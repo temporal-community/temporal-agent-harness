@@ -1,0 +1,556 @@
+# ABOUTME: Tests for the AgentWorkflowRunner handler-dispatch model — that @agent.accepts
+# handlers are discovered and validated, that an inbound send_agent_message envelope routes
+# by `type` to the matching handler (reconstructing its input model, rejecting an unknown
+# function or a malformed payload at the update boundary), that the handler's return value
+# is published as the reply, that the agent_interface query announces the callable surface,
+# and that the runner resolves config-vs-agent-default knobs (with stream + approval policy
+# required).
+#
+# The accept/reject/dispatch behavior is exercised end-to-end through real updates against
+# the Temporal time-skipping test server (the only faithful way — routing lives in the
+# update validator + run loop, which run in a workflow context). The discovery/validation
+# and config-resolution checks are plain unit tests.
+#
+# Run with: uv run pytest tests/harness/test_agent_workflow_runner.py -v
+
+from __future__ import annotations
+
+import asyncio
+import uuid
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+import pytest_asyncio
+from pydantic import BaseModel
+from temporalio import workflow
+from temporalio.client import Client, WorkflowHandle, WorkflowUpdateFailedError
+from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.contrib.workflow_streams import WorkflowStream
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+
+from temporal_agent_harness.harness import AgentWorkflowRunner, agent
+from temporal_agent_harness.harness.agent_protocol import (
+    AGENT_INTERFACE_QUERY,
+    AGENT_STATUS_QUERY,
+    SEND_AGENT_MESSAGE_UPDATE,
+    AcceptedFunction,
+    AgentConfig,
+    AgentEvent,
+    AgentEventType,
+    AgentMessage,
+    AgentStatus,
+    TextMessage,
+    TextReply,
+    ToolApprovalPolicy,
+    AgentMessageReply,
+)
+from temporal_agent_harness.harness.agent_workflow import _discover_handlers
+
+# ---------------------------------------------------------------------------
+# Message models + probe workflows
+# ---------------------------------------------------------------------------
+
+
+class Greeting(BaseModel):
+    """A person to greet."""
+
+    name: str
+
+
+class Greeted(BaseModel):
+    """The greeting produced for a person."""
+
+    message: str
+
+
+class ModelPick(BaseModel):
+    """A model selection."""
+
+    model: str
+
+
+class Picked(BaseModel):
+    """The confirmed model selection."""
+
+    model: str
+
+
+@workflow.defn
+@agent.defn
+class TypedProbeAgent:
+    """Two handlers — greet(Greeting)->Greeted and pick(ModelPick)->Picked — plus a
+    failing handler. Records each handled message so a test can confirm the runner routed
+    + reconstructed the concrete input model (not a dict)."""
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            # Default queuing on (tests send several messages back-to-back); a config
+            # value would still win over this default.
+            enable_message_queuing_default=True,
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+        )
+        self._seen: list[str] = []
+
+    @workflow.run
+    async def run(self, _config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+    @agent.accepts
+    async def greet(self, message: Greeting) -> Greeted:
+        """Greet a person by name."""
+        self._seen.append(f"greet:{message.name}")
+        return Greeted(message=f"hi {message.name}")
+
+    @agent.accepts
+    async def pick(self, message: ModelPick) -> Picked:
+        """Pick a model for the session."""
+        self._seen.append(f"pick:{message.model}")
+        return Picked(model=message.model)
+
+    @agent.accepts
+    async def boom(self, message: TextMessage) -> TextReply:
+        """Always raises — to prove an errored turn publishes AgentError + turn_end and
+        the loop survives for the next message."""
+        raise RuntimeError(f"boom: {message.text}")
+
+    @workflow.query
+    def seen(self) -> list[str]:
+        return self._seen
+
+
+# ---------------------------------------------------------------------------
+# Fixtures + helpers
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def client_and_queue():
+    """A time-skipping env (pydantic converter) with a worker hosting the probe."""
+    env = await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter
+    )
+    task_queue = f"agent-workflow-runner-test-{uuid.uuid4()}"
+    async with Worker(
+        env.client,
+        task_queue=task_queue,
+        workflows=[TypedProbeAgent],
+        # Unsandboxed so the test module's imports (pydantic, harness, pytest) don't
+        # trip the workflow sandbox; the runner logic under test is unaffected.
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ):
+        try:
+            yield env.client, task_queue
+        finally:
+            await env.shutdown()
+
+
+async def _start(client: Client, task_queue: str, wf: Any) -> WorkflowHandle:
+    return await client.start_workflow(
+        wf.run, AgentConfig(), id=f"{wf.__name__}-{uuid.uuid4()}", task_queue=task_queue
+    )
+
+
+async def _next_expected_turn(handle: WorkflowHandle) -> int:
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    return status.current_turn + len(status.pending_turns) + 1
+
+
+async def _send(
+    handle: WorkflowHandle, type: str, payload: dict[str, Any]
+) -> AgentMessageReply:
+    return await handle.execute_update(
+        SEND_AGENT_MESSAGE_UPDATE,
+        AgentMessage(
+            type=type,
+            payload=payload,
+            expected_turn=await _next_expected_turn(handle),
+        ),
+        result_type=AgentMessageReply,
+    )
+
+
+async def _wait_for_seen(
+    handle: WorkflowHandle, count: int, *, attempts: int = 200, delay: float = 0.05
+) -> list[str]:
+    seen: list[str] = []
+    for _ in range(attempts):
+        seen = await handle.query("seen", result_type=list[str])
+        if len(seen) >= count:
+            return seen
+        await asyncio.sleep(delay)
+    raise AssertionError(f"timed out waiting for {count} seen entries; got {seen}")
+
+
+# ---------------------------------------------------------------------------
+# Routing + dispatch (end-to-end)
+# ---------------------------------------------------------------------------
+
+
+async def test_routes_by_type_and_reconstructs_input(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    await _send(handle, "greet", {"name": "Ada"})
+    await _send(handle, "pick", {"model": "opus"})
+
+    seen = await _wait_for_seen(handle, 2)
+    # FIFO order, and each message arrived at its handler as the concrete input model.
+    assert seen == ["greet:Ada", "pick:opus"]
+
+
+async def test_rejects_unknown_function(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    with pytest.raises(WorkflowUpdateFailedError) as excinfo:
+        await _send(handle, "does_not_exist", {})
+    cause = excinfo.value.cause
+    assert getattr(cause, "type", None) == "UnknownFunction"
+    # The rejection spells out the known functions so a caller can self-correct.
+    detail = str(cause)
+    assert "greet" in detail and "pick" in detail
+
+    # The rejected message created no turn.
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.current_turn == 0 and status.pending_turns == []
+
+
+async def test_rejects_malformed_payload(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    # `greet` requires {name: str}; an empty payload fails its input model.
+    with pytest.raises(WorkflowUpdateFailedError) as excinfo:
+        await _send(handle, "greet", {})
+    cause = excinfo.value.cause
+    assert getattr(cause, "type", None) == "MalformedMessage"
+    assert "Greeting" in str(cause)
+
+
+async def test_agent_interface_query_announces_handlers(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    functions = await handle.query(
+        AGENT_INTERFACE_QUERY, result_type=list[AcceptedFunction]
+    )
+    by_name = {f.name: f for f in functions}
+    assert set(by_name) == {"greet", "pick", "boom"}
+    # Description is the handler docstring; parameters/output are the model schemas.
+    assert by_name["greet"].description == "Greet a person by name."
+    assert "name" in by_name["greet"].parameters["properties"]
+    assert "message" in by_name["greet"].output["properties"]
+
+
+async def _collect_until_turn_end(client: Client, workflow_id: str) -> list[AgentEvent]:
+    from datetime import timedelta
+
+    from temporalio.contrib.workflow_streams import WorkflowStreamClient
+
+    stream = WorkflowStreamClient.create(client, workflow_id)
+    events: list[AgentEvent] = []
+    async with asyncio.timeout(30):
+        async for item in stream.subscribe(
+            topics=["turn_events"],
+            from_offset=0,
+            result_type=AgentEvent,
+            poll_cooldown=timedelta(milliseconds=10),
+        ):
+            events.append(item.data)
+            if item.data.event.type == AgentEventType.TURN_END:
+                break
+    return events
+
+
+async def test_reply_is_the_handler_return_value(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+    await _send(handle, "greet", {"name": "Ada"})
+
+    events = await _collect_until_turn_end(client, handle.id)
+    reply = next(e.event for e in events if e.event.type == AgentEventType.REPLY)
+    # The reply carries the handler's return model serialized to a dict.
+    assert reply.output == {"message": "hi Ada"}
+
+
+async def test_handler_error_publishes_agent_error_and_loop_survives(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    # A raising handler → AgentError (then turn_end), and the session stays alive.
+    await _send(handle, "boom", {"text": "x"})
+    events = await _collect_until_turn_end(client, handle.id)
+    errors = [e for e in events if e.event.type == AgentEventType.ERROR]
+    assert len(errors) == 1 and "boom: x" in errors[0].event.message
+    # The next message is still handled normally.
+    await _send(handle, "greet", {"name": "Bob"})
+    seen = await _wait_for_seen(handle, 1)
+    assert "greet:Bob" in seen
+
+
+# ---------------------------------------------------------------------------
+# Handler discovery + validation (pure unit tests)
+# ---------------------------------------------------------------------------
+
+
+def test_discovers_accepts_handlers():
+    handlers = _discover_handlers(TypedProbeAgent)
+    assert set(handlers) == {"greet", "pick", "boom"}
+    assert handlers["greet"].input_type is Greeting
+    assert handlers["greet"].output_type is Greeted
+
+
+def test_discover_rejects_non_pydantic_input():
+    class Bad:
+        @agent.accepts
+        async def h(self, message: int) -> Greeted:  # input not a pydantic model
+            """h."""
+            ...
+
+    with pytest.raises(TypeError, match="must be annotated with a pydantic model"):
+        _discover_handlers(Bad)
+
+
+def test_discover_rejects_scalar_return():
+    class Bad:
+        @agent.accepts
+        async def h(self, message: Greeting) -> str:  # scalar return
+            """h."""
+            ...
+
+    with pytest.raises(TypeError, match="return type must be a pydantic model"):
+        _discover_handlers(Bad)
+
+
+def test_discover_rejects_missing_docstring():
+    class Bad:
+        @agent.accepts
+        async def h(self, message: Greeting) -> Greeted:
+            ...  # no docstring
+
+    with pytest.raises(TypeError, match="must have a docstring"):
+        _discover_handlers(Bad)
+
+
+def test_discover_rejects_wrong_arity():
+    class Bad:
+        @agent.accepts
+        async def h(self, a: Greeting, b: Greeting) -> Greeted:  # two args
+            """h."""
+            ...
+
+    with pytest.raises(TypeError, match="exactly one argument"):
+        _discover_handlers(Bad)
+
+
+# ---------------------------------------------------------------------------
+# @agent.defn signature contract
+# ---------------------------------------------------------------------------
+
+
+class _ValidAgentShape:
+    @workflow.run
+    async def run(self, config: AgentConfig) -> None: ...
+
+
+class _MissingConfigShape:
+    @workflow.run
+    async def run(self) -> None: ...
+
+
+class _WrongInputShape:
+    @workflow.run
+    async def run(self, value: int) -> None: ...
+
+
+def test_agent_defn_accepts_single_agentconfig():
+    assert agent.defn(_ValidAgentShape) is _ValidAgentShape
+
+
+def test_agent_defn_rejects_missing_config_at_definition_time():
+    with pytest.raises(TypeError, match="must accept exactly one AgentConfig"):
+        agent.defn(_MissingConfigShape)
+
+
+def test_agent_defn_rejects_bespoke_input_at_definition_time():
+    with pytest.raises(TypeError, match="must accept exactly one AgentConfig"):
+        agent.defn(_WrongInputShape)
+
+
+# ---------------------------------------------------------------------------
+# Direct construction is blocked
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Config resolution + required values (offline unit tests)
+# ---------------------------------------------------------------------------
+
+
+def test_stream_and_approval_policy_default_are_required():
+    """``stream`` and ``approval_policy_default`` are required keyword-only constructor
+    args, so omitting either is a call-site TypeError — no runtime ``build()`` check to
+    forget. The author must make a deliberate safe-by-default approval choice."""
+    stream = MagicMock()
+    stream.topic.return_value = MagicMock()
+    with pytest.raises(TypeError):
+        AgentWorkflowRunner(  # type: ignore[call-arg]  — missing stream
+            AgentConfig(),
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+        )
+    with pytest.raises(TypeError):
+        AgentWorkflowRunner(  # type: ignore[call-arg]  — missing approval_policy_default
+            AgentConfig(),
+            stream=stream,
+        )
+
+
+def test_message_queuing_resolves_config_over_agent_default(offline_build):
+    assert offline_build(AgentConfig())._status.is_message_queuing_enabled is False
+    assert (
+        offline_build(AgentConfig(), default=True)._status.is_message_queuing_enabled
+        is True
+    )
+    assert (
+        offline_build(
+            AgentConfig(is_message_queuing_enabled=True), default=False
+        )._status.is_message_queuing_enabled
+        is True
+    )
+    assert (
+        offline_build(
+            AgentConfig(is_message_queuing_enabled=False), default=True
+        )._status.is_message_queuing_enabled
+        is False
+    )
+
+
+def test_approval_policy_resolves_config_over_agent_default(offline_build_policy):
+    agent_default = ToolApprovalPolicy.allow_inherently_safe()
+    caller_policy = ToolApprovalPolicy.dangerously_skip_all()
+    assert (
+        offline_build_policy(AgentConfig(), default=agent_default).current_approval_policy
+        == agent_default
+    )
+    assert (
+        offline_build_policy(
+            AgentConfig(approval_policy=caller_policy), default=agent_default
+        ).current_approval_policy
+        == caller_policy
+    )
+
+
+def test_set_approval_policy_resolves_matching_pending(offline_build_policy):
+    from temporal_agent_harness.harness.agent_workflow import _ApprovalStatus
+
+    runner = offline_build_policy(
+        AgentConfig(), default=ToolApprovalPolicy.always_require_approvals()
+    )
+    runner._status.register_pending_approval(
+        "t1", "trusted_tool", {"x": 1}, 1, "turn-1", inherently_safe=False
+    )
+    runner._status.register_pending_approval(
+        "t2", "other_tool", {}, 1, "turn-1", inherently_safe=False
+    )
+
+    runner.set_approval_policy(ToolApprovalPolicy.allow_tools(["trusted_tool"]))
+
+    assert runner._status.is_approval_resolved("t1") is True
+    entry = runner._status.approval_entry("t1")
+    assert entry.status is _ApprovalStatus.APPROVED
+    assert entry.reason == "auto-approved by updated policy"
+    assert runner._status.is_approval_resolved("t2") is False
+
+
+def test_custom_fallback_is_consulted_only_as_last_layer(offline_build_policy):
+    calls: list[str] = []
+
+    def fallback(ctx) -> bool:
+        calls.append(ctx.tool_name)
+        return ctx.tool_name == "blessed"
+
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.dangerously_skip_all(),
+        custom_fallback=fallback,
+    )
+    assert runner._auto_approves("anything", {}, inherently_safe=False) is True
+    assert calls == []
+
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.always_require_approvals(),
+        custom_fallback=fallback,
+    )
+    assert runner._auto_approves("blessed", {}, inherently_safe=False) is True
+    assert runner._auto_approves("cursed", {}, inherently_safe=False) is False
+    assert calls == ["blessed", "cursed"]
+
+
+def test_protocol_types_use_concrete_annotations():
+    """Guard: the wire types must use concrete (not stringized) annotations — they cross
+    the Temporal pydantic converter, which builds their TypeAdapter inside the workflow
+    sandbox, where a stringized annotation fails to resolve."""
+    from temporal_agent_harness.harness.agent_protocol import AgentMessage, AgentStatus, AgentMessageReply
+
+    for cls in (AgentMessage, AgentStatus, AgentMessageReply):
+        for field_name, annotation in cls.__annotations__.items():
+            assert not isinstance(annotation, str), (
+                f"{cls.__name__}.{field_name} is a string annotation — "
+                f"agent_interface.py must not use `from __future__ import annotations`."
+            )
+
+
+# ---------------------------------------------------------------------------
+# Offline build fixtures (workflow APIs __init__ touches are patched out)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def offline_build(monkeypatch):
+    import temporal_agent_harness.harness.agent_workflow as aw
+
+    for handler in ("set_update_handler", "set_query_handler", "set_signal_handler"):
+        monkeypatch.setattr(aw.workflow, handler, lambda *a, **k: None)
+    monkeypatch.setattr(aw.workflow, "time", lambda: 0.0)
+
+    def build(config: AgentConfig, *, default: bool | None = None):
+        stream = MagicMock()
+        stream.topic.return_value = MagicMock()
+        kwargs: dict[str, Any] = {}
+        if default is not None:
+            kwargs["enable_message_queuing_default"] = default
+        return AgentWorkflowRunner(
+            config,
+            stream=stream,
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+            **kwargs,
+        )
+
+    return build
+
+
+@pytest.fixture
+def offline_build_policy(monkeypatch):
+    import temporal_agent_harness.harness.agent_workflow as aw
+
+    for handler in ("set_update_handler", "set_query_handler", "set_signal_handler"):
+        monkeypatch.setattr(aw.workflow, handler, lambda *a, **k: None)
+    monkeypatch.setattr(aw.workflow, "time", lambda: 0.0)
+
+    def build(config: AgentConfig, *, default: ToolApprovalPolicy, custom_fallback=None):
+        stream = MagicMock()
+        stream.topic.return_value = MagicMock()
+        return AgentWorkflowRunner(
+            config,
+            stream=stream,
+            approval_policy_default=default,
+            custom_approval_fallback=custom_fallback,
+        )
+
+    return build

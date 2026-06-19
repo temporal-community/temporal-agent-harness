@@ -1,0 +1,61 @@
+[project]
+name = "temporal-agent-harness"
+version = "0.1.0"
+description = "Temporal-native agent harness (experimental) — durable agents on Temporal, with the AI SDKs you already use."
+readme = "README.md"
+requires-python = ">=3.11"
+# Core runtime deps are deliberately minimal: the harness itself only needs Temporal and
+# pydantic. AI-SDK and external-storage needs are opt-in extras below, so installing the
+# harness doesn't drag in Gemini or boto3.
+dependencies = [
+    "temporalio>=1.27.2",  # provides temporalio.contrib.workflow_streams (experimental)
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+# The Google Gemini SDK integration: temporal_agent_harness.ai_sdks.google_genai_plugin.
+genai = [
+    "google-genai>=2.0.0",
+    "google-auth>=2.53.0",
+]
+# S3-backed large-payload offload (temporal_agent_harness.harness.large_payload). The
+# default local-filesystem driver needs nothing extra; only the S3 driver needs aioboto3.
+s3 = [
+    "aioboto3>=15.5.0",
+]
+
+[dependency-groups]
+# Everything needed to RUN the bundled examples (examples/monty + examples/session_manager) from a
+# checkout. Not part of the published package's runtime deps — examples are not shipped.
+examples = [
+    "google-genai>=2.0.0",
+    "google-auth>=2.53.0",
+    "pydantic-monty>=0.0.18",  # the Monty sandbox the monty example runs scripts in
+    "fastapi[standard]>=0.136.3",  # session-manager BFF (examples/session_manager/app.py); pulls in uvicorn
+]
+# Test + lint tooling. The full tests/ suite imports both the Gemini SDK (the ai_sdks plugin
+# tests) and pydantic-monty (the monty example tests), which live in the `examples` group —
+# so dev includes it. uv installs the `dev` group by default, so a plain `uv run pytest`
+# has everything the whole suite under tests/ needs.
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+    { include-group = "examples" },
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+# Ship only the package; examples/, tests/, and docs/ stay out of the wheel.
+include = ["temporal_agent_harness*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# All tests live under tests/, mirroring the layout of the code they exercise: tests/harness
+# + tests/ai_sdks for the package, tests/examples/monty for the bundled example. The example
+# tests import the example by absolute path (examples.monty.*), so put the repo root on
+# sys.path — the editable install only exposes the package, not the (unshipped) examples.
+testpaths = ["tests"]
+pythonpath = ["."]

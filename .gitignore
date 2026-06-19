@@ -1,0 +1,33 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+.env
+.env.local
+
+# Private Temporal connection profiles (e.g. Temporal Cloud creds / api_key). The committed
+# temporal.local.toml ships only a local-dev default; put your own profiles in a temporal.toml
+# and point an example's .env.local TEMPORAL_CONFIG_FILE at it.
+temporal.toml
+
+# Node deps for the TS worker
+rag/ingestion_workflow/ts/node_modules/
+rag/ingestion_workflow/ts/dist/
+
+# Local configs for IDEs
+.vscode
+pyrightconfig.json
+
+# Temporal server build artifacts
+.build/
+devserver/temporal-server
+
+# Local LLM configs
+.claude/

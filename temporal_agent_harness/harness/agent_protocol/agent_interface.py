@@ -1,0 +1,381 @@
+# ABOUTME: The request/response contract between an agent workflow and its clients —
+# the ``send_agent_message`` update and ``agent_status`` / ``agent_interface`` query
+# names, and the plain dataclasses exchanged across those update/query/queue boundaries.
+# The workflow must expose handlers under these exact names; the client addresses them by
+# the same. A message is a name-routed tool-call envelope (``AgentMessage{type, payload}``):
+# ``type`` names the target ``@agent.accepts`` handler; ``payload`` is that handler's input
+# model JSON.
+
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+# ---------------------------------------------------------------------------
+# Protocol constants — workflow must use these exact names
+# ---------------------------------------------------------------------------
+
+SEND_AGENT_MESSAGE_UPDATE = "send_agent_message"
+TOOL_APPROVAL_UPDATE = "tool_approval"
+AGENT_STATUS_QUERY = "agent_status"
+AGENT_INTERFACE_QUERY = "agent_interface"
+
+
+# ---------------------------------------------------------------------------
+# Tool-approval policy
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ToolApprovalContext:
+    """The facts about a single tool call that a custom approval-policy fallback
+    evaluates.
+
+    Passed to the developer-supplied predicate given as the runner's
+    ``custom_approval_fallback=`` constructor arg — the FINAL approval layer, consulted
+    only when the serializable :class:`ToolApprovalPolicy` layers did not already
+    auto-approve the call.
+
+    ``tool_name`` is the tool's registered name; ``tool_input`` is the model-facing
+    arguments (injected parameters excluded); ``inherently_safe`` is the tool's static
+    self-assertion (the decorator's ``inherently_safe=``).
+    """
+
+    tool_name: str
+    tool_input: dict[str, Any]
+    inherently_safe: bool
+
+
+class ToolApprovalPolicy(BaseModel):
+    """Agent-level, serializable policy deciding which tool calls require human approval.
+
+    Safe-by-default: with every field at its default the policy approves NOTHING
+    automatically, so every tool call is gated (step-through). Relax it by opting into
+    layers; :meth:`auto_approves` checks them in priority order:
+
+      0. ``dangerously_skip_all_approvals`` — approve EVERYTHING (no call is ever gated).
+         The name is a deliberate yellow-flag: this disables the guardrail entirely.
+      1. ``auto_approve_inherently_safe`` — approve any tool that statically declared
+         itself ``inherently_safe`` (a tool that is *never*, under any input, unsafe).
+      2. ``auto_approve_tools`` — approve these specific tools by name (additive on top
+         of the layers above).
+
+    A call not approved by any layer here falls through to the runner's custom fallback
+    (if one is set), and otherwise is gated. Whether a tool calls itself ``inherently_safe``
+    is only ever a *hint*: this policy — not the tool — decides enforcement, so an operator
+    can still gate everything regardless of what a tool claims.
+
+    The model is ``frozen`` (value-like): produce the next policy by constructing a new
+    one (see :meth:`with_tool_allowed`). Serializable on purpose — a caller may supply one
+    at startup via ``AgentConfig.approval_policy`` (overriding the agent's built-in
+    default), and the live policy is surfaced on ``AgentStatus.approval_policy`` so a
+    client can persist it and replay it into the next session.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    dangerously_skip_all_approvals: bool = False
+    auto_approve_inherently_safe: bool = False
+    auto_approve_tools: frozenset[str] = frozenset()
+
+    def auto_approves(self, tool_name: str, *, inherently_safe: bool) -> bool:
+        """Whether THIS policy auto-approves the call (skips the human gate).
+
+        Checks the layers in priority order (see the class docstring). Does NOT consult
+        the runner's custom fallback — that is applied by the runner only after this
+        returns ``False``.
+        """
+        if self.dangerously_skip_all_approvals:
+            return True
+        if inherently_safe and self.auto_approve_inherently_safe:
+            return True
+        return tool_name in self.auto_approve_tools
+
+    def with_tool_allowed(self, tool_name: str) -> "ToolApprovalPolicy":
+        """A copy of this policy with ``tool_name`` added to ``auto_approve_tools``.
+
+        Backs the "approve, and stop asking me about this tool" flow (a ``tool_approval``
+        decision with ``remember=True``) and any agent-driven runtime allow-listing.
+        """
+        return self.model_copy(
+            update={"auto_approve_tools": self.auto_approve_tools | {tool_name}}
+        )
+
+    # -- Named presets (ergonomic constructors; all serialize to this one model) -----
+
+    @classmethod
+    def always_require_approvals(cls) -> "ToolApprovalPolicy":
+        """Gate EVERY tool call — even inherently-safe ones (step-through). The
+        safe-by-default baseline; equivalent to the all-defaults policy."""
+        return cls()
+
+    @classmethod
+    def allow_inherently_safe(cls) -> "ToolApprovalPolicy":
+        """Auto-approve tools that declared ``inherently_safe``; gate everything else."""
+        return cls(auto_approve_inherently_safe=True)
+
+    @classmethod
+    def allow_tools(
+        cls, tool_names: Iterable[str], *, also_inherently_safe: bool = False
+    ) -> "ToolApprovalPolicy":
+        """Auto-approve the named tools; optionally also auto-approve inherently-safe
+        ones (additive)."""
+        return cls(
+            auto_approve_tools=frozenset(tool_names),
+            auto_approve_inherently_safe=also_inherently_safe,
+        )
+
+    @classmethod
+    def dangerously_skip_all(cls) -> "ToolApprovalPolicy":
+        """Auto-approve EVERYTHING — no call is ever gated. Disables the guardrail."""
+        return cls(dangerously_skip_all_approvals=True)
+
+
+# ---------------------------------------------------------------------------
+# Standardized agent input
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AgentConfig:
+    """The single, harness-defined input contract every agent workflow accepts.
+
+    The harness enforces a uniform construction shape: an agent ``@workflow.defn``
+    class that builds an ``AgentWorkflowRunner`` must declare its ``run``/``__init__``
+    to take EITHER no argument OR exactly one argument of this type. That invariant is
+    asserted when the runner is built (see
+    ``AgentWorkflowRunner._assert_standardized_agent_signature``).
+
+    Standardizing the input is what lets any harness agent be substituted for another —
+    as a top-level agent or as a sub-agent — since a caller can always construct one
+    knowing only ``AgentConfig``, never a bespoke per-agent input type. Consequently
+    this carries ONLY knobs universal to every agent; agent-specific behavior is
+    configured at runtime (e.g. via slash commands), never through a custom input type.
+
+    EVERY field is optional, with ``None`` meaning "the caller did not specify this."
+    An agent supplies its own default for any unspecified field (via the matching
+    ``AgentWorkflowRunner`` ``*_default`` constructor argument); a value the caller *did*
+    specify is authoritative and an agent can never override it. So the effective value
+    of each knob is: the caller's value if given, else the agent's default, else the
+    harness baseline.
+
+    ``is_message_queuing_enabled`` — whether the agent accepts a new message while a
+    turn is already in flight (queuing it behind the active turn) rather than rejecting
+    it as busy. ``None`` → defer to the agent's default (harness baseline: disabled).
+
+    ``approval_policy`` — the tool-approval policy to run the agent under (see
+    :class:`ToolApprovalPolicy`). ``None`` → use the agent's built-in default (the runner's
+    required ``approval_policy_default=`` constructor arg). A caller's
+    policy is authoritative and overrides the agent's default — letting an operator, for
+    example, start a session that gates every tool call regardless of the agent's default.
+    The developer's separate *custom fallback* predicate is not part of this contract and
+    is never overridable from the config (it is non-serializable).
+    """
+
+    is_message_queuing_enabled: bool | None = None
+    approval_policy: ToolApprovalPolicy | None = None
+
+
+# ---------------------------------------------------------------------------
+# Typed message base
+# ---------------------------------------------------------------------------
+
+
+class AgentMessage(BaseModel):
+    """The payload of the ``send_agent_message`` update — a tool-call envelope.
+
+    ``type`` names the target ``@agent.accepts`` handler (its function name, also the
+    handler's tool name in :class:`AcceptedFunction`); ``payload`` is the JSON of that
+    handler's declared input model. The runner resolves the handler by ``type`` and
+    ``model_validate``s ``payload`` into the handler's input model (coercing it, or
+    rejecting a bad shape) before dispatching::
+
+        AgentMessage(type="slash",
+                     payload={"payload": {"name": "scope", "arg": "docs"}},
+                     expected_turn=1)
+
+    Routing is **by name**, not by a discriminator on the payload type — so two handlers
+    may accept the *same* input model.
+
+    ``expected_turn`` is the turn number the client believes this message should be; the
+    update validator rejects it if the workflow is already past that turn (stale client).
+    It is carried on the envelope itself — the ``send_agent_message`` update takes a bare
+    :class:`AgentMessage`, with no separate wrapper.
+    """
+
+    type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    expected_turn: int
+
+
+# ---------------------------------------------------------------------------
+# Built-in free-text input/output models
+# ---------------------------------------------------------------------------
+#
+# There is no implicit ``str`` channel anymore — every accepted message is a
+# ``@agent.accepts`` handler with a pydantic input + output. These two models keep the
+# common "free text in, free text out" agent trivial: declare
+# ``async def ask(self, msg: TextMessage) -> TextReply``.
+
+
+class TextMessage(BaseModel):
+    """Free-form natural-language text from the user (the input to a plain chat handler)."""
+
+    text: str
+
+
+class TextReply(BaseModel):
+    """A free-form natural-language reply (the output of a plain chat handler)."""
+
+    text: str
+
+
+# ---------------------------------------------------------------------------
+# Wire types — shared between workflow and client
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AgentMessageReply:
+    """Returned by the workflow's ``send_agent_message`` update on acceptance.
+
+    ``pending`` is True if the message was queued behind an active
+    turn rather than being processed immediately.
+    """
+
+    turn_number: int
+    turn_id: str
+    pending: bool = False
+
+
+@dataclass
+class ToolApprovalDecision:
+    """Update payload sent to the workflow to resolve a pending tool approval.
+
+    ``tool_id`` is the id carried by the :class:`ToolApprovalRequested` event (and listed
+    under :attr:`AgentStatus.pending_approvals`). ``approved`` is the human's decision;
+    ``reason`` is an optional note surfaced on the resolution event and, on denial, fed
+    back to the model as the tool's error result. The workflow's update validator rejects
+    a decision for an unknown ``tool_id`` or one already resolved (idempotent — a
+    double-submit fails rather than flipping a settled decision).
+
+    ``remember`` applies the decision to *future* calls of the same tool too: an
+    ``approved`` + ``remember`` decision adds the tool to the live
+    :class:`ToolApprovalPolicy`'s allow-list, so the agent stops asking about it (and any
+    other call of that tool currently waiting auto-resolves). This is the "approve, and
+    don't ask me about this tool again" affordance. ``remember`` is a no-op on denial for
+    now (there is no deny-list yet).
+    """
+
+    tool_id: str
+    approved: bool
+    reason: str | None = None
+    remember: bool = False
+
+
+@dataclass
+class ToolApprovalResult:
+    """Returned by the workflow's ``tool_approval`` update once the decision is recorded.
+
+    ``accepted`` is always True on a successful return (the update validator rejects
+    anything that should not be recorded before the handler runs); it exists so the
+    contract has an explicit, evolvable acknowledgement payload.
+    """
+
+    tool_id: str
+    accepted: bool = True
+
+
+@dataclass
+class PendingApproval:
+    """A gated tool call awaiting a human decision, surfaced via ``agent_status``.
+
+    Lets a client that attaches after the :class:`ToolApprovalRequested` event was
+    published still discover and act on outstanding approvals. ``tool_input`` is the
+    model-facing input (injected parameters excluded).
+    """
+
+    tool_id: str
+    tool_name: str
+    tool_input: dict[str, Any]
+    turn_number: int
+
+
+@dataclass
+class PendingTurn:
+    """A message waiting in the agent's queue."""
+
+    turn_number: int
+    turn_id: str
+    message: str
+
+
+@dataclass
+class SubagentInfo:
+    """An active subagent this agent is driving, surfaced via ``agent_status``.
+
+    ``handle`` is the short id the agent references it by; ``workflow_id`` is the real child
+    workflow (for an operator/UI to drill into). ``next_expected_turn`` reflects how many turns
+    it has run (its next is ``next_expected_turn``). The caller-side FIFO gate's internals (its
+    ticket counters) are deliberately NOT surfaced — they are an implementation detail of turn
+    ordering, not agent status.
+    """
+
+    handle: str
+    agent_key: str
+    workflow_id: str
+    next_expected_turn: int
+
+
+@dataclass
+class AgentStatus:
+    """Queryable status of the agent workflow.
+
+    The workflow exposes this via the ``agent_status`` query. It is the
+    single source of truth for ``attach()``'s termination decision and
+    for the client to compute ``expected_turn`` before sending.
+    """
+
+    current_turn: int = 0
+    turn_active: bool = False
+    pending_turns: list[PendingTurn] = field(default_factory=list)
+    is_message_queuing_enabled: bool = False
+    pending_approvals: list[PendingApproval] = field(default_factory=list)
+    # Subagents this agent is currently driving (its own child agents), each a
+    # :class:`SubagentInfo` — short handle, agent key, real child workflow id, next turn. Gate
+    # internals are excluded by construction.
+    subagents: list[SubagentInfo] = field(default_factory=list)
+    # The tool-approval policy the agent is currently running under. A client can read
+    # this (e.g. after a runtime update) and persist it to replay into a later session
+    # via ``AgentConfig.approval_policy``. ``has_custom_approval_fallback`` reports only
+    # *whether* a developer fallback predicate is wired (the predicate itself is
+    # non-serializable, so it is not — and cannot be — surfaced here).
+    approval_policy: ToolApprovalPolicy = field(
+        default_factory=ToolApprovalPolicy.always_require_approvals
+    )
+    has_custom_approval_fallback: bool = False
+
+
+class AcceptedFunction(BaseModel):
+    """One ``@agent.accepts`` handler the agent exposes, described tool-style.
+
+    The element type of the ``agent_interface`` query result (a ``list[AcceptedFunction]``)
+    — an agent-level analogue of MCP's ``list_tools`` / a model's function declarations,
+    announcing the callable surface this agent accepts. Gemini-tool-shaped:
+
+      * ``name`` — the handler's function name; the value a caller puts in
+        :attr:`AgentMessage.type`, and the tool name when this agent is wired as a subagent.
+      * ``description`` — the handler method's docstring (when/how to use it).
+      * ``parameters`` — the JSON schema of the handler's single input model.
+      * ``output`` — the JSON schema of the handler's return model.
+
+    A caller introspects this to construct a valid :class:`AgentMessage` for any handler
+    (or, for a parent agent, to model each handler as a tool) without hardcoding the
+    contract, so it can evolve without client-side changes.
+    """
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    output: dict[str, Any]

@@ -1,0 +1,17 @@
+set dotenv-filename := ".env.local"
+set dotenv-load
+
+worker:
+    uv run --directory .. python -m google_genai_plugin.first_class_example.worker
+
+query q="What's the weather right now?":
+    uv run --directory .. python -m google_genai_plugin.first_class_example.start_workflow "{{q}}"
+
+file-worker:
+    uv run --directory .. python -m google_genai_plugin.file_upload_example.worker
+
+file q="Summarize the key financial metrics and top 3 risks from this report.":
+    uv run --directory .. python -m google_genai_plugin.file_upload_example.start_workflow "{{q}}"
+
+file-store:
+    uv run --directory .. python -m google_genai_plugin.file_upload_example.start_workflow --store

@@ -1,0 +1,16 @@
+# Temporal client connection profiles for the examples — the committed, local-only default.
+#
+# Named `.local` because it targets a LOCAL Temporal dev server (`just temporal`): the `default`
+# profile below points at localhost. The example .env.example sets TEMPORAL_CONFIG_FILE to this
+# file, and the workers/server resolve the connection via temporalio's
+# ClientConfig.load_client_connect_config(); pick a profile with TEMPORAL_PROFILE.
+#
+# To run against your own server or Temporal Cloud, DON'T edit this committed file — create a
+# private `temporal.toml` next to it (same format, e.g. a profile with an `address`, `namespace`,
+# and `api_key`). `temporal.toml` is gitignored, so secrets stay out of the repo; point an
+# example at it by setting TEMPORAL_CONFIG_FILE=temporal.toml in that example's .env.local.
+
+[profile]
+  [profile.default]
+    address = "localhost:7233"
+    namespace = "default"

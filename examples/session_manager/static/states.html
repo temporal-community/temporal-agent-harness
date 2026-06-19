@@ -1,0 +1,1917 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent · Live Enclosure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+  /* "Instrument enclosure" telemetry view. Shares chat.html's dark palette so the
+     two views read as one product, but the metaphor is physical: the AGENT is a
+     sealed box. Messages arrive as SIGNALS from OUTSIDE and dock at the box's
+     ingress port (they never wire straight into the model — what the agent does
+     internally is its own business). The box renders ONLY what is happening right
+     now: it EXPANDS to fit live tool calls and a momentary "what the model is
+     doing" card (a thinking / citation chunk that lasts a single tick), and
+     CONTRACTS back to just the model core when idle. Reply text streams out the
+     egress port as packets. Lifecycle (idle / running / replied / error) is a
+     STATUS BADGE on the box; an error floods the whole enclosure red.
+
+     Everything the box shows is a pure function of the event prefix, so any
+     prefix reconstructs exactly — which is what makes scrubbing / replay / jump-
+     to-live correct. The view is also AGNOSTIC of any model SDK: opaque payloads
+     (thought/annotation deltas) are rendered as plain JSON, never field-mined. */
+  :root {
+    --bg-base:       #131314;
+    --bg-surface-1:  #1b1b1d;
+    --bg-surface-2:  #1e1f20;
+    --bg-surface-3:  #28292c;
+    --bg-elevated:   #2d2e30;
+    --border:        rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text-primary:   #e3e3e3;
+    --text-secondary: #9aa0a6;
+    --text-tertiary:  #80868b;
+    --accent:        #8ab4f8;
+    --accent-hover:  #aecbfa;
+    --success:       #81c995;
+    --success-bg:    rgba(129, 201, 149, 0.16);
+    --warning:       #fdd663;
+    --warning-bg:    rgba(253, 214, 99, 0.16);
+    --error:         #f28b82;
+    --error-bg:      rgba(242, 139, 130, 0.14);
+    --queue:         #c4a7f5;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--mono);
+    background:
+      radial-gradient(circle at 1px 1px, rgba(255,255,255,0.045) 1px, transparent 0) 0 0 / 26px 26px,
+      var(--bg-base);
+    color: var(--text-primary);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ---- Header ------------------------------------------------------------ */
+  header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 12px 20px;
+    background: linear-gradient(180deg, var(--bg-surface-1), rgba(27,27,29,0.78));
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0; backdrop-filter: blur(6px);
+  }
+  header h1 {
+    font-size: 13px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase;
+    display: flex; align-items: center; gap: 9px;
+  }
+  header h1 .glyph { color: var(--accent); font-size: 15px; }
+  header h1 .dim { color: var(--text-tertiary); font-weight: 400; }
+  header .nav-link {
+    font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--text-tertiary); text-decoration: none;
+    border: 1px solid var(--border); padding: 4px 10px; border-radius: 6px;
+    transition: color .15s, border-color .15s;
+  }
+  header .nav-link:hover { color: var(--accent); border-color: var(--border-strong); }
+  .spacer { flex: 1; }
+
+  select#session {
+    font-family: var(--mono); font-size: 12px;
+    background: var(--bg-surface-3); color: var(--text-primary);
+    border: 1px solid var(--border-strong); border-radius: 7px;
+    padding: 7px 12px; cursor: pointer; max-width: 360px;
+  }
+  select#session:focus { outline: none; border-color: var(--accent); }
+
+  .chip {
+    font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase;
+    padding: 5px 11px; border-radius: 20px;
+    background: var(--bg-surface-3); color: var(--text-tertiary);
+    display: inline-flex; align-items: center; gap: 7px;
+    border: 1px solid var(--border); white-space: nowrap;
+  }
+  .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .chip.connected { color: var(--success); }
+  .chip.streaming { color: var(--warning); }
+  .chip.streaming::before { animation: blink 1s steps(2, start) infinite; }
+  .chip.paused, .chip.playing { color: var(--queue); }
+  @keyframes blink { 50% { opacity: 0.25; } }
+
+  /* ---- Layout ------------------------------------------------------------ */
+  main {
+    flex: 1; overflow-y: auto; padding: 26px 24px 40px;
+    display: flex; flex-direction: column; gap: 22px;
+    max-width: 1240px; width: 100%; margin: 0 auto;
+  }
+  .panel {
+    background: linear-gradient(180deg, var(--bg-surface-2), var(--bg-surface-1));
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 18px 20px 22px; position: relative;
+  }
+  .panel > .panel-title {
+    font-size: 10px; letter-spacing: 2.5px; text-transform: uppercase;
+    color: var(--text-tertiary); margin-bottom: 18px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .panel > .panel-title .rule { flex: 1; height: 1px; background: var(--border); }
+  #turn-meta { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+  /* ---- The stage: [ ingress | AGENT BOX | egress ] ---------------------- */
+  /* Tone variables drive every coloured element from one source. */
+  .tone-neutral { --tone: var(--text-secondary); }
+  .tone-model   { --tone: var(--accent); }
+  .tone-tools   { --tone: var(--warning); }
+  .tone-done    { --tone: var(--success); }
+  .tone-error   { --tone: var(--error); }
+  .tone-queue   { --tone: var(--queue); }
+
+  .stage {
+    display: grid;
+    grid-template-columns: minmax(160px, 220px) minmax(0, 1fr) minmax(120px, 168px);
+    align-items: center; gap: 0;
+    min-height: 240px;
+  }
+
+  /* ---- Ingress / egress lanes (OUTSIDE the box) ------------------------- */
+  .lane { position: relative; height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 8px; }
+  .lane-cap {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .egress .lane-cap { text-align: right; }
+  .lane-tag { font-size: 9px; letter-spacing: 2.5px; text-transform: uppercase; color: var(--text-tertiary); }
+  .lane-sub { font-size: 10px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+  /* The trace is the wire the signal rides in on. Flowing dashes imply direction. */
+  .trace {
+    position: absolute; top: 50%; height: 2px; transform: translateY(-50%);
+    background-image: repeating-linear-gradient(90deg, var(--border-strong) 0 7px, transparent 7px 14px);
+    background-size: 28px 2px;
+    opacity: 0.6; z-index: 0;
+  }
+  .ingress .trace { left: 0; right: -6px; }
+  .egress  .trace { left: -6px; right: 0; }
+  .stage.running .ingress .trace { animation: traceflow 1.1s linear infinite; }
+  .stage.streaming-out .egress .trace { animation: traceflow .9s linear infinite; opacity: .9; }
+  @keyframes traceflow { to { background-position: 28px 0; } }
+  .trace::after {
+    content: ""; position: absolute; top: 50%; right: -1px; width: 0; height: 0;
+    transform: translateY(-50%);
+    border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+    border-left: 8px solid var(--border-strong);
+  }
+
+  /* Momentary signal cards OUTSIDE the box: the incoming message on the ingress
+     lane, the streaming reply deltas on the egress lane. */
+  .msg-slot, .out-slot { position: relative; z-index: 1; }
+  .msg-slot:empty, .out-slot:empty { display: none; }
+  .msg-slot .act-card, .out-slot .act-card { width: 100%; }
+
+  /* Queue = pending messages stacked OUTSIDE the box, each clickable. */
+  .queue-stack {
+    position: absolute; left: 0; bottom: 4px; z-index: 1;
+    display: flex; flex-wrap: wrap-reverse; gap: 5px; max-width: 100%;
+  }
+  .q-chip {
+    min-width: 26px; height: 16px; padding: 0 5px; border-radius: 3px; cursor: pointer;
+    font-size: 8px; letter-spacing: .5px; color: var(--queue);
+    display: inline-flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--queue) 22%, var(--bg-surface-3));
+    border: 1px solid color-mix(in srgb, var(--queue) 55%, transparent);
+    box-shadow: 0 0 6px color-mix(in srgb, var(--queue) 35%, transparent);
+    transition: transform .15s;
+  }
+  .q-chip:hover { transform: translateY(-1px); }
+  .q-chip.enter { animation: chipIn .35s cubic-bezier(.2,.9,.3,1.2); }
+  @keyframes chipIn { from { opacity: 0; transform: translateX(-14px) scale(.7); } }
+
+  /* A travelling signal packet, fired into / out of the box on a real transition. */
+  .packet {
+    position: absolute; top: 50%; width: 16px; height: 8px; border-radius: 2px;
+    transform: translateY(-50%); pointer-events: none; z-index: 2;
+    background: var(--accent); box-shadow: 0 0 12px var(--accent);
+  }
+  .packet.stream { width: 9px; height: 6px; background: var(--success); box-shadow: 0 0 9px var(--success); }
+  .ingress .packet, .egress .packet { animation: packetTravel .62s cubic-bezier(.4,0,.2,1) forwards; }
+  .egress  .packet.err { background: var(--error); box-shadow: 0 0 12px var(--error); }
+  .egress  .packet.ok  { background: var(--success); box-shadow: 0 0 12px var(--success); }
+  @keyframes packetTravel { 0% { left: 0; opacity: 0; } 12% { opacity: 1; } 100% { left: 100%; opacity: 0; } }
+
+  /* Egress terminal — where the reply (or error) lands; clickable to read it. */
+  .terminal {
+    align-self: flex-end; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase;
+    padding: 6px 11px; border-radius: 7px; white-space: nowrap;
+    background: var(--bg-surface-3); color: var(--text-tertiary);
+    border: 1px solid var(--border);
+    transition: color .25s, border-color .25s, background .25s, box-shadow .25s;
+  }
+  .terminal.lit {
+    color: var(--tone); border-color: var(--tone); cursor: pointer;
+    background: color-mix(in srgb, var(--tone) 16%, var(--bg-surface-3));
+    box-shadow: 0 0 14px color-mix(in srgb, var(--tone) 45%, transparent);
+  }
+
+  /* ---- THE AGENT ENCLOSURE ---------------------------------------------- */
+  .agent-enclosure {
+    position: relative;
+    margin: 0 4px;
+    border: 1.5px solid var(--border-strong); border-radius: 16px;
+    background: linear-gradient(180deg, var(--bg-surface-3), var(--bg-surface-2));
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.04),
+      0 18px 40px rgba(0,0,0,0.45);
+    overflow: hidden;
+    transition: border-color .3s, box-shadow .3s, background .3s;
+  }
+  /* corner registration brackets — instrument-panel detail */
+  .agent-enclosure::before, .agent-enclosure::after {
+    content: ""; position: absolute; width: 13px; height: 13px;
+    border: 1.5px solid var(--border-strong); opacity: .7; pointer-events: none; z-index: 2;
+  }
+  .agent-enclosure::before { top: 9px; left: 9px; border-right: 0; border-bottom: 0; }
+  .agent-enclosure::after  { bottom: 9px; right: 9px; border-left: 0; border-top: 0; }
+
+  .agent-enclosure.running {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.05),
+      0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+      0 18px 46px rgba(0,0,0,0.5),
+      0 0 50px color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+  .agent-enclosure.replied {
+    border-color: color-mix(in srgb, var(--success) 60%, var(--border-strong));
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.05),
+      0 0 0 1px color-mix(in srgb, var(--success) 32%, transparent),
+      0 18px 46px rgba(0,0,0,0.5),
+      0 0 50px color-mix(in srgb, var(--success) 16%, transparent);
+  }
+  /* Error floods the whole box red. */
+  .agent-enclosure.error {
+    border-color: var(--error);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--error) 12%, var(--bg-surface-3)), var(--bg-surface-2));
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.04),
+      0 0 0 1px color-mix(in srgb, var(--error) 45%, transparent),
+      0 18px 46px rgba(0,0,0,0.5),
+      0 0 56px color-mix(in srgb, var(--error) 22%, transparent);
+  }
+
+  /* scanline only sweeps while the box is actively running */
+  .scanline {
+    position: absolute; left: 0; right: 0; top: 0; height: 2px; pointer-events: none; z-index: 1;
+    background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 70%, transparent), transparent);
+    opacity: 0;
+  }
+  .agent-enclosure.running .scanline { animation: scan 2.6s linear infinite; }
+  @keyframes scan { 0% { top: 0; opacity: 0; } 8% { opacity: .8; } 92% { opacity: .8; } 100% { top: 100%; opacity: 0; } }
+
+  /* Ingress / egress ports — notches on the box edges where signals dock. */
+  .port {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    width: 9px; height: 34px; border-radius: 3px;
+    background: var(--bg-surface-1); border: 1.5px solid var(--border-strong);
+    z-index: 3;
+  }
+  .port-in  { left: -5px; }
+  .port-out { right: -5px; }
+  .port.flash {
+    border-color: var(--accent);
+    box-shadow: 0 0 14px var(--accent), inset 0 0 8px color-mix(in srgb, var(--accent) 50%, transparent);
+    animation: portflash .7s ease-out;
+  }
+  .port-out.flash.ok  { border-color: var(--success); box-shadow: 0 0 14px var(--success); }
+  .port-out.flash.err { border-color: var(--error);   box-shadow: 0 0 14px var(--error); }
+  @keyframes portflash { 0% { transform: translateY(-50%) scaleY(1.35); } 100% { transform: translateY(-50%) scaleY(1); } }
+
+  /* Header strip of the box: identity + the lifecycle status badge. */
+  .agent-head {
+    display: flex; align-items: center; gap: 14px;
+    padding: 13px 18px; border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent);
+  }
+  .agent-name {
+    font-size: 12px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase;
+    display: inline-flex; align-items: center; gap: 8px; color: var(--text-secondary);
+  }
+  .agent-name .glyph { color: var(--accent); font-size: 14px; }
+
+  .status-badge {
+    margin-left: auto;
+    font-size: 10px; letter-spacing: 1.6px; text-transform: uppercase; font-weight: 700;
+    padding: 6px 13px; border-radius: 20px; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border); background: var(--bg-surface-1);
+    color: var(--text-tertiary);
+    transition: color .25s, border-color .25s, background .25s, box-shadow .25s;
+  }
+  .status-badge::before {
+    content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+    box-shadow: 0 0 9px currentColor;
+  }
+  .status-badge.running {
+    color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--bg-surface-1));
+  }
+  .status-badge.running::before { animation: blink 1.1s steps(2, start) infinite; }
+  .status-badge.replied {
+    color: var(--success); border-color: color-mix(in srgb, var(--success) 50%, transparent);
+    background: var(--success-bg);
+  }
+  .status-badge.error {
+    color: var(--error); border-color: color-mix(in srgb, var(--error) 60%, transparent);
+    background: var(--error-bg);
+  }
+
+  /* Box interior: collapses to just the model core when idle, expands with a
+     momentary "model doing" card and live tool cards. */
+  .agent-body {
+    display: flex; gap: 14px; align-items: stretch;
+    padding: 16px;
+  }
+  .core-col { display: flex; flex-direction: column; gap: 9px; flex-shrink: 0; }
+  .think-bay:empty { display: none; }
+
+  .model-core {
+    width: 132px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    border-radius: 12px; padding: 13px 10px;
+    border: 1.5px solid var(--border-strong);
+    background: radial-gradient(circle at 50% 38%, var(--bg-elevated), var(--bg-surface-2));
+    color: var(--text-tertiary);
+    transition: color .25s, border-color .25s, box-shadow .25s, background .25s;
+  }
+  .model-core .mc-glyph { font-size: 24px; line-height: 1; }
+  .model-core .mc-label { font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; }
+  /* When the label holds an actual model id (during an interaction) it can be long and
+     hyphenated — drop the wide tracking/uppercasing so it fits the 132px core and wraps. */
+  .model-core .mc-label.mc-model { font-size: 10px; letter-spacing: 0.3px; text-transform: none; word-break: break-word; text-align: center; }
+  .model-core .mc-sub   { font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--text-tertiary); text-align: center; line-height: 1.4; word-break: break-word; }
+  /* Clickable once an interaction has ended and the core is showing its token usage. */
+  .model-core.clickable { cursor: pointer; }
+  .model-core.clickable:hover { border-color: var(--accent); }
+  /* Exactly two states: dormant, or a STEADY bright highlight held for every tick
+     inside a model_interaction_started → model_interaction_ended bracket. No
+     pulsing — the highlight reflects only whether the model is mid-interaction. */
+  .model-core.active {
+    color: var(--accent); border-color: var(--accent);
+    background: radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--accent) 26%, var(--bg-elevated)), var(--bg-surface-2));
+    box-shadow: 0 0 30px color-mix(in srgb, var(--accent) 34%, transparent),
+                inset 0 0 18px color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  .model-core.active .mc-sub { color: var(--accent); }
+  .agent-enclosure.error .model-core { border-color: color-mix(in srgb, var(--error) 50%, var(--border-strong)); }
+
+  /* The tool bay — a flexible spacer that grows the box with concurrent calls. */
+  .tool-bay {
+    flex: 1; min-width: 0;
+    display: flex; flex-wrap: wrap; align-content: flex-start; gap: 10px;
+    padding: 4px; border-radius: 10px;
+    border: 1px dashed transparent;
+    position: relative;
+    transition: border-color .25s, background .25s;
+  }
+  .tool-bay.active { border-color: var(--border); background: rgba(0,0,0,0.12); }
+
+  /* ---- Activity cards (tool / thinking / message) — clickable to inspect -- */
+  .act-card {
+    width: 138px; flex: 0 0 auto;
+    border-radius: 9px; padding: 9px 11px;
+    border: 1.5px solid var(--tone);
+    background: color-mix(in srgb, var(--tone) 13%, var(--bg-surface-2));
+    transition: border-color .25s, background .25s, box-shadow .25s, transform .18s;
+    transform-origin: center; position: relative; cursor: pointer;
+  }
+  .act-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.4), 0 0 0 1px var(--tone); }
+  .act-card .ac-head { display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; }
+  .act-card .ac-name { font-size: 11px; font-weight: 700; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act-card .ac-id   { font-size: 9px; color: var(--text-tertiary); margin-left: auto; flex-shrink: 0; }
+  .act-card .ac-state {
+    font-size: 8.5px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--tone);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .act-card .ac-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--tone); flex-shrink: 0; }
+  .act-card .ac-preview {
+    margin-top: 6px; font-size: 9.5px; line-height: 1.35; color: var(--text-secondary);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word;
+  }
+  .act-card .ac-expand {
+    position: absolute; top: 7px; right: 8px; font-size: 10px; color: var(--text-tertiary);
+    opacity: 0; transition: opacity .18s;
+  }
+  .act-card:hover .ac-expand { opacity: .9; }
+  .act-card.running { box-shadow: 0 0 0 1px color-mix(in srgb, var(--tone) 35%, transparent); animation: toolrun 1.3s ease-in-out infinite; }
+  @keyframes toolrun {
+    0%, 100% { box-shadow: 0 0 4px color-mix(in srgb, var(--tone) 35%, transparent); }
+    50%      { box-shadow: 0 0 16px color-mix(in srgb, var(--tone) 70%, transparent); }
+  }
+  .act-card.running .ac-state::before { animation: blink 1s steps(2, start) infinite; }
+  .act-card.enter { animation: cardIn .34s cubic-bezier(.2,.9,.3,1.2); }
+  @keyframes cardIn { from { opacity: 0; transform: scale(.7) translateY(8px); } }
+  .act-card.ping { animation: cardPing .5s ease-out; }
+  @keyframes cardPing { 0%,100% { box-shadow: 0 0 4px var(--tone); } 45% { box-shadow: 0 0 18px var(--tone); } }
+  .act-card.returning { box-shadow: 0 0 22px var(--tone); transform: scale(1.04); }
+  .act-card.leaving { animation: cardOut .5s ease-in forwards; }
+  @keyframes cardOut { to { opacity: 0; transform: scale(.62); } }
+
+  /* ---- Inspector overlay (click a card / chip / terminal to read it) ----- */
+  .inspector { position: fixed; inset: 0; z-index: 50; display: none; }
+  .inspector.open { display: block; }
+  .insp-backdrop { position: absolute; inset: 0; background: rgba(8,8,9,0.62); backdrop-filter: blur(2px); }
+  .insp-panel {
+    position: absolute; top: 0; right: 0; height: 100%; width: min(440px, 92vw);
+    background: linear-gradient(180deg, var(--bg-surface-2), var(--bg-surface-1));
+    border-left: 1px solid var(--border-strong);
+    box-shadow: -18px 0 50px rgba(0,0,0,0.5);
+    display: flex; flex-direction: column;
+    animation: drawerIn .26s cubic-bezier(.2,.8,.3,1);
+  }
+  @keyframes drawerIn { from { transform: translateX(28px); opacity: 0; } }
+  .insp-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px 18px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  .insp-title { font-size: 13px; font-weight: 700; letter-spacing: 1px; color: var(--text-primary); }
+  .insp-state {
+    font-size: 9px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--tone);
+    border: 1px solid var(--tone); border-radius: 20px; padding: 3px 9px;
+  }
+  .insp-close {
+    margin-left: auto; width: 28px; height: 28px; border-radius: 6px;
+    border: 1px solid var(--border-strong); background: var(--bg-surface-3);
+    color: var(--text-secondary); cursor: pointer; font-size: 13px; line-height: 1;
+  }
+  .insp-close:hover { color: var(--accent); border-color: var(--accent); }
+  .insp-body { padding: 16px 18px 26px; overflow-y: auto; }
+  .insp-section { margin-bottom: 18px; }
+  .insp-label { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: var(--text-tertiary); margin-bottom: 7px; }
+  .insp-pre {
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.5; color: var(--text-primary);
+    background: var(--bg-base); border: 1px solid var(--border); border-radius: 8px;
+    padding: 11px 13px; white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow-y: auto;
+  }
+
+  /* ---- History scrubber + transport controls --------------------------- */
+  .scrubber {
+    display: flex; align-items: center; gap: 10px;
+    margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border);
+  }
+  .ctrl-btn {
+    font-family: var(--mono); font-size: 13px; line-height: 1;
+    width: 34px; height: 30px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 7px; border: 1px solid var(--border-strong);
+    background: var(--bg-surface-3); color: var(--text-secondary); cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .ctrl-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+  .ctrl-btn:disabled { opacity: .35; cursor: default; }
+  .ctrl-btn.active { color: var(--queue); border-color: color-mix(in srgb, var(--queue) 45%, transparent); }
+  /* Taller than a bare slider so the usage chart has room ABOVE the track. The track,
+     the chart's baseline, and the turn-ticks all share one bottom line (~10px up, leaving
+     room for the thumb's lower half), so the area grows UP from the timeline. */
+  .scrub-wrap { position: relative; flex: 1; height: 46px; }
+  .turn-ticks { position: absolute; left: 0; right: 0; bottom: 2px; top: auto; height: 16px; pointer-events: none; z-index: 2; }
+  .turn-tick {
+    position: absolute; top: 50%; transform: translate(-50%, -50%);
+    width: 3px; height: 16px; border-radius: 1.5px; pointer-events: auto; cursor: pointer;
+    background: var(--queue); box-shadow: 0 0 6px color-mix(in srgb, var(--queue) 60%, transparent);
+    opacity: .75; transition: opacity .15s, height .15s;
+  }
+  .turn-tick:hover { opacity: 1; height: 20px; }
+  .live-btn {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 1.2px;
+    text-transform: uppercase; white-space: nowrap; flex-shrink: 0;
+    /* Fixed width sized for the wider "○ JUMP TO LIVE" label (~100px of monospace glyphs
+       + letter-spacing, plus padding) so the timeline doesn't resize when the button
+       toggles to the shorter "● LIVE". Flex-center the label within that fixed box. */
+    width: 134px; box-sizing: border-box;
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 7px 12px; border-radius: 7px;
+    border: 1px solid var(--border-strong); background: var(--bg-surface-3);
+    color: var(--text-tertiary); cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .live-btn.following {
+    color: var(--success); cursor: default;
+    border-color: color-mix(in srgb, var(--success) 45%, transparent);
+    background: var(--success-bg);
+  }
+  .live-btn:not(.following):hover { color: var(--accent); border-color: var(--border-strong); }
+  /* Fixed-width readout so the slider never resizes as you scrub. The event
+     TYPE is intentionally NOT shown here — it is legible in the animation above. */
+  .scrub-readout {
+    font-size: 11px; color: var(--text-secondary); white-space: nowrap;
+    width: 118px; text-align: right; font-variant-numeric: tabular-nums; flex-shrink: 0;
+  }
+  input[type=range]#scrub {
+    position: absolute; left: 0; right: 0; bottom: 8px; width: 100%; z-index: 3;
+    -webkit-appearance: none; appearance: none;
+    height: 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg-surface-3) 78%, transparent);
+    outline: none; cursor: pointer;
+  }
+  input[type=range]#scrub:disabled { opacity: .4; cursor: default; }
+  input[type=range]#scrub:focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+  input[type=range]#scrub::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--accent); border: 2px solid var(--bg-base); box-shadow: 0 0 0 1px var(--accent);
+    position: relative; z-index: 2;
+  }
+  input[type=range]#scrub::-moz-range-thumb {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--accent); border: 2px solid var(--bg-base);
+  }
+
+  /* ---- Token usage: a fixed top strip (per-model totals) ----------------- */
+  /* Not a panel/card — a flat strip pinned to the top of the scrollable main, with the
+     page background so content scrolls cleanly beneath it. */
+  .usage-bar {
+    position: sticky; top: 0; z-index: 40;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+    padding: 8px 2px; margin-bottom: -8px;
+    background: var(--bg-base); border-bottom: 1px solid var(--border);
+  }
+  .usage-bar-label { font-size: 10px; letter-spacing: 2.5px; text-transform: uppercase; color: var(--text-tertiary); }
+  .usage-readout { margin-left: auto; color: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .model-usage { display: flex; flex-wrap: wrap; gap: 8px; }
+  .model-usage:empty { display: none; }
+  .mu-chip {
+    display: flex; flex-direction: column; gap: 2px;
+    border: 1px solid var(--border); border-radius: 9px; padding: 6px 10px;
+    background: var(--bg-elevated);
+  }
+  .mu-model { font-size: 12px; font-weight: 600; color: var(--accent); }
+  .mu-stats { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .mu-stats.mu-calls { color: var(--text-tertiary); }
+
+  /* ---- Token-usage area chart, overlaid behind the scrub track ----------- */
+  /* Absolutely fills .scrub-wrap so its x-axis is EXACTLY the timeline's width — every
+     column lines up 1:1 with a scrub position. Behind the slider (z-index 1) and
+     pointer-transparent so dragging the slider still works; hover is handled on the wrap. */
+  /* Baseline (svg bottom) sits on the track line at 10px up, so the area's flat base IS
+     the timeline; it rises 34px toward the top of the 46px wrap.
+     NOTE: the height MUST be an explicit pixel value, not `auto`. An inline SVG with
+     `height:auto` derives its height from the viewBox's intrinsic ratio (cols:100), so a
+     short session (few columns) computes an enormous height and shoots off the bottom of
+     the page. With preserveAspectRatio="none" the viewBox stretches to fill this fixed box,
+     so x still lines up 1:1 with the track. */
+  .usage-chart {
+    position: absolute; left: 0; right: 0; bottom: 10px; width: 100%; height: 34px;
+    z-index: 1; pointer-events: none; overflow: visible;
+  }
+  .usage-chart .uc-area { fill: color-mix(in srgb, var(--accent) 20%, transparent); }
+  .usage-chart .uc-line { fill: none; stroke: var(--accent); stroke-width: 1.5; opacity: 0.85; }
+  /* Hover summary card — floats above the track, follows the cursor's x. */
+  .usage-tip {
+    position: absolute; bottom: calc(100% + 8px); z-index: 20; pointer-events: none;
+    transform: translateX(-50%); white-space: nowrap;
+    background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 8px;
+    padding: 7px 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  }
+  .usage-tip[hidden] { display: none; }
+  .usage-tip .ut-model { font-size: 12px; font-weight: 600; color: var(--accent); }
+  .usage-tip .ut-stats { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .usage-tip .ut-empty { font-size: 11px; color: var(--text-tertiary); }
+
+  /* ---- Legend ----------------------------------------------------------- */
+  #legend { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+  .legend-item {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 10px; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-secondary);
+  }
+  .legend-swatch { width: 11px; height: 11px; border-radius: 3px; border: 1.5px solid var(--tone); background: color-mix(in srgb, var(--tone) 22%, transparent); }
+
+  /* ---- Live HITL approvals (developer override surface) ----------------- */
+  /* A floating panel, deliberately decoupled from the scrubber: it tracks tool
+     calls awaiting approval at the LIVE head and resolves them via /api/approve,
+     so a developer can drive human-in-the-loop without building their own UI. */
+  .live-approvals {
+    position: fixed; right: 18px; bottom: 18px; z-index: 60;
+    width: 348px; max-height: 72vh; overflow-y: auto;
+    background: var(--bg-elevated); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: 0 12px 44px rgba(0,0,0,0.55); padding: 12px 14px;
+  }
+  .live-approvals[hidden] { display: none; }
+  .la-head {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+    font-size: 11px; letter-spacing: 0.7px; text-transform: uppercase; color: var(--warning);
+  }
+  .la-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); box-shadow: 0 0 8px var(--warning); }
+  .la-count { margin-left: auto; color: var(--text-secondary); letter-spacing: 0; text-transform: none; }
+  .la-item { border: 1px solid var(--border); border-radius: 9px; padding: 9px 10px; margin-bottom: 9px;
+             background: color-mix(in srgb, var(--warning) 8%, transparent); }
+  .la-item:last-child { margin-bottom: 0; }
+  .la-name { font-weight: 600; font-size: 13px; }
+  .la-id { color: var(--text-secondary); font-size: 11px; margin-left: 6px; font-variant-numeric: tabular-nums; }
+  .la-input { font-size: 11px; color: var(--text-secondary); margin: 5px 0 7px; word-break: break-word; }
+  .la-reason {
+    width: 100%; box-sizing: border-box; font: inherit; font-size: 11px; padding: 4px 7px; margin-bottom: 7px;
+    background: var(--bg-surface-3); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px;
+  }
+  .la-reason:focus { outline: none; border-color: var(--accent); }
+  .la-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .la-actions button {
+    font: inherit; font-size: 11px; padding: 4px 9px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg-surface-3); color: var(--text-primary);
+  }
+  .la-actions button.la-approve { border-color: var(--accent); color: var(--accent); }
+  .la-actions button.la-approve:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  .la-actions button.la-remember { border-color: var(--accent); color: var(--accent); opacity: 0.82; }
+  .la-actions button.la-remember:hover { opacity: 1; background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  .la-actions button.la-deny:hover { background: var(--error-bg); color: var(--error); }
+  .la-actions button:disabled { opacity: 0.5; cursor: default; }
+  .la-error { color: var(--error); font-size: 11px; margin-top: 6px; }
+
+  @media (max-width: 720px) {
+    .live-approvals { left: 12px; right: 12px; width: auto; }
+    .stage { grid-template-columns: 1fr; gap: 18px; }
+    .lane { height: 70px; }
+    .trace, .port { display: none; }
+    .agent-body { flex-direction: column; }
+    .model-core { width: auto; flex-direction: row; gap: 12px; }
+    .insp-panel { width: 100vw; }
+  }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; } .status-badge.running::before { opacity: 1; } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="glyph">◈</span> Agent <span class="dim">/</span> Live Enclosure</h1>
+  <a class="nav-link" href="/">Chat ↗</a>
+  <div class="spacer"></div>
+  <select id="session"><option value="">— no sessions —</option></select>
+  <span id="status" class="chip">connecting</span>
+</header>
+
+<main>
+  <!-- Per-model token-usage totals — a fixed strip pinned to the top of the page (not a
+       card). The agent may switch models mid-session or use several, so one chip per
+       model. Hidden until the first model interaction completes. -->
+  <div class="usage-bar" id="usage-bar" hidden>
+    <span class="usage-bar-label">Tokens</span>
+    <div class="model-usage" id="model-usage"></div>
+    <span class="usage-readout" id="usage-readout"></span>
+  </div>
+
+  <section class="panel">
+    <div class="panel-title">Agent runtime <span class="rule"></span> <span id="turn-meta"></span></div>
+
+    <div class="stage" id="stage">
+      <!-- INGRESS: signals arrive from outside and dock at the box's left port -->
+      <div class="lane ingress" id="ingress-lane">
+        <div class="lane-cap">
+          <span class="lane-tag">Ingress</span>
+          <span class="lane-sub" id="queue-readout">idle</span>
+        </div>
+        <div class="trace"></div>
+        <div class="msg-slot" id="msg-slot"></div>
+        <div class="queue-stack" id="queue-stack"></div>
+      </div>
+
+      <!-- THE AGENT, as a box that renders only what's happening right now -->
+      <div class="agent-enclosure" id="agent">
+        <div class="scanline"></div>
+        <div class="port port-in" id="port-in"></div>
+        <div class="port port-out" id="port-out"></div>
+        <div class="agent-head">
+          <span class="agent-name"><span class="glyph">◈</span> Agent</span>
+          <span class="status-badge" id="agent-status">—</span>
+        </div>
+        <div class="agent-body">
+          <div class="core-col">
+            <div class="model-core" id="model-core">
+              <span class="mc-glyph">▣</span>
+              <span class="mc-label" id="model-label">Model</span>
+              <span class="mc-sub" id="model-sub">dormant</span>
+            </div>
+            <div class="think-bay" id="think-bay"></div>
+          </div>
+          <div class="tool-bay" id="tool-bay"></div>
+        </div>
+      </div>
+
+      <!-- EGRESS: the reply (or error) leaves through the right port -->
+      <div class="lane egress" id="egress-lane">
+        <div class="lane-cap">
+          <span class="lane-tag">Egress</span>
+          <span class="lane-sub" id="egress-readout">—</span>
+        </div>
+        <div class="trace"></div>
+        <div class="out-slot" id="out-slot"></div>
+        <div class="terminal" id="egress-terminal">reply</div>
+      </div>
+    </div>
+
+    <div class="scrubber">
+      <button id="prev-turn" class="ctrl-btn" title="Jump to previous turn" disabled>⏮</button>
+      <button id="play-btn" class="ctrl-btn" title="Play from here" disabled>▶</button>
+      <!-- The token-usage area chart is laid directly BEHIND the scrub track (exact same
+           width), so the curve has a 1:1 x-correspondence with timeline clicks: the slider
+           thumb is itself the position cursor. Hover anywhere over the track for a per-
+           interaction summary card. -->
+      <div class="scrub-wrap" id="scrub-wrap">
+        <svg class="usage-chart" id="usage-chart" preserveAspectRatio="none" viewBox="0 0 1 100" aria-hidden="true"></svg>
+        <input id="scrub" type="range" min="0" max="0" value="0" step="1" disabled
+               aria-label="Scrub through agent history">
+        <div class="turn-ticks" id="turn-ticks"></div>
+        <div class="usage-tip" id="usage-tip" hidden></div>
+      </div>
+      <button id="next-turn" class="ctrl-btn" title="Skip to next turn" disabled>⏭</button>
+      <span id="scrub-readout" class="scrub-readout">no events</span>
+      <button id="live-btn" class="live-btn following" title="Jump to the live tail">● LIVE</button>
+    </div>
+  </section>
+  <section class="panel" style="padding:14px 20px;"><div id="legend"></div></section>
+</main>
+
+<!-- Live HITL approvals (developer override) — only shown when calls are pending -->
+<div class="live-approvals" id="live-approvals" hidden></div>
+
+<!-- Inspector drawer -->
+<div class="inspector" id="inspector">
+  <div class="insp-backdrop" id="insp-backdrop"></div>
+  <div class="insp-panel">
+    <div class="insp-head">
+      <span class="insp-title" id="insp-title">—</span>
+      <span class="insp-state tone-neutral" id="insp-state"></span>
+      <button class="insp-close" id="insp-close" title="Close (Esc)">✕</button>
+    </div>
+    <div class="insp-body" id="insp-body"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+/* ===========================================================================
+ * 1. PROTOCOL MODEL — the single, declarative source of truth.
+ *
+ * Mirrors harness/agent_protocol/events.py (AgentEventType). The box renders the
+ * agent's CURRENT activity only — a state that is purely a function of the event
+ * prefix (status, turn number, queued messages, the live tool set, and ONE
+ * momentary "model is doing X" card that lasts a single tick). Because of that,
+ * any prefix reconstructs exactly, which is what keeps scrubbing / replay /
+ * jump-to-live correct (see §6). The renderer treats opaque payloads (thought /
+ * annotation deltas) as JSON — it knows nothing about any model SDK.
+ *
+ *   toolMachine — ONE tool call's lifecycle (requested → running → done/failed).
+ *     Each live tool card morphs through these states; its tone comes from here.
+ * =========================================================================== */
+
+const PROTOCOL_EVENTS = [
+  "message_queued", "turn_started", "turn_end",
+  "model_interaction_started", "model_interaction_ended",
+  "tool_requested", "tool_approval_requested", "tool_approval_resolved",
+  "tool_start", "tool_progress_delta", "tool_end", "tool_error",
+  "reply_delta", "thought_summary", "text_annotation",
+  "reply", "error",
+];
+
+const toolMachine = {
+  initial: "requested",
+  states: {
+    requested: { label: "requested", tone: "neutral" },
+    awaiting:  { label: "awaiting approval", tone: "queue" },
+    approved:  { label: "approved",  tone: "tools" },
+    running:   { label: "running",   tone: "tools" },
+    done:      { label: "done",      tone: "done" },
+    failed:    { label: "failed",    tone: "error" },
+    denied:    { label: "denied",    tone: "error" },
+  },
+};
+const toneOf = (state) => toolMachine.states[state].tone;
+
+// The card label for a resolved approval, built ONLY from the event's own fields
+// (``approved`` + the harness-supplied ``reason`` + ``remember``). The reason string
+// itself conveys provenance (e.g. "auto-approved by updated policy", "agent closed before
+// approval") — we surface it verbatim and never infer a category the event didn't send.
+// ``remember`` marks an "approve, and don't ask again" decision (tool now allow-listed).
+function resolutionText(approved, reason, remember) {
+  const verb = approved ? "approved" : "denied";
+  let t = reason ? `${verb} · ${reason}` : verb;
+  if (remember) t += " · remembered";
+  return t;
+}
+
+// Documentation-honesty guard: every protocol event must be handled by the
+// driver, and the driver must not invent events the protocol doesn't define.
+const DRIVEN_EVENTS = new Set([
+  "message_queued", "turn_started", "turn_end",
+  "model_interaction_started", "model_interaction_ended",
+  "tool_requested", "tool_approval_requested", "tool_approval_resolved",
+  "tool_start", "tool_progress_delta", "tool_end", "tool_error",
+  "reply_delta", "thought_summary", "text_annotation", "reply", "error",
+]);
+(function assertDriverMirrorsProtocol() {
+  for (const ev of DRIVEN_EVENTS)
+    if (!PROTOCOL_EVENTS.includes(ev)) console.warn(`[protocol drift] driver handles event not in AgentEventType: ${ev}`);
+  for (const ev of PROTOCOL_EVENTS)
+    if (!DRIVEN_EVENTS.has(ev)) console.warn(`[protocol drift] AgentEventType not handled by driver: ${ev}`);
+})();
+
+/* ===========================================================================
+ * 2. DOM HELPERS
+ * =========================================================================== */
+
+function el(tag, attrs, kids) {
+  const n = document.createElement(tag);
+  for (const k in (attrs || {})) {
+    if (k === "class") n.className = attrs[k];
+    else if (k === "onclick") n.addEventListener("click", attrs[k]);
+    else if (attrs[k] != null) n.setAttribute(k, attrs[k]);
+  }
+  if (kids != null) {
+    if (typeof kids === "string") n.textContent = kids;
+    else for (const c of kids) if (c != null) n.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  }
+  return n;
+}
+function flash(node, cls, ms, extra) {
+  node.classList.remove(cls, ...(extra || []));
+  void node.offsetWidth;                       // restart the animation
+  node.classList.add(cls, ...(extra || []));
+  setTimeout(() => node.classList.remove(cls, ...(extra || [])), ms);
+}
+
+// --- Exit-animation registry ------------------------------------------------
+// Disappear animations run on timers, but ticks can arrive far faster than the
+// timer (initial catch-up once `replaying` flips, or holding the arrow key to
+// scrub). On a fixed timer those fades would outlive their tick and pile up, so
+// the box would show more concurrent activity than was ever really live. Every
+// timed node-removal registers here; finalizeExits() force-completes them — an
+// exit that began on one tick is therefore always gone before the next tick ends.
+const pendingExits = new Set();
+function scheduleExit(node, totalMs, { phases = [], onDone } = {}) {
+  const timers = [];
+  const finalize = () => {
+    if (!pendingExits.delete(finalize)) return;  // already finalized
+    timers.forEach(clearTimeout);
+    node.remove();
+    if (onDone) onDone();
+  };
+  for (const ph of phases) timers.push(setTimeout(() => node.classList.add(ph.class), ph.at));
+  timers.push(setTimeout(finalize, totalMs));
+  pendingExits.add(finalize);
+}
+function finalizeExits() { for (const f of [...pendingExits]) f(); }
+// One-line, SDK-agnostic preview for an opaque payload: a string as-is, anything
+// else as compact JSON. Truncated for the card; the inspector shows it in full.
+function previewOf(value, max = 90) {
+  const s = typeof value === "string" ? value : JSON.stringify(value);
+  if (!s) return "—";
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
+/* ===========================================================================
+ * 3. THE INSPECTOR — a drawer that renders a snapshot as plain text / JSON.
+ * A snapshot is { title, state, tone, id?, sections: [{label, value}] } where a
+ * string value renders as text and anything else as pretty JSON. No SDK shapes.
+ * =========================================================================== */
+
+const inspector = document.getElementById("inspector");
+const inspTitle  = document.getElementById("insp-title");
+const inspState  = document.getElementById("insp-state");
+const inspBody   = document.getElementById("insp-body");
+
+function inspSection(label, value) {
+  if (value == null || value === "") return null;
+  if (typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0) return null;
+  if (Array.isArray(value) && value.length === 0) return null;
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  return el("div", { class: "insp-section" }, [
+    el("div", { class: "insp-label" }, label),
+    el("pre", { class: "insp-pre" }, text),
+  ]);
+}
+function openInspector(snap) {
+  if (!snap) return;
+  inspTitle.textContent = snap.title || "Detail";
+  inspState.textContent = snap.state || "";
+  inspState.className = "insp-state tone-" + (snap.tone || "neutral");
+  inspBody.innerHTML = "";
+  const parts = [];
+  if (snap.id) parts.push(inspSection("Tool ID", snap.id));
+  for (const s of (snap.sections || [])) parts.push(inspSection(s.label, s.value));
+  const real = parts.filter(Boolean);
+  if (!real.length) real.push(el("div", { class: "insp-label" }, "no detail captured for this event"));
+  for (const p of real) inspBody.appendChild(p);
+  inspector.classList.add("open");
+}
+function closeInspector() { inspector.classList.remove("open"); }
+document.getElementById("insp-close").addEventListener("click", closeInspector);
+document.getElementById("insp-backdrop").addEventListener("click", closeInspector);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeInspector(); });
+
+// Shared card factory: builds a clickable activity card and wires inspection.
+function buildCard({ tone, name, id, state, preview, animate, snapshot }) {
+  const card = el("div", {
+    class: `act-card tone-${tone}${animate ? " enter" : ""}`,
+    onclick: () => openInspector(snapshot()),
+  }, [
+    el("span", { class: "ac-expand" }, "⤢"),
+    el("div", { class: "ac-head" }, [
+      el("span", { class: "ac-name" }, name),
+      id ? el("span", { class: "ac-id" }, "#" + id) : null,
+    ]),
+    el("div", { class: "ac-state" }, state),
+    preview != null ? el("div", { class: "ac-preview" }, preview) : null,
+  ]);
+  return { card, stateEl: card.querySelector(".ac-state") };
+}
+
+/* ===========================================================================
+ * 4. RENDER LAYER — controllers that reflect CURRENT state onto the enclosure.
+ * Each method takes `animate`: when false (scrub rebuild) it sets the resting
+ * state with no signals; when true (live / single-step) it plays them.
+ * =========================================================================== */
+
+const agentEl     = document.getElementById("agent");
+const agentStatus = document.getElementById("agent-status");
+const portIn      = document.getElementById("port-in");
+const portOut     = document.getElementById("port-out");
+const ingressLane = document.getElementById("ingress-lane");
+const egressLane  = document.getElementById("egress-lane");
+const queueStack  = document.getElementById("queue-stack");
+const queueReadout= document.getElementById("queue-readout");
+const egressTerm  = document.getElementById("egress-terminal");
+const egressSub   = document.getElementById("egress-readout");
+const stageEl     = document.getElementById("stage");
+
+// --- The model core inside the box: a binary highlight (dormant / bright) held ON for
+// the whole model_interaction_started → ended bracket. While active, its label shows the
+// MODEL NAME (so you can read which model is generating from the start of the interaction,
+// for its whole duration); the sub line carries the momentary activity note
+// (active / thinking / citing / streaming), which the label is deliberately kept clear of. ---
+const model = {
+  el: document.getElementById("model-core"),
+  label: document.getElementById("model-label"),
+  sub: document.getElementById("model-sub"),
+  _detail: null,
+  activate(modelName) {
+    this.el.classList.add("active");
+    this.el.classList.remove("clickable");
+    this._detail = null;
+    this.label.textContent = modelName || "Model";
+    this.label.classList.toggle("mc-model", !!modelName);
+    this.sub.textContent = "active";
+  },
+  deactivate() {
+    this.el.classList.remove("active", "clickable");
+    this._detail = null;
+    this.label.textContent = "Model";
+    this.label.classList.remove("mc-model");
+    this.sub.textContent = "dormant";
+  },
+  // The interaction ended: the core itself drops out of "active" but KEEPS the model name
+  // and now shows this interaction's token totals on its sub line — no extra card. The
+  // core becomes clickable to open the full per-field usage in the inspector.
+  end(modelName, usage) {
+    this.el.classList.remove("active");
+    this.label.textContent = modelName || "Model";
+    this.label.classList.toggle("mc-model", !!modelName);
+    this.sub.textContent = usage ? tokenSummary(usage) : "done";
+    this._detail = { title: "Model interaction", state: "ended", tone: "model",
+      sections: [{ label: "Model", value: modelName }, { label: "Token usage", value: usage }] };
+    this.el.classList.toggle("clickable", !!usage);
+  },
+  note(text) { if (this.el.classList.contains("active")) this.sub.textContent = text; },
+};
+model.el.addEventListener("click", () => { if (model._detail) openInspector(model._detail); });
+
+/* ===========================================================================
+ * 4c. TOKEN-USAGE ANALYTICS — per-model aggregates (a fixed top strip) + an area chart
+ * laid behind the scrub track (1:1 with the timeline, hover for a per-interaction card).
+ * Both derived from the eventLog (model_interaction_started/ended pairs); rebuilt as
+ * interactions complete.
+ * =========================================================================== */
+const usageBar      = document.getElementById("usage-bar");
+const usageReadout  = document.getElementById("usage-readout");
+const modelUsageEl  = document.getElementById("model-usage");
+const usageChart    = document.getElementById("usage-chart");
+const scrubWrap     = document.getElementById("scrub-wrap");
+const usageTip      = document.getElementById("usage-tip");
+const SVGNS = "http://www.w3.org/2000/svg";
+const UC_H = 100;  // viewBox height; width = event count (preserveAspectRatio=none stretches it to the track)
+const ucArea = document.createElementNS(SVGNS, "path"); ucArea.setAttribute("class", "uc-area");
+const ucLine = document.createElementNS(SVGNS, "path");
+ucLine.setAttribute("class", "uc-line"); ucLine.setAttribute("vector-effect", "non-scaling-stroke");
+usageChart.append(ucArea, ucLine);
+let lastInteractions = [];   // completed interactions from the last rebuild (for the hover card)
+
+// One model interaction's token total — input + output ONLY. The provider's own
+// `total_tokens` also folds in thought / cached / tool-use tokens, which inflates it
+// confusingly; the full breakdown stays available by clicking the model core.
+function ioTotal(usage) {
+  if (!usage) return 0;
+  return (usage.input_tokens || 0) + (usage.output_tokens || 0);
+}
+// Compact token formatting for dense readouts (1,230 → "1.2k", 2_000_000 → "2.0M").
+function fmtTokens(n) {
+  if (n == null) return "—";
+  if (n < 1000) return String(n);
+  if (n < 1e6) return (n / 1000).toFixed(n < 1e4 ? 1 : 0) + "k";
+  return (n / 1e6).toFixed(1) + "M";
+}
+// Pair started/ended events into completed interactions, each tagged with the event-index
+// span it occupied (used to spread its tokens across the timeline). One still in flight
+// (no ended yet) is omitted until its usage is known.
+function computeInteractions() {
+  const out = [];
+  let start = null, startModel = null;
+  eventLog.forEach((e, i) => {
+    if (e.event === "model_interaction_started") {
+      start = i; startModel = e.data.model || null;
+    } else if (e.event === "model_interaction_ended" && start != null) {
+      out.push({ model: e.data.model || startModel, usage: e.data.usage || null,
+                 total: ioTotal(e.data.usage), start, end: i });
+      start = null; startModel = null;
+    }
+  });
+  return out;
+}
+
+// Monotone cubic Hermite interpolation (Fritsch–Carlson) → cubic-bézier. The token series is
+// step-like (each interaction is a flat plateau), and a plain Catmull-Rom spline overshoots
+// on steps — it throws "devil-horn" spikes up at each plateau's edges and sags in between.
+// A monotone fit is overshoot-free by construction: flat plateaus stay perfectly flat and
+// the rises/falls between interaction levels bow as smooth, professional S-curves. Uniform
+// x spacing (1 per column) keeps the tangent math simple.
+// Pre-smooth the step series before the monotone fit: each pass blends every point with its
+// neighbours (a [0.25, 0.5, 0.25] kernel), turning the blocky plateau edges into gentle ramps
+// so the curve reads as rolling hills rather than tight steps. More passes → rounder. Endpoints
+// are pinned. Wide plateaus keep most of their height (only the few columns nearest an edge
+// soften), so relative interaction heights stay legible.
+function softenSteps(points, passes) {
+  let ys = points.map(p => p.y);
+  for (let k = 0; k < passes; k++) {
+    const next = ys.slice();
+    for (let i = 1; i < ys.length - 1; i++) next[i] = ys[i - 1] * 0.25 + ys[i] * 0.5 + ys[i + 1] * 0.25;
+    ys = next;
+  }
+  return points.map((p, i) => ({ x: p.x, y: ys[i] }));
+}
+
+function smoothTop(points) {
+  const m = points.length;
+  if (m === 0) return "";
+  if (m === 1) return `M ${points[0].x} ${points[0].y.toFixed(2)}`;
+
+  // Secant slopes between consecutive points.
+  const delta = [];
+  for (let i = 0; i < m - 1; i++) {
+    delta.push((points[i + 1].y - points[i].y) / (points[i + 1].x - points[i].x));
+  }
+  // Initial tangents: average of neighbouring secants, endpoints take the one-sided secant.
+  const tan = new Array(m);
+  tan[0] = delta[0];
+  tan[m - 1] = delta[m - 2];
+  for (let i = 1; i < m - 1; i++) {
+    // A sign change (or a flat on either side) is a local extremum → zero tangent keeps it flat.
+    tan[i] = (delta[i - 1] * delta[i] <= 0) ? 0 : (delta[i - 1] + delta[i]) / 2;
+  }
+  // Fritsch–Carlson limiter: clamp tangents into the circle of radius 3 so no segment can
+  // overshoot its endpoints. Flat secants force both tangents to 0 (a true plateau).
+  for (let i = 0; i < m - 1; i++) {
+    if (delta[i] === 0) { tan[i] = 0; tan[i + 1] = 0; continue; }
+    const a = tan[i] / delta[i], b = tan[i + 1] / delta[i];
+    const s = a * a + b * b;
+    if (s > 9) {
+      const t = 3 / Math.sqrt(s);
+      tan[i] = t * a * delta[i];
+      tan[i + 1] = t * b * delta[i];
+    }
+  }
+  // Emit each Hermite segment as a cubic bézier (control points at ±1/3 of the tangent).
+  let d = `M ${points[0].x} ${points[0].y.toFixed(2)}`;
+  for (let i = 0; i < m - 1; i++) {
+    const h = points[i + 1].x - points[i].x;
+    const c1x = points[i].x + h / 3,     c1y = points[i].y + tan[i] * h / 3;
+    const c2x = points[i + 1].x - h / 3, c2y = points[i + 1].y - tan[i + 1] * h / 3;
+    d += ` C ${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${points[i + 1].x} ${points[i + 1].y.toFixed(2)}`;
+  }
+  return d;
+}
+
+function rebuildAnalytics() {
+  const interactions = computeInteractions();
+  lastInteractions = interactions;
+  if (interactions.length === 0) {
+    usageBar.hidden = true;
+    ucArea.removeAttribute("d"); ucLine.removeAttribute("d");
+    usageTip.hidden = true;
+    return;
+  }
+  usageBar.hidden = false;
+
+  // Per-model aggregate — the agent may switch models mid-session or use several. "total"
+  // is input + output only (see ioTotal).
+  const agg = new Map();
+  let sessionTotal = 0, maxTotal = 0, minTotal = Infinity;
+  for (const it of interactions) {
+    const key = it.model || "(unknown model)";
+    const a = agg.get(key) || { input: 0, output: 0, total: 0, count: 0 };
+    const u = it.usage || {};
+    a.input += u.input_tokens || 0;
+    a.output += u.output_tokens || 0;
+    a.total += it.total;
+    a.count += 1;
+    agg.set(key, a);
+    sessionTotal += it.total;
+    if (it.total > maxTotal) maxTotal = it.total;
+    if (it.total < minTotal) minTotal = it.total;
+  }
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  usageReadout.textContent =
+    `${fmtTokens(sessionTotal)} tokens · ${plural(interactions.length, "model interaction")} · ${plural(agg.size, "model")}`;
+  modelUsageEl.innerHTML = "";
+  for (const [m, a] of agg) {
+    modelUsageEl.appendChild(el("div", { class: "mu-chip" }, [
+      el("div", { class: "mu-model" }, m),
+      el("div", { class: "mu-stats" }, `${fmtTokens(a.input)} in · ${fmtTokens(a.output)} out · ${fmtTokens(a.total)} total`),
+      el("div", { class: "mu-stats mu-calls" }, plural(a.count, "model interaction")),
+    ]));
+  }
+
+  // Area chart over the event timeline: each interaction holds its FULL token total as a
+  // flat plateau across every column from its start to its end — height reads as the
+  // interaction's actual token usage, independent of how many events/clicks it spanned.
+  // (Spreading the total across the span would shrink a long interaction below a short
+  // one that used fewer tokens, inverting the visual.) Interactions don't overlap, so each
+  // column belongs to at most one; gaps between them rest at the baseline. Y normalizes to
+  // the largest interaction total so the heaviest one reaches the top. The viewBox width =
+  // column count, stretched to the track's exact width, so x lines up 1:1 with the scrubber.
+  const n = eventLog.length;
+  const series = new Array(n).fill(0);
+  const active = new Array(n).fill(false);   // columns that belong to an interaction (vs. baseline gaps)
+  for (const it of interactions) {
+    for (let i = it.start; i <= it.end; i++) { series[i] = it.total; active[i] = true; }
+  }
+  const cols = Math.max(n - 1, 1);
+  usageChart.setAttribute("viewBox", `0 0 ${cols} ${UC_H}`);
+  // Rescale across the interactions' OWN min→max range (not 0→max) so differences between
+  // turns are visually exaggerated: the lightest interaction sits just above the baseline
+  // (FLOOR) and the heaviest reaches the top, everything else proportionally between. Gaps
+  // with no interaction rest flat on the baseline. (When all totals are equal, range is 0 →
+  // every interaction shows at full height.)
+  const FLOOR = 0.16;                         // lowest interaction's height fraction above baseline
+  const range = maxTotal - minTotal;
+  const points = series.map((v, i) => {
+    if (!active[i]) return { x: i, y: UC_H };                       // baseline gap
+    const norm = range > 0 ? (v - minTotal) / range : 1;           // 0 (lightest) → 1 (heaviest)
+    const frac = FLOOR + norm * (1 - FLOOR);                        // FLOOR → 1
+    return { x: i, y: UC_H - frac * UC_H };
+  });
+  // Soften the plateau edges, then re-pin baseline gaps back to the floor: the blur would
+  // otherwise lift the gaps off zero, blurring away the distinction between separate model
+  // interactions. Pinning keeps each gap dropping cleanly to the baseline.
+  const soft = softenSteps(points, 2);
+  for (let i = 0; i < soft.length; i++) if (!active[i]) soft[i].y = UC_H;
+  const top = smoothTop(soft);
+  ucLine.setAttribute("d", top);
+  ucArea.setAttribute("d", `${top} L ${cols} ${UC_H} L 0 ${UC_H} Z`);
+}
+
+// Hover the timeline for a per-interaction summary card. The chart shares the scrub track's
+// exact width, so the cursor's x maps 1:1 to an event index; we surface the interaction (if
+// any) covering it. Bound to the wrap (not the pointer-transparent svg) so dragging the
+// slider still works.
+function onScrubHover(e) {
+  const n = eventLog.length;
+  const rect = scrubWrap.getBoundingClientRect();
+  if (n < 1 || lastInteractions.length === 0 || rect.width === 0) { usageTip.hidden = true; return; }
+  const frac = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+  const idx = Math.round(frac * Math.max(n - 1, 0));
+  const it = lastInteractions.find(t => idx >= t.start && idx <= t.end);
+  usageTip.innerHTML = "";
+  if (!it) {
+    usageTip.appendChild(el("div", { class: "ut-empty" }, "no model interaction here"));
+  } else {
+    const u = it.usage || {};
+    usageTip.append(
+      el("div", { class: "ut-model" }, it.model || "(unknown model)"),
+      el("div", { class: "ut-stats" },
+        `${fmtTokens(u.input_tokens || 0)} in · ${fmtTokens(u.output_tokens || 0)} out · ${fmtTokens(it.total)} total`),
+    );
+  }
+  usageTip.style.left = `${frac * 100}%`;
+  usageTip.hidden = false;
+}
+scrubWrap.addEventListener("mousemove", onScrubHover);
+scrubWrap.addEventListener("mouseleave", () => { usageTip.hidden = true; });
+
+// Compact, click-free token summary for the model core's sub line (the full per-field
+// breakdown is in the inspector on click). "total" is input + output only, matching the
+// rest of the UI; handles missing usage / absent per-field counts gracefully.
+function tokenSummary(usage) {
+  if (!usage) return "token usage unavailable";
+  const fmt = (n) => (n == null ? "—" : n.toLocaleString());
+  const i = usage.input_tokens, o = usage.output_tokens;
+  return `${fmt(i)} in · ${fmt(o)} out · ${fmt((i || 0) + (o || 0))} total`;
+}
+
+// --- The status badge + box colour (idle / running / replied / error) ---
+function setAgentStatus(status, turnNumber) {
+  agentEl.classList.toggle("running", status === "running");
+  agentEl.classList.toggle("replied", status === "replied");
+  agentEl.classList.toggle("error",   status === "error");
+  agentStatus.className = "status-badge " + (status === "idle" ? "" : status);
+  if (status === "running")      agentStatus.textContent = `running · turn ${turnNumber ?? "?"}`;
+  else if (status === "replied") agentStatus.textContent = `replied ✓ · turn ${turnNumber ?? "?"}`;
+  else if (status === "error")   agentStatus.textContent = `error · turn ${turnNumber ?? "?"}`;
+  else agentStatus.textContent = turnNumber != null ? `idle · awaiting turn ${turnNumber + 1}` : "idle · awaiting first turn";
+}
+
+// --- Ingress: clickable queued-message chips + a docking signal packet ---
+const ingress = {
+  renderQueue(messages, animate) {
+    const prev = queueStack.children.length;
+    queueReadout.textContent = messages.length ? `${messages.length} queued` : "idle";
+    queueStack.innerHTML = "";
+    messages.forEach((msg, i) => {
+      const chip = el("div", { class: "q-chip", title: "click to read queued message",
+        onclick: () => openInspector({ title: "Queued message", state: "queued", tone: "queue",
+          sections: [{ label: "Message", value: msg }] }) }, "msg");
+      if (animate && i === messages.length - 1 && messages.length > prev) chip.classList.add("enter");
+      queueStack.appendChild(chip);
+    });
+  },
+  dock() {                                       // a message strikes the box's left port
+    const p = el("div", { class: "packet" });
+    ingressLane.appendChild(p);
+    scheduleExit(p, 700);
+    flash(portIn, "flash", 700);
+  },
+};
+
+// --- Egress: reply text streaming out as packets + the terminal it lands on ---
+const egress = {
+  _last: 0, _detail: null,
+  reset() {
+    egressTerm.textContent = "reply"; egressTerm.className = "terminal";
+    egressSub.textContent = "—"; this._detail = null;
+  },
+  stream(animate) {                              // a chunk of reply text flowing out
+    if (!animate) return;
+    const now = performance.now();
+    if (now - this._last < 110) return;
+    this._last = now;
+    const p = el("div", { class: "packet stream ok" });
+    egressLane.appendChild(p);
+    scheduleExit(p, 650);
+  },
+  emit(kind, turnNumber, detail, animate) {
+    const ok = kind === "reply";
+    egressTerm.textContent = ok ? "reply ✓" : "error";
+    egressTerm.className = "terminal lit " + (ok ? "tone-done" : "tone-error");
+    egressSub.textContent = ok ? `turn ${turnNumber ?? "?"} replied` : `turn ${turnNumber ?? "?"} errored`;
+    this._detail = { title: ok ? "Reply" : "Error", state: ok ? "replied" : "error",
+      tone: ok ? "done" : "error", sections: [{ label: ok ? "Output" : "Error message", value: detail }] };
+    if (!animate) return;
+    const p = el("div", { class: "packet " + (ok ? "ok" : "err") });
+    egressLane.appendChild(p);
+    scheduleExit(p, 700);
+    flash(portOut, "flash", 700, [ok ? "ok" : "err"]);
+  },
+};
+egressTerm.addEventListener("click", () => openInspector(egress._detail));
+
+// --- The tool bay: cards appear on request; an ended card stays (done/failed,
+// clickable to read its OUTPUT) for its OWN tick and only retires on the NEXT
+// tick — so you can always pause on the terminal event and inspect it. ---
+function createToolBay(bayEl) {
+  const cards = new Map();                         // tool_id -> live inst
+  const retiring = new Map();                      // ended last tick, awaiting removal
+  const sync = () => bayEl.classList.toggle("active", bayEl.children.length > 0);
+
+  function make(id, data, animate) {
+    const short = String(id).slice(-5);
+    const inst = { id, short, name: data.tool_name || "tool", input: data.tool_input || {},
+                   output: null, error: null, resolution: null, state: "requested" };
+    const built = buildCard({
+      tone: toneOf("requested"), name: inst.name, id: short, state: "requested",
+      preview: Object.keys(inst.input).length ? previewOf(inst.input) : null, animate,
+      snapshot: () => ({ title: inst.name, state: inst.state, tone: toneOf(inst.state), id: inst.id,
+        sections: [{ label: "Input", value: inst.input },
+                   { label: "Approval", value: inst.resolution },
+                   { label: "Output", value: inst.output },
+                   { label: "Error", value: inst.error }] }),
+    });
+    inst.card = built.card; inst.stateEl = built.stateEl;
+    bayEl.appendChild(inst.card);
+    cards.set(id, inst); sync();
+    return inst;
+  }
+  function paint(inst, state) {
+    inst.card.className = `act-card tone-${toneOf(state)}${state === "running" ? " running" : ""}`;
+    inst.stateEl.textContent = state;
+    inst.state = state;
+  }
+
+  return {
+    get size() { return cards.size; },
+    spawn(id, data, animate) { paint(cards.get(id) || make(id, data, animate), "requested"); },
+    set(id, state, data, animate) { paint(cards.get(id) || make(id, data || {}, animate), state); },
+    // Record an approval decision on the card: stash exactly the event's fields
+    // ({approved, reason, remember}) for the inspector and replace the bare state text
+    // with a reason-bearing label (e.g. "approved · auto-approved by updated policy ·
+    // remembered"). An ended (denied) card has moved to `retiring` but is still in the
+    // DOM — find it there too.
+    resolve(id, approved, reason, remember, label) {
+      const inst = cards.get(id) || retiring.get(id);
+      if (!inst) return;
+      inst.resolution = { approved, reason: reason ?? null, remember: !!remember };
+      if (label) inst.stateEl.textContent = label;
+    },
+    progress(id, animate) { const i = cards.get(id); if (i && animate) flash(i.card, "ping", 500); },
+    end(id, state, data, animate) {                // terminal state shown NOW; retires next tick
+      const inst = cards.get(id) || make(id, data || {}, animate);
+      if (data && data.tool_output != null) inst.output = data.tool_output;
+      if (data && data.message != null) inst.error = data.message;
+      paint(inst, state);
+      cards.delete(id); retiring.set(id, inst);    // still in the DOM, still clickable
+    },
+    flushRetiring(animate) {                        // called at the top of the NEXT event
+      for (const [, inst] of retiring) {
+        const card = inst.card;
+        if (animate) { card.classList.add("returning"); scheduleExit(card, 920, { phases: [{ class: "leaving", at: 420 }], onDone: sync }); }
+        else card.remove();
+      }
+      retiring.clear(); sync();
+    },
+    clear() {
+      for (const [, i] of cards) i.card.remove();
+      for (const [, i] of retiring) i.card.remove();
+      cards.clear(); retiring.clear(); sync();
+    },
+  };
+}
+const tools = createToolBay(document.getElementById("tool-bay"));
+
+// --- A momentary card: shows the agent's MOST RECENT activity for one tick. ---
+// Cleared at the top of every event, so it never accumulates.
+function createMomentary(zoneEl) {
+  let card = null;
+  return {
+    has() { return !!card; },
+    show({ tone, name, state, preview, snapshot, animate }) {
+      this.clear();
+      card = buildCard({ tone, name, id: null, state, preview, animate, snapshot }).card;
+      zoneEl.appendChild(card);
+    },
+    clear() { if (card) { card.remove(); card = null; } },
+  };
+}
+const modelCard   = createMomentary(document.getElementById("think-bay")); // thinking / citation
+const ingressCard = createMomentary(document.getElementById("msg-slot"));   // incoming message
+const outCard     = createMomentary(document.getElementById("out-slot"));    // reply delta streaming out (egress lane)
+
+/* ===========================================================================
+ * 4b. LIVE HITL APPROVALS — a developer override surface.
+ *
+ * Deliberately SEPARATE from the replay box. The box is a pure function of the
+ * scrubbed event prefix; this panel tracks what is awaiting approval at the LIVE
+ * head, so it is fed from onStreamEvent (the real-time ingest) — NOT applyEvent
+ * (which also runs during scrub/replay and would corrupt the live set). It lets a
+ * developer resolve a pending call straight through /api/approve — including
+ * "approve & don't ask again" (remember) — without building their own interface or
+ * poking at the workflow with scripts. Actions stay enabled regardless of where the
+ * box is scrubbed, because the pending call is genuinely live.
+ * =========================================================================== */
+
+const liveApprovals = new Map();   // tool_id -> { tool_name, tool_input, turn_number }
+const liveApprovalsEl = document.getElementById("live-approvals");
+
+// Update the live set from a freshly-arrived stream event. Called once per real
+// event in onStreamEvent — never from the replay/scrub path.
+function trackLiveApproval(event, data) {
+  if (event === "tool_approval_requested") {
+    liveApprovals.set(data.tool_id, {
+      tool_name: data.tool_name, tool_input: data.tool_input || {}, turn_number: data.turn_number,
+    });
+    renderLiveApprovals();
+  } else if (event === "tool_approval_resolved") {
+    if (liveApprovals.delete(data.tool_id)) renderLiveApprovals();
+  }
+}
+
+function renderLiveApprovals() {
+  liveApprovalsEl.innerHTML = "";
+  if (liveApprovals.size === 0) { liveApprovalsEl.hidden = true; return; }
+  liveApprovalsEl.hidden = false;
+  liveApprovalsEl.appendChild(el("div", { class: "la-head" }, [
+    el("span", { class: "la-dot" }),
+    "Awaiting approval",
+    el("span", { class: "la-count" }, `${liveApprovals.size} live`),
+  ]));
+  for (const [toolId, info] of liveApprovals) {
+    const reason = el("input", { class: "la-reason", type: "text", placeholder: "reason (optional)" });
+    const err = el("div", { class: "la-error" }); err.style.display = "none";
+    const approveBtn  = el("button", { class: "la-approve" }, "Approve");
+    const rememberBtn = el("button", { class: "la-remember",
+      title: "Approve and auto-approve this tool for the rest of the session" }, "Approve & don't ask again");
+    const denyBtn     = el("button", { class: "la-deny" }, "Deny");
+    const row = el("div", { class: "la-item" }, [
+      el("div", {}, [
+        el("span", { class: "la-name" }, info.tool_name || "tool"),
+        el("span", { class: "la-id" }, "#" + String(toolId).slice(-5)),
+      ]),
+      Object.keys(info.tool_input || {}).length ? el("div", { class: "la-input" }, previewOf(info.tool_input, 160)) : null,
+      reason,
+      el("div", { class: "la-actions" }, [approveBtn, rememberBtn, denyBtn]),
+      err,
+    ]);
+    const submit = (approved, remember) =>
+      devApprove(toolId, approved, remember, reason.value.trim() || null, row, err);
+    approveBtn.addEventListener("click", () => submit(true, false));
+    rememberBtn.addEventListener("click", () => submit(true, true));
+    denyBtn.addEventListener("click", () => submit(false, false));
+    liveApprovalsEl.appendChild(row);
+  }
+}
+
+// POST the decision. The workflow then streams tool_approval_resolved (and, on
+// approval, tool_start/tool_end) back over the attached stream, which is what removes
+// the row (via trackLiveApproval) and updates the box. So on success we leave the row
+// disabled and let the event clean it up.
+async function devApprove(toolId, approved, remember, reason, row, err) {
+  if (!activeSessionId) return;
+  const buttons = row.querySelectorAll("button");
+  buttons.forEach((b) => (b.disabled = true));
+  err.style.display = "none"; err.textContent = "";
+  try {
+    const res = await fetch("/api/approve", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: activeSessionId, tool_id: toolId, approved, remember, reason }),
+    });
+    if (!res.ok) {
+      const e = await res.json().catch(() => ({}));
+      // Already resolved (another client, or a policy update / remember cascade) or
+      // unknown — the resolved event already (or will) drop the row; drop it locally too.
+      if (e.error === "ToolApprovalAlreadyResolved" || e.error === "UnknownToolApproval") {
+        if (liveApprovals.delete(toolId)) renderLiveApprovals();
+        return;
+      }
+      err.textContent = e.message || `approval failed (${res.status})`;
+      err.style.display = "block";
+      buttons.forEach((b) => (b.disabled = false));
+    }
+  } catch (e) {
+    err.textContent = "request failed — check your connection";
+    err.style.display = "block";
+    buttons.forEach((b) => (b.disabled = false));
+  }
+}
+
+/* ===========================================================================
+ * 5. DRIVER — applies events to the derived state + render layer.
+ * `animate` gates packets / flashes / enter-exit so the SAME function drives
+ * both live updates and instant scrub rebuilds.
+ * =========================================================================== */
+
+const turnMetaEl = document.getElementById("turn-meta");
+
+let turnNumber = null;     // last turn we've seen begin (null before any turn)
+let turnActive = false;    // a turn is mid-flight (for the top transport chip)
+let queued = [];           // queued user messages, cleared when a turn starts
+let streamingOut = false;  // reply text is currently flowing out the egress port
+
+function updateMeta() {
+  const bits = [];
+  if (turnNumber != null) bits.push(`turn #${turnNumber}`);
+  const n = tools.size; if (n) bits.push(`${n} tool${n > 1 ? "s" : ""} active`);
+  turnMetaEl.textContent = bits.join("   ·   ");
+}
+function setStreamingOut(on) { streamingOut = on; stageEl.classList.toggle("streaming-out", on); }
+function clearMomentary() { modelCard.clear(); ingressCard.clear(); outCard.clear(); }
+
+function applyEvent(event, data, animate) {
+  finalizeExits();                                // force-finish any exit anims from prior ticks
+  tools.flushRetiring(animate);                   // retire tools that ended on the PREVIOUS tick
+  clearMomentary();                               // momentary cards last exactly one tick
+  switch (event) {
+    case "message_queued":
+      queued.push(data.user_message);
+      ingress.renderQueue(queued, animate);
+      break;
+
+    case "turn_started":
+      turnNumber = data.turn_number ?? turnNumber;
+      turnActive = true;
+      queued = []; ingress.renderQueue(queued, false);
+      tools.clear(); egress.reset(); setStreamingOut(false);
+      setAgentStatus("running", turnNumber);
+      model.deactivate();  // agent's turn began, but the MODEL isn't working yet
+      // The incoming message docks at the box edge — shown momentarily + clickable.
+      ingressCard.show({ tone: "queue", name: "Message in", state: "received",
+        preview: previewOf(data.user_message), animate,
+        snapshot: () => ({ title: "Incoming message", state: "received", tone: "queue",
+          sections: [{ label: "Message", value: data.user_message }] }) });
+      if (animate) ingress.dock();
+      updateMeta();
+      break;
+
+    // The MODEL itself is working only between these two events — distinct from
+    // the AGENT, which is "running" across the whole turn (tools, waiting, etc.).
+    case "model_interaction_started":
+      // Light the core and name the model for the whole interaction.
+      model.activate(data.model);
+      break;
+    case "model_interaction_ended":
+      // No separate card: the totals land on the model core itself, which keeps the model
+      // name and now shows input/output/total on its sub line (clickable for the full
+      // breakdown). Pausing on this tick is where the just-finished usage is visible.
+      model.end(data.model, data.usage);
+      break;
+
+    case "thought_summary":
+      model.note("thinking");
+      modelCard.show({ tone: "model", name: "Thinking", state: "reasoning",
+        preview: previewOf(data.delta), animate,
+        snapshot: () => ({ title: "Thinking", state: "reasoning", tone: "model",
+          sections: [{ label: "Thought delta (raw)", value: data.delta }] }) });
+      break;
+
+    case "text_annotation":
+      model.note("citing");
+      modelCard.show({ tone: "model", name: "Citation", state: "annotation",
+        preview: previewOf(data.delta), animate,
+        snapshot: () => ({ title: "Citation", state: "annotation", tone: "model",
+          sections: [{ label: "Annotation delta (raw)", value: data.delta }] }) });
+      break;
+
+    case "reply_delta":
+      model.note("streaming"); setStreamingOut(true);
+      outCard.show({ tone: "done", name: "Reply Δ", state: "streaming out",
+        preview: previewOf(data.text), animate,
+        snapshot: () => ({ title: "Reply chunk", state: "streaming", tone: "done",
+          sections: [{ label: "Delta text", value: data.text }] }) });
+      egress.stream(animate);
+      break;
+
+    case "tool_requested":
+      tools.spawn(data.tool_id, data, animate); updateMeta(); break;
+    case "tool_approval_requested":
+      // Gated tool parked for a human decision (between requested and start).
+      tools.set(data.tool_id, "awaiting", data, animate); updateMeta(); break;
+    case "tool_approval_resolved":
+      // Approved → distinct "approved" state (tool_start then drives it to "running");
+      // denied → terminal here (carry the reason into the card's Error section, since no
+      // tool_error will arrive). Never regress to "requested". Either way, stamp the card
+      // with the event's reason (+ "remembered" when the decision allow-listed the tool).
+      if (data.approved) tools.set(data.tool_id, "approved", data, animate);
+      else tools.end(data.tool_id, "denied",
+        { ...data, message: data.reason ? `Denied: ${data.reason}` : "Denied" }, animate);
+      tools.resolve(data.tool_id, data.approved, data.reason, data.remember,
+        resolutionText(data.approved, data.reason, data.remember));
+      updateMeta(); break;
+    case "tool_start":
+      tools.set(data.tool_id, "running", data, animate); updateMeta(); break;
+    case "tool_progress_delta":
+      tools.progress(data.tool_id, animate); break;
+    case "tool_end":
+      tools.end(data.tool_id, "done", data, animate);
+      updateMeta(); break;
+    case "tool_error":
+      tools.end(data.tool_id, "failed", data, animate);
+      updateMeta(); break;
+
+    case "reply": {
+      turnActive = false; setStreamingOut(false);
+      setAgentStatus("replied", turnNumber);
+      model.deactivate();
+      // Agent-agnostic: AgentReply.output is the handler's return model as a dict. This UI
+      // knows nothing about any agent's output shape, so it just renders the raw JSON —
+      // there is always an output object to show.
+      egress.emit("reply", turnNumber, JSON.stringify(data.output ?? {}, null, 2), animate);
+      updateMeta(); break;
+    }
+
+    case "error":
+      turnActive = false; setStreamingOut(false);
+      setAgentStatus("error", turnNumber);
+      model.deactivate();
+      egress.emit("error", turnNumber, data.message, animate);
+      updateMeta(); break;
+
+    case "turn_end":
+      turnActive = false; setStreamingOut(false);
+      tools.clear();
+      setAgentStatus("idle", turnNumber);          // → "awaiting turn N+1"
+      model.deactivate();
+      egress.reset();
+      updateMeta(); break;
+  }
+}
+
+function resetView() {
+  finalizeExits(); clearMomentary(); tools.clear();
+  turnNumber = null; turnActive = false; queued = []; setStreamingOut(false);
+  ingress.renderQueue(queued, false);
+  egress.reset();
+  model.deactivate();
+  setAgentStatus("idle", null);
+  turnMetaEl.textContent = "";
+}
+
+/* ===========================================================================
+ * 6. HISTORY: event log, scrubber, transport (step / play / live / turn-jump).
+ * =========================================================================== */
+
+const scrubEl   = document.getElementById("scrub");
+const liveBtn   = document.getElementById("live-btn");
+const playBtn   = document.getElementById("play-btn");
+const prevTurnBtn = document.getElementById("prev-turn");
+const nextTurnBtn = document.getElementById("next-turn");
+const readoutEl = document.getElementById("scrub-readout");
+const statusEl  = document.getElementById("status");
+const ticksEl   = document.getElementById("turn-ticks");
+
+const eventLog = [];
+let viewIndex = 0;        // events currently applied to the view
+let following = true;     // cursor pinned to the live tail
+let playing = false;
+let playTimer = null;
+const PLAY_MS = 650;
+
+let replaying = true;     // settle history instantly until the stream quiets
+let liveFlipTimer = null;
+function scheduleLiveFlip() {
+  if (!replaying) return;
+  clearTimeout(liveFlipTimer);
+  liveFlipTimer = setTimeout(() => { replaying = false; }, 150);
+}
+
+function rebuildTo(index) {
+  resetView();
+  for (let i = 0; i < index; i++) applyEvent(eventLog[i].event, eventLog[i].data, false);
+  viewIndex = index;
+  updateScrub();
+}
+
+// Slider values that land on the IDLE tick just BEFORE each turn starts — i.e.
+// the index of each turn_started event itself (events [0,i) applied, turn_started
+// not yet), so stepping forward from there shows the message come in.
+function turnStartTargets() {
+  const out = [];
+  for (let i = 0; i < eventLog.length; i++) if (eventLog[i].event === "turn_started") out.push(i);
+  return out;
+}
+let lastTickN = -1;
+function renderTurnTicks() {
+  if (eventLog.length === lastTickN) return;     // positions only shift when n changes
+  lastTickN = eventLog.length;
+  ticksEl.innerHTML = "";
+  const n = eventLog.length; if (!n) return;
+  for (const target of turnStartTargets()) {
+    const frac = target / n;
+    const tick = el("div", {
+      class: "turn-tick", title: `turn ${eventLog[target].data.turn_number ?? "?"} — click, then step ▶ to see it arrive`,
+      onclick: () => gotoIndex(target),
+    });
+    tick.style.left = `calc(${frac} * (100% - 14px) + 7px)`;
+    ticksEl.appendChild(tick);
+  }
+}
+
+function updateScrub() {
+  const n = eventLog.length;
+  scrubEl.max = n; scrubEl.disabled = n === 0;
+  if (following) { viewIndex = n; scrubEl.value = n; }
+  renderTurnTicks();
+  // No event TYPE here on purpose: a variable-length name would resize the
+  // slider as you scrub. The type is legible in the animation above.
+  const ev = viewIndex > 0 ? eventLog[viewIndex - 1] : null;
+  readoutEl.textContent = !n ? "no events"
+    : `${viewIndex} / ${n}` + (ev && ev.data.turn_number != null ? ` · t${ev.data.turn_number}` : "");
+  liveBtn.classList.toggle("following", following);
+  liveBtn.textContent = following ? "● LIVE" : "○ JUMP TO LIVE";
+  playBtn.textContent = playing ? "⏸" : "▶";
+  playBtn.classList.toggle("active", playing);
+  playBtn.disabled = n === 0 || (following && !playing);
+  playBtn.title = playing ? "Pause" : "Play from here";
+  prevTurnBtn.disabled = n === 0;
+  nextTurnBtn.disabled = n === 0;
+}
+
+function refreshStatus() {
+  if (!activeSessionId) return setStatus("no session", "");
+  if (playing) return setStatus("playing", "playing");
+  if (!following) return setStatus("paused · scrubbing", "paused");
+  setStatus(turnActive ? "streaming" : "watching", turnActive ? "streaming" : "connected");
+}
+function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = "chip " + (cls || ""); }
+
+// Apply one live event: record it, and if following the tail, render it.
+function onStreamEvent(event, data) {
+  if (!PROTOCOL_EVENTS.includes(event)) {
+    console.warn(`[protocol drift] unmodeled event: ${event} — update states.html + harness/agent_protocol/events.py`);
+    return;
+  }
+  eventLog.push({ event, data });
+  // Maintain the LIVE approvals set here (real-time ingest), independent of the scrub
+  // position — so the dev override panel reflects what's actually pending now even while
+  // the box is paused/scrubbing back through history.
+  trackLiveApproval(event, data);
+  // Per-model usage aggregates + chart are session-level (derived from the whole log),
+  // so refresh them on each new event regardless of follow/scrub state.
+  rebuildAnalytics();
+  if (following) {
+    scheduleLiveFlip();
+    applyEvent(event, data, !replaying);
+  }
+  updateScrub();
+  if (following) refreshStatus();
+}
+
+// Move the cursor to `target`. A single forward step animates that one
+// transition (so arrow-key scrubbing shows the signals); any other jump rebuilds
+// instantly (drag / click / back-step / turn-jump).
+function gotoIndex(target, { fromTransport = false } = {}) {
+  if (!fromTransport) stopPlay();
+  target = Math.max(0, Math.min(eventLog.length, target));
+  following = target >= eventLog.length;          // set BEFORE rebuild (cursor pinning)
+  if (target === viewIndex + 1) {
+    applyEvent(eventLog[viewIndex].event, eventLog[viewIndex].data, true); // animate the one step
+    viewIndex = target;
+  } else if (target !== viewIndex) {
+    rebuildTo(target);
+  }
+  scrubEl.value = viewIndex;
+  updateScrub();
+  refreshStatus();
+}
+
+function stopPlay() {
+  if (!playing) return;
+  playing = false; clearInterval(playTimer); playTimer = null;
+  updateScrub(); refreshStatus();
+}
+function startPlay() {
+  if (playing || eventLog.length === 0) return;
+  if (following) return;                 // already at the live tail
+  playing = true; updateScrub(); refreshStatus();
+  playTimer = setInterval(() => {
+    if (viewIndex >= eventLog.length) {  // caught up to the tail → resume live
+      following = true; stopPlay(); return;
+    }
+    gotoIndex(viewIndex + 1, { fromTransport: true });
+    if (viewIndex >= eventLog.length) { following = true; stopPlay(); }
+  }, PLAY_MS);
+}
+
+scrubEl.addEventListener("input", () => gotoIndex(+scrubEl.value));
+playBtn.addEventListener("click", () => (playing ? stopPlay() : startPlay()));
+liveBtn.addEventListener("click", () => { stopPlay(); following = true; rebuildTo(eventLog.length); refreshStatus(); });
+nextTurnBtn.addEventListener("click", () => {
+  const next = turnStartTargets().find((t) => t > viewIndex);
+  gotoIndex(next ?? eventLog.length);
+});
+prevTurnBtn.addEventListener("click", () => {
+  const prior = turnStartTargets().filter((t) => t < viewIndex);
+  gotoIndex(prior.length ? prior[prior.length - 1] : 0);
+});
+
+// Arrow keys step the scrubber (when the slider isn't already handling them).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  if (document.activeElement === scrubEl) return;            // let the range handle it
+  const tag = (document.activeElement || {}).tagName;
+  if (tag === "SELECT" || tag === "INPUT" || tag === "TEXTAREA") return;
+  e.preventDefault();
+  gotoIndex(viewIndex + (e.key === "ArrowRight" ? 1 : -1));
+});
+
+/* ===========================================================================
+ * 7. STREAM CONSUMPTION + SESSION PICKER (observe-only).
+ * =========================================================================== */
+
+let activeSessionId = null;
+let lastOffset = 0;
+let abortController = null;
+
+async function consumeSSE(res) {
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += value;
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) !== -1) {
+      const frame = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const ev = frame.match(/^event: (.+)$/m);
+      const da = frame.match(/^data: (.+)$/m);
+      if (!ev || !da) continue;
+      const data = JSON.parse(da[1]);
+      if (data.offset != null) lastOffset = data.offset;
+      onStreamEvent(ev[1], data);
+    }
+  }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Exactly ONE attach, always for the currently-viewed session. attach replays
+// history then streams live and returns when idle; we re-poll for the next turn.
+// The sessionId guard + abort tear the old watch down on switch — we never hold
+// streams open for any other session.
+async function watchSession(sessionId) {
+  while (sessionId === activeSessionId) {
+    abortController = new AbortController();
+    try {
+      const res = await fetch(
+        `/api/attach?session_id=${encodeURIComponent(sessionId)}&from_offset=${lastOffset}`,
+        { signal: abortController.signal });
+      if (sessionId !== activeSessionId) return;
+      refreshStatus();
+      await consumeSSE(res);
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      console.warn("attach failed:", err);
+      setStatus("reconnecting", "");
+    }
+    if (sessionId !== activeSessionId) return;
+    refreshStatus();
+    await sleep(1000); // idle poll for the next turn (current session only)
+  }
+}
+
+async function switchSession(sessionId) {
+  if (sessionId === activeSessionId) return;
+  activeSessionId = sessionId || null;
+  if (abortController) { abortController.abort(); abortController = null; }
+  stopPlay();
+  closeInspector();
+  eventLog.length = 0; viewIndex = 0; following = true; lastOffset = 0; replaying = true; lastTickN = -1;
+  liveApprovals.clear(); renderLiveApprovals();
+  rebuildAnalytics();   // empty log → hides the usage panel until this session has interactions
+  resetView(); updateScrub();
+  if (!activeSessionId) { setStatus("no session", ""); return; }
+  setStatus("catching up", "streaming");
+  watchSession(activeSessionId);
+}
+
+async function loadSessions() {
+  const res = await fetch("/api/sessions");
+  const sessions = await res.json();
+  const sel = document.getElementById("session");
+  sel.innerHTML = "";
+  if (!sessions.length) { sel.appendChild(new Option("— no sessions —", "")); return sessions; }
+  for (const s of [...sessions].reverse()) {
+    sel.appendChild(new Option(`${s.label}  ·  ${new Date(s.created_at * 1000).toLocaleString()}`, s.workflow_id));
+  }
+  return sessions;
+}
+document.getElementById("session").addEventListener("change", (e) => switchSession(e.target.value));
+
+/* ===========================================================================
+ * 8. LEGEND + BOOTSTRAP
+ * =========================================================================== */
+
+(function renderLegend() {
+  const items = [
+    ["model", "Model / thinking"], ["tools", "Tool running"],
+    ["done", "Done / reply"], ["error", "Error"],
+    ["queue", "Message in"], ["neutral", "Requested"],
+  ];
+  const elx = document.getElementById("legend");
+  for (const [tone, label] of items) {
+    const item = document.createElement("span");
+    item.className = `legend-item tone-${tone}`;
+    item.innerHTML = `<span class="legend-swatch"></span>${label}`;
+    elx.appendChild(item);
+  }
+})();
+
+(async function init() {
+  resetView();
+  updateScrub();
+  try {
+    const sessions = await loadSessions();
+    if (sessions.length) {
+      const mostRecent = sessions[sessions.length - 1];
+      document.getElementById("session").value = mostRecent.workflow_id;
+      switchSession(mostRecent.workflow_id);
+    } else {
+      setStatus("no sessions", "");
+    }
+  } catch (err) {
+    console.error("init failed:", err);
+    setStatus("error", "");
+  }
+})();
+</script>
+</body>
+</html>
