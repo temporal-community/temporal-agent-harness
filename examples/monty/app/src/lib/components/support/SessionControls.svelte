@@ -10,6 +10,7 @@
     sending?: boolean;
     creatingSession?: boolean;
     error?: string | null;
+    pendingApprovalCount?: number;
     onNewSession?: (workflowType: string) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
   }
@@ -22,6 +23,7 @@
     sending = false,
     creatingSession = false,
     error = null,
+    pendingApprovalCount = 0,
     onNewSession,
     onSelectSession
   }: Props = $props();
@@ -46,18 +48,20 @@
       : "No session"
   );
   const canCreateSession = $derived(
-    Boolean(onNewSession) && agents.length > 0 && !connecting && !sending && !creatingSession
+    Boolean(onNewSession) && agents.length > 0 && !creatingSession
   );
   const statusLabel = $derived(
     creatingSession
       ? "Starting"
       : connecting
         ? "Connecting"
-        : sending
-          ? "Thinking"
-          : error
-            ? "Needs attention"
-            : "Available"
+        : pendingApprovalCount > 0
+          ? `${pendingApprovalCount} approval${pendingApprovalCount === 1 ? "" : "s"} needed`
+          : sending
+            ? "Thinking"
+            : error
+              ? "Needs attention"
+              : "Available"
   );
 
   $effect(() => {
@@ -103,7 +107,7 @@
     const select = event.currentTarget as HTMLSelectElement;
     const workflowType = select.value;
     select.value = "";
-    if (!workflowType || !onNewSession || connecting || sending || creatingSession) return;
+    if (!workflowType || !onNewSession || creatingSession) return;
     await onNewSession(workflowType);
     sessionDrawerOpen = false;
   }
@@ -173,7 +177,10 @@
   </button>
 
   <div class="agent-state">
-    <span class={`live-dot ${error ? "error" : ""}`} aria-hidden="true"></span>
+    <span
+      class={`live-dot ${error ? "error" : pendingApprovalCount > 0 ? "approval" : ""}`}
+      aria-hidden="true"
+    ></span>
     <span>{statusLabel}</span>
   </div>
 
@@ -370,6 +377,11 @@
   .live-dot.error {
     background: var(--error);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 16%, transparent);
+  }
+
+  .live-dot.approval {
+    background: var(--queue);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--queue) 18%, transparent);
   }
 
   .session-popover {

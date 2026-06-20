@@ -29,6 +29,21 @@
     void run.initialize();
   });
 
+  const pendingApprovalCount = $derived.by(() => {
+    const resolvedToolIds = new Set<string>();
+    for (const row of run.fullReplayLog.rows) {
+      if (row.event === "tool_approval_resolved" && row.toolId) {
+        resolvedToolIds.add(row.toolId);
+      }
+    }
+    return run.fullReplayLog.rows.filter(
+      (row) =>
+        row.event === "tool_approval_requested" &&
+        row.toolId != null &&
+        !resolvedToolIds.has(row.toolId)
+    ).length;
+  });
+
   function selectNode(nodeId: string): void {
     const localNodeId = nodeId.split("::").at(-1) ?? nodeId;
     if (localNodeId === "model" || localNodeId === "reasoning") {
@@ -133,6 +148,7 @@
         sending={run.sending}
         creatingSession={run.creatingSession}
         error={run.connectionError}
+        {pendingApprovalCount}
         onNewSession={(workflowType) => run.startNewSession(workflowType)}
         onSelectSession={(sessionId) => run.selectSession(sessionId)}
       />
@@ -229,6 +245,7 @@
           <TranscriptPanel
             groups={run.replayLog.groups}
             activeTurnNumber={run.currentLogRow?.turnNumber ?? null}
+            activeRowId={run.currentLogRow?.id ?? null}
             activeOffset={run.currentLogRow?.offset ?? null}
             filter={transcriptFilter}
             onFilterChange={(next) => (transcriptFilter = next)}

@@ -29,6 +29,7 @@
   interface Props {
     groups: TurnLogGroup[];
     activeTurnNumber: number | null;
+    activeRowId?: string | null;
     activeOffset: number | null;
     filter?: TranscriptFilter;
     onFilterChange?: (filter: TranscriptFilter) => void;
@@ -37,11 +38,12 @@
   let {
     groups,
     activeTurnNumber,
+    activeRowId = null,
     activeOffset,
     filter = "all",
     onFilterChange
   }: Props = $props();
-  let expandedRows = $state<Record<number, boolean>>({});
+  let expandedRows = $state<Record<string, boolean>>({});
   let query = $state("");
 
   const filters: Array<{ key: TranscriptFilter; label: string }> = [
@@ -94,15 +96,15 @@
   );
 
   $effect(() => {
-    const offset = activeOffset;
-    if (offset == null) {
+    const rowId = activeRowId;
+    if (rowId == null) {
       expandedRows = {};
       return;
     }
-    expandedRows = { [offset]: true };
+    expandedRows = { [rowId]: true };
     tick().then(() => {
       document
-        .getElementById(`log-row-${offset}`)
+        .getElementById(`log-row-${rowId}`)
         ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     });
   });
@@ -115,28 +117,31 @@
     });
   }
 
-  function isRowExpanded(offset: number): boolean {
-    return expandedRows[offset] ?? false;
+  function isRowExpanded(rowId: string): boolean {
+    return expandedRows[rowId] ?? false;
   }
 
-  function toggleRow(offset: number): void {
+  function toggleRow(rowId: string): void {
     expandedRows = {
       ...expandedRows,
-      [offset]: !isRowExpanded(offset)
+      [rowId]: !isRowExpanded(rowId)
     };
   }
 
   function actorLabel(row: ReplayLogRow): string {
+    const prefix = row.parentTurnNumber != null ? "Subagent " : "";
+    if (row.parentTurnNumber != null && row.actor === "user") return "Subagent input";
+    if (row.parentTurnNumber != null && row.actor === "agent") return "Subagent output";
     if (row.actor === "user") return "User";
     if (row.actor === "agent") return "Agent";
-    if (row.actor === "model") return "Model";
-    if (row.actor === "tool") return row.toolName ?? "Tool";
-    if (row.actor === "approval") return "Approval";
+    if (row.actor === "model") return `${prefix}Model`;
+    if (row.actor === "tool") return `${prefix}${row.toolName ?? "Tool"}`;
+    if (row.actor === "approval") return `${prefix}Approval`;
     if (row.actor === "subagent") return "Subagent";
-    if (row.actor === "queue") return "Queue";
-    if (row.actor === "reasoning") return "Reasoning";
-    if (row.actor === "error") return "Error";
-    return "System";
+    if (row.actor === "queue") return `${prefix}Queue`;
+    if (row.actor === "reasoning") return `${prefix}Reasoning`;
+    if (row.actor === "error") return `${prefix}Error`;
+    return `${prefix}System`;
   }
 </script>
 
@@ -226,10 +231,11 @@
 
           <div class="log-lines" id={`turn-${group.turnNumber}-logs`}>
             {#each group.rows as row}
-              {@const expanded = isRowExpanded(row.offset)}
+              {@const expanded = isRowExpanded(row.id)}
+              {@const active = activeRowId === row.id || (activeRowId == null && activeOffset === row.offset)}
               <article
-                id={`log-row-${row.offset}`}
-                class={`log-line ${row.tone} ${expanded ? "expanded" : ""} ${activeOffset === row.offset ? "active-row" : ""}`}
+                id={`log-row-${row.id}`}
+                class={`log-line ${row.tone} ${row.parentTurnNumber != null ? "nested-subagent" : ""} ${expanded ? "expanded" : ""} ${active ? "active-row" : ""}`}
               >
                 <div class="actor-icon" aria-hidden="true">
                   {#if row.actor === "user"}
@@ -268,8 +274,8 @@
                     class="line-toggle"
                     type="button"
                     aria-expanded={expanded}
-                    aria-controls={`log-row-${row.offset}-details`}
-                    onclick={() => toggleRow(row.offset)}
+                    aria-controls={`log-row-${row.id}-details`}
+                    onclick={() => toggleRow(row.id)}
                   >
                     <span class="line-toggle-main">
                       <span class="line-meta">
@@ -278,6 +284,11 @@
                         <Badge label={row.label} tone={row.tone} />
                         {#if row.status}
                           <span class="status">{row.status}</span>
+                        {/if}
+                        {#if row.parentTurnNumber != null}
+                          <span class="source-turn" title={row.sourceLabel ?? undefined}>
+                            subagent turn {row.sourceTurnNumber}
+                          </span>
                         {/if}
                       </span>
                     </span>
@@ -291,7 +302,7 @@
                   </button>
 
                   {#if expanded}
-                    <div class="line-details" id={`log-row-${row.offset}-details`}>
+                    <div class="line-details" id={`log-row-${row.id}-details`}>
                       {#if row.body}
                         <p>{row.body}</p>
                       {/if}
@@ -555,6 +566,23 @@
     background: transparent;
   }
 
+  .log-line.nested-subagent {
+    position: relative;
+    margin-left: 18px;
+    padding-left: 12px;
+    border-left: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+    background: color-mix(in srgb, var(--accent) 5%, transparent);
+  }
+
+  .log-line.nested-subagent::before {
+    content: "";
+    position: absolute;
+    left: -1px;
+    top: 19px;
+    width: 10px;
+    border-top: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  }
+
   .log-line:last-child {
     border-bottom: 0;
   }
@@ -657,6 +685,16 @@
   .status {
     flex: 0 0 auto;
     color: var(--text-3);
+  }
+
+  .source-turn {
+    flex: 0 0 auto;
+    padding: 1px 5px;
+    border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+    border-radius: 999px;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+    font-size: 10px;
   }
 
   .line-meta time {

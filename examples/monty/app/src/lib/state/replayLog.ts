@@ -41,6 +41,10 @@ export interface ReplayLogRow {
   index: number;
   offset: number;
   turnNumber: number;
+  sourceTurnNumber: number;
+  parentTurnNumber?: number;
+  workflowId?: string;
+  sourceLabel?: string;
   turnId: string;
   timestamp: number;
   event: AgentEventType;
@@ -95,6 +99,14 @@ export interface ReplayMarker {
   turnNumber: number;
   tone: ReplayMarkerTone;
   label: string;
+}
+
+export interface ReplayLogFrame {
+  frame: AgentSseFrame;
+  workflowId?: string;
+  role?: "parent" | "subagent";
+  label?: string;
+  parentTurnNumber?: number;
 }
 
 function renderUserMessage(value: string): string {
@@ -161,13 +173,24 @@ function modelUsageBody(usage: UsageTotals, cost: number | null): string {
   return `${formatTokens(usage.total)} tokens, ${formatCost(cost)}`;
 }
 
-function rowFromFrame(frame: AgentSseFrame, frameIndex: number): ReplayLogRow | null {
+function normalizeReplayLogFrame(item: AgentSseFrame | ReplayLogFrame): ReplayLogFrame {
+  return "frame" in item ? item : { frame: item, role: "parent" };
+}
+
+function rowFromFrame(
+  entry: ReplayLogFrame,
+  frameIndex: number
+): ReplayLogRow | null {
+  const { frame } = entry;
   if (!("type" in frame.data)) {
     return {
-      id: `stream-error-${frame.data.offset}`,
+      id: `${entry.workflowId ?? "parent"}-stream-error-${frame.data.offset}`,
       index: frameIndex + 1,
       offset: frame.data.offset,
       turnNumber: 0,
+      sourceTurnNumber: 0,
+      workflowId: entry.workflowId,
+      sourceLabel: entry.label,
       turnId: "client",
       timestamp: 0,
       event: "error",
@@ -181,11 +204,20 @@ function rowFromFrame(frame: AgentSseFrame, frameIndex: number): ReplayLogRow | 
     };
   }
 
+  const sourceTurnNumber = frame.data.turn_number;
+  const turnNumber =
+    entry.role === "subagent" && entry.parentTurnNumber != null
+      ? entry.parentTurnNumber
+      : sourceTurnNumber;
   const base = {
-    id: `${frame.data.type}-${frame.data.offset}`,
+    id: `${entry.workflowId ?? "parent"}-${frame.data.type}-${frame.data.offset}`,
     index: frameIndex + 1,
     offset: frame.data.offset,
-    turnNumber: frame.data.turn_number,
+    turnNumber,
+    sourceTurnNumber,
+    parentTurnNumber: entry.role === "subagent" ? entry.parentTurnNumber : undefined,
+    workflowId: entry.workflowId,
+    sourceLabel: entry.label,
     turnId: frame.data.turn_id,
     timestamp: frame.data.timestamp,
     event: frame.data.type,
@@ -472,9 +504,9 @@ function buildSummary(turnNumber: number, rows: ReplayLogRow[]): TurnLogSummary 
   };
 }
 
-export function buildReplayLog(frames: AgentSseFrame[]): ReplayLog {
-  const rows = frames
-    .map((frame, index) => rowFromFrame(frame, index))
+export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): ReplayLog {
+  const rows = input
+    .map((item, index) => rowFromFrame(normalizeReplayLogFrame(item), index))
     .filter((row): row is ReplayLogRow => row != null);
 
   const groupedRows = new Map<number, ReplayLogRow[]>();
@@ -496,8 +528,8 @@ export function buildReplayLog(frames: AgentSseFrame[]): ReplayLog {
   return { rows, groups };
 }
 
-export function buildReplayMarkers(frames: AgentSseFrame[]): ReplayMarker[] {
-  return buildReplayLog(frames).rows
+export function buildReplayMarkers(input: Array<AgentSseFrame | ReplayLogFrame>): ReplayMarker[] {
+  return buildReplayLog(input).rows
     .filter((row) => row.marker)
     .map((row) => ({
       id: `marker-${row.offset}`,

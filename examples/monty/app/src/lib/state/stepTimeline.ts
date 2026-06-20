@@ -23,7 +23,17 @@ export interface TimelineSpan {
   ongoing: boolean;
 }
 
-export interface TurnTimeline {
+export type TimelineRole = "parent" | "subagent";
+
+export interface StepTimelineFrame {
+  frame: AgentSseFrame;
+  workflowId?: string;
+  role?: TimelineRole;
+  label?: string;
+  parentTurnNumber?: number;
+}
+
+export interface TimelineTurnBase {
   turnNumber: number;
   startTs: number;
   endTs: number;
@@ -33,6 +43,18 @@ export interface TurnTimeline {
   laneCount: number;
 }
 
+export interface SubagentTurnTimeline extends TimelineTurnBase {
+  role: "subagent";
+  workflowId: string;
+  label: string;
+  parentTurnNumber: number;
+}
+
+export interface TurnTimeline extends TimelineTurnBase {
+  role: "parent";
+  subagentTurns: SubagentTurnTimeline[];
+}
+
 export interface StepTimeline {
   turns: TurnTimeline[];
   /** Longest turn wall-clock, used as the shared horizontal scale. */
@@ -40,12 +62,27 @@ export interface StepTimeline {
 }
 
 interface OpenSpan {
+  scope: TimelineScope;
   turnNumber: number;
   kind: SpanKind;
   label: string;
   detail?: string;
   startTs: number;
   startIndex: number;
+}
+
+interface TimelineScope {
+  key: string;
+  role: TimelineRole;
+  workflowId: string;
+  label: string;
+  turnNumber: number;
+  parentTurnNumber: number;
+}
+
+interface LastSeenFrame {
+  timestamp: number;
+  index: number;
 }
 
 function spanLabel(kind: SpanKind, name: string): string {
@@ -58,23 +95,31 @@ function spanLabel(kind: SpanKind, name: string): string {
  * Pairs start/end frames into duration spans so the UI can show *where time
  * goes* inside each turn (model latency, tool execution, approval waits).
  */
-export function buildStepTimeline(frames: AgentSseFrame[]): StepTimeline {
+export function buildStepTimeline(input: Array<AgentSseFrame | StepTimelineFrame>): StepTimeline {
   const turns = new Map<number, TurnTimeline>();
-  const openModel = new Map<number, OpenSpan>();
+  const openModel = new Map<string, OpenSpan>();
   const openTool = new Map<string, OpenSpan>();
   const openApproval = new Map<string, OpenSpan>();
+  const lastSeenByScope = new Map<string, LastSeenFrame>();
+  const previewByScope = new Map<string, string>();
 
-  function turnFor(turnNumber: number, timestamp: number): TurnTimeline {
+  function frameFor(item: AgentSseFrame | StepTimelineFrame): StepTimelineFrame {
+    return "frame" in item ? item : { frame: item, role: "parent" };
+  }
+
+  function parentTurnFor(turnNumber: number, timestamp: number): TurnTimeline {
     let turn = turns.get(turnNumber);
     if (!turn) {
       turn = {
+        role: "parent",
         turnNumber,
         startTs: timestamp,
         endTs: timestamp,
         durationSeconds: 0,
         preview: "",
         spans: [],
-        laneCount: 1
+        laneCount: 1,
+        subagentTurns: []
       };
       turns.set(turnNumber, turn);
     }
@@ -83,18 +128,88 @@ export function buildStepTimeline(frames: AgentSseFrame[]): StepTimeline {
     return turn;
   }
 
+  function subagentTurnFor(scope: TimelineScope, timestamp: number): SubagentTurnTimeline {
+    const parent = parentTurnFor(scope.parentTurnNumber, timestamp);
+    let turn = parent.subagentTurns.find(
+      (item) =>
+        item.workflowId === scope.workflowId &&
+        item.turnNumber === scope.turnNumber &&
+        item.parentTurnNumber === scope.parentTurnNumber
+    );
+    if (!turn) {
+      turn = {
+        role: "subagent",
+        workflowId: scope.workflowId,
+        label: scope.label,
+        parentTurnNumber: scope.parentTurnNumber,
+        turnNumber: scope.turnNumber,
+        startTs: timestamp,
+        endTs: timestamp,
+        durationSeconds: 0,
+        preview: previewByScope.get(scope.key) ?? "",
+        spans: [],
+        laneCount: 1
+      };
+      parent.subagentTurns.push(turn);
+    }
+    turn.startTs = Math.min(turn.startTs, timestamp);
+    turn.endTs = Math.max(turn.endTs, timestamp);
+    return turn;
+  }
+
+  function turnFor(scope: TimelineScope, timestamp: number): TimelineTurnBase {
+    if (scope.role === "subagent") return subagentTurnFor(scope, timestamp);
+    return parentTurnFor(scope.turnNumber, timestamp);
+  }
+
+  function scopeFor(entry: StepTimelineFrame, turnNumber: number): TimelineScope {
+    const role = entry.role ?? "parent";
+    const workflowId = entry.workflowId ?? role;
+    if (role === "subagent") {
+      const parentTurnNumber = entry.parentTurnNumber ?? turnNumber;
+      return {
+        key: `subagent:${workflowId}:${parentTurnNumber}:${turnNumber}`,
+        role,
+        workflowId,
+        label: entry.label ?? "Subagent",
+        turnNumber,
+        parentTurnNumber
+      };
+    }
+    return {
+      key: parentScopeKey(turnNumber),
+      role,
+      workflowId,
+      label: entry.label ?? "Parent agent",
+      turnNumber,
+      parentTurnNumber: turnNumber
+    };
+  }
+
+  function modelKey(scope: TimelineScope): string {
+    return `${scope.key}:model`;
+  }
+
+  function parentScopeKey(turnNumber: number): string {
+    return `parent:${turnNumber}`;
+  }
+
+  function keyedTool(scope: TimelineScope, toolId: string): string {
+    return `${scope.key}:${toolId}`;
+  }
+
   function closeSpan(
-    turnNumber: number,
     open: OpenSpan,
     endTs: number,
     endIndex: number,
     tone: SpanTone,
     detail?: string
   ): void {
-    const turn = turnFor(turnNumber, endTs);
+    turnFor(open.scope, open.startTs);
+    const turn = turnFor(open.scope, endTs);
     turn.spans.push({
       id: `${open.kind}-${open.startIndex}-${endIndex}`,
-      turnNumber,
+      turnNumber: open.turnNumber,
       kind: open.kind,
       label: open.label,
       detail: detail ?? open.detail,
@@ -119,50 +234,59 @@ export function buildStepTimeline(frames: AgentSseFrame[]): StepTimeline {
   ): void {
     const open = map.get(key);
     if (!open) return;
-    closeSpan(open.turnNumber, open, endTs, endIndex, tone, detail);
+    closeSpan(open, endTs, endIndex, tone, detail);
     map.delete(key);
   }
 
   function closeOpenSpansForTurn(
-    turnNumber: number,
+    scope: TimelineScope,
     endTs: number,
     endIndex: number,
     tone: SpanTone,
     detail?: string
   ): void {
-    closeOpenSpan(openModel, turnNumber, endTs, endIndex, tone, detail);
+    closeOpenSpan(openModel, modelKey(scope), endTs, endIndex, tone, detail);
     for (const [toolId, open] of openTool) {
-      if (open.turnNumber === turnNumber) {
+      if (open.scope.key === scope.key) {
         closeOpenSpan(openTool, toolId, endTs, endIndex, tone, detail);
       }
     }
     for (const [toolId, open] of openApproval) {
-      if (open.turnNumber === turnNumber) {
+      if (open.scope.key === scope.key) {
         closeOpenSpan(openApproval, toolId, endTs, endIndex, tone, detail);
       }
     }
   }
 
-  frames.forEach((frame, position) => {
+  input.forEach((item, position) => {
+    const entry = frameFor(item);
+    const { frame } = entry;
     if (!("type" in frame.data)) return;
     const index = position + 1;
     const { turn_number: turnNumber, timestamp } = frame.data;
-    turnFor(turnNumber, timestamp);
+    const scope = scopeFor(entry, turnNumber);
+    if (scope.role === "parent") turnFor(scope, timestamp);
+    lastSeenByScope.set(scope.key, { timestamp, index });
+    if (scope.role === "subagent") {
+      lastSeenByScope.set(parentScopeKey(scope.parentTurnNumber), { timestamp, index });
+    }
 
     switch (frame.event) {
       case "turn_started":
-        turns.get(turnNumber)!.preview = frame.data.user_message;
+        previewByScope.set(scope.key, frame.data.user_message);
+        if (scope.role === "parent") turnFor(scope, timestamp).preview = frame.data.user_message;
         break;
       case "model_interaction_started":
         closeOpenSpan(
           openModel,
-          turnNumber,
+          modelKey(scope),
           timestamp,
           index,
           "error",
           "Model span restarted before completion."
         );
-        openModel.set(turnNumber, {
+        openModel.set(modelKey(scope), {
+          scope,
           turnNumber,
           kind: "model",
           label: spanLabel("model", frame.data.model ?? "model"),
@@ -171,12 +295,14 @@ export function buildStepTimeline(frames: AgentSseFrame[]): StepTimeline {
         });
         break;
       case "model_interaction_ended": {
-        closeOpenSpan(openModel, turnNumber, timestamp, index, "done");
+        closeOpenSpan(openModel, modelKey(scope), timestamp, index, "done");
         break;
       }
       case "tool_start": {
-        if (!openTool.has(frame.data.tool_id)) {
-          openTool.set(frame.data.tool_id, {
+        const key = keyedTool(scope, frame.data.tool_id);
+        if (!openTool.has(key)) {
+          openTool.set(key, {
+            scope,
             turnNumber,
             kind: "tool",
             label: spanLabel("tool", frame.data.tool_name),
@@ -187,15 +313,23 @@ export function buildStepTimeline(frames: AgentSseFrame[]): StepTimeline {
         break;
       }
       case "tool_end": {
-        closeOpenSpan(openTool, frame.data.tool_id, timestamp, index, "done");
+        closeOpenSpan(openTool, keyedTool(scope, frame.data.tool_id), timestamp, index, "done");
         break;
       }
       case "tool_error": {
-        closeOpenSpan(openTool, frame.data.tool_id, timestamp, index, "error", frame.data.message);
+        closeOpenSpan(
+          openTool,
+          keyedTool(scope, frame.data.tool_id),
+          timestamp,
+          index,
+          "error",
+          frame.data.message
+        );
         break;
       }
       case "tool_approval_requested":
-        openApproval.set(frame.data.tool_id, {
+        openApproval.set(keyedTool(scope, frame.data.tool_id), {
+          scope,
           turnNumber,
           kind: "approval",
           label: spanLabel("approval", frame.data.tool_name),
@@ -206,7 +340,7 @@ export function buildStepTimeline(frames: AgentSseFrame[]): StepTimeline {
       case "tool_approval_resolved": {
         closeOpenSpan(
           openApproval,
-          frame.data.tool_id,
+          keyedTool(scope, frame.data.tool_id),
           timestamp,
           index,
           frame.data.approved ? "done" : "error",
@@ -215,21 +349,23 @@ export function buildStepTimeline(frames: AgentSseFrame[]): StepTimeline {
         break;
       }
       case "error": {
-        closeOpenSpansForTurn(turnNumber, timestamp, index, "error", frame.data.message);
+        closeOpenSpansForTurn(scope, timestamp, index, "error", frame.data.message);
         break;
       }
     }
   });
 
   // Flush spans that never resolved within the supplied frames.
-  const lastIndex = frames.length;
-  const lastTs = frames.at(-1)?.data && "type" in frames.at(-1)!.data
-    ? (frames.at(-1)!.data as { timestamp: number }).timestamp
-    : 0;
   const flush = (map: ReadonlyMap<unknown, OpenSpan>, tone: SpanTone) => {
     for (const [, open] of map) {
-      closeSpan(open.turnNumber, open, Math.max(lastTs, open.startTs), lastIndex, tone);
-      const turn = turns.get(open.turnNumber);
+      const lastSeen = lastSeenByScope.get(open.scope.key);
+      closeSpan(
+        open,
+        Math.max(lastSeen?.timestamp ?? open.startTs, open.startTs),
+        lastSeen?.index ?? input.length,
+        tone
+      );
+      const turn = turnFor(open.scope, open.startTs);
       const span = turn?.spans.at(-1);
       if (span) span.ongoing = true;
     }
@@ -242,19 +378,37 @@ export function buildStepTimeline(frames: AgentSseFrame[]): StepTimeline {
     .filter((turn) => turn.turnNumber > 0)
     .map((turn) => {
       const packed = packSpans(turn.spans);
+      const subagentTurns = turn.subagentTurns
+        .filter(
+          (subagentTurn) => subagentTurn.turnNumber > 0 && subagentTurn.spans.length > 0
+        )
+        .map((subagentTurn) => {
+          const subagentPacked = packSpans(subagentTurn.spans);
+          return {
+            ...subagentTurn,
+            durationSeconds: Math.max(0, subagentTurn.endTs - subagentTurn.startTs),
+            spans: subagentPacked.spans,
+            laneCount: subagentPacked.laneCount
+          };
+        })
+        .sort((a, b) => a.startTs - b.startTs || a.label.localeCompare(b.label));
       return {
         ...turn,
         durationSeconds: Math.max(0, turn.endTs - turn.startTs),
         spans: packed.spans,
-        laneCount: packed.laneCount
+        laneCount: packed.laneCount,
+        subagentTurns
       };
     })
     .sort((a, b) => a.turnNumber - b.turnNumber);
 
-  const maxTurnDuration = orderedTurns.reduce(
-    (max, turn) => Math.max(max, turn.durationSeconds),
-    1
-  );
+  const maxTurnDuration = orderedTurns.reduce((max, turn) => {
+    const nestedMax = turn.subagentTurns.reduce(
+      (nested, subagentTurn) => Math.max(nested, subagentTurn.endTs - turn.startTs),
+      0
+    );
+    return Math.max(max, turn.durationSeconds, nestedMax);
+  }, 1);
 
   return { turns: orderedTurns, maxTurnDuration };
 }
@@ -289,30 +443,37 @@ export interface SpanAggregate {
 export function aggregateSpans(timeline: StepTimeline): SpanAggregate[] {
   const totals = new Map<SpanKind, SpanAggregate>();
   for (const turn of timeline.turns) {
-    for (const span of turn.spans) {
-      const agg = totals.get(span.kind) ?? {
-        kind: span.kind,
-        count: 0,
-        totalSeconds: 0
-      };
-      agg.count += 1;
-      totals.set(span.kind, agg);
-    }
-
-    for (const { kind, seconds } of exclusiveTurnSegments(turn.spans)) {
-      const agg = totals.get(kind) ?? {
-        kind,
-        count: 0,
-        totalSeconds: 0
-      };
-      agg.totalSeconds += seconds;
-      totals.set(kind, agg);
+    addTurnAggregate(totals, turn.spans);
+    for (const subagentTurn of turn.subagentTurns) {
+      addTurnAggregate(totals, subagentTurn.spans);
     }
   }
   const order: SpanKind[] = ["model", "tool", "approval"];
   return order
     .map((kind) => totals.get(kind))
     .filter((agg): agg is SpanAggregate => agg != null);
+}
+
+function addTurnAggregate(totals: Map<SpanKind, SpanAggregate>, spans: TimelineSpan[]): void {
+  for (const span of spans) {
+    const agg = totals.get(span.kind) ?? {
+      kind: span.kind,
+      count: 0,
+      totalSeconds: 0
+    };
+    agg.count += 1;
+    totals.set(span.kind, agg);
+  }
+
+  for (const { kind, seconds } of exclusiveTurnSegments(spans)) {
+    const agg = totals.get(kind) ?? {
+      kind,
+      count: 0,
+      totalSeconds: 0
+    };
+    agg.totalSeconds += seconds;
+    totals.set(kind, agg);
+  }
 }
 
 function exclusiveTurnSegments(spans: TimelineSpan[]): { kind: SpanKind; seconds: number }[] {

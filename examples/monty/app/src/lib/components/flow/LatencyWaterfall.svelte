@@ -20,6 +20,9 @@
   const totalSpanSeconds = $derived(
     aggregates.reduce((sum, agg) => sum + agg.totalSeconds, 0)
   );
+  const subagentTurnCount = $derived(
+    timeline.turns.reduce((sum, turn) => sum + turn.subagentTurns.length, 0)
+  );
 
   function pct(span: TimelineSpan, turnStart: number): { left: number; width: number } {
     const scale = Math.max(timeline.maxTurnDuration, 1);
@@ -68,7 +71,13 @@
   <header class="waterfall-head">
     <div class="title">
       <h2>Latency waterfall</h2>
-      <p>Per-step wall-clock across {timeline.turns.length} turns · bars share one time scale</p>
+      <p>
+        Per-step wall-clock across {timeline.turns.length} parent turns
+        {#if subagentTurnCount > 0}
+          · {subagentTurnCount} nested subagent turns
+        {/if}
+        · bars share one time scale
+      </p>
     </div>
     <div class="rollup" aria-label="Time by step kind">
       {#each aggregates as agg}
@@ -106,20 +115,56 @@
             <p class="turn-no">Turn {turn.turnNumber}</p>
             <p class="turn-dur">{formatDuration(turn.durationSeconds)}</p>
           </div>
-          <div class="track" style={`height: ${trackHeight(turn.laneCount)}px`}>
-            {#each turn.spans as span}
-              {@const box = pct(span, turn.startTs)}
-              <button
-                class={barClass(span)}
-                style={`left: ${box.left}%; width: ${box.width}%; top: ${laneTop(span)}px`}
-                title={spanTitle(span)}
-                onclick={() => onScrub(span.startIndex)}
-              >
-                <span class="bar-text">{span.label} · {formatDuration(span.durationSeconds)}</span>
-              </button>
-            {/each}
-            {#if turn.spans.length === 0}
-              <span class="track-empty">no measured steps</span>
+          <div class="turn-body">
+            <div class="track parent-track" style={`height: ${trackHeight(turn.laneCount)}px`}>
+              {#each turn.spans as span}
+                {@const box = pct(span, turn.startTs)}
+                <button
+                  class={barClass(span)}
+                  style={`left: ${box.left}%; width: ${box.width}%; top: ${laneTop(span)}px`}
+                  title={spanTitle(span)}
+                  onclick={() => onScrub(span.startIndex)}
+                >
+                  <span class="bar-text">{span.label} · {formatDuration(span.durationSeconds)}</span>
+                </button>
+              {/each}
+              {#if turn.spans.length === 0}
+                <span class="track-empty">no measured parent steps</span>
+              {/if}
+            </div>
+
+            {#if turn.subagentTurns.length > 0}
+              <div class="subagent-stack" aria-label={`Subagent latency for turn ${turn.turnNumber}`}>
+                {#each turn.subagentTurns as subagent}
+                  <div class="subagent-row">
+                    <div class="subagent-label">
+                      <span>Subagent</span>
+                      <strong title={subagent.label}>{subagent.label}</strong>
+                      <small>
+                        turn {subagent.turnNumber} · {formatDuration(subagent.durationSeconds)}
+                      </small>
+                    </div>
+                    <div class="track subagent-track" style={`height: ${trackHeight(subagent.laneCount)}px`}>
+                      {#each subagent.spans as span}
+                        {@const box = pct(span, turn.startTs)}
+                        <button
+                          class={barClass(span)}
+                          style={`left: ${box.left}%; width: ${box.width}%; top: ${laneTop(span)}px`}
+                          title={`${subagent.label} · ${spanTitle(span)}`}
+                          onclick={() => onScrub(span.startIndex)}
+                        >
+                          <span class="bar-text">
+                            {span.label} · {formatDuration(span.durationSeconds)}
+                          </span>
+                        </button>
+                      {/each}
+                      {#if subagent.spans.length === 0}
+                        <span class="track-empty">no measured subagent steps</span>
+                      {/if}
+                    </div>
+                  </div>
+                {/each}
+              </div>
             {/if}
           </div>
         </article>
@@ -256,6 +301,70 @@
     min-height: 30px;
     border-radius: 6px;
     background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+  }
+
+  .turn-body {
+    min-width: 0;
+    display: grid;
+    gap: 8px;
+  }
+
+  .parent-track {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 45%, transparent);
+  }
+
+  .subagent-stack {
+    display: grid;
+    gap: 7px;
+    padding-left: 12px;
+    border-left: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+
+  .subagent-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 168px) minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+  }
+
+  .subagent-label {
+    min-width: 0;
+    display: grid;
+    gap: 1px;
+    padding-top: 1px;
+  }
+
+  .subagent-label span {
+    width: max-content;
+    padding: 1px 5px;
+    border: 1px solid color-mix(in srgb, var(--accent) 44%, transparent);
+    border-radius: 4px;
+    color: var(--accent);
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .subagent-label strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 11px;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .subagent-label small {
+    color: var(--text-3);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .subagent-track {
+    background: color-mix(in srgb, var(--surface-2) 36%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
   }
 
   .bar {

@@ -13,7 +13,7 @@ import {
   type MountedAgentGraphInput
 } from "./flowProjection";
 import { buildReplayLog, buildReplayMarkers } from "./replayLog";
-import { buildStepTimeline } from "./stepTimeline";
+import { buildStepTimeline, type StepTimelineFrame } from "./stepTimeline";
 import { buildTranscript } from "./transcript";
 
 export type PlaybackSpeed = 1 | 2 | 5 | 10;
@@ -41,7 +41,7 @@ export interface MountedAgentStream {
 
 type ReplayTimelineRole = "parent" | "subagent";
 
-interface ReplayTimelineEntry {
+interface ReplayTimelineEntry extends StepTimelineFrame {
   workflowId: string;
   role: ReplayTimelineRole;
   frame: AgentSseFrame;
@@ -121,6 +121,10 @@ function writeStoredSubagents(parentWorkflowId: string, agents: MountedAgentStre
   } catch {
     // Best-effort cache only; the live stream/history paths remain authoritative.
   }
+}
+
+function replayFrameKey(workflowId: string, frame: AgentSseFrame): string {
+  return `${workflowId}:offset:${frame.data.offset}`;
 }
 
 function renderUserMessage(value: string): string {
@@ -216,16 +220,16 @@ export class MockRunController {
   );
   graphAgents = $derived(this.#graphAgents());
   graph = $derived(buildMountedAgentGraph(this.graphAgents));
-  replayLog = $derived(buildReplayLog(this.visibleReplayFrames));
-  fullReplayLog = $derived(buildReplayLog(this.allReplayFrames));
+  replayLog = $derived(buildReplayLog(this.visibleReplayTimeline));
+  fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
   supportTranscript = $derived(buildTranscript(this.frames));
   currentLogRow = $derived(
     this.fullReplayLog.rows.find((row) => row.index === this.viewIndex) ?? null
   );
   usage = $derived(summarizeCost(this.visibleReplayFrames));
   usageTimeline = $derived(buildUsageTimeline(this.allReplayFrames));
-  stepTimeline = $derived(buildStepTimeline(this.allReplayFrames));
-  anomalyMarkers = $derived(buildReplayMarkers(this.allReplayFrames));
+  stepTimeline = $derived(buildStepTimeline(this.replayTimeline));
+  anomalyMarkers = $derived(buildReplayMarkers(this.replayTimeline));
   turnMarkers = $derived(
     this.allReplayFrames
       .map((frame, index) =>
@@ -269,12 +273,14 @@ export class MockRunController {
     const mountedByWorkflowId = new Map(
       this.mountedAgents.map((agent) => [agent.workflowId, agent])
     );
+    const injectedSubagentFrames = new Set<string>();
     const timeline: ReplayTimelineEntry[] = [];
 
     for (const frame of this.frames) {
       timeline.push({
         workflowId: session.workflow_id,
         role: "parent",
+        label: this.runInfo.agentLabel,
         frame
       });
       if (frame.event !== "subagent_message_sent" || !("type" in frame.data)) {
@@ -287,9 +293,14 @@ export class MockRunController {
           "type" in childFrame.data &&
           childFrame.data.turn_number === frame.data.subagent_turn
         ) {
+          const childKey = replayFrameKey(mounted.workflowId, childFrame);
+          if (injectedSubagentFrames.has(childKey)) continue;
+          injectedSubagentFrames.add(childKey);
           timeline.push({
             workflowId: mounted.workflowId,
             role: "subagent",
+            label: mounted.label,
+            parentTurnNumber: frame.data.turn_number,
             frame: childFrame
           });
         }
@@ -517,6 +528,10 @@ export class MockRunController {
 
   async startNewSession(workflowType?: string): Promise<void> {
     const connectionVersion = this.#beginConnection();
+    this.#sendVersion += 1;
+    this.#stopStream();
+    this.#stopSubagentStreams();
+    this.sending = false;
     this.creatingSession = true;
     this.connecting = true;
     this.connectionError = null;

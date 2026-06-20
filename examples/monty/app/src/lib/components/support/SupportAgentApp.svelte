@@ -26,6 +26,7 @@
   import MarkdownMessage from "./MarkdownMessage.svelte";
 
   type SupportLayout = "full" | "embedded";
+  type ActivityFilter = "all" | "subagent";
 
   interface Props {
     items: TranscriptItem[];
@@ -88,6 +89,7 @@
   let sessionDrawerOpen = $state(false);
   let sessionSearch = $state("");
   let expandedActivityTurns = $state<number[]>([]);
+  let activityFilter = $state<ActivityFilter>("all");
   let observedActivitySessionId = $state<string | null>(null);
   let observedActivityOffsets = $state<Record<number, number>>({});
   let deletingSessionIds = $state<string[]>([]);
@@ -108,8 +110,10 @@
 
   const fixtureMessages = $derived(seedMessages(items));
   const messages = $derived([...fixtureMessages, ...localMessages]);
-  const logsByTurn = $derived(groupLogsByTurn(logs));
+  const hasSubagentLogs = $derived(logs.some((row) => isSubagentActivity(row)));
+  const logsByTurn = $derived(groupLogsByTurn(logs, activityFilter));
   const resolvedApprovalToolIds = $derived(resolvedApprovalIds(logs));
+  const pendingApprovalRows = $derived(logs.filter((row) => isApprovalPending(row)));
   const sources = $derived(uniqueCitations(messages.flatMap((message) => message.citations)));
   const sessionItems = $derived(sortedSessions(sessions));
   const sessionSearchTerm = $derived(sessionSearch.trim().toLowerCase());
@@ -137,8 +141,13 @@
     isMonty ? "Send a Python script to Monty" : `Ask ${agentLabel}`
   );
   const canCreateSession = $derived(
-    Boolean(onNewSession) && agents.length > 0 && !connecting && !sending && !creatingSession
+    Boolean(onNewSession) && agents.length > 0 && !creatingSession
   );
+  const messageQueueingEnabled = $derived(
+    activeSession?.is_message_queuing_enabled ?? false
+  );
+  const sendingBlocksInput = $derived(sending && !messageQueueingEnabled);
+  const connectingBlocksInput = $derived(connecting && activeSession == null);
   const drawerActive = $derived(showHeader && layout === "embedded" && sessionDrawerOpen);
   const latestMessage = $derived(messages[messages.length - 1] ?? null);
   const latestLog = $derived(logs[logs.length - 1] ?? null);
@@ -156,6 +165,7 @@
       sending ? "sending" : "idle",
       connecting ? "connecting" : "connected",
       expandedActivityTurns.join(","),
+      activityFilter,
       resolvingApprovalIds.length,
       Object.keys(approvalErrors).length
     ].join("|")
@@ -165,11 +175,15 @@
       ? "Starting"
       : connecting
         ? "Connecting"
-        : sending
-          ? "Thinking"
-          : error
-            ? "Needs attention"
-            : "Available"
+        : pendingApprovalRows.length > 0
+          ? `${pendingApprovalRows.length} approval${
+              pendingApprovalRows.length === 1 ? "" : "s"
+            } needed`
+          : sending
+            ? "Thinking"
+            : error
+              ? "Needs attention"
+              : "Available"
   );
 
   $effect(() => {
@@ -256,10 +270,23 @@
     ].includes(row.event);
   }
 
-  function groupLogsByTurn(rows: ReplayLogRow[]): Map<number, ReplayLogRow[]> {
+  function isSubagentActivity(row: ReplayLogRow): boolean {
+    return row.actor === "subagent" || row.parentTurnNumber != null;
+  }
+
+  function matchesActivityFilter(row: ReplayLogRow, filter: ActivityFilter): boolean {
+    if (filter === "all") return true;
+    return isSubagentActivity(row);
+  }
+
+  function groupLogsByTurn(
+    rows: ReplayLogRow[],
+    filter: ActivityFilter
+  ): Map<number, ReplayLogRow[]> {
     const grouped = new Map<number, ReplayLogRow[]>();
     for (const row of rows) {
       if (!showLogInApp(row)) continue;
+      if (!matchesActivityFilter(row, filter)) continue;
       const current = grouped.get(row.turnNumber) ?? [];
       current.push(row);
       grouped.set(row.turnNumber, current);
@@ -479,7 +506,7 @@
 
   async function sendMessage(text = draft): Promise<void> {
     const question = text.trim();
-    if (!question || sending || connecting || creatingSession) return;
+    if (!question || sendingBlocksInput || connectingBlocksInput || creatingSession) return;
 
     draft = "";
     if (onSend) {
@@ -514,7 +541,7 @@
   }
 
   async function startNewSession(workflowType: string): Promise<void> {
-    if (!onNewSession || connecting || sending || creatingSession) return;
+    if (!onNewSession || creatingSession) return;
     await onNewSession(workflowType);
   }
 
@@ -621,7 +648,12 @@
             </button>
           {/if}
           <div class="agent-state">
-            <span class={`live-dot ${error ? "error" : ""}`} aria-hidden="true"></span>
+            <span
+              class={`live-dot ${
+                error ? "error" : pendingApprovalRows.length > 0 ? "approval" : ""
+              }`}
+              aria-hidden="true"
+            ></span>
             <span>{statusLabel}</span>
           </div>
         </div>
@@ -696,6 +728,29 @@
       </section>
     {:else}
       <div class="message-list" bind:this={messageListElement}>
+        {#if hasSubagentLogs}
+          <div class="activity-filter-bar" role="group" aria-label="Chat activity filter">
+            <button
+              type="button"
+              class={activityFilter === "all" ? "active" : ""}
+              aria-pressed={activityFilter === "all"}
+              onclick={() => (activityFilter = "all")}
+            >
+              <Clock3 size={13} />
+              <span>All</span>
+            </button>
+            <button
+              type="button"
+              class={activityFilter === "subagent" ? "active" : ""}
+              aria-pressed={activityFilter === "subagent"}
+              onclick={() => (activityFilter = "subagent")}
+            >
+              <MessageCircle size={13} />
+              <span>Subagents</span>
+            </button>
+          </div>
+        {/if}
+
         {#if connecting && messages.length === 0}
           <div class="empty-chat">
             <Sparkles size={18} />
@@ -902,12 +957,71 @@
       <div class="error-banner">{error}</div>
     {/if}
 
+    {#if !drawerActive && pendingApprovalRows.length > 0}
+      <section class="pending-approvals" aria-label="Pending tool approvals">
+        <header class="pending-approvals-head">
+          <span class="pending-approvals-title">
+            <ShieldCheck size={15} />
+            <span>
+              {pendingApprovalRows.length} approval{pendingApprovalRows.length === 1 ? "" : "s"} needed
+            </span>
+          </span>
+        </header>
+
+        <div class="pending-approval-list">
+          {#each pendingApprovalRows as approval}
+            <article class="pending-approval-card">
+              <div class="pending-approval-copy">
+                <strong>{approval.toolName ?? approval.body ?? "Tool approval"}</strong>
+                <span>Turn {approval.turnNumber} · {time(approval.timestamp)}</span>
+              </div>
+              <div class="approval-actions compact">
+                <button
+                  type="button"
+                  class="approval-approve"
+                  disabled={!onApproveTool || isApprovalResolving(approval.toolId)}
+                  onclick={(event) => void resolveApproval(event, approval, true)}
+                  onkeydown={(event) => event.stopPropagation()}
+                >
+                  <CheckCircle2 size={13} />
+                  <span>Approve</span>
+                </button>
+                <button
+                  type="button"
+                  class="approval-remember"
+                  disabled={!onApproveTool || isApprovalResolving(approval.toolId)}
+                  onclick={(event) => void resolveApproval(event, approval, true, true)}
+                  onkeydown={(event) => event.stopPropagation()}
+                >
+                  <ShieldCheck size={13} />
+                  <span>Approve and remember</span>
+                </button>
+                <button
+                  type="button"
+                  class="approval-reject"
+                  disabled={!onApproveTool || isApprovalResolving(approval.toolId)}
+                  onclick={(event) => void resolveApproval(event, approval, false)}
+                  onkeydown={(event) => event.stopPropagation()}
+                >
+                  <XCircle size={13} />
+                  <span>Reject</span>
+                </button>
+                {#if approvalError(approval.toolId)}
+                  <span class="approval-error">{approvalError(approval.toolId)}</span>
+                {/if}
+              </div>
+            </article>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
     {#if !drawerActive && starterQuestions.length > 0}
       <div class="starter-row" aria-label="Suggested questions">
         {#each starterQuestions as question}
           <button
             type="button"
-            disabled={sending || connecting || creatingSession}
+            disabled={sendingBlocksInput || connectingBlocksInput || creatingSession}
             onclick={() => void sendMessage(question)}
           >
             {question}
@@ -922,12 +1036,12 @@
         bind:value={draft}
         placeholder={composerPlaceholder}
         aria-label={`Message ${agentLabel}`}
-        disabled={connecting || creatingSession}
+        disabled={connectingBlocksInput || creatingSession}
       />
       <button
         type="submit"
         aria-label="Send message"
-        disabled={!draft.trim() || sending || connecting || creatingSession}
+        disabled={!draft.trim() || sendingBlocksInput || connectingBlocksInput || creatingSession}
       >
         <ArrowUp size={17} />
       </button>
@@ -1402,6 +1516,11 @@
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 16%, transparent);
   }
 
+  .live-dot.approval {
+    background: var(--queue);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--queue) 18%, transparent);
+  }
+
   .message-list {
     min-height: 0;
     overflow-y: auto;
@@ -1434,6 +1553,56 @@
   .empty-chat.error {
     color: var(--error);
     border-color: color-mix(in srgb, var(--error) 35%, var(--border));
+  }
+
+  .activity-filter-bar {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    align-self: flex-start;
+    display: inline-flex;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--surface-1) 94%, transparent);
+    box-shadow: 0 8px 18px color-mix(in srgb, var(--surface-0) 42%, transparent);
+  }
+
+  .support-app.embedded .activity-filter-bar {
+    align-self: stretch;
+    justify-content: flex-start;
+  }
+
+  .activity-filter-bar button {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 9px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-3);
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .activity-filter-bar button:hover,
+  .activity-filter-bar button:focus-visible {
+    color: var(--text-1);
+    border-color: var(--border);
+    outline: 0;
+  }
+
+  .activity-filter-bar button.active {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+    background: color-mix(in srgb, var(--accent) 11%, var(--surface-2));
   }
 
   .message {
@@ -1636,6 +1805,76 @@
     min-width: 0;
     color: var(--error);
     font-size: 11px;
+  }
+
+  .pending-approvals {
+    display: grid;
+    gap: 8px;
+    margin: 0 clamp(18px, 5vw, 72px) 10px;
+    padding: 10px;
+    border: 1px solid color-mix(in srgb, var(--queue) 42%, var(--border));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--queue) 9%, var(--surface-1));
+  }
+
+  .support-app.embedded .pending-approvals {
+    margin: 0 12px 10px;
+  }
+
+  .pending-approvals-head {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .pending-approvals-title {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--queue);
+    font-size: 12px;
+    font-weight: 750;
+  }
+
+  .pending-approval-list {
+    display: grid;
+    gap: 7px;
+  }
+
+  .pending-approval-card {
+    min-width: 0;
+    display: grid;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid color-mix(in srgb, var(--queue) 26%, var(--border));
+    border-radius: 7px;
+    background: var(--surface-0);
+  }
+
+  .pending-approval-copy {
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: baseline;
+  }
+
+  .pending-approval-copy strong {
+    color: var(--text-1);
+    font-size: 12px;
+  }
+
+  .pending-approval-copy span {
+    color: var(--text-3);
+    font-size: 11px;
+  }
+
+  .approval-actions.compact {
+    grid-column: auto;
+    padding-top: 0;
   }
 
   .activity-expander {
