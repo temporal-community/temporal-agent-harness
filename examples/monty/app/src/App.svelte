@@ -13,9 +13,17 @@
 
   type RightPanelView = "chat" | "latency" | "logs";
 
+  const RIGHT_PANEL_MIN_WIDTH = 380;
+  const RIGHT_PANEL_DEFAULT_WIDTH = 540;
+  const RIGHT_PANEL_KEYBOARD_STEP = 24;
+  const LEFT_PANE_MIN_WIDTH = 480;
+
   const run = createMockRunController();
   let rightPanelView = $state<RightPanelView>("chat");
   let transcriptFilter = $state<TranscriptFilter>("all");
+  let workspaceElement = $state<HTMLElement | null>(null);
+  let rightPanelWidth = $state(RIGHT_PANEL_DEFAULT_WIDTH);
+  let rightPanelResizing = $state(false);
 
   $effect(() => {
     void run.initialize();
@@ -40,6 +48,65 @@
       hour: "2-digit",
       minute: "2-digit"
     });
+  }
+
+  function rightPanelMaxWidth(): number {
+    const workspaceWidth = workspaceElement?.getBoundingClientRect().width ?? 0;
+    if (!workspaceWidth) return Math.max(RIGHT_PANEL_MIN_WIDTH, rightPanelWidth);
+    return Math.max(RIGHT_PANEL_MIN_WIDTH, workspaceWidth - LEFT_PANE_MIN_WIDTH);
+  }
+
+  function clampRightPanelWidth(width: number): number {
+    return Math.min(
+      Math.max(width, RIGHT_PANEL_MIN_WIDTH),
+      rightPanelMaxWidth()
+    );
+  }
+
+  function resizeRightPanelFromClientX(clientX: number): void {
+    const rect = workspaceElement?.getBoundingClientRect();
+    if (!rect) return;
+    rightPanelWidth = Math.round(clampRightPanelWidth(rect.right - clientX));
+  }
+
+  function startRightPanelResize(event: PointerEvent): void {
+    if (event.button !== 0 && event.pointerType !== "touch") return;
+    event.preventDefault();
+    rightPanelResizing = true;
+    const handle = event.currentTarget as HTMLElement;
+    handle.setPointerCapture(event.pointerId);
+    resizeRightPanelFromClientX(event.clientX);
+  }
+
+  function moveRightPanelResize(event: PointerEvent): void {
+    if (!rightPanelResizing) return;
+    resizeRightPanelFromClientX(event.clientX);
+  }
+
+  function stopRightPanelResize(event: PointerEvent): void {
+    rightPanelResizing = false;
+    const handle = event.currentTarget as HTMLElement;
+    if (handle.hasPointerCapture(event.pointerId)) {
+      handle.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handleRightPanelResizeKeydown(event: KeyboardEvent): void {
+    let nextWidth = rightPanelWidth;
+    if (event.key === "ArrowLeft") {
+      nextWidth += RIGHT_PANEL_KEYBOARD_STEP;
+    } else if (event.key === "ArrowRight") {
+      nextWidth -= RIGHT_PANEL_KEYBOARD_STEP;
+    } else if (event.key === "Home") {
+      nextWidth = RIGHT_PANEL_MIN_WIDTH;
+    } else if (event.key === "End") {
+      nextWidth = rightPanelMaxWidth();
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    rightPanelWidth = Math.round(clampRightPanelWidth(nextWidth));
   }
 </script>
 
@@ -77,11 +144,27 @@
     </div>
   </header>
 
-  <section class="workspace states">
+  <section
+    class={`workspace states ${rightPanelResizing ? "resizing" : ""}`}
+    bind:this={workspaceElement}
+    style={`--right-panel-width: ${rightPanelWidth}px`}
+  >
     <div class="flow-pane">
       <AgentStateFlow graph={run.graph} onNodeSelect={selectNode} />
     </div>
     <aside class="right-pane" aria-label="Detail panel">
+      <button
+        type="button"
+        class="resize-handle"
+        aria-label="Resize detail panel"
+        aria-keyshortcuts="ArrowLeft ArrowRight Home End"
+        title="Resize detail panel"
+        onpointerdown={startRightPanelResize}
+        onpointermove={moveRightPanelResize}
+        onpointerup={stopRightPanelResize}
+        onpointercancel={stopRightPanelResize}
+        onkeydown={handleRightPanelResizeKeydown}
+      ></button>
       <header class="right-pane-head">
         <div class="panel-tabs" role="group" aria-label="Right panel view">
           <button
@@ -285,16 +368,58 @@
 
   .states {
     display: grid;
-    grid-template-columns: minmax(480px, 1fr) minmax(420px, 540px);
+    grid-template-columns: minmax(480px, 1fr)
+      clamp(380px, var(--right-panel-width, 540px), calc(100% - 480px));
+  }
+
+  .states.resizing,
+  .states.resizing * {
+    cursor: col-resize;
+    user-select: none;
   }
 
   .right-pane {
+    position: relative;
     min-width: 0;
     min-height: 0;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
     border-left: 1px solid var(--border);
     background: var(--surface-0);
+  }
+
+  .resize-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -6px;
+    z-index: 6;
+    width: 12px;
+    border: 0;
+    padding: 0;
+    appearance: none;
+    background: transparent;
+    cursor: col-resize;
+    outline: 0;
+    touch-action: none;
+  }
+
+  .resize-handle::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 5px;
+    width: 2px;
+    background: transparent;
+    transition: background 120ms ease, box-shadow 120ms ease;
+  }
+
+  .resize-handle:hover::before,
+  .resize-handle:focus-visible::before,
+  .states.resizing .resize-handle::before {
+    background: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
   }
 
   .right-pane-head {
@@ -373,6 +498,10 @@
       height: 44vh;
       border-left: 0;
       border-top: 1px solid var(--border);
+    }
+
+    .resize-handle {
+      display: none;
     }
 
     .right-pane-head {
