@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     AlertTriangle,
+    ChevronDown,
     ChevronLeft,
     ChevronRight,
     CircleDollarSign,
@@ -71,6 +72,7 @@
 
   const playbackSpeeds: PlaybackSpeed[] = [1, 2, 5, 10];
   const markerCount = $derived(anomalyMarkers.length);
+  let usageExpanded = $state(false);
 
   const metrics: Metric[] = $derived([
     { label: "cost", value: formatCost(usage.estimatedCostUsd), tone: "cost" },
@@ -191,17 +193,41 @@
     {/if}
   </div>
 
-  <div class="usage-row">
-    <div class="usage">
-      <div class="usage-title">
+  <section class="usage-section" class:expanded={usageExpanded}>
+    <button
+      class="usage-toggle"
+      type="button"
+      aria-expanded={usageExpanded}
+      aria-controls="usage-details"
+      onclick={() => (usageExpanded = !usageExpanded)}
+    >
+      <span class="usage-toggle-title">
         <CircleDollarSign size={15} />
-        <span>Replay totals</span>
+        <span>Token / Cost</span>
+      </span>
+      <span class="usage-toggle-summary">
+        <strong>{formatTokens(usage.tokens.total)} tok</strong>
+        <span>{formatCost(usage.estimatedCostUsd)}</span>
+      </span>
+      <span class="usage-toggle-icon" aria-hidden="true">
+        <ChevronDown size={15} />
+      </span>
+    </button>
+
+    {#if usageExpanded}
+      <div id="usage-details" class="usage-row">
+        <div class="usage">
+          <div class="usage-title">
+            <CircleDollarSign size={15} />
+            <span>Replay totals</span>
+          </div>
+          <MetricStrip {metrics} dense />
+        </div>
+        <ModelBreakdown {usage} />
+        <UsageLineChart points={usageTimeline} {viewIndex} />
       </div>
-      <MetricStrip {metrics} dense />
-    </div>
-    <ModelBreakdown {usage} />
-    <UsageLineChart points={usageTimeline} {viewIndex} />
-  </div>
+    {/if}
+  </section>
 </footer>
 
 <style>
@@ -404,6 +430,73 @@
   .current-event.approval,
   .current-event.queue {
     border-color: color-mix(in srgb, var(--queue) 40%, var(--border));
+  }
+
+  .usage-section {
+    min-width: 0;
+    display: grid;
+    gap: 10px;
+  }
+
+  .usage-toggle {
+    min-width: 0;
+    min-height: 36px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface-2);
+    color: var(--text-2);
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+  }
+
+  .usage-toggle:hover,
+  .usage-toggle:focus-visible {
+    border-color: var(--border-strong);
+    color: var(--text-1);
+    outline: 0;
+  }
+
+  .usage-toggle-title,
+  .usage-toggle-summary {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    white-space: nowrap;
+  }
+
+  .usage-toggle-title {
+    color: var(--text-1);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .usage-toggle-summary {
+    justify-self: end;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: 12px;
+  }
+
+  .usage-toggle-summary strong {
+    color: var(--text-1);
+    font-weight: 700;
+  }
+
+  .usage-toggle-icon {
+    display: inline-flex;
+    color: var(--text-3);
+    transition: transform 140ms ease;
+  }
+
+  .usage-section.expanded .usage-toggle-icon {
+    transform: rotate(180deg);
   }
 
   .usage-row {
