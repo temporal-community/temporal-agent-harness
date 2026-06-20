@@ -1,0 +1,26 @@
+{
+  "name": "temporal-agent-ui-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.9.0",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check:svelte5": "node scripts/check-svelte5-syntax.mjs"
+  },
+  "dependencies": {
+    "@xyflow/svelte": "^1.6.0",
+    "@lucide/svelte": "^1.0.1",
+    "svelte": "^5.0.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

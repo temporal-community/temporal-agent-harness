@@ -27,3 +27,20 @@ default:
 # Run the Monty example agent worker (MontyDynamicAgent + the two conversational agents).
 worker:
     cd "{{root}}" && uv run --group examples python -m examples.monty.worker
+
+# Install the Svelte app dependencies.
+app-install:
+    pnpm --dir app install
+
+# Type-check the Svelte app and run the local Svelte 5 syntax guard.
+app-check:
+    pnpm --dir app run check
+    pnpm --dir app run check:svelte5
+
+# Build the Svelte app into app/dist.
+app-build:
+    pnpm --dir app run build
+
+# Run the Svelte app on Vite. /api is proxied to the FastAPI server on :8000.
+app-dev:
+    pnpm --dir app run dev
