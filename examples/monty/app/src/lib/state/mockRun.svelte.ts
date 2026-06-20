@@ -734,7 +734,11 @@ export class MockRunController {
     }
   }
 
-  async approveTool(toolId: string, approved: boolean): Promise<void> {
+  async approveTool(
+    toolId: string,
+    approved: boolean,
+    remember = false
+  ): Promise<void> {
     const session = this.session;
     if (!session) throw new Error("No active session.");
 
@@ -745,7 +749,7 @@ export class MockRunController {
         tool_id: toolId,
         approved,
         reason: approved ? null : "Rejected in chat.",
-        remember: false
+        remember: approved && remember
       });
     } catch (error) {
       this.connectionError =

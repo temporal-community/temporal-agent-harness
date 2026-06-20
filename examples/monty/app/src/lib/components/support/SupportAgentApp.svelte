@@ -14,14 +14,18 @@
     ShieldCheck,
     Sparkles,
     Trash2,
+    X,
     XCircle,
     Wrench
   } from "@lucide/svelte";
+  import { tick } from "svelte";
   import { fade } from "svelte/transition";
   import type { AgentDescriptor, FileCitationAnnotation, Session } from "$lib/api/types";
   import type { ReplayLogRow } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
   import MarkdownMessage from "./MarkdownMessage.svelte";
+
+  type SupportLayout = "full" | "embedded";
 
   interface Props {
     items: TranscriptItem[];
@@ -29,6 +33,8 @@
     sessions?: Session[];
     agentLabel: string;
     sessionId: string;
+    layout?: SupportLayout;
+    showHeader?: boolean;
     agents?: AgentDescriptor[];
     currentAgentWorkflowType?: string | null;
     connecting?: boolean;
@@ -39,7 +45,11 @@
     onNewSession?: (workflowType: string) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
     onDeleteSession?: (sessionId: string) => void | Promise<void>;
-    onApproveTool?: (toolId: string, approved: boolean) => void | Promise<void>;
+    onApproveTool?: (
+      toolId: string,
+      approved: boolean,
+      remember?: boolean
+    ) => void | Promise<void>;
   }
 
   interface SupportMessage {
@@ -57,6 +67,8 @@
     sessions = [],
     agentLabel,
     sessionId,
+    layout = "full",
+    showHeader = true,
     agents = [],
     currentAgentWorkflowType = null,
     connecting = false,
@@ -72,12 +84,16 @@
   let draft = $state("");
   let localMessages = $state<SupportMessage[]>([]);
   let observedSessionId = $state<string | null>(null);
+  let selectedSessionId = $state("");
+  let sessionDrawerOpen = $state(false);
+  let sessionSearch = $state("");
   let expandedActivityTurns = $state<number[]>([]);
   let observedActivitySessionId = $state<string | null>(null);
   let observedActivityOffsets = $state<Record<number, number>>({});
   let deletingSessionIds = $state<string[]>([]);
   let resolvingApprovalIds = $state<string[]>([]);
   let approvalErrors = $state<Record<string, string>>({});
+  let messageListElement = $state<HTMLDivElement | null>(null);
 
   const qaStarterQuestions = [
     "When should I use Signals vs Updates?",
@@ -96,6 +112,20 @@
   const resolvedApprovalToolIds = $derived(resolvedApprovalIds(logs));
   const sources = $derived(uniqueCitations(messages.flatMap((message) => message.citations)));
   const sessionItems = $derived(sortedSessions(sessions));
+  const sessionSearchTerm = $derived(sessionSearch.trim().toLowerCase());
+  const filteredSessionItems = $derived(
+    sessionSearchTerm
+      ? sessionItems.filter((session) => sessionMatchesSearch(session, sessionSearchTerm))
+      : sessionItems
+  );
+  const activeSession = $derived(
+    sessionItems.find((item) => item.workflow_id === sessionId) ?? null
+  );
+  const activeSessionLabel = $derived(
+    activeSession
+      ? `${sessionCreatedAt(activeSession.created_at)} - ${sessionInitialMessage(activeSession)}`
+      : "Session"
+  );
   const isMonty = $derived(currentAgentWorkflowType === "MontyDynamicAgent");
   const isMontyTravelAgent = $derived(
     currentAgentWorkflowType?.startsWith("Monty") ?? false
@@ -108,6 +138,27 @@
   );
   const canCreateSession = $derived(
     Boolean(onNewSession) && agents.length > 0 && !connecting && !sending && !creatingSession
+  );
+  const drawerActive = $derived(showHeader && layout === "embedded" && sessionDrawerOpen);
+  const latestMessage = $derived(messages[messages.length - 1] ?? null);
+  const latestLog = $derived(logs[logs.length - 1] ?? null);
+  const chatScrollSignature = $derived(
+    [
+      sessionId,
+      drawerActive ? "drawer" : "chat",
+      messages.length,
+      latestMessage?.id ?? "",
+      latestMessage?.text.length ?? 0,
+      logs.length,
+      latestLog?.offset ?? "",
+      latestLog?.status ?? "",
+      latestLog?.body?.length ?? 0,
+      sending ? "sending" : "idle",
+      connecting ? "connecting" : "connected",
+      expandedActivityTurns.join(","),
+      resolvingApprovalIds.length,
+      Object.keys(approvalErrors).length
+    ].join("|")
   );
   const statusLabel = $derived(
     creatingSession
@@ -122,6 +173,7 @@
   );
 
   $effect(() => {
+    selectedSessionId = sessionId;
     if (observedSessionId === null) {
       observedSessionId = sessionId;
       return;
@@ -144,6 +196,18 @@
     }
     observedActivitySessionId = sessionId;
     observedActivityOffsets = nextOffsets;
+  });
+
+  $effect(() => {
+    chatScrollSignature;
+    if (drawerActive) return;
+
+    void tick().then(() => {
+      scrollMessagesToBottom();
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(scrollMessagesToBottom);
+      }
+    });
   });
 
   function seedMessages(transcriptItems: TranscriptItem[]): SupportMessage[] {
@@ -237,6 +301,12 @@
     return rows[rows.length - 1] ?? null;
   }
 
+  function scrollMessagesToBottom(): void {
+    const element = messageListElement;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+  }
+
   function activeLogFadeDuration(
     turnNumber: number | undefined,
     activeLog: ReplayLogRow | null
@@ -281,7 +351,8 @@
   async function resolveApproval(
     event: MouseEvent,
     row: ReplayLogRow,
-    approved: boolean
+    approved: boolean,
+    remember = false
   ): Promise<void> {
     event.stopPropagation();
     const toolId = row.toolId;
@@ -290,7 +361,7 @@
     resolvingApprovalIds = [...resolvingApprovalIds, toolId];
     approvalErrors = { ...approvalErrors, [toolId]: "" };
     try {
-      await onApproveTool(toolId, approved);
+      await onApproveTool(toolId, approved, remember);
     } catch (error) {
       approvalErrors = {
         ...approvalErrors,
@@ -333,6 +404,15 @@
       agents.find((agent) => agent.workflow_type === session.agent_workflow_type)?.label ??
       session.agent_workflow_type
     );
+  }
+
+  function sessionMatchesSearch(session: Session, term: string): boolean {
+    return [
+      sessionInitialMessage(session),
+      sessionAgentLabel(session),
+      session.workflow_id,
+      session.agent_workflow_type
+    ].some((value) => value.toLowerCase().includes(term));
   }
 
   function citationUrl(citation: FileCitationAnnotation): string {
@@ -444,11 +524,22 @@
     select.value = "";
     if (!workflowType) return;
     await startNewSession(workflowType);
+    sessionDrawerOpen = false;
+  }
+
+  async function handleSessionChange(): Promise<void> {
+    if (!selectedSessionId) return;
+    await selectSession(selectedSessionId);
   }
 
   async function selectSession(nextSessionId: string): Promise<void> {
     if (!onSelectSession || nextSessionId === sessionId) return;
     await onSelectSession(nextSessionId);
+  }
+
+  async function openSession(nextSessionId: string): Promise<void> {
+    await selectSession(nextSessionId);
+    sessionDrawerOpen = false;
   }
 
   function sessionDeleting(nextSessionId: string): boolean {
@@ -466,212 +557,352 @@
   }
 </script>
 
-<section class="support-app" aria-label={`${agentLabel} customer chat`}>
+<section
+  class={`support-app ${layout} ${showHeader ? "" : "headerless"}`}
+  aria-label={`${agentLabel} customer chat`}
+>
   <div class="chat-shell">
-    <header class="support-head">
-      <div class="agent-mark" aria-hidden="true">
-        <MessageCircle size={19} />
-      </div>
-      <div class="agent-title">
-        <h2>{agentLabel}</h2>
-        <p>{sessionId}</p>
-      </div>
-      <div class="agent-controls">
-        <div class="agent-state">
-          <span class={`live-dot ${error ? "error" : ""}`} aria-hidden="true"></span>
-          <span>{statusLabel}</span>
+    {#if showHeader}
+      <header class="support-head">
+        <div class="agent-mark" aria-hidden="true">
+          <MessageCircle size={19} />
         </div>
-
-      </div>
-    </header>
-
-    <div class="message-list">
-      {#if connecting && messages.length === 0}
-        <div class="empty-chat">
-          <Sparkles size={18} />
-          <span>Connecting to {agentLabel}...</span>
+        <div class="agent-title">
+          <h2>{agentLabel}</h2>
+          <p>{sessionId}</p>
         </div>
-      {:else if error && messages.length === 0}
-        <div class="empty-chat error">
-          <span>{error}</span>
-        </div>
-      {/if}
-
-      {#each messages as message}
-        <article class={`message ${message.role}`}>
-          {#if message.role === "assistant"}
-            <div class="assistant-avatar" aria-hidden="true">
-              <Sparkles size={15} />
-            </div>
+        <div class="agent-controls">
+          {#if layout === "embedded"}
+            <label
+              class={`header-session-select ${
+                !onSelectSession || sessionItems.length === 0 || connecting || creatingSession
+                  ? "disabled"
+                  : ""
+              }`}
+            >
+              <History size={13} aria-hidden="true" />
+              <span>{activeSessionLabel}</span>
+              <select
+                bind:value={selectedSessionId}
+                aria-label="Select session"
+                disabled={!onSelectSession || sessionItems.length === 0 || connecting || creatingSession}
+                onchange={() => void handleSessionChange()}
+              >
+                {#each sessionItems as item}
+                  <option value={item.workflow_id}>
+                    {sessionCreatedAt(item.created_at)} - {sessionInitialMessage(item)}
+                  </option>
+                {/each}
+              </select>
+              <ChevronDown size={12} aria-hidden="true" />
+            </label>
+            <label class={`header-session-add ${canCreateSession ? "" : "disabled"}`}>
+              <Plus size={13} aria-hidden="true" />
+              <span>{creatingSession ? "Starting" : "New"}</span>
+              <select
+                aria-label="Add session"
+                disabled={!canCreateSession}
+                onchange={(event) => void handleNewSessionAgentChange(event)}
+              >
+                <option value="">{creatingSession ? "Starting" : "New"}</option>
+                {#each agents as agent}
+                  <option value={agent.workflow_type}>{agent.label}</option>
+                {/each}
+              </select>
+            </label>
+            <button
+              type="button"
+              class={`header-session-drawer ${sessionDrawerOpen ? "active" : ""}`}
+              aria-pressed={sessionDrawerOpen}
+              onclick={() => (sessionDrawerOpen = !sessionDrawerOpen)}
+            >
+              <History size={13} />
+              <span>Sessions</span>
+            </button>
           {/if}
-
-          <div class="bubble">
-            <MarkdownMessage
-              text={message.text}
-              citations={message.role === "assistant" ? message.citations : []}
-            />
+          <div class="agent-state">
+            <span class={`live-dot ${error ? "error" : ""}`} aria-hidden="true"></span>
+            <span>{statusLabel}</span>
           </div>
-        </article>
+        </div>
+      </header>
+    {/if}
 
-        {#if message.role === "user"}
-          {@const activityLogs = logsForTurn(message.turnNumber)}
-          {@const activeLog = activeLogForTurn(message.turnNumber)}
-          {@const expanded = activityExpanded(message.turnNumber)}
-          {#if activityLogs.length > 0}
-            <div class={`activity-feed ${expanded ? "expanded" : ""}`}>
-              {#if expanded}
-                <div class="activity-list">
-                  {#each activityLogs as log}
-                    <div class={activityLineClass(log, log.offset === activeLog?.offset)}>
+    {#if drawerActive}
+      <section class="session-drawer" aria-label="Sessions">
+        <header class="session-drawer-head">
+          <span class="session-drawer-title">
+            <History size={15} />
+            <span>Sessions</span>
+          </span>
+          <button
+            type="button"
+            class="session-drawer-close"
+            aria-label="Close sessions"
+            onclick={() => (sessionDrawerOpen = false)}
+          >
+            <X size={15} />
+          </button>
+        </header>
+
+        <label class="session-drawer-search">
+          <Search size={14} aria-hidden="true" />
+          <input
+            bind:value={sessionSearch}
+            placeholder="Search sessions"
+            aria-label="Search sessions"
+          />
+        </label>
+
+        <label class={`session-drawer-add ${canCreateSession ? "" : "disabled"}`}>
+          <Plus size={14} aria-hidden="true" />
+          <span>{creatingSession ? "Starting" : "New session"}</span>
+          <select
+            aria-label="Add session"
+            disabled={!canCreateSession}
+            onchange={(event) => void handleNewSessionAgentChange(event)}
+          >
+            <option value="">{creatingSession ? "Starting" : "New session"}</option>
+            {#each agents as agent}
+              <option value={agent.workflow_type}>{agent.label}</option>
+            {/each}
+          </select>
+          <ChevronDown size={13} aria-hidden="true" />
+        </label>
+
+        <div class="session-drawer-list">
+          {#if filteredSessionItems.length === 0}
+            <p class="session-empty">No matching sessions.</p>
+          {/if}
+          {#each filteredSessionItems as item}
+            <button
+              type="button"
+              class={`drawer-session-row ${item.workflow_id === sessionId ? "active" : ""}`}
+              aria-current={item.workflow_id === sessionId ? "true" : undefined}
+              onclick={() => void openSession(item.workflow_id)}
+            >
+              <span class="session-dot" aria-hidden="true"></span>
+              <span class="session-copy">
+                <time>{sessionCreatedAt(item.created_at)}</time>
+                <strong>{sessionInitialMessage(item)}</strong>
+                <small>{sessionAgentLabel(item)}</small>
+              </span>
+              {#if item.workflow_id === sessionId}
+                <span class="drawer-session-current">Active</span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      </section>
+    {:else}
+      <div class="message-list" bind:this={messageListElement}>
+        {#if connecting && messages.length === 0}
+          <div class="empty-chat">
+            <Sparkles size={18} />
+            <span>Connecting to {agentLabel}...</span>
+          </div>
+        {:else if error && messages.length === 0}
+          <div class="empty-chat error">
+            <span>{error}</span>
+          </div>
+        {/if}
+
+        {#each messages as message}
+          <article class={`message ${message.role}`}>
+            {#if message.role === "assistant"}
+              <div class="assistant-avatar" aria-hidden="true">
+                <Sparkles size={15} />
+              </div>
+            {/if}
+
+            <div class="bubble">
+              <MarkdownMessage
+                text={message.text}
+                citations={message.role === "assistant" ? message.citations : []}
+              />
+            </div>
+          </article>
+
+          {#if message.role === "user"}
+            {@const activityLogs = logsForTurn(message.turnNumber)}
+            {@const activeLog = activeLogForTurn(message.turnNumber)}
+            {@const expanded = activityExpanded(message.turnNumber)}
+            {#if activityLogs.length > 0}
+              <div class={`activity-feed ${expanded ? "expanded" : ""}`}>
+                {#if expanded}
+                  <div class="activity-list">
+                    {#each activityLogs as log}
+                      <div class={activityLineClass(log, log.offset === activeLog?.offset)}>
+                        <span class="activity-icon" aria-hidden="true">
+                          {#if log.actor === "model"}
+                            <Cpu size={14} />
+                          {:else if log.actor === "reasoning"}
+                            <BrainCircuit size={14} />
+                          {:else if log.actor === "tool"}
+                            <Wrench size={14} />
+                          {:else if log.actor === "approval"}
+                            <ShieldCheck size={14} />
+                          {:else if log.actor === "subagent"}
+                            <MessageCircle size={14} />
+                          {:else if logTone(log) === "error"}
+                            <AlertTriangle size={14} />
+                          {:else if logTone(log) === "done"}
+                            <CheckCircle2 size={14} />
+                          {:else}
+                            <Clock3 size={14} />
+                          {/if}
+                        </span>
+                      <span class="activity-copy">
+                        <strong>{log.label}</strong>
+                        {#if logDetail(log)}
+                          <span>{logDetail(log)}</span>
+                        {/if}
+                      </span>
+                      <time>{time(log.timestamp)}</time>
+                      {#if isApprovalPending(log)}
+                        <div class="approval-actions">
+                          <button
+                            type="button"
+                            class="approval-approve"
+                            disabled={!onApproveTool || isApprovalResolving(log.toolId)}
+                            onclick={(event) => void resolveApproval(event, log, true)}
+                            onkeydown={(event) => event.stopPropagation()}
+                          >
+                            <CheckCircle2 size={13} />
+                            <span>Approve</span>
+                          </button>
+                          <button
+                            type="button"
+                            class="approval-remember"
+                            disabled={!onApproveTool || isApprovalResolving(log.toolId)}
+                            onclick={(event) => void resolveApproval(event, log, true, true)}
+                            onkeydown={(event) => event.stopPropagation()}
+                          >
+                            <ShieldCheck size={13} />
+                            <span>Approve and remember</span>
+                          </button>
+                          <button
+                            type="button"
+                            class="approval-reject"
+                            disabled={!onApproveTool || isApprovalResolving(log.toolId)}
+                            onclick={(event) => void resolveApproval(event, log, false)}
+                            onkeydown={(event) => event.stopPropagation()}
+                          >
+                            <XCircle size={13} />
+                            <span>Reject</span>
+                          </button>
+                          {#if approvalError(log.toolId)}
+                            <span class="approval-error">{approvalError(log.toolId)}</span>
+                          {/if}
+                        </div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+                {:else if activeLog}
+                  {#key activeLog.offset}
+                    <div
+                      class={activityLineClass(activeLog, true)}
+                      in:fade={{ duration: activeLogFadeDuration(message.turnNumber, activeLog) }}
+                    >
                       <span class="activity-icon" aria-hidden="true">
-                        {#if log.actor === "model"}
+                        {#if activeLog.actor === "model"}
                           <Cpu size={14} />
-                        {:else if log.actor === "reasoning"}
+                        {:else if activeLog.actor === "reasoning"}
                           <BrainCircuit size={14} />
-                        {:else if log.actor === "tool"}
+                        {:else if activeLog.actor === "tool"}
                           <Wrench size={14} />
-                        {:else if log.actor === "approval"}
+                        {:else if activeLog.actor === "approval"}
                           <ShieldCheck size={14} />
-                        {:else if log.actor === "subagent"}
+                        {:else if activeLog.actor === "subagent"}
                           <MessageCircle size={14} />
-                        {:else if logTone(log) === "error"}
+                        {:else if logTone(activeLog) === "error"}
                           <AlertTriangle size={14} />
-                        {:else if logTone(log) === "done"}
+                        {:else if logTone(activeLog) === "done"}
                           <CheckCircle2 size={14} />
                         {:else}
                           <Clock3 size={14} />
                         {/if}
                       </span>
-                    <span class="activity-copy">
-                      <strong>{log.label}</strong>
-                      {#if logDetail(log)}
-                        <span>{logDetail(log)}</span>
-                      {/if}
-                    </span>
-                    <time>{time(log.timestamp)}</time>
-                    {#if isApprovalPending(log)}
-                      <div class="approval-actions">
-                        <button
-                          type="button"
-                          class="approval-approve"
-                          disabled={!onApproveTool || isApprovalResolving(log.toolId)}
-                          onclick={(event) => void resolveApproval(event, log, true)}
-                          onkeydown={(event) => event.stopPropagation()}
-                        >
-                          <CheckCircle2 size={13} />
-                          <span>Approve</span>
-                        </button>
-                        <button
-                          type="button"
-                          class="approval-reject"
-                          disabled={!onApproveTool || isApprovalResolving(log.toolId)}
-                          onclick={(event) => void resolveApproval(event, log, false)}
-                          onkeydown={(event) => event.stopPropagation()}
-                        >
-                          <XCircle size={13} />
-                          <span>Reject</span>
-                        </button>
-                        {#if approvalError(log.toolId)}
-                          <span class="approval-error">{approvalError(log.toolId)}</span>
+                      <span class="activity-copy">
+                        <strong>{activeLog.label}</strong>
+                        {#if logDetail(activeLog)}
+                          <span>{logDetail(activeLog)}</span>
                         {/if}
-                      </div>
-                    {/if}
-                  </div>
-                {/each}
+                      </span>
+                      <time>{time(activeLog.timestamp)}</time>
+                      {#if isApprovalPending(activeLog)}
+                        <div class="approval-actions">
+                          <button
+                            type="button"
+                            class="approval-approve"
+                            disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
+                            onclick={(event) => void resolveApproval(event, activeLog, true)}
+                            onkeydown={(event) => event.stopPropagation()}
+                          >
+                            <CheckCircle2 size={13} />
+                            <span>Approve</span>
+                          </button>
+                          <button
+                            type="button"
+                            class="approval-remember"
+                            disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
+                            onclick={(event) => void resolveApproval(event, activeLog, true, true)}
+                            onkeydown={(event) => event.stopPropagation()}
+                          >
+                            <ShieldCheck size={13} />
+                            <span>Approve and remember</span>
+                          </button>
+                          <button
+                            type="button"
+                            class="approval-reject"
+                            disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
+                            onclick={(event) => void resolveApproval(event, activeLog, false)}
+                            onkeydown={(event) => event.stopPropagation()}
+                          >
+                            <XCircle size={13} />
+                            <span>Reject</span>
+                          </button>
+                          {#if approvalError(activeLog.toolId)}
+                            <span class="approval-error">{approvalError(activeLog.toolId)}</span>
+                          {/if}
+                        </div>
+                      {/if}
+                    </div>
+                  {/key}
+                {/if}
+                <button
+                  type="button"
+                  class={`activity-expander ${expanded ? "expanded" : ""}`}
+                  aria-expanded={expanded}
+                  aria-label={expanded ? "Collapse activity logs" : "Expand activity logs"}
+                  onclick={() => toggleActivity(message.turnNumber)}
+                >
+                  <ChevronDown size={14} />
+                </button>
               </div>
-              {:else if activeLog}
-                {#key activeLog.offset}
-                  <div
-                    class={activityLineClass(activeLog, true)}
-                    in:fade={{ duration: activeLogFadeDuration(message.turnNumber, activeLog) }}
-                  >
-                    <span class="activity-icon" aria-hidden="true">
-                      {#if activeLog.actor === "model"}
-                        <Cpu size={14} />
-                      {:else if activeLog.actor === "reasoning"}
-                        <BrainCircuit size={14} />
-                      {:else if activeLog.actor === "tool"}
-                        <Wrench size={14} />
-                      {:else if activeLog.actor === "approval"}
-                        <ShieldCheck size={14} />
-                      {:else if activeLog.actor === "subagent"}
-                        <MessageCircle size={14} />
-                      {:else if logTone(activeLog) === "error"}
-                        <AlertTriangle size={14} />
-                      {:else if logTone(activeLog) === "done"}
-                        <CheckCircle2 size={14} />
-                      {:else}
-                        <Clock3 size={14} />
-                      {/if}
-                    </span>
-                    <span class="activity-copy">
-                      <strong>{activeLog.label}</strong>
-                      {#if logDetail(activeLog)}
-                        <span>{logDetail(activeLog)}</span>
-                      {/if}
-                    </span>
-                    <time>{time(activeLog.timestamp)}</time>
-                    {#if isApprovalPending(activeLog)}
-                      <div class="approval-actions">
-                        <button
-                          type="button"
-                          class="approval-approve"
-                          disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
-                          onclick={(event) => void resolveApproval(event, activeLog, true)}
-                          onkeydown={(event) => event.stopPropagation()}
-                        >
-                          <CheckCircle2 size={13} />
-                          <span>Approve</span>
-                        </button>
-                        <button
-                          type="button"
-                          class="approval-reject"
-                          disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
-                          onclick={(event) => void resolveApproval(event, activeLog, false)}
-                          onkeydown={(event) => event.stopPropagation()}
-                        >
-                          <XCircle size={13} />
-                          <span>Reject</span>
-                        </button>
-                        {#if approvalError(activeLog.toolId)}
-                          <span class="approval-error">{approvalError(activeLog.toolId)}</span>
-                        {/if}
-                      </div>
-                    {/if}
-                  </div>
-                {/key}
-              {/if}
-              <button
-                type="button"
-                class={`activity-expander ${expanded ? "expanded" : ""}`}
-                aria-expanded={expanded}
-                aria-label={expanded ? "Collapse activity logs" : "Expand activity logs"}
-                onclick={() => toggleActivity(message.turnNumber)}
-              >
-                <ChevronDown size={14} />
-              </button>
-            </div>
+            {/if}
           {/if}
+        {/each}
+
+        {#if sending}
+          <article class="message assistant">
+            <div class="assistant-avatar" aria-hidden="true">
+              <Sparkles size={15} />
+            </div>
+            <div class="bubble thinking">
+              <span></span><span></span><span></span>
+            </div>
+          </article>
         {/if}
-      {/each}
+      </div>
+    {/if}
 
-      {#if sending}
-        <article class="message assistant">
-          <div class="assistant-avatar" aria-hidden="true">
-            <Sparkles size={15} />
-          </div>
-          <div class="bubble thinking">
-            <span></span><span></span><span></span>
-          </div>
-        </article>
-      {/if}
-    </div>
-
-    {#if error && messages.length > 0}
+    {#if !drawerActive && error && messages.length > 0}
       <div class="error-banner">{error}</div>
     {/if}
 
-    {#if starterQuestions.length > 0}
+    {#if !drawerActive && starterQuestions.length > 0}
       <div class="starter-row" aria-label="Suggested questions">
         {#each starterQuestions as question}
           <button
@@ -703,74 +934,84 @@
     </form>
   </div>
 
-  <aside class="session-panel" aria-label="Sessions">
-    <div class="session-head">
-      <span class="session-title">
-        <History size={16} />
-        <span>Sessions</span>
-      </span>
-      <label class={`session-add-select ${canCreateSession ? "" : "disabled"}`}>
-        <Plus size={14} aria-hidden="true" />
-        <span class="session-add-label">{creatingSession ? "Starting" : "Add"}</span>
-        <select
-          aria-label="Add session"
-          disabled={!canCreateSession}
-          onchange={(event) => void handleNewSessionAgentChange(event)}
-        >
-          <option value="">{creatingSession ? "Starting" : "Add"}</option>
-          {#each agents as agent}
-            <option value={agent.workflow_type}>{agent.label}</option>
-          {/each}
-        </select>
-        <ChevronDown size={13} aria-hidden="true" />
-      </label>
-    </div>
+  {#if layout === "full"}
+    <aside class="session-panel" aria-label="Sessions">
+      <div class="session-head">
+        <span class="session-title">
+          <History size={16} />
+          <span>Sessions</span>
+        </span>
+        <label class={`session-add-select ${canCreateSession ? "" : "disabled"}`}>
+          <Plus size={14} aria-hidden="true" />
+          <span class="session-add-label">{creatingSession ? "Starting" : "Add"}</span>
+          <select
+            aria-label="Add session"
+            disabled={!canCreateSession}
+            onchange={(event) => void handleNewSessionAgentChange(event)}
+          >
+            <option value="">{creatingSession ? "Starting" : "Add"}</option>
+            {#each agents as agent}
+              <option value={agent.workflow_type}>{agent.label}</option>
+            {/each}
+          </select>
+          <ChevronDown size={13} aria-hidden="true" />
+        </label>
+      </div>
 
-    <div class="session-list">
-      {#if sessionItems.length === 0}
-        <p class="session-empty">Sessions will appear after the app connects.</p>
-      {/if}
-      {#each sessionItems as item}
-        <div
-          class={`session-card ${item.workflow_id === sessionId ? "active" : ""}`}
-          aria-current={item.workflow_id === sessionId ? "true" : undefined}
-        >
-          <button
-            class="session-select"
-            type="button"
-            onclick={() => void selectSession(item.workflow_id)}
+      <div class="session-list">
+        {#if sessionItems.length === 0}
+          <p class="session-empty">Sessions will appear after the app connects.</p>
+        {/if}
+        {#each sessionItems as item}
+          <div
+            class={`session-card ${item.workflow_id === sessionId ? "active" : ""}`}
+            aria-current={item.workflow_id === sessionId ? "true" : undefined}
           >
-            <span class="session-dot" aria-hidden="true"></span>
-            <span class="session-copy">
-              <time>{sessionCreatedAt(item.created_at)}</time>
-              <strong>{sessionInitialMessage(item)}</strong>
-              <small>{sessionAgentLabel(item)}</small>
-            </span>
-          </button>
-          <button
-            class="session-delete"
-            type="button"
-            aria-label={`Delete session ${sessionInitialMessage(item)}`}
-            title="Delete session"
-            disabled={!onDeleteSession || sessionDeleting(item.workflow_id)}
-            onclick={() => void deleteSession(item.workflow_id)}
-          >
-            <Trash2 size={14} />
-          </button>
-        </div>
-      {/each}
-    </div>
-  </aside>
+            <button
+              class="session-select"
+              type="button"
+              onclick={() => void selectSession(item.workflow_id)}
+            >
+              <span class="session-dot" aria-hidden="true"></span>
+              <span class="session-copy">
+                <time>{sessionCreatedAt(item.created_at)}</time>
+                <strong>{sessionInitialMessage(item)}</strong>
+                <small>{sessionAgentLabel(item)}</small>
+              </span>
+            </button>
+            <button
+              class="session-delete"
+              type="button"
+              aria-label={`Delete session ${sessionInitialMessage(item)}`}
+              title="Delete session"
+              disabled={!onDeleteSession || sessionDeleting(item.workflow_id)}
+              onclick={() => void deleteSession(item.workflow_id)}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        {/each}
+      </div>
+    </aside>
+  {/if}
 </section>
 
 <style>
   .support-app {
     width: 100%;
+    height: 100%;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
     gap: 0;
     background: var(--surface-0);
+  }
+
+  .support-app.full {
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  }
+
+  .support-app.embedded {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .chat-shell {
@@ -781,6 +1022,14 @@
     border-right: 1px solid var(--border);
   }
 
+  .support-app.embedded .chat-shell {
+    border-right: 0;
+  }
+
+  .support-app.headerless .chat-shell {
+    grid-template-rows: minmax(0, 1fr) auto auto;
+  }
+
   .support-head {
     min-height: 66px;
     display: flex;
@@ -789,6 +1038,12 @@
     padding: 12px 18px;
     border-bottom: 1px solid var(--border);
     background: var(--surface-1);
+  }
+
+  .support-app.embedded .support-head {
+    min-height: 58px;
+    align-items: flex-start;
+    padding: 10px 12px;
   }
 
   .agent-mark,
@@ -806,6 +1061,11 @@
     width: 36px;
     height: 36px;
     border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  }
+
+  .support-app.embedded .agent-mark {
+    width: 32px;
+    height: 32px;
   }
 
   .agent-title {
@@ -842,8 +1102,291 @@
     min-width: 0;
     margin-left: auto;
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
+    justify-content: flex-end;
     gap: 8px;
+  }
+
+  .support-app.embedded .agent-controls {
+    flex: 1 1 100%;
+    margin-left: 44px;
+    justify-content: flex-start;
+  }
+
+  .header-session-select,
+  .header-session-add,
+  .header-session-drawer {
+    position: relative;
+    min-width: 0;
+    height: 28px;
+    display: inline-grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface-0);
+    color: var(--text-2);
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .header-session-drawer {
+    grid-template-columns: auto minmax(0, 1fr);
+    border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+  }
+
+  .header-session-select {
+    flex: 1 1 180px;
+    max-width: 260px;
+  }
+
+  .header-session-add {
+    flex: 0 0 auto;
+  }
+
+  .header-session-select:hover:not(.disabled),
+  .header-session-select:focus-within:not(.disabled),
+  .header-session-add:hover:not(.disabled),
+  .header-session-add:focus-within:not(.disabled),
+  .header-session-drawer:hover,
+  .header-session-drawer:focus-visible,
+  .header-session-drawer.active {
+    border-color: var(--border-strong);
+    color: var(--text-1);
+    outline: 0;
+  }
+
+  .header-session-select span,
+  .header-session-add span,
+  .header-session-drawer span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .header-session-select select,
+  .header-session-add select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    opacity: 0;
+    outline: 0;
+    appearance: none;
+  }
+
+  .header-session-select select:disabled,
+  .header-session-add select:disabled {
+    cursor: default;
+  }
+
+  .header-session-select option,
+  .header-session-add option {
+    background: var(--surface-1);
+    color: var(--text-1);
+  }
+
+  .header-session-select.disabled,
+  .header-session-add.disabled {
+    cursor: default;
+    opacity: 0.52;
+  }
+
+  .session-drawer {
+    min-height: 0;
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    gap: 10px;
+    padding: 14px 12px;
+    background: var(--surface-0);
+  }
+
+  .session-drawer-head {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .session-drawer-title {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--text-1);
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .session-drawer-close {
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface-1);
+    color: var(--text-3);
+    cursor: pointer;
+  }
+
+  .session-drawer-close:hover,
+  .session-drawer-close:focus-visible {
+    color: var(--text-1);
+    border-color: var(--border-strong);
+    outline: 0;
+  }
+
+  .session-drawer-search {
+    min-width: 0;
+    height: 34px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px;
+    align-items: center;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-1);
+    color: var(--text-3);
+  }
+
+  .session-drawer-search:focus-within {
+    border-color: var(--border-strong);
+    color: var(--text-2);
+  }
+
+  .session-drawer-search input {
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text-1);
+    font: inherit;
+    font-size: 12px;
+  }
+
+  .session-drawer-search input::placeholder {
+    color: var(--text-3);
+  }
+
+  .session-drawer-add {
+    position: relative;
+    min-width: 0;
+    height: 34px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+    padding: 0 10px;
+    border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .session-drawer-add:hover:not(.disabled),
+  .session-drawer-add:focus-within:not(.disabled) {
+    border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+    outline: 0;
+  }
+
+  .session-drawer-add.disabled {
+    cursor: default;
+    opacity: 0.52;
+  }
+
+  .session-drawer-add span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .session-drawer-add select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    opacity: 0;
+    outline: 0;
+    appearance: none;
+  }
+
+  .session-drawer-add select:disabled {
+    cursor: default;
+  }
+
+  .session-drawer-add option {
+    background: var(--surface-1);
+    color: var(--text-1);
+  }
+
+  .session-drawer-list {
+    min-height: 0;
+    overflow-y: auto;
+    display: grid;
+    align-content: start;
+    gap: 8px;
+  }
+
+  .drawer-session-row {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 9px;
+    align-items: start;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-1);
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+  }
+
+  .drawer-session-row:hover,
+  .drawer-session-row:focus-visible {
+    border-color: var(--border-strong);
+    outline: 0;
+  }
+
+  .drawer-session-row.active {
+    border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface-1));
+  }
+
+  .drawer-session-current {
+    align-self: start;
+    padding: 3px 6px;
+    border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
+    border-radius: 999px;
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
   }
 
   .live-dot {
@@ -862,10 +1405,16 @@
   .message-list {
     min-height: 0;
     overflow-y: auto;
+    overflow-anchor: none;
     display: flex;
     flex-direction: column;
     gap: 16px;
     padding: 22px clamp(18px, 5vw, 72px);
+  }
+
+  .support-app.embedded .message-list {
+    gap: 12px;
+    padding: 14px 12px;
   }
 
   .empty-chat {
@@ -918,10 +1467,18 @@
     line-height: 1.5;
   }
 
+  .support-app.embedded .bubble {
+    max-width: min(100%, 460px);
+  }
+
   .message.user .bubble {
     max-width: min(620px, 72%);
     border-color: color-mix(in srgb, var(--accent) 32%, transparent);
     background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+  }
+
+  .support-app.embedded .message.user .bubble {
+    max-width: min(100%, 460px);
   }
 
   .activity-feed {
@@ -936,6 +1493,11 @@
     background: color-mix(in srgb, var(--surface-1) 78%, transparent);
     cursor: pointer;
     transition: border-color 160ms ease, background 160ms ease;
+  }
+
+  .support-app.embedded .activity-feed {
+    width: min(100%, 460px);
+    margin-left: 0;
   }
 
   .activity-feed:hover,
@@ -1060,6 +1622,11 @@
     border-color: color-mix(in srgb, var(--success) 35%, var(--border));
   }
 
+  .approval-actions .approval-remember {
+    color: var(--queue);
+    border-color: color-mix(in srgb, var(--queue) 40%, var(--border));
+  }
+
   .approval-actions .approval-reject {
     color: var(--error);
     border-color: color-mix(in srgb, var(--error) 35%, var(--border));
@@ -1140,6 +1707,10 @@
     overflow-x: auto;
   }
 
+  .support-app.embedded .starter-row {
+    padding: 0 12px 10px;
+  }
+
   .starter-row button {
     flex: 0 0 auto;
     padding: 7px 10px;
@@ -1172,6 +1743,10 @@
     font-size: 12px;
   }
 
+  .support-app.embedded .error-banner {
+    margin: 0 12px 10px;
+  }
+
   .composer {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -1183,6 +1758,10 @@
     border-radius: 8px;
     background: var(--surface-1);
     color: var(--text-3);
+  }
+
+  .support-app.embedded .composer {
+    margin: 0 12px 12px;
   }
 
   .composer input {
@@ -1448,10 +2027,14 @@
       justify-content: flex-start;
     }
 
+    .support-app.embedded .agent-controls {
+      margin-left: 42px;
+    }
+
   }
 
   @media (max-width: 980px) {
-    .support-app {
+    .support-app.full {
       grid-template-columns: 1fr;
       grid-template-rows: minmax(0, 1fr) auto;
     }
