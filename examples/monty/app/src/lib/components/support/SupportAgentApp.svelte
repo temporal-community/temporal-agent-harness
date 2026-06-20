@@ -26,7 +26,6 @@
   import MarkdownMessage from "./MarkdownMessage.svelte";
 
   type SupportLayout = "full" | "embedded";
-  type ActivityFilter = "all" | "subagent";
 
   interface Props {
     items: TranscriptItem[];
@@ -85,11 +84,9 @@
   let draft = $state("");
   let localMessages = $state<SupportMessage[]>([]);
   let observedSessionId = $state<string | null>(null);
-  let selectedSessionId = $state("");
   let sessionDrawerOpen = $state(false);
   let sessionSearch = $state("");
   let expandedActivityTurns = $state<number[]>([]);
-  let activityFilter = $state<ActivityFilter>("all");
   let observedActivitySessionId = $state<string | null>(null);
   let observedActivityOffsets = $state<Record<number, number>>({});
   let deletingSessionIds = $state<string[]>([]);
@@ -110,8 +107,7 @@
 
   const fixtureMessages = $derived(seedMessages(items));
   const messages = $derived([...fixtureMessages, ...localMessages]);
-  const hasSubagentLogs = $derived(logs.some((row) => isSubagentActivity(row)));
-  const logsByTurn = $derived(groupLogsByTurn(logs, activityFilter));
+  const logsByTurn = $derived(groupLogsByTurn(logs));
   const resolvedApprovalToolIds = $derived(resolvedApprovalIds(logs));
   const pendingApprovalRows = $derived(logs.filter((row) => isApprovalPending(row)));
   const sources = $derived(uniqueCitations(messages.flatMap((message) => message.citations)));
@@ -124,11 +120,6 @@
   );
   const activeSession = $derived(
     sessionItems.find((item) => item.workflow_id === sessionId) ?? null
-  );
-  const activeSessionLabel = $derived(
-    activeSession
-      ? `${sessionCreatedAt(activeSession.created_at)} - ${sessionInitialMessage(activeSession)}`
-      : "Session"
   );
   const isMonty = $derived(currentAgentWorkflowType === "MontyDynamicAgent");
   const isMontyTravelAgent = $derived(
@@ -165,7 +156,6 @@
       sending ? "sending" : "idle",
       connecting ? "connecting" : "connected",
       expandedActivityTurns.join(","),
-      activityFilter,
       resolvingApprovalIds.length,
       Object.keys(approvalErrors).length
     ].join("|")
@@ -187,7 +177,6 @@
   );
 
   $effect(() => {
-    selectedSessionId = sessionId;
     if (observedSessionId === null) {
       observedSessionId = sessionId;
       return;
@@ -270,23 +259,10 @@
     ].includes(row.event);
   }
 
-  function isSubagentActivity(row: ReplayLogRow): boolean {
-    return row.actor === "subagent" || row.parentTurnNumber != null;
-  }
-
-  function matchesActivityFilter(row: ReplayLogRow, filter: ActivityFilter): boolean {
-    if (filter === "all") return true;
-    return isSubagentActivity(row);
-  }
-
-  function groupLogsByTurn(
-    rows: ReplayLogRow[],
-    filter: ActivityFilter
-  ): Map<number, ReplayLogRow[]> {
+  function groupLogsByTurn(rows: ReplayLogRow[]): Map<number, ReplayLogRow[]> {
     const grouped = new Map<number, ReplayLogRow[]>();
     for (const row of rows) {
       if (!showLogInApp(row)) continue;
-      if (!matchesActivityFilter(row, filter)) continue;
       const current = grouped.get(row.turnNumber) ?? [];
       current.push(row);
       grouped.set(row.turnNumber, current);
@@ -554,11 +530,6 @@
     sessionDrawerOpen = false;
   }
 
-  async function handleSessionChange(): Promise<void> {
-    if (!selectedSessionId) return;
-    await selectSession(selectedSessionId);
-  }
-
   async function selectSession(nextSessionId: string): Promise<void> {
     if (!onSelectSession || nextSessionId === sessionId) return;
     await onSelectSession(nextSessionId);
@@ -600,29 +571,6 @@
         </div>
         <div class="agent-controls">
           {#if layout === "embedded"}
-            <label
-              class={`header-session-select ${
-                !onSelectSession || sessionItems.length === 0 || connecting || creatingSession
-                  ? "disabled"
-                  : ""
-              }`}
-            >
-              <History size={13} aria-hidden="true" />
-              <span>{activeSessionLabel}</span>
-              <select
-                bind:value={selectedSessionId}
-                aria-label="Select session"
-                disabled={!onSelectSession || sessionItems.length === 0 || connecting || creatingSession}
-                onchange={() => void handleSessionChange()}
-              >
-                {#each sessionItems as item}
-                  <option value={item.workflow_id}>
-                    {sessionCreatedAt(item.created_at)} - {sessionInitialMessage(item)}
-                  </option>
-                {/each}
-              </select>
-              <ChevronDown size={12} aria-hidden="true" />
-            </label>
             <label class={`header-session-add ${canCreateSession ? "" : "disabled"}`}>
               <Plus size={13} aria-hidden="true" />
               <span>{creatingSession ? "Starting" : "New"}</span>
@@ -728,29 +676,6 @@
       </section>
     {:else}
       <div class="message-list" bind:this={messageListElement}>
-        {#if hasSubagentLogs}
-          <div class="activity-filter-bar" role="group" aria-label="Chat activity filter">
-            <button
-              type="button"
-              class={activityFilter === "all" ? "active" : ""}
-              aria-pressed={activityFilter === "all"}
-              onclick={() => (activityFilter = "all")}
-            >
-              <Clock3 size={13} />
-              <span>All</span>
-            </button>
-            <button
-              type="button"
-              class={activityFilter === "subagent" ? "active" : ""}
-              aria-pressed={activityFilter === "subagent"}
-              onclick={() => (activityFilter = "subagent")}
-            >
-              <MessageCircle size={13} />
-              <span>Subagents</span>
-            </button>
-          </div>
-        {/if}
-
         {#if connecting && messages.length === 0}
           <div class="empty-chat">
             <Sparkles size={18} />
@@ -1228,7 +1153,6 @@
     justify-content: flex-start;
   }
 
-  .header-session-select,
   .header-session-add,
   .header-session-drawer {
     position: relative;
@@ -1253,17 +1177,10 @@
     border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
   }
 
-  .header-session-select {
-    flex: 1 1 180px;
-    max-width: 260px;
-  }
-
   .header-session-add {
     flex: 0 0 auto;
   }
 
-  .header-session-select:hover:not(.disabled),
-  .header-session-select:focus-within:not(.disabled),
   .header-session-add:hover:not(.disabled),
   .header-session-add:focus-within:not(.disabled),
   .header-session-drawer:hover,
@@ -1274,7 +1191,6 @@
     outline: 0;
   }
 
-  .header-session-select span,
   .header-session-add span,
   .header-session-drawer span {
     min-width: 0;
@@ -1283,7 +1199,6 @@
     white-space: nowrap;
   }
 
-  .header-session-select select,
   .header-session-add select {
     position: absolute;
     inset: 0;
@@ -1299,18 +1214,15 @@
     appearance: none;
   }
 
-  .header-session-select select:disabled,
   .header-session-add select:disabled {
     cursor: default;
   }
 
-  .header-session-select option,
   .header-session-add option {
     background: var(--surface-1);
     color: var(--text-1);
   }
 
-  .header-session-select.disabled,
   .header-session-add.disabled {
     cursor: default;
     opacity: 0.52;
@@ -1553,56 +1465,6 @@
   .empty-chat.error {
     color: var(--error);
     border-color: color-mix(in srgb, var(--error) 35%, var(--border));
-  }
-
-  .activity-filter-bar {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    align-self: flex-start;
-    display: inline-flex;
-    gap: 4px;
-    padding: 4px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--surface-1) 94%, transparent);
-    box-shadow: 0 8px 18px color-mix(in srgb, var(--surface-0) 42%, transparent);
-  }
-
-  .support-app.embedded .activity-filter-bar {
-    align-self: stretch;
-    justify-content: flex-start;
-  }
-
-  .activity-filter-bar button {
-    min-width: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    height: 28px;
-    padding: 0 9px;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--text-3);
-    cursor: pointer;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 650;
-  }
-
-  .activity-filter-bar button:hover,
-  .activity-filter-bar button:focus-visible {
-    color: var(--text-1);
-    border-color: var(--border);
-    outline: 0;
-  }
-
-  .activity-filter-bar button.active {
-    color: var(--accent);
-    border-color: color-mix(in srgb, var(--accent) 38%, transparent);
-    background: color-mix(in srgb, var(--accent) 11%, var(--surface-2));
   }
 
   .message {

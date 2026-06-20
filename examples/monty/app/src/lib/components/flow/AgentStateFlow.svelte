@@ -23,6 +23,13 @@
   let { graph, onNodeSelect }: Props = $props();
   let nodes = $state.raw<Node<AgentNodeData>[]>([]);
   let edges = $state.raw<Edge[]>([]);
+  let flowWrapElement = $state<HTMLDivElement | null>(null);
+  let flowViewportWidth = $state(0);
+  let flowViewportHeight = $state(0);
+  let resizeFrame = 0;
+  const minZoom = 0.04;
+  const maxZoom = 2.5;
+  const fitViewOptions = { padding: 0.16, minZoom, maxZoom };
   const nodeTypes: NodeTypes = {
     agentState: AgentStateNode,
     agentWorkflow: AgentWorkflowNode
@@ -44,20 +51,51 @@
       )
       .join("|")
   );
+  const viewportSignature = $derived(`${flowViewportWidth}x${flowViewportHeight}`);
+  const fitSignature = $derived(`${autoFitSignature}|${viewportSignature}`);
 
   $effect(() => {
     nodes = graph.nodes;
     edges = graph.edges;
   });
+
+  $effect(() => {
+    const element = flowWrapElement;
+    if (!element || typeof ResizeObserver === "undefined") return;
+
+    const updateSize = (width: number, height: number) => {
+      if (resizeFrame) cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(() => {
+        flowViewportWidth = Math.round(width);
+        flowViewportHeight = Math.round(height);
+        resizeFrame = 0;
+      });
+    };
+
+    updateSize(element.clientWidth, element.clientHeight);
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      updateSize(entry.contentRect.width, entry.contentRect.height);
+    });
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+      if (resizeFrame) cancelAnimationFrame(resizeFrame);
+      resizeFrame = 0;
+    };
+  });
 </script>
 
-<div class="flow-wrap">
+<div class="flow-wrap" bind:this={flowWrapElement}>
   <SvelteFlow
     bind:nodes
     bind:edges
     {nodeTypes}
     fitView
-    fitViewOptions={{ padding: 0.12 }}
+    {fitViewOptions}
+    {minZoom}
+    {maxZoom}
     colorMode="dark"
     nodesDraggable={false}
     nodesConnectable={false}
@@ -65,8 +103,8 @@
     onnodeclick={({ node }) => onNodeSelect?.(node.id)}
     proOptions={{ hideAttribution: true }}
   >
-    <AutoFitView signature={autoFitSignature} />
-    <Controls />
+    <AutoFitView signature={fitSignature} {fitViewOptions} />
+    <Controls {fitViewOptions} />
     <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
   </SvelteFlow>
 </div>

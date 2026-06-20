@@ -28,8 +28,9 @@
     onSelectSession
   }: Props = $props();
 
-  let selectedSessionId = $state("");
   let sessionDrawerOpen = $state(false);
+  let newSessionMenuOpen = $state(false);
+  let popoverNewSessionOpen = $state(false);
   let sessionSearch = $state("");
 
   const sessionItems = $derived(sortedSessions(sessions));
@@ -38,14 +39,6 @@
     sessionSearchTerm
       ? sessionItems.filter((session) => sessionMatchesSearch(session, sessionSearchTerm))
       : sessionItems
-  );
-  const activeSession = $derived(
-    sessionItems.find((item) => item.workflow_id === sessionId) ?? null
-  );
-  const activeSessionLabel = $derived(
-    activeSession
-      ? `${sessionCreatedAt(activeSession.created_at)} - ${sessionInitialMessage(activeSession)}`
-      : "No session"
   );
   const canCreateSession = $derived(
     Boolean(onNewSession) && agents.length > 0 && !creatingSession
@@ -63,10 +56,6 @@
               ? "Needs attention"
               : "Available"
   );
-
-  $effect(() => {
-    selectedSessionId = sessionId;
-  });
 
   function sortedSessions(value: Session[]): Session[] {
     return [...value].sort((a, b) => b.created_at - a.created_at);
@@ -103,18 +92,26 @@
     ].some((value) => value.toLowerCase().includes(term));
   }
 
-  async function handleNewSessionAgentChange(event: Event): Promise<void> {
-    const select = event.currentTarget as HTMLSelectElement;
-    const workflowType = select.value;
-    select.value = "";
-    if (!workflowType || !onNewSession || creatingSession) return;
-    await onNewSession(workflowType);
-    sessionDrawerOpen = false;
+  function toggleNewSessionMenu(): void {
+    if (!canCreateSession) return;
+    newSessionMenuOpen = !newSessionMenuOpen;
+    if (newSessionMenuOpen) {
+      sessionDrawerOpen = false;
+      popoverNewSessionOpen = false;
+    }
   }
 
-  async function handleSessionChange(): Promise<void> {
-    if (!selectedSessionId || !onSelectSession || selectedSessionId === sessionId) return;
-    await onSelectSession(selectedSessionId);
+  function toggleSessionPopover(): void {
+    sessionDrawerOpen = !sessionDrawerOpen;
+    if (sessionDrawerOpen) newSessionMenuOpen = false;
+  }
+
+  async function startNewSession(workflowType: string): Promise<void> {
+    if (!workflowType || !onNewSession || creatingSession) return;
+    await onNewSession(workflowType);
+    newSessionMenuOpen = false;
+    popoverNewSessionOpen = false;
+    sessionDrawerOpen = false;
   }
 
   async function openSession(nextSessionId: string): Promise<void> {
@@ -127,50 +124,61 @@
 </script>
 
 <div class="session-controls">
-  <label
-    class={`session-picker ${
-      !onSelectSession || sessionItems.length === 0 || connecting || creatingSession
-        ? "disabled"
-        : ""
-    }`}
-  >
-    <History size={13} aria-hidden="true" />
-    <span>{activeSessionLabel}</span>
-    <select
-      bind:value={selectedSessionId}
-      aria-label="Select session"
-      disabled={!onSelectSession || sessionItems.length === 0 || connecting || creatingSession}
-      onchange={() => void handleSessionChange()}
-    >
-      {#each sessionItems as item}
-        <option value={item.workflow_id}>
-          {sessionCreatedAt(item.created_at)} - {sessionInitialMessage(item)}
-        </option>
-      {/each}
-    </select>
-    <ChevronDown size={12} aria-hidden="true" />
-  </label>
-
-  <label class={`session-add ${canCreateSession ? "" : "disabled"}`}>
-    <Plus size={13} aria-hidden="true" />
-    <span>{creatingSession ? "Starting" : "New"}</span>
-    <select
-      aria-label="Add session"
+  <div class="new-session-anchor">
+    <button
+      type="button"
+      class={`session-add ${canCreateSession ? "" : "disabled"} ${newSessionMenuOpen ? "active" : ""}`}
       disabled={!canCreateSession}
-      onchange={(event) => void handleNewSessionAgentChange(event)}
+      aria-haspopup="menu"
+      aria-expanded={newSessionMenuOpen}
+      onclick={toggleNewSessionMenu}
     >
-      <option value="">{creatingSession ? "Starting" : "New"}</option>
-      {#each agents as agent}
-        <option value={agent.workflow_type}>{agent.label}</option>
-      {/each}
-    </select>
-  </label>
+      <Plus size={13} aria-hidden="true" />
+      <span>{creatingSession ? "Starting" : "New"}</span>
+    </button>
+
+    {#if newSessionMenuOpen}
+      <section class="new-session-popover" aria-label="New session">
+        <header class="new-session-head">
+          <span class="new-session-title">
+            <Plus size={15} />
+            <span>New session</span>
+          </span>
+          <button
+            type="button"
+            class="new-session-close"
+            aria-label="Close new session menu"
+            onclick={() => (newSessionMenuOpen = false)}
+          >
+            <X size={15} />
+          </button>
+        </header>
+
+        <div class="agent-list" role="menu">
+          {#each agents as agent}
+            <button
+              type="button"
+              class="agent-row"
+              role="menuitem"
+              onclick={() => void startNewSession(agent.workflow_type)}
+            >
+              <span class="agent-dot" aria-hidden="true"></span>
+              <span class="agent-copy">
+                <strong>{agent.label}</strong>
+                <small>{agent.workflow_type}</small>
+              </span>
+            </button>
+          {/each}
+        </div>
+      </section>
+    {/if}
+  </div>
 
   <button
     type="button"
     class={`session-drawer-button ${sessionDrawerOpen ? "active" : ""}`}
     aria-pressed={sessionDrawerOpen}
-    onclick={() => (sessionDrawerOpen = !sessionDrawerOpen)}
+    onclick={toggleSessionPopover}
   >
     <History size={13} />
     <span>Sessions</span>
@@ -210,21 +218,38 @@
         />
       </label>
 
-      <label class={`session-popover-add ${canCreateSession ? "" : "disabled"}`}>
+      <button
+        type="button"
+        class={`session-popover-add ${canCreateSession ? "" : "disabled"} ${popoverNewSessionOpen ? "active" : ""}`}
+        disabled={!canCreateSession}
+        aria-expanded={popoverNewSessionOpen}
+        aria-controls="session-popover-agent-list"
+        onclick={() => {
+          if (canCreateSession) popoverNewSessionOpen = !popoverNewSessionOpen;
+        }}
+      >
         <Plus size={14} aria-hidden="true" />
         <span>{creatingSession ? "Starting" : "New session"}</span>
-        <select
-          aria-label="Add session"
-          disabled={!canCreateSession}
-          onchange={(event) => void handleNewSessionAgentChange(event)}
-        >
-          <option value="">{creatingSession ? "Starting" : "New session"}</option>
-          {#each agents as agent}
-            <option value={agent.workflow_type}>{agent.label}</option>
-          {/each}
-        </select>
         <ChevronDown size={13} aria-hidden="true" />
-      </label>
+      </button>
+
+      {#if popoverNewSessionOpen}
+        <div class="agent-list inline" id="session-popover-agent-list">
+          {#each agents as agent}
+            <button
+              type="button"
+              class="agent-row"
+              onclick={() => void startNewSession(agent.workflow_type)}
+            >
+              <span class="agent-dot" aria-hidden="true"></span>
+              <span class="agent-copy">
+                <strong>{agent.label}</strong>
+                <small>{agent.workflow_type}</small>
+              </span>
+            </button>
+          {/each}
+        </div>
+      {/if}
 
       <div class="session-list">
         {#if filteredSessionItems.length === 0}
@@ -264,7 +289,11 @@
     gap: 8px;
   }
 
-  .session-picker,
+  .new-session-anchor {
+    position: relative;
+    display: inline-flex;
+  }
+
   .session-add,
   .session-drawer-button {
     position: relative;
@@ -285,13 +314,9 @@
     font-weight: 650;
   }
 
-  .session-picker {
-    flex: 1 1 260px;
-    max-width: 420px;
-  }
-
   .session-add {
     flex: 0 0 auto;
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
   .session-drawer-button {
@@ -299,10 +324,9 @@
     border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
   }
 
-  .session-picker:hover:not(.disabled),
-  .session-picker:focus-within:not(.disabled),
   .session-add:hover:not(.disabled),
-  .session-add:focus-within:not(.disabled),
+  .session-add:focus-visible:not(.disabled),
+  .session-add.active,
   .session-drawer-button:hover,
   .session-drawer-button:focus-visible,
   .session-drawer-button.active {
@@ -311,7 +335,6 @@
     outline: 0;
   }
 
-  .session-picker span,
   .session-add span,
   .session-drawer-button span {
     min-width: 0;
@@ -320,38 +343,8 @@
     white-space: nowrap;
   }
 
-  .session-picker select,
-  .session-add select,
-  .session-popover-add select {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    font: inherit;
-    opacity: 0;
-    outline: 0;
-    appearance: none;
-  }
-
-  .session-picker select:disabled,
-  .session-add select:disabled,
-  .session-popover-add select:disabled {
-    cursor: default;
-  }
-
-  .session-picker option,
-  .session-add option,
-  .session-popover-add option {
-    background: var(--surface-1);
-    color: var(--text-1);
-  }
-
-  .session-picker.disabled,
-  .session-add.disabled {
+  .session-add.disabled,
+  .session-add:disabled {
     cursor: default;
     opacity: 0.52;
   }
@@ -403,7 +396,25 @@
     box-shadow: 0 18px 42px rgb(0 0 0 / 0.28);
   }
 
-  .session-popover-head {
+  .new-session-popover {
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 0;
+    z-index: 22;
+    width: min(360px, calc(100vw - 32px));
+    min-height: 0;
+    overflow: hidden;
+    display: grid;
+    gap: 10px;
+    padding: 14px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-0);
+    box-shadow: 0 18px 42px rgb(0 0 0 / 0.28);
+  }
+
+  .session-popover-head,
+  .new-session-head {
     min-width: 0;
     display: flex;
     align-items: center;
@@ -411,7 +422,8 @@
     gap: 10px;
   }
 
-  .session-popover-title {
+  .session-popover-title,
+  .new-session-title {
     min-width: 0;
     display: inline-flex;
     align-items: center;
@@ -421,7 +433,8 @@
     font-weight: 700;
   }
 
-  .session-popover-close {
+  .session-popover-close,
+  .new-session-close {
     width: 28px;
     height: 28px;
     display: inline-flex;
@@ -435,7 +448,9 @@
   }
 
   .session-popover-close:hover,
-  .session-popover-close:focus-visible {
+  .session-popover-close:focus-visible,
+  .new-session-close:hover,
+  .new-session-close:focus-visible {
     color: var(--text-1);
     border-color: var(--border-strong);
     outline: 0;
@@ -475,7 +490,6 @@
   }
 
   .session-popover-add {
-    position: relative;
     min-width: 0;
     height: 34px;
     display: grid;
@@ -488,17 +502,20 @@
     background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
     color: var(--accent);
     cursor: pointer;
+    font: inherit;
     font-size: 12px;
     font-weight: 650;
   }
 
   .session-popover-add:hover:not(.disabled),
-  .session-popover-add:focus-within:not(.disabled) {
+  .session-popover-add:focus-visible:not(.disabled),
+  .session-popover-add.active {
     border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
     outline: 0;
   }
 
-  .session-popover-add.disabled {
+  .session-popover-add.disabled,
+  .session-popover-add:disabled {
     cursor: default;
     opacity: 0.52;
   }
@@ -506,6 +523,77 @@
   .session-popover-add span {
     min-width: 0;
     overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .session-popover-add.active :global(svg:last-child) {
+    transform: rotate(180deg);
+  }
+
+  .agent-list {
+    min-height: 0;
+    display: grid;
+    gap: 8px;
+  }
+
+  .agent-list.inline {
+    margin-top: -2px;
+  }
+
+  .agent-row {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 9px;
+    align-items: start;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-1);
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+  }
+
+  .agent-row:hover,
+  .agent-row:focus-visible {
+    border-color: var(--border-strong);
+    outline: 0;
+    background: color-mix(in srgb, var(--surface-2) 38%, var(--surface-0));
+  }
+
+  .agent-dot {
+    width: 8px;
+    height: 8px;
+    margin-top: 5px;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+
+  .agent-copy {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+  }
+
+  .agent-copy strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-1);
+    font-size: 12px;
+    font-weight: 650;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agent-copy small {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: 11px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -608,11 +696,6 @@
   @media (max-width: 980px) {
     .session-controls {
       justify-content: flex-start;
-    }
-
-    .session-picker {
-      flex-basis: min(100%, 360px);
-      max-width: none;
     }
 
     .session-popover {
