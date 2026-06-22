@@ -46,18 +46,24 @@ const sessions: Session[] = [
   }
 ];
 
-let offset = 0;
+const rootAgentId = "qa-root";
+const searchSubagentId = "qa-root-search";
+const searchSubagentWorkflowId = "agent-session-mock-qa-search";
+let resumeOffset = 0;
 
 function frame<T extends keyof AgentSseEventMap>(
   event: T,
-  data: Omit<AgentSseEventMap[T], "offset"> & { offset?: number }
+  data: Omit<AgentSseEventMap[T], "agent_id" | "resume_offset"> &
+    { agent_id?: string; resume_offset?: number }
 ): AgentSseFrame {
-  offset += 1;
+  const agentId = data.agent_id ?? rootAgentId;
+  if (agentId === rootAgentId) resumeOffset += 1;
   return {
     event,
     data: {
       ...data,
-      offset
+      agent_id: agentId,
+      resume_offset: data.resume_offset ?? resumeOffset
     } as AgentSseEventMap[T]
   } as AgentSseFrame;
 }
@@ -578,6 +584,78 @@ const frames: AgentSseFrame[] = [
     tool_output:
       '{"expected_total_tokens":62000,"expected_cached_tokens":18000,"expected_model_calls":22}'
   }),
+  frame("subagent_started", {
+    type: "subagent_started",
+    ...meta(7, 138.1),
+    subagent_id: searchSubagentId,
+    agent_key: "research",
+    workflow_id: searchSubagentWorkflowId
+  }),
+  frame("subagent_message_sent", {
+    type: "subagent_message_sent",
+    ...meta(7, 138.2),
+    subagent_id: searchSubagentId,
+    agent_key: "research",
+    workflow_id: searchSubagentWorkflowId,
+    function: "summarize_budget_examples",
+    subagent_turn: 1,
+    from_offset: 0
+  }),
+  frame("turn_started", {
+    type: "turn_started",
+    ...meta(1, 138.3),
+    agent_id: searchSubagentId,
+    turn_id: "search-turn-001",
+    user_message: '{"type":"summarize_budget_examples","payload":{"turns":15}}'
+  }),
+  frame("tool_start", {
+    type: "tool_start",
+    ...meta(1, 138.4),
+    agent_id: searchSubagentId,
+    turn_id: "search-turn-001",
+    tool_id: "tool-search-budget-1",
+    tool_name: "scan_saved_sessions",
+    tool_input: { kind: "budget-examples" }
+  }),
+  frame("tool_end", {
+    type: "tool_end",
+    ...meta(1, 138.55),
+    agent_id: searchSubagentId,
+    turn_id: "search-turn-001",
+    tool_id: "tool-search-budget-1",
+    tool_name: "scan_saved_sessions",
+    tool_output: '{"matching_sessions":4,"largest_token_total":68120}'
+  }),
+  frame("reply", {
+    type: "reply",
+    ...meta(1, 138.7),
+    agent_id: searchSubagentId,
+    turn_id: "search-turn-001",
+    text: "Saved budget-heavy sessions cluster between 58k and 68k tokens."
+  }),
+  frame("turn_end", {
+    type: "turn_end",
+    ...meta(1, 138.8),
+    agent_id: searchSubagentId,
+    turn_id: "search-turn-001"
+  }),
+  frame("subagent_reply_received", {
+    type: "subagent_reply_received",
+    ...meta(7, 138.9),
+    subagent_id: searchSubagentId,
+    agent_key: "research",
+    workflow_id: searchSubagentWorkflowId,
+    function: "summarize_budget_examples",
+    subagent_turn: 1,
+    outcome: "ok"
+  }),
+  frame("subagent_stopped", {
+    type: "subagent_stopped",
+    ...meta(7, 138.95),
+    subagent_id: searchSubagentId,
+    agent_key: "research",
+    workflow_id: searchSubagentWorkflowId
+  }),
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(7, 139),
@@ -848,7 +926,10 @@ const frames: AgentSseFrame[] = [
     type: "error",
     ...meta(11, 242),
     message: "Upstream model stream interrupted after headers were sent."
-  } as Omit<Extract<AgentSseEventMap["error"], { type: "error" }>, "offset">),
+  } as Omit<
+    Extract<AgentSseEventMap["error"], { type: "error" }>,
+    "agent_id" | "resume_offset"
+  >),
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(11, 246),

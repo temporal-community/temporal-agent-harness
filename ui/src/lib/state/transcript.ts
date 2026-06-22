@@ -110,7 +110,7 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
       if (text) {
         items.push({
           kind: "thought",
-          id: `thought-${frame.data.offset}`,
+          id: `thought-${frame.data.turn_id}-${frame.data.timestamp}`,
           turnNumber: turn_number,
           text,
           timestamp

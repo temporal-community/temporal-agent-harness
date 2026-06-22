@@ -198,16 +198,20 @@ Response media type: `text/event-stream`.
 
 The server performs the workflow update before streaming begins. If the update
 is rejected, the response is a regular HTTP error instead of an SSE stream.
+The stream is already merged: it contains the root agent and every recursive
+subagent event in one ordered sequence.
 
 ### `GET /api/attach?session_id=...&from_offset=0`
 
-Replays or tails an existing session stream.
+Replays or tails an existing merged session stream.
 
 Response media type: `text/event-stream`.
 
-When `from_offset` is `0`, the server replays the session event history. When it
-is non-zero, only newer events are streamed. The stream returns when the workflow
-is idle and caught up.
+When `from_offset` is `0`, the server replays the merged session event history.
+When it is non-zero, pass a prior frame's `resume_offset`; only newer root-stream
+positions are streamed. The stream returns when the workflow is idle and caught
+up. `resume_offset` is a root-stream cursor, not a display ordinal: several
+subagent frames may carry the same value.
 
 ## Error Responses
 
@@ -241,22 +245,23 @@ For normal agent events, `data` is a flat object containing:
 
 - the event payload fields
 - `type`, matching the SSE event name
+- `agent_id`, identifying the agent that published the event
 - `turn_id`
 - `turn_number`
 - `timestamp` epoch seconds
-- `offset`, the next stream offset the client should pass as `from_offset`
+- `resume_offset`, the root-stream cursor the client should pass as `from_offset`
 
 Example:
 
 ```txt
 event: reply_delta
-data: {"type":"reply_delta","turn_id":"t1","turn_number":1,"timestamp":1710000001,"offset":2,"text":"Hi"}
+data: {"type":"reply_delta","agent_id":"root","turn_id":"t1","turn_number":1,"timestamp":1710000001,"resume_offset":2,"text":"Hi"}
 
 ```
 
 `POST /api/chat` can also emit client-side `error` frames for timeout or agent
-turn failure. Those frames have `kind`, `message`, and `offset`, but may not
-have `type` or turn metadata.
+turn failure. Those frames have `kind`, `message`, and `resume_offset`, but may
+not have `type` or turn metadata.
 
 ## SSE Event Payloads
 
@@ -326,6 +331,42 @@ tool_error: {
   message: string
 }
 
+subagent_started: {
+  subagent_id: string
+  agent_key: string
+  workflow_id: string
+}
+
+subagent_message_sent: {
+  subagent_id: string
+  agent_key: string
+  workflow_id: string
+  function: string
+  subagent_turn: number
+  from_offset: number
+}
+
+subagent_reply_received: {
+  subagent_id: string
+  agent_key: string
+  workflow_id: string
+  function: string
+  subagent_turn: number
+  outcome: "ok" | "error"
+}
+
+subagent_stopped: {
+  subagent_id: string
+  agent_key: string
+  workflow_id: string
+}
+
+subagent_stream_unavailable: {
+  subagent_id: string
+  workflow_id: string
+  reason: string
+}
+
 reply_delta: {
   text: string
 }
@@ -365,16 +406,16 @@ A basic text turn can be mocked as:
 
 ```txt
 event: turn_started
-data: {"type":"turn_started","turn_id":"t1","turn_number":1,"timestamp":1710000000,"offset":1,"user_message":"hello"}
+data: {"type":"turn_started","agent_id":"root","turn_id":"t1","turn_number":1,"timestamp":1710000000,"resume_offset":1,"user_message":"hello"}
 
 event: reply_delta
-data: {"type":"reply_delta","turn_id":"t1","turn_number":1,"timestamp":1710000001,"offset":2,"text":"Hi"}
+data: {"type":"reply_delta","agent_id":"root","turn_id":"t1","turn_number":1,"timestamp":1710000001,"resume_offset":2,"text":"Hi"}
 
 event: reply
-data: {"type":"reply","turn_id":"t1","turn_number":1,"timestamp":1710000002,"offset":3,"output":{"text":"Hi there."}}
+data: {"type":"reply","agent_id":"root","turn_id":"t1","turn_number":1,"timestamp":1710000002,"resume_offset":3,"output":{"text":"Hi there."}}
 
 event: turn_end
-data: {"type":"turn_end","turn_id":"t1","turn_number":1,"timestamp":1710000003,"offset":4}
+data: {"type":"turn_end","agent_id":"root","turn_id":"t1","turn_number":1,"timestamp":1710000003,"resume_offset":4}
 
 ```
 

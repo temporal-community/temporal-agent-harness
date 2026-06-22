@@ -19,7 +19,6 @@ export interface AgentApi {
   acceptedMessageTypes(sessionId: WorkflowId): Promise<AcceptedMessageTypesResponse>;
   agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]>;
   attach(sessionId: WorkflowId, fromOffset?: number, signal?: AbortSignal): AsyncIterable<AgentSseFrame>;
-  streamHistory(sessionId: WorkflowId, fromOffset?: number, signal?: AbortSignal): AsyncIterable<AgentSseFrame>;
   chat(request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame>;
   approve(request: ToolApprovalRequest): Promise<ToolApprovalResponse>;
 }

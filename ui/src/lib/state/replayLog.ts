@@ -182,11 +182,12 @@ function rowFromFrame(
   frameIndex: number
 ): ReplayLogRow | null {
   const { frame } = entry;
+  const displayOffset = frameIndex + 1;
   if (!("type" in frame.data)) {
     return {
-      id: `${entry.workflowId ?? "parent"}-stream-error-${frame.data.offset}`,
-      index: frameIndex + 1,
-      offset: frame.data.offset,
+      id: `${entry.workflowId ?? "parent"}-stream-error-${displayOffset}`,
+      index: displayOffset,
+      offset: displayOffset,
       turnNumber: 0,
       sourceTurnNumber: 0,
       workflowId: entry.workflowId,
@@ -210,9 +211,9 @@ function rowFromFrame(
       ? entry.parentTurnNumber
       : sourceTurnNumber;
   const base = {
-    id: `${entry.workflowId ?? "parent"}-${frame.data.type}-${frame.data.offset}`,
-    index: frameIndex + 1,
-    offset: frame.data.offset,
+    id: `${entry.workflowId ?? frame.data.agent_id}-${frame.data.type}-${displayOffset}`,
+    index: displayOffset,
+    offset: displayOffset,
     turnNumber,
     sourceTurnNumber,
     parentTurnNumber: entry.role === "subagent" ? entry.parentTurnNumber : undefined,
@@ -381,7 +382,7 @@ function rowFromFrame(
       actor: "subagent",
       tone: "agent",
       label: "Subagent started",
-      body: `${frame.data.agent_key} · ${frame.data.handle}`,
+      body: `${frame.data.agent_key} · ${frame.data.subagent_id}`,
       detail: frame.data.workflow_id,
       status: "running"
     };
@@ -394,8 +395,20 @@ function rowFromFrame(
       tone: "tool",
       label: "Subagent message sent",
       body: `${frame.data.function} → turn ${frame.data.subagent_turn}`,
-      detail: `${frame.data.agent_key} · ${frame.data.handle}`,
+      detail: `${frame.data.agent_key} · ${frame.data.subagent_id}`,
       status: "dispatched"
+    };
+  }
+
+  if (frame.event === "subagent_reply_received") {
+    return {
+      ...base,
+      actor: "subagent",
+      tone: frame.data.outcome === "ok" ? "done" : "error",
+      label: "Subagent reply received",
+      body: `${frame.data.function} → turn ${frame.data.subagent_turn}`,
+      detail: `${frame.data.agent_key} · ${frame.data.subagent_id}`,
+      status: frame.data.outcome
     };
   }
 
@@ -405,9 +418,23 @@ function rowFromFrame(
       actor: "subagent",
       tone: "done",
       label: "Subagent stopped",
-      body: `${frame.data.agent_key} · ${frame.data.handle}`,
+      body: `${frame.data.agent_key} · ${frame.data.subagent_id}`,
       detail: frame.data.workflow_id,
       status: "stopped"
+    };
+  }
+
+  if (frame.event === "subagent_stream_unavailable") {
+    return {
+      ...base,
+      actor: "subagent",
+      tone: "error",
+      label: "Subagent stream unavailable",
+      body: frame.data.reason || "Subagent detail was unavailable.",
+      detail: frame.data.workflow_id,
+      status: "degraded",
+      marker: "error",
+      markerLabel: "subagent stream unavailable"
     };
   }
 

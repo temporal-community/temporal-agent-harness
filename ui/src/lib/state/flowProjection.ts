@@ -648,16 +648,25 @@ export function buildAgentGraph(
     } else if (
       frame.event === "subagent_started" ||
       frame.event === "subagent_message_sent" ||
-      frame.event === "subagent_stopped"
+      frame.event === "subagent_reply_received" ||
+      frame.event === "subagent_stopped" ||
+      frame.event === "subagent_stream_unavailable"
     ) {
       if (!showSubagentDispatch) continue;
       markRuntimeNode("subagent");
-      subagentSubtitle = `${frame.data.agent_key} · ${frame.data.handle}`;
+      subagentSubtitle =
+        "agent_key" in frame.data
+          ? `${frame.data.agent_key} · ${frame.data.subagent_id}`
+          : frame.data.subagent_id;
       subagentDetail = frame.data.workflow_id;
       if (frame.event === "subagent_started") {
         subagentState = "started";
       } else if (frame.event === "subagent_message_sent") {
         subagentState = `${frame.data.function} → turn ${frame.data.subagent_turn}`;
+      } else if (frame.event === "subagent_reply_received") {
+        subagentState = `reply ${frame.data.outcome}`;
+      } else if (frame.event === "subagent_stream_unavailable") {
+        subagentState = "detail unavailable";
       } else {
         subagentState = "stopped";
       }
@@ -752,7 +761,12 @@ export function buildAgentGraph(
     }
     if (id === "subagent") {
       return {
-        tone: subagentState === "stopped" ? "done" : "agent",
+        tone:
+          subagentState === "detail unavailable"
+            ? "error"
+            : subagentState === "stopped"
+              ? "done"
+              : "agent",
         title: "Subagent",
         state: subagentState,
         subtitle: subagentSubtitle,
@@ -926,7 +940,7 @@ function mountedLabel(agent: MountedAgentGraphInput): string {
 
 function mountedSubtitle(agent: MountedAgentGraphInput): string {
   const bits = [agent.label];
-  if (agent.handle) bits.unshift(`handle ${agent.handle}`);
+  if (agent.handle) bits.unshift(`subagent ${agent.handle}`);
   if (agent.stopped) bits.push("stopped");
   return bits.filter(Boolean).join(" · ");
 }

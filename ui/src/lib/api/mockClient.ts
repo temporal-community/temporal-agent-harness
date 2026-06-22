@@ -120,19 +120,11 @@ export class MockAgentApi implements AgentApi {
   ): AsyncIterable<AgentSseFrame> {
     for (const item of realisticQaScenario.frames) {
       if (signal?.aborted) return;
-      if (item.data.offset <= fromOffset) continue;
+      if (item.data.resume_offset <= fromOffset) continue;
       await sleep(40);
       if (signal?.aborted) return;
       yield item;
     }
-  }
-
-  async *streamHistory(
-    sessionId: WorkflowId,
-    fromOffset = 0,
-    signal?: AbortSignal
-  ): AsyncIterable<AgentSseFrame> {
-    yield* this.attach(sessionId, fromOffset, signal);
   }
 
   async *chat(_request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame> {

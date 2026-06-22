@@ -29,12 +29,10 @@ export interface MountedAgentStream {
   workflowId: string;
   role: "subagent";
   parentWorkflowId: string;
-  handle: string;
+  subagentId: string;
   agentKey: string;
   label: string;
-  frames: AgentSseFrame[];
   agentInterface?: AgentInterfaceFunction[];
-  lastOffset: number;
   targetTurn: number | null;
   stopped: boolean;
 }
@@ -49,11 +47,6 @@ interface ReplayTimelineEntry extends StepTimelineFrame {
 
 const basePlaybackDelayMs = 700;
 const activeSessionStorageKey = "temporal-agent-ui.active-session.v1";
-const subagentStoragePrefix = "temporal-agent-ui.subagents.v1:";
-
-interface StoredSubagentStreams {
-  agents: MountedAgentStream[];
-}
 
 function readStoredActiveSessionId(): string | null {
   if (typeof window === "undefined") return null;
@@ -83,50 +76,6 @@ function removeStoredActiveSessionId(): void {
   }
 }
 
-function subagentStorageKey(parentWorkflowId: string): string {
-  return `${subagentStoragePrefix}${parentWorkflowId}`;
-}
-
-function readStoredSubagents(parentWorkflowId: string): MountedAgentStream[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(subagentStorageKey(parentWorkflowId));
-    if (!raw) return [];
-    const stored = JSON.parse(raw) as Partial<StoredSubagentStreams>;
-    if (!Array.isArray(stored.agents)) return [];
-    return stored.agents.filter(
-      (agent): agent is MountedAgentStream =>
-        agent?.role === "subagent" &&
-        typeof agent.workflowId === "string" &&
-        typeof agent.parentWorkflowId === "string" &&
-        typeof agent.handle === "string" &&
-        typeof agent.agentKey === "string" &&
-        typeof agent.label === "string" &&
-        Array.isArray(agent.frames) &&
-        (!("agentInterface" in agent) || Array.isArray(agent.agentInterface)) &&
-        typeof agent.lastOffset === "number"
-    );
-  } catch {
-    return [];
-  }
-}
-
-function writeStoredSubagents(parentWorkflowId: string, agents: MountedAgentStream[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(
-      subagentStorageKey(parentWorkflowId),
-      JSON.stringify({ agents } satisfies StoredSubagentStreams)
-    );
-  } catch {
-    // Best-effort cache only; the live stream/history paths remain authoritative.
-  }
-}
-
-function replayFrameKey(workflowId: string, frame: AgentSseFrame): string {
-  return `${workflowId}:offset:${frame.data.offset}`;
-}
-
 function renderUserMessage(value: string): string {
   if (!value.startsWith("{")) return value;
   try {
@@ -154,24 +103,6 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-function delay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const timeout = window.setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        window.clearTimeout(timeout);
-        resolve();
-      },
-      { once: true }
-    );
-  });
-}
-
 export class MockRunController {
   #api: AgentApi;
   #initialized = false;
@@ -191,12 +122,11 @@ export class MockRunController {
   sessions = $state<Session[]>([]);
   session = $state<Session | null>(null);
   expectedTurn = $state(1);
-  lastOffset = $state(0);
+  lastResumeOffset = $state(0);
   #streamVersion = 0;
   #connectionVersion = 0;
   #sendVersion = 0;
   #streamAbort: AbortController | null = null;
-  #subagentAborts = new Map<string, AbortController>();
   #interfaceRequests = new Set<string>();
   #timer: number | null = null;
 
@@ -222,7 +152,13 @@ export class MockRunController {
   graph = $derived(buildMountedAgentGraph(this.graphAgents));
   replayLog = $derived(buildReplayLog(this.visibleReplayTimeline));
   fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
-  supportTranscript = $derived(buildTranscript(this.frames));
+  supportTranscript = $derived(
+    buildTranscript(
+      this.replayTimeline
+        .filter((entry) => entry.role === "parent")
+        .map((entry) => entry.frame)
+    )
+  );
   currentLogRow = $derived(
     this.fullReplayLog.rows.find((row) => row.index === this.viewIndex) ?? null
   );
@@ -231,10 +167,12 @@ export class MockRunController {
   stepTimeline = $derived(buildStepTimeline(this.replayTimeline));
   anomalyMarkers = $derived(buildReplayMarkers(this.replayTimeline));
   turnMarkers = $derived(
-    this.allReplayFrames
-      .map((frame, index) =>
-        frame.event === "turn_started" && "type" in frame.data
-          ? { index, turnNumber: frame.data.turn_number }
+    this.replayTimeline
+      .map((entry, index) =>
+        entry.role === "parent" &&
+        entry.frame.event === "turn_started" &&
+        "type" in entry.frame.data
+          ? { index, turnNumber: entry.frame.data.turn_number }
           : null
       )
       .filter((item): item is { index: number; turnNumber: number } => item != null)
@@ -270,40 +208,48 @@ export class MockRunController {
   #replayTimeline(): ReplayTimelineEntry[] {
     const session = this.session;
     if (!session) return [];
-    const mountedByWorkflowId = new Map(
-      this.mountedAgents.map((agent) => [agent.workflowId, agent])
+    const mountedBySubagentId = new Map(
+      this.mountedAgents.map((agent) => [agent.subagentId, agent])
     );
-    const injectedSubagentFrames = new Set<string>();
+    const parentTurnBySubagentTurn = new Map<string, number>();
     const timeline: ReplayTimelineEntry[] = [];
 
     for (const frame of this.frames) {
-      timeline.push({
-        workflowId: session.workflow_id,
-        role: "parent",
-        label: this.runInfo.agentLabel,
-        frame
-      });
-      if (frame.event !== "subagent_message_sent" || !("type" in frame.data)) {
+      if (!("type" in frame.data)) {
+        timeline.push({
+          workflowId: session.workflow_id,
+          role: "parent",
+          label: this.runInfo.agentLabel,
+          frame
+        });
         continue;
       }
-      const mounted = mountedByWorkflowId.get(frame.data.workflow_id);
-      if (!mounted) continue;
-      for (const childFrame of mounted.frames) {
-        if (
-          "type" in childFrame.data &&
-          childFrame.data.turn_number === frame.data.subagent_turn
-        ) {
-          const childKey = replayFrameKey(mounted.workflowId, childFrame);
-          if (injectedSubagentFrames.has(childKey)) continue;
-          injectedSubagentFrames.add(childKey);
-          timeline.push({
-            workflowId: mounted.workflowId,
-            role: "subagent",
-            label: mounted.label,
-            parentTurnNumber: frame.data.turn_number,
-            frame: childFrame
-          });
-        }
+
+      const mounted = mountedBySubagentId.get(frame.data.agent_id);
+      const parentTurnNumber =
+        mounted == null
+          ? undefined
+          : parentTurnBySubagentTurn.get(
+              `${frame.data.agent_id}:${frame.data.turn_number}`
+            );
+      const role: ReplayTimelineRole = mounted == null ? "parent" : "subagent";
+      timeline.push({
+        workflowId: mounted?.workflowId ?? session.workflow_id,
+        role,
+        label: mounted?.label ?? this.runInfo.agentLabel,
+        parentTurnNumber,
+        frame
+      });
+
+      if (frame.event === "subagent_message_sent") {
+        const enclosingParentTurn =
+          role === "subagent" && parentTurnNumber != null
+            ? parentTurnNumber
+            : frame.data.turn_number;
+        parentTurnBySubagentTurn.set(
+          `${frame.data.subagent_id}:${frame.data.subagent_turn}`,
+          enclosingParentTurn
+        );
       }
     }
 
@@ -320,7 +266,9 @@ export class MockRunController {
       if (
         frame.event !== "subagent_started" &&
         frame.event !== "subagent_message_sent" &&
-        frame.event !== "subagent_stopped"
+        frame.event !== "subagent_reply_received" &&
+        frame.event !== "subagent_stopped" &&
+        frame.event !== "subagent_stream_unavailable"
       ) {
         continue;
       }
@@ -355,7 +303,7 @@ export class MockRunController {
           role: agent.role,
           label: agent.label,
           parentWorkflowId: agent.parentWorkflowId,
-          handle: agent.handle,
+          handle: agent.subagentId,
           agentKey: agent.agentKey,
           frames: visibleSubagentFrames.get(agent.workflowId) ?? [],
           agentInterface:
@@ -369,13 +317,6 @@ export class MockRunController {
     this.#streamAbort?.abort();
     this.#streamAbort = null;
     this.#streamVersion += 1;
-  }
-
-  #stopSubagentStreams(): void {
-    for (const controller of this.#subagentAborts.values()) {
-      controller.abort();
-    }
-    this.#subagentAborts.clear();
   }
 
   #beginStream(): {
@@ -397,15 +338,15 @@ export class MockRunController {
     if (this.#streamAbort === controller) this.#streamAbort = null;
   }
 
-  #subagentLabel(agentKey: string, handle: string): string {
+  #subagentLabel(agentKey: string, subagentId: string): string {
     const descriptor = this.agents.find((agent) => agent.key === agentKey);
-    return `${descriptor?.label ?? agentKey} (${handle})`;
+    return `${descriptor?.label ?? agentKey} (${subagentId})`;
   }
 
   #upsertSubagent(data: {
     workflow_id: string;
-    handle: string;
-    agent_key: string;
+    subagent_id: string;
+    agent_key?: string;
     targetTurn?: number;
     stopped?: boolean;
   }, parentWorkflowId = this.session?.workflow_id): void {
@@ -413,17 +354,16 @@ export class MockRunController {
     const existing = this.mountedAgents.find(
       (agent) => agent.workflowId === data.workflow_id
     );
+    const agentKey = data.agent_key ?? existing?.agentKey ?? "subagent";
     const next: MountedAgentStream = {
       workflowId: data.workflow_id,
       role: "subagent",
       parentWorkflowId,
-      handle: data.handle,
-      agentKey: data.agent_key,
-      label: this.#subagentLabel(data.agent_key, data.handle),
-      frames: existing?.frames ?? [],
+      subagentId: data.subagent_id,
+      agentKey,
+      label: this.#subagentLabel(agentKey, data.subagent_id),
       agentInterface:
         this.agentInterfaces[data.workflow_id] ?? existing?.agentInterface,
-      lastOffset: existing?.lastOffset ?? 0,
       targetTurn:
         data.targetTurn == null
           ? existing?.targetTurn ?? null
@@ -434,23 +374,6 @@ export class MockRunController {
       ...this.mountedAgents.filter((agent) => agent.workflowId !== data.workflow_id),
       next
     ];
-    this.#persistSubagentCache();
-  }
-
-  #loadSubagentCache(parentWorkflowId: string): void {
-    this.mountedAgents = readStoredSubagents(parentWorkflowId);
-    const cachedInterfaces = Object.fromEntries(
-      this.mountedAgents
-        .filter((agent) => agent.agentInterface?.length)
-        .map((agent) => [agent.workflowId, agent.agentInterface ?? []])
-    );
-    this.agentInterfaces = { ...this.agentInterfaces, ...cachedInterfaces };
-  }
-
-  #persistSubagentCache(): void {
-    const parentWorkflowId = this.session?.workflow_id;
-    if (!parentWorkflowId) return;
-    writeStoredSubagents(parentWorkflowId, this.mountedAgents);
   }
 
   async #fetchAgentInterface(workflowId: string): Promise<void> {
@@ -468,7 +391,6 @@ export class MockRunController {
         this.mountedAgents = this.mountedAgents.map((agent) =>
           agent.workflowId === workflowId ? { ...agent, agentInterface } : agent
         );
-        this.#persistSubagentCache();
       }
     } catch {
       // Agent-interface discovery is auxiliary UI metadata; streaming remains authoritative.
@@ -511,7 +433,6 @@ export class MockRunController {
         this.sessions = [...this.sessions, this.session];
       }
       writeStoredActiveSessionId(this.session.workflow_id);
-      this.#loadSubagentCache(this.session.workflow_id);
       void this.#fetchAgentInterface(this.session.workflow_id);
 
       if (!this.#isCurrentConnection(connectionVersion)) return;
@@ -530,7 +451,6 @@ export class MockRunController {
     const connectionVersion = this.#beginConnection();
     this.#sendVersion += 1;
     this.#stopStream();
-    this.#stopSubagentStreams();
     this.sending = false;
     this.creatingSession = true;
     this.connecting = true;
@@ -559,7 +479,6 @@ export class MockRunController {
       this.#resetSessionView();
       this.session = session;
       writeStoredActiveSessionId(session.workflow_id);
-      this.#loadSubagentCache(session.workflow_id);
       void this.#fetchAgentInterface(session.workflow_id);
       await this.attach(0);
     } catch (error) {
@@ -592,7 +511,6 @@ export class MockRunController {
     this.#resetSessionView();
     this.session = session;
     writeStoredActiveSessionId(session.workflow_id);
-    this.#loadSubagentCache(session.workflow_id);
     void this.#fetchAgentInterface(session.workflow_id);
 
     try {
@@ -607,7 +525,7 @@ export class MockRunController {
     }
   }
 
-  async attach(fromOffset = this.lastOffset): Promise<void> {
+  async attach(fromOffset = this.lastResumeOffset): Promise<void> {
     const session = this.session;
     if (!session) return;
 
@@ -623,84 +541,6 @@ export class MockRunController {
       if (!isAbortError(error)) throw error;
     } finally {
       this.#finishStream(controller);
-    }
-  }
-
-  #subagentTurnEnded(workflowId: string, turnNumber: number): boolean {
-    const mounted = this.mountedAgents.find((agent) => agent.workflowId === workflowId);
-    return (
-      mounted?.frames.some(
-        (frame) =>
-          frame.event === "turn_end" &&
-          "type" in frame.data &&
-          frame.data.turn_number >= turnNumber
-      ) ?? false
-    );
-  }
-
-  async #fetchSubagentMessages(workflowId: string, replace = false): Promise<void> {
-    const mounted = this.mountedAgents.find((agent) => agent.workflowId === workflowId);
-    if (!mounted || mounted.stopped) return;
-    const existing = this.#subagentAborts.get(workflowId);
-    if (existing) {
-      if (!replace) return;
-      existing.abort();
-      this.#subagentAborts.delete(workflowId);
-    }
-
-    const parentWorkflowId = mounted.parentWorkflowId;
-    const controller = new AbortController();
-    this.#subagentAborts.set(workflowId, controller);
-    try {
-      while (!controller.signal.aborted) {
-        const current = this.mountedAgents.find((agent) => agent.workflowId === workflowId);
-        if (
-          !current ||
-          current.stopped ||
-          this.session?.workflow_id !== parentWorkflowId ||
-          (current.targetTurn != null && this.#subagentTurnEnded(workflowId, current.targetTurn))
-        ) {
-          break;
-        }
-
-        let sawFrame = false;
-        for await (const frame of this.#api.streamHistory(
-          workflowId,
-          current.lastOffset,
-          controller.signal
-        )) {
-          if (
-            controller.signal.aborted ||
-            this.session?.workflow_id !== parentWorkflowId ||
-            !this.mountedAgents.some((agent) => agent.workflowId === workflowId)
-          ) {
-            break;
-          }
-          sawFrame = true;
-          this.#appendSubagentFrame(workflowId, frame);
-        }
-
-        const latest = this.mountedAgents.find((agent) => agent.workflowId === workflowId);
-        if (
-          !latest ||
-          latest.stopped ||
-          latest.targetTurn == null ||
-          this.#subagentTurnEnded(workflowId, latest.targetTurn)
-        ) {
-          break;
-        }
-
-        await delay(sawFrame ? 50 : 250, controller.signal);
-      }
-    } catch (error) {
-      if (!isAbortError(error) && this.session?.workflow_id === parentWorkflowId) {
-        this.connectionError =
-          error instanceof Error ? error.message : "Failed to fetch subagent stream.";
-      }
-    } finally {
-      if (this.#subagentAborts.get(workflowId) === controller) {
-        this.#subagentAborts.delete(workflowId);
-      }
     }
   }
 
@@ -724,7 +564,7 @@ export class MockRunController {
         session_id: session.workflow_id,
         message: this.#messageForSession(message, session),
         expected_turn: expectedTurn,
-        from_offset: this.lastOffset
+        from_offset: this.lastResumeOffset
       }, signal)) {
         if (streamVersion !== this.#streamVersion || this.session?.workflow_id !== session.workflow_id) {
           break;
@@ -742,7 +582,7 @@ export class MockRunController {
       this.expectedTurn = Math.max(1, expectedTurn);
       this.connectionError =
         error instanceof Error ? error.message : "Failed to send message.";
-      await this.attach(this.lastOffset);
+      await this.attach(this.lastResumeOffset);
     } finally {
       if (sendVersion === this.#sendVersion) this.sending = false;
       this.#finishStream(controller);
@@ -803,67 +643,55 @@ export class MockRunController {
   #resetSessionView(): void {
     this.pause();
     this.#stopStream();
-    this.#stopSubagentStreams();
     this.frames = [];
     this.mountedAgents = [];
     this.viewIndex = 0;
     this.following = false;
     this.expectedTurn = 1;
-    this.lastOffset = 0;
+    this.lastResumeOffset = 0;
   }
 
   #appendFrame(frame: AgentSseFrame): void {
     if (!("type" in frame.data)) {
       this.connectionError = frame.data.message;
     }
-
-    if (
-      "offset" in frame.data &&
-      this.frames.some((item) => "offset" in item.data && item.data.offset === frame.data.offset)
-    ) {
-      return;
-    }
+    const publisherWorkflowId = this.#publisherWorkflowId(frame);
+    const isRootFrame = publisherWorkflowId === this.session?.workflow_id;
 
     this.frames = [...this.frames, frame];
     this.following = true;
     this.viewIndex = this.total;
 
-    if ("offset" in frame.data && typeof frame.data.offset === "number") {
-      this.lastOffset = Math.max(this.lastOffset, frame.data.offset);
+    if (
+      "resume_offset" in frame.data &&
+      typeof frame.data.resume_offset === "number"
+    ) {
+      this.lastResumeOffset = Math.max(
+        this.lastResumeOffset,
+        frame.data.resume_offset
+      );
     }
-    if ("type" in frame.data && frame.data.turn_number >= this.expectedTurn) {
+    if (
+      isRootFrame &&
+      "type" in frame.data &&
+      frame.data.turn_number >= this.expectedTurn
+    ) {
       this.expectedTurn = frame.data.turn_number + 1;
     }
-    if (frame.event === "turn_started" && frame.data.turn_number === 1) {
+    if (isRootFrame && frame.event === "turn_started" && frame.data.turn_number === 1) {
       this.#recordInitialUserMessage(renderUserMessage(frame.data.user_message));
     }
-    this.#handleSubagentEvent(frame);
+    this.#handleSubagentEvent(frame, publisherWorkflowId);
   }
 
-  #appendSubagentFrame(workflowId: string, frame: AgentSseFrame): void {
-    this.mountedAgents = this.mountedAgents.map((agent) => {
-      if (agent.workflowId !== workflowId) return agent;
-      if (
-        "offset" in frame.data &&
-        agent.frames.some(
-          (item) => "offset" in item.data && item.data.offset === frame.data.offset
-        )
-      ) {
-        return agent;
-      }
-      const lastOffset =
-        "offset" in frame.data && typeof frame.data.offset === "number"
-          ? Math.max(agent.lastOffset, frame.data.offset)
-          : agent.lastOffset;
-      return {
-        ...agent,
-        frames: [...agent.frames, frame],
-        lastOffset
-      };
-    });
-    this.#persistSubagentCache();
-    this.#handleSubagentEvent(frame, workflowId);
-    if (this.following) this.viewIndex = this.total;
+  #publisherWorkflowId(frame: AgentSseFrame): string | undefined {
+    const sessionWorkflowId = this.session?.workflow_id;
+    if (!("agent_id" in frame.data)) return sessionWorkflowId;
+    const agentId = frame.data.agent_id;
+    return (
+      this.mountedAgents.find((agent) => agent.subagentId === agentId)
+        ?.workflowId ?? sessionWorkflowId
+    );
   }
 
   #handleSubagentEvent(frame: AgentSseFrame, parentWorkflowId = this.session?.workflow_id): void {
@@ -881,13 +709,25 @@ export class MockRunController {
         parentWorkflowId
       );
       void this.#fetchAgentInterface(frame.data.workflow_id);
-      void this.#fetchSubagentMessages(frame.data.workflow_id, true);
+      return;
+    }
+
+    if (frame.event === "subagent_reply_received") {
+      this.#upsertSubagent(
+        { ...frame.data, targetTurn: frame.data.subagent_turn },
+        parentWorkflowId
+      );
+      void this.#fetchAgentInterface(frame.data.workflow_id);
       return;
     }
 
     if (frame.event === "subagent_stopped") {
       this.#upsertSubagent({ ...frame.data, stopped: true }, parentWorkflowId);
-      this.#subagentAborts.get(frame.data.workflow_id)?.abort();
+      return;
+    }
+
+    if (frame.event === "subagent_stream_unavailable") {
+      this.#upsertSubagent(frame.data, parentWorkflowId);
     }
   }
 
@@ -917,7 +757,7 @@ export class MockRunController {
   nextTurn(): void {
     this.pause();
     const target = this.turnMarkers.find((marker) => marker.index >= this.viewIndex);
-    this.goTo(target?.index ?? this.frames.length);
+    this.goTo(target?.index ?? this.total);
   }
 
   nextMarker(): void {

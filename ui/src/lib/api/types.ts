@@ -1,5 +1,6 @@
 export type UnixEpochSeconds = number;
-export type StreamOffset = number;
+export type ResumeOffset = number;
+export type StreamOffset = ResumeOffset;
 export type WorkflowId = string;
 export type TurnId = string;
 export type ToolId = string;
@@ -103,7 +104,7 @@ export interface ChatRequest {
   session_id: WorkflowId;
   message: AgentInboundMessage;
   expected_turn: number;
-  from_offset?: StreamOffset;
+  from_offset?: ResumeOffset;
 }
 
 export interface ToolApprovalRequest {
@@ -139,7 +140,7 @@ export interface ToolApprovalPolicy {
 }
 
 export interface SubagentInfo {
-  handle: string;
+  subagent_id: string;
   agent_key: string;
   workflow_id: string;
   next_expected_turn: number;
@@ -185,6 +186,8 @@ export type AgentEventType =
   | "subagent_started"
   | "subagent_stopped"
   | "subagent_message_sent"
+  | "subagent_reply_received"
+  | "subagent_stream_unavailable"
   | "reply_delta"
   | "thought_summary"
   | "text_annotation"
@@ -192,10 +195,11 @@ export type AgentEventType =
   | "error";
 
 export interface AgentEventMetadata {
+  agent_id: string;
   turn_id: TurnId;
   turn_number: number;
   timestamp: UnixEpochSeconds;
-  offset: StreamOffset;
+  resume_offset: ResumeOffset;
 }
 
 export interface AgentEventDataBase<TType extends AgentEventType>
@@ -275,25 +279,43 @@ export interface ToolErrorEvent extends ToolEventDataBase<"tool_error"> {
 
 export interface SubagentStartedEvent
   extends AgentEventDataBase<"subagent_started"> {
-  handle: string;
+  subagent_id: string;
   agent_key: string;
   workflow_id: string;
 }
 
 export interface SubagentStoppedEvent
   extends AgentEventDataBase<"subagent_stopped"> {
-  handle: string;
+  subagent_id: string;
   agent_key: string;
   workflow_id: string;
 }
 
 export interface SubagentMessageSentEvent
   extends AgentEventDataBase<"subagent_message_sent"> {
-  handle: string;
+  subagent_id: string;
   agent_key: string;
   workflow_id: string;
   function: string;
   subagent_turn: number;
+  from_offset: number;
+}
+
+export interface SubagentReplyReceivedEvent
+  extends AgentEventDataBase<"subagent_reply_received"> {
+  subagent_id: string;
+  agent_key: string;
+  workflow_id: string;
+  function: string;
+  subagent_turn: number;
+  outcome: "ok" | "error";
+}
+
+export interface SubagentStreamUnavailableEvent
+  extends AgentEventDataBase<"subagent_stream_unavailable"> {
+  subagent_id: string;
+  workflow_id: string;
+  reason: string;
 }
 
 export interface ReplyDeltaEvent extends AgentEventDataBase<"reply_delta"> {
@@ -355,7 +377,7 @@ export interface AgentErrorEvent extends AgentEventDataBase<"error"> {
 export interface ClientSideStreamErrorEvent {
   kind: "timeout" | "agent";
   message: string;
-  offset: StreamOffset;
+  resume_offset: ResumeOffset;
 }
 
 export interface AgentSseEventMap {
@@ -374,6 +396,8 @@ export interface AgentSseEventMap {
   subagent_started: SubagentStartedEvent;
   subagent_stopped: SubagentStoppedEvent;
   subagent_message_sent: SubagentMessageSentEvent;
+  subagent_reply_received: SubagentReplyReceivedEvent;
+  subagent_stream_unavailable: SubagentStreamUnavailableEvent;
   reply_delta: ReplyDeltaEvent;
   thought_summary: ThoughtSummaryEvent;
   text_annotation: TextAnnotationEvent;

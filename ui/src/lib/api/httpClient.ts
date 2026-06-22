@@ -107,14 +107,6 @@ export class HttpAgentApi implements AgentApi {
     yield* readSse(response);
   }
 
-  async *streamHistory(
-    sessionId: WorkflowId,
-    fromOffset = 0,
-    signal?: AbortSignal
-  ): AsyncIterable<AgentSseFrame> {
-    yield* this.attach(sessionId, fromOffset, signal);
-  }
-
   async *chat(request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame> {
     const response = await fetch("/api/chat", {
       method: "POST",
