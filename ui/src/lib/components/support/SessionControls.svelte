@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, History, Plus, Search, X } from "@lucide/svelte";
+  import { History, Plus, Search, X } from "@lucide/svelte";
   import type { AgentDescriptor, Session } from "$lib/api/types";
 
   interface Props {
@@ -30,7 +30,6 @@
 
   let sessionDrawerOpen = $state(false);
   let newSessionMenuOpen = $state(false);
-  let popoverNewSessionOpen = $state(false);
   let sessionSearch = $state("");
 
   const sessionItems = $derived(sortedSessions(sessions));
@@ -97,7 +96,6 @@
     newSessionMenuOpen = !newSessionMenuOpen;
     if (newSessionMenuOpen) {
       sessionDrawerOpen = false;
-      popoverNewSessionOpen = false;
     }
   }
 
@@ -110,7 +108,6 @@
     if (!workflowType || !onNewSession || creatingSession) return;
     await onNewSession(workflowType);
     newSessionMenuOpen = false;
-    popoverNewSessionOpen = false;
     sessionDrawerOpen = false;
   }
 
@@ -217,39 +214,6 @@
           aria-label="Search sessions"
         />
       </label>
-
-      <button
-        type="button"
-        class={`session-popover-add ${canCreateSession ? "" : "disabled"} ${popoverNewSessionOpen ? "active" : ""}`}
-        disabled={!canCreateSession}
-        aria-expanded={popoverNewSessionOpen}
-        aria-controls="session-popover-agent-list"
-        onclick={() => {
-          if (canCreateSession) popoverNewSessionOpen = !popoverNewSessionOpen;
-        }}
-      >
-        <Plus size={14} aria-hidden="true" />
-        <span>{creatingSession ? "Starting" : "New session"}</span>
-        <ChevronDown size={13} aria-hidden="true" />
-      </button>
-
-      {#if popoverNewSessionOpen}
-        <div class="agent-list inline" id="session-popover-agent-list">
-          {#each agents as agent}
-            <button
-              type="button"
-              class="agent-row"
-              onclick={() => void startNewSession(agent.workflow_type)}
-            >
-              <span class="agent-dot" aria-hidden="true"></span>
-              <span class="agent-copy">
-                <strong>{agent.label}</strong>
-                <small>{agent.workflow_type}</small>
-              </span>
-            </button>
-          {/each}
-        </div>
-      {/if}
 
       <div class="session-list">
         {#if filteredSessionItems.length === 0}
@@ -489,56 +453,10 @@
     color: var(--text-3);
   }
 
-  .session-popover-add {
-    min-width: 0;
-    height: 34px;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 8px;
-    align-items: center;
-    padding: 0 10px;
-    border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
-    color: var(--accent);
-    cursor: pointer;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 650;
-  }
-
-  .session-popover-add:hover:not(.disabled),
-  .session-popover-add:focus-visible:not(.disabled),
-  .session-popover-add.active {
-    border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
-    outline: 0;
-  }
-
-  .session-popover-add.disabled,
-  .session-popover-add:disabled {
-    cursor: default;
-    opacity: 0.52;
-  }
-
-  .session-popover-add span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .session-popover-add.active :global(svg:last-child) {
-    transform: rotate(180deg);
-  }
-
   .agent-list {
     min-height: 0;
     display: grid;
     gap: 8px;
-  }
-
-  .agent-list.inline {
-    margin-top: -2px;
   }
 
   .agent-row {

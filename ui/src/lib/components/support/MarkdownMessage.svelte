@@ -1094,7 +1094,8 @@
   .markdown-message {
     min-width: 0;
     display: grid;
-    gap: 9px;
+    gap: var(--markdown-block-gap, 9px);
+    font-family: var(--markdown-font-family, inherit);
     overflow-wrap: anywhere;
   }
 
@@ -1116,21 +1117,25 @@
   .markdown-message :global(h5),
   .markdown-message :global(h6) {
     color: var(--text-1);
-    font-size: 13px;
-    line-height: 1.35;
+    font-size: var(--markdown-heading-size, 13px);
+    line-height: var(--markdown-heading-line-height, 1.35);
   }
 
   .markdown-message :global(p),
   .markdown-message :global(li),
   .markdown-message :global(blockquote) {
-    font-size: 13px;
-    line-height: 1.5;
+    font-size: var(--markdown-body-size, 13px);
+    line-height: var(--markdown-body-line-height, 1.5);
+  }
+
+  .markdown-message :global(strong) {
+    font-weight: var(--markdown-strong-weight, 700);
   }
 
   .markdown-message :global(ul),
   .markdown-message :global(ol) {
     display: grid;
-    gap: 5px;
+    gap: var(--markdown-list-gap, 5px);
     padding-left: 20px;
   }
 

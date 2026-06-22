@@ -21,6 +21,7 @@
   import { tick } from "svelte";
   import { fade } from "svelte/transition";
   import type { AgentDescriptor, FileCitationAnnotation, Session } from "$lib/api/types";
+  import { formatCost } from "$lib/cost/pricing";
   import type { ReplayLogRow } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
   import MarkdownMessage from "./MarkdownMessage.svelte";
@@ -61,6 +62,13 @@
     citations: FileCitationAnnotation[];
   }
 
+  interface TurnActivitySummary {
+    label: string;
+    detail: string;
+    duration: string | null;
+    endedAt: number;
+  }
+
   let {
     items,
     logs = [],
@@ -87,23 +95,13 @@
   let sessionDrawerOpen = $state(false);
   let sessionSearch = $state("");
   let expandedActivityTurns = $state<number[]>([]);
+  let expandedLogRows = $state<string[]>([]);
   let observedActivitySessionId = $state<string | null>(null);
   let observedActivityOffsets = $state<Record<number, number>>({});
   let deletingSessionIds = $state<string[]>([]);
   let resolvingApprovalIds = $state<string[]>([]);
   let approvalErrors = $state<Record<string, string>>({});
   let messageListElement = $state<HTMLDivElement | null>(null);
-
-  const qaStarterQuestions = [
-    "When should I use Signals vs Updates?",
-    "How do I roll out a new Worker safely?",
-    "Why did my Workflow keep running after deploy?"
-  ];
-  const montyStarterQuestions = [
-    "Find me a flight from Seattle to Austin next Friday.",
-    "Plan a three-night trip to Chicago with a hotel near downtown.",
-    "Book the cheapest complete flight and hotel option for my trip."
-  ];
 
   const fixtureMessages = $derived(seedMessages(items));
   const messages = $derived([...fixtureMessages, ...localMessages]);
@@ -122,12 +120,6 @@
     sessionItems.find((item) => item.workflow_id === sessionId) ?? null
   );
   const isMonty = $derived(currentAgentWorkflowType === "MontyDynamicAgent");
-  const isMontyTravelAgent = $derived(
-    currentAgentWorkflowType?.startsWith("Monty") ?? false
-  );
-  const starterQuestions = $derived(
-    isMonty ? [] : isMontyTravelAgent ? montyStarterQuestions : qaStarterQuestions
-  );
   const composerPlaceholder = $derived(
     isMonty ? "Send a Python script to Monty" : `Ask ${agentLabel}`
   );
@@ -155,7 +147,6 @@
       latestLog?.body?.length ?? 0,
       sending ? "sending" : "idle",
       connecting ? "connecting" : "connected",
-      expandedActivityTurns.join(","),
       resolvingApprovalIds.length,
       Object.keys(approvalErrors).length
     ].join("|")
@@ -188,6 +179,8 @@
       localMessages = [];
       observedActivitySessionId = null;
       observedActivityOffsets = {};
+      expandedActivityTurns = [];
+      expandedLogRows = [];
     }
   });
 
@@ -304,6 +297,39 @@
     return rows[rows.length - 1] ?? null;
   }
 
+  function allLogsForTurn(turnNumber: number | undefined): ReplayLogRow[] {
+    if (turnNumber == null) return [];
+    return logs.filter((row) => row.turnNumber === turnNumber && row.timestamp > 0);
+  }
+
+  function turnActivitySummary(
+    turnNumber: number | undefined,
+    visibleRows: ReplayLogRow[]
+  ): TurnActivitySummary {
+    const turnRows = allLogsForTurn(turnNumber);
+    const rows = turnRows.length > 0 ? turnRows : visibleRows;
+    const timestamps = rows.map((row) => row.timestamp).filter((value) => value > 0);
+    const startedAt = Math.min(...timestamps);
+    const endedAt = Math.max(...timestamps);
+    const durationMs =
+      timestamps.length >= 2 && Number.isFinite(startedAt) && Number.isFinite(endedAt)
+        ? Math.max(0, (endedAt - startedAt) * 1000)
+        : 0;
+
+    return {
+      label: turnNumber == null ? "Turn" : `Turn ${turnNumber}`,
+      detail: `total ${formatCost(turnEstimatedCost(rows))}`,
+      duration: durationMs > 0 ? formatElapsedDuration(durationMs) : null,
+      endedAt: Number.isFinite(endedAt) ? endedAt : visibleRows[visibleRows.length - 1]?.timestamp ?? 0
+    };
+  }
+
+  function turnEstimatedCost(rows: ReplayLogRow[]): number | null {
+    const modelRows = rows.filter((row) => row.event === "model_interaction_ended");
+    if (modelRows.some((row) => row.estimatedCostUsd == null)) return null;
+    return modelRows.reduce((sum, row) => sum + (row.estimatedCostUsd ?? 0), 0);
+  }
+
   function scrollMessagesToBottom(): void {
     const element = messageListElement;
     if (!element) return;
@@ -331,6 +357,16 @@
       : [...expandedActivityTurns, turnNumber];
   }
 
+  function logExpanded(row: ReplayLogRow): boolean {
+    return expandedLogRows.includes(row.id);
+  }
+
+  function toggleLog(row: ReplayLogRow): void {
+    expandedLogRows = logExpanded(row)
+      ? expandedLogRows.filter((item) => item !== row.id)
+      : [...expandedLogRows, row.id];
+  }
+
   function logTone(row: ReplayLogRow): string {
     if (row.tone === "error" || row.actor === "error") return "error";
     if (row.actor === "model") return "model";
@@ -343,12 +379,195 @@
   }
 
   function activityLineClass(row: ReplayLogRow, active = false): string {
-    return `activity-line ${logTone(row)}${active ? " active" : ""}`;
+    return [
+      "activity-line",
+      logTone(row),
+      logHighlightClass(row),
+      active ? "active" : ""
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  function logHighlightClass(row: ReplayLogRow): string {
+    if (row.tone === "error" || row.actor === "error") return "highlight-error";
+    if (row.event === "tool_approval_resolved" && row.status === "approved") {
+      return "highlight-success";
+    }
+    return "";
+  }
+
+  function logElapsedDuration(row: ReplayLogRow, rows: ReplayLogRow[]): string | null {
+    const startRow = logDurationStart(row, rows) ?? previousLog(row, rows);
+    if (!startRow) return null;
+
+    const deltaMs = (row.timestamp - startRow.timestamp) * 1000;
+    if (!Number.isFinite(deltaMs) || deltaMs <= 0) return null;
+    return formatElapsedDuration(deltaMs);
+  }
+
+  function logDurationStart(row: ReplayLogRow, rows: ReplayLogRow[]): ReplayLogRow | null {
+    if (row.event === "model_interaction_ended") {
+      return previousLog(
+        row,
+        rows,
+        (item) =>
+          item.event === "model_interaction_started" &&
+          sameLogScope(item, row) &&
+          item.model === row.model
+      );
+    }
+
+    if (row.event === "tool_end" || row.event === "tool_error") {
+      return previousLog(
+        row,
+        rows,
+        (item) =>
+          item.event === "tool_start" &&
+          sameLogScope(item, row) &&
+          item.toolId === row.toolId
+      );
+    }
+
+    if (row.event === "tool_approval_resolved") {
+      return previousLog(
+        row,
+        rows,
+        (item) =>
+          item.event === "tool_approval_requested" &&
+          sameLogScope(item, row) &&
+          item.toolId === row.toolId
+      );
+    }
+
+    if (row.event === "subagent_stopped") {
+      return previousLog(
+        row,
+        rows,
+        (item) =>
+          item.event === "subagent_started" &&
+          sameLogScope(item, row) &&
+          item.detail === row.detail
+      );
+    }
+
+    return null;
+  }
+
+  function previousLog(
+    row: ReplayLogRow,
+    rows: ReplayLogRow[],
+    predicate: (item: ReplayLogRow) => boolean = () => true
+  ): ReplayLogRow | null {
+    const index = rows.findIndex((item) => item.id === row.id);
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (predicate(rows[i])) return rows[i];
+    }
+    return null;
+  }
+
+  function sameLogScope(a: ReplayLogRow, b: ReplayLogRow): boolean {
+    return a.workflowId === b.workflowId && a.sourceTurnNumber === b.sourceTurnNumber;
+  }
+
+  function formatElapsedDuration(deltaMs: number): string {
+    if (deltaMs < 1000) return `${Math.max(1, Math.round(deltaMs))}ms`;
+
+    const seconds = deltaMs / 1000;
+    const tenths = Math.round(seconds * 10) / 10;
+    if (seconds < 10 && !Number.isInteger(tenths)) return `${tenths.toFixed(1)}s`;
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+
+    const roundedSeconds = Math.round(seconds);
+    return `${Math.floor(roundedSeconds / 60)}m ${String(roundedSeconds % 60).padStart(2, "0")}s`;
   }
 
   function logDetail(row: ReplayLogRow): string {
     const value = row.body ?? row.status ?? row.output ?? "";
     return value.split(/\r?\n/)[0]?.trim() ?? "";
+  }
+
+  function formatLogValue(value: unknown): string {
+    if (value == null) return "";
+    if (typeof value === "string") return value.trim();
+    return JSON.stringify(value, null, 2);
+  }
+
+  function scriptPreview(script: string): string {
+    const compact = script.trim().replace(/\s+/g, " ");
+    return compact.length > 12 ? `${compact.slice(0, 12)}...` : compact;
+  }
+
+  function scriptFromValue(value: unknown): string | null {
+    if (typeof value === "string") {
+      try {
+        return scriptFromValue(JSON.parse(value));
+      } catch {
+        return null;
+      }
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const script = scriptFromValue(item);
+        if (script) return script;
+      }
+      return null;
+    }
+    if (typeof value !== "object" || value == null) return null;
+
+    const record = value as Record<string, unknown>;
+    if (typeof record.script === "string") return record.script;
+    for (const item of Object.values(record)) {
+      const script = scriptFromValue(item);
+      if (script) return script;
+    }
+    return null;
+  }
+
+  function scrubScriptValue(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map((item) => scrubScriptValue(item));
+    if (typeof value !== "object" || value == null) return value;
+
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        key === "script" && typeof item === "string"
+          ? scriptPreview(item)
+          : scrubScriptValue(item)
+      ])
+    );
+  }
+
+  function logScript(row: ReplayLogRow): string | null {
+    return (
+      scriptFromValue(row.input) ??
+      scriptFromValue(row.body) ??
+      scriptFromValue(row.detail) ??
+      scriptFromValue(row.output)
+    );
+  }
+
+  function logFullDetail(row: ReplayLogRow): string {
+    const sections: string[] = [];
+    const body = formatLogValue(row.body);
+    const detail = formatLogValue(row.detail);
+    const input = formatLogValue(scrubScriptValue(row.input));
+    const output = formatLogValue(row.output);
+    const metadata = [
+      `event: ${row.event}`,
+      row.status ? `status: ${row.status}` : "",
+      row.toolName ? `tool: ${row.toolName}` : "",
+      row.toolId ? `tool_id: ${row.toolId}` : "",
+      row.model ? `model: ${row.model}` : ""
+    ].filter(Boolean);
+
+    if (body) sections.push(body);
+    if (detail) sections.push(`detail:\n${detail}`);
+    if (input) sections.push(`input:\n${input}`);
+    if (output) sections.push(`output:\n${output}`);
+    if (metadata.length > 0) sections.push(metadata.join("\n"));
+
+    return sections.join("\n\n");
   }
 
   async function resolveApproval(
@@ -634,22 +853,6 @@
           />
         </label>
 
-        <label class={`session-drawer-add ${canCreateSession ? "" : "disabled"}`}>
-          <Plus size={14} aria-hidden="true" />
-          <span>{creatingSession ? "Starting" : "New session"}</span>
-          <select
-            aria-label="Add session"
-            disabled={!canCreateSession}
-            onchange={(event) => void handleNewSessionAgentChange(event)}
-          >
-            <option value="">{creatingSession ? "Starting" : "New session"}</option>
-            {#each agents as agent}
-              <option value={agent.workflow_type}>{agent.label}</option>
-            {/each}
-          </select>
-          <ChevronDown size={13} aria-hidden="true" />
-        </label>
-
         <div class="session-drawer-list">
           {#if filteredSessionItems.length === 0}
             <p class="session-empty">No matching sessions.</p>
@@ -707,159 +910,171 @@
             {@const activityLogs = logsForTurn(message.turnNumber)}
             {@const activeLog = activeLogForTurn(message.turnNumber)}
             {@const expanded = activityExpanded(message.turnNumber)}
-            {#if activityLogs.length > 0}
+            {#if activityLogs.length > 0 && activeLog}
+              {@const turnSummary = turnActivitySummary(message.turnNumber, activityLogs)}
               <div class={`activity-feed ${expanded ? "expanded" : ""}`}>
+                {#key activeLog.offset}
+                  <button
+                    type="button"
+                    class={`activity-summary ${expanded ? "expanded" : ""} activity-line turn-summary active`}
+                    aria-expanded={expanded}
+                    aria-label={expanded ? "Collapse activity logs" : "Expand activity logs"}
+                    onclick={() => toggleActivity(message.turnNumber)}
+                    in:fade={{ duration: activeLogFadeDuration(message.turnNumber, activeLog) }}
+                  >
+                    <span class="activity-icon" aria-hidden="true">
+                      <History size={14} />
+                    </span>
+                    <span class="activity-copy">
+                      <strong>{turnSummary.label}</strong>
+                      <span>{turnSummary.detail}</span>
+                    </span>
+                    <span
+                      class="activity-duration"
+                      aria-hidden={turnSummary.duration ? undefined : "true"}
+                    >
+                      {turnSummary.duration ?? ""}
+                    </span>
+                    <time>{time(turnSummary.endedAt)}</time>
+                    <ChevronDown class="activity-chevron" size={14} aria-hidden="true" />
+                  </button>
+                {/key}
+
+                {#if isApprovalPending(activeLog) && !expanded}
+                  <div class="approval-actions">
+                    <button
+                      type="button"
+                      class="approval-approve"
+                      disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
+                      onclick={(event) => void resolveApproval(event, activeLog, true)}
+                      onkeydown={(event) => event.stopPropagation()}
+                    >
+                      <CheckCircle2 size={13} />
+                      <span>Approve</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="approval-remember"
+                      disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
+                      onclick={(event) => void resolveApproval(event, activeLog, true, true)}
+                      onkeydown={(event) => event.stopPropagation()}
+                    >
+                      <ShieldCheck size={13} />
+                      <span>Approve and remember</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="approval-reject"
+                      disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
+                      onclick={(event) => void resolveApproval(event, activeLog, false)}
+                      onkeydown={(event) => event.stopPropagation()}
+                    >
+                      <XCircle size={13} />
+                      <span>Reject</span>
+                    </button>
+                    {#if approvalError(activeLog.toolId)}
+                      <span class="approval-error">{approvalError(activeLog.toolId)}</span>
+                    {/if}
+                  </div>
+                {/if}
+
                 {#if expanded}
                   <div class="activity-list">
                     {#each activityLogs as log}
-                      <div class={activityLineClass(log, log.offset === activeLog?.offset)}>
-                        <span class="activity-icon" aria-hidden="true">
-                          {#if log.actor === "model"}
-                            <Cpu size={14} />
-                          {:else if log.actor === "reasoning"}
-                            <BrainCircuit size={14} />
-                          {:else if log.actor === "tool"}
-                            <Wrench size={14} />
-                          {:else if log.actor === "approval"}
-                            <ShieldCheck size={14} />
-                          {:else if log.actor === "subagent"}
-                            <MessageCircle size={14} />
-                          {:else if logTone(log) === "error"}
-                            <AlertTriangle size={14} />
-                          {:else if logTone(log) === "done"}
-                            <CheckCircle2 size={14} />
-                          {:else}
-                            <Clock3 size={14} />
+                      {@const rowExpanded = logExpanded(log)}
+                      {@const fullDetail = logFullDetail(log)}
+                      {@const scriptDetail = logScript(log)}
+                      {@const rowDuration = logElapsedDuration(log, activityLogs)}
+                      <div class={`activity-row ${rowExpanded ? "expanded" : ""}`}>
+                        <button
+                          type="button"
+                          class={`${activityLineClass(log, log.offset === activeLog.offset)} activity-row-button`}
+                          aria-expanded={rowExpanded}
+                          onclick={() => toggleLog(log)}
+                        >
+                          <span class="activity-icon" aria-hidden="true">
+                            {#if log.actor === "model"}
+                              <Cpu size={14} />
+                            {:else if log.actor === "reasoning"}
+                              <BrainCircuit size={14} />
+                            {:else if log.actor === "tool"}
+                              <Wrench size={14} />
+                            {:else if log.actor === "approval"}
+                              <ShieldCheck size={14} />
+                            {:else if log.actor === "subagent"}
+                              <MessageCircle size={14} />
+                            {:else if logTone(log) === "error"}
+                              <AlertTriangle size={14} />
+                            {:else if logTone(log) === "done"}
+                              <CheckCircle2 size={14} />
+                            {:else}
+                              <Clock3 size={14} />
+                            {/if}
+                          </span>
+                          <span class="activity-copy">
+                            <strong>{log.label}</strong>
+                            {#if logDetail(log)}
+                              <span>{logDetail(log)}</span>
+                            {/if}
+                          </span>
+                          <span
+                            class="activity-duration"
+                            aria-hidden={rowDuration ? undefined : "true"}
+                          >
+                            {rowDuration ?? ""}
+                          </span>
+                          <time>{time(log.timestamp)}</time>
+                          <ChevronDown class="activity-row-chevron" size={13} aria-hidden="true" />
+                        </button>
+
+                        {#if rowExpanded}
+                          {#if scriptDetail}
+                            <pre class="activity-script-detail"><code>{scriptDetail}</code></pre>
                           {/if}
-                        </span>
-                      <span class="activity-copy">
-                        <strong>{log.label}</strong>
-                        {#if logDetail(log)}
-                          <span>{logDetail(log)}</span>
+                          <pre class="activity-detail">{fullDetail}</pre>
                         {/if}
-                      </span>
-                      <time>{time(log.timestamp)}</time>
-                      {#if isApprovalPending(log)}
-                        <div class="approval-actions">
-                          <button
-                            type="button"
-                            class="approval-approve"
-                            disabled={!onApproveTool || isApprovalResolving(log.toolId)}
-                            onclick={(event) => void resolveApproval(event, log, true)}
-                            onkeydown={(event) => event.stopPropagation()}
-                          >
-                            <CheckCircle2 size={13} />
-                            <span>Approve</span>
-                          </button>
-                          <button
-                            type="button"
-                            class="approval-remember"
-                            disabled={!onApproveTool || isApprovalResolving(log.toolId)}
-                            onclick={(event) => void resolveApproval(event, log, true, true)}
-                            onkeydown={(event) => event.stopPropagation()}
-                          >
-                            <ShieldCheck size={13} />
-                            <span>Approve and remember</span>
-                          </button>
-                          <button
-                            type="button"
-                            class="approval-reject"
-                            disabled={!onApproveTool || isApprovalResolving(log.toolId)}
-                            onclick={(event) => void resolveApproval(event, log, false)}
-                            onkeydown={(event) => event.stopPropagation()}
-                          >
-                            <XCircle size={13} />
-                            <span>Reject</span>
-                          </button>
-                          {#if approvalError(log.toolId)}
-                            <span class="approval-error">{approvalError(log.toolId)}</span>
-                          {/if}
-                        </div>
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
-                {:else if activeLog}
-                  {#key activeLog.offset}
-                    <div
-                      class={activityLineClass(activeLog, true)}
-                      in:fade={{ duration: activeLogFadeDuration(message.turnNumber, activeLog) }}
-                    >
-                      <span class="activity-icon" aria-hidden="true">
-                        {#if activeLog.actor === "model"}
-                          <Cpu size={14} />
-                        {:else if activeLog.actor === "reasoning"}
-                          <BrainCircuit size={14} />
-                        {:else if activeLog.actor === "tool"}
-                          <Wrench size={14} />
-                        {:else if activeLog.actor === "approval"}
-                          <ShieldCheck size={14} />
-                        {:else if activeLog.actor === "subagent"}
-                          <MessageCircle size={14} />
-                        {:else if logTone(activeLog) === "error"}
-                          <AlertTriangle size={14} />
-                        {:else if logTone(activeLog) === "done"}
-                          <CheckCircle2 size={14} />
-                        {:else}
-                          <Clock3 size={14} />
+
+                        {#if isApprovalPending(log)}
+                          <div class="approval-actions">
+                            <button
+                              type="button"
+                              class="approval-approve"
+                              disabled={!onApproveTool || isApprovalResolving(log.toolId)}
+                              onclick={(event) => void resolveApproval(event, log, true)}
+                              onkeydown={(event) => event.stopPropagation()}
+                            >
+                              <CheckCircle2 size={13} />
+                              <span>Approve</span>
+                            </button>
+                            <button
+                              type="button"
+                              class="approval-remember"
+                              disabled={!onApproveTool || isApprovalResolving(log.toolId)}
+                              onclick={(event) => void resolveApproval(event, log, true, true)}
+                              onkeydown={(event) => event.stopPropagation()}
+                            >
+                              <ShieldCheck size={13} />
+                              <span>Approve and remember</span>
+                            </button>
+                            <button
+                              type="button"
+                              class="approval-reject"
+                              disabled={!onApproveTool || isApprovalResolving(log.toolId)}
+                              onclick={(event) => void resolveApproval(event, log, false)}
+                              onkeydown={(event) => event.stopPropagation()}
+                            >
+                              <XCircle size={13} />
+                              <span>Reject</span>
+                            </button>
+                            {#if approvalError(log.toolId)}
+                              <span class="approval-error">{approvalError(log.toolId)}</span>
+                            {/if}
+                          </div>
                         {/if}
-                      </span>
-                      <span class="activity-copy">
-                        <strong>{activeLog.label}</strong>
-                        {#if logDetail(activeLog)}
-                          <span>{logDetail(activeLog)}</span>
-                        {/if}
-                      </span>
-                      <time>{time(activeLog.timestamp)}</time>
-                      {#if isApprovalPending(activeLog)}
-                        <div class="approval-actions">
-                          <button
-                            type="button"
-                            class="approval-approve"
-                            disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
-                            onclick={(event) => void resolveApproval(event, activeLog, true)}
-                            onkeydown={(event) => event.stopPropagation()}
-                          >
-                            <CheckCircle2 size={13} />
-                            <span>Approve</span>
-                          </button>
-                          <button
-                            type="button"
-                            class="approval-remember"
-                            disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
-                            onclick={(event) => void resolveApproval(event, activeLog, true, true)}
-                            onkeydown={(event) => event.stopPropagation()}
-                          >
-                            <ShieldCheck size={13} />
-                            <span>Approve and remember</span>
-                          </button>
-                          <button
-                            type="button"
-                            class="approval-reject"
-                            disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
-                            onclick={(event) => void resolveApproval(event, activeLog, false)}
-                            onkeydown={(event) => event.stopPropagation()}
-                          >
-                            <XCircle size={13} />
-                            <span>Reject</span>
-                          </button>
-                          {#if approvalError(activeLog.toolId)}
-                            <span class="approval-error">{approvalError(activeLog.toolId)}</span>
-                          {/if}
-                        </div>
-                      {/if}
-                    </div>
-                  {/key}
+                      </div>
+                    {/each}
+                  </div>
                 {/if}
-                <button
-                  type="button"
-                  class={`activity-expander ${expanded ? "expanded" : ""}`}
-                  aria-expanded={expanded}
-                  aria-label={expanded ? "Collapse activity logs" : "Expand activity logs"}
-                  onclick={() => toggleActivity(message.turnNumber)}
-                >
-                  <ChevronDown size={14} />
-                </button>
               </div>
             {/if}
           {/if}
@@ -939,20 +1154,6 @@
           {/each}
         </div>
       </section>
-    {/if}
-
-    {#if !drawerActive && starterQuestions.length > 0}
-      <div class="starter-row" aria-label="Suggested questions">
-        {#each starterQuestions as question}
-          <button
-            type="button"
-            disabled={sendingBlocksInput || connectingBlocksInput || creatingSession}
-            onclick={() => void sendMessage(question)}
-          >
-            {question}
-          </button>
-        {/each}
-      </div>
     {/if}
 
     <form class="composer" onsubmit={handleSubmit}>
@@ -1309,66 +1510,6 @@
     color: var(--text-3);
   }
 
-  .session-drawer-add {
-    position: relative;
-    min-width: 0;
-    height: 34px;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 8px;
-    align-items: center;
-    padding: 0 10px;
-    border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
-    color: var(--accent);
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 650;
-  }
-
-  .session-drawer-add:hover:not(.disabled),
-  .session-drawer-add:focus-within:not(.disabled) {
-    border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
-    outline: 0;
-  }
-
-  .session-drawer-add.disabled {
-    cursor: default;
-    opacity: 0.52;
-  }
-
-  .session-drawer-add span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .session-drawer-add select {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    font: inherit;
-    opacity: 0;
-    outline: 0;
-    appearance: none;
-  }
-
-  .session-drawer-add select:disabled {
-    cursor: default;
-  }
-
-  .session-drawer-add option {
-    background: var(--surface-1);
-    color: var(--text-1);
-  }
-
   .session-drawer-list {
     min-height: 0;
     overflow-y: auto;
@@ -1498,8 +1639,24 @@
     line-height: 1.5;
   }
 
+  .message.assistant .bubble {
+    --markdown-font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI",
+      Roboto, "Helvetica Neue", Arial, sans-serif;
+    --markdown-body-size: 14px;
+    --markdown-body-line-height: 1.6;
+    --markdown-heading-size: 14.5px;
+    --markdown-heading-line-height: 1.42;
+    --markdown-block-gap: 11px;
+    --markdown-list-gap: 7px;
+    --markdown-strong-weight: 680;
+  }
+
   .support-app.embedded .bubble {
-    max-width: min(100%, 460px);
+    max-width: min(100%, 680px);
+  }
+
+  .support-app.embedded .message.assistant .bubble {
+    width: min(calc(100% - 40px), 640px);
   }
 
   .message.user .bubble {
@@ -1509,7 +1666,7 @@
   }
 
   .support-app.embedded .message.user .bubble {
-    max-width: min(100%, 460px);
+    max-width: min(100%, 560px);
   }
 
   .activity-feed {
@@ -1518,16 +1675,15 @@
     display: grid;
     align-self: flex-start;
     margin-left: 40px;
-    padding: 8px 34px 8px 10px;
+    padding: 8px 10px;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: color-mix(in srgb, var(--surface-1) 78%, transparent);
-    cursor: pointer;
     transition: border-color 160ms ease, background 160ms ease;
   }
 
   .support-app.embedded .activity-feed {
-    width: min(100%, 460px);
+    width: min(100%, 680px);
     margin-left: 0;
   }
 
@@ -1545,16 +1701,76 @@
   .activity-list {
     display: grid;
     gap: 6px;
+    padding-top: 2px;
+    border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  }
+
+  .activity-row {
+    min-width: 0;
+    display: grid;
+    gap: 6px;
+  }
+
+  .activity-summary,
+  .activity-row-button {
+    width: 100%;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
   }
 
   .activity-line {
     min-width: 0;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
     gap: 8px;
     align-items: center;
     color: var(--text-3);
     font-size: 12px;
+  }
+
+  .activity-line.highlight-error,
+  .activity-line.highlight-success {
+    margin: -4px -6px;
+    padding: 4px 6px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    color: var(--text-2);
+  }
+
+  .activity-line.highlight-error {
+    border-color: color-mix(in srgb, var(--error) 30%, transparent);
+    background: color-mix(in srgb, var(--error) 15%, transparent);
+  }
+
+  .activity-line.highlight-success {
+    border-color: color-mix(in srgb, var(--success) 28%, transparent);
+    background: color-mix(in srgb, var(--success) 14%, transparent);
+  }
+
+  .activity-summary:hover,
+  .activity-row-button:hover {
+    color: var(--text-2);
+  }
+
+  .activity-line.highlight-error:hover {
+    border-color: color-mix(in srgb, var(--error) 42%, transparent);
+    background: color-mix(in srgb, var(--error) 19%, transparent);
+  }
+
+  .activity-line.highlight-success:hover {
+    border-color: color-mix(in srgb, var(--success) 38%, transparent);
+    background: color-mix(in srgb, var(--success) 18%, transparent);
+  }
+
+  .activity-summary:focus-visible,
+  .activity-row-button:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    outline-offset: 2px;
   }
 
   .activity-line.active {
@@ -1583,6 +1799,7 @@
   .activity-line.approval .activity-icon { color: var(--queue); }
   .activity-line.done .activity-icon { color: var(--success); }
   .activity-line.error .activity-icon { color: var(--error); }
+  .activity-line.turn-summary .activity-icon { color: var(--accent); }
 
   .activity-copy {
     min-width: 0;
@@ -1605,6 +1822,15 @@
     text-overflow: ellipsis;
   }
 
+  .activity-duration {
+    min-width: 38px;
+    color: color-mix(in srgb, var(--text-3) 78%, transparent);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+  }
+
   .activity-line time {
     color: var(--text-3);
     font-size: 11px;
@@ -1612,13 +1838,76 @@
     white-space: nowrap;
   }
 
+  .activity-chevron,
+  .activity-row-chevron {
+    color: var(--text-3);
+    transition: transform 160ms ease, color 160ms ease;
+  }
+
+  .activity-summary:hover .activity-chevron,
+  .activity-row-button:hover .activity-row-chevron {
+    color: var(--text-2);
+  }
+
+  .activity-summary.expanded .activity-chevron,
+  .activity-row.expanded .activity-row-chevron {
+    transform: rotate(180deg);
+  }
+
+  .activity-detail {
+    min-width: 0;
+    max-height: 320px;
+    overflow: auto;
+    margin: 0 0 0 30px;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+    border-radius: 7px;
+    background: var(--surface-0);
+    color: var(--text-2);
+    font: 11px/1.45 ui-monospace, SFMono-Regular, SFMono, Menlo, Consolas, "Liberation Mono", monospace;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .activity-script-detail {
+    min-width: 0;
+    max-height: 320px;
+    overflow: auto;
+    margin: 0 0 0 30px;
+    padding: 8px;
+    border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--surface-0) 72%, black 8%);
+    color: var(--text-2);
+    font-family:
+      ui-monospace,
+      SFMono-Regular,
+      Menlo,
+      Monaco,
+      Consolas,
+      "Liberation Mono",
+      monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    white-space: pre;
+  }
+
+  .activity-script-detail code {
+    font: inherit;
+  }
+
   .approval-actions {
-    grid-column: 2 / 4;
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
     align-items: center;
+    margin-left: 30px;
     padding-top: 2px;
+  }
+
+  .approval-actions.compact {
+    margin-left: 0;
+    padding-top: 0;
   }
 
   .approval-actions button {
@@ -1734,40 +2023,6 @@
     font-size: 11px;
   }
 
-  .approval-actions.compact {
-    grid-column: auto;
-    padding-top: 0;
-  }
-
-  .activity-expander {
-    position: absolute;
-    top: 12px;
-    right: 10px;
-    width: 18px;
-    height: 18px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    border: 0;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--text-3);
-    cursor: pointer;
-    transition: transform 160ms ease, color 160ms ease;
-  }
-
-  .activity-feed:hover .activity-expander,
-  .activity-expander:focus-visible {
-    color: var(--text-2);
-    outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
-    outline-offset: 2px;
-  }
-
-  .activity-expander.expanded {
-    transform: rotate(180deg);
-  }
-
   .thinking {
     display: inline-flex;
     gap: 5px;
@@ -1799,39 +2054,6 @@
   .session-card:hover,
   .session-card:focus-within {
     border-color: var(--border-strong);
-  }
-
-  .starter-row {
-    display: flex;
-    gap: 8px;
-    padding: 0 clamp(18px, 5vw, 72px) 10px;
-    overflow-x: auto;
-  }
-
-  .support-app.embedded .starter-row {
-    padding: 0 12px 10px;
-  }
-
-  .starter-row button {
-    flex: 0 0 auto;
-    padding: 7px 10px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--surface-1);
-    color: var(--text-2);
-    cursor: pointer;
-    font: inherit;
-    font-size: 12px;
-  }
-
-  .starter-row button:hover {
-    color: var(--text-1);
-    border-color: var(--border-strong);
-  }
-
-  .starter-row button:disabled {
-    opacity: 0.45;
-    cursor: default;
   }
 
   .error-banner {
@@ -2158,14 +2380,9 @@
       max-width: 88%;
     }
 
-    .starter-row,
     .composer {
       margin-inline: 16px;
       padding-inline: 0;
-    }
-
-    .starter-row {
-      padding-inline: 16px;
     }
 
     .composer {

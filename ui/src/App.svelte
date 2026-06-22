@@ -14,7 +14,7 @@
   type RightPanelView = "chat" | "latency" | "logs";
 
   const RIGHT_PANEL_MIN_WIDTH = 380;
-  const RIGHT_PANEL_DEFAULT_WIDTH = 540;
+  const RIGHT_PANEL_DEFAULT_WIDTH = 880;
   const RIGHT_PANEL_KEYBOARD_STEP = 24;
   const LEFT_PANE_MIN_WIDTH = 480;
 
@@ -386,7 +386,7 @@
   .states {
     display: grid;
     grid-template-columns: minmax(480px, 1fr)
-      clamp(380px, var(--right-panel-width, 540px), calc(100% - 480px));
+      clamp(380px, var(--right-panel-width, 880px), calc(100% - 480px));
   }
 
   .states.resizing,
