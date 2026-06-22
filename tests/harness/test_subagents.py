@@ -52,6 +52,7 @@ class _SampleChildAgent:
 
 def _status() -> _WorkflowStatus:
     return _WorkflowStatus(
+        agent_id="parent",
         is_message_queuing_enabled=False,
         approval_policy=ToolApprovalPolicy.allow_inherently_safe(),
     )
@@ -141,7 +142,7 @@ def test_agent_status_lists_subagents_without_gate_internals():
     status = st.to_agent_status()
     assert len(status.subagents) == 1
     info = status.subagents[0]
-    assert (info.handle, info.agent_key, info.workflow_id, info.next_expected_turn) == (
+    assert (info.subagent_id, info.agent_key, info.workflow_id, info.next_expected_turn) == (
         "a3f9c2",
         "sample",
         "sample-subagent-wf",
@@ -152,7 +153,7 @@ def test_agent_status_lists_subagents_without_gate_internals():
     fields = set(vars(info))
     assert "_next_ticket" not in fields
     assert "_serving" not in fields
-    assert fields == {"handle", "agent_key", "workflow_id", "next_expected_turn"}
+    assert fields == {"subagent_id", "agent_key", "workflow_id", "next_expected_turn"}
 
 
 def test_subagent_lifecycle_events_carry_workflow_id_and_round_trip():
@@ -160,14 +161,18 @@ def test_subagent_lifecycle_events_carry_workflow_id_and_round_trip():
     # the child workflow_id intact — that field is what lets a consumer dynamically mount the
     # subagent's own stream for a consolidated view.
     for ev in (
-        SubagentStarted(handle="a3f9c2", agent_key="sample", workflow_id="sample-subagent-wf"),
-        SubagentStopped(handle="a3f9c2", agent_key="sample", workflow_id="sample-subagent-wf"),
+        SubagentStarted(subagent_id="a3f9c2", agent_key="sample", workflow_id="sample-subagent-wf"),
+        SubagentStopped(subagent_id="a3f9c2", agent_key="sample", workflow_id="sample-subagent-wf"),
     ):
-        envelope = AgentEvent(event=ev, turn_id="t1", turn_number=2, timestamp=0.0)
+        envelope = AgentEvent(
+            event=ev, agent_id="parent-wf", turn_id="t1", turn_number=2, timestamp=0.0
+        )
         back = AgentEvent.model_validate_json(envelope.model_dump_json())
         assert type(back.event) is type(ev)
+        # The envelope agent_id is the PARENT; the payload subagent_id is the child being driven.
+        assert back.agent_id == "parent-wf"
         assert back.event.workflow_id == "sample-subagent-wf"
-        assert back.event.handle == "a3f9c2"
+        assert back.event.subagent_id == "a3f9c2"
         assert back.event.agent_key == "sample"
 
 
@@ -177,7 +182,7 @@ def test_subagent_message_sent_event_round_trips_with_dispatch_details():
     # child's own stream: the handle/workflow_id, the target handler function, and the child
     # turn number.
     ev = SubagentMessageSent(
-        handle="a3f9c2",
+        subagent_id="a3f9c2",
         agent_key="monty",
         workflow_id="monty-subagent-wf",
         function="run_script",
@@ -186,10 +191,12 @@ def test_subagent_message_sent_event_round_trips_with_dispatch_details():
     # Envelope turn_number (the parent's turn) is deliberately DIFFERENT from subagent_turn (the
     # child's turn) — the two must not be conflated, which is exactly why the payload field is
     # named subagent_turn rather than turn_number.
-    envelope = AgentEvent(event=ev, turn_id="t1", turn_number=5, timestamp=0.0)
+    envelope = AgentEvent(
+        event=ev, agent_id="parent-wf", turn_id="t1", turn_number=5, timestamp=0.0
+    )
     back = AgentEvent.model_validate_json(envelope.model_dump_json())
     assert type(back.event) is SubagentMessageSent
-    assert back.event.handle == "a3f9c2"
+    assert back.event.subagent_id == "a3f9c2"
     assert back.event.agent_key == "monty"
     assert back.event.workflow_id == "monty-subagent-wf"
     assert back.event.function == "run_script"

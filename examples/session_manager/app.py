@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -26,6 +26,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentConfig,
     AgentEvent,
     AgentEventType,
+    AgentStatus,
 )
 from temporal_agent_harness.harness.agent_client import (
     AgentBusyError,
@@ -116,7 +117,6 @@ class ChatRequest(BaseModel):
     # non-text @agent.accepts handlers.
     message: str | dict[str, Any]
     expected_turn: int
-    from_offset: int = 0
 
 
 class ToolApprovalRequestBody(BaseModel):
@@ -130,14 +130,17 @@ class ToolApprovalRequestBody(BaseModel):
     remember: bool = False
 
 
-def _sse(event: str, data: dict, offset: int | None = None) -> bytes:
+def _sse(event: str, data: dict, resume_offset: int | None = None) -> bytes:
     payload = {**data}
-    if offset is not None:
-        payload["offset"] = offset
+    if resume_offset is not None:
+        # The merge's ROOT-stream resume CURSOR as of this event (a value the client records and
+        # passes back as ``attach(from_offset=...)``) — NOT this event's own position. It advances
+        # only on root events, so every event within one subagent turn carries the same value.
+        payload["resume_offset"] = resume_offset
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
 
 
-def _yield_item(item, offset: int | None = None) -> bytes:
+def _yield_item(item, resume_offset: int | None = None) -> bytes:
     # Every stream item is an AgentEvent envelope. Flatten it for the wire: the
     # SSE event name is the nested payload's ``type``, and the data is the
     # payload's fields plus the envelope's routing metadata (turn_id /
@@ -146,11 +149,16 @@ def _yield_item(item, offset: int | None = None) -> bytes:
         payload = item.event
         data = {
             **payload.model_dump(mode="json"),
+            # agent_id identifies which agent published this event — for a session that drives
+            # subagents, the merged stream carries the parent's AND every (recursive) subagent's
+            # events, so the UI uses agent_id to attribute/group them (subagent streams are merged
+            # in client-side; each agent still keeps its own independent stream).
+            "agent_id": item.agent_id,
             "turn_id": item.turn_id,
             "turn_number": item.turn_number,
             "timestamp": item.timestamp,
         }
-        return _sse(payload.type, data, offset)
+        return _sse(payload.type, data, resume_offset)
     return b""
 
 
@@ -221,8 +229,14 @@ async def get_status(session_id: str):
         workflow_id=session_id,
     )
     status = await client.get_status()
+    # AgentStatus is a stdlib dataclass but carries a nested *pydantic* model
+    # (``approval_policy: ToolApprovalPolicy``); ``dataclasses.asdict`` does NOT convert nested
+    # pydantic models, so ``json.dumps`` would choke on it. Serialize via a pydantic TypeAdapter,
+    # which walks the dataclass, the nested pydantic model, and the nested dataclasses
+    # (PendingApproval / PendingTurn / SubagentInfo) into JSON-safe primitives.
+    content = TypeAdapter(AgentStatus).dump_python(status, mode="json")
     return JSONResponse(
-        content=asdict(status),
+        content=content,
         headers={"Cache-Control": "no-store"},
     )
 
@@ -247,13 +261,21 @@ async def agent_interface(session_id: str):
 
 @app.get("/api/attach")
 async def attach(session_id: str, from_offset: int = 0) -> StreamingResponse:
-    """Reattach to a session's event stream."""
+    """Reattach to a session's event stream, merging the agent + its subagents into one stream.
+
+    ``from_offset`` (default 0) is a resume offset: 0 replays everything (a freshly loaded tab); any
+    value the previous stream handed back (the ``resume_offset`` field on each SSE event) resumes from
+    exactly there, so a polling/debugging UI doesn't re-replay events it has already seen. Resuming
+    *inside* a subagent's turn simply omits that subagent's own events (the merge never saw its turn
+    start); the parent's stream is unaffected. So a UI that already rendered that detail loses
+    nothing; a brand-new consumer should attach from 0.
+    """
     client = AgentClient(
         temporal=app.state.temporal,
         workflow_id=session_id,
     )
     return StreamingResponse(
-        client.attach(on_item=_yield_item, from_offset=from_offset),
+        await client.attach(on_item=_yield_item, from_offset=from_offset),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -286,28 +308,28 @@ async def approve_tool(req: ToolApprovalRequestBody):
 
 @app.post("/api/chat")
 async def chat(req: ChatRequest):
-    """Send a message to a session and stream back ALL events.
+    """Send a message to a session and stream back ALL events of the resulting turn.
 
-    The stream includes events from ``from_offset`` through to the
-    completion of the submitted turn — including any intermediate turns
-    from other clients or queued messages. This lets the caller drop a
-    prior stream and resume seamlessly.
+    The stream covers the submitted turn from its ``turn_started`` through its ``turn_end``,
+    merging the agent's own events with every subagent stream it drives (recursively) into one
+    logical stream — so subagent activity appears inline. The client derives where to start
+    reading from the update's acceptance offset; the caller passes no offset.
 
     Phase 1 (the workflow update) happens eagerly — StaleTurnError and
     AgentBusyError propagate as HTTP errors via the exception handlers.
     """
-    def on_item(item: AgentStreamOutput, offset: int) -> bytes:
+    def on_item(item: AgentStreamOutput, resume_offset: int) -> bytes:
         match item:
             case AgentTurnTimeout():
                 return _sse(
-                    AgentEventType.ERROR, {"kind": "timeout", "message": str(item)}, offset
+                    AgentEventType.ERROR, {"kind": "timeout", "message": str(item)}, resume_offset
                 )
             case AgentTurnError():
                 return _sse(
-                    AgentEventType.ERROR, {"kind": "agent", "message": str(item)}, offset
+                    AgentEventType.ERROR, {"kind": "agent", "message": str(item)}, resume_offset
                 )
             case _:
-                return _yield_item(item, offset)
+                return _yield_item(item, resume_offset)
 
     client = AgentClient(
         temporal=app.state.temporal,
@@ -329,7 +351,6 @@ async def chat(req: ChatRequest):
             payload,
             req.expected_turn,
             on_item=on_item,
-            from_offset=req.from_offset,
         ),
         media_type="text/event-stream",
         headers={

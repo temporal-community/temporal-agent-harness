@@ -1231,7 +1231,15 @@ const mainEl = document.getElementById("main");
 
 let activeSessionId = null;
 let nextTurn = 1; // the turn number the next message will claim
-let lastOffset = 0; // last pubsub offset received — sent as from_offset on next chat
+let lastResumeOffset = 0; // last ROOT-stream resume cursor seen — passed as from_offset on a re-attach
+// The root session agent's short id (from /api/status). The merged stream now interleaves
+// the root agent's events with every subagent it drives; this chat surface renders ONLY the
+// root agent's events, so handleEvent filters everything else out by agent_id. Resolved per
+// session in switchSession; null until then.
+let rootAgentId = null;
+// Subagent ids discovered via subagent_started — a fallback filter so a subagent's raw events
+// are dropped even if the root-id fetch failed (rootAgentId === null). Cleared per session.
+const subagentIds = new Set();
 let isMessageQueuingEnabled = false;
 let isAgentBusy = false;
 let sending = false;
@@ -1349,6 +1357,7 @@ function clearMessages() {
   toolCards = {};
   toolIndex = 0;
   toolStartTimes = {};
+  subagentIds.clear();
   activeReplyEl = null;
   globalCitations.clear();
   globalCitationCounter = 0;
@@ -1882,25 +1891,50 @@ async function submitApproval(toolId, approved, row, remember = false) {
 async function consumeSSE(res) {
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   let buf = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += value;
-    let idx;
-    while ((idx = buf.indexOf("\n\n")) !== -1) {
-      const frame = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      const eventMatch = frame.match(/^event: (.+)$/m);
-      const dataMatch = frame.match(/^data: (.+)$/m);
-      if (!eventMatch || !dataMatch) continue;
-      handleEvent(eventMatch[1], JSON.parse(dataMatch[1]));
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const eventMatch = frame.match(/^event: (.+)$/m);
+        const dataMatch = frame.match(/^data: (.+)$/m);
+        if (!eventMatch || !dataMatch) continue;
+        handleEvent(eventMatch[1], JSON.parse(dataMatch[1]));
+      }
     }
+  } finally {
+    // Release the body so the server-side merge generator is aclose()d (cancelling its cursors'
+    // in-flight poll updates against the agent AND each subagent workflow) promptly — on a normal
+    // end, an abort, or a throw — rather than left dangling holding updates toward the per-workflow
+    // concurrent-update cap.
+    try { await reader.cancel(); } catch { /* already closed/aborted */ }
   }
 }
 
 function handleEvent(event, data) {
-  // Track pubsub offset for from_offset on next send_message
-  if (data.offset != null) lastOffset = data.offset;
+  // Track the merge's ROOT-stream resume cursor (NOT this event's own position — it advances only
+  // on root events, so it repeats across a subagent turn) for from_offset on a re-attach.
+  if (data.resume_offset != null) lastResumeOffset = data.resume_offset;
+
+  // The merged stream interleaves the root agent's events with every subagent it drives.
+  // This conversational surface renders ONLY the root agent's events — a subagent's raw
+  // reply deltas / tool calls must not leak into the transcript as if they were the main
+  // agent's. Record subagent ids as we see them announced (the announcing subagent_started
+  // is published BY the parent, so data.agent_id == root and it passes the filter below).
+  if (event === "subagent_started" && data.subagent_id) subagentIds.add(data.subagent_id);
+  // Drop anything published by a non-root agent. Prefer the authoritative root id from
+  // /api/status; if that fetch failed (rootAgentId === null) fall back to the discovered
+  // subagent-id set so child events are still suppressed.
+  if (data.agent_id != null) {
+    const isFromRoot = rootAgentId != null
+      ? data.agent_id === rootAgentId
+      : !subagentIds.has(data.agent_id);
+    if (!isFromRoot) return;
+  }
 
   // Track highest turn number seen — used to derive nextTurn from the stream
   if (data.turn_number != null && data.turn_number >= nextTurn) {
@@ -2122,8 +2156,20 @@ async function switchSession(sessionId) {
 
   activeSessionId = sessionId;
   nextTurn = 1;
-  lastOffset = 0;
+  lastResumeOffset = 0;
+  rootAgentId = null;
   isAgentBusy = false;
+  // Resolve the root agent's id so handleEvent can filter the merged stream down to just
+  // this (root) agent's events — subagent events are dropped (see handleEvent). Awaited
+  // before attaching so the very first events are already filtered. A failure leaves
+  // rootAgentId null; the subagent-id fallback in handleEvent still suppresses children.
+  try {
+    const statusRes = await fetch(`/api/status/${encodeURIComponent(sessionId)}`);
+    if (statusRes.ok) rootAgentId = (await statusRes.json()).agent_id ?? null;
+  } catch (err) {
+    console.warn("Failed to resolve root agent id:", err);
+  }
+  if (sessionId !== activeSessionId) return; // session switched again while awaiting status
   // Derive the slash-command set from this agent's accepted-message schema (once
   // per page). Fire-and-forget — it's independent of attaching to the stream.
   loadSlashCommands(sessionId);
@@ -2626,7 +2672,7 @@ async function sendMessage() {
   const expectedTurn = nextTurn;
   nextTurn++; // optimistic — if accepted, this is correct
 
-  // Drop any prior SSE stream — the new stream picks up from lastOffset.
+  // Drop any prior SSE stream — the new stream picks up from lastResumeOffset.
   if (activeAbortController) activeAbortController.abort();
   const controller = new AbortController();
   activeAbortController = controller;
@@ -2645,7 +2691,7 @@ async function sendMessage() {
         session_id: activeSessionId,
         message,
         expected_turn: expectedTurn,
-        from_offset: lastOffset,
+        from_offset: lastResumeOffset,
       }),
       signal: controller.signal,
     });
@@ -2659,7 +2705,7 @@ async function sendMessage() {
       return;
     }
 
-    // Stream ALL events from lastOffset through this turn's reply.
+    // Stream ALL events from lastResumeOffset through this turn's reply.
     // message_queued events in the stream will populate the pending section.
     isAgentBusy = true;
     updateInputState();
@@ -2868,16 +2914,23 @@ async function focusPoll() {
   if (!activeSessionId || focusPolling || isAttaching || sending) return;
   focusPolling = true;
   try {
+    // Abort any previous focus-poll attach before opening another — overlapping merges double up
+    // the in-flight poll updates each holds against the agent (and every subagent) workflow.
+    if (activeAbortController) activeAbortController.abort();
     const controller = new AbortController();
     activeAbortController = controller;
-    const offsetBefore = lastOffset;
-    const url = `/api/attach?session_id=${encodeURIComponent(activeSessionId)}&from_offset=${lastOffset}`;
+    const offsetBefore = lastResumeOffset;
+    // This focus-poll deliberately omits from_offset, so /api/attach replays from 0 — it only needs
+    // to learn whether NEW events arrived (lastResumeOffset advanced past offsetBefore) to derive the
+    // idle state, not to resume incrementally. (The merge/backend DO support from_offset resume — see
+    // attach's resume_offset — this surface just doesn't use it.)
+    const url = `/api/attach?session_id=${encodeURIComponent(activeSessionId)}`;
     const res = await fetch(url, { signal: controller.signal });
     if (res.ok) {
       await consumeSSE(res);
       // Attach only terminates when the workflow is idle, so if we
       // received new events we can derive state from the stream alone.
-      if (lastOffset !== offsetBefore) {
+      if (lastResumeOffset !== offsetBefore) {
         isAgentBusy = false;
         // Derive nextTurn from the highest turn_number seen in events.
         // handleEvent doesn't track this yet, so we use the pending
@@ -2898,9 +2951,13 @@ async function focusPoll() {
 function startFocusPolling() {
   stopFocusPolling();
   if (!focusPollToggle.checked || !activeSessionId) return;
-  // Poll immediately on start, then every 1s
+  // Poll immediately on start, then on a relaxed interval. Each poll opens a full /api/attach
+  // (a merge from offset 0 that re-subscribes the agent AND every subagent stream, each holding a
+  // long-poll update toward the per-workflow concurrent-update cap of 10), so polling tightly —
+  // and any overlap between an abandoned poll and the next — risks exhausting that cap on a busy
+  // subagent. A relaxed cadence catches the next turn without that churn.
   focusPoll();
-  focusPollInterval = setInterval(focusPoll, 1000);
+  focusPollInterval = setInterval(focusPoll, 5000);
 }
 
 function stopFocusPolling() {

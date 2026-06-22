@@ -25,6 +25,7 @@ from enum import StrEnum
 from typing import (
     Annotated,
     Any,
+    Literal,
     ParamSpec,
     TypeVar,
     cast,
@@ -44,6 +45,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.workflow import ActivityConfig
 
 from temporal_agent_harness.harness.agent_protocol import (
+    AGENT_ID_LENGTH,
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
@@ -65,6 +67,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     PendingTurn,
     RunSubagentTurnInput,
     SubagentInfo,
+    SubagentReplyReceived,
     SubagentStarted,
     SubagentStopped,
     SubagentTurnResult,
@@ -648,12 +651,14 @@ class TurnEventPublisher:
 
         Producers build the typed payload (e.g. ``ReplyDelta(text=…)``); the
         envelope adds the routing metadata only the harness controls — ``turn_id``
-        / ``turn_number`` (from the bound context) and ``timestamp`` (wall-clock;
+        / ``turn_number`` / ``agent_id`` (all from the bound :class:`TurnStreamContext`,
+        which the workflow side threaded into the activity) and ``timestamp`` (wall-clock;
         the workflow side uses ``workflow.time()`` — both serialize identically).
         """
         self._events.publish(
             AgentEvent(
                 event=event,
+                agent_id=self._context.agent_id,
                 turn_id=self._context.turn_id,
                 turn_number=self._context.turn_number,
                 timestamp=time.time(),
@@ -714,10 +719,12 @@ class _ApprovalOutcome:
 class _SubagentInstance:
     """One running subagent this agent drives, keyed by its short model-facing ``handle``.
 
-    ``handle`` is a short (~6 char) id the model uses to reference this subagent in
-    ``send_<function>`` / ``stop_<key>`` calls — far cheaper for the model to reproduce than the
-    full child ``workflow_id`` (which it never sees). The workflow-side code maps ``handle`` →
-    ``workflow_id`` and passes the real ``workflow_id`` to the ``run_subagent_turn`` activity.
+    ``handle`` is a short, tree-unique id the model uses to reference this subagent in
+    ``send_<function>`` / ``stop_<key>`` calls (this agent's own id plus one fresh segment — see
+    :meth:`AgentWorkflowRunner._fresh_subagent_handle`) — far cheaper for the model to reproduce
+    than the full child ``workflow_id`` (which it never sees). The workflow-side code maps
+    ``handle`` → ``workflow_id`` and passes the real ``workflow_id`` to the ``run_subagent_turn``
+    activity.
 
     Holds the per-subagent turn bookkeeping the ``send_<function>`` tool threads to the
     ``run_subagent_turn`` activity: ``next_expected_turn`` (the child's next turn number, sent
@@ -778,10 +785,14 @@ class _WorkflowStatus:
     def __init__(
         self,
         *,
+        agent_id: str,
         is_message_queuing_enabled: bool,
         approval_policy: ToolApprovalPolicy,
         has_custom_approval_fallback: bool = False,
     ) -> None:
+        # This agent's own short id — stamped on every event (via current_stream_context for
+        # activity publishes, and _pub for in-workflow ones) and surfaced on the status query.
+        self._agent_id: str = agent_id
         self._current_turn: int = 0
         self._current_turn_id: str | None = None
         self._turn_active: bool = False
@@ -812,6 +823,7 @@ class _WorkflowStatus:
         return TurnStreamContext(
             turn_id=self._current_turn_id,
             turn_number=self._current_turn,
+            agent_id=self._agent_id,
         )
 
     @property
@@ -979,11 +991,11 @@ class _WorkflowStatus:
     def active_subagents(self) -> list[SubagentInfo]:
         """The active subagents projected for the ``agent_status`` query.
 
-        Surfaces the handle / agent_key / real ``workflow_id`` / next turn — deliberately NOT
+        Surfaces the subagent_id / agent_key / real ``workflow_id`` / next turn — deliberately NOT
         the gate's ticket counters (an internal turn-ordering detail, not status)."""
         return [
             SubagentInfo(
-                handle=inst.handle,
+                subagent_id=inst.handle,
                 agent_key=inst.agent_key,
                 workflow_id=inst.workflow_id,
                 next_expected_turn=inst.next_expected_turn,
@@ -993,6 +1005,7 @@ class _WorkflowStatus:
 
     def to_agent_status(self) -> AgentStatus:
         return AgentStatus(
+            agent_id=self._agent_id,
             current_turn=self._current_turn,
             turn_active=self._turn_active,
             pending_turns=[
@@ -1079,11 +1092,22 @@ class AgentWorkflowRunner:
             if config.is_message_queuing_enabled is not None
             else enable_message_queuing_default
         )
+        # This agent's short id, stamped on every event it publishes and reported on its status
+        # query. A parent assigns it when starting a subagent (pushing down the same short handle
+        # it references the child by — see start_subagent); a top-level agent left with no id
+        # generates its own. workflow.uuid4 is deterministic in-workflow (offline unit tests patch
+        # it). Distinct from the full workflow_id, which the model/UI never needs to reproduce.
+        self._agent_id: str = config.agent_id or workflow.uuid4().hex[:AGENT_ID_LENGTH]
+        # Retain the WorkflowStream itself (not just the topic handle) so the runner can read
+        # the stream's current head offset in-workflow — see ``_handle_send_agent_message``,
+        # which returns it as ``AgentMessageReply.accepted_offset`` for the client stream-merge.
+        self._stream = stream
         self._events: WorkflowTopicHandle[AgentEvent] = stream.topic(
             TURN_EVENTS_TOPIC, type=AgentEvent
         )
         self._custom_approval_fallback = custom_approval_fallback
         self._status = _WorkflowStatus(
+            agent_id=self._agent_id,
             is_message_queuing_enabled=is_message_queuing_enabled,
             approval_policy=approval_policy,
             has_custom_approval_fallback=custom_approval_fallback is not None,
@@ -1126,6 +1150,14 @@ class AgentWorkflowRunner:
     # -- Protocol handlers --------------------------------------------------
 
     async def _handle_send_agent_message(self, message: AgentMessage) -> AgentMessageReply:
+        # Capture the stream head BEFORE publishing anything for this message: it is the
+        # client stream-merge's read-start hint (``accepted_offset``). The handler body is
+        # synchronous (no await that yields), so this runs atomically before the turn loop can
+        # publish this turn's ``turn_started`` — guaranteeing ``accepted_offset <= turn_started``,
+        # which is all the merge requires (it discards events up to ``turn_started``). Read the
+        # real log head (``_on_offset``), not a publish counter: activity-published events enter
+        # the same global log via signals and would be missed by an in-workflow counter.
+        accepted_offset = self._stream._on_offset()
         turn_id = str(workflow.uuid4())
         pending = self._status.has_pending_work
         turn_number = self._status.enqueue_message(message, turn_id)
@@ -1140,6 +1172,7 @@ class AgentWorkflowRunner:
         return AgentMessageReply(
             turn_number=turn_number,
             turn_id=turn_id,
+            accepted_offset=accepted_offset,
             pending=pending,
         )
 
@@ -1452,13 +1485,22 @@ class AgentWorkflowRunner:
     # or ``has_self`` plumbing.
 
     def _fresh_subagent_handle(self) -> str:
-        """A short (~6 hex char) handle unique within this agent's registry.
+        """A short, TREE-UNIQUE handle for a new subagent: this agent's own id plus one fresh
+        ``AGENT_ID_LENGTH``-char hex segment (e.g. ``<this agent's id>-a1b2c3``).
 
-        The model references subagents by this handle (cheap to reproduce), never by the full
-        child ``workflow_id``. Generated from ``workflow.uuid4`` (deterministic in-workflow) and
-        re-rolled on the astronomically-unlikely collision with a live handle."""
+        The model references subagents by this handle (cheap to reproduce), never by the full child
+        ``workflow_id``. It is ALSO pushed down as the child's ``AgentConfig.agent_id`` (see
+        :meth:`start_subagent`), so the child stamps this same id on its own events — letting a
+        client merging the streams label and group the child's events by the handle the parent knows
+        it by, with no risk of two agents in the tree sharing an id.
+
+        Tree-uniqueness rests on the reroll below: the fresh segment is regenerated until the full
+        handle is unused in THIS agent's registry, so this agent's children all get distinct
+        segments; prefixing with this agent's own (already tree-unique) id then extends uniqueness
+        across the entire subagent tree. The reroll is LOAD-BEARING for that guarantee — do not drop
+        it. ``workflow.uuid4`` is deterministic in-workflow (offline unit tests patch it)."""
         while True:
-            candidate = workflow.uuid4().hex[:6]
+            candidate = f"{self._agent_id}-{workflow.uuid4().hex[:AGENT_ID_LENGTH]}"
             if not self._status.has_subagent(candidate):
                 return candidate
 
@@ -1479,9 +1521,18 @@ class AgentWorkflowRunner:
         workflow-side resolves ``handle`` → ``workflow_id`` internally."""
         handle = self._fresh_subagent_handle()
         workflow_id = f"{agent_key}-subagent-{workflow.uuid4()}"
+        # Push the handle down as the child's own agent_id so the child stamps it on every event
+        # it publishes — unifying "the id the parent references this subagent by" with "the id on
+        # the subagent's own stream", which is what lets a client merge the two streams coherently
+        # (and, since the handle is tree-unique, group by agent_id without collisions). This is the
+        # one config field the parent overrides per-child (everything else passes through
+        # unchanged); a caller-supplied agent_id would not match the parent's handle.
+        child_config = (config if config is not None else AgentConfig()).model_copy(
+            update={"agent_id": handle}
+        )
         await workflow.start_child_workflow(
             workflow_type,
-            config if config is not None else AgentConfig(),
+            child_config,
             id=workflow_id,
             task_queue=task_queue,
             # EXPLICIT: a subagent is owned by its parent and must never outlive it. If the
@@ -1511,7 +1562,7 @@ class AgentWorkflowRunner:
         # consolidated view — subagent streams are never mirrored onto this one.
         self.publish(
             SubagentStarted(
-                handle=handle, agent_key=agent_key, workflow_id=workflow_id
+                subagent_id=handle, agent_key=agent_key, workflow_id=workflow_id
             )
         )
         return handle
@@ -1527,7 +1578,7 @@ class AgentWorkflowRunner:
         await workflow.get_external_workflow_handle(inst.workflow_id).signal("close")
         self.publish(
             SubagentStopped(
-                handle=inst.handle,
+                subagent_id=inst.handle,
                 agent_key=inst.agent_key,
                 workflow_id=inst.workflow_id,
             )
@@ -1601,13 +1652,81 @@ class AgentWorkflowRunner:
                 # next send would be a spurious StaleTurn. A pre-acceptance rejection (abnormal
                 # under the gate) advanced nothing, so leave the counter untouched.
                 if e.type in ("SubagentTurnError", "SubagentNoReply"):
-                    inst.next_expected_turn = expected + 1
+                    # Close the bracket on the child's ACTUAL accepted turn number — which the
+                    # activity threads through the error details — NOT a re-derived ``expected``.
+                    # The opening ``subagent_message_sent`` was published with that real number
+                    # (``progress.turn_number``), and the close gate keys on
+                    # ``(workflow_id, subagent_turn)``; using the same source on both sides makes
+                    # the key match by construction rather than by an implicit
+                    # validator+enqueue invariant. (They are equal today, but this can't drift.)
+                    accepted_turn = self._accepted_turn_from_error(e, default=expected)
+                    inst.next_expected_turn = accepted_turn + 1
+                    # The child ran (and errored on) that turn — it still emitted its own
+                    # turn_end — so we MUST close the [message_sent … reply_received] bracket on
+                    # OUR stream, or a client merge would wedge waiting on a reply that never
+                    # comes. (A pre-acceptance rejection ran no child turn → no bracket → no
+                    # publish.) outcome="error" since this turn produced no usable reply.
+                    self._publish_subagent_reply_received(
+                        inst, msg_type, accepted_turn, outcome="error"
+                    )
                 raise
             inst.next_expected_turn = result.turn_number + 1
             inst.last_consumed_offset = result.consumed_offset
+            # Close the bracket on OUR stream now that the agent (this workflow) actually holds
+            # the reply — BEFORE ``release_gate()`` in the finally, so this turn's reply_received
+            # is published ahead of the next gathered turn's message_sent (the merge relies on
+            # per-subagent brackets never overlapping; see run_subagent_turn's FIFO gate).
+            self._publish_subagent_reply_received(
+                inst, msg_type, result.turn_number, outcome="ok"
+            )
             return result.output
         finally:
             inst.release_gate()
+
+    @staticmethod
+    def _accepted_turn_from_error(e: ApplicationError, *, default: int) -> int:
+        """The child's ACTUAL accepted turn number, threaded through the activity's error details.
+
+        On an accepted-but-errored child turn the ``run_subagent_turn`` activity raises an
+        ``ApplicationError`` carrying ``{"subagent_turn": <the child's real accepted turn>}`` — the
+        SAME number the activity stamped on the opening ``subagent_message_sent``. We close the
+        bracket on that exact key so the client merge's close gate (keyed on
+        ``(workflow_id, subagent_turn)``) always matches, independent of the validator+enqueue
+        invariant that makes it equal to ``default`` (``expected``) today. Falls back to ``default``
+        if the detail is absent (older activity build / unexpected shape)."""
+        for detail in e.details or ():
+            if isinstance(detail, dict) and "subagent_turn" in detail:
+                return int(detail["subagent_turn"])
+        return default
+
+    def _publish_subagent_reply_received(
+        self,
+        inst: _SubagentInstance,
+        function: str,
+        subagent_turn: int,
+        *,
+        outcome: Literal["ok", "error"],
+    ) -> None:
+        """Publish the :class:`SubagentReplyReceived` close marker for one subagent turn.
+
+        Published IN-WORKFLOW (not from the activity) — the agent *is* the workflow, so
+        "received" must mean the AGENT (this workflow) has the reply in hand, not merely that the
+        ``run_subagent_turn`` activity (potentially on another machine) returned. In-workflow is
+        also deterministic and needs no heartbeat dedup, unlike the activity-published
+        ``subagent_message_sent`` (which must survive activity retries). Mirrors
+        ``SubagentMessageSent``'s correlation fields so a client stream-merge can match the
+        bracket on ``(workflow_id, subagent_turn)``.
+        """
+        self.publish(
+            SubagentReplyReceived(
+                subagent_id=inst.handle,
+                agent_key=inst.agent_key,
+                workflow_id=inst.workflow_id,
+                function=function,
+                subagent_turn=subagent_turn,
+                outcome=outcome,
+            )
+        )
 
     def publish(self, event: AgentStreamItem) -> None:
         """Publish an event against the in-flight turn (for custom intermediate events).
@@ -1656,6 +1775,10 @@ class AgentWorkflowRunner:
         client = WorkflowStreamClient.from_within_activity(
             batch_interval=batch_interval,
         )
+        # ``from_within_activity`` targets the workflow that SCHEDULED this activity (always the
+        # publishing agent), so events land on the right stream. The agent's SHORT id to stamp them
+        # with is not derivable from ``activity.info()`` (which only knows the workflow_id), so it
+        # rides in on the threaded ``context`` (TurnStreamContext.agent_id).
         async with client:
             yield TurnEventPublisher(
                 events=client.topic(TURN_EVENTS_TOPIC, type=AgentEvent),
@@ -1721,6 +1844,10 @@ class AgentWorkflowRunner:
         self._events.publish(
             AgentEvent(
                 event=event,
+                # This agent's own short id — so every event on the stream self-identifies its
+                # source agent for the client stream-merge (and a single-agent consumer can filter
+                # by it). For a subagent this is the handle its parent references it by.
+                agent_id=self._agent_id,
                 turn_id=turn_id,
                 turn_number=turn_number,
                 timestamp=workflow.time(),

@@ -35,22 +35,24 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from typing import Any
 
 from pydantic import BaseModel
 from temporalio import activity
 from temporalio.client import Client, WorkflowUpdateFailedError
+from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.exceptions import ApplicationError
 
 from temporal_agent_harness.harness.agent_client import (
     AgentBusyError,
     AgentClient,
-    AgentTurnError,
     StaleTurnError,
 )
 from temporal_agent_harness.harness.agent_protocol import (
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
     RUN_SUBAGENT_TURN_ACTIVITY,
+    TURN_EVENTS_TOPIC,
     AgentEvent,
     AgentEventType,
     RunSubagentTurnInput,
@@ -132,39 +134,21 @@ class SubagentActivities:
         # then let the background task keep it alive at a steady cadence.
         activity.heartbeat(progress)
 
-        # Consume via the shared front-door streamer (AgentClient._stream_turn): it owns the
-        # turn-id filtering, the error→AgentTurnError surfacing, and the turn_end termination,
-        # so this activity stays in lockstep with the human/client path. timeout=None — the
-        # turn runs as long as the activity is allowed to (see the module header).
-        output: dict[str, Any] = {}
-        got_reply = False
+        # Consume the CHILD's stream to capture this turn's reply. The auto-heartbeat keeps the
+        # dedup memo alive at a steady cadence while we wait (no consume timeout — see header).
         async with self._auto_heartbeat(progress):
-            async for out, offset in client._stream_turn(
-                turn_id=progress.turn_id,
-                turn_number=progress.turn_number,
-                on_item=lambda item, off: (item, off),
-                from_offset=progress.consumed_offset,
-                timeout=None,
-            ):
-                # Mutate in place so the background heartbeat re-sends the latest offset.
-                progress.consumed_offset = offset
-
-                if isinstance(out, AgentTurnError):
-                    raise ApplicationError(
-                        str(out), type="SubagentTurnError", non_retryable=True
-                    )
-                if (
-                    isinstance(out, AgentEvent)
-                    and out.event.type == AgentEventType.REPLY
-                ):
-                    output = out.event.output
-                    got_reply = True
+            output, got_reply = await self._consume_child_turn(req, progress)
 
         if not got_reply:
             # turn_end with no preceding reply — an error-only turn whose AgentError we
             # streamed past (or a turn that produced nothing). Surface as a tool error.
+            # Carry the child's ACTUAL accepted turn number in the details: the parent closes
+            # the [message_sent … reply_received] bracket on this exact turn number (the same
+            # one the dispatch marker opened with), never a re-derived `expected` (see
+            # AgentWorkflowRunner._accepted_turn_from_error).
             raise ApplicationError(
                 f"subagent turn {progress.turn_number} ended without a reply",
+                {"subagent_turn": progress.turn_number},
                 type="SubagentNoReply",
                 non_retryable=True,
             )
@@ -174,6 +158,55 @@ class SubagentActivities:
             turn_number=progress.turn_number,
             consumed_offset=progress.consumed_offset,
         )
+
+    async def _consume_child_turn(
+        self, req: RunSubagentTurnInput, progress: _TurnProgress
+    ) -> tuple[dict[str, Any], bool]:
+        """Stream ONE child turn's events to completion; return ``(reply_output, got_reply)``.
+
+        The activity's minimal single-CHILD-stream reader — the replacement for the former
+        ``AgentClient._stream_turn``. Subscribes the child's own stream from
+        ``progress.consumed_offset`` (mutating it as events pass, so the auto-heartbeat memo stays
+        current for a resume), filters to ``progress.turn_id``, captures the ``AgentReply`` output,
+        and stops at that turn's ``turn_end``. The turn's terminal error is surfaced as a
+        non-retryable ``SubagentTurnError``.
+
+        Deliberately reads ONLY the child's stream — NO recursion into grandchildren and NO bracket
+        gates. That is correct precisely because of stream isolation: coalescing the parent +
+        subagent streams into one logical view is a separate CLIENT-side concern (``stream_merge``);
+        an activity that gated on a grandchild's ``turn_end`` (a turn it never mounts) would wedge.
+        """
+        stream = WorkflowStreamClient.create(self._client, req.child_workflow_id)
+        output: dict[str, Any] = {}
+        got_reply = False
+        async for item in stream.subscribe(
+            topics=[TURN_EVENTS_TOPIC],
+            from_offset=progress.consumed_offset,
+            result_type=AgentEvent,
+            poll_cooldown=timedelta(milliseconds=10),
+        ):
+            # Advance the resume offset for EVERY item seen (mutated in place so the background
+            # heartbeat re-sends the latest), then act only on our turn's events.
+            progress.consumed_offset = item.offset + 1
+            envelope: AgentEvent = item.data
+            if envelope.turn_id != progress.turn_id:
+                continue
+            payload = envelope.event
+            if payload.type == AgentEventType.ERROR:
+                # Carry the child's ACTUAL accepted turn number so the parent closes the bracket
+                # on the same turn the dispatch marker opened (see _accepted_turn_from_error).
+                raise ApplicationError(
+                    payload.message or "subagent turn failed",
+                    {"subagent_turn": progress.turn_number},
+                    type="SubagentTurnError",
+                    non_retryable=True,
+                )
+            if payload.type == AgentEventType.REPLY:
+                output = payload.output
+                got_reply = True
+            if payload.type == AgentEventType.TURN_END:
+                break
+        return output, got_reply
 
     @asynccontextmanager
     async def _auto_heartbeat(self, progress: _TurnProgress) -> AsyncIterator[None]:
@@ -259,11 +292,15 @@ class SubagentActivities:
         ) as publisher:
             publisher.publish(
                 SubagentMessageSent(
-                    handle=req.handle,
+                    subagent_id=req.handle,
                     agent_key=req.agent_key,
                     workflow_id=req.child_workflow_id,
                     function=req.type,
                     subagent_turn=progress.turn_number,
+                    # The child stream offset this turn's events begin at (the perf-hint offset
+                    # the parent resumed from) — lets a client merging the parent + child streams
+                    # mount the child cursor at the right spot when resuming mid-session.
+                    from_offset=req.from_offset,
                 )
             )
 
