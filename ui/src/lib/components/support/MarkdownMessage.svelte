@@ -1149,14 +1149,10 @@
     max-width: 100%;
     overflow-x: auto;
     padding: 12px;
-    border: 1px solid color-mix(in srgb, #a78bfa 42%, var(--border));
+    border: 1px solid var(--code-block-border);
     border-radius: 8px;
-    background:
-      linear-gradient(180deg, rgb(50 38 83 / 88%), rgb(28 20 48 / 94%)),
-      var(--surface-0);
-    box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 7%),
-      0 10px 26px rgb(12 8 24 / 26%);
+    background: var(--code-block-bg);
+    box-shadow: var(--code-block-shadow);
   }
 
   .markdown-message :global(pre.md-code-block[data-language]) {
@@ -1170,10 +1166,10 @@
     top: 9px;
     right: 10px;
     padding: 2px 7px;
-    border: 1px solid rgb(196 181 253 / 24%);
+    border: 1px solid var(--code-label-border);
     border-radius: 999px;
-    background: rgb(91 68 142 / 34%);
-    color: #d8ccff;
+    background: var(--code-label-bg);
+    color: var(--code-label-text);
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
     font-size: 10px;
     font-weight: 750;
@@ -1182,10 +1178,10 @@
   }
 
   .markdown-message :global(code) {
-    border: 1px solid color-mix(in srgb, #a78bfa 28%, var(--border));
+    border: 1px solid var(--code-inline-border);
     border-radius: 5px;
     padding: 1px 4px;
-    background: rgb(63 45 105 / 42%);
+    background: var(--code-inline-bg);
     color: #f5f0ff;
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
     font-size: 12px;
@@ -1196,7 +1192,7 @@
     border: 0;
     padding: 0;
     background: transparent;
-    color: #f7f2ff;
+    color: var(--code-block-text);
     line-height: 1.55;
     tab-size: 2;
     white-space: pre;

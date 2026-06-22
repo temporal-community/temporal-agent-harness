@@ -17,6 +17,9 @@
   } from "@lucide/svelte";
   import { Search, X } from "@lucide/svelte";
   import Badge from "$lib/components/primitives/Badge.svelte";
+  import StatusChip, {
+    type StatusKind
+  } from "$lib/components/primitives/StatusChip.svelte";
   import {
     formatDuration,
     type ReplayLogRow,
@@ -142,6 +145,26 @@
     if (row.actor === "reasoning") return `${prefix}Reasoning`;
     if (row.actor === "error") return `${prefix}Error`;
     return `${prefix}System`;
+  }
+
+  function statusKind(row: ReplayLogRow): StatusKind {
+    const status = row.status?.toLowerCase() ?? "";
+    if (row.tone === "error" || row.actor === "error" || status.includes("fail")) {
+      return "error";
+    }
+    if (row.actor === "approval" || status.includes("approval") || status.includes("await")) {
+      return "approval";
+    }
+    if (row.actor === "tool" || status.includes("tool")) return "tool";
+    if (row.actor === "model") return "model";
+    if (row.actor === "reasoning") return "reasoning";
+    if (row.actor === "subagent") return "delegating";
+    if (row.actor === "queue" || status.includes("queue")) return "queued";
+    if (status.includes("done") || status.includes("complete") || status.includes("approved")) {
+      return "complete";
+    }
+    if (status.includes("running") || status.includes("streaming")) return "thinking";
+    return "idle";
   }
 </script>
 
@@ -283,7 +306,12 @@
                         <time>{time(row.timestamp)}</time>
                         <Badge label={row.label} tone={row.tone} />
                         {#if row.status}
-                          <span class="status">{row.status}</span>
+                          <StatusChip
+                            label={row.status}
+                            kind={statusKind(row)}
+                            compact
+                            active={row.offset === activeOffset}
+                          />
                         {/if}
                         {#if row.parentTurnNumber != null}
                           <span class="source-turn" title={row.sourceLabel ?? undefined}>
@@ -680,11 +708,6 @@
     flex: 0 0 auto;
     color: var(--text-2);
     font-weight: 650;
-  }
-
-  .status {
-    flex: 0 0 auto;
-    color: var(--text-3);
   }
 
   .source-turn {

@@ -1,7 +1,9 @@
 <script lang="ts">
   import { Handle, Position } from "@xyflow/svelte";
   import type { AgentNodeData } from "$lib/state/flowProjection";
-  import Badge from "$lib/components/primitives/Badge.svelte";
+  import StatusChip, {
+    type StatusKind
+  } from "$lib/components/primitives/StatusChip.svelte";
 
   interface Props {
     data: AgentNodeData;
@@ -31,6 +33,45 @@
       .join(" ")
   );
   const detailScript = $derived(scriptFromDetail(data.detail));
+  const statusKind = $derived(kindFromState(data.state, data.statusTone ?? data.tone));
+
+  function kindFromState(
+    state: string,
+    tone: AgentNodeData["tone"] | undefined
+  ): StatusKind {
+    const normalized = state.toLowerCase();
+    if (normalized.includes("fail") || normalized.includes("error") || normalized.includes("denied")) {
+      return "error";
+    }
+    if (normalized.includes("approval") || normalized.includes("pending") || normalized.includes("await")) {
+      return "approval";
+    }
+    if (normalized.includes("queue") || normalized.includes("requested") || normalized.includes("dispatch")) {
+      return "queued";
+    }
+    if (
+      normalized.includes("done") ||
+      normalized.includes("complete") ||
+      normalized.includes("replied") ||
+      normalized.includes("captured") ||
+      normalized.includes("approved")
+    ) {
+      return "complete";
+    }
+    if (normalized.includes("running") || normalized.includes("streaming")) {
+      if (tone === "tool") return "tool";
+      if (tone === "model") return "model";
+      if (tone === "reasoning") return "reasoning";
+      if (tone === "queue") return "queued";
+      return "thinking";
+    }
+    if (tone === "tool") return "tool";
+    if (tone === "model") return "model";
+    if (tone === "reasoning") return "reasoning";
+    if (tone === "approval") return "approval";
+    if (tone === "queue") return "queued";
+    return "idle";
+  }
 </script>
 
 <div
@@ -63,13 +104,18 @@
       {/if}
       <span class="title">{data.title}</span>
     </span>
-    <Badge label={data.state} tone={data.statusTone ?? data.tone} />
+    <StatusChip
+      label={data.state}
+      kind={statusKind}
+      compact
+      active={data.active}
+    />
   </div>
   {#if data.subtitle}
     <div class="subtitle">{data.subtitle}</div>
   {/if}
   {#if detailScript}
-    <pre class="detail code-detail"><code>{detailScript}</code></pre>
+    <pre class="detail code-detail" data-language="python"><code>{detailScript}</code></pre>
   {:else if data.detail}
     <div class="detail">{data.detail}</div>
   {/if}
@@ -87,14 +133,30 @@
 
 <style>
   .state-node {
+    position: relative;
     width: 230px;
     min-height: 96px;
     padding: 12px;
-    border: 1px solid var(--border);
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--tone-color, var(--text-2)) 18%, var(--border));
     border-radius: 8px;
-    background: color-mix(in srgb, var(--tone-color, var(--text-2)) 8%, var(--surface-2));
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--tone-color, var(--text-2)) 9%, var(--surface-2)),
+        color-mix(in srgb, var(--surface-1) 88%, black)
+      );
     color: var(--text-1);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  }
+
+  .state-node::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: color-mix(in srgb, var(--tone-color, var(--text-2)) 86%, white 4%);
+    opacity: 0.78;
   }
 
   .state-node.selected {
@@ -107,6 +169,12 @@
       0 0 0 1px color-mix(in srgb, var(--tone-color, var(--accent)) 30%, transparent),
       0 0 22px color-mix(in srgb, var(--tone-color, var(--accent)) 42%, transparent),
       0 18px 42px rgba(0, 0, 0, 0.34);
+  }
+
+  .state-node.active::before {
+    width: 4px;
+    opacity: 1;
+    box-shadow: 0 0 18px color-mix(in srgb, var(--tone-color, var(--accent)) 58%, transparent);
   }
 
   .state-node.large {
@@ -219,22 +287,48 @@
   }
 
   .code-detail {
-    max-height: 132px;
-    padding: 8px;
-    border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--surface-0) 72%, black 8%);
-    color: var(--text-2);
+    position: relative;
+    max-height: 156px;
+    max-width: 100%;
+    padding: 32px 12px 12px;
+    overflow: auto;
+    border: 1px solid var(--code-block-border);
+    border-radius: 8px;
+    background: var(--code-block-bg);
+    color: var(--code-block-text);
+    box-shadow: var(--code-block-shadow);
     font-family:
-      ui-monospace,
       SFMono-Regular,
-      Menlo,
-      Monaco,
       Consolas,
       "Liberation Mono",
       monospace;
+    font-size: 11px;
+    line-height: 1.55;
+    tab-size: 2;
     white-space: pre;
     word-break: normal;
+  }
+
+  .code-detail::before {
+    content: attr(data-language);
+    position: absolute;
+    top: 8px;
+    right: 9px;
+    padding: 2px 7px;
+    border: 1px solid var(--code-label-border);
+    border-radius: 999px;
+    background: var(--code-label-bg);
+    color: var(--code-label-text);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 10px;
+    font-weight: 750;
+    line-height: 1.2;
+    letter-spacing: 0;
+  }
+
+  .code-detail code {
+    display: block;
+    font: inherit;
   }
 
   .metrics {

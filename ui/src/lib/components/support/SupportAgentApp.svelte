@@ -22,6 +22,10 @@
   import { fade } from "svelte/transition";
   import type { AgentDescriptor, FileCitationAnnotation, Session } from "$lib/api/types";
   import { formatCost } from "$lib/cost/pricing";
+  import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
+  import StatusChip, {
+    type StatusKind
+  } from "$lib/components/primitives/StatusChip.svelte";
   import type { ReplayLogRow } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
   import MarkdownMessage from "./MarkdownMessage.svelte";
@@ -93,6 +97,7 @@
   let localMessages = $state<SupportMessage[]>([]);
   let observedSessionId = $state<string | null>(null);
   let sessionDrawerOpen = $state(false);
+  let newSessionMenuOpen = $state(false);
   let sessionSearch = $state("");
   let expandedActivityTurns = $state<number[]>([]);
   let expandedLogRows = $state<string[]>([]);
@@ -118,6 +123,11 @@
   );
   const activeSession = $derived(
     sessionItems.find((item) => item.workflow_id === sessionId) ?? null
+  );
+  const activeAgent = $derived(
+    agents.find((agent) => agent.workflow_type === activeSession?.agent_workflow_type) ??
+      agents.find((agent) => agent.workflow_type === currentAgentWorkflowType) ??
+      null
   );
   const isMonty = $derived(currentAgentWorkflowType === "MontyDynamicAgent");
   const composerPlaceholder = $derived(
@@ -165,6 +175,18 @@
             : error
               ? "Needs attention"
               : "Available"
+  );
+  const statusKind = $derived(currentStatusKind());
+  const statusDetail = $derived(
+    error
+      ? "intervention"
+      : pendingApprovalRows.length > 0
+        ? "human gate"
+        : connecting
+          ? "stream"
+          : sending
+            ? "turn active"
+            : activeAgent?.label
   );
 
   $effect(() => {
@@ -487,6 +509,10 @@
     return value.split(/\r?\n/)[0]?.trim() ?? "";
   }
 
+  function turnMessagePreview(value: string): string {
+    return value.trim().replace(/\s+/g, " ") || "No user message";
+  }
+
   function formatLogValue(value: unknown): string {
     if (value == null) return "";
     if (typeof value === "string") return value.trim();
@@ -628,6 +654,35 @@
     );
   }
 
+  function currentStatusKind(): StatusKind {
+    if (error) return "error";
+    if (pendingApprovalRows.length > 0) return "approval";
+    if (creatingSession) return "starting";
+    if (connecting) return "connecting";
+    if (sending) return "thinking";
+    return "available";
+  }
+
+  function sessionStatusKind(session: Session): StatusKind {
+    if (session.workflow_id === sessionId) return statusKind;
+    return session.is_message_queuing_enabled ? "queued" : "idle";
+  }
+
+  function sessionStatusLabel(session: Session): string {
+    if (session.workflow_id === sessionId) return "Active";
+    return session.is_message_queuing_enabled ? "Queue on" : "Idle";
+  }
+
+  function glyphStatusForSession(
+    session: Session
+  ): "available" | "busy" | "approval" | "error" | "idle" {
+    if (session.workflow_id !== sessionId) return "idle";
+    if (statusKind === "error") return "error";
+    if (statusKind === "approval") return "approval";
+    if (statusKind === "available" || statusKind === "complete") return "available";
+    return "busy";
+  }
+
   function sessionMatchesSearch(session: Session, term: string): boolean {
     return [
       sessionInitialMessage(session),
@@ -738,15 +793,19 @@
   async function startNewSession(workflowType: string): Promise<void> {
     if (!onNewSession || creatingSession) return;
     await onNewSession(workflowType);
+    newSessionMenuOpen = false;
+    sessionDrawerOpen = false;
   }
 
-  async function handleNewSessionAgentChange(event: Event): Promise<void> {
-    const select = event.currentTarget as HTMLSelectElement;
-    const workflowType = select.value;
-    select.value = "";
-    if (!workflowType) return;
-    await startNewSession(workflowType);
-    sessionDrawerOpen = false;
+  function toggleNewSessionMenu(): void {
+    if (!canCreateSession) return;
+    newSessionMenuOpen = !newSessionMenuOpen;
+    if (newSessionMenuOpen) sessionDrawerOpen = false;
+  }
+
+  function toggleSessionDrawer(): void {
+    sessionDrawerOpen = !sessionDrawerOpen;
+    if (sessionDrawerOpen) newSessionMenuOpen = false;
   }
 
   async function selectSession(nextSessionId: string): Promise<void> {
@@ -782,7 +841,18 @@
     {#if showHeader}
       <header class="support-head">
         <div class="agent-mark" aria-hidden="true">
-          <MessageCircle size={19} />
+          <AgentGlyph
+            label={activeAgent?.label ?? agentLabel}
+            workflowType={currentAgentWorkflowType}
+            status={statusKind === "error"
+              ? "error"
+              : statusKind === "approval"
+                ? "approval"
+                : statusKind === "available"
+                  ? "available"
+                  : "busy"}
+            size={layout === "embedded" ? "md" : "lg"}
+          />
         </div>
         <div class="agent-title">
           <h2>{agentLabel}</h2>
@@ -790,39 +860,66 @@
         </div>
         <div class="agent-controls">
           {#if layout === "embedded"}
-            <label class={`header-session-add ${canCreateSession ? "" : "disabled"}`}>
-              <Plus size={13} aria-hidden="true" />
-              <span>{creatingSession ? "Starting" : "New"}</span>
-              <select
-                aria-label="Add session"
+            <div class="new-session-control">
+              <button
+                type="button"
+                class="header-session-add"
+                class:disabled={!canCreateSession}
+                class:active={newSessionMenuOpen}
                 disabled={!canCreateSession}
-                onchange={(event) => void handleNewSessionAgentChange(event)}
+                aria-haspopup="menu"
+                aria-expanded={newSessionMenuOpen}
+                onclick={toggleNewSessionMenu}
               >
-                <option value="">{creatingSession ? "Starting" : "New"}</option>
-                {#each agents as agent}
-                  <option value={agent.workflow_type}>{agent.label}</option>
-                {/each}
-              </select>
-            </label>
+                <Plus size={13} aria-hidden="true" />
+                <span>{creatingSession ? "Starting" : "New"}</span>
+                <span class="control-chevron" aria-hidden="true">
+                  <ChevronDown size={13} />
+                </span>
+              </button>
+              {#if newSessionMenuOpen}
+                <section class="agent-command-menu header-menu" aria-label="New session">
+                  {#each agents as agent}
+                    <button
+                      type="button"
+                      class="agent-command-row"
+                      onclick={() => void startNewSession(agent.workflow_type)}
+                    >
+                      <AgentGlyph
+                        label={agent.label}
+                        workflowType={agent.workflow_type}
+                        status="available"
+                      />
+                      <span class="agent-command-copy">
+                        <strong>{agent.label}</strong>
+                        <small>{agent.description || agent.workflow_type}</small>
+                      </span>
+                      <StatusChip label="Ready" kind="available" compact />
+                    </button>
+                  {/each}
+                </section>
+              {/if}
+            </div>
             <button
               type="button"
-              class={`header-session-drawer ${sessionDrawerOpen ? "active" : ""}`}
+              class="header-session-drawer"
+              class:active={sessionDrawerOpen}
               aria-pressed={sessionDrawerOpen}
-              onclick={() => (sessionDrawerOpen = !sessionDrawerOpen)}
+              onclick={toggleSessionDrawer}
             >
               <History size={13} />
               <span>Sessions</span>
+              <span class="control-chevron" aria-hidden="true">
+                <ChevronDown size={13} />
+              </span>
             </button>
           {/if}
-          <div class="agent-state">
-            <span
-              class={`live-dot ${
-                error ? "error" : pendingApprovalRows.length > 0 ? "approval" : ""
-              }`}
-              aria-hidden="true"
-            ></span>
-            <span>{statusLabel}</span>
-          </div>
+          <StatusChip
+            label={statusLabel}
+            kind={statusKind}
+            detail={statusDetail}
+            active={statusKind === "thinking" || statusKind === "connecting"}
+          />
         </div>
       </header>
     {/if}
@@ -864,15 +961,22 @@
               aria-current={item.workflow_id === sessionId ? "true" : undefined}
               onclick={() => void openSession(item.workflow_id)}
             >
-              <span class="session-dot" aria-hidden="true"></span>
+              <AgentGlyph
+                label={sessionAgentLabel(item)}
+                workflowType={item.agent_workflow_type}
+                status={glyphStatusForSession(item)}
+              />
               <span class="session-copy">
                 <time>{sessionCreatedAt(item.created_at)}</time>
                 <strong>{sessionInitialMessage(item)}</strong>
                 <small>{sessionAgentLabel(item)}</small>
               </span>
-              {#if item.workflow_id === sessionId}
-                <span class="drawer-session-current">Active</span>
-              {/if}
+              <StatusChip
+                label={sessionStatusLabel(item)}
+                kind={sessionStatusKind(item)}
+                compact
+                active={item.workflow_id === sessionId && statusKind !== "available"}
+              />
             </button>
           {/each}
         </div>
@@ -926,8 +1030,11 @@
                       <History size={14} />
                     </span>
                     <span class="activity-copy">
-                      <strong>{turnSummary.label}</strong>
-                      <span>{turnSummary.detail}</span>
+                      <span class="activity-heading">
+                        <strong>{turnSummary.label}</strong>
+                        <span>{turnSummary.detail}</span>
+                      </span>
+                      <span class="activity-message">{turnMessagePreview(message.text)}</span>
                     </span>
                     <span
                       class="activity-duration"
@@ -939,44 +1046,6 @@
                     <ChevronDown class="activity-chevron" size={14} aria-hidden="true" />
                   </button>
                 {/key}
-
-                {#if isApprovalPending(activeLog) && !expanded}
-                  <div class="approval-actions">
-                    <button
-                      type="button"
-                      class="approval-approve"
-                      disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
-                      onclick={(event) => void resolveApproval(event, activeLog, true)}
-                      onkeydown={(event) => event.stopPropagation()}
-                    >
-                      <CheckCircle2 size={13} />
-                      <span>Approve</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="approval-remember"
-                      disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
-                      onclick={(event) => void resolveApproval(event, activeLog, true, true)}
-                      onkeydown={(event) => event.stopPropagation()}
-                    >
-                      <ShieldCheck size={13} />
-                      <span>Approve and remember</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="approval-reject"
-                      disabled={!onApproveTool || isApprovalResolving(activeLog.toolId)}
-                      onclick={(event) => void resolveApproval(event, activeLog, false)}
-                      onkeydown={(event) => event.stopPropagation()}
-                    >
-                      <XCircle size={13} />
-                      <span>Reject</span>
-                    </button>
-                    {#if approvalError(activeLog.toolId)}
-                      <span class="approval-error">{approvalError(activeLog.toolId)}</span>
-                    {/if}
-                  </div>
-                {/if}
 
                 {#if expanded}
                   <div class="activity-list">
@@ -1029,47 +1098,9 @@
 
                         {#if rowExpanded}
                           {#if scriptDetail}
-                            <pre class="activity-script-detail"><code>{scriptDetail}</code></pre>
+                            <pre class="activity-script-detail" data-language="python"><code>{scriptDetail}</code></pre>
                           {/if}
                           <pre class="activity-detail">{fullDetail}</pre>
-                        {/if}
-
-                        {#if isApprovalPending(log)}
-                          <div class="approval-actions">
-                            <button
-                              type="button"
-                              class="approval-approve"
-                              disabled={!onApproveTool || isApprovalResolving(log.toolId)}
-                              onclick={(event) => void resolveApproval(event, log, true)}
-                              onkeydown={(event) => event.stopPropagation()}
-                            >
-                              <CheckCircle2 size={13} />
-                              <span>Approve</span>
-                            </button>
-                            <button
-                              type="button"
-                              class="approval-remember"
-                              disabled={!onApproveTool || isApprovalResolving(log.toolId)}
-                              onclick={(event) => void resolveApproval(event, log, true, true)}
-                              onkeydown={(event) => event.stopPropagation()}
-                            >
-                              <ShieldCheck size={13} />
-                              <span>Approve and remember</span>
-                            </button>
-                            <button
-                              type="button"
-                              class="approval-reject"
-                              disabled={!onApproveTool || isApprovalResolving(log.toolId)}
-                              onclick={(event) => void resolveApproval(event, log, false)}
-                              onkeydown={(event) => event.stopPropagation()}
-                            >
-                              <XCircle size={13} />
-                              <span>Reject</span>
-                            </button>
-                            {#if approvalError(log.toolId)}
-                              <span class="approval-error">{approvalError(log.toolId)}</span>
-                            {/if}
-                          </div>
                         {/if}
                       </div>
                     {/each}
@@ -1100,12 +1131,14 @@
     {#if !drawerActive && pendingApprovalRows.length > 0}
       <section class="pending-approvals" aria-label="Pending tool approvals">
         <header class="pending-approvals-head">
-          <span class="pending-approvals-title">
-            <ShieldCheck size={15} />
-            <span>
-              {pendingApprovalRows.length} approval{pendingApprovalRows.length === 1 ? "" : "s"} needed
-            </span>
-          </span>
+          <StatusChip
+            label={`${pendingApprovalRows.length} approval${
+              pendingApprovalRows.length === 1 ? "" : "s"
+            } needed`}
+            kind="approval"
+            detail="human gate"
+            active
+          />
         </header>
 
         <div class="pending-approval-list">
@@ -1114,6 +1147,7 @@
               <div class="pending-approval-copy">
                 <strong>{approval.toolName ?? approval.body ?? "Tool approval"}</strong>
                 <span>Turn {approval.turnNumber} · {time(approval.timestamp)}</span>
+                <StatusChip label="Awaiting approval" kind="approval" compact active />
               </div>
               <div class="approval-actions compact">
                 <button
@@ -1181,21 +1215,46 @@
           <History size={16} />
           <span>Sessions</span>
         </span>
-        <label class={`session-add-select ${canCreateSession ? "" : "disabled"}`}>
-          <Plus size={14} aria-hidden="true" />
-          <span class="session-add-label">{creatingSession ? "Starting" : "Add"}</span>
-          <select
-            aria-label="Add session"
+        <div class="new-session-control panel-add">
+          <button
+            type="button"
+            class="session-add-select"
+            class:disabled={!canCreateSession}
+            class:active={newSessionMenuOpen}
             disabled={!canCreateSession}
-            onchange={(event) => void handleNewSessionAgentChange(event)}
+            aria-haspopup="menu"
+            aria-expanded={newSessionMenuOpen}
+            onclick={toggleNewSessionMenu}
           >
-            <option value="">{creatingSession ? "Starting" : "Add"}</option>
-            {#each agents as agent}
-              <option value={agent.workflow_type}>{agent.label}</option>
-            {/each}
-          </select>
-          <ChevronDown size={13} aria-hidden="true" />
-        </label>
+            <Plus size={14} aria-hidden="true" />
+            <span class="session-add-label">{creatingSession ? "Starting" : "Add"}</span>
+            <span class="control-chevron" aria-hidden="true">
+              <ChevronDown size={13} />
+            </span>
+          </button>
+          {#if newSessionMenuOpen}
+            <section class="agent-command-menu panel-menu" aria-label="New session">
+              {#each agents as agent}
+                <button
+                  type="button"
+                  class="agent-command-row"
+                  onclick={() => void startNewSession(agent.workflow_type)}
+                >
+                  <AgentGlyph
+                    label={agent.label}
+                    workflowType={agent.workflow_type}
+                    status="available"
+                  />
+                  <span class="agent-command-copy">
+                    <strong>{agent.label}</strong>
+                    <small>{agent.description || agent.workflow_type}</small>
+                  </span>
+                  <StatusChip label="Ready" kind="available" compact />
+                </button>
+              {/each}
+            </section>
+          {/if}
+        </div>
       </div>
 
       <div class="session-list">
@@ -1212,13 +1271,24 @@
               type="button"
               onclick={() => void selectSession(item.workflow_id)}
             >
-              <span class="session-dot" aria-hidden="true"></span>
+              <AgentGlyph
+                label={sessionAgentLabel(item)}
+                workflowType={item.agent_workflow_type}
+                status={glyphStatusForSession(item)}
+                size="sm"
+              />
               <span class="session-copy">
                 <time>{sessionCreatedAt(item.created_at)}</time>
                 <strong>{sessionInitialMessage(item)}</strong>
                 <small>{sessionAgentLabel(item)}</small>
               </span>
             </button>
+            <StatusChip
+              label={sessionStatusLabel(item)}
+              kind={sessionStatusKind(item)}
+              compact
+              active={item.workflow_id === sessionId && statusKind !== "available"}
+            />
             <button
               class="session-delete"
               type="button"
@@ -1286,26 +1356,21 @@
     padding: 10px 12px;
   }
 
-  .agent-mark,
-  .assistant-avatar {
+  .agent-mark {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
-    color: var(--accent);
   }
 
   .agent-mark {
-    width: 36px;
-    height: 36px;
-    border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+    width: auto;
+    height: auto;
   }
 
   .support-app.embedded .agent-mark {
-    width: 32px;
-    height: 32px;
+    width: auto;
+    height: auto;
   }
 
   .agent-title {
@@ -1329,15 +1394,6 @@
     white-space: nowrap;
   }
 
-  .agent-state {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    color: var(--success);
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
   .agent-controls {
     min-width: 0;
     margin-left: auto;
@@ -1356,6 +1412,7 @@
 
   .header-session-add,
   .header-session-drawer {
+    --control-accent: var(--accent);
     position: relative;
     min-width: 0;
     height: 28px;
@@ -1364,18 +1421,23 @@
     align-items: center;
     gap: 6px;
     padding: 0 8px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--surface-0);
+    border: 1px solid color-mix(in srgb, var(--control-accent) 18%, var(--border));
+    border-radius: 6px;
+    background: var(--control-bg);
     color: var(--text-2);
     cursor: pointer;
     font-size: 11px;
     font-weight: 600;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    transition:
+      border-color 140ms ease,
+      background 140ms ease,
+      color 140ms ease,
+      box-shadow 140ms ease;
   }
 
   .header-session-drawer {
-    grid-template-columns: auto minmax(0, 1fr);
-    border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+    --control-accent: var(--reasoning);
   }
 
   .header-session-add {
@@ -1384,12 +1446,38 @@
 
   .header-session-add:hover:not(.disabled),
   .header-session-add:focus-within:not(.disabled),
+  .header-session-add.active,
   .header-session-drawer:hover,
   .header-session-drawer:focus-visible,
   .header-session-drawer.active {
-    border-color: var(--border-strong);
+    border-color: color-mix(in srgb, var(--control-accent) 46%, var(--border-strong));
     color: var(--text-1);
+    background: color-mix(in srgb, var(--control-accent) 10%, var(--control-hover));
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.06),
+      0 0 0 3px color-mix(in srgb, var(--control-accent) 16%, transparent);
     outline: 0;
+  }
+
+  .control-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-3);
+    transition: transform 140ms ease, color 140ms ease;
+  }
+
+  .header-session-add.active .control-chevron,
+  .header-session-drawer.active .control-chevron {
+    color: color-mix(in srgb, var(--control-accent) 78%, white);
+    transform: rotate(180deg);
+  }
+
+  .header-session-add:hover:not(.disabled) .control-chevron,
+  .header-session-add:focus-within:not(.disabled) .control-chevron,
+  .header-session-drawer:hover .control-chevron,
+  .header-session-drawer:focus-visible .control-chevron {
+    color: color-mix(in srgb, var(--control-accent) 78%, white);
   }
 
   .header-session-add span,
@@ -1400,33 +1488,84 @@
     white-space: nowrap;
   }
 
-  .header-session-add select {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    font: inherit;
-    opacity: 0;
-    outline: 0;
-    appearance: none;
-  }
-
-  .header-session-add select:disabled {
-    cursor: default;
-  }
-
-  .header-session-add option {
-    background: var(--surface-1);
-    color: var(--text-1);
-  }
-
   .header-session-add.disabled {
     cursor: default;
     opacity: 0.52;
+  }
+
+  .new-session-control {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .agent-command-menu {
+    position: absolute;
+    top: calc(100% + 10px);
+    z-index: 30;
+    width: min(360px, calc(100vw - 32px));
+    display: grid;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--surface-1);
+    box-shadow: var(--shadow-popover);
+  }
+
+  .agent-command-menu.header-menu {
+    left: 0;
+  }
+
+  .agent-command-menu.panel-menu {
+    right: 0;
+  }
+
+  .agent-command-row {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 9px;
+    align-items: center;
+    padding: 9px;
+    border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--surface-2) 44%, var(--surface-1));
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+  }
+
+  .agent-command-row:hover,
+  .agent-command-row:focus-visible {
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
+    background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
+    outline: 0;
+  }
+
+  .agent-command-copy {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+  }
+
+  .agent-command-copy strong,
+  .agent-command-copy small {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agent-command-copy strong {
+    color: var(--text-1);
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .agent-command-copy small {
+    color: var(--text-3);
+    font-size: 11px;
   }
 
   .session-drawer {
@@ -1437,6 +1576,7 @@
     gap: 10px;
     padding: 14px 12px;
     background: var(--surface-0);
+    border-bottom: 1px solid var(--border);
   }
 
   .session-drawer-head {
@@ -1464,8 +1604,8 @@
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--surface-1);
+    border-radius: 6px;
+    background: var(--control-bg);
     color: var(--text-3);
     cursor: pointer;
   }
@@ -1486,14 +1626,15 @@
     align-items: center;
     padding: 0 10px;
     border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--surface-1);
+    border-radius: 6px;
+    background: var(--control-bg);
     color: var(--text-3);
   }
 
   .session-drawer-search:focus-within {
-    border-color: var(--border-strong);
+    border-color: color-mix(in srgb, var(--accent) 48%, var(--border-strong));
     color: var(--text-2);
+    box-shadow: 0 0 0 3px var(--focus-ring);
   }
 
   .session-drawer-search input {
@@ -1523,55 +1664,33 @@
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 9px;
-    align-items: start;
+    align-items: center;
     padding: 10px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--surface-1);
+    border: 1px solid color-mix(in srgb, var(--reasoning) 10%, var(--border));
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--surface-2) 42%, var(--surface-1));
     color: inherit;
     cursor: pointer;
     font: inherit;
     text-align: left;
+    transition:
+      border-color 140ms ease,
+      background 140ms ease,
+      transform 140ms ease;
   }
 
   .drawer-session-row:hover,
   .drawer-session-row:focus-visible {
-    border-color: var(--border-strong);
+    border-color: color-mix(in srgb, var(--reasoning) 38%, var(--border-strong));
+    background: color-mix(in srgb, var(--reasoning) 5%, var(--surface-2));
+    transform: translateY(-1px);
     outline: 0;
   }
 
   .drawer-session-row.active {
-    border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
-    background: color-mix(in srgb, var(--accent) 8%, var(--surface-1));
-  }
-
-  .drawer-session-current {
-    align-self: start;
-    padding: 3px 6px;
-    border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
-    border-radius: 999px;
-    color: var(--accent);
-    font-size: 10px;
-    font-weight: 700;
-    line-height: 1;
-  }
-
-  .live-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-    background: var(--success);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent);
-  }
-
-  .live-dot.error {
-    background: var(--error);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 16%, transparent);
-  }
-
-  .live-dot.approval {
-    background: var(--queue);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--queue) 18%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+    background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
+    box-shadow: inset 3px 0 0 var(--accent);
   }
 
   .message-list {
@@ -1625,7 +1744,15 @@
   .assistant-avatar {
     width: 30px;
     height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     margin-top: 2px;
+    flex: 0 0 auto;
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+    color: var(--accent);
   }
 
   .bubble {
@@ -1803,6 +1930,23 @@
 
   .activity-copy {
     min-width: 0;
+    overflow: hidden;
+  }
+
+  .activity-summary .activity-copy {
+    display: grid;
+    gap: 3px;
+  }
+
+  .activity-row-button .activity-copy {
+    display: inline-flex;
+    gap: 7px;
+    align-items: baseline;
+    white-space: nowrap;
+  }
+
+  .activity-heading {
+    min-width: 0;
     display: inline-flex;
     gap: 7px;
     align-items: baseline;
@@ -1816,10 +1960,22 @@
     font-weight: 650;
   }
 
-  .activity-copy span {
+  .activity-heading span,
+  .activity-row-button .activity-copy > span {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .activity-message {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .activity-duration {
@@ -1870,26 +2026,43 @@
   }
 
   .activity-script-detail {
+    position: relative;
     min-width: 0;
     max-height: 320px;
     overflow: auto;
     margin: 0 0 0 30px;
-    padding: 8px;
-    border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--surface-0) 72%, black 8%);
-    color: var(--text-2);
+    padding: 34px 12px 12px;
+    border: 1px solid var(--code-block-border);
+    border-radius: 8px;
+    background: var(--code-block-bg);
+    color: var(--code-block-text);
+    box-shadow: var(--code-block-shadow);
     font-family:
-      ui-monospace,
       SFMono-Regular,
-      Menlo,
-      Monaco,
       Consolas,
       "Liberation Mono",
       monospace;
-    font-size: 11px;
-    line-height: 1.45;
+    font-size: 12px;
+    line-height: 1.55;
+    tab-size: 2;
     white-space: pre;
+  }
+
+  .activity-script-detail::before {
+    content: attr(data-language);
+    position: absolute;
+    top: 9px;
+    right: 10px;
+    padding: 2px 7px;
+    border: 1px solid var(--code-label-border);
+    border-radius: 999px;
+    background: var(--code-label-bg);
+    color: var(--code-label-text);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 10px;
+    font-weight: 750;
+    line-height: 1.2;
+    letter-spacing: 0;
   }
 
   .activity-script-detail code {
@@ -1980,16 +2153,6 @@
     gap: 10px;
   }
 
-  .pending-approvals-title {
-    min-width: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    color: var(--queue);
-    font-size: 12px;
-    font-weight: 750;
-  }
-
   .pending-approval-list {
     display: grid;
     gap: 7px;
@@ -2049,11 +2212,6 @@
   @keyframes pulse {
     0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
     40% { opacity: 1; transform: translateY(-2px); }
-  }
-
-  .session-card:hover,
-  .session-card:focus-within {
-    border-color: var(--border-strong);
   }
 
   .error-banner {
@@ -2151,6 +2309,7 @@
   }
 
   .session-add-select {
+    --control-accent: var(--accent);
     position: relative;
     height: 30px;
     display: inline-grid;
@@ -2158,14 +2317,20 @@
     align-items: center;
     gap: 6px;
     padding: 0 8px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--surface-0);
+    border: 1px solid color-mix(in srgb, var(--control-accent) 18%, var(--border));
+    border-radius: 6px;
+    background: var(--control-bg);
     color: var(--text-2);
     cursor: pointer;
     font-size: 12px;
     font-weight: 600;
     white-space: nowrap;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    transition:
+      border-color 140ms ease,
+      background 140ms ease,
+      color 140ms ease,
+      box-shadow 140ms ease;
   }
 
   .session-add-label {
@@ -2176,9 +2341,14 @@
   }
 
   .session-add-select:hover:not(.disabled),
-  .session-add-select:focus-within:not(.disabled) {
-    border-color: var(--border-strong);
+  .session-add-select:focus-within:not(.disabled),
+  .session-add-select.active {
+    border-color: color-mix(in srgb, var(--control-accent) 46%, var(--border-strong));
     color: var(--text-1);
+    background: color-mix(in srgb, var(--control-accent) 10%, var(--control-hover));
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.06),
+      0 0 0 3px color-mix(in srgb, var(--control-accent) 16%, transparent);
   }
 
   .session-add-select.disabled {
@@ -2186,30 +2356,14 @@
     cursor: default;
   }
 
-  .session-add-select select {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 600;
-    opacity: 0;
-    outline: 0;
-    appearance: none;
+  .session-add-select.active .control-chevron,
+  .session-add-select:hover:not(.disabled) .control-chevron,
+  .session-add-select:focus-within:not(.disabled) .control-chevron {
+    color: color-mix(in srgb, var(--control-accent) 78%, white);
   }
 
-  .session-add-select select:disabled {
-    cursor: default;
-  }
-
-  .session-add-select option {
-    background: var(--surface-1);
-    color: var(--text-1);
+  .session-add-select.active .control-chevron {
+    transform: rotate(180deg);
   }
 
   .session-list {
@@ -2230,21 +2384,32 @@
   .session-card {
     min-width: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     gap: 6px;
     align-items: center;
     padding: 6px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--reasoning) 10%, var(--border));
+    border-radius: 7px;
     color: inherit;
-    background: var(--surface-2);
-    transition: border-color 160ms ease, background 160ms ease;
+    background: color-mix(in srgb, var(--surface-2) 72%, var(--surface-1));
+    transition:
+      border-color 140ms ease,
+      background 140ms ease,
+      transform 140ms ease;
   }
 
   .session-card.active {
-    border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
-    background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+    background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+    box-shadow: inset 3px 0 0 var(--accent);
     cursor: default;
+  }
+
+  .session-card:hover,
+  .session-card:focus-within {
+    border-color: color-mix(in srgb, var(--reasoning) 38%, var(--border-strong));
+    background: color-mix(in srgb, var(--reasoning) 5%, var(--surface-2));
+    transform: translateY(-1px);
   }
 
   .session-select {
@@ -2252,7 +2417,7 @@
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: 9px;
-    align-items: start;
+    align-items: center;
     padding: 4px;
     border: 0;
     border-radius: 6px;
@@ -2269,19 +2434,6 @@
     outline-offset: 2px;
   }
 
-  .session-dot {
-    width: 8px;
-    height: 8px;
-    margin-top: 6px;
-    border-radius: 999px;
-    background: var(--text-3);
-  }
-
-  .session-card.active .session-dot {
-    background: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
-  }
-
   .session-delete {
     width: 28px;
     height: 28px;
@@ -2293,6 +2445,11 @@
     background: transparent;
     color: var(--text-3);
     cursor: pointer;
+  }
+
+  .drawer-session-row :global(.status-chip),
+  .session-card :global(.status-chip) {
+    justify-self: end;
   }
 
   .session-delete:hover:not(:disabled) {

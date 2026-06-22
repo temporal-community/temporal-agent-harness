@@ -190,7 +190,10 @@
 
       <div class="inspector-content">
         <div class="content-label">{detail.label}</div>
-        <pre class={`expanded-detail ${detail.kind}`}><code>{detail.text}</code></pre>
+        <pre
+          class={`expanded-detail ${detail.kind}`}
+          data-language={detail.kind === "json" ? "json" : detail.kind === "code" ? "code" : undefined}
+        ><code>{detail.text}</code></pre>
       </div>
     </dialog>
   {/if}
@@ -376,6 +379,7 @@
   }
 
   .expanded-detail {
+    position: relative;
     min-height: 180px;
     max-height: min(520px, calc(100vh - 260px));
     margin: 0;
@@ -401,8 +405,31 @@
 
   .expanded-detail.code,
   .expanded-detail.json {
+    padding-top: 34px;
+    border-color: var(--code-block-border);
+    background: var(--code-block-bg);
+    color: var(--code-block-text);
+    box-shadow: var(--code-block-shadow);
     white-space: pre;
     overflow-wrap: normal;
+  }
+
+  .expanded-detail.code::before,
+  .expanded-detail.json::before {
+    content: attr(data-language);
+    position: absolute;
+    top: 9px;
+    right: 10px;
+    padding: 2px 7px;
+    border: 1px solid var(--code-label-border);
+    border-radius: 999px;
+    background: var(--code-label-bg);
+    color: var(--code-label-text);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 10px;
+    font-weight: 750;
+    line-height: 1.2;
+    letter-spacing: 0;
   }
 
   :global(.svelte-flow__edges) {

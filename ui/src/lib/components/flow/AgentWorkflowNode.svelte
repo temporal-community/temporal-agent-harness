@@ -1,6 +1,10 @@
 <script lang="ts">
   import { Handle, Position } from "@xyflow/svelte";
   import type { AgentNodeData } from "$lib/state/flowProjection";
+  import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
+  import StatusChip, {
+    type StatusKind
+  } from "$lib/components/primitives/StatusChip.svelte";
 
   interface Props {
     data: AgentNodeData;
@@ -33,6 +37,19 @@
   const runtimeRole = $derived(
     data.runtimeRole === "subagent" ? "subagent" : "parent"
   );
+  const statusKind = $derived(kindFromState(data.state, data.tone));
+
+  function kindFromState(state: string, tone: AgentNodeData["tone"]): StatusKind {
+    const normalized = state.toLowerCase();
+    if (normalized.includes("error") || normalized.includes("fail")) return "error";
+    if (normalized.includes("approval") || normalized.includes("pending")) return "approval";
+    if (normalized.includes("running") || normalized.includes("stream")) {
+      return runtimeRole === "subagent" ? "delegating" : "thinking";
+    }
+    if (normalized.includes("replied") || normalized.includes("complete")) return "complete";
+    if (tone === "agent") return "available";
+    return "idle";
+  }
 </script>
 
 <div
@@ -41,6 +58,18 @@
 >
   <Handle id="target-top" class="workflow-handle" type="target" position={Position.Top} />
   <div class="workflow-head">
+    <AgentGlyph
+      label={data.title}
+      workflowType={data.title}
+      role={runtimeRole === "subagent" ? "subagent" : "agent"}
+      status={statusKind === "error"
+        ? "error"
+        : statusKind === "approval"
+          ? "approval"
+          : statusKind === "available" || statusKind === "complete"
+            ? "available"
+            : "busy"}
+    />
     <div class="workflow-title-group">
       <span class="workflow-title">{data.title}</span>
       {#if data.subtitle}
@@ -62,7 +91,12 @@
       {#if headerPrefix}
         <span>{headerPrefix}</span>
       {/if}
-      <strong>{data.state}</strong>
+      <StatusChip
+        label={data.state}
+        kind={statusKind}
+        compact
+        active={statusKind === "thinking" || statusKind === "delegating"}
+      />
     </span>
   </div>
   <Handle id="source-bottom" class="workflow-handle" type="source" position={Position.Bottom} />
@@ -119,7 +153,7 @@
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 18px;
+    gap: 12px;
     padding: 13px 14px 11px;
     border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
     color: var(--text-1);
@@ -151,16 +185,10 @@
     white-space: nowrap;
   }
 
-  .workflow-head strong {
-    color: var(--accent);
-    font-size: 11px;
-    font-weight: 650;
-  }
-
   .workflow-status {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     color: var(--text-3);
     font-size: 11px;
     white-space: nowrap;

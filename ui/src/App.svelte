@@ -6,7 +6,9 @@
   import AgentStateFlow from "$lib/components/flow/AgentStateFlow.svelte";
   import LatencyWaterfall from "$lib/components/flow/LatencyWaterfall.svelte";
   import StepController from "$lib/components/flow/StepController.svelte";
-  import Badge from "$lib/components/primitives/Badge.svelte";
+  import StatusChip, {
+    type StatusKind
+  } from "$lib/components/primitives/StatusChip.svelte";
   import SessionControls from "$lib/components/support/SessionControls.svelte";
   import SupportAgentApp from "$lib/components/support/SupportAgentApp.svelte";
   import { createMockRunController } from "$lib/state/mockRun.svelte";
@@ -62,6 +64,13 @@
       hour: "2-digit",
       minute: "2-digit"
     });
+  }
+
+  function graphStatusKind(status: typeof run.graph.status): StatusKind {
+    if (status === "error") return "error";
+    if (status === "running") return "thinking";
+    if (status === "replied") return "complete";
+    return "available";
   }
 
   function rightPanelMaxWidth(): number {
@@ -154,8 +163,12 @@
     </div>
 
     <div class="replay-status">
-      <Badge label={run.graph.status} tone={run.graph.status === "idle" ? "done" : run.graph.status === "error" ? "error" : "model"} />
-      <Badge label={`${run.viewIndex}/${run.total} events`} />
+      <StatusChip
+        label={run.graph.status}
+        kind={graphStatusKind(run.graph.status)}
+        active={run.graph.status === "running"}
+      />
+      <StatusChip label={`${run.viewIndex}/${run.total} events`} kind="queued" compact />
     </div>
   </header>
 
@@ -296,7 +309,8 @@
     align-items: center;
     padding: 10px 16px;
     border-bottom: 1px solid var(--border);
-    background: var(--surface-1);
+    background: color-mix(in srgb, var(--surface-1) 88%, black);
+    box-shadow: 0 1px 0 rgb(255 255 255 / 0.03);
   }
 
   .brand {
@@ -330,11 +344,12 @@
 
   .panel-tabs {
     display: inline-flex;
-    gap: 6px;
-    padding: 3px;
-    border: 1px solid var(--border);
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid var(--border-strong);
     border-radius: 8px;
-    background: var(--surface-0);
+    background: var(--control-bg);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
   }
 
   .panel-tabs button {
@@ -351,11 +366,26 @@
     cursor: pointer;
     font: inherit;
     font-size: 12px;
+    font-weight: 650;
+    transition:
+      background 140ms ease,
+      color 140ms ease,
+      box-shadow 140ms ease;
+  }
+
+  .panel-tabs button:hover,
+  .panel-tabs button:focus-visible {
+    color: var(--text-1);
+    background: var(--control-hover);
+    outline: 0;
   }
 
   .panel-tabs button.active {
-    color: var(--accent);
+    color: color-mix(in srgb, var(--accent) 82%, white);
     background: color-mix(in srgb, var(--accent) 13%, var(--surface-2));
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.06),
+      0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
   }
 
   .session-slot {

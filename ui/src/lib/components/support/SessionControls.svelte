@@ -1,6 +1,10 @@
 <script lang="ts">
-  import { History, Plus, Search, X } from "@lucide/svelte";
+  import { ChevronDown, History, Plus, Search, X } from "@lucide/svelte";
   import type { AgentDescriptor, Session } from "$lib/api/types";
+  import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
+  import StatusChip, {
+    type StatusKind
+  } from "$lib/components/primitives/StatusChip.svelte";
 
   interface Props {
     sessions?: Session[];
@@ -42,6 +46,14 @@
   const canCreateSession = $derived(
     Boolean(onNewSession) && agents.length > 0 && !creatingSession
   );
+  const activeSession = $derived(
+    sessionItems.find((session) => session.workflow_id === sessionId) ?? null
+  );
+  const activeAgent = $derived(
+    agents.find((agent) => agent.workflow_type === activeSession?.agent_workflow_type) ??
+      null
+  );
+  const statusKind = $derived(currentStatusKind());
   const statusLabel = $derived(
     creatingSession
       ? "Starting"
@@ -54,6 +66,17 @@
             : error
               ? "Needs attention"
               : "Available"
+  );
+  const statusDetail = $derived(
+    error
+      ? "intervention"
+      : pendingApprovalCount > 0
+        ? "human gate"
+        : connecting
+          ? "stream"
+          : sending
+            ? "turn active"
+            : activeAgent?.label
   );
 
   function sortedSessions(value: Session[]): Session[] {
@@ -80,6 +103,29 @@
       agents.find((agent) => agent.workflow_type === session.agent_workflow_type)?.label ??
       session.agent_workflow_type
     );
+  }
+
+  function currentStatusKind(): StatusKind {
+    if (error) return "error";
+    if (pendingApprovalCount > 0) return "approval";
+    if (creatingSession) return "starting";
+    if (connecting) return "connecting";
+    if (sending) return "thinking";
+    return "available";
+  }
+
+  function sessionStatusKind(session: Session): StatusKind {
+    if (session.workflow_id === sessionId) return statusKind;
+    return session.is_message_queuing_enabled ? "queued" : "idle";
+  }
+
+  function sessionStatusLabel(session: Session): string {
+    if (session.workflow_id === sessionId) return "Active";
+    return session.is_message_queuing_enabled ? "Queue on" : "Idle";
+  }
+
+  function agentDescription(agent: AgentDescriptor): string {
+    return agent.description?.trim() || agent.workflow_type;
   }
 
   function sessionMatchesSearch(session: Session, term: string): boolean {
@@ -124,7 +170,9 @@
   <div class="new-session-anchor">
     <button
       type="button"
-      class={`session-add ${canCreateSession ? "" : "disabled"} ${newSessionMenuOpen ? "active" : ""}`}
+      class="session-add"
+      class:disabled={!canCreateSession}
+      class:active={newSessionMenuOpen}
       disabled={!canCreateSession}
       aria-haspopup="menu"
       aria-expanded={newSessionMenuOpen}
@@ -132,6 +180,9 @@
     >
       <Plus size={13} aria-hidden="true" />
       <span>{creatingSession ? "Starting" : "New"}</span>
+      <span class="control-chevron" aria-hidden="true">
+        <ChevronDown size={13} />
+      </span>
     </button>
 
     {#if newSessionMenuOpen}
@@ -159,11 +210,16 @@
               role="menuitem"
               onclick={() => void startNewSession(agent.workflow_type)}
             >
-              <span class="agent-dot" aria-hidden="true"></span>
+              <AgentGlyph
+                label={agent.label}
+                workflowType={agent.workflow_type}
+                status="available"
+              />
               <span class="agent-copy">
                 <strong>{agent.label}</strong>
-                <small>{agent.workflow_type}</small>
+                <small>{agentDescription(agent)}</small>
               </span>
+              <StatusChip label="Ready" kind="available" compact />
             </button>
           {/each}
         </div>
@@ -173,21 +229,24 @@
 
   <button
     type="button"
-    class={`session-drawer-button ${sessionDrawerOpen ? "active" : ""}`}
+    class="session-drawer-button"
+    class:active={sessionDrawerOpen}
     aria-pressed={sessionDrawerOpen}
     onclick={toggleSessionPopover}
   >
     <History size={13} />
     <span>Sessions</span>
+    <span class="control-chevron" aria-hidden="true">
+      <ChevronDown size={13} />
+    </span>
   </button>
 
-  <div class="agent-state">
-    <span
-      class={`live-dot ${error ? "error" : pendingApprovalCount > 0 ? "approval" : ""}`}
-      aria-hidden="true"
-    ></span>
-    <span>{statusLabel}</span>
-  </div>
+  <StatusChip
+    label={statusLabel}
+    kind={statusKind}
+    detail={statusDetail}
+    active={statusKind === "thinking" || statusKind === "connecting"}
+  />
 
   {#if sessionDrawerOpen}
     <section class="session-popover" aria-label="Sessions">
@@ -226,15 +285,30 @@
             aria-current={item.workflow_id === sessionId ? "true" : undefined}
             onclick={() => void openSession(item.workflow_id)}
           >
-            <span class="session-dot" aria-hidden="true"></span>
+            <AgentGlyph
+              label={sessionAgentLabel(item)}
+              workflowType={item.agent_workflow_type}
+              status={item.workflow_id === sessionId
+                ? statusKind === "error"
+                  ? "error"
+                  : statusKind === "approval"
+                    ? "approval"
+                    : statusKind === "available"
+                      ? "available"
+                      : "busy"
+                : "idle"}
+            />
             <span class="session-copy">
               <time>{sessionCreatedAt(item.created_at)}</time>
               <strong>{sessionInitialMessage(item)}</strong>
               <small>{sessionAgentLabel(item)}</small>
             </span>
-            {#if item.workflow_id === sessionId}
-              <span class="session-current">Active</span>
-            {/if}
+            <StatusChip
+              label={sessionStatusLabel(item)}
+              kind={sessionStatusKind(item)}
+              compact
+              active={item.workflow_id === sessionId && statusKind !== "available"}
+            />
           </button>
         {/each}
       </div>
@@ -260,6 +334,7 @@
 
   .session-add,
   .session-drawer-button {
+    --control-accent: var(--accent);
     position: relative;
     min-width: 0;
     height: 32px;
@@ -268,24 +343,28 @@
     align-items: center;
     gap: 7px;
     padding: 0 10px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--surface-0);
+    border: 1px solid color-mix(in srgb, var(--control-accent) 18%, var(--border));
+    border-radius: 6px;
+    background: var(--control-bg);
     color: var(--text-2);
     cursor: pointer;
     font: inherit;
     font-size: 12px;
     font-weight: 650;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    transition:
+      border-color 140ms ease,
+      background 140ms ease,
+      color 140ms ease,
+      box-shadow 140ms ease;
   }
 
   .session-add {
     flex: 0 0 auto;
-    grid-template-columns: auto minmax(0, 1fr);
   }
 
   .session-drawer-button {
-    grid-template-columns: auto minmax(0, 1fr);
-    border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+    --control-accent: var(--reasoning);
   }
 
   .session-add:hover:not(.disabled),
@@ -294,9 +373,34 @@
   .session-drawer-button:hover,
   .session-drawer-button:focus-visible,
   .session-drawer-button.active {
-    border-color: var(--border-strong);
+    border-color: color-mix(in srgb, var(--control-accent) 46%, var(--border-strong));
     color: var(--text-1);
+    background: color-mix(in srgb, var(--control-accent) 10%, var(--control-hover));
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.06),
+      0 0 0 3px color-mix(in srgb, var(--control-accent) 16%, transparent);
     outline: 0;
+  }
+
+  .control-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-3);
+    transition: transform 140ms ease, color 140ms ease;
+  }
+
+  .session-add.active .control-chevron,
+  .session-drawer-button.active .control-chevron {
+    color: color-mix(in srgb, var(--control-accent) 78%, white);
+    transform: rotate(180deg);
+  }
+
+  .session-add:hover:not(.disabled) .control-chevron,
+  .session-add:focus-visible:not(.disabled) .control-chevron,
+  .session-drawer-button:hover .control-chevron,
+  .session-drawer-button:focus-visible .control-chevron {
+    color: color-mix(in srgb, var(--control-accent) 78%, white);
   }
 
   .session-add span,
@@ -313,34 +417,6 @@
     opacity: 0.52;
   }
 
-  .agent-state {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    color: var(--success);
-    font-size: 12px;
-    font-weight: 650;
-    white-space: nowrap;
-  }
-
-  .live-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-    background: var(--success);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent);
-  }
-
-  .live-dot.error {
-    background: var(--error);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 16%, transparent);
-  }
-
-  .live-dot.approval {
-    background: var(--queue);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--queue) 18%, transparent);
-  }
-
   .session-popover {
     position: absolute;
     top: calc(100% + 10px);
@@ -354,10 +430,10 @@
     grid-template-rows: auto auto auto minmax(0, 1fr);
     gap: 10px;
     padding: 14px 12px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-strong);
     border-radius: 8px;
-    background: var(--surface-0);
-    box-shadow: 0 18px 42px rgb(0 0 0 / 0.28);
+    background: var(--surface-1);
+    box-shadow: var(--shadow-popover);
   }
 
   .new-session-popover {
@@ -371,10 +447,10 @@
     display: grid;
     gap: 10px;
     padding: 14px 12px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-strong);
     border-radius: 8px;
-    background: var(--surface-0);
-    box-shadow: 0 18px 42px rgb(0 0 0 / 0.28);
+    background: var(--surface-1);
+    box-shadow: var(--shadow-popover);
   }
 
   .session-popover-head,
@@ -405,8 +481,8 @@
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--surface-1);
+    border-radius: 6px;
+    background: var(--control-bg);
     color: var(--text-3);
     cursor: pointer;
   }
@@ -429,14 +505,15 @@
     align-items: center;
     padding: 0 10px;
     border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--surface-1);
+    border-radius: 6px;
+    background: var(--control-bg);
     color: var(--text-3);
   }
 
   .session-search:focus-within {
-    border-color: var(--border-strong);
+    border-color: color-mix(in srgb, var(--accent) 48%, var(--border-strong));
     color: var(--text-2);
+    box-shadow: 0 0 0 3px var(--focus-ring);
   }
 
   .session-search input {
@@ -462,33 +539,29 @@
   .agent-row {
     min-width: 0;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 9px;
-    align-items: start;
+    align-items: center;
     padding: 10px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--surface-1);
+    border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--surface-2) 42%, var(--surface-1));
     color: inherit;
     cursor: pointer;
     font: inherit;
     text-align: left;
+    transition:
+      border-color 140ms ease,
+      background 140ms ease,
+      transform 140ms ease;
   }
 
   .agent-row:hover,
   .agent-row:focus-visible {
-    border-color: var(--border-strong);
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
     outline: 0;
-    background: color-mix(in srgb, var(--surface-2) 38%, var(--surface-0));
-  }
-
-  .agent-dot {
-    width: 8px;
-    height: 8px;
-    margin-top: 5px;
-    border-radius: 999px;
-    background: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+    background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
+    transform: translateY(-1px);
   }
 
   .agent-copy {
@@ -531,48 +604,31 @@
     gap: 9px;
     align-items: start;
     padding: 10px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--surface-1);
+    border: 1px solid color-mix(in srgb, var(--reasoning) 10%, var(--border));
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--surface-2) 42%, var(--surface-1));
     color: inherit;
     cursor: pointer;
     font: inherit;
     text-align: left;
+    transition:
+      border-color 140ms ease,
+      background 140ms ease,
+      transform 140ms ease;
   }
 
   .session-row:hover,
   .session-row:focus-visible {
-    border-color: var(--border-strong);
+    border-color: color-mix(in srgb, var(--reasoning) 38%, var(--border-strong));
+    background: color-mix(in srgb, var(--reasoning) 5%, var(--surface-2));
+    transform: translateY(-1px);
     outline: 0;
   }
 
   .session-row.active {
-    border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
-    background: color-mix(in srgb, var(--accent) 8%, var(--surface-1));
-  }
-
-  .session-current {
-    align-self: start;
-    padding: 3px 6px;
-    border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
-    border-radius: 999px;
-    color: var(--accent);
-    font-size: 10px;
-    font-weight: 700;
-    line-height: 1;
-  }
-
-  .session-dot {
-    width: 8px;
-    height: 8px;
-    margin-top: 5px;
-    border-radius: 999px;
-    background: var(--text-3);
-  }
-
-  .session-row.active .session-dot {
-    background: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+    background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
+    box-shadow: inset 3px 0 0 var(--accent);
   }
 
   .session-copy {
@@ -609,6 +665,11 @@
     margin: 6px 0;
     color: var(--text-3);
     font-size: 12px;
+  }
+
+  .agent-row :global(.status-chip),
+  .session-row :global(.status-chip) {
+    justify-self: end;
   }
 
   @media (max-width: 980px) {
