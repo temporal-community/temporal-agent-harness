@@ -52,7 +52,6 @@
       transcriptFilter =
         localNodeId === "tool" || localNodeId === "approval" ? localNodeId : "all";
     }
-    rightPanelView = "logs";
   }
 
   function startedAtLabel(seconds: number): string {
