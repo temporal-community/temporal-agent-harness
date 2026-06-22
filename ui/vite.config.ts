@@ -4,6 +4,11 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [svelte()],
+  base: "./",
+  build: {
+    outDir: "../temporal_agent_harness/ui/dist",
+    emptyOutDir: true
+  },
   resolve: {
     alias: {
       $lib: fileURLToPath(new URL("./src/lib", import.meta.url))

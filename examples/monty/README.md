@@ -36,11 +36,12 @@ Each command in its own terminal, all from this directory:
 ```bash
 just temporal          # 1. local Temporal dev server (skip if you bring your own)
 just session-manager   # 2. session-manager worker
-just server            # 3. FastAPI API server  ->  http://localhost:8000
-just app-dev           # 4. shared Svelte UI    ->  http://127.0.0.1:5173
-just worker            # 5. the Monty agents
+just server            # 3. FastAPI API + built Svelte UI  ->  http://localhost:8000
+just worker            # 4. the Monty agents
 ```
 
-Then open <http://127.0.0.1:5173> and pick a Monty agent.
+Then open <http://localhost:8000> and pick a Monty agent. For frontend
+development, `just ui-dev` runs Vite at <http://127.0.0.1:5173> with `/api`
+proxied to the same FastAPI server.
 
 `just` lists every recipe; `just config` shows the Temporal connection currently in use.

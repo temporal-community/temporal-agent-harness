@@ -7,8 +7,8 @@ shapes.
 
 Source of truth in the current server:
 
-- `examples/session_manager/app.py`: HTTP routes and SSE flattening.
-- `examples/session_manager/workflow.py`: agent registry and session shapes.
+- `temporal_agent_harness/web/app.py`: HTTP routes and SSE flattening.
+- `temporal_agent_harness/web/session_manager.py`: agent registry and session shapes.
 - `harness/agent_protocol/events.py`: stream event payloads.
 - `harness/agent_protocol/agent_interface.py`: status, accepted-message, and
   tool-approval shapes.
@@ -17,21 +17,27 @@ Source of truth in the current server:
 
 ### `GET /`
 
-Returns the legacy static chat UI from the shared session manager. In
-development, run the shared Svelte app from `ui` with Vite and let it proxy
-`/api` to the same FastAPI server.
+Returns the packaged Vite UI (`temporal_agent_harness/ui/dist/index.html`)
+when no custom `static_dir` is supplied. In development, run the shared Svelte
+app from `ui` with Vite and let it proxy `/api` to the same FastAPI server.
 
 ### `GET /states`
 
-Returns the legacy static diagnostics view.
+Only present when `create_agent_harness_app(..., states_file=...)` is used.
+The packaged Vite UI does not register this route.
 
 ### `GET /static/*`
 
-Serves legacy/static assets from `examples/session_manager/static`.
+Serves the configured static asset directory. By default this is the packaged
+Vite dist directory.
 
 ### `GET /assets/*`
 
-Not used by the current Vite development flow.
+Serves `static_dir/assets` when that directory exists.
+
+The packaged UI uses relative asset and API URLs, so the app can be mounted at
+`/` or under a path prefix as long as the API routes and static routes are
+mounted together.
 
 ## JSON Endpoints
 
@@ -185,7 +191,6 @@ type ChatRequest = {
   session_id: string
   message: string | AgentMessageObject
   expected_turn: number
-  from_offset?: number
 }
 
 type AgentMessageObject = {
@@ -200,6 +205,9 @@ The server performs the workflow update before streaming begins. If the update
 is rejected, the response is a regular HTTP error instead of an SSE stream.
 The stream is already merged: it contains the root agent and every recursive
 subagent event in one ordered sequence.
+
+The client does not pass a stream offset to `POST /api/chat`; the workflow
+acceptance response determines the exact turn-start offset internally.
 
 ### `GET /api/attach?session_id=...&from_offset=0`
 

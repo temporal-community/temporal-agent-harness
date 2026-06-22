@@ -33,7 +33,7 @@
     groups: TurnLogGroup[];
     activeTurnNumber: number | null;
     activeRowId?: string | null;
-    activeOffset: number | null;
+    activeOrdinal: number | null;
     filter?: TranscriptFilter;
     onFilterChange?: (filter: TranscriptFilter) => void;
   }
@@ -42,7 +42,7 @@
     groups,
     activeTurnNumber,
     activeRowId = null,
-    activeOffset,
+    activeOrdinal,
     filter = "all",
     onFilterChange
   }: Props = $props();
@@ -83,7 +83,7 @@
         const needle = query.trim().toLowerCase();
         const rows = group.rows.filter(
           (row) =>
-            row.offset === activeOffset ||
+            row.ordinal === activeOrdinal ||
             (matchesFilter(row, filter) && matchesQuery(row, needle))
         );
         return { ...group, rows };
@@ -255,7 +255,7 @@
           <div class="log-lines" id={`turn-${group.turnNumber}-logs`}>
             {#each group.rows as row}
               {@const expanded = isRowExpanded(row.id)}
-              {@const active = activeRowId === row.id || (activeRowId == null && activeOffset === row.offset)}
+              {@const active = activeRowId === row.id || (activeRowId == null && activeOrdinal === row.ordinal)}
               <article
                 id={`log-row-${row.id}`}
                 class={`log-line ${row.tone} ${row.parentTurnNumber != null ? "nested-subagent" : ""} ${expanded ? "expanded" : ""} ${active ? "active-row" : ""}`}
@@ -310,7 +310,7 @@
                             label={row.status}
                             kind={statusKind(row)}
                             compact
-                            active={row.offset === activeOffset}
+                            active={row.ordinal === activeOrdinal}
                           />
                         {/if}
                         {#if row.parentTurnNumber != null}

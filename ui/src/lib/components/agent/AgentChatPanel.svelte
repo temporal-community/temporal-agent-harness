@@ -28,9 +28,9 @@
   } from "$lib/components/primitives/StatusChip.svelte";
   import type { ReplayLogRow } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
-  import MarkdownMessage from "./MarkdownMessage.svelte";
+  import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
 
-  type SupportLayout = "full" | "embedded";
+  type AgentChatLayout = "full" | "embedded";
 
   interface Props {
     items: TranscriptItem[];
@@ -38,7 +38,7 @@
     sessions?: Session[];
     agentLabel: string;
     sessionId: string;
-    layout?: SupportLayout;
+    layout?: AgentChatLayout;
     showHeader?: boolean;
     agents?: AgentDescriptor[];
     currentAgentWorkflowType?: string | null;
@@ -57,7 +57,7 @@
     ) => void | Promise<void>;
   }
 
-  interface SupportMessage {
+  interface ChatMessage {
     id: string;
     role: "user" | "assistant";
     turnNumber?: number;
@@ -94,7 +94,7 @@
     onApproveTool
   }: Props = $props();
   let draft = $state("");
-  let localMessages = $state<SupportMessage[]>([]);
+  let localMessages = $state<ChatMessage[]>([]);
   let observedSessionId = $state<string | null>(null);
   let sessionDrawerOpen = $state(false);
   let newSessionMenuOpen = $state(false);
@@ -102,14 +102,14 @@
   let expandedActivityTurns = $state<number[]>([]);
   let expandedLogRows = $state<string[]>([]);
   let observedActivitySessionId = $state<string | null>(null);
-  let observedActivityOffsets = $state<Record<number, number>>({});
+  let observedActivityOrdinals = $state<Record<number, number>>({});
   let deletingSessionIds = $state<string[]>([]);
   let resolvingApprovalIds = $state<string[]>([]);
   let approvalErrors = $state<Record<string, string>>({});
   let messageListElement = $state<HTMLDivElement | null>(null);
 
-  const fixtureMessages = $derived(seedMessages(items));
-  const messages = $derived([...fixtureMessages, ...localMessages]);
+  const transcriptMessages = $derived(seedMessages(items));
+  const messages = $derived([...transcriptMessages, ...localMessages]);
   const logsByTurn = $derived(groupLogsByTurn(logs));
   const resolvedApprovalToolIds = $derived(resolvedApprovalIds(logs));
   const pendingApprovalRows = $derived(logs.filter((row) => isApprovalPending(row)));
@@ -152,7 +152,7 @@
       latestMessage?.id ?? "",
       latestMessage?.text.length ?? 0,
       logs.length,
-      latestLog?.offset ?? "",
+      latestLog?.ordinal ?? "",
       latestLog?.status ?? "",
       latestLog?.body?.length ?? 0,
       sending ? "sending" : "idle",
@@ -200,20 +200,20 @@
       draft = "";
       localMessages = [];
       observedActivitySessionId = null;
-      observedActivityOffsets = {};
+      observedActivityOrdinals = {};
       expandedActivityTurns = [];
       expandedLogRows = [];
     }
   });
 
   $effect(() => {
-    const nextOffsets: Record<number, number> = {};
+    const nextOrdinals: Record<number, number> = {};
     for (const [turnNumber, rows] of logsByTurn) {
       const active = rows[rows.length - 1];
-      if (active) nextOffsets[turnNumber] = active.offset;
+      if (active) nextOrdinals[turnNumber] = active.ordinal;
     }
     observedActivitySessionId = sessionId;
-    observedActivityOffsets = nextOffsets;
+    observedActivityOrdinals = nextOrdinals;
   });
 
   $effect(() => {
@@ -228,15 +228,15 @@
     });
   });
 
-  function seedMessages(transcriptItems: TranscriptItem[]): SupportMessage[] {
-    const messages: SupportMessage[] = [];
+  function seedMessages(transcriptItems: TranscriptItem[]): ChatMessage[] {
+    const messages: ChatMessage[] = [];
     const emittedUsers = new Set<number>();
 
     for (const item of transcriptItems) {
       if (item.kind === "user" && !item.text.startsWith("/")) {
         emittedUsers.add(item.turnNumber);
         messages.push({
-          id: `support-user-${item.turnNumber}`,
+          id: `chat-user-${item.turnNumber}`,
           role: "user",
           turnNumber: item.turnNumber,
           text: item.text,
@@ -248,7 +248,7 @@
       if (item.kind === "agent") {
         if (!emittedUsers.has(item.turnNumber)) continue;
         messages.push({
-          id: `support-agent-${item.turnNumber}`,
+          id: `chat-agent-${item.turnNumber}`,
           role: "assistant",
           turnNumber: item.turnNumber,
           text: item.text,
@@ -364,8 +364,8 @@
   ): number {
     if (turnNumber == null || activeLog == null) return 0;
     if (observedActivitySessionId !== sessionId) return 0;
-    const observedOffset = observedActivityOffsets[turnNumber];
-    return observedOffset != null && observedOffset !== activeLog.offset ? 150 : 0;
+    const observedOrdinal = observedActivityOrdinals[turnNumber];
+    return observedOrdinal != null && observedOrdinal !== activeLog.ordinal ? 150 : 0;
   }
 
   function activityExpanded(turnNumber: number | undefined): boolean {
@@ -834,12 +834,12 @@
 </script>
 
 <section
-  class={`support-app ${layout} ${showHeader ? "" : "headerless"}`}
+  class={`agent-chat ${layout} ${showHeader ? "" : "headerless"}`}
   aria-label={`${agentLabel} customer chat`}
 >
   <div class="chat-shell">
     {#if showHeader}
-      <header class="support-head">
+      <header class="agent-chat-head">
         <div class="agent-mark" aria-hidden="true">
           <AgentGlyph
             label={activeAgent?.label ?? agentLabel}
@@ -1017,7 +1017,7 @@
             {#if activityLogs.length > 0 && activeLog}
               {@const turnSummary = turnActivitySummary(message.turnNumber, activityLogs)}
               <div class={`activity-feed ${expanded ? "expanded" : ""}`}>
-                {#key activeLog.offset}
+                {#key activeLog.ordinal}
                   <button
                     type="button"
                     class={`activity-summary ${expanded ? "expanded" : ""} activity-line turn-summary active`}
@@ -1057,7 +1057,7 @@
                       <div class={`activity-row ${rowExpanded ? "expanded" : ""}`}>
                         <button
                           type="button"
-                          class={`${activityLineClass(log, log.offset === activeLog.offset)} activity-row-button`}
+                          class={`${activityLineClass(log, log.ordinal === activeLog.ordinal)} activity-row-button`}
                           aria-expanded={rowExpanded}
                           onclick={() => toggleLog(log)}
                         >
@@ -1307,7 +1307,7 @@
 </section>
 
 <style>
-  .support-app {
+  .agent-chat {
     width: 100%;
     height: 100%;
     min-height: 0;
@@ -1316,11 +1316,11 @@
     background: var(--surface-0);
   }
 
-  .support-app.full {
+  .agent-chat.full {
     grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
   }
 
-  .support-app.embedded {
+  .agent-chat.embedded {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1332,15 +1332,15 @@
     border-right: 1px solid var(--border);
   }
 
-  .support-app.embedded .chat-shell {
+  .agent-chat.embedded .chat-shell {
     border-right: 0;
   }
 
-  .support-app.headerless .chat-shell {
+  .agent-chat.headerless .chat-shell {
     grid-template-rows: minmax(0, 1fr) auto auto;
   }
 
-  .support-head {
+  .agent-chat-head {
     min-height: 66px;
     display: flex;
     align-items: center;
@@ -1350,7 +1350,7 @@
     background: var(--surface-1);
   }
 
-  .support-app.embedded .support-head {
+  .agent-chat.embedded .agent-chat-head {
     min-height: 58px;
     align-items: flex-start;
     padding: 10px 12px;
@@ -1368,7 +1368,7 @@
     height: auto;
   }
 
-  .support-app.embedded .agent-mark {
+  .agent-chat.embedded .agent-mark {
     width: auto;
     height: auto;
   }
@@ -1404,7 +1404,7 @@
     gap: 8px;
   }
 
-  .support-app.embedded .agent-controls {
+  .agent-chat.embedded .agent-controls {
     flex: 1 1 100%;
     margin-left: 44px;
     justify-content: flex-start;
@@ -1703,7 +1703,7 @@
     padding: 22px clamp(18px, 5vw, 72px);
   }
 
-  .support-app.embedded .message-list {
+  .agent-chat.embedded .message-list {
     gap: 12px;
     padding: 14px 12px;
   }
@@ -1778,11 +1778,11 @@
     --markdown-strong-weight: 680;
   }
 
-  .support-app.embedded .bubble {
+  .agent-chat.embedded .bubble {
     max-width: min(100%, 680px);
   }
 
-  .support-app.embedded .message.assistant .bubble {
+  .agent-chat.embedded .message.assistant .bubble {
     width: min(calc(100% - 40px), 640px);
   }
 
@@ -1792,7 +1792,7 @@
     background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
   }
 
-  .support-app.embedded .message.user .bubble {
+  .agent-chat.embedded .message.user .bubble {
     max-width: min(100%, 560px);
   }
 
@@ -1809,7 +1809,7 @@
     transition: border-color 160ms ease, background 160ms ease;
   }
 
-  .support-app.embedded .activity-feed {
+  .agent-chat.embedded .activity-feed {
     width: min(100%, 680px);
     margin-left: 0;
   }
@@ -2141,7 +2141,7 @@
     background: color-mix(in srgb, var(--queue) 9%, var(--surface-1));
   }
 
-  .support-app.embedded .pending-approvals {
+  .agent-chat.embedded .pending-approvals {
     margin: 0 12px 10px;
   }
 
@@ -2224,7 +2224,7 @@
     font-size: 12px;
   }
 
-  .support-app.embedded .error-banner {
+  .agent-chat.embedded .error-banner {
     margin: 0 12px 10px;
   }
 
@@ -2241,7 +2241,7 @@
     color: var(--text-3);
   }
 
-  .support-app.embedded .composer {
+  .agent-chat.embedded .composer {
     margin: 0 12px 12px;
   }
 
@@ -2496,7 +2496,7 @@
   }
 
   @media (max-width: 760px) {
-    .support-head {
+    .agent-chat-head {
       flex-wrap: wrap;
     }
 
@@ -2507,14 +2507,14 @@
       justify-content: flex-start;
     }
 
-    .support-app.embedded .agent-controls {
+    .agent-chat.embedded .agent-controls {
       margin-left: 42px;
     }
 
   }
 
   @media (max-width: 980px) {
-    .support-app.full {
+    .agent-chat.full {
       grid-template-columns: 1fr;
       grid-template-rows: minmax(0, 1fr) auto;
     }

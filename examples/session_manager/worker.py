@@ -1,4 +1,4 @@
-"""Worker that hosts the agent-agnostic SessionManagerWorkflow.
+"""Worker that hosts the packaged agent-agnostic SessionManagerWorkflow.
 
 Run from the repo root with:
     uv run python -m examples.session_manager.worker
@@ -30,11 +30,12 @@ import logging
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
-from temporalio.worker import Worker
 
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
-
-from .workflow import SESSION_MANAGER_TASK_QUEUE, SessionManagerWorkflow
+from temporal_agent_harness.web import (
+    SESSION_MANAGER_TASK_QUEUE,
+    create_session_manager_worker,
+)
 
 
 async def main() -> None:
@@ -56,11 +57,7 @@ async def main() -> None:
 
     # Only the manager workflow runs here. It dispatches each agent session to that agent's
     # own queue (resolved from the registry), so this worker hosts no agent and no activities.
-    worker = Worker(
-        client,
-        task_queue=SESSION_MANAGER_TASK_QUEUE,
-        workflows=[SessionManagerWorkflow],
-    )
+    worker = create_session_manager_worker(client)
     print(
         f"Session manager worker ready: taskQueue={SESSION_MANAGER_TASK_QUEUE!r} "
         f"namespace={connect_config.get('namespace')}",

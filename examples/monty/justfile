@@ -1,14 +1,14 @@
 # Scoped justfile for the Monty travel-agent example (examples/monty).
 # Run from this directory: `just <recipe>`.
 #
-# Self-contained: the session-manager recipes (the session-manager worker + API server + shared
+# Self-contained: the session-manager recipes (the session-manager worker + API server + built
 # Svelte UI that drives these agents) are imported from examples/session_manager, so a full local
 # run is doable entirely from here:
 #   just temporal          # 1. local Temporal dev server (or bring your own)
 #   just session-manager   # 2. session-manager worker      (imported from examples/session_manager)
-#   just server            # 3. FastAPI API on :8000        (imported from examples/session_manager)
-#   just app-dev           # 4. shared Svelte UI on :5173   (imported from examples/session_manager)
-#   just worker            # 5. this example's agent worker
+#   just server            # 3. FastAPI API + UI on :8000   (imported from examples/session_manager)
+#   just worker            # 4. this example's agent worker
+# Optional: `just ui-dev` runs the Svelte Vite dev server on :5173 with /api proxied to :8000.
 #
 # uv installs the project's `examples` dependency group (pydantic-monty + the Gemini SDK) on
 # demand, so there's no separate install step. First-time setup: `cp .env.example .env.local`

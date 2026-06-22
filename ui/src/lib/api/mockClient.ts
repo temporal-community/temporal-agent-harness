@@ -128,7 +128,7 @@ export class MockAgentApi implements AgentApi {
   }
 
   async *chat(_request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame> {
-    yield* this.attach("agent-session-mock-qa", _request.from_offset ?? 0, signal);
+    yield* this.attach("agent-session-mock-qa", 0, signal);
   }
 
   async approve(request: ToolApprovalRequest): Promise<ToolApprovalResponse> {

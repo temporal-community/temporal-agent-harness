@@ -6,6 +6,11 @@ dist/
 wheels/
 *.egg-info
 
+# Packaged browser UI assets. Root-level dist/ and ui/dist/ stay ignored.
+!temporal_agent_harness/ui/
+!temporal_agent_harness/ui/dist/
+!temporal_agent_harness/ui/dist/**
+
 # Virtual environments
 .venv
 

@@ -104,7 +104,6 @@ export interface ChatRequest {
   session_id: WorkflowId;
   message: AgentInboundMessage;
   expected_turn: number;
-  from_offset?: ResumeOffset;
 }
 
 export interface ToolApprovalRequest {

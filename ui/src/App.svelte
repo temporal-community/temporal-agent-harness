@@ -9,9 +9,9 @@
   import StatusChip, {
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
-  import SessionControls from "$lib/components/support/SessionControls.svelte";
-  import SupportAgentApp from "$lib/components/support/SupportAgentApp.svelte";
-  import { createMockRunController } from "$lib/state/mockRun.svelte";
+  import SessionControls from "$lib/components/chat/SessionControls.svelte";
+  import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
+  import { createAgentRunController } from "$lib/state/agentRun.svelte";
 
   type RightPanelView = "chat" | "latency" | "logs";
 
@@ -20,7 +20,7 @@
   const RIGHT_PANEL_KEYBOARD_STEP = 24;
   const LEFT_PANE_MIN_WIDTH = 480;
 
-  const run = createMockRunController();
+  const run = createAgentRunController();
   let rightPanelView = $state<RightPanelView>("chat");
   let transcriptFilter = $state<TranscriptFilter>("all");
   let workspaceElement = $state<HTMLElement | null>(null);
@@ -136,7 +136,7 @@
 <main class="app">
   <header class="topbar">
     <div class="brand">
-      <img src="/temporal-logo.svg" alt="Temporal logo" width="24" height="24" />
+      <img src="temporal-logo.svg" alt="Temporal logo" width="24" height="24" />
       <div class="brand-text">
         <h1>Agentic Harness</h1>
         <p>
@@ -227,10 +227,10 @@
 
       <div class="right-pane-body">
         {#if rightPanelView === "chat"}
-          <SupportAgentApp
+          <AgentChatPanel
             layout="embedded"
             showHeader={false}
-            items={run.supportTranscript}
+            items={run.chatTranscript}
             logs={run.fullReplayLog.rows}
             sessions={run.sessions}
             agentLabel={run.runInfo.agentLabel}
@@ -258,7 +258,7 @@
             groups={run.replayLog.groups}
             activeTurnNumber={run.currentLogRow?.turnNumber ?? null}
             activeRowId={run.currentLogRow?.id ?? null}
-            activeOffset={run.currentLogRow?.offset ?? null}
+            activeOrdinal={run.currentLogRow?.ordinal ?? null}
             filter={transcriptFilter}
             onFilterChange={(next) => (transcriptFilter = next)}
           />

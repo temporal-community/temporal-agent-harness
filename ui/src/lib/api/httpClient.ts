@@ -13,6 +13,10 @@ import type {
 } from "./types";
 import type { AgentApi } from "./client";
 
+function apiPath(path: string): string {
+  return `api/${path.replace(/^\/+/, "")}`;
+}
+
 async function json<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
   if (!response.ok) {
@@ -56,17 +60,17 @@ async function* readSse(response: Response): AsyncIterable<AgentSseFrame> {
 
 export class HttpAgentApi implements AgentApi {
   async listAgents(): Promise<AgentRegistryResponse> {
-    return json<AgentRegistryResponse>("/api/agents");
+    return json<AgentRegistryResponse>(apiPath("agents"));
   }
 
   async listSessions(): Promise<Session[]> {
-    return json<Session[]>("/api/sessions");
+    return json<Session[]>(apiPath("sessions"));
   }
 
   async createSession(
     request: CreateSessionRequest
   ): Promise<CreateSessionResponse> {
-    return json<CreateSessionResponse>("/api/sessions", {
+    return json<CreateSessionResponse>(apiPath("sessions"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request)
@@ -88,7 +92,7 @@ export class HttpAgentApi implements AgentApi {
 
   async agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]> {
     return json<AgentInterfaceFunction[]>(
-      `/api/agent-interface/${encodeURIComponent(sessionId)}`
+      apiPath(`agent-interface/${encodeURIComponent(sessionId)}`)
     );
   }
 
@@ -98,7 +102,7 @@ export class HttpAgentApi implements AgentApi {
     signal?: AbortSignal
   ): AsyncIterable<AgentSseFrame> {
     const response = await fetch(
-      `/api/attach?session_id=${encodeURIComponent(sessionId)}&from_offset=${fromOffset}`,
+      apiPath(`attach?session_id=${encodeURIComponent(sessionId)}&from_offset=${fromOffset}`),
       { signal }
     );
     if (!response.ok) {
@@ -108,7 +112,7 @@ export class HttpAgentApi implements AgentApi {
   }
 
   async *chat(request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame> {
-    const response = await fetch("/api/chat", {
+    const response = await fetch(apiPath("chat"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
@@ -121,7 +125,7 @@ export class HttpAgentApi implements AgentApi {
   }
 
   async approve(request: ToolApprovalRequest): Promise<ToolApprovalResponse> {
-    return json<ToolApprovalResponse>("/api/approve", {
+    return json<ToolApprovalResponse>(apiPath("approve"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request)

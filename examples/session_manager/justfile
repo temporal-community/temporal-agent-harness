@@ -1,9 +1,9 @@
 # Scoped justfile for the session manager (examples/session_manager).
 #
 # The session manager is shared infrastructure, not an agent: it hosts the SessionManagerWorkflow
-# and serves the API used by the shared top-level Svelte UI. Run it standalone from this
-# directory (`just <recipe>`), or import these recipes into an example's own justfile so the
-# whole stack is runnable from that example's directory (see examples/monty/justfile).
+# and serves the API plus packaged Svelte UI. Run it standalone from this directory
+# (`just <recipe>`), or import these recipes into an example's own justfile so the whole stack is
+# runnable from that example's directory (see examples/monty/justfile).
 #
 # uv installs the project's `examples` dependency group on demand, so there's no separate
 # install step. The Temporal connection and GEMINI_API_KEY come from a .env.local file in the
@@ -38,8 +38,8 @@ temporal:
 session-manager:
     cd "{{root}}" && uv run --group examples python -m examples.session_manager.worker
 
-# Serve the FastAPI API + legacy static UI on http://localhost:8000 (needs `session-manager` + an agent worker up).
-server:
+# Serve the FastAPI API + built Svelte UI on http://localhost:8000 (needs `session-manager` + an agent worker up).
+server: app-build
     cd "{{root}}" && uv run --group examples uvicorn examples.session_manager.app:app --host 0.0.0.0 --port 8000 --reload
 
 # Install the shared Svelte UI dependencies.
@@ -51,10 +51,10 @@ app-check:
     pnpm --dir "{{ui}}" run check
     pnpm --dir "{{ui}}" run check:svelte5
 
-# Build the shared Svelte UI into ui/dist.
+# Build the shared Svelte UI into temporal_agent_harness/ui/dist for packaging/server use.
 app-build:
     pnpm --dir "{{ui}}" run build
 
-# Run the shared Svelte UI on Vite. /api is proxied to the FastAPI server on :8000.
-app-dev:
+# Run the shared Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
+ui-dev:
     pnpm --dir "{{ui}}" run dev

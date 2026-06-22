@@ -21,7 +21,7 @@
     type CostSummary,
     type UsageTimelinePoint
   } from "$lib/cost/pricing";
-  import type { PlaybackSpeed } from "$lib/state/mockRun.svelte";
+  import type { PlaybackSpeed } from "$lib/state/agentRun.svelte";
   import type { ReplayLogRow, ReplayMarker } from "$lib/state/replayLog";
 
   interface Props {

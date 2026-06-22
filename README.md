@@ -149,11 +149,12 @@ temporal_agent_harness/
 ├── harness/      # the core harness: agent contract, turn runner, tools,
 │                 #   the agent/subagent protocol, human-in-the-loop approvals
 ├── ai_sdks/      # AI SDK integrations (Gemini today) — durable activity wrappers
+├── web/          # packaged session-manager workflow + FastAPI app factory
 └── utils/        # general Temporal utilities (e.g. large-payload offload)
 
 examples/
 ├── monty/            # a travel-booking agent example (start here)
-└── session_manager/  # an agent-agnostic launcher + API the examples run on
+└── session_manager/  # example registry/wrappers for the packaged web layer
 
 ui/               # shared Svelte frontend for examples
 
@@ -166,6 +167,22 @@ The [`examples/monty`](examples/monty) example is the best way to see the harnes
 conversational travel agent, plus a variant that drives another agent as a subagent. Its
 [README](examples/monty/README.md) walks through the one-time setup and the handful of `just`
 commands to run the full stack locally.
+
+To serve the packaged browser UI from an installed package, install the web
+extra:
+
+```bash
+pip install "temporal-agent-harness[ui]"
+```
+
+Package apps can use the bundled session manager and UI server directly:
+
+```python
+from temporal_agent_harness.web import (
+    create_agent_harness_app,
+    create_session_manager_worker,
+)
+```
 
 ## Requirements
 

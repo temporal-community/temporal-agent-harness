@@ -14,7 +14,7 @@ export interface TimelineSpan {
   startTs: number;
   endTs: number;
   durationSeconds: number;
-  /** 1-based frame position, aligned with MockRunController.viewIndex. */
+  /** 1-based frame position, aligned with AgentRunController.viewIndex. */
   startIndex: number;
   endIndex: number;
   /** 0-based visual lane, assigned so overlapping spans do not obscure each other. */

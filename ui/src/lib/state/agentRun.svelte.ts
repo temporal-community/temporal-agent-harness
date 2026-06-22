@@ -9,8 +9,8 @@ import { HttpAgentApi } from "$lib/api/httpClient";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
 import {
-  buildMountedAgentGraph,
-  type MountedAgentGraphInput
+  buildAgentTreeGraph,
+  type AgentGraphSource
 } from "./flowProjection";
 import { buildReplayLog, buildReplayMarkers } from "./replayLog";
 import { buildStepTimeline, type StepTimelineFrame } from "./stepTimeline";
@@ -25,7 +25,7 @@ export interface RunInfo {
   startedAt: number;
 }
 
-export interface MountedAgentStream {
+export interface ObservedSubagent {
   workflowId: string;
   role: "subagent";
   parentWorkflowId: string;
@@ -103,12 +103,12 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-export class MockRunController {
+export class AgentRunController {
   #api: AgentApi;
   #initialized = false;
 
   frames = $state<AgentSseFrame[]>([]);
-  mountedAgents = $state<MountedAgentStream[]>([]);
+  observedSubagents = $state<ObservedSubagent[]>([]);
   agentInterfaces = $state<Record<string, AgentInterfaceFunction[]>>({});
   viewIndex = $state(0);
   playing = $state(false);
@@ -149,10 +149,10 @@ export class MockRunController {
     this.viewIndex > 0 ? this.visibleReplayFrames.at(-1) ?? null : null
   );
   graphAgents = $derived(this.#graphAgents());
-  graph = $derived(buildMountedAgentGraph(this.graphAgents));
+  graph = $derived(buildAgentTreeGraph(this.graphAgents));
   replayLog = $derived(buildReplayLog(this.visibleReplayTimeline));
   fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
-  supportTranscript = $derived(
+  chatTranscript = $derived(
     buildTranscript(
       this.replayTimeline
         .filter((entry) => entry.role === "parent")
@@ -208,8 +208,8 @@ export class MockRunController {
   #replayTimeline(): ReplayTimelineEntry[] {
     const session = this.session;
     if (!session) return [];
-    const mountedBySubagentId = new Map(
-      this.mountedAgents.map((agent) => [agent.subagentId, agent])
+    const observedBySubagentId = new Map(
+      this.observedSubagents.map((agent) => [agent.subagentId, agent])
     );
     const parentTurnBySubagentTurn = new Map<string, number>();
     const timeline: ReplayTimelineEntry[] = [];
@@ -225,18 +225,18 @@ export class MockRunController {
         continue;
       }
 
-      const mounted = mountedBySubagentId.get(frame.data.agent_id);
+      const observedSubagent = observedBySubagentId.get(frame.data.agent_id);
       const parentTurnNumber =
-        mounted == null
+        observedSubagent == null
           ? undefined
           : parentTurnBySubagentTurn.get(
               `${frame.data.agent_id}:${frame.data.turn_number}`
             );
-      const role: ReplayTimelineRole = mounted == null ? "parent" : "subagent";
+      const role: ReplayTimelineRole = observedSubagent == null ? "parent" : "subagent";
       timeline.push({
-        workflowId: mounted?.workflowId ?? session.workflow_id,
+        workflowId: observedSubagent?.workflowId ?? session.workflow_id,
         role,
-        label: mounted?.label ?? this.runInfo.agentLabel,
+        label: observedSubagent?.label ?? this.runInfo.agentLabel,
         parentTurnNumber,
         frame
       });
@@ -256,7 +256,7 @@ export class MockRunController {
     return timeline;
   }
 
-  #graphAgents(): MountedAgentGraphInput[] {
+  #graphAgents(): AgentGraphSource[] {
     const session = this.session;
     if (!session) return [];
     const visibleSubagentWorkflowIds = new Set<string>();
@@ -283,7 +283,7 @@ export class MockRunController {
       frames.push(entry.frame);
       visibleSubagentFrames.set(entry.workflowId, frames);
     }
-    for (const agent of this.mountedAgents) {
+    for (const agent of this.observedSubagents) {
       if (visibleSubagentFrames.has(agent.workflowId)) {
         visibleSubagentWorkflowIds.add(agent.workflowId);
       }
@@ -296,14 +296,14 @@ export class MockRunController {
         frames: this.visibleFrames,
         agentInterface: this.agentInterfaces[session.workflow_id] ?? []
       },
-      ...this.mountedAgents
+      ...this.observedSubagents
         .filter((agent) => visibleSubagentWorkflowIds.has(agent.workflowId))
         .map((agent) => ({
           workflowId: agent.workflowId,
           role: agent.role,
           label: agent.label,
           parentWorkflowId: agent.parentWorkflowId,
-          handle: agent.subagentId,
+          subagentId: agent.subagentId,
           agentKey: agent.agentKey,
           frames: visibleSubagentFrames.get(agent.workflowId) ?? [],
           agentInterface:
@@ -351,11 +351,11 @@ export class MockRunController {
     stopped?: boolean;
   }, parentWorkflowId = this.session?.workflow_id): void {
     if (!parentWorkflowId) return;
-    const existing = this.mountedAgents.find(
+    const existing = this.observedSubagents.find(
       (agent) => agent.workflowId === data.workflow_id
     );
     const agentKey = data.agent_key ?? existing?.agentKey ?? "subagent";
-    const next: MountedAgentStream = {
+    const next: ObservedSubagent = {
       workflowId: data.workflow_id,
       role: "subagent",
       parentWorkflowId,
@@ -370,8 +370,8 @@ export class MockRunController {
           : Math.max(existing?.targetTurn ?? 0, data.targetTurn),
       stopped: data.stopped ?? existing?.stopped ?? false
     };
-    this.mountedAgents = [
-      ...this.mountedAgents.filter((agent) => agent.workflowId !== data.workflow_id),
+    this.observedSubagents = [
+      ...this.observedSubagents.filter((agent) => agent.workflowId !== data.workflow_id),
       next
     ];
   }
@@ -387,8 +387,8 @@ export class MockRunController {
         ...this.agentInterfaces,
         [workflowId]: agentInterface
       };
-      if (this.mountedAgents.some((agent) => agent.workflowId === workflowId)) {
-        this.mountedAgents = this.mountedAgents.map((agent) =>
+      if (this.observedSubagents.some((agent) => agent.workflowId === workflowId)) {
+        this.observedSubagents = this.observedSubagents.map((agent) =>
           agent.workflowId === workflowId ? { ...agent, agentInterface } : agent
         );
       }
@@ -408,8 +408,8 @@ export class MockRunController {
 
     try {
       const agents = await this.#loadAgents();
-      const supportAgent = agents.find((agent) => agent.key === "qa") ?? agents[0];
-      if (!supportAgent) throw new Error("No support agent is registered.");
+      const defaultAgent = agents.find((agent) => agent.key === "qa") ?? agents[0];
+      if (!defaultAgent) throw new Error("No agent is registered.");
 
       const sessions = await this.#api.listSessions();
       this.sessions = sessions;
@@ -419,7 +419,7 @@ export class MockRunController {
         : null;
       const existing = [...sessions]
         .reverse()
-        .find((item) => item.agent_workflow_type === supportAgent.workflow_type);
+        .find((item) => item.agent_workflow_type === defaultAgent.workflow_type);
 
       if (storedSession) {
         this.session = storedSession;
@@ -427,7 +427,7 @@ export class MockRunController {
         this.session = existing;
       } else {
         this.session = await this.#api.createSession({
-          agent_workflow_type: supportAgent.workflow_type,
+          agent_workflow_type: defaultAgent.workflow_type,
           is_message_queuing_enabled: true
         });
         this.sessions = [...this.sessions, this.session];
@@ -440,7 +440,7 @@ export class MockRunController {
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
-          error instanceof Error ? error.message : "Failed to initialize support session.";
+          error instanceof Error ? error.message : "Failed to initialize agent session.";
       }
     } finally {
       if (this.#isCurrentConnection(connectionVersion)) this.connecting = false;
@@ -465,7 +465,7 @@ export class MockRunController {
         agents.find((item) => item.key === "qa") ??
         agents[0];
 
-      if (!agent) throw new Error("No support agent is registered.");
+      if (!agent) throw new Error("No agent is registered.");
 
       const session = await this.#api.createSession({
         agent_workflow_type: agent.workflow_type,
@@ -484,7 +484,7 @@ export class MockRunController {
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
-          error instanceof Error ? error.message : "Failed to create support session.";
+          error instanceof Error ? error.message : "Failed to create agent session.";
       }
     } finally {
       if (this.#isCurrentConnection(connectionVersion)) {
@@ -563,8 +563,7 @@ export class MockRunController {
       for await (const frame of this.#api.chat({
         session_id: session.workflow_id,
         message: this.#messageForSession(message, session),
-        expected_turn: expectedTurn,
-        from_offset: this.lastResumeOffset
+        expected_turn: expectedTurn
       }, signal)) {
         if (streamVersion !== this.#streamVersion || this.session?.workflow_id !== session.workflow_id) {
           break;
@@ -644,7 +643,7 @@ export class MockRunController {
     this.pause();
     this.#stopStream();
     this.frames = [];
-    this.mountedAgents = [];
+    this.observedSubagents = [];
     this.viewIndex = 0;
     this.following = false;
     this.expectedTurn = 1;
@@ -689,7 +688,7 @@ export class MockRunController {
     if (!("agent_id" in frame.data)) return sessionWorkflowId;
     const agentId = frame.data.agent_id;
     return (
-      this.mountedAgents.find((agent) => agent.subagentId === agentId)
+      this.observedSubagents.find((agent) => agent.subagentId === agentId)
         ?.workflowId ?? sessionWorkflowId
     );
   }
@@ -817,6 +816,6 @@ export class MockRunController {
   }
 }
 
-export function createMockRunController(): MockRunController {
-  return new MockRunController();
+export function createAgentRunController(): AgentRunController {
+  return new AgentRunController();
 }

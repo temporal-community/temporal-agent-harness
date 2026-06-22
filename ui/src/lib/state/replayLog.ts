@@ -39,7 +39,7 @@ export type ReplayMarkerTone = "approval" | "error" | "queue";
 export interface ReplayLogRow {
   id: string;
   index: number;
-  offset: number;
+  ordinal: number;
   turnNumber: number;
   sourceTurnNumber: number;
   parentTurnNumber?: number;
@@ -182,12 +182,12 @@ function rowFromFrame(
   frameIndex: number
 ): ReplayLogRow | null {
   const { frame } = entry;
-  const displayOffset = frameIndex + 1;
+  const ordinal = frameIndex + 1;
   if (!("type" in frame.data)) {
     return {
-      id: `${entry.workflowId ?? "parent"}-stream-error-${displayOffset}`,
-      index: displayOffset,
-      offset: displayOffset,
+      id: `${entry.workflowId ?? "parent"}-stream-error-${ordinal}`,
+      index: ordinal,
+      ordinal,
       turnNumber: 0,
       sourceTurnNumber: 0,
       workflowId: entry.workflowId,
@@ -211,9 +211,9 @@ function rowFromFrame(
       ? entry.parentTurnNumber
       : sourceTurnNumber;
   const base = {
-    id: `${entry.workflowId ?? frame.data.agent_id}-${frame.data.type}-${displayOffset}`,
-    index: displayOffset,
-    offset: displayOffset,
+    id: `${entry.workflowId ?? frame.data.agent_id}-${frame.data.type}-${ordinal}`,
+    index: ordinal,
+    ordinal,
     turnNumber,
     sourceTurnNumber,
     parentTurnNumber: entry.role === "subagent" ? entry.parentTurnNumber : undefined,
@@ -559,7 +559,7 @@ export function buildReplayMarkers(input: Array<AgentSseFrame | ReplayLogFrame>)
   return buildReplayLog(input).rows
     .filter((row) => row.marker)
     .map((row) => ({
-      id: `marker-${row.offset}`,
+      id: `marker-${row.ordinal}`,
       index: row.index,
       turnNumber: row.turnNumber,
       tone: row.marker ?? "queue",

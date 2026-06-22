@@ -50,13 +50,13 @@ export interface AgentGraph {
   usage: CostSummary;
 }
 
-export interface MountedAgentGraphInput {
+export interface AgentGraphSource {
   workflowId: string;
   role: "parent" | "subagent";
   label: string;
   frames: AgentSseFrame[];
   parentWorkflowId?: string;
-  handle?: string;
+  subagentId?: string;
   agentKey?: string;
   agentInterface?: AgentInterfaceFunction[];
   stopped?: boolean;
@@ -933,20 +933,20 @@ export function buildAgentGraph(
   return { nodes, edges, activeTurn, status, usage };
 }
 
-function mountedLabel(agent: MountedAgentGraphInput): string {
+function graphSourceLabel(agent: AgentGraphSource): string {
   if (agent.role === "parent") return "Parent agent";
   return `${agent.agentKey ?? "subagent"} subagent`;
 }
 
-function mountedSubtitle(agent: MountedAgentGraphInput): string {
+function graphSourceSubtitle(agent: AgentGraphSource): string {
   const bits = [agent.label];
-  if (agent.handle) bits.unshift(`subagent ${agent.handle}`);
+  if (agent.subagentId) bits.unshift(`subagent ${agent.subagentId}`);
   if (agent.stopped) bits.push("stopped");
   return bits.filter(Boolean).join(" · ");
 }
 
 function scopedGraph(
-  agent: MountedAgentGraphInput,
+  agent: AgentGraphSource,
   graph: AgentGraph,
   xOffset: number,
   yOffset: number
@@ -965,8 +965,8 @@ function scopedGraph(
         ? {
             ...item.data,
             runtimeRole: agent.role,
-            title: `${mountedLabel(agent)} runtime`,
-            subtitle: [mountedSubtitle(agent), item.data.subtitle]
+            title: `${graphSourceLabel(agent)} runtime`,
+            subtitle: [graphSourceSubtitle(agent), item.data.subtitle]
               .filter(Boolean)
               .join(" · ")
           }
@@ -993,11 +993,11 @@ function composeStatus(statuses: AgentGraph["status"][]): AgentGraph["status"] {
   return "idle";
 }
 
-export function buildMountedAgentGraph(agents: MountedAgentGraphInput[]): AgentGraph {
+export function buildAgentTreeGraph(agents: AgentGraphSource[]): AgentGraph {
   if (agents.length === 0) return buildAgentGraph([]);
 
   const agentByWorkflow = new Map(agents.map((agent) => [agent.workflowId, agent]));
-  const childrenByParent = new Map<string, MountedAgentGraphInput[]>();
+  const childrenByParent = new Map<string, AgentGraphSource[]>();
   for (const agent of agents) {
     if (!agent.parentWorkflowId) continue;
     const children = childrenByParent.get(agent.parentWorkflowId) ?? [];
@@ -1007,7 +1007,7 @@ export function buildMountedAgentGraph(agents: MountedAgentGraphInput[]): AgentG
 
   const builtGraphs: AgentGraph[] = [];
   function buildNestedAgentGraph(
-    agent: MountedAgentGraphInput,
+    agent: AgentGraphSource,
     seen = new Set<string>()
   ): AgentGraph {
     const nextSeen = new Set(seen);

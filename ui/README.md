@@ -15,8 +15,8 @@ Useful commands from any example that imports `examples/session_manager/justfile
 ```bash
 just app-install   # one-time install, or after package changes
 just app-check     # svelte-check + local Svelte 5 syntax guard
-just app-build     # writes ui/dist
-just app-dev       # Vite dev server; proxies /api to localhost:8000
+just app-build     # writes temporal_agent_harness/ui/dist for packaging
+just ui-dev        # Vite dev server; proxies /api to localhost:8000
 ```
 
 The same commands can be run from the repo root with `pnpm --dir ui ...`.
@@ -24,6 +24,6 @@ The same commands can be run from the repo root with `pnpm --dir ui ...`.
 Local testing:
 
 ```bash
-just server   # backend and /api
-just app-dev  # frontend on Vite, with /api proxy
+just server  # builds and serves the Svelte UI on port 8000
+just ui-dev  # optional Vite frontend, with /api proxy
 ```
