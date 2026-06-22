@@ -1,8 +1,8 @@
-# Server App
+# Shared Example UI
 
-This directory is the Svelte frontend for the Monty example. In development,
-Vite serves the app and proxies `/api` to the shared FastAPI server on
-`localhost:8000`.
+This directory is the shared Svelte frontend for the examples. In development,
+Vite serves the app and proxies `/api` to the shared session-manager FastAPI
+server on `localhost:8000`.
 
 Files:
 
@@ -10,14 +10,16 @@ Files:
 - `src/lib/api/types.ts`: TypeScript request, response, and stream-event types.
 - `src/lib/api/index.ts`: API type exports.
 
-Useful commands from `examples/monty`:
+Useful commands from any example that imports `examples/session_manager/justfile`:
 
 ```bash
 just app-install   # one-time install, or after package changes
 just app-check     # svelte-check + local Svelte 5 syntax guard
-just app-build     # writes app/dist
+just app-build     # writes ui/dist
 just app-dev       # Vite dev server; proxies /api to localhost:8000
 ```
+
+The same commands can be run from the repo root with `pnpm --dir ui ...`.
 
 Local testing:
 

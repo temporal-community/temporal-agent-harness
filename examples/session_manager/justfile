@@ -1,7 +1,7 @@
 # Scoped justfile for the session manager (examples/session_manager).
 #
 # The session manager is shared infrastructure, not an agent: it hosts the SessionManagerWorkflow
-# and serves the web chat UI that drives the example agents. Run it standalone from this
+# and serves the API used by the shared top-level Svelte UI. Run it standalone from this
 # directory (`just <recipe>`), or import these recipes into an example's own justfile so the
 # whole stack is runnable from that example's directory (see examples/monty/justfile).
 #
@@ -15,6 +15,7 @@ set dotenv-load := true
 # Repo root (examples/session_manager sits two levels below it); `uv run` from there resolves the
 # project's pyproject — its deps, the temporal_agent_harness package, and the examples.
 root := justfile_directory() / ".." / ".."
+ui := root / "ui"
 
 # The Temporal connection comes from TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE, which the workers
 # and server read via ClientConfig.load_client_connect_config(). Set them in .env.local
@@ -37,6 +38,23 @@ temporal:
 session-manager:
     cd "{{root}}" && uv run --group examples python -m examples.session_manager.worker
 
-# Serve the FastAPI chat UI + BFF on http://localhost:8000 (needs `session-manager` + an agent worker up).
+# Serve the FastAPI API + legacy static UI on http://localhost:8000 (needs `session-manager` + an agent worker up).
 server:
     cd "{{root}}" && uv run --group examples uvicorn examples.session_manager.app:app --host 0.0.0.0 --port 8000 --reload
+
+# Install the shared Svelte UI dependencies.
+app-install:
+    pnpm --dir "{{ui}}" install
+
+# Type-check the shared Svelte UI and run the local Svelte 5 syntax guard.
+app-check:
+    pnpm --dir "{{ui}}" run check
+    pnpm --dir "{{ui}}" run check:svelte5
+
+# Build the shared Svelte UI into ui/dist.
+app-build:
+    pnpm --dir "{{ui}}" run build
+
+# Run the shared Svelte UI on Vite. /api is proxied to the FastAPI server on :8000.
+app-dev:
+    pnpm --dir "{{ui}}" run dev

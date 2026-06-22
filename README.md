@@ -153,7 +153,9 @@ temporal_agent_harness/
 
 examples/
 ├── monty/            # a travel-booking agent example (start here)
-└── session_manager/  # an agent-agnostic launcher + web chat UI the examples run on
+└── session_manager/  # an agent-agnostic launcher + API the examples run on
+
+ui/               # shared Svelte frontend for examples
 
 tests/            # mirrors the package layout
 ```

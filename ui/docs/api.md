@@ -18,12 +18,12 @@ Source of truth in the current server:
 ### `GET /`
 
 Returns the legacy static chat UI from the shared session manager. In
-development, run this Svelte app with Vite and let it proxy `/api` to the same
-FastAPI server.
+development, run the shared Svelte app from `ui` with Vite and let it proxy
+`/api` to the same FastAPI server.
 
 ### `GET /states`
 
-Returns the same Svelte app; the frontend handles the selected diagnostics view.
+Returns the legacy static diagnostics view.
 
 ### `GET /static/*`
 
@@ -31,7 +31,7 @@ Serves legacy/static assets from `examples/session_manager/static`.
 
 ### `GET /assets/*`
 
-Not used by the current Monty Vite development flow.
+Not used by the current Vite development flow.
 
 ## JSON Endpoints
 

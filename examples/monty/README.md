@@ -12,9 +12,9 @@ Three variants ship here:
 - **MontyChatSubagentAgent** — same conversational experience, but it drives `MontyDynamicAgent`
   as a *subagent* (the first end-to-end exercise of the harness subagent toolset).
 
-The agents are driven through the shared session-manager launcher (`examples/session_manager`),
-which hosts the session manager and serves the web chat UI. Its recipes are imported here, so the
-whole stack runs from this directory.
+The agents are driven through the shared session-manager launcher (`examples/session_manager`)
+and the shared Svelte UI (`ui`). Their recipes are imported here, so the whole stack runs from
+this directory.
 
 ## Setup
 
@@ -36,10 +36,11 @@ Each command in its own terminal, all from this directory:
 ```bash
 just temporal          # 1. local Temporal dev server (skip if you bring your own)
 just session-manager   # 2. session-manager worker
-just server            # 3. web chat UI  ->  http://localhost:8000
-just worker            # 4. the Monty agents
+just server            # 3. FastAPI API server  ->  http://localhost:8000
+just app-dev           # 4. shared Svelte UI    ->  http://127.0.0.1:5173
+just worker            # 5. the Monty agents
 ```
 
-Then open <http://localhost:8000> and pick a Monty agent.
+Then open <http://127.0.0.1:5173> and pick a Monty agent.
 
 `just` lists every recipe; `just config` shows the Temporal connection currently in use.
