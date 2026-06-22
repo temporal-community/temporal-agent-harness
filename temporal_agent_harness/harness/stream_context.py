@@ -22,3 +22,9 @@ class TurnStreamContext(BaseModel):
 
     turn_id: str = Field(description="The id of the turn to publish against.")
     turn_number: int = Field(description="The monotonic number of that turn.")
+    agent_id: str = Field(
+        description="The short id of the agent that owns this turn — stamped onto every event the "
+        "activity publishes (``AgentEvent.agent_id``). Threaded here because an activity can't "
+        "derive it from ``activity.info()`` (which only knows the workflow_id), and the agent's id "
+        "is no longer its workflow_id but a short, parent-assignable handle."
+    )

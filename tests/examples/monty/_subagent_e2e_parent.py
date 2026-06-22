@@ -51,6 +51,13 @@ class DriveSubagent(BaseModel):
         description="If true, dispatch all scripts at once via asyncio.gather (exercises the "
         "per-subagent FIFO gate) instead of awaiting them sequentially.",
     )
+    stop: bool = Field(
+        default=True,
+        description="If true (default), stop the subagent at the end of the turn. Set false to "
+        "leave it alive+idle — needed by the client stream-merge test, since a stopped subagent "
+        "is a COMPLETED workflow whose stream can't yet be read post-completion (a known "
+        "workflow_streams limitation with an upstream fix in flight).",
+    )
 
 
 @workflow.defn(name="SubagentE2EParent")
@@ -87,7 +94,8 @@ class SubagentE2EParentWorkflow:
                     await self._run_one(handle, script) for script in msg.scripts
                 ]
         finally:
-            await self._runner.stop_subagent(handle)
+            if msg.stop:
+                await self._runner.stop_subagent(handle)
         return TextReply(text="\n---\n".join(outputs))
 
     async def _run_one(self, handle: str, script: str) -> str:

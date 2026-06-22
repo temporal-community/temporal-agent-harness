@@ -41,11 +41,14 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEventType,
     AgentMessage,
     AgentStatus,
+    SubagentReplyReceived,
     TextMessage,
     TextReply,
     ToolApprovalPolicy,
     AgentMessageReply,
 )
+from temporalio.exceptions import ApplicationError
+
 from temporal_agent_harness.harness.agent_workflow import _discover_handlers
 
 # ---------------------------------------------------------------------------
@@ -506,6 +509,56 @@ def test_protocol_types_use_concrete_annotations():
             )
 
 
+def test_errored_subagent_turn_closes_bracket_on_actual_accepted_turn(offline_build):
+    """On an accepted-but-errored child turn, the parent closes the
+    [subagent_message_sent … subagent_reply_received] bracket on the child's ACTUAL accepted turn
+    number — which the activity threads through the error details — not a re-derived ``expected``.
+
+    Keeps the close-gate key (``workflow_id``, ``subagent_turn``) matching the open marker by
+    construction, independent of the validator+enqueue invariant that makes them equal in practice.
+    """
+    runner = offline_build(AgentConfig())
+    # Make a turn active so publish() has a stream context to publish against.
+    runner._status.enqueue_message(
+        AgentMessage(type="x", payload={}, expected_turn=1), "turn-1"
+    )
+    runner._status.start_next_turn()
+    inst = runner._status.register_subagent("aaaaaa-bbbbbb", "child-wf-1", "k")
+
+    # The activity raises with the child's ACTUAL accepted turn number (7) in the details —
+    # deliberately different from the ``expected``/default we pass (2), so the assertion proves we
+    # use the threaded value and not ``expected``.
+    err = ApplicationError(
+        "subagent turn failed",
+        {"subagent_turn": 7},
+        type="SubagentTurnError",
+        non_retryable=True,
+    )
+    accepted = runner._accepted_turn_from_error(err, default=2)
+    assert accepted == 7
+    runner._publish_subagent_reply_received(
+        inst, "run_script", accepted, outcome="error"
+    )
+
+    published = [c.args[0] for c in runner._events.publish.call_args_list]
+    replies = [e for e in published if isinstance(e.event, SubagentReplyReceived)]
+    assert len(replies) == 1
+    rr = replies[0].event
+    assert rr.subagent_turn == 7  # the actual accepted turn, NOT the (wrong) expected=2
+    assert rr.outcome == "error"
+    assert rr.workflow_id == "child-wf-1"
+    assert rr.subagent_id == "aaaaaa-bbbbbb"
+    # The local turn counter advances off the same accepted turn.
+    assert accepted + 1 == 8
+
+
+def test_accepted_turn_from_error_falls_back_when_detail_absent():
+    """If an error carries no ``subagent_turn`` detail (older activity build / unexpected shape),
+    the parent falls back to the supplied ``default`` (``expected``) rather than failing."""
+    err = ApplicationError("no reply", type="SubagentNoReply", non_retryable=True)
+    assert AgentWorkflowRunner._accepted_turn_from_error(err, default=3) == 3
+
+
 # ---------------------------------------------------------------------------
 # Offline build fixtures (workflow APIs __init__ touches are patched out)
 # ---------------------------------------------------------------------------
@@ -518,6 +571,9 @@ def offline_build(monkeypatch):
     for handler in ("set_update_handler", "set_query_handler", "set_signal_handler"):
         monkeypatch.setattr(aw.workflow, handler, lambda *a, **k: None)
     monkeypatch.setattr(aw.workflow, "time", lambda: 0.0)
+    # The runner generates its short agent_id from workflow.uuid4() in __init__; offline there is
+    # no workflow loop, so stub it with a plain uuid.
+    monkeypatch.setattr(aw.workflow, "uuid4", lambda: uuid.uuid4())
 
     def build(config: AgentConfig, *, default: bool | None = None):
         stream = MagicMock()
@@ -542,6 +598,9 @@ def offline_build_policy(monkeypatch):
     for handler in ("set_update_handler", "set_query_handler", "set_signal_handler"):
         monkeypatch.setattr(aw.workflow, handler, lambda *a, **k: None)
     monkeypatch.setattr(aw.workflow, "time", lambda: 0.0)
+    # The runner generates its short agent_id from workflow.uuid4() in __init__; offline there is
+    # no workflow loop, so stub it with a plain uuid.
+    monkeypatch.setattr(aw.workflow, "uuid4", lambda: uuid.uuid4())
 
     def build(config: AgentConfig, *, default: ToolApprovalPolicy, custom_fallback=None):
         stream = MagicMock()

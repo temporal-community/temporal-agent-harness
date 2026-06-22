@@ -8,9 +8,9 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 # ---------------------------------------------------------------------------
 # Protocol constants — workflow must use these exact names
@@ -20,6 +20,24 @@ SEND_AGENT_MESSAGE_UPDATE = "send_agent_message"
 TOOL_APPROVAL_UPDATE = "tool_approval"
 AGENT_STATUS_QUERY = "agent_status"
 AGENT_INTERFACE_QUERY = "agent_interface"
+
+# Width (hex chars) of ONE segment of an agent's short id. A top-level agent's id is a single
+# segment; a subagent's id is its parent's id plus one fresh segment, joined by ``-`` (see
+# ``AGENT_ID`` and ``AgentWorkflowRunner.start_subagent``) — short and cheap for a model to
+# reproduce, replacing the full ``workflow_id`` as an agent's stream identity.
+AGENT_ID_LENGTH = 6
+
+# The constrained form a configured/stamped agent id must take: one or more ``AGENT_ID_LENGTH``-wide
+# lowercase-hex segments joined by ``-`` (e.g. ``a1b2c3`` for a root, ``a1b2c3-d4e5f6`` for its
+# subagent, ``a1b2c3-d4e5f6-…`` for deeper descendants). The ``-``-prefixing makes an id TREE-UNIQUE:
+# each agent rerolls its own children's segments for in-registry uniqueness, and prefixing with the
+# (already tree-unique) parent id extends that guarantee across the whole subagent tree — so a
+# consumer can group/filter a merged multi-agent stream by ``agent_id`` without collisions. pydantic
+# enforces this shape when an ``AgentConfig`` crosses the data converter into a workflow.
+_AGENT_ID_SEGMENT = rf"[0-9a-f]{{{AGENT_ID_LENGTH}}}"
+AgentId = Annotated[
+    str, StringConstraints(pattern=rf"^{_AGENT_ID_SEGMENT}(-{_AGENT_ID_SEGMENT})*$")
+]
 
 
 # ---------------------------------------------------------------------------
@@ -137,9 +155,12 @@ class ToolApprovalPolicy(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class AgentConfig:
+class AgentConfig(BaseModel):
     """The single, harness-defined input contract every agent workflow accepts.
+
+    A pydantic model (not a plain dataclass) so its field constraints — notably the
+    :data:`AgentId` shape on ``agent_id`` — are actually VALIDATED when an ``AgentConfig`` crosses
+    the data converter into a workflow, rather than being mere annotations.
 
     The harness enforces a uniform construction shape: an agent ``@workflow.defn``
     class that builds an ``AgentWorkflowRunner`` must declare its ``run``/``__init__``
@@ -171,10 +192,19 @@ class AgentConfig:
     example, start a session that gates every tool call regardless of the agent's default.
     The developer's separate *custom fallback* predicate is not part of this contract and
     is never overridable from the config (it is non-serializable).
+
+    ``agent_id`` — the short, tree-unique id this agent stamps on every event it publishes (and
+    reports on its ``agent_status`` query); see :data:`AgentId` for the segment shape. A PARENT sets
+    this when starting a subagent — pushing down the same ``handle`` it uses to reference the child
+    (its own id plus one fresh segment) — so the child's own event stream is labelled with the
+    id the parent (and a UI merging the streams) already knows it by. ``None`` → a top-level agent
+    generates its own single-segment id. This is the one ``AgentConfig`` field a parent populates
+    per-child rather than passing through unchanged.
     """
 
     is_message_queuing_enabled: bool | None = None
     approval_policy: ToolApprovalPolicy | None = None
+    agent_id: AgentId | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -242,10 +272,20 @@ class AgentMessageReply:
 
     ``pending`` is True if the message was queued behind an active
     turn rather than being processed immediately.
+
+    ``accepted_offset`` is the agent's stream offset captured at the instant the update was
+    accepted (the log head BEFORE this turn publishes anything). It is internal plumbing for the
+    client's stream-merge: a caller starts reading the merged logical stream from here and
+    discards events until this turn's ``turn_started`` — a quiescent point with no in-flight
+    subagent brackets. It is a read-start *hint* (its only requirement is to be ``<=`` this
+    turn's ``turn_started`` offset, which capture-at-acceptance guarantees); the BFF/UI never
+    sees or stores it. For a queued message it is the head mid the active prior turn; the
+    skip-to-``turn_started`` preamble normalizes that.
     """
 
     turn_number: int
     turn_id: str
+    accepted_offset: int = 0
     pending: bool = False
 
 
@@ -315,14 +355,15 @@ class PendingTurn:
 class SubagentInfo:
     """An active subagent this agent is driving, surfaced via ``agent_status``.
 
-    ``handle`` is the short id the agent references it by; ``workflow_id`` is the real child
-    workflow (for an operator/UI to drill into). ``next_expected_turn`` reflects how many turns
-    it has run (its next is ``next_expected_turn``). The caller-side FIFO gate's internals (its
-    ticket counters) are deliberately NOT surfaced — they are an implementation detail of turn
-    ordering, not agent status.
+    ``subagent_id`` is the short id the agent references it by (the same id the subagent stamps as
+    its own ``agent_id``, and the value on the parent's ``subagent_started`` / ``subagent_message_sent``
+    / ``subagent_reply_received`` events); ``workflow_id`` is the real child workflow (for an
+    operator/UI to drill into). ``next_expected_turn`` reflects how many turns it has run (its next
+    is ``next_expected_turn``). The caller-side FIFO gate's internals (its ticket counters) are
+    deliberately NOT surfaced — they are an implementation detail of turn ordering, not agent status.
     """
 
-    handle: str
+    subagent_id: str
     agent_key: str
     workflow_id: str
     next_expected_turn: int
@@ -335,8 +376,14 @@ class AgentStatus:
     The workflow exposes this via the ``agent_status`` query. It is the
     single source of truth for ``attach()``'s termination decision and
     for the client to compute ``expected_turn`` before sending.
+
+    ``agent_id`` is this agent's own short id — the value it stamps on every event it publishes
+    (:attr:`AgentEvent.agent_id`). A consumer reads it to map a session's events to the agent, and
+    a parent can cross-reference it against the ``handle`` it pushed down for a subagent.
     """
 
+    # Empty only as a dataclass default; a live workflow's status always carries its real id.
+    agent_id: str = ""
     current_turn: int = 0
     turn_active: bool = False
     pending_turns: list[PendingTurn] = field(default_factory=list)

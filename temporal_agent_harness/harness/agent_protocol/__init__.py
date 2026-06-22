@@ -7,12 +7,14 @@
 # inside the Temporal workflow sandbox.
 
 from temporal_agent_harness.harness.agent_protocol.agent_interface import (
+    AGENT_ID_LENGTH,
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
     SEND_AGENT_MESSAGE_UPDATE,
     TOOL_APPROVAL_UPDATE,
     AcceptedFunction,
     AgentConfig,
+    AgentId,
     AgentMessage,
     AgentStatus,
     PendingApproval,
@@ -40,8 +42,10 @@ from temporal_agent_harness.harness.agent_protocol.events import (
     ReplyDelta,
     StreamEvent,
     SubagentMessageSent,
+    SubagentReplyReceived,
     SubagentStarted,
     SubagentStopped,
+    SubagentStreamUnavailable,
     TextAnnotationDelta,
     ThoughtSummaryDelta,
     TokenUsage,
@@ -67,12 +71,14 @@ from temporal_agent_harness.harness.agent_protocol.subagent_interface import (
 
 __all__ = [
     # Signal/update/query interface
+    "AGENT_ID_LENGTH",
     "AGENT_INTERFACE_QUERY",
     "AGENT_STATUS_QUERY",
     "SEND_AGENT_MESSAGE_UPDATE",
     "TOOL_APPROVAL_UPDATE",
     "AcceptedFunction",
     "AgentConfig",
+    "AgentId",
     "AgentMessage",
     "AgentStatus",
     "PendingApproval",
@@ -106,6 +112,8 @@ __all__ = [
     "SubagentStarted",
     "SubagentStopped",
     "SubagentMessageSent",
+    "SubagentReplyReceived",
+    "SubagentStreamUnavailable",
     "ReplyDelta",
     "ThoughtSummaryDelta",
     "TextAnnotationDelta",

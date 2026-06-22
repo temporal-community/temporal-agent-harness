@@ -124,7 +124,7 @@ class AgentEventType(StrEnum):
 
     SUBAGENT_STARTED = "subagent_started"
     """This agent started a subagent (a child agent it drives), carrying the subagent's
-    short ``handle`` and its real ``workflow_id``. Analogous to TOOL_START but for a
+    short ``subagent_id`` and its real ``workflow_id``. Analogous to TOOL_START but for a
     whole child agent's lifecycle rather than one tool call.
 
     The ``workflow_id`` is the load-bearing field: a consumer that wants a single
@@ -136,14 +136,14 @@ class AgentEventType(StrEnum):
 
     SUBAGENT_STOPPED = "subagent_stopped"
     """This agent stopped a subagent it was driving (sent it the ``close`` signal and
-    dropped it). Carries the same ``handle`` / ``workflow_id`` so a consumer can unmount
+    dropped it). Carries the same ``subagent_id`` / ``workflow_id`` so a consumer can unmount
     the subagent's stream. Terminal for that subagent from this agent's perspective.
     See :class:`SubagentStopped`."""
 
     SUBAGENT_MESSAGE_SENT = "subagent_message_sent"
     """This agent sent a message (one turn) to a downstream subagent it is driving.
     Published whenever the agent communicates with a subagent, naming the target subagent
-    (``handle`` / ``workflow_id``), the ``function`` the message is addressed to, and the
+    (``subagent_id`` / ``workflow_id``), the ``function`` the message is addressed to, and the
     ``subagent_turn`` it starts (the turn number on the SUBAGENT — distinct from this event's
     envelope ``turn_number``, which is the parent's turn) — so a consumer can correlate it with
     the matching turn on the subagent's OWN stream (mounted via the SUBAGENT_STARTED
@@ -151,6 +151,35 @@ class AgentEventType(StrEnum):
     SUBAGENT_STARTED, but for a single message rather than the subagent's lifecycle. The
     subagent's reply is NOT mirrored onto this stream (stream isolation).
     See :class:`SubagentMessageSent`."""
+
+    SUBAGENT_REPLY_RECEIVED = "subagent_reply_received"
+    """This agent received a subagent's reply for one turn it dispatched — the CLOSE marker of
+    the ``[subagent_message_sent … subagent_reply_received]`` bracket that
+    ``SUBAGENT_MESSAGE_SENT`` opens. Carries the same correlation fields (``subagent_id`` /
+    ``agent_key`` / ``workflow_id`` / ``function`` / ``subagent_turn``) plus an ``outcome``
+    (``ok``/``error``). Published IN-WORKFLOW by the parent's ``run_subagent_turn`` once the
+    activity returns — i.e. once the AGENT (workflow) actually has the reply in hand — and
+    published for EVERY accepted child turn (including an accepted-but-errored one, which still
+    emitted its own ``turn_end``), but NEVER for a pre-acceptance rejection (no child turn ran,
+    so no bracket to close). The reply *payload* is not carried here (it rides the child's own
+    ``reply`` event and the send-tool's ``tool_end``); this is a thin close/correlation marker.
+    A client merging the parent + subagent streams uses it to guarantee a subagent's whole turn
+    is ordered before the reply is observed on the parent. See :class:`SubagentReplyReceived`."""
+
+    SUBAGENT_STREAM_UNAVAILABLE = "subagent_stream_unavailable"
+    """A client merging the parent + subagent streams could NOT obtain a subagent's events, so it
+    gave up on that subagent's DETAIL and rendered the parent's view without it.
+
+    Unlike every other event here, this one is **never published by a workflow** — it is
+    SYNTHESIZED CLIENT-SIDE by the stream merge and injected into the merged logical stream. It is
+    emitted when a mounted subagent stream can't be read (today: a stopped/completed subagent, whose
+    stream ``workflow_streams`` can't yet replay — an upstream workflow_streams fix is in flight) 
+    or stalls without delivering its turn. It is purely informational and **non-fatal**: the parent's
+    own stream is self-sufficient (it already carries the subagent's ``subagent_reply_received`` and 
+    the send-tool's result), so the parent renders fully; only the subagent's own turn DETAIL is
+    missing. The merge does NOT retry — recovery is a fresh ``attach`` (a full page refresh in a
+    UI). A drill-in UI keys off the carried ``subagent_id`` to mark that subagent's view degraded.
+    See :class:`SubagentStreamUnavailable`."""
 
     REPLY_DELTA = "reply_delta"
     """An incremental text chunk (word/token) of the agent's reply. See
@@ -440,9 +469,11 @@ class SubagentStarted(StreamEvent[Literal[AgentEventType.SUBAGENT_STARTED]]):
     """This agent started a subagent (a child agent it drives)."""
 
     type: Literal[AgentEventType.SUBAGENT_STARTED] = AgentEventType.SUBAGENT_STARTED
-    handle: str = Field(
-        description="The short id this agent references the subagent by (the value it passes "
-        "to its send_<function> / stop_<key> tools)."
+    subagent_id: str = Field(
+        description="The short id of the SUBAGENT this event is about — the id the parent "
+        "references it by AND the ``agent_id`` the subagent stamps on its own events (the parent "
+        "pushes it down as the child's id). Distinct from the enclosing envelope's ``agent_id``, "
+        "which is THIS (the parent) agent."
     )
     agent_key: str = Field(description="Which wired agent type this subagent is.")
     workflow_id: str = Field(
@@ -456,8 +487,9 @@ class SubagentStopped(StreamEvent[Literal[AgentEventType.SUBAGENT_STOPPED]]):
     """This agent stopped a subagent it was driving (signalled ``close`` + dropped it)."""
 
     type: Literal[AgentEventType.SUBAGENT_STOPPED] = AgentEventType.SUBAGENT_STOPPED
-    handle: str = Field(
-        description="The short id of the stopped subagent (matches the prior SubagentStarted)."
+    subagent_id: str = Field(
+        description="The short id of the stopped SUBAGENT (matches the prior SubagentStarted). "
+        "Distinct from the envelope's ``agent_id`` (this parent agent)."
     )
     agent_key: str = Field(description="Which wired agent type the stopped subagent was.")
     workflow_id: str = Field(
@@ -472,8 +504,10 @@ class SubagentMessageSent(StreamEvent[Literal[AgentEventType.SUBAGENT_MESSAGE_SE
     type: Literal[AgentEventType.SUBAGENT_MESSAGE_SENT] = (
         AgentEventType.SUBAGENT_MESSAGE_SENT
     )
-    handle: str = Field(
-        description="The short id of the subagent being messaged (matches its SubagentStarted)."
+    subagent_id: str = Field(
+        description="The short id of the SUBAGENT being messaged (matches its SubagentStarted, and "
+        "the ``agent_id`` on that subagent's own events). Distinct from the envelope's ``agent_id`` "
+        "(this parent agent)."
     )
     agent_key: str = Field(description="Which wired agent type the messaged subagent is.")
     workflow_id: str = Field(
@@ -490,6 +524,88 @@ class SubagentMessageSent(StreamEvent[Literal[AgentEventType.SUBAGENT_MESSAGE_SE
         "the enclosing AgentEvent's `turn_number`, which is THIS agent's (the parent's) turn. "
         "Several dispatches in one parent turn share that envelope turn_number but get distinct "
         "subagent_turn values; pairs with the turn_number on the subagent's OWN stream events."
+    )
+    from_offset: int = Field(
+        default=0,
+        description="The offset in the SUBAGENT's OWN stream at which this turn's events begin "
+        "(the child stream position the parent resumes consumption from for this turn). A client "
+        "merging the parent + subagent streams positions the child cursor here the first time it "
+        "mounts the child — so a merge that starts mid-session (resuming at a parent turn that is "
+        "not the child's first) skips the child's pre-resume history, whose own message_sent "
+        "markers are not on the merged stream and could otherwise never be ordered. Unrelated "
+        "address space from the parent stream's offsets.",
+    )
+
+
+class SubagentReplyReceived(
+    StreamEvent[Literal[AgentEventType.SUBAGENT_REPLY_RECEIVED]]
+):
+    """This agent received a subagent's reply for one turn it dispatched.
+
+    The CLOSE marker of the ``[subagent_message_sent … subagent_reply_received]`` bracket
+    (mirrors :class:`SubagentMessageSent`'s correlation fields), published in-workflow by the
+    parent's ``run_subagent_turn`` once the activity returns and the agent (workflow) actually
+    holds the reply — for EVERY accepted child turn (``outcome`` distinguishes success from an
+    accepted-but-errored turn, which still emitted its own ``turn_end``), but never for a
+    pre-acceptance rejection. Carries no reply payload (that rides the child's own ``reply``
+    event + the send-tool's ``tool_end``); it is a thin close/correlation signal a stream-merge
+    uses to order a subagent's whole turn ahead of the parent observing its reply.
+    """
+
+    type: Literal[AgentEventType.SUBAGENT_REPLY_RECEIVED] = (
+        AgentEventType.SUBAGENT_REPLY_RECEIVED
+    )
+    subagent_id: str = Field(
+        description="The short id of the SUBAGENT that replied (matches its SubagentMessageSent, "
+        "and the ``agent_id`` on that subagent's own events). Distinct from the envelope's "
+        "``agent_id`` (this parent agent)."
+    )
+    agent_key: str = Field(description="Which wired agent type the replying subagent is.")
+    workflow_id: str = Field(
+        description="The replying subagent's real child workflow id (matches the opening "
+        "SubagentMessageSent) — the close-gate key a stream-merge correlates against."
+    )
+    function: str = Field(
+        description="The function this reply answers (the same send_agent_message envelope "
+        "'type' as the opening SubagentMessageSent)."
+    )
+    subagent_turn: int = Field(
+        description="The turn number ON THE SUBAGENT this reply closes — pairs with the opening "
+        "SubagentMessageSent's subagent_turn, NOT the enclosing envelope's (parent's) turn_number."
+    )
+    outcome: Literal["ok", "error"] = Field(
+        description="'ok' if the child turn produced a reply; 'error' if it was accepted but then "
+        "errored / produced no reply (it still emitted its own turn_end, so the bracket closes "
+        "either way). Never published for a pre-acceptance rejection."
+    )
+
+
+class SubagentStreamUnavailable(StreamEvent[Literal[AgentEventType.SUBAGENT_STREAM_UNAVAILABLE]]):
+    """The stream merge gave up obtaining a subagent's events; its DETAIL is degraded (non-fatal).
+
+    SYNTHESIZED CLIENT-SIDE by the merge (never workflow-published) and injected into the merged
+    logical stream when a mounted subagent stream is unreadable/stalled. The merge stamps the
+    enclosing :class:`AgentEvent`'s ``agent_id`` with this same ``subagent_id`` — so a UI that
+    groups events by ``agent_id`` routes this straight to the affected subagent's view, and a
+    root-only consumer (which filters to the root ``agent_id``) ignores it. The parent stream is
+    unaffected; only the subagent's own turn detail is missing. No retry — a fresh attach recovers.
+    """
+
+    type: Literal[AgentEventType.SUBAGENT_STREAM_UNAVAILABLE] = (
+        AgentEventType.SUBAGENT_STREAM_UNAVAILABLE
+    )
+    subagent_id: str = Field(
+        description="The short id of the subagent whose events couldn't be obtained (matches the "
+        "``subagent_id`` on the parent's SubagentStarted/SubagentMessageSent, and the ``agent_id`` "
+        "that subagent stamps on its own events)."
+    )
+    workflow_id: str = Field(
+        description="The subagent's real child workflow id (the stream the merge couldn't read)."
+    )
+    reason: str = Field(
+        default="",
+        description="A short, human-facing note on why the subagent's events were unavailable "
+        "(e.g. the child workflow has completed and its stream isn't yet replayable).",
     )
 
 
@@ -564,6 +680,8 @@ AgentStreamItem = Annotated[
     | SubagentStarted
     | SubagentStopped
     | SubagentMessageSent
+    | SubagentReplyReceived
+    | SubagentStreamUnavailable
     | ReplyDelta
     | ThoughtSummaryDelta
     | TextAnnotationDelta
@@ -580,13 +698,24 @@ class AgentEvent(BaseModel):
     ``turn_events`` topic. Composes over a :data:`AgentStreamItem` payload
     (``event``) and adds the routing metadata the harness stamps at publish time.
     Producers never build this — they construct a payload and the publisher wraps
-    it — so ``turn_id`` / ``turn_number`` / ``timestamp`` can only ever be set by
-    the harness. Being a concrete type (not a bare union), it is also a clean
+    it — so ``agent_id`` / ``turn_id`` / ``turn_number`` / ``timestamp`` can only ever be set
+    by the harness. Being a concrete type (not a bare union), it is also a clean
     ``type`` for the workflow-stream topic and subscribe ``result_type``.
     """
 
     model_config = ConfigDict(frozen=True)
 
+    agent_id: str = Field(
+        description="The short, TREE-UNIQUE id of the agent that PUBLISHED this event "
+        "(``AgentConfig.agent_id`` / ``AgentStatus.agent_id`` — see ``AgentId`` for the segment "
+        "shape; NOT the full workflow_id) — stamped by the harness at publish time; producers never "
+        "set it. Every event carries it so a merged multi-agent stream is self-describing: because "
+        "the id is unique across the whole subagent tree, a consumer can filter to one agent's "
+        "events, or group the merged stream by agent, with no risk of conflating two agents. For a "
+        "subagent it equals the ``handle`` its parent references it by (the parent's own id plus a "
+        "fresh segment, pushed down as the child's ``agent_id``), so a consumer can attribute child "
+        "events to the subagent shown in the parent's status/events."
+    )
     turn_id: str = Field(
         description="The id of the turn this event belongs to — stamped by the harness at "
         "publish time; producers never set it."

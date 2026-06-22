@@ -122,7 +122,36 @@
     display: flex; align-items: center; gap: 8px;
   }
   .panel > .panel-title .rule { flex: 1; height: 1px; background: var(--border); }
-  #turn-meta { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .turn-meta { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+
+  /* ---- Per-agent panels ------------------------------------------------- */
+  /* One .agent-view panel per agent in the merged stream. The root agent reads as before; each
+     subagent gets its own panel as it appears. The panel-title carries the agent's label + short
+     id; a stopped subagent dims and is tagged "ended" but is kept (history is never deleted). */
+  #agents { display: flex; flex-direction: column; gap: 22px; }
+  .agent-view { transition: opacity .3s; }
+  .agent-view .panel-title .av-title { color: var(--text-secondary); font-weight: 700; }
+  .agent-view .panel-title .av-id {
+    color: var(--text-tertiary); letter-spacing: 1px; font-variant-numeric: tabular-nums;
+  }
+  /* The root/session agent reads as the primary view; subagents are visually subordinate. */
+  .agent-view.subagent .av-title { color: var(--accent); }
+  .agent-view.ended { opacity: 0.6; }
+  .agent-view .panel-title .av-ended {
+    color: var(--text-tertiary); border: 1px solid var(--border-strong); border-radius: 20px;
+    padding: 2px 8px; letter-spacing: 1.5px;
+  }
+  .agent-view .panel-title .av-ended[hidden] { display: none; }
+  /* "Degraded" = the stream merge couldn't load THIS subagent's own events (it emitted a
+     synthetic subagent_stream_unavailable). Distinct from "ended" (a stopped subagent): the panel and
+     its history stay visible, but a warning-toned badge marks that the detail is missing and a
+     refresh would retry. Unobtrusive — just a tinted badge + faint warning border, no dimming. */
+  .agent-view.degraded { border-color: color-mix(in srgb, var(--warning) 32%, var(--border)); }
+  .agent-view .panel-title .av-degraded {
+    color: var(--warning); border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+    background: var(--warning-bg); border-radius: 20px; padding: 2px 8px; letter-spacing: 1px;
+  }
+  .agent-view .panel-title .av-degraded[hidden] { display: none; }
 
   /* ---- The stage: [ ingress | AGENT BOX | egress ] ---------------------- */
   /* Tone variables drive every coloured element from one source. */
@@ -513,32 +542,32 @@
     font-size: 11px; color: var(--text-secondary); white-space: nowrap;
     width: 118px; text-align: right; font-variant-numeric: tabular-nums; flex-shrink: 0;
   }
-  input[type=range]#scrub {
+  input[type=range].scrub {
     position: absolute; left: 0; right: 0; bottom: 8px; width: 100%; z-index: 3;
     -webkit-appearance: none; appearance: none;
     height: 4px; border-radius: 3px; background: color-mix(in srgb, var(--bg-surface-3) 78%, transparent);
     outline: none; cursor: pointer;
   }
-  input[type=range]#scrub:disabled { opacity: .4; cursor: default; }
-  input[type=range]#scrub:focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
-  input[type=range]#scrub::-webkit-slider-thumb {
+  input[type=range].scrub:disabled { opacity: .4; cursor: default; }
+  input[type=range].scrub:focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+  input[type=range].scrub::-webkit-slider-thumb {
     -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
     background: var(--accent); border: 2px solid var(--bg-base); box-shadow: 0 0 0 1px var(--accent);
     position: relative; z-index: 2;
   }
-  input[type=range]#scrub::-moz-range-thumb {
+  input[type=range].scrub::-moz-range-thumb {
     width: 14px; height: 14px; border-radius: 50%;
     background: var(--accent); border: 2px solid var(--bg-base);
   }
 
-  /* ---- Token usage: a fixed top strip (per-model totals) ----------------- */
-  /* Not a panel/card — a flat strip pinned to the top of the scrollable main, with the
-     page background so content scrolls cleanly beneath it. */
+  /* ---- Token usage: a per-agent top strip (per-model totals) ------------- */
+  /* A flat strip at the top of an agent's own panel (one usage bar per agent), showing the
+     per-model totals for that agent. Flush to the panel's top edge, divided from the runtime
+     stage below by a hairline. */
   .usage-bar {
-    position: sticky; top: 0; z-index: 40;
     display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
-    padding: 8px 2px; margin-bottom: -8px;
-    background: var(--bg-base); border-bottom: 1px solid var(--border);
+    margin: -4px -4px 14px; padding: 0 0 12px;
+    border-bottom: 1px solid var(--border);
   }
   .usage-bar-label { font-size: 10px; letter-spacing: 2.5px; text-transform: uppercase; color: var(--text-tertiary); }
   .usage-readout { margin-left: auto; color: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -655,85 +684,104 @@
 </header>
 
 <main>
-  <!-- Per-model token-usage totals — a fixed strip pinned to the top of the page (not a
-       card). The agent may switch models mid-session or use several, so one chip per
-       model. Hidden until the first model interaction completes. -->
-  <div class="usage-bar" id="usage-bar" hidden>
-    <span class="usage-bar-label">Tokens</span>
-    <div class="model-usage" id="model-usage"></div>
-    <span class="usage-readout" id="usage-readout"></span>
-  </div>
+  <!-- One panel per agent. The merged stream now interleaves the root session agent's events
+       with every subagent it drives (recursively); the page grows a new panel the first time it
+       sees a never-before-seen agent_id, and routes each event to the matching panel by agent_id.
+       The root agent's panel is created on session switch; subagents' panels appear as they start.
+       Each agent owns its OWN event log, scrubber, usage analytics, and render state. -->
+  <div id="agents"></div>
+  <section class="panel" style="padding:14px 20px;"><div id="legend"></div></section>
+</main>
 
-  <section class="panel">
-    <div class="panel-title">Agent runtime <span class="rule"></span> <span id="turn-meta"></span></div>
+<!-- Per-agent panel template, cloned by createAgentView. Holds everything that was a single
+     static view before: the per-model token usage bar, the runtime stage (ingress | box | egress),
+     and the history scrubber. IDs that used to be unique now live on classes (the factory resolves
+     them within the cloned subtree), so N agents can coexist. -->
+<template id="agent-view-tpl">
+  <section class="panel agent-view">
+    <!-- Per-model token-usage totals for THIS agent — one chip per model it used. Hidden until
+         this agent completes its first model interaction. -->
+    <div class="usage-bar" hidden>
+      <span class="usage-bar-label">Tokens</span>
+      <div class="model-usage"></div>
+      <span class="usage-readout"></span>
+    </div>
 
-    <div class="stage" id="stage">
+    <div class="panel-title">
+      <span class="av-title">Agent runtime</span>
+      <span class="av-id"></span>
+      <span class="av-ended" hidden>ended</span>
+      <span class="av-degraded" hidden title="The stream merge couldn't load this subagent's own events.">subagent detail unavailable — refresh to retry</span>
+      <span class="rule"></span>
+      <span class="turn-meta"></span>
+    </div>
+
+    <div class="stage">
       <!-- INGRESS: signals arrive from outside and dock at the box's left port -->
-      <div class="lane ingress" id="ingress-lane">
+      <div class="lane ingress">
         <div class="lane-cap">
           <span class="lane-tag">Ingress</span>
-          <span class="lane-sub" id="queue-readout">idle</span>
+          <span class="lane-sub queue-readout">idle</span>
         </div>
         <div class="trace"></div>
-        <div class="msg-slot" id="msg-slot"></div>
-        <div class="queue-stack" id="queue-stack"></div>
+        <div class="msg-slot"></div>
+        <div class="queue-stack"></div>
       </div>
 
       <!-- THE AGENT, as a box that renders only what's happening right now -->
-      <div class="agent-enclosure" id="agent">
+      <div class="agent-enclosure">
         <div class="scanline"></div>
-        <div class="port port-in" id="port-in"></div>
-        <div class="port port-out" id="port-out"></div>
+        <div class="port port-in"></div>
+        <div class="port port-out"></div>
         <div class="agent-head">
-          <span class="agent-name"><span class="glyph">◈</span> Agent</span>
-          <span class="status-badge" id="agent-status">—</span>
+          <span class="agent-name"><span class="glyph">◈</span> <span class="av-name">Agent</span></span>
+          <span class="status-badge agent-status">—</span>
         </div>
         <div class="agent-body">
           <div class="core-col">
-            <div class="model-core" id="model-core">
+            <div class="model-core">
               <span class="mc-glyph">▣</span>
-              <span class="mc-label" id="model-label">Model</span>
-              <span class="mc-sub" id="model-sub">dormant</span>
+              <span class="mc-label model-label">Model</span>
+              <span class="mc-sub model-sub">dormant</span>
             </div>
-            <div class="think-bay" id="think-bay"></div>
+            <div class="think-bay"></div>
           </div>
-          <div class="tool-bay" id="tool-bay"></div>
+          <div class="tool-bay"></div>
         </div>
       </div>
 
       <!-- EGRESS: the reply (or error) leaves through the right port -->
-      <div class="lane egress" id="egress-lane">
+      <div class="lane egress">
         <div class="lane-cap">
           <span class="lane-tag">Egress</span>
-          <span class="lane-sub" id="egress-readout">—</span>
+          <span class="lane-sub egress-readout">—</span>
         </div>
         <div class="trace"></div>
-        <div class="out-slot" id="out-slot"></div>
-        <div class="terminal" id="egress-terminal">reply</div>
+        <div class="out-slot"></div>
+        <div class="terminal egress-terminal">reply</div>
       </div>
     </div>
 
     <div class="scrubber">
-      <button id="prev-turn" class="ctrl-btn" title="Jump to previous turn" disabled>⏮</button>
-      <button id="play-btn" class="ctrl-btn" title="Play from here" disabled>▶</button>
+      <button class="ctrl-btn prev-turn" title="Jump to previous turn" disabled>⏮</button>
+      <button class="ctrl-btn play-btn" title="Play from here" disabled>▶</button>
       <!-- The token-usage area chart is laid directly BEHIND the scrub track (exact same
            width), so the curve has a 1:1 x-correspondence with timeline clicks: the slider
            thumb is itself the position cursor. Hover anywhere over the track for a per-
            interaction summary card. -->
-      <div class="scrub-wrap" id="scrub-wrap">
-        <svg class="usage-chart" id="usage-chart" preserveAspectRatio="none" viewBox="0 0 1 100" aria-hidden="true"></svg>
-        <input id="scrub" type="range" min="0" max="0" value="0" step="1" disabled
+      <div class="scrub-wrap">
+        <svg class="usage-chart" preserveAspectRatio="none" viewBox="0 0 1 100" aria-hidden="true"></svg>
+        <input class="scrub" type="range" min="0" max="0" value="0" step="1" disabled
                aria-label="Scrub through agent history">
-        <div class="turn-ticks" id="turn-ticks"></div>
-        <div class="usage-tip" id="usage-tip" hidden></div>
+        <div class="turn-ticks"></div>
+        <div class="usage-tip" hidden></div>
       </div>
-      <button id="next-turn" class="ctrl-btn" title="Skip to next turn" disabled>⏭</button>
-      <span id="scrub-readout" class="scrub-readout">no events</span>
-      <button id="live-btn" class="live-btn following" title="Jump to the live tail">● LIVE</button>
+      <button class="ctrl-btn next-turn" title="Skip to next turn" disabled>⏭</button>
+      <span class="scrub-readout">no events</span>
+      <button class="live-btn following" title="Jump to the live tail">● LIVE</button>
     </div>
   </section>
-  <section class="panel" style="padding:14px 20px;"><div id="legend"></div></section>
-</main>
+</template>
 
 <!-- Live HITL approvals (developer override) — only shown when calls are pending -->
 <div class="live-approvals" id="live-approvals" hidden></div>
@@ -774,6 +822,13 @@ const PROTOCOL_EVENTS = [
   "model_interaction_started", "model_interaction_ended",
   "tool_requested", "tool_approval_requested", "tool_approval_resolved",
   "tool_start", "tool_progress_delta", "tool_end", "tool_error",
+  // Subagent lifecycle — published BY THE PARENT, naming a child (subagent_id). The merged
+  // stream interleaves these with the parent's events and the child's own events.
+  "subagent_started", "subagent_stopped", "subagent_message_sent", "subagent_reply_received",
+  // subagent_stream_unavailable is SYNTHESIZED CLIENT-SIDE by the stream merge (never workflow-published)
+  // when it gives up reading a subagent's own stream. Its agent_id == subagent_id, so it routes to
+  // the affected subagent's panel and marks that panel degraded (detail missing — refresh to retry).
+  "subagent_stream_unavailable",
   "reply_delta", "thought_summary", "text_annotation",
   "reply", "error",
 ];
@@ -811,6 +866,8 @@ const DRIVEN_EVENTS = new Set([
   "model_interaction_started", "model_interaction_ended",
   "tool_requested", "tool_approval_requested", "tool_approval_resolved",
   "tool_start", "tool_progress_delta", "tool_end", "tool_error",
+  "subagent_started", "subagent_stopped", "subagent_message_sent", "subagent_reply_received",
+  "subagent_stream_unavailable",
   "reply_delta", "thought_summary", "text_annotation", "reply", "error",
 ]);
 (function assertDriverMirrorsProtocol() {
@@ -931,84 +988,24 @@ function buildCard({ tone, name, id, state, preview, animate, snapshot }) {
 }
 
 /* ===========================================================================
- * 4. RENDER LAYER — controllers that reflect CURRENT state onto the enclosure.
- * Each method takes `animate`: when false (scrub rebuild) it sets the resting
+ * 4. PER-AGENT VIEW — createAgentView(agentId, { label, isRoot }) builds ONE agent's
+ * panel (cloned from #agent-view-tpl) and owns everything that used to be the single
+ * global view: its render controllers (model core / tool bay / ingress / egress /
+ * momentary cards / status badge), its driver state + applyEvent, its token-usage
+ * analytics, and its OWN event log + scrubber/transport. The merged stream is routed
+ * to the right view by agent_id (see §7); each agent's turn_number, state-machine node,
+ * usage and history are tracked independently — nothing is shared across agents except
+ * the inspector drawer and the (session-wide) live-approvals panel.
+ *
+ * Each render method takes `animate`: when false (scrub rebuild) it sets the resting
  * state with no signals; when true (live / single-step) it plays them.
  * =========================================================================== */
 
-const agentEl     = document.getElementById("agent");
-const agentStatus = document.getElementById("agent-status");
-const portIn      = document.getElementById("port-in");
-const portOut     = document.getElementById("port-out");
-const ingressLane = document.getElementById("ingress-lane");
-const egressLane  = document.getElementById("egress-lane");
-const queueStack  = document.getElementById("queue-stack");
-const queueReadout= document.getElementById("queue-readout");
-const egressTerm  = document.getElementById("egress-terminal");
-const egressSub   = document.getElementById("egress-readout");
-const stageEl     = document.getElementById("stage");
-
-// --- The model core inside the box: a binary highlight (dormant / bright) held ON for
-// the whole model_interaction_started → ended bracket. While active, its label shows the
-// MODEL NAME (so you can read which model is generating from the start of the interaction,
-// for its whole duration); the sub line carries the momentary activity note
-// (active / thinking / citing / streaming), which the label is deliberately kept clear of. ---
-const model = {
-  el: document.getElementById("model-core"),
-  label: document.getElementById("model-label"),
-  sub: document.getElementById("model-sub"),
-  _detail: null,
-  activate(modelName) {
-    this.el.classList.add("active");
-    this.el.classList.remove("clickable");
-    this._detail = null;
-    this.label.textContent = modelName || "Model";
-    this.label.classList.toggle("mc-model", !!modelName);
-    this.sub.textContent = "active";
-  },
-  deactivate() {
-    this.el.classList.remove("active", "clickable");
-    this._detail = null;
-    this.label.textContent = "Model";
-    this.label.classList.remove("mc-model");
-    this.sub.textContent = "dormant";
-  },
-  // The interaction ended: the core itself drops out of "active" but KEEPS the model name
-  // and now shows this interaction's token totals on its sub line — no extra card. The
-  // core becomes clickable to open the full per-field usage in the inspector.
-  end(modelName, usage) {
-    this.el.classList.remove("active");
-    this.label.textContent = modelName || "Model";
-    this.label.classList.toggle("mc-model", !!modelName);
-    this.sub.textContent = usage ? tokenSummary(usage) : "done";
-    this._detail = { title: "Model interaction", state: "ended", tone: "model",
-      sections: [{ label: "Model", value: modelName }, { label: "Token usage", value: usage }] };
-    this.el.classList.toggle("clickable", !!usage);
-  },
-  note(text) { if (this.el.classList.contains("active")) this.sub.textContent = text; },
-};
-model.el.addEventListener("click", () => { if (model._detail) openInspector(model._detail); });
-
-/* ===========================================================================
- * 4c. TOKEN-USAGE ANALYTICS — per-model aggregates (a fixed top strip) + an area chart
- * laid behind the scrub track (1:1 with the timeline, hover for a per-interaction card).
- * Both derived from the eventLog (model_interaction_started/ended pairs); rebuilt as
- * interactions complete.
- * =========================================================================== */
-const usageBar      = document.getElementById("usage-bar");
-const usageReadout  = document.getElementById("usage-readout");
-const modelUsageEl  = document.getElementById("model-usage");
-const usageChart    = document.getElementById("usage-chart");
-const scrubWrap     = document.getElementById("scrub-wrap");
-const usageTip      = document.getElementById("usage-tip");
+const agentsContainer = document.getElementById("agents");
 const SVGNS = "http://www.w3.org/2000/svg";
 const UC_H = 100;  // viewBox height; width = event count (preserveAspectRatio=none stretches it to the track)
-const ucArea = document.createElementNS(SVGNS, "path"); ucArea.setAttribute("class", "uc-area");
-const ucLine = document.createElementNS(SVGNS, "path");
-ucLine.setAttribute("class", "uc-line"); ucLine.setAttribute("vector-effect", "non-scaling-stroke");
-usageChart.append(ucArea, ucLine);
-let lastInteractions = [];   // completed interactions from the last rebuild (for the hover card)
 
+// --- Token-usage pure helpers (shared by every agent view's analytics) -------------------
 // One model interaction's token total — input + output ONLY. The provider's own
 // `total_tokens` also folds in thought / cached / tool-use tokens, which inflates it
 // confusingly; the full breakdown stays available by clicking the model core.
@@ -1023,22 +1020,14 @@ function fmtTokens(n) {
   if (n < 1e6) return (n / 1000).toFixed(n < 1e4 ? 1 : 0) + "k";
   return (n / 1e6).toFixed(1) + "M";
 }
-// Pair started/ended events into completed interactions, each tagged with the event-index
-// span it occupied (used to spread its tokens across the timeline). One still in flight
-// (no ended yet) is omitted until its usage is known.
-function computeInteractions() {
-  const out = [];
-  let start = null, startModel = null;
-  eventLog.forEach((e, i) => {
-    if (e.event === "model_interaction_started") {
-      start = i; startModel = e.data.model || null;
-    } else if (e.event === "model_interaction_ended" && start != null) {
-      out.push({ model: e.data.model || startModel, usage: e.data.usage || null,
-                 total: ioTotal(e.data.usage), start, end: i });
-      start = null; startModel = null;
-    }
-  });
-  return out;
+// Compact, click-free token summary for the model core's sub line (the full per-field
+// breakdown is in the inspector on click). "total" is input + output only, matching the
+// rest of the UI; handles missing usage / absent per-field counts gracefully.
+function tokenSummary(usage) {
+  if (!usage) return "token usage unavailable";
+  const fmt = (n) => (n == null ? "—" : n.toLocaleString());
+  const i = usage.input_tokens, o = usage.output_tokens;
+  return `${fmt(i)} in · ${fmt(o)} out · ${fmt((i || 0) + (o || 0))} total`;
 }
 
 // Monotone cubic Hermite interpolation (Fritsch–Carlson) → cubic-bézier. The token series is
@@ -1103,192 +1092,9 @@ function smoothTop(points) {
   return d;
 }
 
-function rebuildAnalytics() {
-  const interactions = computeInteractions();
-  lastInteractions = interactions;
-  if (interactions.length === 0) {
-    usageBar.hidden = true;
-    ucArea.removeAttribute("d"); ucLine.removeAttribute("d");
-    usageTip.hidden = true;
-    return;
-  }
-  usageBar.hidden = false;
-
-  // Per-model aggregate — the agent may switch models mid-session or use several. "total"
-  // is input + output only (see ioTotal).
-  const agg = new Map();
-  let sessionTotal = 0, maxTotal = 0, minTotal = Infinity;
-  for (const it of interactions) {
-    const key = it.model || "(unknown model)";
-    const a = agg.get(key) || { input: 0, output: 0, total: 0, count: 0 };
-    const u = it.usage || {};
-    a.input += u.input_tokens || 0;
-    a.output += u.output_tokens || 0;
-    a.total += it.total;
-    a.count += 1;
-    agg.set(key, a);
-    sessionTotal += it.total;
-    if (it.total > maxTotal) maxTotal = it.total;
-    if (it.total < minTotal) minTotal = it.total;
-  }
-  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
-  usageReadout.textContent =
-    `${fmtTokens(sessionTotal)} tokens · ${plural(interactions.length, "model interaction")} · ${plural(agg.size, "model")}`;
-  modelUsageEl.innerHTML = "";
-  for (const [m, a] of agg) {
-    modelUsageEl.appendChild(el("div", { class: "mu-chip" }, [
-      el("div", { class: "mu-model" }, m),
-      el("div", { class: "mu-stats" }, `${fmtTokens(a.input)} in · ${fmtTokens(a.output)} out · ${fmtTokens(a.total)} total`),
-      el("div", { class: "mu-stats mu-calls" }, plural(a.count, "model interaction")),
-    ]));
-  }
-
-  // Area chart over the event timeline: each interaction holds its FULL token total as a
-  // flat plateau across every column from its start to its end — height reads as the
-  // interaction's actual token usage, independent of how many events/clicks it spanned.
-  // (Spreading the total across the span would shrink a long interaction below a short
-  // one that used fewer tokens, inverting the visual.) Interactions don't overlap, so each
-  // column belongs to at most one; gaps between them rest at the baseline. Y normalizes to
-  // the largest interaction total so the heaviest one reaches the top. The viewBox width =
-  // column count, stretched to the track's exact width, so x lines up 1:1 with the scrubber.
-  const n = eventLog.length;
-  const series = new Array(n).fill(0);
-  const active = new Array(n).fill(false);   // columns that belong to an interaction (vs. baseline gaps)
-  for (const it of interactions) {
-    for (let i = it.start; i <= it.end; i++) { series[i] = it.total; active[i] = true; }
-  }
-  const cols = Math.max(n - 1, 1);
-  usageChart.setAttribute("viewBox", `0 0 ${cols} ${UC_H}`);
-  // Rescale across the interactions' OWN min→max range (not 0→max) so differences between
-  // turns are visually exaggerated: the lightest interaction sits just above the baseline
-  // (FLOOR) and the heaviest reaches the top, everything else proportionally between. Gaps
-  // with no interaction rest flat on the baseline. (When all totals are equal, range is 0 →
-  // every interaction shows at full height.)
-  const FLOOR = 0.16;                         // lowest interaction's height fraction above baseline
-  const range = maxTotal - minTotal;
-  const points = series.map((v, i) => {
-    if (!active[i]) return { x: i, y: UC_H };                       // baseline gap
-    const norm = range > 0 ? (v - minTotal) / range : 1;           // 0 (lightest) → 1 (heaviest)
-    const frac = FLOOR + norm * (1 - FLOOR);                        // FLOOR → 1
-    return { x: i, y: UC_H - frac * UC_H };
-  });
-  // Soften the plateau edges, then re-pin baseline gaps back to the floor: the blur would
-  // otherwise lift the gaps off zero, blurring away the distinction between separate model
-  // interactions. Pinning keeps each gap dropping cleanly to the baseline.
-  const soft = softenSteps(points, 2);
-  for (let i = 0; i < soft.length; i++) if (!active[i]) soft[i].y = UC_H;
-  const top = smoothTop(soft);
-  ucLine.setAttribute("d", top);
-  ucArea.setAttribute("d", `${top} L ${cols} ${UC_H} L 0 ${UC_H} Z`);
-}
-
-// Hover the timeline for a per-interaction summary card. The chart shares the scrub track's
-// exact width, so the cursor's x maps 1:1 to an event index; we surface the interaction (if
-// any) covering it. Bound to the wrap (not the pointer-transparent svg) so dragging the
-// slider still works.
-function onScrubHover(e) {
-  const n = eventLog.length;
-  const rect = scrubWrap.getBoundingClientRect();
-  if (n < 1 || lastInteractions.length === 0 || rect.width === 0) { usageTip.hidden = true; return; }
-  const frac = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
-  const idx = Math.round(frac * Math.max(n - 1, 0));
-  const it = lastInteractions.find(t => idx >= t.start && idx <= t.end);
-  usageTip.innerHTML = "";
-  if (!it) {
-    usageTip.appendChild(el("div", { class: "ut-empty" }, "no model interaction here"));
-  } else {
-    const u = it.usage || {};
-    usageTip.append(
-      el("div", { class: "ut-model" }, it.model || "(unknown model)"),
-      el("div", { class: "ut-stats" },
-        `${fmtTokens(u.input_tokens || 0)} in · ${fmtTokens(u.output_tokens || 0)} out · ${fmtTokens(it.total)} total`),
-    );
-  }
-  usageTip.style.left = `${frac * 100}%`;
-  usageTip.hidden = false;
-}
-scrubWrap.addEventListener("mousemove", onScrubHover);
-scrubWrap.addEventListener("mouseleave", () => { usageTip.hidden = true; });
-
-// Compact, click-free token summary for the model core's sub line (the full per-field
-// breakdown is in the inspector on click). "total" is input + output only, matching the
-// rest of the UI; handles missing usage / absent per-field counts gracefully.
-function tokenSummary(usage) {
-  if (!usage) return "token usage unavailable";
-  const fmt = (n) => (n == null ? "—" : n.toLocaleString());
-  const i = usage.input_tokens, o = usage.output_tokens;
-  return `${fmt(i)} in · ${fmt(o)} out · ${fmt((i || 0) + (o || 0))} total`;
-}
-
-// --- The status badge + box colour (idle / running / replied / error) ---
-function setAgentStatus(status, turnNumber) {
-  agentEl.classList.toggle("running", status === "running");
-  agentEl.classList.toggle("replied", status === "replied");
-  agentEl.classList.toggle("error",   status === "error");
-  agentStatus.className = "status-badge " + (status === "idle" ? "" : status);
-  if (status === "running")      agentStatus.textContent = `running · turn ${turnNumber ?? "?"}`;
-  else if (status === "replied") agentStatus.textContent = `replied ✓ · turn ${turnNumber ?? "?"}`;
-  else if (status === "error")   agentStatus.textContent = `error · turn ${turnNumber ?? "?"}`;
-  else agentStatus.textContent = turnNumber != null ? `idle · awaiting turn ${turnNumber + 1}` : "idle · awaiting first turn";
-}
-
-// --- Ingress: clickable queued-message chips + a docking signal packet ---
-const ingress = {
-  renderQueue(messages, animate) {
-    const prev = queueStack.children.length;
-    queueReadout.textContent = messages.length ? `${messages.length} queued` : "idle";
-    queueStack.innerHTML = "";
-    messages.forEach((msg, i) => {
-      const chip = el("div", { class: "q-chip", title: "click to read queued message",
-        onclick: () => openInspector({ title: "Queued message", state: "queued", tone: "queue",
-          sections: [{ label: "Message", value: msg }] }) }, "msg");
-      if (animate && i === messages.length - 1 && messages.length > prev) chip.classList.add("enter");
-      queueStack.appendChild(chip);
-    });
-  },
-  dock() {                                       // a message strikes the box's left port
-    const p = el("div", { class: "packet" });
-    ingressLane.appendChild(p);
-    scheduleExit(p, 700);
-    flash(portIn, "flash", 700);
-  },
-};
-
-// --- Egress: reply text streaming out as packets + the terminal it lands on ---
-const egress = {
-  _last: 0, _detail: null,
-  reset() {
-    egressTerm.textContent = "reply"; egressTerm.className = "terminal";
-    egressSub.textContent = "—"; this._detail = null;
-  },
-  stream(animate) {                              // a chunk of reply text flowing out
-    if (!animate) return;
-    const now = performance.now();
-    if (now - this._last < 110) return;
-    this._last = now;
-    const p = el("div", { class: "packet stream ok" });
-    egressLane.appendChild(p);
-    scheduleExit(p, 650);
-  },
-  emit(kind, turnNumber, detail, animate) {
-    const ok = kind === "reply";
-    egressTerm.textContent = ok ? "reply ✓" : "error";
-    egressTerm.className = "terminal lit " + (ok ? "tone-done" : "tone-error");
-    egressSub.textContent = ok ? `turn ${turnNumber ?? "?"} replied` : `turn ${turnNumber ?? "?"} errored`;
-    this._detail = { title: ok ? "Reply" : "Error", state: ok ? "replied" : "error",
-      tone: ok ? "done" : "error", sections: [{ label: ok ? "Output" : "Error message", value: detail }] };
-    if (!animate) return;
-    const p = el("div", { class: "packet " + (ok ? "ok" : "err") });
-    egressLane.appendChild(p);
-    scheduleExit(p, 700);
-    flash(portOut, "flash", 700, [ok ? "ok" : "err"]);
-  },
-};
-egressTerm.addEventListener("click", () => openInspector(egress._detail));
-
-// --- The tool bay: cards appear on request; an ended card stays (done/failed,
-// clickable to read its OUTPUT) for its OWN tick and only retires on the NEXT
-// tick — so you can always pause on the terminal event and inspect it. ---
+// --- The tool bay: cards appear on request; an ended card stays (done/failed, clickable to
+// read its OUTPUT) for its OWN tick and only retires on the NEXT tick — so you can always
+// pause on the terminal event and inspect it. One bay per agent view (built with its bayEl). ---
 function createToolBay(bayEl) {
   const cards = new Map();                         // tool_id -> live inst
   const retiring = new Map();                      // ended last tick, awaiting removal
@@ -1356,10 +1162,9 @@ function createToolBay(bayEl) {
     },
   };
 }
-const tools = createToolBay(document.getElementById("tool-bay"));
 
 // --- A momentary card: shows the agent's MOST RECENT activity for one tick. ---
-// Cleared at the top of every event, so it never accumulates.
+// Cleared at the top of every event, so it never accumulates. One per zone, per agent view.
 function createMomentary(zoneEl) {
   let card = null;
   return {
@@ -1372,32 +1177,30 @@ function createMomentary(zoneEl) {
     clear() { if (card) { card.remove(); card = null; } },
   };
 }
-const modelCard   = createMomentary(document.getElementById("think-bay")); // thinking / citation
-const ingressCard = createMomentary(document.getElementById("msg-slot"));   // incoming message
-const outCard     = createMomentary(document.getElementById("out-slot"));    // reply delta streaming out (egress lane)
 
 /* ===========================================================================
- * 4b. LIVE HITL APPROVALS — a developer override surface.
+ * 4b. LIVE HITL APPROVALS — a developer override surface (SESSION-WIDE, one panel).
  *
- * Deliberately SEPARATE from the replay box. The box is a pure function of the
- * scrubbed event prefix; this panel tracks what is awaiting approval at the LIVE
- * head, so it is fed from onStreamEvent (the real-time ingest) — NOT applyEvent
- * (which also runs during scrub/replay and would corrupt the live set). It lets a
- * developer resolve a pending call straight through /api/approve — including
- * "approve & don't ask again" (remember) — without building their own interface or
- * poking at the workflow with scripts. Actions stay enabled regardless of where the
- * box is scrubbed, because the pending call is genuinely live.
+ * Deliberately SEPARATE from the per-agent replay boxes. Each box is a pure function of
+ * its scrubbed event prefix; this panel tracks what is awaiting approval at the LIVE head
+ * across ALL agents (a tool_id is unique session-wide, and /api/approve only needs
+ * session_id + tool_id), so it is fed from onStreamEvent (the real-time ingest, for any
+ * agent) — NOT applyEvent (which also runs during scrub/replay and would corrupt the live
+ * set). It lets a developer resolve a pending call straight through /api/approve —
+ * including "approve & don't ask again" (remember) — without building their own interface.
+ * Actions stay enabled regardless of where any box is scrubbed; the pending call is live.
  * =========================================================================== */
 
-const liveApprovals = new Map();   // tool_id -> { tool_name, tool_input, turn_number }
+const liveApprovals = new Map();   // tool_id -> { tool_name, tool_input, turn_number, agent_id }
 const liveApprovalsEl = document.getElementById("live-approvals");
 
-// Update the live set from a freshly-arrived stream event. Called once per real
-// event in onStreamEvent — never from the replay/scrub path.
+// Update the live set from a freshly-arrived stream event (from ANY agent). Called once per
+// real event in onStreamEvent — never from the replay/scrub path.
 function trackLiveApproval(event, data) {
   if (event === "tool_approval_requested") {
     liveApprovals.set(data.tool_id, {
-      tool_name: data.tool_name, tool_input: data.tool_input || {}, turn_number: data.turn_number,
+      tool_name: data.tool_name, tool_input: data.tool_input || {},
+      turn_number: data.turn_number, agent_id: data.agent_id,
     });
     renderLiveApprovals();
   } else if (event === "tool_approval_resolved") {
@@ -1421,10 +1224,16 @@ function renderLiveApprovals() {
     const rememberBtn = el("button", { class: "la-remember",
       title: "Approve and auto-approve this tool for the rest of the session" }, "Approve & don't ask again");
     const denyBtn     = el("button", { class: "la-deny" }, "Deny");
+    // Name the agent the call belongs to (its full tree-unique id, e.g. "<parent>-<child>") so a
+    // developer can tell whose tool is gated when several agents are running concurrently. Show it
+    // whole — it is already a short id, and truncating would hide the parent prefix that makes it
+    // tree-unique (and could collide in display across two same-suffixed cousins).
+    const owner = info.agent_id ? `agent ${String(info.agent_id)}` : null;
     const row = el("div", { class: "la-item" }, [
       el("div", {}, [
         el("span", { class: "la-name" }, info.tool_name || "tool"),
         el("span", { class: "la-id" }, "#" + String(toolId).slice(-5)),
+        owner ? el("span", { class: "la-id" }, " · " + owner) : null,
       ]),
       Object.keys(info.tool_input || {}).length ? el("div", { class: "la-input" }, previewOf(info.tool_input, 160)) : null,
       reason,
@@ -1473,369 +1282,911 @@ async function devApprove(toolId, approved, remember, reason, row, err) {
   }
 }
 
-/* ===========================================================================
- * 5. DRIVER — applies events to the derived state + render layer.
- * `animate` gates packets / flashes / enter-exit so the SAME function drives
- * both live updates and instant scrub rebuilds.
- * =========================================================================== */
+function createAgentView(agentId, { label, isRoot } = {}) {
+  // Clone the per-agent panel and resolve its parts within this subtree (the markup uses
+  // classes, not ids, so N panels coexist). `q` scopes every lookup to THIS view.
+  const root = document.getElementById("agent-view-tpl").content.firstElementChild.cloneNode(true);
+  const q  = (sel) => root.querySelector(sel);
+  // The full tree-unique agent id ("<parent>-<child>…") — shown whole, not truncated: it is already
+  // a short id, and dropping the parent prefix would hide the tree path and could collide in display.
+  const shortId = String(agentId);
+  root.classList.toggle("subagent", !isRoot);
+  q(".av-title").textContent = label || (isRoot ? "Agent runtime" : "Subagent");
+  q(".av-id").textContent = isRoot ? `session · ${shortId}` : `#${shortId}`;
+  q(".av-name").textContent = isRoot ? "Agent" : shortId;   // the box's own header label
+  agentsContainer.appendChild(root);
 
-const turnMetaEl = document.getElementById("turn-meta");
+  const agentEl     = q(".agent-enclosure");
+  const agentStatus = q(".agent-status");
+  const portIn      = q(".port-in");
+  const portOut     = q(".port-out");
+  const ingressLane = q(".lane.ingress");
+  const egressLane  = q(".lane.egress");
+  const queueStack  = q(".queue-stack");
+  const queueReadout= q(".queue-readout");
+  const egressTerm  = q(".egress-terminal");
+  const egressSub   = q(".egress-readout");
+  const stageEl     = q(".stage");
+  const turnMetaEl  = q(".turn-meta");
+  const endedTag    = q(".av-ended");
+  const degradedTag = q(".av-degraded");
 
-let turnNumber = null;     // last turn we've seen begin (null before any turn)
-let turnActive = false;    // a turn is mid-flight (for the top transport chip)
-let queued = [];           // queued user messages, cleared when a turn starts
-let streamingOut = false;  // reply text is currently flowing out the egress port
+  // --- The model core inside the box: a binary highlight (dormant / bright) held ON for
+  // the whole model_interaction_started → ended bracket. While active, its label shows the
+  // MODEL NAME (so you can read which model is generating from the start of the interaction,
+  // for its whole duration); the sub line carries the momentary activity note
+  // (active / thinking / citing / streaming), which the label is deliberately kept clear of. ---
+  const model = {
+    el: q(".model-core"),
+    label: q(".model-label"),
+    sub: q(".model-sub"),
+    _detail: null,
+    activate(modelName) {
+      this.el.classList.add("active");
+      this.el.classList.remove("clickable");
+      this._detail = null;
+      this.label.textContent = modelName || "Model";
+      this.label.classList.toggle("mc-model", !!modelName);
+      this.sub.textContent = "active";
+    },
+    deactivate() {
+      this.el.classList.remove("active", "clickable");
+      this._detail = null;
+      this.label.textContent = "Model";
+      this.label.classList.remove("mc-model");
+      this.sub.textContent = "dormant";
+    },
+    // The interaction ended: the core itself drops out of "active" but KEEPS the model name
+    // and now shows this interaction's token totals on its sub line — no extra card. The
+    // core becomes clickable to open the full per-field usage in the inspector.
+    end(modelName, usage) {
+      this.el.classList.remove("active");
+      this.label.textContent = modelName || "Model";
+      this.label.classList.toggle("mc-model", !!modelName);
+      this.sub.textContent = usage ? tokenSummary(usage) : "done";
+      this._detail = { title: "Model interaction", state: "ended", tone: "model",
+        sections: [{ label: "Model", value: modelName }, { label: "Token usage", value: usage }] };
+      this.el.classList.toggle("clickable", !!usage);
+    },
+    note(text) { if (this.el.classList.contains("active")) this.sub.textContent = text; },
+  };
+  model.el.addEventListener("click", () => { if (model._detail) openInspector(model._detail); });
 
-function updateMeta() {
-  const bits = [];
-  if (turnNumber != null) bits.push(`turn #${turnNumber}`);
-  const n = tools.size; if (n) bits.push(`${n} tool${n > 1 ? "s" : ""} active`);
-  turnMetaEl.textContent = bits.join("   ·   ");
-}
-function setStreamingOut(on) { streamingOut = on; stageEl.classList.toggle("streaming-out", on); }
-function clearMomentary() { modelCard.clear(); ingressCard.clear(); outCard.clear(); }
+  /* =========================================================================
+   * 4c. TOKEN-USAGE ANALYTICS (per agent) — per-model aggregates (this agent's usage bar)
+   * + an area chart laid behind its scrub track (1:1 with the timeline, hover for a
+   * per-interaction card). Both derived from THIS view's eventLog (model_interaction_started
+   * /ended pairs); rebuilt as interactions complete. Pure helpers (ioTotal/fmtTokens/
+   * softenSteps/smoothTop/tokenSummary) are module-level (below the factory).
+   * ========================================================================= */
+  const usageBar      = q(".usage-bar");
+  const usageReadout  = q(".usage-readout");
+  const modelUsageEl  = q(".model-usage");
+  const usageChart    = q(".usage-chart");
+  const scrubWrap     = q(".scrub-wrap");
+  const usageTip      = q(".usage-tip");
+  const ucArea = document.createElementNS(SVGNS, "path"); ucArea.setAttribute("class", "uc-area");
+  const ucLine = document.createElementNS(SVGNS, "path");
+  ucLine.setAttribute("class", "uc-line"); ucLine.setAttribute("vector-effect", "non-scaling-stroke");
+  usageChart.append(ucArea, ucLine);
+  let lastInteractions = [];   // completed interactions from the last rebuild (for the hover card)
 
-function applyEvent(event, data, animate) {
-  finalizeExits();                                // force-finish any exit anims from prior ticks
-  tools.flushRetiring(animate);                   // retire tools that ended on the PREVIOUS tick
-  clearMomentary();                               // momentary cards last exactly one tick
-  switch (event) {
-    case "message_queued":
-      queued.push(data.user_message);
-      ingress.renderQueue(queued, animate);
-      break;
+  // Pair THIS view's started/ended events into completed interactions, each tagged with the
+  // event-index span it occupied (used to spread its tokens across the timeline). One still in
+  // flight (no ended yet) is omitted until its usage is known.
+  function computeInteractions() {
+    const out = [];
+    let start = null, startModel = null;
+    eventLog.forEach((e, i) => {
+      if (e.event === "model_interaction_started") {
+        start = i; startModel = e.data.model || null;
+      } else if (e.event === "model_interaction_ended" && start != null) {
+        out.push({ model: e.data.model || startModel, usage: e.data.usage || null,
+                   total: ioTotal(e.data.usage), start, end: i });
+        start = null; startModel = null;
+      }
+    });
+    return out;
+  }
 
-    case "turn_started":
-      turnNumber = data.turn_number ?? turnNumber;
-      turnActive = true;
-      queued = []; ingress.renderQueue(queued, false);
-      tools.clear(); egress.reset(); setStreamingOut(false);
-      setAgentStatus("running", turnNumber);
-      model.deactivate();  // agent's turn began, but the MODEL isn't working yet
-      // The incoming message docks at the box edge — shown momentarily + clickable.
-      ingressCard.show({ tone: "queue", name: "Message in", state: "received",
-        preview: previewOf(data.user_message), animate,
-        snapshot: () => ({ title: "Incoming message", state: "received", tone: "queue",
-          sections: [{ label: "Message", value: data.user_message }] }) });
-      if (animate) ingress.dock();
-      updateMeta();
-      break;
+  // Rebuild THIS agent's usage bar + area chart from its own event log.
+  function rebuildAnalytics() {
+    const interactions = computeInteractions();
+    lastInteractions = interactions;
+    if (interactions.length === 0) {
+      usageBar.hidden = true;
+      ucArea.removeAttribute("d"); ucLine.removeAttribute("d");
+      usageTip.hidden = true;
+      return;
+    }
+    usageBar.hidden = false;
 
-    // The MODEL itself is working only between these two events — distinct from
-    // the AGENT, which is "running" across the whole turn (tools, waiting, etc.).
-    case "model_interaction_started":
-      // Light the core and name the model for the whole interaction.
-      model.activate(data.model);
-      break;
-    case "model_interaction_ended":
-      // No separate card: the totals land on the model core itself, which keeps the model
-      // name and now shows input/output/total on its sub line (clickable for the full
-      // breakdown). Pausing on this tick is where the just-finished usage is visible.
-      model.end(data.model, data.usage);
-      break;
-
-    case "thought_summary":
-      model.note("thinking");
-      modelCard.show({ tone: "model", name: "Thinking", state: "reasoning",
-        preview: previewOf(data.delta), animate,
-        snapshot: () => ({ title: "Thinking", state: "reasoning", tone: "model",
-          sections: [{ label: "Thought delta (raw)", value: data.delta }] }) });
-      break;
-
-    case "text_annotation":
-      model.note("citing");
-      modelCard.show({ tone: "model", name: "Citation", state: "annotation",
-        preview: previewOf(data.delta), animate,
-        snapshot: () => ({ title: "Citation", state: "annotation", tone: "model",
-          sections: [{ label: "Annotation delta (raw)", value: data.delta }] }) });
-      break;
-
-    case "reply_delta":
-      model.note("streaming"); setStreamingOut(true);
-      outCard.show({ tone: "done", name: "Reply Δ", state: "streaming out",
-        preview: previewOf(data.text), animate,
-        snapshot: () => ({ title: "Reply chunk", state: "streaming", tone: "done",
-          sections: [{ label: "Delta text", value: data.text }] }) });
-      egress.stream(animate);
-      break;
-
-    case "tool_requested":
-      tools.spawn(data.tool_id, data, animate); updateMeta(); break;
-    case "tool_approval_requested":
-      // Gated tool parked for a human decision (between requested and start).
-      tools.set(data.tool_id, "awaiting", data, animate); updateMeta(); break;
-    case "tool_approval_resolved":
-      // Approved → distinct "approved" state (tool_start then drives it to "running");
-      // denied → terminal here (carry the reason into the card's Error section, since no
-      // tool_error will arrive). Never regress to "requested". Either way, stamp the card
-      // with the event's reason (+ "remembered" when the decision allow-listed the tool).
-      if (data.approved) tools.set(data.tool_id, "approved", data, animate);
-      else tools.end(data.tool_id, "denied",
-        { ...data, message: data.reason ? `Denied: ${data.reason}` : "Denied" }, animate);
-      tools.resolve(data.tool_id, data.approved, data.reason, data.remember,
-        resolutionText(data.approved, data.reason, data.remember));
-      updateMeta(); break;
-    case "tool_start":
-      tools.set(data.tool_id, "running", data, animate); updateMeta(); break;
-    case "tool_progress_delta":
-      tools.progress(data.tool_id, animate); break;
-    case "tool_end":
-      tools.end(data.tool_id, "done", data, animate);
-      updateMeta(); break;
-    case "tool_error":
-      tools.end(data.tool_id, "failed", data, animate);
-      updateMeta(); break;
-
-    case "reply": {
-      turnActive = false; setStreamingOut(false);
-      setAgentStatus("replied", turnNumber);
-      model.deactivate();
-      // Agent-agnostic: AgentReply.output is the handler's return model as a dict. This UI
-      // knows nothing about any agent's output shape, so it just renders the raw JSON —
-      // there is always an output object to show.
-      egress.emit("reply", turnNumber, JSON.stringify(data.output ?? {}, null, 2), animate);
-      updateMeta(); break;
+    // Per-model aggregate — the agent may switch models mid-session or use several. "total"
+    // is input + output only (see ioTotal).
+    const agg = new Map();
+    let sessionTotal = 0, maxTotal = 0, minTotal = Infinity;
+    for (const it of interactions) {
+      const key = it.model || "(unknown model)";
+      const a = agg.get(key) || { input: 0, output: 0, total: 0, count: 0 };
+      const u = it.usage || {};
+      a.input += u.input_tokens || 0;
+      a.output += u.output_tokens || 0;
+      a.total += it.total;
+      a.count += 1;
+      agg.set(key, a);
+      sessionTotal += it.total;
+      if (it.total > maxTotal) maxTotal = it.total;
+      if (it.total < minTotal) minTotal = it.total;
+    }
+    const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+    usageReadout.textContent =
+      `${fmtTokens(sessionTotal)} tokens · ${plural(interactions.length, "model interaction")} · ${plural(agg.size, "model")}`;
+    modelUsageEl.innerHTML = "";
+    for (const [m, a] of agg) {
+      modelUsageEl.appendChild(el("div", { class: "mu-chip" }, [
+        el("div", { class: "mu-model" }, m),
+        el("div", { class: "mu-stats" }, `${fmtTokens(a.input)} in · ${fmtTokens(a.output)} out · ${fmtTokens(a.total)} total`),
+        el("div", { class: "mu-stats mu-calls" }, plural(a.count, "model interaction")),
+      ]));
     }
 
-    case "error":
-      turnActive = false; setStreamingOut(false);
-      setAgentStatus("error", turnNumber);
-      model.deactivate();
-      egress.emit("error", turnNumber, data.message, animate);
-      updateMeta(); break;
-
-    case "turn_end":
-      turnActive = false; setStreamingOut(false);
-      tools.clear();
-      setAgentStatus("idle", turnNumber);          // → "awaiting turn N+1"
-      model.deactivate();
-      egress.reset();
-      updateMeta(); break;
+    // Area chart over the event timeline: each interaction holds its FULL token total as a
+    // flat plateau across every column from its start to its end — height reads as the
+    // interaction's actual token usage, independent of how many events/clicks it spanned.
+    // (Spreading the total across the span would shrink a long interaction below a short
+    // one that used fewer tokens, inverting the visual.) Interactions don't overlap, so each
+    // column belongs to at most one; gaps between them rest at the baseline. Y normalizes to
+    // the largest interaction total so the heaviest one reaches the top. The viewBox width =
+    // column count, stretched to the track's exact width, so x lines up 1:1 with the scrubber.
+    const n = eventLog.length;
+    const series = new Array(n).fill(0);
+    const active = new Array(n).fill(false);   // columns that belong to an interaction (vs. baseline gaps)
+    for (const it of interactions) {
+      for (let i = it.start; i <= it.end; i++) { series[i] = it.total; active[i] = true; }
+    }
+    const cols = Math.max(n - 1, 1);
+    usageChart.setAttribute("viewBox", `0 0 ${cols} ${UC_H}`);
+    // Rescale across the interactions' OWN min→max range (not 0→max) so differences between
+    // turns are visually exaggerated: the lightest interaction sits just above the baseline
+    // (FLOOR) and the heaviest reaches the top, everything else proportionally between. Gaps
+    // with no interaction rest flat on the baseline. (When all totals are equal, range is 0 →
+    // every interaction shows at full height.)
+    const FLOOR = 0.16;                         // lowest interaction's height fraction above baseline
+    const range = maxTotal - minTotal;
+    const points = series.map((v, i) => {
+      if (!active[i]) return { x: i, y: UC_H };                       // baseline gap
+      const norm = range > 0 ? (v - minTotal) / range : 1;           // 0 (lightest) → 1 (heaviest)
+      const frac = FLOOR + norm * (1 - FLOOR);                        // FLOOR → 1
+      return { x: i, y: UC_H - frac * UC_H };
+    });
+    // Soften the plateau edges, then re-pin baseline gaps back to the floor: the blur would
+    // otherwise lift the gaps off zero, blurring away the distinction between separate model
+    // interactions. Pinning keeps each gap dropping cleanly to the baseline.
+    const soft = softenSteps(points, 2);
+    for (let i = 0; i < soft.length; i++) if (!active[i]) soft[i].y = UC_H;
+    const top = smoothTop(soft);
+    ucLine.setAttribute("d", top);
+    ucArea.setAttribute("d", `${top} L ${cols} ${UC_H} L 0 ${UC_H} Z`);
   }
-}
 
-function resetView() {
-  finalizeExits(); clearMomentary(); tools.clear();
-  turnNumber = null; turnActive = false; queued = []; setStreamingOut(false);
-  ingress.renderQueue(queued, false);
-  egress.reset();
-  model.deactivate();
-  setAgentStatus("idle", null);
-  turnMetaEl.textContent = "";
+  // Hover the timeline for a per-interaction summary card. The chart shares the scrub track's
+  // exact width, so the cursor's x maps 1:1 to an event index; we surface the interaction (if
+  // any) covering it. Bound to the wrap (not the pointer-transparent svg) so dragging the
+  // slider still works.
+  function onScrubHover(e) {
+    const n = eventLog.length;
+    const rect = scrubWrap.getBoundingClientRect();
+    if (n < 1 || lastInteractions.length === 0 || rect.width === 0) { usageTip.hidden = true; return; }
+    const frac = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
+    const idx = Math.round(frac * Math.max(n - 1, 0));
+    const it = lastInteractions.find(t => idx >= t.start && idx <= t.end);
+    usageTip.innerHTML = "";
+    if (!it) {
+      usageTip.appendChild(el("div", { class: "ut-empty" }, "no model interaction here"));
+    } else {
+      const u = it.usage || {};
+      usageTip.append(
+        el("div", { class: "ut-model" }, it.model || "(unknown model)"),
+        el("div", { class: "ut-stats" },
+          `${fmtTokens(u.input_tokens || 0)} in · ${fmtTokens(u.output_tokens || 0)} out · ${fmtTokens(it.total)} total`),
+      );
+    }
+    usageTip.style.left = `${frac * 100}%`;
+    usageTip.hidden = false;
+  }
+  scrubWrap.addEventListener("mousemove", onScrubHover);
+  scrubWrap.addEventListener("mouseleave", () => { usageTip.hidden = true; });
+
+  // --- The status badge + box colour (idle / running / replied / error) ---
+  function setAgentStatus(status, turnNumber) {
+    agentEl.classList.toggle("running", status === "running");
+    agentEl.classList.toggle("replied", status === "replied");
+    agentEl.classList.toggle("error",   status === "error");
+    agentStatus.className = "status-badge " + (status === "idle" ? "" : status);
+    if (status === "running")      agentStatus.textContent = `running · turn ${turnNumber ?? "?"}`;
+    else if (status === "replied") agentStatus.textContent = `replied ✓ · turn ${turnNumber ?? "?"}`;
+    else if (status === "error")   agentStatus.textContent = `error · turn ${turnNumber ?? "?"}`;
+    else agentStatus.textContent = turnNumber != null ? `idle · awaiting turn ${turnNumber + 1}` : "idle · awaiting first turn";
+  }
+
+  // --- Ingress: clickable queued-message chips + a docking signal packet ---
+  const ingress = {
+    renderQueue(messages, animate) {
+      const prev = queueStack.children.length;
+      queueReadout.textContent = messages.length ? `${messages.length} queued` : "idle";
+      queueStack.innerHTML = "";
+      messages.forEach((msg, i) => {
+        const chip = el("div", { class: "q-chip", title: "click to read queued message",
+          onclick: () => openInspector({ title: "Queued message", state: "queued", tone: "queue",
+            sections: [{ label: "Message", value: msg }] }) }, "msg");
+        if (animate && i === messages.length - 1 && messages.length > prev) chip.classList.add("enter");
+        queueStack.appendChild(chip);
+      });
+    },
+    dock() {                                       // a message strikes the box's left port
+      const p = el("div", { class: "packet" });
+      ingressLane.appendChild(p);
+      scheduleExit(p, 700);
+      flash(portIn, "flash", 700);
+    },
+  };
+
+  // --- Egress: reply text streaming out as packets + the terminal it lands on ---
+  const egress = {
+    _last: 0, _detail: null,
+    reset() {
+      egressTerm.textContent = "reply"; egressTerm.className = "terminal";
+      egressSub.textContent = "—"; this._detail = null;
+    },
+    stream(animate) {                              // a chunk of reply text flowing out
+      if (!animate) return;
+      const now = performance.now();
+      if (now - this._last < 110) return;
+      this._last = now;
+      const p = el("div", { class: "packet stream ok" });
+      egressLane.appendChild(p);
+      scheduleExit(p, 650);
+    },
+    emit(kind, turnNumber, detail, animate) {
+      const ok = kind === "reply";
+      egressTerm.textContent = ok ? "reply ✓" : "error";
+      egressTerm.className = "terminal lit " + (ok ? "tone-done" : "tone-error");
+      egressSub.textContent = ok ? `turn ${turnNumber ?? "?"} replied` : `turn ${turnNumber ?? "?"} errored`;
+      this._detail = { title: ok ? "Reply" : "Error", state: ok ? "replied" : "error",
+        tone: ok ? "done" : "error", sections: [{ label: ok ? "Output" : "Error message", value: detail }] };
+      if (!animate) return;
+      const p = el("div", { class: "packet " + (ok ? "ok" : "err") });
+      egressLane.appendChild(p);
+      scheduleExit(p, 700);
+      flash(portOut, "flash", 700, [ok ? "ok" : "err"]);
+    },
+  };
+  egressTerm.addEventListener("click", () => openInspector(egress._detail));
+
+  // This view's tool bay + momentary cards (the factories themselves are module-level).
+  const tools       = createToolBay(q(".tool-bay"));
+  const modelCard   = createMomentary(q(".think-bay")); // thinking / citation
+  const ingressCard = createMomentary(q(".msg-slot"));  // incoming message
+  const outCard     = createMomentary(q(".out-slot"));  // reply delta streaming out (egress lane)
+
+  /* =========================================================================
+   * 5. DRIVER (per agent) — applies THIS view's events to its derived state + render
+   * layer. `animate` gates packets / flashes / enter-exit so the SAME function drives
+   * both live updates and instant scrub rebuilds. (Live HITL approvals are tracked
+   * SESSION-wide, not here — see the module-level live-approvals block.)
+   * ========================================================================= */
+
+  let turnNumber = null;     // last turn we've seen begin on THIS agent (null before any turn)
+  let turnActive = false;    // a turn is mid-flight (for the top transport chip)
+  let queued = [];           // queued user messages, cleared when a turn starts
+  let streamingOut = false;  // reply text is currently flowing out the egress port
+
+  function updateMeta() {
+    const bits = [];
+    if (turnNumber != null) bits.push(`turn #${turnNumber}`);
+    const n = tools.size; if (n) bits.push(`${n} tool${n > 1 ? "s" : ""} active`);
+    turnMetaEl.textContent = bits.join("   ·   ");
+  }
+  function setStreamingOut(on) { streamingOut = on; stageEl.classList.toggle("streaming-out", on); }
+  function clearMomentary() { modelCard.clear(); ingressCard.clear(); outCard.clear(); }
+  // "Detail unavailable" mark, driven by a synthetic subagent_stream_unavailable for THIS subagent. It is
+  // a sticky panel flag, NOT turn/box state: the panel + history stay visible and scrubbable, we
+  // just badge that the merge couldn't load this subagent's own events (refresh to retry). Cleared
+  // by resetView so a scrub rebuild to a prefix BEFORE the event drops the mark. The reason (if
+  // any) rides the badge tooltip.
+  function setDegraded(on, reason) {
+    root.classList.toggle("degraded", on);
+    degradedTag.hidden = !on;
+    if (on && reason) degradedTag.title = reason;
+  }
+
+  function applyEvent(event, data, animate) {
+    finalizeExits();                                // force-finish any exit anims from prior ticks
+    tools.flushRetiring(animate);                   // retire tools that ended on the PREVIOUS tick
+    clearMomentary();                               // momentary cards last exactly one tick
+    switch (event) {
+      case "message_queued":
+        queued.push(data.user_message);
+        ingress.renderQueue(queued, animate);
+        break;
+
+      case "turn_started":
+        turnNumber = data.turn_number ?? turnNumber;
+        turnActive = true;
+        queued = []; ingress.renderQueue(queued, false);
+        tools.clear(); egress.reset(); setStreamingOut(false);
+        setAgentStatus("running", turnNumber);
+        model.deactivate();  // agent's turn began, but the MODEL isn't working yet
+        // The incoming message docks at the box edge — shown momentarily + clickable.
+        ingressCard.show({ tone: "queue", name: "Message in", state: "received",
+          preview: previewOf(data.user_message), animate,
+          snapshot: () => ({ title: "Incoming message", state: "received", tone: "queue",
+            sections: [{ label: "Message", value: data.user_message }] }) });
+        if (animate) ingress.dock();
+        updateMeta();
+        break;
+
+      // The MODEL itself is working only between these two events — distinct from
+      // the AGENT, which is "running" across the whole turn (tools, waiting, etc.).
+      case "model_interaction_started":
+        // Light the core and name the model for the whole interaction.
+        model.activate(data.model);
+        break;
+      case "model_interaction_ended":
+        // No separate card: the totals land on the model core itself, which keeps the model
+        // name and now shows input/output/total on its sub line (clickable for the full
+        // breakdown). Pausing on this tick is where the just-finished usage is visible.
+        model.end(data.model, data.usage);
+        break;
+
+      case "thought_summary":
+        model.note("thinking");
+        modelCard.show({ tone: "model", name: "Thinking", state: "reasoning",
+          preview: previewOf(data.delta), animate,
+          snapshot: () => ({ title: "Thinking", state: "reasoning", tone: "model",
+            sections: [{ label: "Thought delta (raw)", value: data.delta }] }) });
+        break;
+
+      case "text_annotation":
+        model.note("citing");
+        modelCard.show({ tone: "model", name: "Citation", state: "annotation",
+          preview: previewOf(data.delta), animate,
+          snapshot: () => ({ title: "Citation", state: "annotation", tone: "model",
+            sections: [{ label: "Annotation delta (raw)", value: data.delta }] }) });
+        break;
+
+      case "reply_delta":
+        model.note("streaming"); setStreamingOut(true);
+        outCard.show({ tone: "done", name: "Reply Δ", state: "streaming out",
+          preview: previewOf(data.text), animate,
+          snapshot: () => ({ title: "Reply chunk", state: "streaming", tone: "done",
+            sections: [{ label: "Delta text", value: data.text }] }) });
+        egress.stream(animate);
+        break;
+
+      case "tool_requested":
+        tools.spawn(data.tool_id, data, animate); updateMeta(); break;
+      case "tool_approval_requested":
+        // Gated tool parked for a human decision (between requested and start).
+        tools.set(data.tool_id, "awaiting", data, animate); updateMeta(); break;
+      case "tool_approval_resolved":
+        // Approved → distinct "approved" state (tool_start then drives it to "running");
+        // denied → terminal here (carry the reason into the card's Error section, since no
+        // tool_error will arrive). Never regress to "requested". Either way, stamp the card
+        // with the event's reason (+ "remembered" when the decision allow-listed the tool).
+        if (data.approved) tools.set(data.tool_id, "approved", data, animate);
+        else tools.end(data.tool_id, "denied",
+          { ...data, message: data.reason ? `Denied: ${data.reason}` : "Denied" }, animate);
+        tools.resolve(data.tool_id, data.approved, data.reason, data.remember,
+          resolutionText(data.approved, data.reason, data.remember));
+        updateMeta(); break;
+      case "tool_start":
+        tools.set(data.tool_id, "running", data, animate); updateMeta(); break;
+      case "tool_progress_delta":
+        tools.progress(data.tool_id, animate); break;
+      case "tool_end":
+        tools.end(data.tool_id, "done", data, animate);
+        updateMeta(); break;
+      case "tool_error":
+        tools.end(data.tool_id, "failed", data, animate);
+        updateMeta(); break;
+
+      // Subagent lifecycle — published BY THIS (parent) agent, so they live on the PARENT's
+      // timeline. Each names a CHILD (subagent_id / agent_key / workflow_id); the child's own
+      // events arrive under data.agent_id == subagent_id and are routed to the child's OWN panel
+      // (which the router mounts off subagent_started). Here we just surface the parent-side
+      // marker as a momentary card so the parent's box reflects that it drove a child.
+      case "subagent_started":
+        modelCard.show({ tone: "model", name: "Subagent +", state: data.agent_key || "subagent",
+          preview: `#${String(data.subagent_id)}`, animate,
+          snapshot: () => ({ title: "Subagent started", state: "started", tone: "model",
+            sections: [{ label: "Agent key", value: data.agent_key },
+                       { label: "Subagent id", value: data.subagent_id },
+                       { label: "Workflow id", value: data.workflow_id }] }) });
+        break;
+      case "subagent_message_sent":
+        modelCard.show({ tone: "model", name: "Subagent →", state: data.function || "message",
+          preview: `#${String(data.subagent_id)} · t${data.subagent_turn}`, animate,
+          snapshot: () => ({ title: "Message to subagent", state: "dispatched", tone: "model",
+            sections: [{ label: "Agent key", value: data.agent_key },
+                       { label: "Subagent id", value: data.subagent_id },
+                       { label: "Function", value: data.function },
+                       { label: "Subagent turn", value: data.subagent_turn }] }) });
+        break;
+      case "subagent_reply_received":
+        modelCard.show({ tone: data.outcome === "ok" ? "done" : "error", name: "Subagent ←",
+          state: data.outcome === "ok" ? "reply" : "error",
+          preview: `#${String(data.subagent_id)} · t${data.subagent_turn}`, animate,
+          snapshot: () => ({ title: "Subagent reply", state: data.outcome, tone: data.outcome === "ok" ? "done" : "error",
+            sections: [{ label: "Agent key", value: data.agent_key },
+                       { label: "Subagent id", value: data.subagent_id },
+                       { label: "Function", value: data.function },
+                       { label: "Subagent turn", value: data.subagent_turn },
+                       { label: "Outcome", value: data.outcome }] }) });
+        break;
+      case "subagent_stopped":
+        modelCard.show({ tone: "neutral", name: "Subagent ×", state: data.agent_key || "stopped",
+          preview: `#${String(data.subagent_id)}`, animate,
+          snapshot: () => ({ title: "Subagent stopped", state: "stopped", tone: "neutral",
+            sections: [{ label: "Agent key", value: data.agent_key },
+                       { label: "Subagent id", value: data.subagent_id },
+                       { label: "Workflow id", value: data.workflow_id }] }) });
+        break;
+
+      // SYNTHESIZED CLIENT-SIDE by the stream merge (agent_id == subagent_id, so the router
+      // delivered this to the AFFECTED subagent's OWN view): the merge gave up reading this
+      // subagent's events. It is non-fatal and NOT a turn event (turn_number 0, turn_id "") —
+      // do NOT advance turnNumber / turnActive / the status badge here. Only flip the panel's
+      // sticky "detail unavailable — refresh to retry" mark; the panel + history stay intact.
+      case "subagent_stream_unavailable":
+        setDegraded(true, data.reason || "Subagent detail couldn't be loaded — refresh to retry.");
+        break;
+
+      case "reply": {
+        turnActive = false; setStreamingOut(false);
+        setAgentStatus("replied", turnNumber);
+        model.deactivate();
+        // Agent-agnostic: AgentReply.output is the handler's return model as a dict. This UI
+        // knows nothing about any agent's output shape, so it just renders the raw JSON —
+        // there is always an output object to show.
+        egress.emit("reply", turnNumber, JSON.stringify(data.output ?? {}, null, 2), animate);
+        updateMeta(); break;
+      }
+
+      case "error":
+        turnActive = false; setStreamingOut(false);
+        setAgentStatus("error", turnNumber);
+        model.deactivate();
+        egress.emit("error", turnNumber, data.message, animate);
+        updateMeta(); break;
+
+      case "turn_end":
+        turnActive = false; setStreamingOut(false);
+        tools.clear();
+        setAgentStatus("idle", turnNumber);          // → "awaiting turn N+1"
+        model.deactivate();
+        egress.reset();
+        updateMeta(); break;
+    }
+  }
+
+  function resetView() {
+    finalizeExits(); clearMomentary(); tools.clear();
+    turnNumber = null; turnActive = false; queued = []; setStreamingOut(false);
+    ingress.renderQueue(queued, false);
+    egress.reset();
+    model.deactivate();
+    setAgentStatus("idle", null);
+    setDegraded(false);                            // re-applied by replaying subagent_stream_unavailable
+    turnMetaEl.textContent = "";
+  }
+
+  /* =========================================================================
+   * 6. HISTORY (per agent): this view's own event log, scrubber + transport
+   * (step / play / live / turn-jump). Each agent scrubs INDEPENDENTLY.
+   * ========================================================================= */
+
+  const scrubEl     = q(".scrub");
+  const liveBtn     = q(".live-btn");
+  const playBtn     = q(".play-btn");
+  const prevTurnBtn = q(".prev-turn");
+  const nextTurnBtn = q(".next-turn");
+  const readoutEl   = q(".scrub-readout");
+  const ticksEl     = q(".turn-ticks");
+
+  const eventLog = [];
+  let viewIndex = 0;        // events currently applied to the view
+  let following = true;     // cursor pinned to the live tail
+  let playing = false;
+  let playTimer = null;
+  const PLAY_MS = 650;
+
+  let replaying = true;     // settle history instantly until the stream quiets
+  let liveFlipTimer = null;
+  function scheduleLiveFlip() {
+    if (!replaying) return;
+    clearTimeout(liveFlipTimer);
+    liveFlipTimer = setTimeout(() => { replaying = false; }, 150);
+  }
+
+  function rebuildTo(index) {
+    resetView();
+    for (let i = 0; i < index; i++) applyEvent(eventLog[i].event, eventLog[i].data, false);
+    viewIndex = index;
+    updateScrub();
+  }
+
+  // Slider values that land on the IDLE tick just BEFORE each turn starts — i.e.
+  // the index of each turn_started event itself (events [0,i) applied, turn_started
+  // not yet), so stepping forward from there shows the message come in.
+  function turnStartTargets() {
+    const out = [];
+    for (let i = 0; i < eventLog.length; i++) if (eventLog[i].event === "turn_started") out.push(i);
+    return out;
+  }
+  let lastTickN = -1;
+  function renderTurnTicks() {
+    if (eventLog.length === lastTickN) return;     // positions only shift when n changes
+    lastTickN = eventLog.length;
+    ticksEl.innerHTML = "";
+    const n = eventLog.length; if (!n) return;
+    for (const target of turnStartTargets()) {
+      const frac = target / n;
+      const tick = el("div", {
+        class: "turn-tick", title: `turn ${eventLog[target].data.turn_number ?? "?"} — click, then step ▶ to see it arrive`,
+        onclick: () => gotoIndex(target),
+      });
+      tick.style.left = `calc(${frac} * (100% - 14px) + 7px)`;
+      ticksEl.appendChild(tick);
+    }
+  }
+
+  function updateScrub() {
+    const n = eventLog.length;
+    scrubEl.max = n; scrubEl.disabled = n === 0;
+    if (following) { viewIndex = n; scrubEl.value = n; }
+    renderTurnTicks();
+    // No event TYPE here on purpose: a variable-length name would resize the
+    // slider as you scrub. The type is legible in the animation above.
+    const ev = viewIndex > 0 ? eventLog[viewIndex - 1] : null;
+    readoutEl.textContent = !n ? "no events"
+      : `${viewIndex} / ${n}` + (ev && ev.data.turn_number != null ? ` · t${ev.data.turn_number}` : "");
+    liveBtn.classList.toggle("following", following);
+    liveBtn.textContent = following ? "● LIVE" : "○ JUMP TO LIVE";
+    playBtn.textContent = playing ? "⏸" : "▶";
+    playBtn.classList.toggle("active", playing);
+    playBtn.disabled = n === 0 || (following && !playing);
+    playBtn.title = playing ? "Pause" : "Play from here";
+    prevTurnBtn.disabled = n === 0;
+    nextTurnBtn.disabled = n === 0;
+  }
+
+  // Ingest one live event for THIS agent: record it, and if following the tail, render it.
+  // The SESSION-wide concerns (live-approvals set, header status chip) are handled by the
+  // router/global layer, not here — this view only owns its own log + box.
+  function onStreamEvent(event, data) {
+    eventLog.push({ event, data });
+    rebuildAnalytics();        // this agent's usage bar/chart, derived from its own log
+    if (following) {
+      scheduleLiveFlip();
+      applyEvent(event, data, !replaying);
+    }
+    updateScrub();
+    if (following) refreshStatus();
+  }
+
+  // Move the cursor to `target`. A single forward step animates that one
+  // transition (so arrow-key scrubbing shows the signals); any other jump rebuilds
+  // instantly (drag / click / back-step / turn-jump).
+  function gotoIndex(target, { fromTransport = false } = {}) {
+    if (!fromTransport) stopPlay();
+    target = Math.max(0, Math.min(eventLog.length, target));
+    following = target >= eventLog.length;          // set BEFORE rebuild (cursor pinning)
+    if (target === viewIndex + 1) {
+      applyEvent(eventLog[viewIndex].event, eventLog[viewIndex].data, true); // animate the one step
+      viewIndex = target;
+    } else if (target !== viewIndex) {
+      rebuildTo(target);
+    }
+    scrubEl.value = viewIndex;
+    updateScrub();
+    refreshStatus();
+  }
+
+  function stopPlay() {
+    if (!playing) return;
+    playing = false; clearInterval(playTimer); playTimer = null;
+    updateScrub(); refreshStatus();
+  }
+  function startPlay() {
+    if (playing || eventLog.length === 0) return;
+    if (following) return;                 // already at the live tail
+    playing = true; updateScrub(); refreshStatus();
+    playTimer = setInterval(() => {
+      if (viewIndex >= eventLog.length) {  // caught up to the tail → resume live
+        following = true; stopPlay(); return;
+      }
+      gotoIndex(viewIndex + 1, { fromTransport: true });
+      if (viewIndex >= eventLog.length) { following = true; stopPlay(); }
+    }, PLAY_MS);
+  }
+
+  // Any interaction with this view's transport makes it the target of global arrow-key
+  // scrubbing (so the keys drive whichever agent the user last touched).
+  const focusThisView = () => { lastActiveView = api; };
+  scrubEl.addEventListener("input", () => { focusThisView(); gotoIndex(+scrubEl.value); });
+  scrubEl.addEventListener("focus", focusThisView);
+  playBtn.addEventListener("click", () => { focusThisView(); playing ? stopPlay() : startPlay(); });
+  liveBtn.addEventListener("click", () => { focusThisView(); stopPlay(); following = true; rebuildTo(eventLog.length); refreshStatus(); });
+  nextTurnBtn.addEventListener("click", () => {
+    focusThisView();
+    const next = turnStartTargets().find((t) => t > viewIndex);
+    gotoIndex(next ?? eventLog.length);
+  });
+  prevTurnBtn.addEventListener("click", () => {
+    focusThisView();
+    const prior = turnStartTargets().filter((t) => t < viewIndex);
+    gotoIndex(prior.length ? prior[prior.length - 1] : 0);
+  });
+
+  // Initial empty render of this fresh view.
+  resetView();
+  updateScrub();
+
+  // The view's public API — what the router/global layer drives it through.
+  const api = {
+    agentId,
+    onStreamEvent,                                    // route a live event here (by agent_id)
+    isActive: () => turnActive,                       // does this agent have a turn mid-flight?
+    stepScrub: (delta) => gotoIndex(viewIndex + delta),  // global arrow keys
+    isScrubFocus: () => document.activeElement === scrubEl,
+    // Mark a (sub)agent's panel ended when its parent stops it — dim it + tag it, but keep its
+    // history. The box itself stays scrubbable.
+    markEnded() { root.classList.add("ended"); endedTag.hidden = false; },
+    destroy() { stopPlay(); clearTimeout(liveFlipTimer); root.remove(); },
+  };
+  return api;
 }
 
 /* ===========================================================================
- * 6. HISTORY: event log, scrubber, transport (step / play / live / turn-jump).
+ * 6b. SESSION-WIDE STATUS CHIP — one header chip for the whole merged stream. Per-agent
+ * follow/scrub state is local to each panel's own readout; this chip reflects only the
+ * session: catching up while attaching, "streaming" if ANY agent has a live turn, else
+ * "watching". `lastActiveView` is the panel global arrow-keys drive (the last one touched).
  * =========================================================================== */
 
-const scrubEl   = document.getElementById("scrub");
-const liveBtn   = document.getElementById("live-btn");
-const playBtn   = document.getElementById("play-btn");
-const prevTurnBtn = document.getElementById("prev-turn");
-const nextTurnBtn = document.getElementById("next-turn");
-const readoutEl = document.getElementById("scrub-readout");
-const statusEl  = document.getElementById("status");
-const ticksEl   = document.getElementById("turn-ticks");
-
-const eventLog = [];
-let viewIndex = 0;        // events currently applied to the view
-let following = true;     // cursor pinned to the live tail
-let playing = false;
-let playTimer = null;
-const PLAY_MS = 650;
-
-let replaying = true;     // settle history instantly until the stream quiets
-let liveFlipTimer = null;
-function scheduleLiveFlip() {
-  if (!replaying) return;
-  clearTimeout(liveFlipTimer);
-  liveFlipTimer = setTimeout(() => { replaying = false; }, 150);
-}
-
-function rebuildTo(index) {
-  resetView();
-  for (let i = 0; i < index; i++) applyEvent(eventLog[i].event, eventLog[i].data, false);
-  viewIndex = index;
-  updateScrub();
-}
-
-// Slider values that land on the IDLE tick just BEFORE each turn starts — i.e.
-// the index of each turn_started event itself (events [0,i) applied, turn_started
-// not yet), so stepping forward from there shows the message come in.
-function turnStartTargets() {
-  const out = [];
-  for (let i = 0; i < eventLog.length; i++) if (eventLog[i].event === "turn_started") out.push(i);
-  return out;
-}
-let lastTickN = -1;
-function renderTurnTicks() {
-  if (eventLog.length === lastTickN) return;     // positions only shift when n changes
-  lastTickN = eventLog.length;
-  ticksEl.innerHTML = "";
-  const n = eventLog.length; if (!n) return;
-  for (const target of turnStartTargets()) {
-    const frac = target / n;
-    const tick = el("div", {
-      class: "turn-tick", title: `turn ${eventLog[target].data.turn_number ?? "?"} — click, then step ▶ to see it arrive`,
-      onclick: () => gotoIndex(target),
-    });
-    tick.style.left = `calc(${frac} * (100% - 14px) + 7px)`;
-    ticksEl.appendChild(tick);
-  }
-}
-
-function updateScrub() {
-  const n = eventLog.length;
-  scrubEl.max = n; scrubEl.disabled = n === 0;
-  if (following) { viewIndex = n; scrubEl.value = n; }
-  renderTurnTicks();
-  // No event TYPE here on purpose: a variable-length name would resize the
-  // slider as you scrub. The type is legible in the animation above.
-  const ev = viewIndex > 0 ? eventLog[viewIndex - 1] : null;
-  readoutEl.textContent = !n ? "no events"
-    : `${viewIndex} / ${n}` + (ev && ev.data.turn_number != null ? ` · t${ev.data.turn_number}` : "");
-  liveBtn.classList.toggle("following", following);
-  liveBtn.textContent = following ? "● LIVE" : "○ JUMP TO LIVE";
-  playBtn.textContent = playing ? "⏸" : "▶";
-  playBtn.classList.toggle("active", playing);
-  playBtn.disabled = n === 0 || (following && !playing);
-  playBtn.title = playing ? "Pause" : "Play from here";
-  prevTurnBtn.disabled = n === 0;
-  nextTurnBtn.disabled = n === 0;
-}
+const statusEl = document.getElementById("status");
+function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = "chip " + (cls || ""); }
+let catchingUp = false;          // true while the SSE attach is replaying history
+let lastActiveView = null;       // the agent view global arrow-keys scrub
 
 function refreshStatus() {
   if (!activeSessionId) return setStatus("no session", "");
-  if (playing) return setStatus("playing", "playing");
-  if (!following) return setStatus("paused · scrubbing", "paused");
-  setStatus(turnActive ? "streaming" : "watching", turnActive ? "streaming" : "connected");
+  if (catchingUp) return setStatus("catching up", "streaming");
+  const anyActive = [...agentViews.values()].some((v) => v.isActive());
+  setStatus(anyActive ? "streaming" : "watching", anyActive ? "streaming" : "connected");
 }
-function setStatus(text, cls) { statusEl.textContent = text; statusEl.className = "chip " + (cls || ""); }
 
-// Apply one live event: record it, and if following the tail, render it.
-function onStreamEvent(event, data) {
+// Arrow keys step the last-touched view's scrubber (when no slider is already handling them).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  const view = lastActiveView;
+  if (!view || view.isScrubFocus()) return;                 // let the range handle it
+  const tag = (document.activeElement || {}).tagName;
+  if (tag === "SELECT" || tag === "INPUT" || tag === "TEXTAREA") return;
+  e.preventDefault();
+  view.stepScrub(e.key === "ArrowRight" ? 1 : -1);
+});
+
+/* ===========================================================================
+ * 7. STREAM CONSUMPTION + ROUTING + SESSION PICKER (observe-only).
+ *
+ * One SSE attach carries the MERGED multi-agent stream. Each event names its publisher via
+ * agent_id; we route it to that agent's view, lazily creating a panel the first time a new
+ * agent_id appears. subagent_started also pre-creates the child's panel (with its agent_key
+ * label) so it reads nicely even before the child's own first event arrives.
+ * =========================================================================== */
+
+const agentViews = new Map();     // agent_id -> view (created lazily; root added on switch)
+let rootAgentId = null;           // the root session agent's id (from /api/status)
+let activeSessionId = null;
+// The resume cursor handed back on every SSE event's `data.resume_offset`: the merge's ROOT-stream
+// resume position. It advances past EVERY root event emitted (not just turn boundaries), and does
+// NOT move on a subagent's own events — so the events within one subagent turn all carry the cursor
+// as of their triggering `subagent_message_sent`. It is NOT a per-event counter. Any root offset is
+// a SAFE resume point (the merge resumes with no skip; a subagent whose turn began before it is just
+// omitted) — we feed it back as `from_offset` on a re-attach so the merge resumes incrementally
+// instead of replaying from 0 (see watchSession).
+let lastResumeOffset = 0;
+let abortController = null;
+// Turn-level dedup. `seenTurns` holds the `agent_id turn_id` of every turn whose events we've
+// already routed into the per-agent logs, across ALL attaches of the current session (it is reset
+// only on a session switch, never per attach — so accumulated per-agent state survives a resume).
+// Resume (from_offset=lastResumeOffset) does NOT re-send turns we've fully seen, but resuming inside
+// an in-flight root turn re-sends it from its turn_started (its turn_end hadn't advanced the cursor
+// past it yet). `resumeSuppress` (cleared at the start of each attach) collects the keys of such
+// re-sent turns the moment their duplicate turn_started arrives, so the rest of that turn's
+// re-delivery is dropped and never double-applied. Genuinely new turns (unseen turn_id) flow through
+// and append to existing state. (This replaces the old offset-comparison guard, which assumed a
+// per-event monotonic offset — wrong: the resume cursor is per-root-event, and repeats across a
+// subagent turn's events, so it can't identify individual events.)
+const seenTurns = new Set();
+let resumeSuppress = new Set();
+// Highest ROOT turn number we've seen on the merged stream — the watch loop uses it to decide
+// (via the cheap status query) whether a re-attach is even warranted, so an idle session doesn't
+// get re-attached (and re-subscribed onto its live subagents) on a fixed tick.
+let lastReplayedTurn = 0;
+
+// Get (or lazily create) the view for an agent_id. `meta` seeds a nicer label/role when we
+// learn it from subagent_started before the agent's own first event.
+function ensureAgentView(agentId, meta = {}) {
+  if (agentId == null) return null;
+  let view = agentViews.get(agentId);
+  if (!view) {
+    // If /api/status didn't resolve the root id, adopt the FIRST agent we see as the root —
+    // the attach always begins with the root agent's own turn events, so the first publisher
+    // (and the first non-subagent_started agent_id) is the root.
+    if (rootAgentId == null && !meta.agentKey) rootAgentId = agentId;
+    const isRoot = agentId === rootAgentId;
+    // The full tree-unique agent id ("<parent>-<child>…") — shown whole, not truncated: it is already
+  // a short id, and dropping the parent prefix would hide the tree path and could collide in display.
+  const shortId = String(agentId);
+    const label = meta.label
+      || (isRoot ? "Agent runtime" : (meta.agentKey ? `Subagent · ${meta.agentKey}` : "Subagent"));
+    view = createAgentView(agentId, { label, isRoot });
+    agentViews.set(agentId, view);
+    if (isRoot) lastActiveView = view;   // default arrow-key target is the root
+  }
+  return view;
+}
+
+// Route one merged-stream event to the right agent's view (by the publisher's agent_id),
+// and run the SESSION-wide side-effects (live approvals, subagent panel mounting).
+function routeEvent(event, data) {
   if (!PROTOCOL_EVENTS.includes(event)) {
     console.warn(`[protocol drift] unmodeled event: ${event} — update states.html + harness/agent_protocol/events.py`);
     return;
   }
-  eventLog.push({ event, data });
-  // Maintain the LIVE approvals set here (real-time ingest), independent of the scrub
-  // position — so the dev override panel reflects what's actually pending now even while
-  // the box is paused/scrubbing back through history.
-  trackLiveApproval(event, data);
-  // Per-model usage aggregates + chart are session-level (derived from the whole log),
-  // so refresh them on each new event regardless of follow/scrub state.
-  rebuildAnalytics();
-  if (following) {
-    scheduleLiveFlip();
-    applyEvent(event, data, !replaying);
-  }
-  updateScrub();
-  if (following) refreshStatus();
-}
-
-// Move the cursor to `target`. A single forward step animates that one
-// transition (so arrow-key scrubbing shows the signals); any other jump rebuilds
-// instantly (drag / click / back-step / turn-jump).
-function gotoIndex(target, { fromTransport = false } = {}) {
-  if (!fromTransport) stopPlay();
-  target = Math.max(0, Math.min(eventLog.length, target));
-  following = target >= eventLog.length;          // set BEFORE rebuild (cursor pinning)
-  if (target === viewIndex + 1) {
-    applyEvent(eventLog[viewIndex].event, eventLog[viewIndex].data, true); // animate the one step
-    viewIndex = target;
-  } else if (target !== viewIndex) {
-    rebuildTo(target);
-  }
-  scrubEl.value = viewIndex;
-  updateScrub();
-  refreshStatus();
-}
-
-function stopPlay() {
-  if (!playing) return;
-  playing = false; clearInterval(playTimer); playTimer = null;
-  updateScrub(); refreshStatus();
-}
-function startPlay() {
-  if (playing || eventLog.length === 0) return;
-  if (following) return;                 // already at the live tail
-  playing = true; updateScrub(); refreshStatus();
-  playTimer = setInterval(() => {
-    if (viewIndex >= eventLog.length) {  // caught up to the tail → resume live
-      following = true; stopPlay(); return;
+  // Turn-level dedup. A re-attach RESUMES (from_offset=lastResumeOffset) rather than replaying from
+  // 0, so already-seen turns aren't re-sent — but resuming inside a turn that was in-flight when we
+  // detached re-sends it from its turn_started (its turn_end hadn't advanced the cursor past it yet).
+  // Drop a turn we've already begun routing so its events can't be appended twice; let genuinely new
+  // turns (new turn_id) through. (The resume cursor is per-root-event and repeats across a subagent
+  // turn's events, so it can't be used as a per-event skip key.)
+  // Only real turns are deduped: the synthetic subagent_stream_unavailable marker carries an EMPTY
+  // turn_id (a non-turn signal) and is skipped here — its effect (marking a panel degraded) is
+  // idempotent, so it's safe to let through every attach without turn-keyed dedup.
+  if (data.agent_id != null && data.turn_id) {
+    const turnKey = data.agent_id + " " + data.turn_id;
+    if (event === "turn_started") {
+      // A turn_started whose turn we already began routing in a prior attach is the resume
+      // re-sending a turn that was in-flight when we detached (its turn_end hadn't advanced
+      // lastResumeOffset). Flag the whole re-sent turn for suppression and drop this duplicate start.
+      if (seenTurns.has(turnKey)) { resumeSuppress.add(turnKey); return; }
+      seenTurns.add(turnKey);
+    } else if (resumeSuppress.has(turnKey)) {
+      return;   // mid-turn event of a turn this resume re-sent; already applied in a prior attach
+    } else {
+      seenTurns.add(turnKey);   // a turn whose start we never saw but is genuinely new to us
     }
-    gotoIndex(viewIndex + 1, { fromTransport: true });
-    if (viewIndex >= eventLog.length) { following = true; stopPlay(); }
-  }, PLAY_MS);
+  }
+  // Track the highest ROOT turn we've applied (the watch loop's "have I already replayed this?"
+  // gate). Root events are those published by the root agent; subagent turn numbers are the
+  // child's own and must not gate the root's re-attach decision.
+  if (data.turn_number != null && (rootAgentId == null || data.agent_id === rootAgentId)) {
+    lastReplayedTurn = Math.max(lastReplayedTurn, data.turn_number);
+  }
+  // Live approvals are session-wide (a tool_id is unique across agents) — fed from the raw
+  // ingest regardless of which agent published, and never from the replay/scrub path.
+  trackLiveApproval(event, data);
+
+  // subagent_started/_stopped are published BY THE PARENT and name a CHILD (subagent_id). Mount
+  // the child's panel on start (seeding its label from agent_key) and mark it ended on stop —
+  // independent of whether the child has emitted any of its own events yet.
+  if (event === "subagent_started" && data.subagent_id != null) {
+    ensureAgentView(data.subagent_id, { agentKey: data.agent_key });
+  } else if (event === "subagent_stopped" && data.subagent_id != null) {
+    agentViews.get(data.subagent_id)?.markEnded();
+  }
+
+  // Deliver the event to its PUBLISHER's view (parent for parent-side events incl. the subagent
+  // markers; the child itself for its own events). A never-before-seen agent_id grows a panel.
+  const view = ensureAgentView(data.agent_id);
+  if (view) view.onStreamEvent(event, data);
 }
-
-scrubEl.addEventListener("input", () => gotoIndex(+scrubEl.value));
-playBtn.addEventListener("click", () => (playing ? stopPlay() : startPlay()));
-liveBtn.addEventListener("click", () => { stopPlay(); following = true; rebuildTo(eventLog.length); refreshStatus(); });
-nextTurnBtn.addEventListener("click", () => {
-  const next = turnStartTargets().find((t) => t > viewIndex);
-  gotoIndex(next ?? eventLog.length);
-});
-prevTurnBtn.addEventListener("click", () => {
-  const prior = turnStartTargets().filter((t) => t < viewIndex);
-  gotoIndex(prior.length ? prior[prior.length - 1] : 0);
-});
-
-// Arrow keys step the scrubber (when the slider isn't already handling them).
-document.addEventListener("keydown", (e) => {
-  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-  if (document.activeElement === scrubEl) return;            // let the range handle it
-  const tag = (document.activeElement || {}).tagName;
-  if (tag === "SELECT" || tag === "INPUT" || tag === "TEXTAREA") return;
-  e.preventDefault();
-  gotoIndex(viewIndex + (e.key === "ArrowRight" ? 1 : -1));
-});
-
-/* ===========================================================================
- * 7. STREAM CONSUMPTION + SESSION PICKER (observe-only).
- * =========================================================================== */
-
-let activeSessionId = null;
-let lastOffset = 0;
-let abortController = null;
 
 async function consumeSSE(res) {
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
   let buf = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += value;
-    let idx;
-    while ((idx = buf.indexOf("\n\n")) !== -1) {
-      const frame = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      const ev = frame.match(/^event: (.+)$/m);
-      const da = frame.match(/^data: (.+)$/m);
-      if (!ev || !da) continue;
-      const data = JSON.parse(da[1]);
-      if (data.offset != null) lastOffset = data.offset;
-      onStreamEvent(ev[1], data);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const ev = frame.match(/^event: (.+)$/m);
+        const da = frame.match(/^data: (.+)$/m);
+        if (!ev || !da) continue;
+        const data = JSON.parse(da[1]);
+        if (data.resume_offset != null) lastResumeOffset = data.resume_offset;
+        routeEvent(ev[1], data);
+      }
     }
+  } finally {
+    // Release the body so the server-side merge generator is aclose()d (cancelling its cursors'
+    // in-flight poll updates) promptly on a normal end, an abort, or a parse throw — never left
+    // dangling to hold updates against a subagent workflow.
+    try { await reader.cancel(); } catch { /* already closed/aborted */ }
   }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Exactly ONE attach, always for the currently-viewed session. attach replays
-// history then streams live and returns when idle; we re-poll for the next turn.
-// The sessionId guard + abort tear the old watch down on switch — we never hold
-// streams open for any other session.
-async function watchSession(sessionId) {
+// Exactly ONE attach in flight at a time, always for the currently-viewed session. The first
+// attach replays history then streams live and returns when idle; every later attach RESUMES from
+// the last resume cursor we saw (from_offset=lastResumeOffset) and streams only what follows it.
+//
+// IDLE WAIT — load-bearing, not cosmetic. Every /api/attach re-subscribes the root AND every
+// (recursive) subagent stream. A subscribe to an IDLE child (one between turns, not stopped) leaves
+// a server-side long-poll *update* parked in wait_condition, holding one of that workflow's 10
+// concurrent-in-flight-update slots — and the client can't reclaim it on disconnect (the
+// server-side update keeps blocking). So re-attaching on a fixed tick steadily LEAKS poll-updates
+// onto a live subagent until that cap is hit, which then also starves the parent's own
+// run_subagent_turn dispatch (the agent goes unusable). The fix: while the session is idle, DON'T
+// re-attach at all — poll the cheap agent_status QUERY (queries don't consume update slots) and
+// only open a fresh attach once status shows genuinely new work (turn_active, or current_turn
+// advanced past what we've replayed). One attach per burst of activity, not one per idle tick —
+// and that attach now RESUMES (only the new turns) rather than re-replaying the whole history.
+const STATUS_POLL_MS = 2000;
+async function fetchSessionStatus(sessionId) {
+  try {
+    const res = await fetch(`/api/status/${encodeURIComponent(sessionId)}`);
+    if (res.ok) return await res.json();
+  } catch { /* transient — treat as unknown */ }
+  return null;
+}
+// Block (cheaply, via the status query) until the session has work we haven't replayed yet, or the
+// view switches away. Returns true if there's new work to attach for, false if we should stop.
+async function waitForNewWork(sessionId, replayedThroughTurn) {
   while (sessionId === activeSessionId) {
+    const st = await fetchSessionStatus(sessionId);
+    if (sessionId !== activeSessionId) return false;
+    if (st && (st.turn_active || (st.current_turn || 0) > replayedThroughTurn)) return true;
+    catchingUp = false; refreshStatus();
+    await sleep(STATUS_POLL_MS);
+  }
+  return false;
+}
+async function watchSession(sessionId) {
+  let replayedThroughTurn = 0;  // highest root turn we've fully replayed; gates idle re-attach
+  // The FIRST attach of a session builds initial state from scratch and so must do a FULL replay
+  // (from_offset=0). Every later re-attach RESUMES from the last resume cursor we saw — passing
+  // from_offset=lastResumeOffset so the merge streams only what follows it instead of re-replaying
+  // everything, and the per-agent views (built on the first attach) are appended to, not rebuilt.
+  let firstAttach = true;
+  while (sessionId === activeSessionId) {
+    // Make sure no prior attach (and its server-side merge + cursors) is still open before we
+    // open another — overlapping merges double up in-flight poll updates on shared subagents.
+    if (abortController) { abortController.abort(); }
     abortController = new AbortController();
+    // Each attach gets a fresh resume-overlap suppression set: it only matters within the lifetime
+    // of one re-sent stream (the in-flight turn it rounds forward to), and `seenTurns` carries the
+    // real "already applied" memory across attaches.
+    resumeSuppress = new Set();
     try {
+      // First attach → from_offset=0 (full replay to build initial state); a re-attach → resume at
+      // the last resume cursor we saw (lastResumeOffset), so already-seen root events are not re-sent.
+      const fromOffset = firstAttach ? 0 : lastResumeOffset;
       const res = await fetch(
-        `/api/attach?session_id=${encodeURIComponent(sessionId)}&from_offset=${lastOffset}`,
+        `/api/attach?session_id=${encodeURIComponent(sessionId)}&from_offset=${fromOffset}`,
         { signal: abortController.signal });
       if (sessionId !== activeSessionId) return;
-      refreshStatus();
+      // Only the FIRST attach of a session has the full history to settle; a resume delivers only
+      // new turns and shouldn't flash "catching up", so the chip doesn't flicker every re-attach.
+      catchingUp = firstAttach; firstAttach = false; refreshStatus();
       await consumeSSE(res);
     } catch (err) {
       if (err.name === "AbortError") return;
@@ -1843,8 +2194,14 @@ async function watchSession(sessionId) {
       setStatus("reconnecting", "");
     }
     if (sessionId !== activeSessionId) return;
-    refreshStatus();
-    await sleep(1000); // idle poll for the next turn (current session only)
+    catchingUp = false; refreshStatus();
+    // The attach returned, so the agent is idle through everything we just replayed. Record how
+    // far we got (the highest root turn we've applied, tracked as lastReplayedTurn), then
+    // — crucially — WAIT (via cheap status queries, not a re-attach) until there's genuinely new
+    // work. This is what stops the per-tick attach leak on a long-idle session.
+    replayedThroughTurn = Math.max(replayedThroughTurn, lastReplayedTurn);
+    const hasNewWork = await waitForNewWork(sessionId, replayedThroughTurn);
+    if (!hasNewWork) return;  // switched away
   }
 }
 
@@ -1852,14 +2209,27 @@ async function switchSession(sessionId) {
   if (sessionId === activeSessionId) return;
   activeSessionId = sessionId || null;
   if (abortController) { abortController.abort(); abortController = null; }
-  stopPlay();
   closeInspector();
-  eventLog.length = 0; viewIndex = 0; following = true; lastOffset = 0; replaying = true; lastTickN = -1;
+  // Tear down every per-agent panel (and its timers) and the session-wide live-approvals set.
+  for (const view of agentViews.values()) view.destroy();
+  agentViews.clear();
+  // A real session switch (not a re-attach) starts from a blank slate: drop the resume offset and
+  // the cross-attach turn-dedup memory so the new session does a full from-0 replay and rebuilds.
+  lastActiveView = null; rootAgentId = null; lastResumeOffset = 0; lastReplayedTurn = 0; catchingUp = false;
+  seenTurns.clear(); resumeSuppress = new Set();
   liveApprovals.clear(); renderLiveApprovals();
-  rebuildAnalytics();   // empty log → hides the usage panel until this session has interactions
-  resetView(); updateScrub();
   if (!activeSessionId) { setStatus("no session", ""); return; }
   setStatus("catching up", "streaming");
+  // Resolve the root agent's id so the router knows which agent_id is the root (vs. a subagent),
+  // then mount the root's panel immediately so the common no-subagent case shows a view up front.
+  try {
+    const res = await fetch(`/api/status/${encodeURIComponent(sessionId)}`);
+    if (res.ok) rootAgentId = (await res.json()).agent_id ?? null;
+  } catch (err) {
+    console.warn("Failed to resolve root agent id:", err);
+  }
+  if (sessionId !== activeSessionId) return;   // switched again while awaiting status
+  if (rootAgentId) ensureAgentView(rootAgentId);
   watchSession(activeSessionId);
 }
 
@@ -1896,8 +2266,6 @@ document.getElementById("session").addEventListener("change", (e) => switchSessi
 })();
 
 (async function init() {
-  resetView();
-  updateScrub();
   try {
     const sessions = await loadSessions();
     if (sessions.length) {
