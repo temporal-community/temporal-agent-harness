@@ -250,12 +250,22 @@ because the Vite dev server proxies API calls to the FastAPI server on port 8000
 
 ## Using The Package
 
-Install the web/UI extra when you want the reusable FastAPI server and packaged
-browser UI:
+Install the core harness when you only need to define and run agent workflows:
+
+```bash
+pip install temporal-agent-harness
+```
+
+Install the `ui` extra when you also want the reusable FastAPI server and
+packaged browser UI:
 
 ```bash
 pip install "temporal-agent-harness[ui]"
 ```
+
+The built Svelte assets are included in the package artifacts, but the server
+runtime dependencies (`fastapi[standard]`, including Uvicorn) are opt-in through
+the `ui` extra so core agent-worker installs stay smaller.
 
 Agent authors use the harness runtime from `temporal_agent_harness.harness`.
 Applications that want the built-in session manager and UI use
