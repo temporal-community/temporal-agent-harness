@@ -1,10 +1,13 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+.pytest_cache/
 build/
 dist/
 wheels/
 *.egg-info
+.coverage
+htmlcov/
 
 # Packaged browser UI assets. Root-level dist/ and ui/dist/ stay ignored.
 !temporal_agent_harness/ui/
@@ -22,11 +25,11 @@ wheels/
 # and point an example's .env.local TEMPORAL_CONFIG_FILE at it.
 temporal.toml
 
-# Node deps for the TS worker
-rag/ingestion_workflow/ts/node_modules/
-rag/ingestion_workflow/ts/dist/
+# Node-generated files
+.pnpm-store/
 
 # Local configs for IDEs
+.DS_Store
 .vscode
 pyrightconfig.json
 
