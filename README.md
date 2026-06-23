@@ -252,6 +252,8 @@ Install the core harness when you only need to define and run agent workflows:
 
 ```bash
 pip install temporal-agent-harness
+# or, in a uv-managed project:
+uv add temporal-agent-harness
 ```
 
 Install the `ui` extra when you also want the reusable FastAPI server and
@@ -259,6 +261,8 @@ packaged browser UI:
 
 ```bash
 pip install "temporal-agent-harness[ui]"
+# or, in a uv-managed project:
+uv add "temporal-agent-harness[ui]"
 ```
 
 The built Svelte assets are included in the package artifacts, but the server
