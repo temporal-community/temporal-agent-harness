@@ -1,16 +1,16 @@
 # Shared Example UI
 
-This directory is the shared Svelte frontend for the examples. In development,
-Vite serves the app and proxies `/api` to the shared session-manager FastAPI
-server on `localhost:8000`.
+This directory is the shared Svelte frontend for the packaged harness web API.
+In development, Vite serves the app and proxies `/api` to the FastAPI server on
+`localhost:8000`.
 
 Files:
 
-- `docs/api.md`: HTTP and SSE API reference for the shared session-manager API.
+- `docs/api.md`: HTTP and SSE API reference for the packaged session-manager API.
 - `src/lib/api/types.ts`: TypeScript request, response, and stream-event types.
 - `src/lib/api/index.ts`: API type exports.
 
-Useful commands from any example that imports `examples/session_manager/justfile`:
+Useful commands from the repo root or the Monty example:
 
 ```bash
 just app-install   # one-time install, or after package changes

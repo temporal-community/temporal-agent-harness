@@ -153,10 +153,9 @@ temporal_agent_harness/
 └── utils/        # general Temporal utilities (e.g. large-payload offload)
 
 examples/
-├── monty/            # a travel-booking agent example (start here)
-└── session_manager/  # example registry/wrappers for the packaged web layer
+└── monty/        # a travel-booking agent example with packaged web/UI wiring
 
-ui/               # shared Svelte frontend for examples
+ui/               # shared Svelte frontend for the Monty example
 
 tests/            # mirrors the package layout
 ```
@@ -167,7 +166,7 @@ tests/            # mirrors the package layout
 - [uv](https://docs.astral.sh/uv/) for dependency management
 - [just](https://just.systems/) for the example recipes
 - [pnpm](https://pnpm.io/) for building or developing the Svelte UI
-- A Temporal service. The examples can start a local dev server with `just temporal`
+- A Temporal service. The Monty example can start a local dev server with `just temporal`
   if you have the `temporal` CLI installed.
 
 ## Root Justfile
@@ -235,8 +234,7 @@ Open <http://localhost:8000> and select a Monty agent. `just server` runs
 `app-build` first, so port 8000 serves the current built Svelte UI from
 `temporal_agent_harness/ui/dist`, not the legacy static HTML files.
 
-Useful UI recipes are available from the root and from the imported example
-justfiles:
+Useful UI recipes are available from the root and from `examples/monty`:
 
 ```bash
 just app-install   # install Svelte dependencies
@@ -375,7 +373,7 @@ just package
 `just package` runs the Svelte production build, Svelte checks, the local
 Svelte 5 syntax guard, the Python test suite, and `uv build`. The primary
 recipe lives in the repo-root `justfile`; the same recipe is also available
-from the example justfiles for convenience.
+from `examples/monty/justfile` for convenience.
 
 ## Status & docs
 

@@ -29,8 +29,8 @@ ui = [
 ]
 
 [dependency-groups]
-# Everything needed to RUN the bundled examples (examples/monty + examples/session_manager) from a
-# checkout. Not part of the published package's runtime deps — examples are not shipped.
+# Everything needed to RUN the bundled Monty example from a checkout. Not part of the
+# published package's runtime deps — examples are not shipped.
 examples = [
     "google-genai>=2.0.0",
     "google-auth>=2.53.0",

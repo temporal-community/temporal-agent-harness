@@ -1,0 +1,31 @@
+# Registry of agents the Monty example UI can launch.
+#
+# The FastAPI server in examples/monty/app.py reads this file and passes the parsed
+# registry into the packaged SessionManagerWorkflow as its workflow init arg. The
+# manager then serves it back over the `available_agents` query, so the app server
+# can expose it at /api/agents without hardcoding the agent list.
+#
+# To expose a new agent: register its @workflow.defn on a worker, then add a
+# [[agents]] entry here.
+
+[[agents]]
+key = "monty-chat"
+workflow_type = "MontyChatAgent"
+task_queue = "monty-dynamic-agent"
+label = "Monty (Conversational)"
+description = """
+A conversational travel-booking assistant. Chat in plain text; an LLM converses to
+gather your trip details, then WRITES its own pydantic-monty Python script and runs
+it via a tool to orchestrate durable flight/hotel search + booking activities,
+replying with the results."""
+
+[[agents]]
+key = "monty-chat-subagent"
+workflow_type = "MontyChatSubagentAgent"
+task_queue = "monty-dynamic-agent"
+label = "Monty (Conversational, Subagent)"
+description = """
+Same conversational travel-booking experience as Monty (Conversational), but instead
+of running its Python scripts inline it drives the barebones Monty (Dynamic) agent as
+a SUBAGENT — starting a script-runner instance and sending it each script over the
+harness subagent toolset. The first end-to-end demo of agents-as-subagents."""

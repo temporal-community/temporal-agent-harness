@@ -12,9 +12,9 @@ Three variants ship here:
 - **MontyChatSubagentAgent** — same conversational experience, but it drives `MontyDynamicAgent`
   as a *subagent* (the first end-to-end exercise of the harness subagent toolset).
 
-The agents are driven through the shared session-manager launcher (`examples/session_manager`)
-and the shared Svelte UI (`ui`). Their recipes are imported here, so the whole stack runs from
-this directory.
+The agents are driven through the packaged session-manager workflow and shared
+Svelte UI (`ui`). The Monty example owns the local app, registry, and recipes, so
+the whole stack runs from this directory.
 
 ## Setup
 

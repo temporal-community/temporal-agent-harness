@@ -50,7 +50,7 @@ def test_packaged_ui_dist_contains_relative_vite_entrypoints() -> None:
 
 
 def test_just_server_app_serves_packaged_svelte_ui() -> None:
-    from examples.session_manager.app import app
+    from examples.monty.app import app
 
     client = TestClient(app)
 
@@ -102,10 +102,10 @@ def test_chat_request_rejects_client_supplied_from_offset() -> None:
     assert any("from_offset" in item.get("loc", []) for item in detail)
 
 
-def test_legacy_session_manager_static_html_entrypoints_are_removed() -> None:
-    legacy_static = ROOT / "examples" / "session_manager" / "static"
+def test_legacy_session_manager_example_folder_is_removed() -> None:
+    legacy_example = ROOT / "examples" / "session_manager"
 
-    assert not list(legacy_static.glob("*.html"))
+    assert not legacy_example.exists()
 
 
 def test_create_session_manager_worker_registers_packaged_workflow() -> None:

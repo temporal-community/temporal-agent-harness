@@ -1,12 +1,10 @@
 # Scoped justfile for the Monty travel-agent example (examples/monty).
 # Run from this directory: `just <recipe>`.
 #
-# Self-contained: the session-manager recipes (the session-manager worker + API server + built
-# Svelte UI that drives these agents) are imported from examples/session_manager, so a full local
-# run is doable entirely from here:
+# Self-contained local stack:
 #   just temporal          # 1. local Temporal dev server (or bring your own)
-#   just session-manager   # 2. session-manager worker      (imported from examples/session_manager)
-#   just server            # 3. FastAPI API + UI on :8000   (imported from examples/session_manager)
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API + UI on :8000
 #   just worker            # 4. this example's agent worker
 # Optional: `just ui-dev` runs the Svelte Vite dev server on :5173 with /api proxied to :8000.
 #
@@ -14,16 +12,54 @@
 # demand, so there's no separate install step. First-time setup: `cp .env.example .env.local`
 # and fill it in (Temporal connection + GEMINI_API_KEY). See README.md.
 
-# Let this file's `default` override the one imported from session_manager (otherwise the
-# duplicate is an error). Without our own `default` first, just's "run the first recipe"
-# behavior on a bare `just` would pick `worker` instead of listing.
-set allow-duplicate-recipes := true
+set dotenv-filename := ".env.local"
+set dotenv-load := true
 
-import '../session_manager/justfile'
+root := justfile_directory() / ".." / ".."
+ui := root / "ui"
 
 # List available recipes (bare `just`).
 default:
     @just --list
+
+# Show the Temporal connection these recipes will use (read from .env.local).
+config:
+    @echo "TEMPORAL_CONFIG_FILE = ${TEMPORAL_CONFIG_FILE:-<unset — set it in .env.local; see .env.example>}"
+    @echo "TEMPORAL_PROFILE     = ${TEMPORAL_PROFILE:-default}"
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Run the packaged session-manager worker for the Monty example.
+session-manager:
+    cd "{{root}}" && uv run --group examples python -m examples.monty.session_manager_worker
+
+# Build and serve the Svelte UI + FastAPI API on http://localhost:8000.
+server: app-build
+    cd "{{root}}" && uv run --group examples uvicorn examples.monty.app:app --host 0.0.0.0 --port 8000 --reload
+
+# Install the shared Svelte UI dependencies.
+app-install:
+    pnpm --dir "{{ui}}" install
+
+# Type-check the shared Svelte UI and run the local Svelte 5 syntax guard.
+app-check:
+    pnpm --dir "{{ui}}" run check
+    pnpm --dir "{{ui}}" run check:svelte5
+
+# Build the shared Svelte UI into temporal_agent_harness/ui/dist for packaging/server use.
+app-build:
+    pnpm --dir "{{ui}}" run build
+
+# Build, test, and create the wheel/sdist in dist/.
+package: app-build app-check
+    cd "{{root}}" && uv run pytest
+    cd "{{root}}" && uv build
+
+# Run the shared Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
+ui-dev:
+    pnpm --dir "{{ui}}" run dev
 
 # Run the Monty example agent worker (MontyDynamicAgent + the two conversational agents).
 worker:
