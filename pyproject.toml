@@ -23,15 +23,19 @@ genai = [
 s3 = [
     "aioboto3>=15.5.0",
 ]
+# Packaged FastAPI server and browser UI assets.
+ui = [
+    "fastapi[standard]>=0.136.3",
+]
 
 [dependency-groups]
-# Everything needed to RUN the bundled examples (examples/monty + examples/session_manager) from a
-# checkout. Not part of the published package's runtime deps — examples are not shipped.
+# Everything needed to RUN the bundled Monty example from a checkout. Not part of the
+# published package's runtime deps — examples are not shipped.
 examples = [
     "google-genai>=2.0.0",
     "google-auth>=2.53.0",
     "pydantic-monty>=0.0.18",  # the Monty sandbox the monty example runs scripts in
-    "fastapi[standard]>=0.136.3",  # session-manager BFF (examples/session_manager/app.py); pulls in uvicorn
+    "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
 ]
 # Test + lint tooling. The full tests/ suite imports both the Gemini SDK (the ai_sdks plugin
 # tests) and pydantic-monty (the monty example tests), which live in the `examples` group —
@@ -40,6 +44,7 @@ examples = [
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
+    "setuptools>=68",  # package artifact tests call the build backend directly
     { include-group = "examples" },
 ]
 
@@ -50,6 +55,12 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 # Ship only the package; examples/, tests/, and docs/ stay out of the wheel.
 include = ["temporal_agent_harness*"]
+
+[tool.setuptools.package-data]
+"temporal_agent_harness.ui" = [
+    "dist/*",
+    "dist/assets/*",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

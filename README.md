@@ -149,27 +149,235 @@ temporal_agent_harness/
 ├── harness/      # the core harness: agent contract, turn runner, tools,
 │                 #   the agent/subagent protocol, human-in-the-loop approvals
 ├── ai_sdks/      # AI SDK integrations (Gemini today) — durable activity wrappers
+├── web/          # packaged session-manager workflow + FastAPI app factory
 └── utils/        # general Temporal utilities (e.g. large-payload offload)
 
 examples/
-├── monty/            # a travel-booking agent example (start here)
-└── session_manager/  # an agent-agnostic launcher + web chat UI the examples run on
+└── monty/        # a travel-booking agent example with packaged web/UI wiring
+
+ui/               # shared Svelte frontend for the Monty example
 
 tests/            # mirrors the package layout
 ```
 
-## Try it
-
-The [`examples/monty`](examples/monty) example is the best way to see the harness end to end — a
-conversational travel agent, plus a variant that drives another agent as a subagent. Its
-[README](examples/monty/README.md) walks through the one-time setup and the handful of `just`
-commands to run the full stack locally.
-
 ## Requirements
 
 - Python **3.11+**
-- A Temporal service — a local dev server works out of the box (`just temporal` in the example)
 - [uv](https://docs.astral.sh/uv/) for dependency management
+- [just](https://just.systems/) for the example recipes
+- [pnpm](https://pnpm.io/) for building or developing the Svelte UI
+- A Temporal service. The Monty example can start a local dev server with `just temporal`
+  if you have the `temporal` CLI installed.
+
+## Root Justfile
+
+The repo root has a `justfile` for the common development workflow. Run
+`just --list` from the repo root to see the available recipes.
+
+Build and package recipes run directly from the root:
+
+```bash
+just app-install   # install Svelte dependencies
+just app-build     # build ui/ into temporal_agent_harness/ui/dist
+just app-check     # Svelte checks
+just package       # UI build + UI checks + pytest + uv build
+```
+
+Local stack recipes delegate into `examples/monty`:
+
+```bash
+just temporal          # local Temporal dev server
+just session-manager   # packaged session-manager worker
+just server            # built Svelte UI + FastAPI API on http://localhost:8000
+just monty-worker      # Monty agent worker
+just ui-dev            # Vite hot reload on http://127.0.0.1:5173
+```
+
+The delegation matters because `examples/monty/justfile` loads
+`examples/monty/.env.local`. Keep example-specific settings there; root commands
+will still use them.
+
+## Run The Example
+
+The [`examples/monty`](examples/monty) example is the best end-to-end path: it
+includes a conversational travel agent and a subagent-driven variant. From
+`examples/monty`, create local environment settings first:
+
+```bash
+cp .env.example .env.local
+```
+
+Set `GEMINI_API_KEY` in `.env.local` for the conversational agents. The example
+defaults to the committed `temporal.local.toml` profile, which points at a local
+Temporal dev server.
+
+Install the Svelte UI dependencies once from the repo root:
+
+```bash
+just app-install
+```
+
+Run each command in its own terminal from the repo root:
+
+```bash
+just temporal          # local Temporal dev server; skip if you bring your own
+just session-manager   # worker hosting the packaged SessionManagerWorkflow
+just server            # builds and serves the Svelte UI + /api on http://localhost:8000
+just monty-worker      # Monty agent worker
+```
+
+These root recipes delegate into `examples/monty`, so `.env.local` is still read
+from that example directory. You can also run the same recipes directly from
+`examples/monty`; there the agent worker recipe is named `just worker`.
+
+Open <http://localhost:8000> and select a Monty agent. `just server` runs
+`app-build` first, so port 8000 serves the current built Svelte UI from
+`temporal_agent_harness/ui/dist`, not the legacy static HTML files.
+
+Useful UI recipes are available from the root and from `examples/monty`:
+
+```bash
+just app-install   # install Svelte dependencies
+just app-check     # svelte-check + local Svelte 5 syntax guard
+just app-build     # build ui/ into temporal_agent_harness/ui/dist
+just ui-dev        # Vite hot reload on http://127.0.0.1:5173, proxying /api to :8000
+```
+
+Use `just ui-dev` only for frontend iteration. Keep `just server` running too,
+because the Vite dev server proxies API calls to the FastAPI server on port 8000.
+
+## Using The Package
+
+Install the core harness when you only need to define and run agent workflows:
+
+```bash
+pip install temporal-agent-harness
+# or, in a uv-managed project:
+uv add temporal-agent-harness
+```
+
+Install the `ui` extra when you also want the reusable FastAPI server and
+packaged browser UI:
+
+```bash
+pip install "temporal-agent-harness[ui]"
+# or, in a uv-managed project:
+uv add "temporal-agent-harness[ui]"
+```
+
+The built Svelte assets are included in the package artifacts, but the server
+runtime dependencies (`fastapi[standard]`, including Uvicorn) are opt-in through
+the `ui` extra so core agent-worker installs stay smaller.
+
+Agent authors use the harness runtime from `temporal_agent_harness.harness`.
+Applications that want the built-in session manager and UI use
+`temporal_agent_harness.web`:
+
+```python
+from temporalio.client import Client
+from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.envconfig import ClientConfig
+
+from temporal_agent_harness.utils.large_payload import with_large_payload_offload
+from temporal_agent_harness.web import (
+    create_agent_harness_app,
+    create_session_manager_worker,
+)
+
+
+async def run_session_manager() -> None:
+    connect_config = ClientConfig.load_client_connect_config()
+    client = await Client.connect(
+        **connect_config,
+        data_converter=await with_large_payload_offload(pydantic_data_converter),
+    )
+    worker = create_session_manager_worker(client)
+    await worker.run()
+
+
+app = create_agent_harness_app(registry_path="agents.toml")
+```
+
+Then serve the app with Uvicorn:
+
+```bash
+uvicorn my_app.web:app --host 0.0.0.0 --port 8000
+```
+
+The registry lists the launchable agents the UI can create:
+
+```toml
+[[agents]]
+key = "my-agent"
+workflow_type = "MyAgent"
+task_queue = "my-agent-task-queue"
+label = "My Agent"
+description = "A short description shown in the UI."
+```
+
+The app factory serves both `/api/*` and the packaged Svelte UI. The helper
+`create_session_manager_worker` only registers the packaged session-manager
+workflow; run your own agent workflows on their own workers and task queues.
+
+## UI Development
+
+The source Svelte app lives in [`ui/`](ui). The package ships the compiled
+output in [`temporal_agent_harness/ui/dist`](temporal_agent_harness/ui/dist), so
+any UI change needs a rebuild before packaging or before `just server` serves it:
+
+```bash
+just app-install   # one-time install of Svelte dependencies
+just app-build     # build ui/ into temporal_agent_harness/ui/dist
+just app-check     # svelte-check + local Svelte 5 syntax guard
+```
+
+For hot reload, keep the FastAPI API server running on port 8000 and start Vite
+in another terminal:
+
+```bash
+# terminal 1
+just server
+
+# terminal 2
+just ui-dev
+```
+
+The production build uses relative asset and API URLs, so the UI can be served
+from `/` or under a path prefix as long as the UI and API are mounted together.
+
+## Build And Package
+
+Use the package recipe from the repo root:
+
+```bash
+just app-install   # one-time setup if ui/node_modules is absent
+just package
+```
+
+The resulting artifacts are written to `dist/`:
+
+```text
+dist/temporal_agent_harness-0.1.0.tar.gz
+dist/temporal_agent_harness-0.1.0-py3-none-any.whl
+```
+
+The wheel and sdist include:
+
+- the core harness package
+- `temporal_agent_harness.web` with the FastAPI app factory and session-manager worker helper
+- `temporal_agent_harness.ui/dist` with the built Svelte UI assets
+- the `ui` extra, which pulls in `fastapi[standard]`
+
+Before publishing or handing off artifacts, run:
+
+```bash
+just package
+```
+
+`just package` runs the Svelte production build, Svelte checks, the local
+Svelte 5 syntax guard, the Python test suite, and `uv build`. The primary
+recipe lives in the repo-root `justfile`; the same recipe is also available
+from `examples/monty/justfile` for convenience.
 
 ## Status & docs
 

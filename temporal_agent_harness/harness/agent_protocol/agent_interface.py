@@ -390,7 +390,7 @@ class AgentStatus:
     is_message_queuing_enabled: bool = False
     pending_approvals: list[PendingApproval] = field(default_factory=list)
     # Subagents this agent is currently driving (its own child agents), each a
-    # :class:`SubagentInfo` — short handle, agent key, real child workflow id, next turn. Gate
+    # :class:`SubagentInfo` — short subagent id, agent key, real child workflow id, next turn. Gate
     # internals are excluded by construction.
     subagents: list[SubagentInfo] = field(default_factory=list)
     # The tool-approval policy the agent is currently running under. A client can read

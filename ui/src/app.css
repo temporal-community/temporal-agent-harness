@@ -1,0 +1,71 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  --surface-0: #0b0d10;
+  --surface-1: #11151a;
+  --surface-2: #171d24;
+  --surface-3: #222a33;
+  --text-1: #f5f7f9;
+  --text-2: #b7c0ca;
+  --text-3: #7b8794;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.2);
+  --control-bg: #0f1318;
+  --control-hover: #18202a;
+  --focus-ring: rgba(83, 185, 255, 0.28);
+  --shadow-popover: 0 20px 50px rgb(0 0 0 / 0.44);
+  --shadow-active: 0 0 0 1px rgb(255 255 255 / 0.04), 0 12px 32px rgb(0 0 0 / 0.3);
+  --accent: #53b9ff;
+  --model: #b59cff;
+  --reasoning: #53dfca;
+  --success: #55d98d;
+  --warning: #ffc857;
+  --queue: #ff7ac8;
+  --error: #ff6b6b;
+  --code-block-border: color-mix(in srgb, #a78bfa 42%, var(--border));
+  --code-block-bg:
+    linear-gradient(180deg, rgb(50 38 83 / 88%), rgb(28 20 48 / 94%)),
+    var(--surface-0);
+  --code-block-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 7%),
+    0 10px 26px rgb(12 8 24 / 26%);
+  --code-block-text: #f7f2ff;
+  --code-label-border: rgb(196 181 253 / 24%);
+  --code-label-bg: rgb(91 68 142 / 34%);
+  --code-label-text: #d8ccff;
+  --code-inline-border: color-mix(in srgb, #a78bfa 28%, var(--border));
+  --code-inline-bg: rgb(63 45 105 / 42%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: var(--surface-0);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}

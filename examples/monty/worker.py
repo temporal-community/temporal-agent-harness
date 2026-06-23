@@ -17,9 +17,9 @@ Env vars:
     MONTY_AGENT_TASK_QUEUE       task queue to poll (default: monty-dynamic-agent)
 
 This worker hosts the three Monty agents (MontyDynamicAgent + the two conversational
-agents) — not the session manager. The agent-agnostic session manager (examples/session_manager)
-is hosted by its own worker; because it launches agents by registered name, it dispatches
-these agents to this queue without this worker hosting it.
+agents) — not the session manager. The packaged session manager is hosted by
+examples.monty.session_manager_worker; because it launches agents by registered name,
+it dispatches these agents to this queue without this worker hosting it.
 """
 
 from __future__ import annotations
@@ -86,8 +86,8 @@ async def main() -> None:
     # All three Monty agents run here: the script-only MontyDynamicAgent, the inline
     # conversational MontyChatAgent, and the subagent-driven MontyChatSubagentAgent (which
     # drives MontyDynamicAgent as a subagent — so the child runs on this same queue). The
-    # session manager (examples/session_manager) is hosted by its own worker, not here; it
-    # dispatches these agents to this queue by name.
+    # session manager is hosted by its own worker, not here; it dispatches these agents
+    # to this queue by name.
     #
     # SubagentActivities closes over this worker's client so its run_subagent_turn activity can
     # send updates to + stream the reply from the child MontyDynamicAgent workflow. It's the
