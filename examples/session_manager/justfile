@@ -55,6 +55,11 @@ app-check:
 app-build:
     pnpm --dir "{{ui}}" run build
 
+# Build, test, and create the wheel/sdist in dist/.
+package: app-build app-check
+    cd "{{root}}" && uv run pytest
+    cd "{{root}}" && uv build
+
 # Run the shared Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
 ui-dev:
     pnpm --dir "{{ui}}" run dev

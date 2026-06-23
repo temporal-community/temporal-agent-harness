@@ -13,9 +13,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, TypeAdapter
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowExecutionStatus, WorkflowHandle
+from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
+from temporalio.exceptions import WorkflowAlreadyStartedError
+from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_harness.harness.agent_client import (
     AgentBusyError,
@@ -103,29 +106,12 @@ def create_agent_harness_app(
 
         resolved_registry = _resolve_registry(registry, registry_path)
 
-        from temporalio.client import WorkflowExecutionStatus
-
-        need_new = True
-        try:
-            handle = app.state.temporal.get_workflow_handle(manager_workflow_id)
-            desc = await handle.describe()
-            if desc.status == WorkflowExecutionStatus.RUNNING:
-                need_new = False
-                print(f"Connected to existing session manager: {manager_workflow_id}")
-        except Exception:
-            pass
-
-        if need_new:
-            await app.state.temporal.start_workflow(
-                SessionManagerWorkflow.run,
-                resolved_registry,
-                id=manager_workflow_id,
-                task_queue=manager_task_queue,
-            )
-            handle = app.state.temporal.get_workflow_handle(manager_workflow_id)
-            print(f"Started new session manager: {manager_workflow_id}")
-
-        app.state.manager_handle = handle
+        app.state.manager_handle = await _ensure_session_manager_workflow(
+            app.state.temporal,
+            registry=resolved_registry,
+            manager_workflow_id=manager_workflow_id,
+            manager_task_queue=manager_task_queue,
+        )
         yield
 
     app = FastAPI(lifespan=lifespan)
@@ -282,6 +268,47 @@ def _resolve_registry(
     if registry_path is not None:
         return load_agent_registry(registry_path)
     raise ValueError("create_agent_harness_app requires registry or registry_path.")
+
+
+async def _ensure_session_manager_workflow(
+    temporal: Client,
+    *,
+    registry: AgentRegistry,
+    manager_workflow_id: str,
+    manager_task_queue: str,
+) -> WorkflowHandle[Any, Any]:
+    handle = temporal.get_workflow_handle(manager_workflow_id)
+    try:
+        desc = await handle.describe()
+    except RPCError as exc:
+        if exc.status != RPCStatusCode.NOT_FOUND:
+            raise
+    else:
+        if desc.status == WorkflowExecutionStatus.RUNNING:
+            print(f"Connected to existing session manager: {manager_workflow_id}")
+            return handle
+        print(
+            "Existing session manager "
+            f"{manager_workflow_id} is {desc.status.name}; starting new run"
+        )
+
+    try:
+        handle = await temporal.start_workflow(
+            SessionManagerWorkflow.run,
+            registry,
+            id=manager_workflow_id,
+            task_queue=manager_task_queue,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        )
+    except WorkflowAlreadyStartedError:
+        handle = temporal.get_workflow_handle(manager_workflow_id)
+        print(
+            "Connected to session manager started concurrently: "
+            f"{manager_workflow_id}"
+        )
+    else:
+        print(f"Ensured session manager is running: {manager_workflow_id}")
+    return handle
 
 
 def _mount_static_ui(

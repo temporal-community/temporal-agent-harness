@@ -7,11 +7,16 @@ import sys
 import tarfile
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from temporalio.client import WorkflowExecutionStatus
+from temporalio.common import WorkflowIDConflictPolicy
+from temporalio.exceptions import WorkflowAlreadyStartedError
+from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.web import (
@@ -21,6 +26,7 @@ from temporal_agent_harness.web import (
     create_agent_harness_app,
     create_session_manager_worker,
 )
+from temporal_agent_harness.web.app import _ensure_session_manager_workflow
 
 ROOT = Path(__file__).resolve().parents[2]
 WHEEL_UI_PREFIX = "temporal_agent_harness/ui/dist/"
@@ -138,6 +144,89 @@ def test_create_session_manager_worker_rejects_owned_worker_registration() -> No
         create_session_manager_worker(object(), activities=[])
 
 
+async def test_session_manager_startup_attaches_to_running_workflow() -> None:
+    handle = _FakeWorkflowHandle(status=WorkflowExecutionStatus.RUNNING)
+    temporal = _FakeTemporalClient(handle)
+
+    result = await _ensure_session_manager_workflow(
+        temporal,
+        registry=AgentRegistry(),
+        manager_workflow_id="session-manager",
+        manager_task_queue="session-manager",
+    )
+
+    assert result is handle
+    assert temporal.start_calls == []
+
+
+async def test_session_manager_startup_starts_when_missing() -> None:
+    handle = _FakeWorkflowHandle(
+        error=RPCError("not found", RPCStatusCode.NOT_FOUND, b"")
+    )
+    started_handle = object()
+    registry = AgentRegistry()
+    temporal = _FakeTemporalClient(handle, start_result=started_handle)
+
+    result = await _ensure_session_manager_workflow(
+        temporal,
+        registry=registry,
+        manager_workflow_id="session-manager",
+        manager_task_queue="session-manager",
+    )
+
+    assert result is started_handle
+    assert temporal.start_calls == [
+        {
+            "workflow": SessionManagerWorkflow.run,
+            "arg": registry,
+            "id": "session-manager",
+            "task_queue": "session-manager",
+            "id_conflict_policy": WorkflowIDConflictPolicy.USE_EXISTING,
+        }
+    ]
+
+
+async def test_session_manager_startup_surfaces_temporal_rpc_failures() -> None:
+    handle = _FakeWorkflowHandle(
+        error=RPCError("permission denied", RPCStatusCode.PERMISSION_DENIED, b"")
+    )
+    temporal = _FakeTemporalClient(handle)
+
+    with pytest.raises(RPCError, match="permission denied"):
+        await _ensure_session_manager_workflow(
+            temporal,
+            registry=AgentRegistry(),
+            manager_workflow_id="session-manager",
+            manager_task_queue="session-manager",
+        )
+
+    assert temporal.start_calls == []
+
+
+async def test_session_manager_startup_handles_concurrent_start_race() -> None:
+    handle = _FakeWorkflowHandle(
+        error=RPCError("not found", RPCStatusCode.NOT_FOUND, b"")
+    )
+    temporal = _FakeTemporalClient(
+        handle,
+        start_error=WorkflowAlreadyStartedError(
+            "session-manager",
+            "SessionManagerWorkflow",
+        ),
+    )
+
+    result = await _ensure_session_manager_workflow(
+        temporal,
+        registry=AgentRegistry(),
+        manager_workflow_id="session-manager",
+        manager_task_queue="session-manager",
+    )
+
+    assert result is handle
+    assert temporal.get_handle_ids == ["session-manager", "session-manager"]
+    assert len(temporal.start_calls) == 1
+
+
 @pytest.fixture(scope="module")
 def built_distributions(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
     import setuptools.build_meta as build_meta
@@ -228,6 +317,47 @@ print(dist)
 
 def _relative_asset_paths(index_html: str) -> set[str]:
     return set(re.findall(r'(?:src|href)="\./([^"]+)"', index_html))
+
+
+class _FakeWorkflowHandle:
+    def __init__(
+        self,
+        *,
+        status: WorkflowExecutionStatus | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.status = status
+        self.error = error
+
+    async def describe(self):
+        if self.error is not None:
+            raise self.error
+        return SimpleNamespace(status=self.status)
+
+
+class _FakeTemporalClient:
+    def __init__(
+        self,
+        handle: _FakeWorkflowHandle,
+        *,
+        start_result: object | None = None,
+        start_error: Exception | None = None,
+    ) -> None:
+        self.handle = handle
+        self.start_result = start_result
+        self.start_error = start_error
+        self.get_handle_ids: list[str] = []
+        self.start_calls: list[dict[str, object]] = []
+
+    def get_workflow_handle(self, workflow_id: str) -> _FakeWorkflowHandle:
+        self.get_handle_ids.append(workflow_id)
+        return self.handle
+
+    async def start_workflow(self, workflow, arg, **kwargs):
+        self.start_calls.append({"workflow": workflow, "arg": arg, **kwargs})
+        if self.start_error is not None:
+            raise self.start_error
+        return self.start_result
 
 
 def _assert_ui_assets_present(names: set[str]) -> None:
