@@ -1,14 +1,13 @@
 <script lang="ts">
   import {
-    AlertTriangle,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
     CircleDollarSign,
     Pause,
     Play,
-    Radio,
-    RotateCcw
+    RotateCcw,
+    SkipForward
   } from "@lucide/svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import MetricStrip from "$lib/components/primitives/MetricStrip.svelte";
@@ -43,8 +42,6 @@
     onJumpToLive: () => void;
     onReset: () => void;
     onScrub: (index: number) => void;
-    onPreviousMarker: () => void;
-    onNextMarker: () => void;
   }
 
   let {
@@ -65,13 +62,10 @@
     onSpeedChange,
     onJumpToLive,
     onReset,
-    onScrub,
-    onPreviousMarker,
-    onNextMarker
+    onScrub
   }: Props = $props();
 
   const playbackSpeeds: PlaybackSpeed[] = [1, 2, 5, 10];
-  const markerCount = $derived(anomalyMarkers.length);
   let usageExpanded = $state(false);
 
   const metrics: Metric[] = $derived([
@@ -129,22 +123,9 @@
           </button>
         {/each}
       </div>
-      <IconButton label="Jump to live" tone="live" pressed={following} onclick={onJumpToLive}>
-        <Radio size={16} />
+      <IconButton label="Jump to latest step" tone="live" pressed={following} onclick={onJumpToLive}>
+        <SkipForward size={16} />
       </IconButton>
-
-      {#if markerCount > 0}
-        <span class="transport-divider" aria-hidden="true"></span>
-        <div class="marker-nav" title={`${markerCount} flagged events (errors, approvals, queued turns)`}>
-          <IconButton label="Previous flagged event" onclick={onPreviousMarker}>
-            <ChevronLeft size={16} />
-          </IconButton>
-          <span class="marker-icon" aria-hidden="true"><AlertTriangle size={14} /></span>
-          <IconButton label="Next flagged event" onclick={onNextMarker}>
-            <ChevronRight size={16} />
-          </IconButton>
-        </div>
-      {/if}
     </div>
 
     <div class="scrub-area">
@@ -266,23 +247,6 @@
     background: var(--surface-0);
   }
 
-  .transport-divider {
-    width: 1px;
-    height: 22px;
-    background: var(--border);
-  }
-
-  .marker-nav {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .marker-icon {
-    display: inline-flex;
-    color: var(--error);
-  }
-
   .speed-control button {
     min-width: 31px;
     height: 26px;
@@ -325,6 +289,27 @@
     width: 100%;
     margin: 0;
     accent-color: var(--accent);
+    cursor: grab;
+  }
+
+  input[type="range"]:active {
+    cursor: grabbing;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    cursor: grab;
+  }
+
+  input[type="range"]:active::-webkit-slider-thumb {
+    cursor: grabbing;
+  }
+
+  input[type="range"]::-moz-range-thumb {
+    cursor: grab;
+  }
+
+  input[type="range"]:active::-moz-range-thumb {
+    cursor: grabbing;
   }
 
   .turn-ticks {

@@ -212,6 +212,12 @@ Set `GEMINI_API_KEY` in `.env.local` for the conversational agents. The example
 defaults to the committed `temporal.local.toml` profile, which points at a local
 Temporal dev server.
 
+Install the Svelte UI dependencies once from the repo root:
+
+```bash
+just app-install
+```
+
 Run each command in its own terminal from the repo root:
 
 ```bash
@@ -257,7 +263,10 @@ Applications that want the built-in session manager and UI use
 
 ```python
 from temporalio.client import Client
+from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.envconfig import ClientConfig
 
+from temporal_agent_harness.utils.large_payload import with_large_payload_offload
 from temporal_agent_harness.web import (
     create_agent_harness_app,
     create_session_manager_worker,
@@ -265,7 +274,11 @@ from temporal_agent_harness.web import (
 
 
 async def run_session_manager() -> None:
-    client = await Client.connect("localhost:7233")
+    connect_config = ClientConfig.load_client_connect_config()
+    client = await Client.connect(
+        **connect_config,
+        data_converter=await with_large_payload_offload(pydantic_data_converter),
+    )
     worker = create_session_manager_worker(client)
     await worker.run()
 
@@ -301,21 +314,19 @@ output in [`temporal_agent_harness/ui/dist`](temporal_agent_harness/ui/dist), so
 any UI change needs a rebuild before packaging or before `just server` serves it:
 
 ```bash
-pnpm --dir ui install
-pnpm --dir ui build
-pnpm --dir ui check
-pnpm --dir ui check:svelte5
+just app-install   # one-time install of Svelte dependencies
+just app-build     # build ui/ into temporal_agent_harness/ui/dist
+just app-check     # svelte-check + local Svelte 5 syntax guard
 ```
 
-For hot reload:
+For hot reload, keep the FastAPI API server running on port 8000 and start Vite
+in another terminal:
 
 ```bash
-# terminal 1: FastAPI API server on :8000
-cd examples/monty
+# terminal 1
 just server
 
-# terminal 2: Vite UI server on :5173
-cd examples/monty
+# terminal 2
 just ui-dev
 ```
 
@@ -327,6 +338,7 @@ from `/` or under a path prefix as long as the UI and API are mounted together.
 Use the package recipe from the repo root:
 
 ```bash
+just app-install   # one-time setup if ui/node_modules is absent
 just package
 ```
 

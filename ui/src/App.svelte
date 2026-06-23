@@ -286,8 +286,6 @@
     onJumpToLive={() => run.jumpToLive()}
     onReset={() => run.reset()}
     onScrub={(index) => run.goTo(index)}
-    onPreviousMarker={() => run.previousMarker()}
-    onNextMarker={() => run.nextMarker()}
   />
 </main>
 

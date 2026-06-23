@@ -759,20 +759,6 @@ export class AgentRunController {
     this.goTo(target?.index ?? this.total);
   }
 
-  nextMarker(): void {
-    this.pause();
-    const target = this.anomalyMarkers.find((marker) => marker.index > this.viewIndex);
-    if (target) this.goTo(target.index);
-  }
-
-  previousMarker(): void {
-    this.pause();
-    const target = [...this.anomalyMarkers]
-      .reverse()
-      .find((marker) => marker.index < this.viewIndex);
-    if (target) this.goTo(target.index);
-  }
-
   jumpToLive(): void {
     this.goTo(this.total);
     this.following = true;
