@@ -40,7 +40,15 @@
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
 
   type AgentChatLayout = "full" | "embedded";
+  type OperatorTargetRole = "parent" | "subagent";
+  interface OperatorTargetOption {
+    workflowId: string;
+    role: OperatorTargetRole;
+    label: string;
+    operatorInterface: OperatorCommand[];
+  }
   type SlashMenuItem =
+    | { kind: "target"; id: string; target: OperatorTargetOption }
     | { kind: "command"; id: string; command: OperatorCommand }
     | { kind: "choice"; id: string; command: OperatorCommand; value: string }
     | { kind: "tool"; id: string; command: OperatorCommand; tool: string };
@@ -61,6 +69,9 @@
     agents?: AgentDescriptor[];
     agentInterface?: AgentInterfaceFunction[];
     operatorInterface?: OperatorCommand[];
+    operatorTargetLabel?: string;
+    operatorTargetRole?: OperatorTargetRole;
+    operatorTargets?: OperatorTargetOption[];
     currentAgentWorkflowType?: string | null;
     connecting?: boolean;
     sending?: boolean;
@@ -69,7 +80,8 @@
     onSend?: (message: AgentInboundMessage) => void | Promise<void>;
     onOperatorCommand?: (
       name: string,
-      arg?: string | null
+      arg?: string | null,
+      workflowId?: string | null
     ) => OperatorCommandResponse | Promise<OperatorCommandResponse>;
     onNewSession?: (workflowType: string) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
@@ -108,6 +120,9 @@
     agents = [],
     agentInterface = [],
     operatorInterface = [],
+    operatorTargetLabel = "",
+    operatorTargetRole = "parent",
+    operatorTargets = [],
     currentAgentWorkflowType = null,
     connecting = false,
     sending = false,
@@ -136,6 +151,7 @@
   let messageListElement = $state<HTMLDivElement | null>(null);
   let slashSelectionIndex = $state(0);
   let slashMenuSignature = $state("");
+  let slashTargetWorkflowId = $state<string | null>(null);
 
   const transcriptMessages = $derived(seedMessages(items));
   const messages = $derived([...transcriptMessages, ...localMessages]);
@@ -158,8 +174,38 @@
       agents.find((agent) => agent.workflow_type === currentAgentWorkflowType) ??
       null
   );
-  const availableSlashCommands = $derived(operatorInterface);
-  const acceptsSlashCommands = $derived(operatorInterface.length > 0);
+  const operatorCommandTargets = $derived.by(() => {
+    if (operatorTargets.length > 0) return operatorTargets;
+    return [
+      {
+        workflowId: sessionId,
+        role: operatorTargetRole,
+        label: operatorTargetLabel || agentLabel,
+        operatorInterface
+      }
+    ];
+  });
+  const slashTarget = $derived.by(() => {
+    if (operatorCommandTargets.length === 1) return operatorCommandTargets[0] ?? null;
+    return (
+      operatorCommandTargets.find((target) => target.workflowId === slashTargetWorkflowId) ??
+      null
+    );
+  });
+  const slashNeedsTargetSelection = $derived(
+    operatorCommandTargets.length > 1 && slashTarget == null
+  );
+  const availableSlashCommands = $derived(slashTarget?.operatorInterface ?? []);
+  const acceptsSlashCommands = $derived(
+    operatorCommandTargets.some((target) => target.operatorInterface.length > 0)
+  );
+  const slashTargetLabel = $derived(slashTarget?.label ?? agentLabel);
+  const slashTargetsSubagent = $derived(slashTarget?.role === "subagent");
+  const showSlashTarget = $derived(
+    slashTarget != null &&
+      !slashNeedsTargetSelection &&
+      (operatorCommandTargets.length > 1 || slashTargetsSubagent)
+  );
   const isMonty = $derived(currentAgentWorkflowType === "MontyDynamicAgent");
   const composerPlaceholder = $derived(
     isMonty ? "Send a Python script to Monty" : `Ask ${agentLabel}`
@@ -186,6 +232,8 @@
   const slashMenuItems = $derived(
     buildSlashMenuItems(
       slashMenuOpen,
+      slashNeedsTargetSelection,
+      operatorCommandTargets,
       slashDraft,
       slashCommand,
       slashEnumChoices,
@@ -284,6 +332,21 @@
         requestAnimationFrame(scrollMessagesToBottom);
       }
     });
+  });
+
+  $effect(() => {
+    if (!draft.trimStart().startsWith("/")) {
+      slashTargetWorkflowId = null;
+    }
+  });
+
+  $effect(() => {
+    if (
+      slashTargetWorkflowId &&
+      !operatorCommandTargets.some((target) => target.workflowId === slashTargetWorkflowId)
+    ) {
+      slashTargetWorkflowId = null;
+    }
   });
 
   $effect(() => {
@@ -907,6 +970,8 @@
 
   function buildSlashMenuItems(
     open: boolean,
+    needsTargetSelection: boolean,
+    targets: OperatorTargetOption[],
     parsed: { command: string; arg: string },
     command: OperatorCommand | null,
     enumChoices: string[],
@@ -914,6 +979,16 @@
   ): SlashMenuItem[] {
     if (!open) return [];
     const items: SlashMenuItem[] = [];
+    if (needsTargetSelection) {
+      items.push(
+        ...targets.map((target) => ({
+          kind: "target" as const,
+          id: `target:${target.workflowId}`,
+          target
+        }))
+      );
+      return items;
+    }
     if (command == null) {
       items.push(
         ...availableSlashCommands
@@ -955,6 +1030,7 @@
   }
 
   function operatorCommandForDraft(value: string): ParsedOperatorCommand | null {
+    if (slashNeedsTargetSelection || slashTarget == null) return null;
     const parsed = parseSlashDraft(value);
     const command = commandForSlashDraft(parsed.command);
     if (command == null) return null;
@@ -1031,6 +1107,15 @@
     await sendMessage(`/${command.name} ${value}`);
   }
 
+  function targetRoleLabel(target: OperatorTargetOption): string {
+    return target.role === "subagent" ? "Subagent" : "Parent agent";
+  }
+
+  function selectSlashTarget(target: OperatorTargetOption): void {
+    slashTargetWorkflowId = target.workflowId;
+    if (!draft.trimStart().startsWith("/")) draft = "/";
+  }
+
   function selectSlashCommand(command: OperatorCommand): void {
     if (command.argument == null) {
       void sendMessage(`/${command.name}`);
@@ -1054,10 +1139,17 @@
 
     draft = "";
     if (operatorCommand != null) {
+      const commandTarget = slashTarget;
       if (onOperatorCommand) {
         try {
-          await onOperatorCommand(operatorCommand.name, operatorCommand.arg);
+          await onOperatorCommand(
+            operatorCommand.name,
+            operatorCommand.arg,
+            commandTarget?.workflowId
+          );
+          slashTargetWorkflowId = null;
         } catch (error) {
+          slashTargetWorkflowId = null;
           const now = Date.now() / 1000;
           localMessages = [
             ...localMessages,
@@ -1083,6 +1175,7 @@
         return;
       }
 
+      slashTargetWorkflowId = null;
       const now = Date.now() / 1000;
       try {
         localMessages = [
@@ -1161,6 +1254,11 @@
     if (!slashMenuOpen) return false;
     const selected = selectedSlashMenuItem();
     if (!selected) return false;
+
+    if (selected.kind === "target") {
+      selectSlashTarget(selected.target);
+      return true;
+    }
 
     if (selected.kind === "choice") {
       void sendCommandArgument(selected.command, selected.value);
@@ -1621,94 +1719,122 @@
     <div class="composer-wrap">
       {#if slashMenuOpen}
         <section class="slash-menu" aria-label="Slash commands">
-          {#each availableSlashCommands.filter((command) => commandMatchesDraft(command, slashDraft.command)) as command}
-            {#if slashCommand == null}
-              {@const commandItem = { kind: "command", id: command.name, command } as const}
+          {#if showSlashTarget}
+            <div class="slash-target" title={`Slash commands target ${slashTargetLabel}`}>
+              <span aria-hidden="true">/</span>
+              <strong>{slashTargetLabel}</strong>
+            </div>
+          {/if}
+
+          {#if slashNeedsTargetSelection}
+            {#each operatorCommandTargets as target}
+              {@const targetItem = { kind: "target", id: `target:${target.workflowId}`, target } as const}
               <button
                 type="button"
-                class={`slash-row ${slashItemActive(commandItem) ? "active" : ""}`}
-                onclick={() => selectSlashCommand(command)}
+                class={`slash-row slash-target-row ${slashItemActive(targetItem) ? "active" : ""}`}
+                onclick={() => selectSlashTarget(target)}
               >
-                {#if command.payload_name === "set-model"}
+                {#if target.role === "subagent"}
+                  <MessageCircle size={15} />
+                {:else}
+                  <Sparkles size={15} />
+                {/if}
+                <span>
+                  <strong>{target.label}</strong>
+                  <small>{targetRoleLabel(target)}</small>
+                </span>
+              </button>
+            {/each}
+          {:else}
+            {#each availableSlashCommands.filter((command) => commandMatchesDraft(command, slashDraft.command)) as command}
+              {#if slashCommand == null}
+                {@const commandItem = { kind: "command", id: command.name, command } as const}
+                <button
+                  type="button"
+                  class={`slash-row ${slashItemActive(commandItem) ? "active" : ""}`}
+                  onclick={() => selectSlashCommand(command)}
+                >
+                  {#if command.payload_name === "set-model"}
+                    <BrainCircuit class="model-command-icon" size={15} />
+                  {:else if command.payload_name === "set-approvals"}
+                    <ShieldCheck size={15} />
+                  {:else if command.payload_name === "status"}
+                    <span class="status-dot" aria-hidden="true"></span>
+                  {:else if command.payload_name === "allow-tools"}
+                    <Wrench class="allow-tools-icon" size={15} fill="currentColor" strokeWidth={0} />
+                  {:else}
+                    <Wrench size={15} />
+                  {/if}
+                  <span>
+                    <strong>{command.label}</strong>
+                    <small>{command.description}</small>
+                  </span>
+                </button>
+              {/if}
+            {/each}
+
+            {#if slashCommand}
+              <div class="slash-row slash-command-summary">
+                {#if slashCommand.payload_name === "set-model"}
                   <BrainCircuit class="model-command-icon" size={15} />
-                {:else if command.payload_name === "set-approvals"}
+                {:else if slashCommand.payload_name === "set-approvals"}
                   <ShieldCheck size={15} />
-                {:else if command.payload_name === "status"}
+                {:else if slashCommand.payload_name === "status"}
                   <span class="status-dot" aria-hidden="true"></span>
-                {:else if command.payload_name === "allow-tools"}
+                {:else if slashCommand.payload_name === "allow-tools"}
                   <Wrench class="allow-tools-icon" size={15} fill="currentColor" strokeWidth={0} />
                 {:else}
                   <Wrench size={15} />
                 {/if}
                 <span>
-                  <strong>{command.label}</strong>
-                  <small>{command.description}</small>
+                  <strong>{slashCommand.label}</strong>
+                  <small>{slashCommand.description}</small>
                 </span>
-              </button>
+              </div>
             {/if}
-          {/each}
 
-          {#if slashCommand}
-            <div class="slash-row slash-command-summary">
-              {#if slashCommand.payload_name === "set-model"}
-                <BrainCircuit class="model-command-icon" size={15} />
-              {:else if slashCommand.payload_name === "set-approvals"}
-                <ShieldCheck size={15} />
-              {:else if slashCommand.payload_name === "status"}
-                <span class="status-dot" aria-hidden="true"></span>
-              {:else if slashCommand.payload_name === "allow-tools"}
-                <Wrench class="allow-tools-icon" size={15} fill="currentColor" strokeWidth={0} />
-              {:else}
-                <Wrench size={15} />
-              {/if}
-              <span>
-                <strong>{slashCommand.label}</strong>
-                <small>{slashCommand.description}</small>
-              </span>
-            </div>
-          {/if}
-
-          {#if slashCommand?.argument?.kind === "enum"}
-            <div class="slash-models" aria-label="Argument choices">
-              {#each slashEnumChoices as choice}
-                {@const choiceItem = { kind: "choice", id: `${slashCommand.name}:${choice}`, command: slashCommand, value: choice } as const}
-                <button
-                  type="button"
-                  class={`slash-row model-choice ${slashItemActive(choiceItem) ? "active" : ""}`}
-                  onclick={() => void sendCommandArgument(slashCommand, choice)}
-                >
-                  {#if slashCommand.payload_name === "set-model"}
-                    <Cpu size={15} />
-                  {:else if slashCommand.payload_name === "set-approvals"}
-                    <ShieldCheck size={15} />
-                  {:else}
+            {#if slashCommand?.argument?.kind === "enum"}
+              <div class="slash-models" aria-label="Argument choices">
+                {#each slashEnumChoices as choice}
+                  {@const choiceItem = { kind: "choice", id: `${slashCommand.name}:${choice}`, command: slashCommand, value: choice } as const}
+                  <button
+                    type="button"
+                    class={`slash-row model-choice ${slashItemActive(choiceItem) ? "active" : ""}`}
+                    onclick={() => void sendCommandArgument(slashCommand, choice)}
+                  >
+                    {#if slashCommand.payload_name === "set-model"}
+                      <Cpu size={15} />
+                    {:else if slashCommand.payload_name === "set-approvals"}
+                      <ShieldCheck size={15} />
+                    {:else}
+                      <Wrench size={15} />
+                    {/if}
+                    <span>
+                      <strong>{choice}</strong>
+                      <small>{slashCommand.payload_name}</small>
+                    </span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+            {#if slashCommand?.argument?.kind === "tool_names"}
+              <div class="slash-models" aria-label="Tool choices">
+                {#each slashToolChoices as tool}
+                  {@const toolItem = { kind: "tool", id: `${slashCommand.name}:${tool}`, command: slashCommand, tool } as const}
+                  <button
+                    type="button"
+                    class={`slash-row model-choice ${slashItemActive(toolItem) ? "active" : ""}`}
+                    onclick={() => void sendCommandArgument(slashCommand, tool)}
+                  >
                     <Wrench size={15} />
-                  {/if}
-                  <span>
-                    <strong>{choice}</strong>
-                    <small>{slashCommand.payload_name}</small>
-                  </span>
-                </button>
-              {/each}
-            </div>
-          {/if}
-          {#if slashCommand?.argument?.kind === "tool_names"}
-            <div class="slash-models" aria-label="Tool choices">
-              {#each slashToolChoices as tool}
-                {@const toolItem = { kind: "tool", id: `${slashCommand.name}:${tool}`, command: slashCommand, tool } as const}
-                <button
-                  type="button"
-                  class={`slash-row model-choice ${slashItemActive(toolItem) ? "active" : ""}`}
-                  onclick={() => void sendCommandArgument(slashCommand, tool)}
-                >
-                  <Wrench size={15} />
-                  <span>
-                    <strong>{tool}</strong>
-                    <small>{slashCommand.payload_name}</small>
-                  </span>
-                </button>
-              {/each}
-            </div>
+                    <span>
+                      <strong>{tool}</strong>
+                      <small>{slashCommand.payload_name}</small>
+                    </span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
           {/if}
         </section>
       {/if}
@@ -2812,6 +2938,44 @@
     border-radius: 8px;
     background: color-mix(in srgb, var(--surface-1) 96%, black);
     box-shadow: 0 12px 30px rgb(0 0 0 / 0.3);
+  }
+
+  .slash-target {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    justify-self: start;
+    max-width: 100%;
+    padding: 5px 8px;
+    border: 1px solid color-mix(in srgb, var(--model) 36%, var(--border));
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--model) 13%, var(--surface-2));
+    color: var(--text-2);
+    font-size: 11px;
+  }
+
+  .slash-target span {
+    width: 17px;
+    height: 17px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--model) 28%, var(--surface-1));
+    color: color-mix(in srgb, var(--model) 88%, white);
+    font-family: SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+    font-weight: 750;
+  }
+
+  .slash-target strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 680;
   }
 
   .slash-models {

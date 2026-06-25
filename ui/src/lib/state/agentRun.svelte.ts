@@ -41,6 +41,13 @@ export interface ObservedSubagent {
   stopped: boolean;
 }
 
+export interface OperatorTarget {
+  workflowId: string;
+  role: "parent" | "subagent";
+  label: string;
+  operatorInterface: OperatorCommand[];
+}
+
 type ReplayTimelineRole = "parent" | "subagent";
 
 interface ReplayTimelineEntry extends StepTimelineFrame {
@@ -173,7 +180,8 @@ function displayTextForMessage(message: AgentInboundMessage): string {
 }
 
 function frameKey(frame: AgentSseFrame): string {
-  return `${frame.event}|${JSON.stringify(frame.data)}`;
+  const { resume_offset: _resumeOffset, ...identityData } = frame.data;
+  return `${frame.event}|${JSON.stringify(identityData)}`;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -182,6 +190,14 @@ function isAbortError(error: unknown): boolean {
     error !== null &&
     "name" in error &&
     (error as { name?: unknown }).name === "AbortError"
+  );
+}
+
+function isOperatorCommandFrame(frame: AgentSseFrame): boolean {
+  return (
+    frame.event === "operator_command_started" ||
+    frame.event === "operator_command_completed" ||
+    frame.event === "operator_command_failed"
   );
 }
 
@@ -212,6 +228,8 @@ export class AgentRunController {
   #streamAbort: AbortController | null = null;
   #interfaceRequests = new Set<string>();
   #operatorInterfaceRequests = new Set<string>();
+  #workflowResumeOffsets = new Map<string, number>();
+  #workflowAttachAbort = new Map<string, AbortController>();
   #frameKeys = new Set<string>();
   #frameCacheTimer: number | null = null;
   #submitQueue: Promise<void> = Promise.resolve();
@@ -237,12 +255,13 @@ export class AgentRunController {
   );
   graphAgents = $derived(this.#graphAgents());
   graph = $derived(buildAgentTreeGraph(this.graphAgents));
+  operatorTargets = $derived(this.#operatorTargets());
   replayLog = $derived(buildReplayLog(this.visibleReplayTimeline));
   fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
   chatTranscript = $derived(
     buildTranscript(
       this.replayTimeline
-        .filter((entry) => entry.role === "parent")
+        .filter((entry) => entry.role === "parent" || isOperatorCommandFrame(entry.frame))
         .map((entry) => entry.frame)
     )
   );
@@ -425,6 +444,90 @@ export class AgentRunController {
 
   #finishStream(controller: AbortController): void {
     if (this.#streamAbort === controller) this.#streamAbort = null;
+  }
+
+  #stopWorkflowAttach(workflowId: string): void {
+    const controller = this.#workflowAttachAbort.get(workflowId);
+    controller?.abort();
+    this.#workflowAttachAbort.delete(workflowId);
+  }
+
+  #stopWorkflowAttachStreams(): void {
+    for (const controller of this.#workflowAttachAbort.values()) {
+      controller.abort();
+    }
+    this.#workflowAttachAbort.clear();
+  }
+
+  #isKnownWorkflowId(workflowId: string): boolean {
+    return (
+      workflowId === this.session?.workflow_id ||
+      this.observedSubagents.some((agent) => agent.workflowId === workflowId)
+    );
+  }
+
+  #resumeOffsetForWorkflow(workflowId: string): number {
+    if (workflowId === this.session?.workflow_id) return this.lastResumeOffset;
+    return this.#workflowResumeOffsets.get(workflowId) ?? 0;
+  }
+
+  #operatorTargets(): OperatorTarget[] {
+    const session = this.session;
+    if (!session) return [];
+    return [
+      {
+        workflowId: session.workflow_id,
+        role: "parent",
+        label: this.runInfo.agentLabel,
+        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? []
+      },
+      ...this.observedSubagents
+        .filter((agent) => !agent.stopped)
+        .map((agent) => ({
+          workflowId: agent.workflowId,
+          role: agent.role,
+          label: agent.label,
+          operatorInterface:
+            this.operatorInterfaces[agent.workflowId] ??
+            agent.operatorInterface ??
+            []
+        }))
+    ];
+  }
+
+  operatorTargetForWorkflow(workflowId?: string | null): OperatorTarget | null {
+    const session = this.session;
+    if (!session) return null;
+    if (!workflowId || workflowId === session.workflow_id) {
+      return {
+        workflowId: session.workflow_id,
+        role: "parent",
+        label: this.runInfo.agentLabel,
+        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? []
+      };
+    }
+
+    const subagent = this.observedSubagents.find(
+      (agent) => agent.workflowId === workflowId
+    );
+    if (!subagent) {
+      return {
+        workflowId: session.workflow_id,
+        role: "parent",
+        label: this.runInfo.agentLabel,
+        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? []
+      };
+    }
+
+    return {
+      workflowId: subagent.workflowId,
+      role: "subagent",
+      label: subagent.label,
+      operatorInterface:
+        this.operatorInterfaces[subagent.workflowId] ??
+        subagent.operatorInterface ??
+        []
+    };
   }
 
   #subagentLabel(agentKey: string, subagentId: string): string {
@@ -676,6 +779,40 @@ export class AgentRunController {
     }
   }
 
+  async #attachWorkflow(
+    workflowId: string,
+    fromOffset = this.#resumeOffsetForWorkflow(workflowId)
+  ): Promise<void> {
+    const session = this.session;
+    if (!session || !this.#isKnownWorkflowId(workflowId)) return;
+
+    this.#stopWorkflowAttach(workflowId);
+    const controller = new AbortController();
+    this.#workflowAttachAbort.set(workflowId, controller);
+    try {
+      for await (const frame of this.#api.attach(
+        workflowId,
+        fromOffset,
+        controller.signal
+      )) {
+        if (
+          controller.signal.aborted ||
+          this.session?.workflow_id !== session.workflow_id ||
+          !this.#isKnownWorkflowId(workflowId)
+        ) {
+          break;
+        }
+        this.#appendFrame(frame, { sourceWorkflowId: workflowId });
+      }
+    } catch (error) {
+      if (!isAbortError(error)) throw error;
+    } finally {
+      if (this.#workflowAttachAbort.get(workflowId) === controller) {
+        this.#workflowAttachAbort.delete(workflowId);
+      }
+    }
+  }
+
   async sendMessage(message: AgentInboundMessage): Promise<void> {
     const displayText = displayTextForMessage(message);
     if (!displayText) return;
@@ -727,29 +864,48 @@ export class AgentRunController {
 
   async executeOperatorCommand(
     name: string,
-    arg?: string | null
+    arg?: string | null,
+    workflowId?: string | null
   ): Promise<OperatorCommandResponse> {
     await this.initialize();
     const session = this.session;
     if (!session) throw new Error("No active session.");
+    const targetWorkflowId =
+      workflowId && this.#isKnownWorkflowId(workflowId)
+        ? workflowId
+        : session.workflow_id;
 
     this.connectionError = null;
     try {
       const result = await this.#api.executeOperatorCommand({
-        session_id: session.workflow_id,
+        session_id: targetWorkflowId,
         name,
         arg: arg ?? null
       });
-      const shouldClearSendingOnIdle = this.sending;
-      void this.attach(this.lastResumeOffset, {
-        clearSendingOnIdle: shouldClearSendingOnIdle
-      }).catch((error: unknown) => {
-        if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
-          this.connectionError =
-            error instanceof Error ? error.message : "Failed to stream operator events.";
-          if (shouldClearSendingOnIdle) this.sending = false;
-        }
-      });
+      if (targetWorkflowId === session.workflow_id) {
+        const shouldClearSendingOnIdle = this.sending;
+        void this.attach(this.lastResumeOffset, {
+          clearSendingOnIdle: shouldClearSendingOnIdle
+        }).catch((error: unknown) => {
+          if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
+            this.connectionError =
+              error instanceof Error ? error.message : "Failed to stream operator events.";
+            if (shouldClearSendingOnIdle) this.sending = false;
+          }
+        });
+      } else {
+        void this.#attachWorkflow(
+          targetWorkflowId,
+          this.#resumeOffsetForWorkflow(targetWorkflowId)
+        ).catch((error: unknown) => {
+          if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
+            this.connectionError =
+              error instanceof Error
+                ? error.message
+                : "Failed to stream operator events.";
+          }
+        });
+      }
       return result;
     } catch (error) {
       this.connectionError =
@@ -832,16 +988,21 @@ export class AgentRunController {
   #resetSessionView(): void {
     this.pause();
     this.#stopStream();
+    this.#stopWorkflowAttachStreams();
     this.frames = [];
     this.observedSubagents = [];
     this.#frameKeys = new Set<string>();
+    this.#workflowResumeOffsets = new Map<string, number>();
     this.viewIndex = 0;
     this.following = false;
     this.expectedTurn = 1;
     this.lastResumeOffset = 0;
   }
 
-  #appendFrame(frame: AgentSseFrame, options: { persist?: boolean } = {}): void {
+  #appendFrame(
+    frame: AgentSseFrame,
+    options: { persist?: boolean; sourceWorkflowId?: string } = {}
+  ): void {
     const key = frameKey(frame);
     if (this.#frameKeys.has(key)) return;
     this.#frameKeys.add(key);
@@ -849,7 +1010,8 @@ export class AgentRunController {
     if (!("type" in frame.data)) {
       this.connectionError = frame.data.message;
     }
-    const publisherWorkflowId = this.#publisherWorkflowId(frame);
+    const publisherWorkflowId =
+      this.#publisherWorkflowId(frame) ?? options.sourceWorkflowId;
     const isRootFrame = publisherWorkflowId === this.session?.workflow_id;
 
     this.frames = [...this.frames, frame];
@@ -860,10 +1022,23 @@ export class AgentRunController {
       "resume_offset" in frame.data &&
       typeof frame.data.resume_offset === "number"
     ) {
-      this.lastResumeOffset = Math.max(
-        this.lastResumeOffset,
-        frame.data.resume_offset
-      );
+      const resumeOffsetOwner =
+        options.sourceWorkflowId ?? (isRootFrame ? publisherWorkflowId : undefined);
+      if (resumeOffsetOwner) {
+        this.#workflowResumeOffsets.set(
+          resumeOffsetOwner,
+          Math.max(
+            this.#workflowResumeOffsets.get(resumeOffsetOwner) ?? 0,
+            frame.data.resume_offset
+          )
+        );
+      }
+      if (isRootFrame) {
+        this.lastResumeOffset = Math.max(
+          this.lastResumeOffset,
+          frame.data.resume_offset
+        );
+      }
     }
     if (
       isRootFrame &&

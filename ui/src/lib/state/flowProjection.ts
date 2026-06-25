@@ -2,6 +2,7 @@ import type { Edge, Node } from "@xyflow/svelte";
 import type {
   AgentInterfaceFunction,
   AgentSseFrame,
+  OperatorCommand,
   ToolId
 } from "$lib/api/types";
 import { formatTokens, summarizeCost, type CostSummary } from "$lib/cost/pricing";
@@ -59,6 +60,7 @@ export interface AgentGraphSource {
   subagentId?: string;
   agentKey?: string;
   agentInterface?: AgentInterfaceFunction[];
+  operatorInterface?: OperatorCommand[];
   stopped?: boolean;
 }
 
