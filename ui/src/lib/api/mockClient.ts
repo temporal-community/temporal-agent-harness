@@ -7,6 +7,7 @@ import type {
   CreateSessionRequest,
   CreateSessionResponse,
   Session,
+  SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
   WorkflowId
@@ -35,14 +36,23 @@ const qaInterface: AgentInterfaceFunction[] = [
     }
   },
   {
-    name: "slash_command",
+    name: "slash",
     description: "Change QA agent runtime settings with slash commands.",
     parameters: {
       type: "object",
       properties: {
-        payload: { type: "object", title: "Payload" }
+        name: {
+          type: "string",
+          title: "Name",
+          enum: ["set-model"]
+        },
+        arg: {
+          type: "string",
+          title: "Arg",
+          enum: ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+        }
       },
-      required: ["payload"]
+      required: ["name"]
     },
     output: {
       type: "object",
@@ -125,6 +135,16 @@ export class MockAgentApi implements AgentApi {
       if (signal?.aborted) return;
       yield item;
     }
+  }
+
+  async submitMessage(request: ChatRequest): Promise<SubmitMessageResponse> {
+    await sleep(80);
+    return {
+      turn_number: request.expected_turn,
+      turn_id: `mock-turn-${request.expected_turn}`,
+      accepted_offset: 0,
+      pending: false
+    };
   }
 
   async *chat(_request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame> {

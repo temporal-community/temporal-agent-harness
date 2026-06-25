@@ -119,8 +119,14 @@ function renderUserMessage(value: string): string {
     };
     if (typeof message.payload?.text === "string") return message.payload.text;
     if (typeof message.script === "string") return message.script;
-    if (message.type !== "slash_command" || !message.payload?.name) return value;
-    return `/${message.payload.name}${message.payload.arg ? ` ${message.payload.arg}` : ""}`;
+    if (
+      (message.type !== "slash" && message.type !== "slash_command") ||
+      !message.payload?.name
+    ) {
+      return value;
+    }
+    const command = message.payload.name === "set-model" ? "model" : message.payload.name;
+    return `/${command}${message.payload.arg ? ` ${message.payload.arg}` : ""}`;
   } catch {
     return value;
   }

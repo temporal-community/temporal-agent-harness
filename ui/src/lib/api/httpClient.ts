@@ -7,6 +7,7 @@ import type {
   CreateSessionRequest,
   CreateSessionResponse,
   Session,
+  SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
   WorkflowId
@@ -109,6 +110,18 @@ export class HttpAgentApi implements AgentApi {
       throw new Error(await responseErrorMessage(response, `Attach failed (${response.status})`));
     }
     yield* readSse(response);
+  }
+
+  async submitMessage(
+    request: ChatRequest,
+    signal?: AbortSignal
+  ): Promise<SubmitMessageResponse> {
+    return json<SubmitMessageResponse>(apiPath("messages"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      signal
+    });
   }
 
   async *chat(request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame> {

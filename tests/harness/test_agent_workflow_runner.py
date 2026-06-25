@@ -499,9 +499,14 @@ def test_protocol_types_use_concrete_annotations():
     """Guard: the wire types must use concrete (not stringized) annotations — they cross
     the Temporal pydantic converter, which builds their TypeAdapter inside the workflow
     sandbox, where a stringized annotation fails to resolve."""
-    from temporal_agent_harness.harness.agent_protocol import AgentMessage, AgentStatus, AgentMessageReply
+    from temporal_agent_harness.harness.agent_protocol import (
+        AgentMessage,
+        AgentMessageReply,
+        AgentStatus,
+        SlashCommand,
+    )
 
-    for cls in (AgentMessage, AgentStatus, AgentMessageReply):
+    for cls in (AgentMessage, AgentStatus, AgentMessageReply, SlashCommand):
         for field_name, annotation in cls.__annotations__.items():
             assert not isinstance(annotation, str), (
                 f"{cls.__name__}.{field_name} is a string annotation — "

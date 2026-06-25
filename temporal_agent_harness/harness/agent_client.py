@@ -228,6 +228,20 @@ class AgentClient:
                 raise AgentBusyError(str(cause)) from e
             raise
 
+    async def submit_message(
+        self,
+        msg_type: str,
+        payload: dict[str, Any],
+        expected_turn: int,
+    ) -> AgentMessageReply:
+        """Submit one message to the agent without streaming the accepted turn.
+
+        UI clients that maintain a separate ``attach`` stream should use this to avoid
+        opening one long-lived stream per queued message. The returned
+        :class:`AgentMessageReply` confirms the workflow accepted or queued the turn.
+        """
+        return await self._submit_message(msg_type, payload, expected_turn)
+
     async def send_message(
         self,
         msg_type: str,

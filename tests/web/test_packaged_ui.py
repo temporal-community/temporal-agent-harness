@@ -102,6 +102,25 @@ def test_chat_request_rejects_client_supplied_from_offset() -> None:
     assert any("from_offset" in item.get("loc", []) for item in detail)
 
 
+def test_submit_message_request_rejects_client_supplied_from_offset() -> None:
+    app = create_agent_harness_app(registry=AgentRegistry())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/messages",
+        json={
+            "session_id": "agent-session-test",
+            "message": "hello",
+            "expected_turn": 1,
+            "from_offset": 42,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any("from_offset" in item.get("loc", []) for item in detail)
+
+
 def test_legacy_session_manager_example_folder_is_removed() -> None:
     legacy_example = ROOT / "examples" / "session_manager"
 

@@ -222,7 +222,7 @@ class AgentMessage(BaseModel):
     rejecting a bad shape) before dispatching::
 
         AgentMessage(type="slash",
-                     payload={"payload": {"name": "scope", "arg": "docs"}},
+                     payload={"name": "set-model", "arg": "gemini-3.1-flash-lite"},
                      expected_turn=1)
 
     Routing is **by name**, not by a discriminator on the payload type — so two handlers
@@ -259,6 +259,13 @@ class TextReply(BaseModel):
     """A free-form natural-language reply (the output of a plain chat handler)."""
 
     text: str
+
+
+class SlashCommand(BaseModel):
+    """A slash command selected by an interactive client."""
+
+    name: str
+    arg: str | None = None
 
 
 # ---------------------------------------------------------------------------

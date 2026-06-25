@@ -7,6 +7,7 @@ import type {
   CreateSessionRequest,
   CreateSessionResponse,
   Session,
+  SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
   WorkflowId
@@ -19,6 +20,7 @@ export interface AgentApi {
   acceptedMessageTypes(sessionId: WorkflowId): Promise<AcceptedMessageTypesResponse>;
   agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]>;
   attach(sessionId: WorkflowId, fromOffset?: number, signal?: AbortSignal): AsyncIterable<AgentSseFrame>;
+  submitMessage(request: ChatRequest, signal?: AbortSignal): Promise<SubmitMessageResponse>;
   chat(request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame>;
   approve(request: ToolApprovalRequest): Promise<ToolApprovalResponse>;
 }

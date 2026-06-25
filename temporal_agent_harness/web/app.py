@@ -192,6 +192,17 @@ def create_agent_harness_app(
         )
         return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
 
+    @app.post("/api/messages")
+    async def submit_message(req: ChatRequestBody):
+        client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
+        if isinstance(req.message, str):
+            msg_type, payload = "ask", {"text": req.message}
+        else:
+            msg_type, payload = req.message["type"], req.message.get("payload") or {}
+
+        result = await client.submit_message(msg_type, payload, req.expected_turn)
+        return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
+
     @app.post("/api/chat")
     async def chat(req: ChatRequestBody):
         def on_item(item: AgentStreamOutput, resume_offset: int) -> bytes:

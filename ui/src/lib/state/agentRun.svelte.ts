@@ -1,6 +1,7 @@
 import type {
   AgentInboundMessage,
   AgentInterfaceFunction,
+  AgentMessageObject,
   AgentSseFrame
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
@@ -47,6 +48,11 @@ interface ReplayTimelineEntry extends StepTimelineFrame {
 
 const basePlaybackDelayMs = 700;
 const activeSessionStorageKey = "temporal-agent-ui.active-session.v1";
+const frameCacheStorageKeyPrefix = "temporal-agent-ui.frames.v1:";
+
+function frameCacheStorageKey(sessionId: string): string {
+  return `${frameCacheStorageKeyPrefix}${sessionId}`;
+}
 
 function readStoredActiveSessionId(): string | null {
   if (typeof window === "undefined") return null;
@@ -76,6 +82,34 @@ function removeStoredActiveSessionId(): void {
   }
 }
 
+function readCachedFrames(sessionId: string): AgentSseFrame[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.sessionStorage.getItem(frameCacheStorageKey(sessionId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as { frames?: unknown };
+    return Array.isArray(parsed.frames) ? (parsed.frames as AgentSseFrame[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCachedFrames(sessionId: string, frames: AgentSseFrame[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(
+      frameCacheStorageKey(sessionId),
+      JSON.stringify({ frames, savedAt: Date.now() })
+    );
+  } catch {
+    try {
+      window.sessionStorage.removeItem(frameCacheStorageKey(sessionId));
+    } catch {
+      // Ignore storage failures.
+    }
+  }
+}
+
 function renderUserMessage(value: string): string {
   if (!value.startsWith("{")) return value;
   try {
@@ -87,11 +121,56 @@ function renderUserMessage(value: string): string {
     if (typeof message.payload?.text === "string") return message.payload.text;
     if (typeof message.payload?.script === "string") return message.payload.script;
     if (typeof message.script === "string") return message.script;
-    if (message.type !== "slash_command" || !message.payload?.name) return value;
-    return `/${message.payload.name}${message.payload.arg ? ` ${message.payload.arg}` : ""}`;
+    if (
+      (message.type !== "slash" && message.type !== "slash_command") ||
+      !message.payload?.name
+    ) {
+      return value;
+    }
+    return slashCommandDisplayText(message.payload.name, message.payload.arg);
   } catch {
     return value;
   }
+}
+
+function isAgentMessageObject(message: AgentInboundMessage): message is AgentMessageObject {
+  return typeof message === "object" && message !== null;
+}
+
+function slashCommandDisplayText(name: string, arg?: string): string {
+  const command = name === "set-model" ? "model" : name;
+  return `/${command}${arg ? ` ${arg}` : ""}`;
+}
+
+function displayTextForMessage(message: AgentInboundMessage): string {
+  if (typeof message === "string") return message.trim();
+  if (
+    message.type === "slash" &&
+    typeof message.payload === "object" &&
+    message.payload != null &&
+    "name" in message.payload &&
+    typeof message.payload.name === "string"
+  ) {
+    const arg =
+      "arg" in message.payload && typeof message.payload.arg === "string"
+        ? message.payload.arg
+        : undefined;
+    return slashCommandDisplayText(message.payload.name, arg);
+  }
+  if (
+    message.type === "run_script" &&
+    typeof message.payload === "object" &&
+    message.payload != null &&
+    "script" in message.payload &&
+    typeof message.payload.script === "string"
+  ) {
+    return message.payload.script.trim();
+  }
+  return JSON.stringify(message);
+}
+
+function frameKey(frame: AgentSseFrame): string {
+  return `${frame.event}|${JSON.stringify(frame.data)}`;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -128,6 +207,9 @@ export class AgentRunController {
   #sendVersion = 0;
   #streamAbort: AbortController | null = null;
   #interfaceRequests = new Set<string>();
+  #frameKeys = new Set<string>();
+  #frameCacheTimer: number | null = null;
+  #submitQueue: Promise<void> = Promise.resolve();
   #timer: number | null = null;
 
   constructor(api: AgentApi = new HttpAgentApi()) {
@@ -434,9 +516,10 @@ export class AgentRunController {
       }
       writeStoredActiveSessionId(this.session.workflow_id);
       void this.#fetchAgentInterface(this.session.workflow_id);
+      this.#hydrateCachedFrames(this.session.workflow_id);
 
       if (!this.#isCurrentConnection(connectionVersion)) return;
-      await this.attach(0);
+      await this.attach(this.lastResumeOffset);
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
@@ -512,9 +595,10 @@ export class AgentRunController {
     this.session = session;
     writeStoredActiveSessionId(session.workflow_id);
     void this.#fetchAgentInterface(session.workflow_id);
+    this.#hydrateCachedFrames(session.workflow_id);
 
     try {
-      await this.attach(0);
+      await this.attach(this.lastResumeOffset);
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
@@ -525,7 +609,10 @@ export class AgentRunController {
     }
   }
 
-  async attach(fromOffset = this.lastResumeOffset): Promise<void> {
+  async attach(
+    fromOffset = this.lastResumeOffset,
+    options: { clearSendingOnIdle?: boolean } = {}
+  ): Promise<void> {
     const session = this.session;
     if (!session) return;
 
@@ -540,12 +627,20 @@ export class AgentRunController {
     } catch (error) {
       if (!isAbortError(error)) throw error;
     } finally {
+      if (
+        options.clearSendingOnIdle &&
+        streamVersion === this.#streamVersion &&
+        this.session?.workflow_id === session.workflow_id
+      ) {
+        this.sending = false;
+      }
       this.#finishStream(controller);
     }
   }
 
-  async sendMessage(message: string): Promise<void> {
-    if (!message.trim()) return;
+  async sendMessage(message: AgentInboundMessage): Promise<void> {
+    const displayText = displayTextForMessage(message);
+    if (!displayText) return;
     await this.initialize();
     const session = this.session;
     if (!session) return;
@@ -553,38 +648,42 @@ export class AgentRunController {
     this.pause();
     const expectedTurn = this.expectedTurn;
     this.expectedTurn += 1;
-    const sendVersion = ++this.#sendVersion;
+    ++this.#sendVersion;
     this.sending = true;
     this.connectionError = null;
-    const { controller, signal, streamVersion } = this.#beginStream();
+    this.#recordInitialUserMessage(displayText);
 
-    try {
-      this.#recordInitialUserMessage(message);
-      for await (const frame of this.#api.chat({
+    const submitted = this.#submitQueue.then(async () => {
+      if (this.session?.workflow_id !== session.workflow_id) return;
+      await this.#api.submitMessage({
         session_id: session.workflow_id,
         message: this.#messageForSession(message, session),
         expected_turn: expectedTurn
-      }, signal)) {
-        if (streamVersion !== this.#streamVersion || this.session?.workflow_id !== session.workflow_id) {
-          break;
+      });
+    });
+    this.#submitQueue = submitted.catch(() => {});
+
+    try {
+      await submitted;
+      if (this.session?.workflow_id !== session.workflow_id) return;
+      void this.attach(this.lastResumeOffset, { clearSendingOnIdle: true }).catch(
+        (error: unknown) => {
+          if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
+            this.connectionError =
+              error instanceof Error ? error.message : "Failed to stream messages.";
+            this.sending = false;
+          }
         }
-        this.#appendFrame(frame);
-      }
+      );
     } catch (error) {
-      if (
-        isAbortError(error) ||
-        streamVersion !== this.#streamVersion ||
-        this.session?.workflow_id !== session.workflow_id
-      ) {
+      if (isAbortError(error) || this.session?.workflow_id !== session.workflow_id) {
         return;
       }
       this.expectedTurn = Math.max(1, expectedTurn);
       this.connectionError =
         error instanceof Error ? error.message : "Failed to send message.";
+      this.sending = false;
       await this.attach(this.lastResumeOffset);
-    } finally {
-      if (sendVersion === this.#sendVersion) this.sending = false;
-      this.#finishStream(controller);
     }
   }
 
@@ -619,7 +718,8 @@ export class AgentRunController {
     return agents;
   }
 
-  #messageForSession(message: string, session: Session): AgentInboundMessage {
+  #messageForSession(message: AgentInboundMessage, session: Session): AgentInboundMessage {
+    if (isAgentMessageObject(message)) return message;
     if (session.agent_workflow_type === "MontyDynamicAgent") {
       return { type: "run_script", payload: { script: message } };
     }
@@ -639,18 +739,42 @@ export class AgentRunController {
     }
   }
 
+  #hydrateCachedFrames(sessionId: string): void {
+    const cachedFrames = readCachedFrames(sessionId);
+    if (cachedFrames.length === 0) return;
+    for (const frame of cachedFrames) {
+      this.#appendFrame(frame, { persist: false });
+    }
+  }
+
+  #scheduleFrameCacheWrite(): void {
+    const sessionId = this.session?.workflow_id;
+    if (!sessionId || typeof window === "undefined") return;
+    if (this.#frameCacheTimer != null) return;
+    this.#frameCacheTimer = window.setTimeout(() => {
+      this.#frameCacheTimer = null;
+      if (this.session?.workflow_id !== sessionId) return;
+      writeCachedFrames(sessionId, this.frames);
+    }, 250);
+  }
+
   #resetSessionView(): void {
     this.pause();
     this.#stopStream();
     this.frames = [];
     this.observedSubagents = [];
+    this.#frameKeys = new Set<string>();
     this.viewIndex = 0;
     this.following = false;
     this.expectedTurn = 1;
     this.lastResumeOffset = 0;
   }
 
-  #appendFrame(frame: AgentSseFrame): void {
+  #appendFrame(frame: AgentSseFrame, options: { persist?: boolean } = {}): void {
+    const key = frameKey(frame);
+    if (this.#frameKeys.has(key)) return;
+    this.#frameKeys.add(key);
+
     if (!("type" in frame.data)) {
       this.connectionError = frame.data.message;
     }
@@ -681,6 +805,7 @@ export class AgentRunController {
       this.#recordInitialUserMessage(renderUserMessage(frame.data.user_message));
     }
     this.#handleSubagentEvent(frame, publisherWorkflowId);
+    if (options.persist !== false) this.#scheduleFrameCacheWrite();
   }
 
   #publisherWorkflowId(frame: AgentSseFrame): string | undefined {

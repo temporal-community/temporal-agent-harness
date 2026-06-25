@@ -209,6 +209,37 @@ subagent event in one ordered sequence.
 The client does not pass a stream offset to `POST /api/chat`; the workflow
 acceptance response determines the exact turn-start offset internally.
 
+### `POST /api/messages`
+
+Submits a message without opening a turn stream.
+
+```ts
+type SubmitMessageResponse = {
+  turn_number: number
+  turn_id: string
+  accepted_offset: number
+  pending: boolean
+}
+```
+
+The shared UI uses this endpoint for queued sends, then keeps one
+`GET /api/attach` stream open from its last `resume_offset`. This avoids
+starting many concurrent Temporal Updates and long-lived merged streams when a
+user sends several queued messages quickly.
+
+Slash commands are structured messages. For example, the UI command
+`/model gemini-3.1-flash-lite` sends:
+
+```json
+{
+  "type": "slash",
+  "payload": {
+    "name": "set-model",
+    "arg": "gemini-3.1-flash-lite"
+  }
+}
+```
+
 ### `GET /api/attach?session_id=...&from_offset=0`
 
 Replays or tails an existing merged session stream.

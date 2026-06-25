@@ -72,19 +72,17 @@ export interface AgentMessageObject {
 
 export type AgentInboundMessage = string | AgentMessageObject;
 
-export type QaSlashCommandPayload =
-  | { name: "scope"; arg?: "all" | "docs" | "forum" }
-  | { name: "set-model"; arg?: "gemini-3.5-flash" | "gemini-3.1-flash-lite" }
-  | { name: "set-docs-store"; arg?: "temporal-docs-v2" }
-  | { name: "set-forum-store"; arg?: "temporal-forum" }
-  | {
-      name: "approval-policy";
-      arg?: "always-require" | "allow-safe" | "dangerously-skip-permissions";
-    };
+export type SlashCommandModel =
+  | "gemini-3.5-flash"
+  | "gemini-3.1-flash-lite";
 
-export interface QaSlashCommandMessage extends AgentMessageObject {
-  type: "slash_command";
-  payload: QaSlashCommandPayload;
+export type SlashCommandPayload =
+  | { name: "set-model"; arg?: SlashCommandModel }
+  | { name: string; arg?: string };
+
+export interface SlashCommandMessage extends AgentMessageObject {
+  type: "slash";
+  payload: SlashCommandPayload;
 }
 
 export interface MontyRunScriptMessage extends AgentMessageObject {
@@ -94,7 +92,7 @@ export interface MontyRunScriptMessage extends AgentMessageObject {
   };
 }
 
-export type KnownAgentMessage = QaSlashCommandMessage | MontyRunScriptMessage;
+export type KnownAgentMessage = SlashCommandMessage | MontyRunScriptMessage;
 
 // ---------------------------------------------------------------------------
 // Chat, attach, approval, and status endpoints
@@ -104,6 +102,13 @@ export interface ChatRequest {
   session_id: WorkflowId;
   message: AgentInboundMessage;
   expected_turn: number;
+}
+
+export interface SubmitMessageResponse {
+  turn_number: number;
+  turn_id: TurnId;
+  accepted_offset: StreamOffset;
+  pending: boolean;
 }
 
 export interface ToolApprovalRequest {

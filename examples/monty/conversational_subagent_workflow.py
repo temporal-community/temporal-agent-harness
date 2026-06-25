@@ -70,6 +70,7 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
+        SlashCommand,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
@@ -78,11 +79,11 @@ with workflow.unsafe.imports_passed_through():
 
     # Reuse the script-writing contract verbatim from the inline agent — the rules the model
     # must follow to author a Monty script are identical; only the tool it calls differs.
-    from .conversational_workflow import _SCRIPT_CONTRACT
+    from .conversational_workflow import SUPPORTED_MODELS, _SCRIPT_CONTRACT
     from .workflow import TASK_QUEUE, MontyDynamicAgentWorkflow
 
 
-DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_MODEL = SUPPORTED_MODELS[0]
 
 # The namespace for the wired script-runner subagent. Tool names are derived from it:
 # start_monty / monty_run_script / stop_monty.
@@ -166,6 +167,17 @@ class MontyChatSubagentWorkflow:
         replies with the results."""
         reply_text = await self._handle_chat_turn(self._gemini, message.text)
         return TextReply(text=reply_text)
+
+    @agent.accepts
+    async def slash(self, command: SlashCommand) -> TextReply:
+        """Apply a slash command to this parent agent session."""
+        if command.name != "set-model":
+            return TextReply(text=f"Unknown slash command: `{command.name}`.")
+        if command.arg not in SUPPORTED_MODELS:
+            choices = ", ".join(f"`{model}`" for model in SUPPORTED_MODELS)
+            return TextReply(text=f"Choose one of: {choices}.")
+        self._model = command.arg
+        return TextReply(text=f"Model set to **{self._model}**.")
 
     # ------------------------------------------------------------------ chat loop
 

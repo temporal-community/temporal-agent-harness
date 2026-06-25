@@ -53,6 +53,7 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
+        SlashCommand,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
@@ -63,7 +64,8 @@ with workflow.unsafe.imports_passed_through():
 
 
 TASK_QUEUE = "monty-dynamic-agent"
-DEFAULT_MODEL = "gemini-3.5-flash"
+SUPPORTED_MODELS = ("gemini-3.5-flash", "gemini-3.1-flash-lite")
+DEFAULT_MODEL = SUPPORTED_MODELS[0]
 
 
 # The script-writing contract the model must follow. The host functions are ASYNC — the
@@ -201,6 +203,17 @@ class MontyChatAgentWorkflow:
         scripts against a simulated travel backend as needed, and replies with the results."""
         reply_text = await self._handle_chat_turn(self._gemini, message.text)
         return TextReply(text=reply_text)
+
+    @agent.accepts
+    async def slash(self, command: SlashCommand) -> TextReply:
+        """Apply a slash command to this parent agent session."""
+        if command.name != "set-model":
+            return TextReply(text=f"Unknown slash command: `{command.name}`.")
+        if command.arg not in SUPPORTED_MODELS:
+            choices = ", ".join(f"`{model}`" for model in SUPPORTED_MODELS)
+            return TextReply(text=f"Choose one of: {choices}.")
+        self._model = command.arg
+        return TextReply(text=f"Model set to **{self._model}**.")
 
     # ------------------------------------------------------------------ chat loop
 
