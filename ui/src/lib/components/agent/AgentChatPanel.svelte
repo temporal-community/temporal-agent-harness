@@ -837,7 +837,7 @@
   }
 
   function currentStatusKind(): StatusKind {
-    if (closed) return "complete";
+    if (closed) return "closed";
     if (error) return "error";
     if (pendingApprovalRows.length > 0) return "approval";
     if (creatingSession) return "starting";
@@ -847,7 +847,7 @@
   }
 
   function sessionStatusKind(session: Session): StatusKind {
-    if (sessionClosedById(session.workflow_id)) return "complete";
+    if (sessionClosedById(session.workflow_id)) return "closed";
     if (session.workflow_id === sessionId) return statusKind;
     return session.is_message_queuing_enabled ? "queued" : "idle";
   }
@@ -1563,7 +1563,7 @@
                 label={sessionStatusLabel(item)}
                 kind={sessionStatusKind(item)}
                 compact
-                active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete"}
+                active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete" && statusKind !== "closed"}
               />
             </button>
           {/each}
@@ -2021,7 +2021,7 @@
               label={sessionStatusLabel(item)}
               kind={sessionStatusKind(item)}
               compact
-              active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete"}
+              active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete" && statusKind !== "closed"}
             />
             <button
               class="session-delete"

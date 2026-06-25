@@ -30,6 +30,7 @@
     | "delegating"
     | "queued"
     | "blocked"
+    | "closed"
     | "complete"
     | "error";
 
@@ -84,6 +85,8 @@
       <GitBranch size={compact ? 12 : 13} />
     {:else if kind === "blocked"}
       <AlertTriangle size={compact ? 12 : 13} />
+    {:else if kind === "closed"}
+      <XCircle size={compact ? 12 : 13} />
     {:else if kind === "complete"}
       <CheckCircle2 size={compact ? 12 : 13} />
     {:else if kind === "error"}
@@ -200,6 +203,17 @@
   .status-chip.blocked,
   .status-chip.error {
     --status-color: var(--error);
+  }
+
+  .status-chip.closed {
+    --status-color: var(--text-3);
+    color: var(--text-2);
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--text-3) 7%, var(--surface-2)),
+        color-mix(in srgb, var(--surface-1) 94%, black)
+      );
   }
 
   @keyframes status-breathe {
