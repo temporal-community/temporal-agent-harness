@@ -46,6 +46,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     TextReply,
     ToolApprovalPolicy,
     AgentMessageReply,
+    SlashCommand,
 )
 from temporalio.exceptions import ApplicationError
 
@@ -126,6 +127,30 @@ class TypedProbeAgent:
         return self._seen
 
 
+@workflow.defn
+@agent.defn
+class SlashExtensionProbeAgent:
+    """Agent with an agent-specific slash extension, used to prove harness slash commands
+    are handled first and unknown commands still fall through to the agent."""
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+        )
+
+    @workflow.run
+    async def run(self, _config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+    @agent.accepts
+    async def slash(self, command: SlashCommand) -> TextReply:
+        """Handle agent-specific slash commands."""
+        return TextReply(text=f"custom:{command.name}:{command.arg or ''}")
+
+
 # ---------------------------------------------------------------------------
 # Fixtures + helpers
 # ---------------------------------------------------------------------------
@@ -141,7 +166,7 @@ async def client_and_queue():
     async with Worker(
         env.client,
         task_queue=task_queue,
-        workflows=[TypedProbeAgent],
+        workflows=[TypedProbeAgent, SlashExtensionProbeAgent],
         # Unsandboxed so the test module's imports (pydantic, harness, pytest) don't
         # trip the workflow sandbox; the runner logic under test is unaffected.
         workflow_runner=UnsandboxedWorkflowRunner(),
@@ -250,6 +275,17 @@ async def test_agent_interface_query_announces_handlers(client_and_queue):
     assert "message" in by_name["greet"].output["properties"]
 
 
+async def test_agent_interface_hides_operator_slash_handler(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
+
+    functions = await handle.query(
+        AGENT_INTERFACE_QUERY, result_type=list[AcceptedFunction]
+    )
+
+    assert {f.name for f in functions} == set()
+
+
 async def _collect_until_turn_end(client: Client, workflow_id: str) -> list[AgentEvent]:
     from datetime import timedelta
 
@@ -270,6 +306,13 @@ async def _collect_until_turn_end(client: Client, workflow_id: str) -> list[Agen
     return events
 
 
+def _reply_text(events: list[AgentEvent]) -> str:
+    reply = next(e.event for e in events if e.event.type == AgentEventType.REPLY)
+    text = reply.output.get("text")
+    assert isinstance(text, str)
+    return text
+
+
 async def test_reply_is_the_handler_return_value(client_and_queue):
     client, task_queue = client_and_queue
     handle = await _start(client, task_queue, TypedProbeAgent)
@@ -279,6 +322,75 @@ async def test_reply_is_the_handler_return_value(client_and_queue):
     reply = next(e.event for e in events if e.event.type == AgentEventType.REPLY)
     # The reply carries the handler's return model serialized to a dict.
     assert reply.output == {"message": "hi Ada"}
+
+
+async def test_harness_slash_status_without_agent_handler(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    await _send(handle, "slash", {"name": "status"})
+
+    text = _reply_text(await _collect_until_turn_end(client, handle.id))
+    assert "- Agent id:" in text
+    assert "- Approvals: `skip`" in text
+    assert "- Pending approvals: none" in text
+
+
+async def test_harness_slash_set_approvals_updates_policy(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    await _send(handle, "slash", {"name": "set-approvals", "arg": "safe"})
+
+    text = _reply_text(await _collect_until_turn_end(client, handle.id))
+    assert text == "Approvals set to **safe**."
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.approval_policy == ToolApprovalPolicy.allow_inherently_safe()
+
+
+async def test_harness_slash_allow_tools_updates_allow_list(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    await _send(handle, "slash", {"name": "allow-tools", "arg": "alpha_tool,beta_tool"})
+
+    text = _reply_text(await _collect_until_turn_end(client, handle.id))
+    assert "Tools `alpha_tool`, `beta_tool` will be auto-approved." == text
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.approval_policy.auto_approve_tools == frozenset(
+        {"alpha_tool", "beta_tool"}
+    )
+
+
+async def test_harness_slash_unknown_without_agent_handler_returns_reply(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    await _send(handle, "slash", {"name": "not-real"})
+
+    text = _reply_text(await _collect_until_turn_end(client, handle.id))
+    assert text == "Unknown slash command: `not-real`."
+
+
+async def test_harness_slash_falls_back_to_agent_extension(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
+
+    await _send(handle, "slash", {"name": "set-model", "arg": "gemini"})
+
+    text = _reply_text(await _collect_until_turn_end(client, handle.id))
+    assert text == "custom:set-model:gemini"
+
+
+async def test_harness_slash_preempts_agent_extension_for_core_commands(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
+
+    await _send(handle, "slash", {"name": "status"})
+
+    text = _reply_text(await _collect_until_turn_end(client, handle.id))
+    assert "- Agent id:" in text
+    assert "custom:status" not in text
 
 
 async def test_handler_error_publishes_agent_error_and_loop_survives(client_and_queue):

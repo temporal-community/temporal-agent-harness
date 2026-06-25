@@ -14,9 +14,11 @@ from temporalio.exceptions import ApplicationError
 from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
+    SlashCommand,
     SubagentMessageSent,
     SubagentStarted,
     SubagentStopped,
+    TextReply,
     ToolApprovalPolicy,
 )
 from temporal_agent_harness.harness.agent_workflow import _SubagentInstance, _WorkflowStatus
@@ -47,6 +49,18 @@ class _SampleChildAgent:
     @agent.accepts
     async def summarize(self, q: _Question) -> _Answer:
         """Summarize the conversation so far."""
+        ...
+
+
+class _SampleChildAgentWithSlash:
+    @agent.accepts
+    async def ask(self, q: _Question) -> _Answer:
+        """Answer a free-form question."""
+        ...
+
+    @agent.accepts
+    async def slash(self, command: SlashCommand) -> TextReply:
+        """Handle operator slash commands."""
         ...
 
 
@@ -211,6 +225,14 @@ def test_toolset_emits_namespaced_start_send_stop_tools():
     # Every generated tool is a real inline tool_defn — so it inherits run_tool dispatch, the
     # approval gate, and tool lifecycle events with no extra wiring.
     assert all(getattr(t, "__agent_tool__", False) for t in tools)
+
+
+def test_toolset_hides_operator_slash_handler():
+    tools = agent.subagent_toolset(
+        _SampleChildAgentWithSlash, key="sample", task_queue="sample-q"
+    )
+
+    assert [t.__name__ for t in tools] == ["start_sample", "sample_ask", "stop_sample"]
 
 
 def test_send_tool_signature_uses_the_childs_real_models():

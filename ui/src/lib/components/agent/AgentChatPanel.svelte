@@ -26,6 +26,7 @@
     AgentInterfaceFunction,
     FileCitationAnnotation,
     Session,
+    SlashCommandApprovalMode,
     SlashCommandMessage,
     SlashCommandModel
   } from "$lib/api/types";
@@ -39,12 +40,35 @@
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
 
   type AgentChatLayout = "full" | "embedded";
+  type SlashCommandId = "model" | "approvals" | "allow-tools" | "status";
   type SlashMenuItem =
-    | { kind: "command"; id: "model" }
-    | { kind: "model"; id: SlashCommandModel; model: SlashCommandModel };
+    | { kind: "command"; id: SlashCommandId }
+    | { kind: "model"; id: SlashCommandModel; model: SlashCommandModel }
+    | { kind: "approval"; id: SlashCommandApprovalMode; mode: SlashCommandApprovalMode }
+    | { kind: "tool"; id: string; tool: string };
   const slashCommandModels: SlashCommandModel[] = [
     "gemini-3.5-flash",
     "gemini-3.1-flash-lite"
+  ];
+  const harnessSlashCommands: { id: SlashCommandId; label: string; detail: string }[] = [
+    { id: "approvals", label: "/approvals", detail: "Set approval policy" },
+    { id: "allow-tools", label: "/allow-tools", detail: "Auto-approve tools" },
+    { id: "status", label: "/status", detail: "Show harness status" }
+  ];
+  const montySlashCommands: { id: SlashCommandId; label: string; detail: string }[] = [
+    { id: "model", label: "/model", detail: "Set model" }
+  ];
+  const slashApprovalModes: SlashCommandApprovalMode[] = ["strict", "safe", "skip"];
+  const montySlashAllowTools = [
+    "run_monty_script",
+    "search_flights",
+    "search_hotels",
+    "book_flight",
+    "book_hotel",
+    "get_trip_summary",
+    "start_monty",
+    "monty_run_script",
+    "stop_monty"
   ];
 
   interface Props {
@@ -148,9 +172,16 @@
       agents.find((agent) => agent.workflow_type === currentAgentWorkflowType) ??
       null
   );
-  const acceptsSlashCommands = $derived(
-    agentInterface.some((item) => item.name === "slash")
+  const supportsMontyRuntimeCommands = $derived(
+    currentAgentWorkflowType === "MontyChatAgent" ||
+      currentAgentWorkflowType === "MontyChatSubagentAgent"
   );
+  const availableSlashCommands = $derived(
+    supportsMontyRuntimeCommands
+      ? [...harnessSlashCommands, ...montySlashCommands]
+      : harnessSlashCommands
+  );
+  const acceptsSlashCommands = $derived(activeSession != null || agentInterface.length > 0);
   const isMonty = $derived(currentAgentWorkflowType === "MontyDynamicAgent");
   const composerPlaceholder = $derived(
     isMonty ? "Send a Python script to Monty" : `Ask ${agentLabel}`
@@ -171,8 +202,17 @@
       !creatingSession
   );
   const slashModelChoices = $derived(filteredSlashModelChoices(slashDraft.arg));
+  const slashApprovalChoices = $derived(filteredSlashApprovalChoices(slashDraft.arg));
+  const slashToolSuggestions = $derived(uniqueToolSuggestions());
+  const slashToolChoices = $derived(filteredSlashToolChoices(slashDraft.arg, slashToolSuggestions));
   const slashMenuItems = $derived(
-    buildSlashMenuItems(slashMenuOpen, slashDraft, slashModelChoices)
+    buildSlashMenuItems(
+      slashMenuOpen,
+      slashDraft,
+      slashModelChoices,
+      slashApprovalChoices,
+      slashToolChoices
+    )
   );
   const canSendDraft = $derived(
     Boolean(draft.trim()) &&
@@ -830,17 +870,55 @@
     );
   }
 
+  function filteredSlashApprovalChoices(value: string): SlashCommandApprovalMode[] {
+    const normalized = value.toLowerCase();
+    if (!normalized) return slashApprovalModes;
+    return slashApprovalModes.filter((mode) => mode.includes(normalized));
+  }
+
+  function uniqueToolSuggestions(): string[] {
+    const pendingTools = pendingApprovalRows
+      .map((row) => row.toolName)
+      .filter((name): name is string => Boolean(name));
+    const tools = supportsMontyRuntimeCommands
+      ? [...pendingTools, ...montySlashAllowTools]
+      : pendingTools;
+    return [...new Set(tools)].sort((a, b) => a.localeCompare(b));
+  }
+
+  function filteredSlashToolChoices(value: string, tools: string[]): string[] {
+    const normalized = value.toLowerCase();
+    if (!normalized) return tools;
+    return tools.filter((tool) => tool.toLowerCase().includes(normalized));
+  }
+
+  function slashCommandIds(): string[] {
+    return availableSlashCommands.map((command) => command.id);
+  }
+
+  function canonicalSlashCommandId(command: string): SlashCommandId | null {
+    const canonical = command === "allow-tool" ? "allow-tools" : command;
+    return slashCommandIds().includes(canonical) ? (canonical as SlashCommandId) : null;
+  }
+
   function buildSlashMenuItems(
     open: boolean,
     parsed: { command: string; arg: string },
-    models: SlashCommandModel[]
+    models: SlashCommandModel[],
+    approvalModes: SlashCommandApprovalMode[],
+    tools: string[]
   ): SlashMenuItem[] {
     if (!open) return [];
     const items: SlashMenuItem[] = [];
-    if (parsed.command !== "model" && (parsed.command === "" || "model".startsWith(parsed.command))) {
-      items.push({ kind: "command", id: "model" });
+    const command = canonicalSlashCommandId(parsed.command);
+    if (command == null) {
+      items.push(
+        ...availableSlashCommands
+          .filter((command) => parsed.command === "" || command.id.startsWith(parsed.command))
+          .map((command) => ({ kind: "command" as const, id: command.id }))
+      );
     }
-    if (parsed.command === "model") {
+    if (command === "model") {
       items.push(
         ...models.map((model) => ({
           kind: "model" as const,
@@ -849,26 +927,54 @@
         }))
       );
     }
+    if (command === "approvals") {
+      items.push(
+        ...approvalModes.map((mode) => ({
+          kind: "approval" as const,
+          id: mode,
+          mode
+        }))
+      );
+    }
+    if (command === "allow-tools") {
+      items.push(
+        ...tools.map((tool) => ({
+          kind: "tool" as const,
+          id: tool,
+          tool
+        }))
+      );
+    }
     return items;
   }
 
   function defaultSlashSelectionIndex(items: SlashMenuItem[]): number {
-    const firstModelIndex = items.findIndex((item) => item.kind === "model");
-    return firstModelIndex === -1 ? 0 : firstModelIndex;
+    const firstChoiceIndex = items.findIndex((item) => item.kind !== "command");
+    return firstChoiceIndex === -1 ? 0 : firstChoiceIndex;
   }
 
   function slashMessageForDraft(value: string): SlashCommandMessage | null {
     const parsed = parseSlashDraft(value);
-    if (parsed.command !== "model") return null;
-    const model = slashCommandModels.find((item) => item === parsed.arg);
-    if (!model) return null;
-    return {
-      type: "slash",
-      payload: {
-        name: "set-model",
-        arg: model
-      }
-    };
+    const command = canonicalSlashCommandId(parsed.command);
+    if (command == null) return null;
+    if (command === "model") {
+      const model = slashCommandModels.find((item) => item === parsed.arg);
+      if (!model) return null;
+      return { type: "slash", payload: { name: "set-model", arg: model } };
+    }
+    if (command === "approvals") {
+      const mode = slashApprovalModes.find((item) => item === parsed.arg);
+      if (!mode) return null;
+      return { type: "slash", payload: { name: "set-approvals", arg: mode } };
+    }
+    if (command === "allow-tools") {
+      if (!parsed.arg) return null;
+      return { type: "slash", payload: { name: "allow-tools", arg: parsed.arg } };
+    }
+    if (command === "status" && !parsed.arg) {
+      return { type: "slash", payload: { name: "status" } };
+    }
+    return null;
   }
 
   function commandDisplayText(message: AgentInboundMessage): string {
@@ -880,7 +986,7 @@
       "name" in message.payload &&
       typeof message.payload.name === "string"
     ) {
-      const command = message.payload.name === "set-model" ? "model" : message.payload.name;
+      const command = slashDisplayCommand(message.payload.name);
       const arg =
         "arg" in message.payload && typeof message.payload.arg === "string"
           ? message.payload.arg
@@ -890,8 +996,31 @@
     return JSON.stringify(message);
   }
 
+  function slashDisplayCommand(name: string): string {
+    if (name === "set-model") return "model";
+    if (name === "set-approvals") return "approvals";
+    if (name === "allow-tool") return "allow-tools";
+    return name;
+  }
+
   async function sendModelCommand(model: SlashCommandModel): Promise<void> {
     await sendMessage(`/model ${model}`);
+  }
+
+  async function sendApprovalCommand(mode: SlashCommandApprovalMode): Promise<void> {
+    await sendMessage(`/approvals ${mode}`);
+  }
+
+  async function sendAllowToolCommand(tool: string): Promise<void> {
+    await sendMessage(`/allow-tools ${tool}`);
+  }
+
+  function selectSlashCommand(command: SlashCommandId): void {
+    if (command === "status") {
+      void sendMessage("/status");
+      return;
+    }
+    draft = `/${command} `;
   }
 
   async function sendMessage(text = draft): Promise<void> {
@@ -954,8 +1083,22 @@
       return true;
     }
 
+    if (selected.kind === "approval") {
+      void sendApprovalCommand(selected.mode);
+      return true;
+    }
+
+    if (selected.kind === "tool") {
+      void sendAllowToolCommand(selected.tool);
+      return true;
+    }
+
     if (selected.kind === "command") {
-      draft = "/model ";
+      if (selected.id === "status") {
+        void sendMessage("/status");
+        return true;
+      }
+      draft = `/${selected.id} `;
       return true;
     }
 
@@ -1399,27 +1542,46 @@
     <div class="composer-wrap">
       {#if slashMenuOpen}
         <section class="slash-menu" aria-label="Slash commands">
-          {#if slashDraft.command !== "model" && (slashDraft.command === "" || "model".startsWith(slashDraft.command))}
-            {@const commandItem = { kind: "command", id: "model" } as const}
-            <button
-              type="button"
-              class={`slash-row ${slashItemActive(commandItem) ? "active" : ""}`}
-              onclick={() => (draft = "/model ")}
-            >
-              <BrainCircuit size={15} />
-              <span>
-                <strong>/model</strong>
-                <small>Set model</small>
-              </span>
-            </button>
-          {:else if slashDraft.command === "model"}
-            <div class="slash-row slash-command-summary">
-              <BrainCircuit size={15} />
-              <span>
-                <strong>/model</strong>
-                <small>Set model</small>
-              </span>
-            </div>
+          {#each availableSlashCommands.filter((command) => slashDraft.command === "" || command.id.startsWith(slashDraft.command)) as command}
+            {#if !slashCommandIds().includes(slashDraft.command)}
+              {@const commandItem = { kind: "command", id: command.id } as const}
+              <button
+                type="button"
+                class={`slash-row ${slashItemActive(commandItem) ? "active" : ""}`}
+                onclick={() => selectSlashCommand(command.id)}
+              >
+                {#if command.id === "model"}
+                  <BrainCircuit size={15} />
+                {:else if command.id === "approvals"}
+                  <ShieldCheck size={15} />
+                {:else}
+                  <Wrench size={15} />
+                {/if}
+                <span>
+                  <strong>{command.label}</strong>
+                  <small>{command.detail}</small>
+                </span>
+              </button>
+            {/if}
+          {/each}
+
+          {#if slashCommandIds().includes(slashDraft.command)}
+            {@const command = availableSlashCommands.find((item) => item.id === slashDraft.command)}
+            {#if command}
+              <div class="slash-row slash-command-summary">
+                {#if command.id === "model"}
+                  <BrainCircuit size={15} />
+                {:else if command.id === "approvals"}
+                  <ShieldCheck size={15} />
+                {:else}
+                  <Wrench size={15} />
+                {/if}
+                <span>
+                  <strong>{command.label}</strong>
+                  <small>{command.detail}</small>
+                </span>
+              </div>
+            {/if}
           {/if}
 
           {#if slashDraft.command === "model"}
@@ -1435,6 +1597,42 @@
                   <span>
                     <strong>{model}</strong>
                     <small>set-model</small>
+                  </span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+          {#if slashDraft.command === "approvals"}
+            <div class="slash-models" aria-label="Approval choices">
+              {#each slashApprovalChoices as mode}
+                {@const approvalItem = { kind: "approval", id: mode, mode } as const}
+                <button
+                  type="button"
+                  class={`slash-row model-choice ${slashItemActive(approvalItem) ? "active" : ""}`}
+                  onclick={() => void sendApprovalCommand(mode)}
+                >
+                  <ShieldCheck size={15} />
+                  <span>
+                    <strong>{mode}</strong>
+                    <small>set-approvals</small>
+                  </span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+          {#if slashDraft.command === "allow-tools" || slashDraft.command === "allow-tool"}
+            <div class="slash-models" aria-label="Tool choices">
+              {#each slashToolChoices as tool}
+                {@const toolItem = { kind: "tool", id: tool, tool } as const}
+                <button
+                  type="button"
+                  class={`slash-row model-choice ${slashItemActive(toolItem) ? "active" : ""}`}
+                  onclick={() => void sendAllowToolCommand(tool)}
+                >
+                  <Wrench size={15} />
+                  <span>
+                    <strong>{tool}</strong>
+                    <small>allow-tools</small>
                   </span>
                 </button>
               {/each}

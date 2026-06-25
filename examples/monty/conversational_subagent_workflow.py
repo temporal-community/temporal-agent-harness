@@ -79,7 +79,7 @@ with workflow.unsafe.imports_passed_through():
 
     # Reuse the script-writing contract verbatim from the inline agent — the rules the model
     # must follow to author a Monty script are identical; only the tool it calls differs.
-    from .conversational_workflow import SUPPORTED_MODELS, _SCRIPT_CONTRACT
+    from .conversational_workflow import SUPPORTED_MODELS, SET_MODEL_COMMAND, _SCRIPT_CONTRACT
     from .workflow import TASK_QUEUE, MontyDynamicAgentWorkflow
 
 
@@ -171,12 +171,20 @@ class MontyChatSubagentWorkflow:
     @agent.accepts
     async def slash(self, command: SlashCommand) -> TextReply:
         """Apply a slash command to this parent agent session."""
-        if command.name != "set-model":
-            return TextReply(text=f"Unknown slash command: `{command.name}`.")
-        if command.arg not in SUPPORTED_MODELS:
+        if command.name == SET_MODEL_COMMAND:
+            return self._set_model(command.arg)
+        return TextReply(
+            text=(
+                f"Unknown Monty slash command: `{command.name}`. Try `/model`. "
+                "Harness commands include `/approvals`, `/allow-tools`, and `/status`."
+            )
+        )
+
+    def _set_model(self, model: str | None) -> TextReply:
+        if model is None or model not in SUPPORTED_MODELS:
             choices = ", ".join(f"`{model}`" for model in SUPPORTED_MODELS)
             return TextReply(text=f"Choose one of: {choices}.")
-        self._model = command.arg
+        self._model = model
         return TextReply(text=f"Model set to **{self._model}**.")
 
     # ------------------------------------------------------------------ chat loop

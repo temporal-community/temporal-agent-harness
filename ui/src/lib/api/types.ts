@@ -76,8 +76,14 @@ export type SlashCommandModel =
   | "gemini-3.5-flash"
   | "gemini-3.1-flash-lite";
 
+export type SlashCommandApprovalMode = "strict" | "safe" | "skip";
+
 export type SlashCommandPayload =
   | { name: "set-model"; arg?: SlashCommandModel }
+  | { name: "set-approvals"; arg?: SlashCommandApprovalMode }
+  | { name: "allow-tools"; arg?: string }
+  | { name: "allow-tool"; arg?: string }
+  | { name: "status" }
   | { name: string; arg?: string };
 
 export interface SlashCommandMessage extends AgentMessageObject {

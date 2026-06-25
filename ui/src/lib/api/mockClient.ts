@@ -44,12 +44,11 @@ const qaInterface: AgentInterfaceFunction[] = [
         name: {
           type: "string",
           title: "Name",
-          enum: ["set-model"]
+          enum: ["set-model", "set-approvals", "allow-tools", "status"]
         },
         arg: {
           type: "string",
-          title: "Arg",
-          enum: ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+          title: "Arg"
         }
       },
       required: ["name"]

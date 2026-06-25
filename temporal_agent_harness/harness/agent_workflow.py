@@ -17,7 +17,7 @@ from __future__ import annotations
 import contextvars
 import inspect
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -66,6 +66,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     PendingApproval,
     PendingTurn,
     RunSubagentTurnInput,
+    SlashCommand,
     SubagentInfo,
     SubagentReplyReceived,
     SubagentStarted,
@@ -80,6 +81,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     ToolEndEvent,
     ToolErrorEvent,
     ToolStartEvent,
+    TextReply,
     TurnEnded,
     TurnStarted,
     AgentMessageReply,
@@ -121,6 +123,14 @@ _INJECTED = _InjectedMarker()
 # Passed to the runner via its ``custom_approval_fallback=`` constructor arg; it is
 # non-serializable (a closure), so it is never carried in ``AgentConfig`` or status.
 CustomApprovalFallback = Callable[[ToolApprovalContext], bool]
+
+_SLASH_MESSAGE_TYPE = "slash"
+_SLASH_SET_APPROVALS = "set-approvals"
+_SLASH_SET_APPROVALS_ALIAS = "approvals"
+_SLASH_ALLOW_TOOLS = "allow-tools"
+_SLASH_ALLOW_TOOL_ALIAS = "allow-tool"
+_SLASH_STATUS = "status"
+_APPROVAL_MODE_CHOICES = ("strict", "safe", "skip")
 
 _InjectedT = TypeVar("_InjectedT")
 
@@ -340,6 +350,69 @@ def _render_message(message: AgentMessage) -> str:
     representation of the message. Consumers that want structure can parse it back.
     """
     return message.model_dump_json(include={"type", "payload"})
+
+
+def _normalize_slash_arg(arg: str | None) -> str:
+    return (arg or "").strip()
+
+
+def _approval_policy_for_mode(mode: str | None) -> ToolApprovalPolicy | None:
+    match _normalize_slash_arg(mode).lower():
+        case "strict":
+            return ToolApprovalPolicy.always_require_approvals()
+        case "safe":
+            return ToolApprovalPolicy.allow_inherently_safe()
+        case "skip":
+            return ToolApprovalPolicy.dangerously_skip_all()
+        case _:
+            return None
+
+
+def _approval_policy_label(policy: ToolApprovalPolicy) -> str:
+    if policy.dangerously_skip_all_approvals:
+        return "skip"
+    base = "safe" if policy.auto_approve_inherently_safe else "strict"
+    if policy.auto_approve_tools:
+        return f"{base} + allow-list"
+    return base
+
+
+def _format_inline_code(values: Iterable[str]) -> str:
+    return ", ".join(f"`{value}`" for value in values)
+
+
+def _parse_tool_names(arg: str | None) -> tuple[str, ...]:
+    normalized = _normalize_slash_arg(arg).replace(",", " ")
+    return tuple(part for part in normalized.split() if part)
+
+
+def _render_harness_status(status: AgentStatus) -> str:
+    allowed = tuple(sorted(status.approval_policy.auto_approve_tools))
+    pending_approvals = sorted(
+        {
+            f"`{approval.tool_name}` (turn {approval.turn_number})"
+            for approval in status.pending_approvals
+        }
+    )
+    if status.subagents:
+        subagents = ", ".join(
+            f"`{item.subagent_id}` ({item.agent_key}, next turn {item.next_expected_turn})"
+            for item in status.subagents
+        )
+    else:
+        subagents = "none"
+
+    lines = [
+        f"- Agent id: `{status.agent_id}`",
+        f"- Turn: `{status.current_turn}` ({'active' if status.turn_active else 'idle'})",
+        f"- Queued turns: `{len(status.pending_turns)}`",
+        f"- Message queueing: `{'on' if status.is_message_queuing_enabled else 'off'}`",
+        f"- Approvals: `{_approval_policy_label(status.approval_policy)}`",
+        f"- Auto-approved tools: {_format_inline_code(allowed) if allowed else 'none'}",
+        f"- Pending approvals: {', '.join(pending_approvals) if pending_approvals else 'none'}",
+        f"- Active subagents: {subagents}",
+    ]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -1196,6 +1269,21 @@ class AgentWorkflowRunner:
                 type="AgentBusy",
                 non_retryable=True,
             )
+        # ``slash`` is a harness-reserved operator command channel. It is accepted for every
+        # runner, whether or not the agent has an agent-specific slash extension handler.
+        if message.type == _SLASH_MESSAGE_TYPE:
+            try:
+                SlashCommand.model_validate(message.payload)
+            except ValidationError as e:
+                raise ApplicationError(
+                    f"Payload for function {_SLASH_MESSAGE_TYPE!r} does not match its "
+                    f"input model {SlashCommand.__name__}. Validation error: {e}",
+                    {"function": _SLASH_MESSAGE_TYPE, "error": str(e)},
+                    type="MalformedMessage",
+                    non_retryable=True,
+                )
+            return
+
         # Route by the envelope ``type`` (the handler's function name); reject an unknown
         # function, then validate the ``payload`` against that handler's input model. So the
         # dispatch loop only ever sees a known handler + an already-coerced input.
@@ -1285,6 +1373,11 @@ class AgentWorkflowRunner:
     def current_approval_policy(self) -> ToolApprovalPolicy:
         """The live :class:`ToolApprovalPolicy` the agent is running under."""
         return self._status.approval_policy
+
+    @property
+    def current_status(self) -> AgentStatus:
+        """A current :class:`AgentStatus` snapshot for in-workflow handlers."""
+        return self._status.to_agent_status()
 
     def set_approval_policy(self, policy: ToolApprovalPolicy) -> None:
         """Swap the agent's tool-approval policy at runtime.
@@ -1390,10 +1483,10 @@ class AgentWorkflowRunner:
 
         One :class:`AcceptedFunction` per ``@agent.accepts`` handler — name, docstring
         description, and the input/output JSON schemas — all reachable through
-        ``send_agent_message``. The ``tool_approval`` update is INTENTIONALLY absent here:
-        it is a human-in-the-loop guardrail, not an agent-to-agent message channel, so a
-        parent agent introspecting this contract must not be able to reach it (see
-        :meth:`_handle_tool_approval`)."""
+        ``send_agent_message``. Operator-only channels are INTENTIONALLY absent here:
+        ``tool_approval`` is a human-in-the-loop guardrail, and ``slash`` carries runtime
+        operator controls such as approval-policy changes. A parent agent introspecting
+        this contract must not be able to reach either one as an agent-to-agent tool."""
         return [
             AcceptedFunction(
                 name=h.name,
@@ -1402,6 +1495,7 @@ class AgentWorkflowRunner:
                 output=h.output_type.model_json_schema(),
             )
             for h in self._handlers.values()
+            if h.name != _SLASH_MESSAGE_TYPE
         ]
 
     @property
@@ -1451,16 +1545,7 @@ class AgentWorkflowRunner:
                 turn_id, turn_number, TurnStarted(user_message=_render_message(envelope))
             )
             try:
-                handler = self._handlers[envelope.type]
-                arg = handler.input_type.model_validate(envelope.payload)
-                result = await getattr(agent, handler.name)(arg)
-                if not isinstance(result, handler.output_type):
-                    raise ApplicationError(
-                        f"handler {handler.name!r} returned {type(result).__name__}, "
-                        f"expected {handler.output_type.__name__}",
-                        type="BadHandlerReturn",
-                        non_retryable=True,
-                    )
+                result = await self._dispatch_turn(agent, envelope)
                 self._pub(
                     turn_id,
                     turn_number,
@@ -1474,6 +1559,71 @@ class AgentWorkflowRunner:
                 # end-of-turn signal) before looping back to wait for the next message.
                 self._status.complete_turn()
                 self._pub(turn_id, turn_number, TurnEnded())
+
+    async def _dispatch_turn(self, agent: object, envelope: AgentMessage) -> BaseModel:
+        """Dispatch one already-validated turn envelope and return its reply model."""
+        if envelope.type == _SLASH_MESSAGE_TYPE:
+            command = SlashCommand.model_validate(envelope.payload)
+            built_in = self._handle_harness_slash(command)
+            if built_in is not None:
+                return built_in
+            handler = self._handlers.get(_SLASH_MESSAGE_TYPE)
+            if handler is None:
+                return TextReply(text=f"Unknown slash command: `{command.name}`.")
+        else:
+            handler = self._handlers[envelope.type]
+
+        arg = handler.input_type.model_validate(envelope.payload)
+        result = await getattr(agent, handler.name)(arg)
+        if not isinstance(result, handler.output_type):
+            raise ApplicationError(
+                f"handler {handler.name!r} returned {type(result).__name__}, "
+                f"expected {handler.output_type.__name__}",
+                type="BadHandlerReturn",
+                non_retryable=True,
+            )
+        return result
+
+    def _handle_harness_slash(self, command: SlashCommand) -> TextReply | None:
+        """Handle harness-owned operator slash commands, or return ``None`` to let an
+        agent-defined slash handler handle an extension command."""
+        match command.name:
+            case _ if command.name in {_SLASH_SET_APPROVALS, _SLASH_SET_APPROVALS_ALIAS}:
+                return self._slash_set_approvals(command.arg)
+            case _ if command.name in {_SLASH_ALLOW_TOOLS, _SLASH_ALLOW_TOOL_ALIAS}:
+                return self._slash_allow_tools(command.arg)
+            case _ if command.name == _SLASH_STATUS:
+                return self._slash_status()
+            case _:
+                return None
+
+    def _slash_set_approvals(self, mode: str | None) -> TextReply:
+        selected = _normalize_slash_arg(mode).lower()
+        policy = _approval_policy_for_mode(mode)
+        if policy is None:
+            return TextReply(
+                text=f"Choose one of: {_format_inline_code(_APPROVAL_MODE_CHOICES)}."
+            )
+        self.set_approval_policy(policy)
+        return TextReply(text=f"Approvals set to **{selected}**.")
+
+    def _slash_allow_tools(self, arg: str | None) -> TextReply:
+        tool_names = _parse_tool_names(arg)
+        if not tool_names:
+            return TextReply(
+                text="Choose one or more tool names to auto-approve for this session."
+            )
+        policy = self.current_approval_policy
+        for tool_name in tool_names:
+            policy = policy.with_tool_allowed(tool_name)
+        self.set_approval_policy(policy)
+        noun = "Tool" if len(tool_names) == 1 else "Tools"
+        return TextReply(
+            text=f"{noun} {_format_inline_code(tool_names)} will be auto-approved."
+        )
+
+    def _slash_status(self) -> TextReply:
+        return TextReply(text=_render_harness_status(self.current_status))
 
     # -- Subagents ----------------------------------------------------------
     #

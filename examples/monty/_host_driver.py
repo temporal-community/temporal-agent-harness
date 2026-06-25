@@ -15,8 +15,6 @@ its :class:`AgentWorkflowRunner` and calls :meth:`MontyHostDriver.run_script`.
     duplicated in both workflows — the "keep in sync" hazard the stubs comment warned about.)
   * :meth:`_run_activity_tool` — run one host activity through ``run_tool`` so it publishes
     its own ``tool_start``/``tool_end`` lifecycle (and is approval-gated per the agent policy).
-
-The driver carries no state beyond the runner it's constructed with.
 """
 
 from __future__ import annotations

@@ -15,9 +15,10 @@
 # delegate to ``runner.start_subagent`` / ``run_subagent_turn`` / ``stop_subagent`` — so all
 # subagent state lives on the runner, with no holder object or ``has_self`` plumbing.
 #
-# GUARDRAIL: a generated toolset has NO approve-a-tool capability — ``tool_approval`` is
-# deliberately absent from ``agent_interface`` — so a child's gated tools still escalate to a
-# human and are never auto-approved just because a parent drove the child.
+# GUARDRAIL: generated toolsets omit operator-only channels. A parent model gets no
+# approve-a-tool capability (``tool_approval``) and no slash-command runtime controls
+# (``slash``), so a child's gated tools still escalate to a human and approval policy stays
+# operator-owned.
 
 from __future__ import annotations
 
@@ -30,6 +31,7 @@ from temporalio import workflow
 
 from temporal_agent_harness.harness.agent_workflow import (
     _AcceptedHandler,
+    _SLASH_MESSAGE_TYPE,
     _current_runner,
     agent_handlers,
     tool_defn,
@@ -180,11 +182,15 @@ def subagent_toolset(
             name.
     """
     resolved_type = workflow_type or _resolve_workflow_type(agent_cls)
-    handlers = agent_handlers(agent_cls)
+    handlers = {
+        name: handler
+        for name, handler in agent_handlers(agent_cls).items()
+        if name != _SLASH_MESSAGE_TYPE
+    }
     if not handlers:
         raise TypeError(
-            f"{agent_cls.__name__} declares no @agent.accepts handlers, so it has no callable "
-            f"surface to wire as a subagent toolset."
+            f"{agent_cls.__name__} declares no @agent.accepts handlers that are "
+            f"model-callable, so it has no callable surface to wire as a subagent toolset."
         )
 
     tools: list[Callable[..., Awaitable[Any]]] = [

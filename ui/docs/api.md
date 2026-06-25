@@ -240,6 +240,23 @@ Slash commands are structured messages. For example, the UI command
 }
 ```
 
+The harness accepts these runtime commands for every agent:
+
+| UI command | Payload |
+| --- | --- |
+| `/approvals strict\|safe\|skip` | `{"name":"set-approvals","arg":"..."}` |
+| `/allow-tools search_flights` | `{"name":"allow-tools","arg":"search_flights"}` |
+| `/status` | `{"name":"status"}` |
+
+These harness runtime commands are operator controls and are not advertised as
+agent-to-agent tools in `agent_interface`.
+
+Monty conversational agents additionally accept:
+
+| UI command | Payload |
+| --- | --- |
+| `/model gemini-3.1-flash-lite` | `{"name":"set-model","arg":"gemini-3.1-flash-lite"}` |
+
 ### `GET /api/attach?session_id=...&from_offset=0`
 
 Replays or tails an existing merged session stream.
