@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 SEND_AGENT_MESSAGE_UPDATE = "send_agent_message"
 TOOL_APPROVAL_UPDATE = "tool_approval"
+EXECUTE_OPERATOR_COMMAND_UPDATE = "execute_operator_command"
 AGENT_STATUS_QUERY = "agent_status"
 AGENT_INTERFACE_QUERY = "agent_interface"
 OPERATOR_INTERFACE_QUERY = "operator_interface"
@@ -291,7 +292,7 @@ class OperatorCommandArgument(BaseModel):
 
 
 class OperatorCommand(BaseModel):
-    """One operator-only slash command accepted through the ``slash`` message channel.
+    """One operator-only slash command accepted through the operator update channel.
 
     This is the element type of the ``operator_interface`` query. It deliberately lives
     outside :class:`AcceptedFunction`: operator commands are for human/client control planes,
@@ -305,6 +306,19 @@ class OperatorCommand(BaseModel):
     aliases: tuple[str, ...] = ()
     argument: OperatorCommandArgument | None = None
     source: Literal["harness", "agent"] = "harness"
+
+
+class OperatorCommandRequest(BaseModel):
+    """Payload for the ``execute_operator_command`` update."""
+
+    name: str
+    arg: str | None = None
+
+
+class OperatorCommandResult(BaseModel):
+    """Result returned by the ``execute_operator_command`` update."""
+
+    text: str
 
 
 # ---------------------------------------------------------------------------

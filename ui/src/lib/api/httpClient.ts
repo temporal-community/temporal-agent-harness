@@ -7,6 +7,8 @@ import type {
   CreateSessionRequest,
   CreateSessionResponse,
   OperatorCommand,
+  OperatorCommandRequest,
+  OperatorCommandResponse,
   Session,
   SubmitMessageResponse,
   ToolApprovalRequest,
@@ -102,6 +104,16 @@ export class HttpAgentApi implements AgentApi {
     return json<OperatorCommand[]>(
       apiPath(`operator-interface/${encodeURIComponent(sessionId)}`)
     );
+  }
+
+  async executeOperatorCommand(
+    request: OperatorCommandRequest
+  ): Promise<OperatorCommandResponse> {
+    return json<OperatorCommandResponse>(apiPath("operator-commands"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request)
+    });
   }
 
   async *attach(

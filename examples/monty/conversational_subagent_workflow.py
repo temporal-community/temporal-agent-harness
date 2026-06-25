@@ -138,6 +138,7 @@ class MontyChatSubagentWorkflow:
             # host calls run inside the child, which has its own dangerously_skip_all policy.
             approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
             operator_commands=[MODEL_OPERATOR_COMMAND],
+            operator_command_handler=self._handle_operator_command,
         )
         self._model: str = DEFAULT_MODEL
         # Server-side conversation chaining id (Interactions API); updated each turn. Safe to
@@ -177,14 +178,20 @@ class MontyChatSubagentWorkflow:
     @agent.accepts
     async def slash(self, command: SlashCommand) -> TextReply:
         """Apply a slash command to this parent agent session."""
-        if command.name == SET_MODEL_COMMAND:
-            return self._set_model(command.arg)
+        reply = self._handle_operator_command(command)
+        if reply is not None:
+            return reply
         return TextReply(
             text=(
                 f"Unknown Monty slash command: `{command.name}`. Try `/model`. "
                 "Harness commands include `/approvals`, `/allow-tools`, and `/status`."
             )
         )
+
+    def _handle_operator_command(self, command: SlashCommand) -> TextReply | None:
+        if command.name == SET_MODEL_COMMAND:
+            return self._set_model(command.arg)
+        return None
 
     def _set_model(self, model: str | None) -> TextReply:
         if model is None or model not in SUPPORTED_MODELS:

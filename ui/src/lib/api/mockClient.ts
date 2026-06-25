@@ -7,6 +7,8 @@ import type {
   CreateSessionRequest,
   CreateSessionResponse,
   OperatorCommand,
+  OperatorCommandRequest,
+  OperatorCommandResponse,
   Session,
   SubmitMessageResponse,
   ToolApprovalRequest,
@@ -163,6 +165,28 @@ export class MockAgentApi implements AgentApi {
     return sessionId.toLowerCase().includes("monty")
       ? montyOperatorInterface
       : harnessOperatorInterface;
+  }
+
+  async executeOperatorCommand(
+    request: OperatorCommandRequest
+  ): Promise<OperatorCommandResponse> {
+    await sleep(80);
+    if (request.name === "set-approvals") {
+      return { text: `Approvals set to **${request.arg ?? "strict"}**.` };
+    }
+    if (request.name === "allow-tools") {
+      const noun = request.arg?.includes(",") ? "Tools" : "Tool";
+      return {
+        text: `${noun} \`${request.arg ?? ""}\` will be auto-approved.`
+      };
+    }
+    if (request.name === "set-model") {
+      return { text: `Model set to **${request.arg ?? "gemini-3.5-flash"}**.` };
+    }
+    if (request.name === "status") {
+      return { text: "- Agent id: `mock`\n- Turn: `0` (idle)\n- Approvals: `strict`" };
+    }
+    return { text: `Unknown operator command: \`${request.name}\`.` };
   }
 
   async *attach(

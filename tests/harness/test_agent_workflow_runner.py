@@ -34,6 +34,7 @@ from temporal_agent_harness.harness import AgentWorkflowRunner, agent
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
+    EXECUTE_OPERATOR_COMMAND_UPDATE,
     OPERATOR_INTERFACE_QUERY,
     SEND_AGENT_MESSAGE_UPDATE,
     AcceptedFunction,
@@ -44,6 +45,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentStatus,
     OperatorCommand,
     OperatorCommandArgument,
+    OperatorCommandRequest,
+    OperatorCommandResult,
     SubagentReplyReceived,
     TextMessage,
     TextReply,
@@ -157,6 +160,7 @@ class SlashExtensionProbeAgent:
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
             operator_commands=[PROBE_MODEL_OPERATOR_COMMAND],
+            operator_command_handler=self._handle_operator_command,
         )
 
     @workflow.run
@@ -167,6 +171,11 @@ class SlashExtensionProbeAgent:
     async def slash(self, command: SlashCommand) -> TextReply:
         """Handle agent-specific slash commands."""
         return TextReply(text=f"custom:{command.name}:{command.arg or ''}")
+
+    def _handle_operator_command(self, command: SlashCommand) -> TextReply | None:
+        if command.name == "set-model":
+            return TextReply(text=f"operator:{command.name}:{command.arg or ''}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +226,16 @@ async def _send(
             expected_turn=await _next_expected_turn(handle),
         ),
         result_type=AgentMessageReply,
+    )
+
+
+async def _operator(
+    handle: WorkflowHandle, name: str, arg: str | None = None
+) -> OperatorCommandResult:
+    return await handle.execute_update(
+        EXECUTE_OPERATOR_COMMAND_UPDATE,
+        OperatorCommandRequest(name=name, arg=arg),
+        result_type=OperatorCommandResult,
     )
 
 
@@ -338,6 +357,72 @@ async def test_operator_interface_includes_agent_extension_commands(client_and_q
     assert by_name["model"].payload_name == "set-model"
     assert by_name["model"].argument is not None
     assert by_name["model"].argument.choices == ("alpha", "beta")
+
+
+async def test_operator_command_status_does_not_create_turn(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    result = await _operator(handle, "status")
+
+    assert "- Agent id:" in result.text
+    assert "- Approvals: `skip`" in result.text
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.current_turn == 0
+    assert status.pending_turns == []
+
+
+async def test_operator_command_set_approvals_updates_policy_without_turn(
+    client_and_queue,
+):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    result = await _operator(handle, "set-approvals", "safe")
+
+    assert result.text == "Approvals set to **safe**."
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.approval_policy == ToolApprovalPolicy.allow_inherently_safe()
+    assert status.current_turn == 0
+
+
+async def test_operator_command_allow_tools_updates_policy_without_turn(
+    client_and_queue,
+):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    result = await _operator(handle, "allow-tools", "alpha_tool,beta_tool")
+
+    assert result.text == "Tools `alpha_tool`, `beta_tool` will be auto-approved."
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.approval_policy.auto_approve_tools == frozenset(
+        {"alpha_tool", "beta_tool"}
+    )
+    assert status.current_turn == 0
+
+
+async def test_operator_command_uses_agent_extension_callback(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
+
+    result = await _operator(handle, "set-model", "alpha")
+
+    assert result.text == "operator:set-model:alpha"
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.current_turn == 0
+
+
+async def test_operator_command_preempts_agent_extension_for_core_commands(
+    client_and_queue,
+):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
+
+    result = await _operator(handle, "status")
+
+    assert "- Agent id:" in result.text
+    assert "operator:status" not in result.text
 
 
 async def _collect_until_turn_end(client: Client, workflow_id: str) -> list[AgentEvent]:
@@ -671,6 +756,8 @@ def test_protocol_types_use_concrete_annotations():
         AgentStatus,
         OperatorCommand,
         OperatorCommandArgument,
+        OperatorCommandRequest,
+        OperatorCommandResult,
         SlashCommand,
     )
 
@@ -681,6 +768,8 @@ def test_protocol_types_use_concrete_annotations():
         SlashCommand,
         OperatorCommand,
         OperatorCommandArgument,
+        OperatorCommandRequest,
+        OperatorCommandResult,
     ):
         for field_name, annotation in cls.__annotations__.items():
             assert not isinstance(annotation, str), (

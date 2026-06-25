@@ -83,6 +83,16 @@ export interface OperatorCommand {
   source: "harness" | "agent";
 }
 
+export interface OperatorCommandRequest {
+  session_id: WorkflowId;
+  name: string;
+  arg?: string | null;
+}
+
+export interface OperatorCommandResponse {
+  text: string;
+}
+
 export interface AgentMessageObject {
   type: string;
   [key: string]: unknown;

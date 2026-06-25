@@ -35,6 +35,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEventType,
     AgentStatus,
     OperatorCommand,
+    OperatorCommandResult,
 )
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
@@ -70,6 +71,14 @@ class ToolApprovalRequestBody(BaseModel):
     approved: bool
     reason: str | None = None
     remember: bool = False
+
+
+class OperatorCommandRequestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    name: str
+    arg: str | None = None
 
 
 def create_agent_harness_app(
@@ -199,6 +208,13 @@ def create_agent_harness_app(
             remember=req.remember,
         )
         return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/operator-commands")
+    async def execute_operator_command(req: OperatorCommandRequestBody):
+        client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
+        result = await client.execute_operator_command(req.name, arg=req.arg)
+        content = TypeAdapter(OperatorCommandResult).dump_python(result, mode="json")
+        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.post("/api/messages")
     async def submit_message(req: ChatRequestBody):

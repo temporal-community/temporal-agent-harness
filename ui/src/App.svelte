@@ -244,6 +244,7 @@
             creatingSession={run.creatingSession}
             error={run.connectionError}
             onSend={(message) => run.sendMessage(message)}
+            onOperatorCommand={(name, arg) => run.executeOperatorCommand(name, arg)}
             onNewSession={(workflowType) => run.startNewSession(workflowType)}
             onSelectSession={(sessionId) => run.selectSession(sessionId)}
             onApproveTool={(toolId, approved, remember) =>

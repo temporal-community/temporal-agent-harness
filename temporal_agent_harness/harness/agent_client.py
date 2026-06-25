@@ -17,6 +17,7 @@ from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
+    EXECUTE_OPERATOR_COMMAND_UPDATE,
     OPERATOR_INTERFACE_QUERY,
     SEND_AGENT_MESSAGE_UPDATE,
     TOOL_APPROVAL_UPDATE,
@@ -26,6 +27,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     AgentStatus,
     OperatorCommand,
+    OperatorCommandRequest,
+    OperatorCommandResult,
     PendingApproval,
     ToolApprovalDecision,
     ToolApprovalResult,
@@ -199,6 +202,22 @@ class AgentClient:
         handle = self._temporal.get_workflow_handle(self._workflow_id)
         return await handle.query(
             OPERATOR_INTERFACE_QUERY, result_type=list[OperatorCommand]
+        )
+
+    async def execute_operator_command(
+        self, name: str, *, arg: str | None = None
+    ) -> OperatorCommandResult:
+        """Execute an operator-only command without creating an agent turn.
+
+        This is the execution counterpart to :meth:`get_operator_interface`. It routes to
+        the workflow's first-class operator update rather than ``send_agent_message``, so
+        it can change runtime controls even while a model turn is busy.
+        """
+        handle = self._temporal.get_workflow_handle(self._workflow_id)
+        return await handle.execute_update(
+            EXECUTE_OPERATOR_COMMAND_UPDATE,
+            OperatorCommandRequest(name=name, arg=arg),
+            result_type=OperatorCommandResult,
         )
 
     async def _submit_message(

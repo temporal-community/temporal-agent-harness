@@ -3,7 +3,8 @@ import type {
   AgentInterfaceFunction,
   AgentMessageObject,
   AgentSseFrame,
-  OperatorCommand
+  OperatorCommand,
+  OperatorCommandResponse
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
 import type { AgentDescriptor, Session } from "$lib/api/types";
@@ -721,6 +722,28 @@ export class AgentRunController {
         error instanceof Error ? error.message : "Failed to send message.";
       this.sending = false;
       await this.attach(this.lastResumeOffset);
+    }
+  }
+
+  async executeOperatorCommand(
+    name: string,
+    arg?: string | null
+  ): Promise<OperatorCommandResponse> {
+    await this.initialize();
+    const session = this.session;
+    if (!session) throw new Error("No active session.");
+
+    this.connectionError = null;
+    try {
+      return await this.#api.executeOperatorCommand({
+        session_id: session.workflow_id,
+        name,
+        arg: arg ?? null
+      });
+    } catch (error) {
+      this.connectionError =
+        error instanceof Error ? error.message : "Failed to execute operator command.";
+      throw error;
     }
   }
 

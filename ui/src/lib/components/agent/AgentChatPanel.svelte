@@ -26,6 +26,7 @@
     AgentInterfaceFunction,
     FileCitationAnnotation,
     OperatorCommand,
+    OperatorCommandResponse,
     Session,
     SlashCommandMessage,
   } from "$lib/api/types";
@@ -43,6 +44,11 @@
     | { kind: "command"; id: string; command: OperatorCommand }
     | { kind: "choice"; id: string; command: OperatorCommand; value: string }
     | { kind: "tool"; id: string; command: OperatorCommand; tool: string };
+  type ParsedOperatorCommand = {
+    name: string;
+    arg?: string;
+    displayText: string;
+  };
 
   interface Props {
     items: TranscriptItem[];
@@ -61,6 +67,10 @@
     creatingSession?: boolean;
     error?: string | null;
     onSend?: (message: AgentInboundMessage) => void | Promise<void>;
+    onOperatorCommand?: (
+      name: string,
+      arg?: string | null
+    ) => OperatorCommandResponse | Promise<OperatorCommandResponse>;
     onNewSession?: (workflowType: string) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
     onDeleteSession?: (sessionId: string) => void | Promise<void>;
@@ -104,6 +114,7 @@
     creatingSession = false,
     error = null,
     onSend,
+    onOperatorCommand,
     onNewSession,
     onSelectSession,
     onDeleteSession,
@@ -186,7 +197,7 @@
       !sendingBlocksInput &&
       !connectingBlocksInput &&
       !creatingSession &&
-      (!draft.trimStart().startsWith("/") || slashMessageForDraft(draft) != null)
+      (!draft.trimStart().startsWith("/") || operatorCommandForDraft(draft) != null)
   );
   const drawerActive = $derived(showHeader && layout === "embedded" && sessionDrawerOpen);
   const latestMessage = $derived(messages[messages.length - 1] ?? null);
@@ -924,6 +935,27 @@
     return firstChoiceIndex === -1 ? 0 : firstChoiceIndex;
   }
 
+  function operatorCommandForDraft(value: string): ParsedOperatorCommand | null {
+    const parsed = parseSlashDraft(value);
+    const command = commandForSlashDraft(parsed.command);
+    if (command == null) return null;
+    const argument = command.argument;
+    if (argument == null) {
+      if (parsed.arg) return null;
+      return {
+        name: command.payload_name,
+        displayText: `/${command.name}`
+      };
+    }
+    if (argument.required && !parsed.arg) return null;
+    if (argument.kind === "enum" && !argument.choices.includes(parsed.arg)) return null;
+    return {
+      name: command.payload_name,
+      arg: parsed.arg || undefined,
+      displayText: `/${command.name}${parsed.arg ? ` ${parsed.arg}` : ""}`
+    };
+  }
+
   function slashMessageForDraft(value: string): SlashCommandMessage | null {
     const parsed = parseSlashDraft(value);
     const command = commandForSlashDraft(parsed.command);
@@ -990,20 +1022,61 @@
 
   async function sendMessage(text = draft): Promise<void> {
     const question = text.trim();
-    const slashMessage = slashMessageForDraft(question);
+    const operatorCommand = operatorCommandForDraft(question);
     if (
       !question ||
       sendingBlocksInput ||
       connectingBlocksInput ||
       creatingSession ||
-      (question.startsWith("/") && slashMessage == null)
+      (question.startsWith("/") && operatorCommand == null)
     ) {
       return;
     }
-    const outbound: AgentInboundMessage = slashMessage ?? question;
-    const displayText = commandDisplayText(outbound);
 
     draft = "";
+    if (operatorCommand != null && onOperatorCommand) {
+      const now = Date.now() / 1000;
+      const userMessage: ChatMessage = {
+        id: `local-operator-user-${now}`,
+        role: "user",
+        text: operatorCommand.displayText,
+        timestamp: now,
+        citations: []
+      };
+      localMessages = [...localMessages, userMessage];
+      try {
+        const result = await onOperatorCommand(operatorCommand.name, operatorCommand.arg);
+        localMessages = [
+          ...localMessages,
+          {
+            id: `local-operator-assistant-${now}`,
+            role: "assistant",
+            text: result.text,
+            timestamp: Date.now() / 1000,
+            citations: []
+          }
+        ];
+      } catch (error) {
+        localMessages = [
+          ...localMessages,
+          {
+            id: `local-operator-error-${now}`,
+            role: "assistant",
+            text:
+              error instanceof Error
+                ? error.message
+                : "Operator command failed.",
+            timestamp: Date.now() / 1000,
+            citations: []
+          }
+        ];
+      }
+      return;
+    }
+
+    const slashMessage = slashMessageForDraft(question);
+    const outbound: AgentInboundMessage = slashMessage ?? question;
+    const displayText = commandDisplayText(outbound);
     if (onSend) {
       await onSend(outbound);
       return;

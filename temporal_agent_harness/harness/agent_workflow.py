@@ -48,6 +48,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AGENT_ID_LENGTH,
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
+    EXECUTE_OPERATOR_COMMAND_UPDATE,
     OPERATOR_INTERFACE_QUERY,
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
     DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
@@ -66,6 +67,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     MessageQueued,
     OperatorCommand,
     OperatorCommandArgument,
+    OperatorCommandRequest,
+    OperatorCommandResult,
     PendingApproval,
     PendingTurn,
     RunSubagentTurnInput,
@@ -126,6 +129,7 @@ _INJECTED = _InjectedMarker()
 # Passed to the runner via its ``custom_approval_fallback=`` constructor arg; it is
 # non-serializable (a closure), so it is never carried in ``AgentConfig`` or status.
 CustomApprovalFallback = Callable[[ToolApprovalContext], bool]
+OperatorCommandHandler = Callable[[SlashCommand], TextReply | None]
 
 _SLASH_MESSAGE_TYPE = "slash"
 _SLASH_SET_APPROVALS = "set-approvals"
@@ -1164,6 +1168,7 @@ class AgentWorkflowRunner:
         enable_message_queuing_default: bool = False,
         custom_approval_fallback: CustomApprovalFallback | None = None,
         operator_commands: Iterable[OperatorCommand] | None = None,
+        operator_command_handler: OperatorCommandHandler | None = None,
     ) -> None:
         """Construct the runner inside the agent's ``@workflow.init``::
 
@@ -1182,6 +1187,8 @@ class AgentWorkflowRunner:
         workflow's update/query/signal handlers. ``operator_commands`` extends the
         harness-owned operator slash commands with agent-specific slash metadata for
         interactive clients; it is never exposed through ``agent_interface``.
+        ``operator_command_handler`` executes agent-owned operator commands through the
+        first-class operator update path, after harness-owned commands get first chance.
         """
         # The runner is built inside the agent's @workflow.init; enforce here that the
         # enclosing workflow honors the standardized agent-input contract (run/__init__
@@ -1198,6 +1205,7 @@ class AgentWorkflowRunner:
             OperatorCommand.model_validate(command)
             for command in (operator_commands or ())
         )
+        self._operator_command_handler = operator_command_handler
         # Resolve each knob: the caller's config value wins when given; otherwise fall back
         # to the agent's default. The caller can never be overridden — the agent only fills
         # gaps.
@@ -1261,6 +1269,10 @@ class AgentWorkflowRunner:
             TOOL_APPROVAL_UPDATE,
             self._handle_tool_approval,
             validator=self._validate_tool_approval,
+        )
+        workflow.set_update_handler(
+            EXECUTE_OPERATOR_COMMAND_UPDATE,
+            self._handle_execute_operator_command,
         )
         workflow.set_query_handler(AGENT_STATUS_QUERY, self._handle_agent_status)
         workflow.set_query_handler(AGENT_INTERFACE_QUERY, self._handle_agent_interface)
@@ -1415,6 +1427,24 @@ class AgentWorkflowRunner:
                 self._status.approval_policy.with_tool_allowed(entry.tool_name)
             )
         return ToolApprovalResult(tool_id=decision.tool_id, accepted=True)
+
+    def _handle_execute_operator_command(
+        self, request: OperatorCommandRequest
+    ) -> OperatorCommandResult:
+        """Execute a human/operator command without creating an agent turn.
+
+        This is the first-class execution counterpart to ``operator_interface``. It does
+        not enqueue ``send_agent_message``, increment the turn counter, or publish a model
+        reply. Built-in harness commands mutate runner state directly; agent-specific
+        extensions can opt in with ``operator_command_handler``.
+        """
+        command = SlashCommand(name=request.name, arg=request.arg)
+        reply = self._handle_harness_slash(command)
+        if reply is None and self._operator_command_handler is not None:
+            reply = self._operator_command_handler(command)
+        if reply is None:
+            reply = TextReply(text=f"Unknown operator command: `{command.name}`.")
+        return OperatorCommandResult(text=reply.text)
 
     # -- Tool-approval policy ----------------------------------------------
 
