@@ -54,7 +54,8 @@
       normalized.includes("complete") ||
       normalized.includes("replied") ||
       normalized.includes("captured") ||
-      normalized.includes("approved")
+      normalized.includes("approved") ||
+      normalized.includes("stopped")
     ) {
       return "complete";
     }

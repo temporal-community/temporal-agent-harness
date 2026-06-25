@@ -17,7 +17,7 @@ from __future__ import annotations
 import contextvars
 import inspect
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -48,6 +48,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     AGENT_ID_LENGTH,
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
+    EXECUTE_OPERATOR_COMMAND_UPDATE,
+    OPERATOR_INTERFACE_QUERY,
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
     DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
     RUN_SUBAGENT_TURN_ACTIVITY,
@@ -63,9 +65,17 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentStatus,
     AgentStreamItem,
     MessageQueued,
+    OperatorCommand,
+    OperatorCommandArgument,
+    OperatorCommandCompleted,
+    OperatorCommandFailed,
+    OperatorCommandRequest,
+    OperatorCommandResult,
+    OperatorCommandStarted,
     PendingApproval,
     PendingTurn,
     RunSubagentTurnInput,
+    SlashCommand,
     SubagentInfo,
     SubagentReplyReceived,
     SubagentStarted,
@@ -80,6 +90,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     ToolEndEvent,
     ToolErrorEvent,
     ToolStartEvent,
+    TextReply,
     TurnEnded,
     TurnStarted,
     AgentMessageReply,
@@ -121,6 +132,61 @@ _INJECTED = _InjectedMarker()
 # Passed to the runner via its ``custom_approval_fallback=`` constructor arg; it is
 # non-serializable (a closure), so it is never carried in ``AgentConfig`` or status.
 CustomApprovalFallback = Callable[[ToolApprovalContext], bool]
+OperatorCommandHandler = Callable[[SlashCommand], TextReply | None]
+
+_SLASH_MESSAGE_TYPE = "slash"
+_SLASH_SET_APPROVALS = "set-approvals"
+_SLASH_SET_APPROVALS_ALIAS = "approvals"
+_SLASH_ALLOW_TOOLS = "allow-tools"
+_SLASH_ALLOW_TOOL_ALIAS = "allow-tool"
+_SLASH_STATUS = "status"
+_SLASH_STOP = "stop-agent"
+_SLASH_STOP_ALIAS = "stop"
+_APPROVAL_MODE_CHOICES = ("strict", "safe", "skip")
+
+_HARNESS_OPERATOR_COMMANDS = (
+    OperatorCommand(
+        name=_SLASH_SET_APPROVALS_ALIAS,
+        payload_name=_SLASH_SET_APPROVALS,
+        label="/approvals",
+        description="Set the tool approval policy for this session.",
+        aliases=(_SLASH_SET_APPROVALS,),
+        argument=OperatorCommandArgument(
+            kind="enum",
+            choices=_APPROVAL_MODE_CHOICES,
+            placeholder="strict | safe | skip",
+        ),
+        source="harness",
+    ),
+    OperatorCommand(
+        name=_SLASH_ALLOW_TOOLS,
+        payload_name=_SLASH_ALLOW_TOOLS,
+        label="/allow-tools",
+        description="Auto-approve one or more named tools for this session.",
+        aliases=(_SLASH_ALLOW_TOOL_ALIAS,),
+        argument=OperatorCommandArgument(
+            kind="tool_names",
+            placeholder="tool_name",
+            allow_multiple=True,
+        ),
+        source="harness",
+    ),
+    OperatorCommand(
+        name=_SLASH_STATUS,
+        payload_name=_SLASH_STATUS,
+        label="/status",
+        description="Show the current harness status for this session.",
+        source="harness",
+    ),
+    OperatorCommand(
+        name=_SLASH_STOP_ALIAS,
+        payload_name=_SLASH_STOP,
+        label="/stop",
+        description="Stop this agent workflow.",
+        aliases=(_SLASH_STOP,),
+        source="harness",
+    ),
+)
 
 _InjectedT = TypeVar("_InjectedT")
 
@@ -340,6 +406,69 @@ def _render_message(message: AgentMessage) -> str:
     representation of the message. Consumers that want structure can parse it back.
     """
     return message.model_dump_json(include={"type", "payload"})
+
+
+def _normalize_slash_arg(arg: str | None) -> str:
+    return (arg or "").strip()
+
+
+def _approval_policy_for_mode(mode: str | None) -> ToolApprovalPolicy | None:
+    match _normalize_slash_arg(mode).lower():
+        case "strict":
+            return ToolApprovalPolicy.always_require_approvals()
+        case "safe":
+            return ToolApprovalPolicy.allow_inherently_safe()
+        case "skip":
+            return ToolApprovalPolicy.dangerously_skip_all()
+        case _:
+            return None
+
+
+def _approval_policy_label(policy: ToolApprovalPolicy) -> str:
+    if policy.dangerously_skip_all_approvals:
+        return "skip"
+    base = "safe" if policy.auto_approve_inherently_safe else "strict"
+    if policy.auto_approve_tools:
+        return f"{base} + allow-list"
+    return base
+
+
+def _format_inline_code(values: Iterable[str]) -> str:
+    return ", ".join(f"`{value}`" for value in values)
+
+
+def _parse_tool_names(arg: str | None) -> tuple[str, ...]:
+    normalized = _normalize_slash_arg(arg).replace(",", " ")
+    return tuple(part for part in normalized.split() if part)
+
+
+def _render_harness_status(status: AgentStatus) -> str:
+    allowed = tuple(sorted(status.approval_policy.auto_approve_tools))
+    pending_approvals = sorted(
+        {
+            f"`{approval.tool_name}` (turn {approval.turn_number})"
+            for approval in status.pending_approvals
+        }
+    )
+    if status.subagents:
+        subagents = ", ".join(
+            f"`{item.subagent_id}` ({item.agent_key}, next turn {item.next_expected_turn})"
+            for item in status.subagents
+        )
+    else:
+        subagents = "none"
+
+    lines = [
+        f"- Agent id: `{status.agent_id}`",
+        f"- Turn: `{status.current_turn}` ({'active' if status.turn_active else 'idle'})",
+        f"- Queued turns: `{len(status.pending_turns)}`",
+        f"- Message queueing: `{'on' if status.is_message_queuing_enabled else 'off'}`",
+        f"- Approvals: `{_approval_policy_label(status.approval_policy)}`",
+        f"- Auto-approved tools: {_format_inline_code(allowed) if allowed else 'none'}",
+        f"- Pending approvals: {', '.join(pending_approvals) if pending_approvals else 'none'}",
+        f"- Active subagents: {subagents}",
+    ]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -1051,6 +1180,8 @@ class AgentWorkflowRunner:
         approval_policy_default: ToolApprovalPolicy,
         enable_message_queuing_default: bool = False,
         custom_approval_fallback: CustomApprovalFallback | None = None,
+        operator_commands: Iterable[OperatorCommand] | None = None,
+        operator_command_handler: OperatorCommandHandler | None = None,
     ) -> None:
         """Construct the runner inside the agent's ``@workflow.init``::
 
@@ -1066,7 +1197,11 @@ class AgentWorkflowRunner:
         safe-by-default choice; ``enable_message_queuing_default`` defaults to the harness
         baseline of disabled). The accepted messages are NOT configured here — they are
         discovered from the agent's ``@agent.accepts`` handler methods. Registers the
-        workflow's update/query/signal handlers.
+        workflow's update/query/signal handlers. ``operator_commands`` extends the
+        harness-owned operator slash commands with agent-specific slash metadata for
+        interactive clients; it is never exposed through ``agent_interface``.
+        ``operator_command_handler`` executes agent-owned operator commands through the
+        first-class operator update path, after harness-owned commands get first chance.
         """
         # The runner is built inside the agent's @workflow.init; enforce here that the
         # enclosing workflow honors the standardized agent-input contract (run/__init__
@@ -1079,6 +1214,11 @@ class AgentWorkflowRunner:
         self._handlers: dict[str, _AcceptedHandler] = (
             agent_handlers(cls) if cls is not None else {}
         )
+        self._operator_commands: tuple[OperatorCommand, ...] = tuple(
+            OperatorCommand.model_validate(command)
+            for command in (operator_commands or ())
+        )
+        self._operator_command_handler = operator_command_handler
         # Resolve each knob: the caller's config value wins when given; otherwise fall back
         # to the agent's default. The caller can never be overridden — the agent only fills
         # gaps.
@@ -1143,8 +1283,15 @@ class AgentWorkflowRunner:
             self._handle_tool_approval,
             validator=self._validate_tool_approval,
         )
+        workflow.set_update_handler(
+            EXECUTE_OPERATOR_COMMAND_UPDATE,
+            self._handle_execute_operator_command,
+        )
         workflow.set_query_handler(AGENT_STATUS_QUERY, self._handle_agent_status)
         workflow.set_query_handler(AGENT_INTERFACE_QUERY, self._handle_agent_interface)
+        workflow.set_query_handler(
+            OPERATOR_INTERFACE_QUERY, self._handle_operator_interface
+        )
         workflow.set_signal_handler("close", self._handle_close)
 
     # -- Protocol handlers --------------------------------------------------
@@ -1196,6 +1343,21 @@ class AgentWorkflowRunner:
                 type="AgentBusy",
                 non_retryable=True,
             )
+        # ``slash`` is a harness-reserved operator command channel. It is accepted for every
+        # runner, whether or not the agent has an agent-specific slash extension handler.
+        if message.type == _SLASH_MESSAGE_TYPE:
+            try:
+                SlashCommand.model_validate(message.payload)
+            except ValidationError as e:
+                raise ApplicationError(
+                    f"Payload for function {_SLASH_MESSAGE_TYPE!r} does not match its "
+                    f"input model {SlashCommand.__name__}. Validation error: {e}",
+                    {"function": _SLASH_MESSAGE_TYPE, "error": str(e)},
+                    type="MalformedMessage",
+                    non_retryable=True,
+                )
+            return
+
         # Route by the envelope ``type`` (the handler's function name); reject an unknown
         # function, then validate the ``payload`` against that handler's input model. So the
         # dispatch loop only ever sees a known handler + an already-coerced input.
@@ -1279,12 +1441,85 @@ class AgentWorkflowRunner:
             )
         return ToolApprovalResult(tool_id=decision.tool_id, accepted=True)
 
+    def _handle_execute_operator_command(
+        self, request: OperatorCommandRequest
+    ) -> OperatorCommandResult:
+        """Execute a human/operator command without creating an agent turn.
+
+        This is the first-class execution counterpart to ``operator_interface``. It does
+        not enqueue ``send_agent_message``, increment the turn counter, or publish a model
+        reply. Built-in harness commands mutate runner state directly; agent-specific
+        extensions can opt in with ``operator_command_handler``.
+        """
+        command = SlashCommand(name=request.name, arg=request.arg)
+        operator_command_id = str(workflow.uuid4())
+        command_label = self._operator_command_label(command.name)
+        self._pub(
+            operator_command_id,
+            0,
+            OperatorCommandStarted(
+                operator_command_id=operator_command_id,
+                command_name=command.name,
+                command_label=command_label,
+                arg=command.arg,
+            ),
+        )
+        reply = self._handle_harness_slash(command)
+        if reply is None and self._operator_command_handler is not None:
+            try:
+                reply = self._operator_command_handler(command)
+            except Exception as e:  # noqa: BLE001 — make operator failures durable
+                message = str(e) or type(e).__name__
+                self._pub(
+                    operator_command_id,
+                    0,
+                    OperatorCommandFailed(
+                        operator_command_id=operator_command_id,
+                        command_name=command.name,
+                        command_label=command_label,
+                        arg=command.arg,
+                        message=message,
+                    ),
+                )
+                return OperatorCommandResult(text=f"Operator command failed: {message}")
+        if reply is None:
+            text = f"Unknown operator command: `{command.name}`."
+            self._pub(
+                operator_command_id,
+                0,
+                OperatorCommandFailed(
+                    operator_command_id=operator_command_id,
+                    command_name=command.name,
+                    command_label=command_label,
+                    arg=command.arg,
+                    message=text,
+                ),
+            )
+            return OperatorCommandResult(text=text)
+        self._pub(
+            operator_command_id,
+            0,
+            OperatorCommandCompleted(
+                operator_command_id=operator_command_id,
+                command_name=command.name,
+                command_label=command_label,
+                arg=command.arg,
+                text=reply.text,
+            ),
+        )
+        return OperatorCommandResult(text=reply.text)
+
     # -- Tool-approval policy ----------------------------------------------
 
     @property
     def current_approval_policy(self) -> ToolApprovalPolicy:
         """The live :class:`ToolApprovalPolicy` the agent is running under."""
         return self._status.approval_policy
+
+    @property
+    def current_status(self) -> AgentStatus:
+        """A current :class:`AgentStatus` snapshot for in-workflow handlers."""
+        return self._status.to_agent_status()
 
     def set_approval_policy(self, policy: ToolApprovalPolicy) -> None:
         """Swap the agent's tool-approval policy at runtime.
@@ -1390,10 +1625,10 @@ class AgentWorkflowRunner:
 
         One :class:`AcceptedFunction` per ``@agent.accepts`` handler — name, docstring
         description, and the input/output JSON schemas — all reachable through
-        ``send_agent_message``. The ``tool_approval`` update is INTENTIONALLY absent here:
-        it is a human-in-the-loop guardrail, not an agent-to-agent message channel, so a
-        parent agent introspecting this contract must not be able to reach it (see
-        :meth:`_handle_tool_approval`)."""
+        ``send_agent_message``. Operator-only channels are INTENTIONALLY absent here:
+        ``tool_approval`` is a human-in-the-loop guardrail, and ``slash`` carries runtime
+        operator controls such as approval-policy changes. A parent agent introspecting
+        this contract must not be able to reach either one as an agent-to-agent tool."""
         return [
             AcceptedFunction(
                 name=h.name,
@@ -1402,7 +1637,26 @@ class AgentWorkflowRunner:
                 output=h.output_type.model_json_schema(),
             )
             for h in self._handlers.values()
+            if h.name != _SLASH_MESSAGE_TYPE
         ]
+
+    def _handle_operator_interface(self) -> list[OperatorCommand]:
+        """Answer the operator discovery query with slash-command metadata.
+
+        Unlike ``agent_interface``, this surface is for human/client control planes. It is
+        intentionally not consumed by generated subagent tools.
+        """
+        return [*_HARNESS_OPERATOR_COMMANDS, *self._operator_commands]
+
+    def _operator_command_label(self, command_name: str) -> str:
+        for command in self._handle_operator_interface():
+            if (
+                command.payload_name == command_name
+                or command.name == command_name
+                or command_name in command.aliases
+            ):
+                return command.label
+        return f"/{command_name}"
 
     @property
     def current_stream_context(self) -> TurnStreamContext | None:
@@ -1451,16 +1705,7 @@ class AgentWorkflowRunner:
                 turn_id, turn_number, TurnStarted(user_message=_render_message(envelope))
             )
             try:
-                handler = self._handlers[envelope.type]
-                arg = handler.input_type.model_validate(envelope.payload)
-                result = await getattr(agent, handler.name)(arg)
-                if not isinstance(result, handler.output_type):
-                    raise ApplicationError(
-                        f"handler {handler.name!r} returned {type(result).__name__}, "
-                        f"expected {handler.output_type.__name__}",
-                        type="BadHandlerReturn",
-                        non_retryable=True,
-                    )
+                result = await self._dispatch_turn(agent, envelope)
                 self._pub(
                     turn_id,
                     turn_number,
@@ -1474,6 +1719,77 @@ class AgentWorkflowRunner:
                 # end-of-turn signal) before looping back to wait for the next message.
                 self._status.complete_turn()
                 self._pub(turn_id, turn_number, TurnEnded())
+
+    async def _dispatch_turn(self, agent: object, envelope: AgentMessage) -> BaseModel:
+        """Dispatch one already-validated turn envelope and return its reply model."""
+        if envelope.type == _SLASH_MESSAGE_TYPE:
+            command = SlashCommand.model_validate(envelope.payload)
+            built_in = self._handle_harness_slash(command)
+            if built_in is not None:
+                return built_in
+            handler = self._handlers.get(_SLASH_MESSAGE_TYPE)
+            if handler is None:
+                return TextReply(text=f"Unknown slash command: `{command.name}`.")
+        else:
+            handler = self._handlers[envelope.type]
+
+        arg = handler.input_type.model_validate(envelope.payload)
+        result = await getattr(agent, handler.name)(arg)
+        if not isinstance(result, handler.output_type):
+            raise ApplicationError(
+                f"handler {handler.name!r} returned {type(result).__name__}, "
+                f"expected {handler.output_type.__name__}",
+                type="BadHandlerReturn",
+                non_retryable=True,
+            )
+        return result
+
+    def _handle_harness_slash(self, command: SlashCommand) -> TextReply | None:
+        """Handle harness-owned operator slash commands, or return ``None`` to let an
+        agent-defined slash handler handle an extension command."""
+        match command.name:
+            case _ if command.name in {_SLASH_SET_APPROVALS, _SLASH_SET_APPROVALS_ALIAS}:
+                return self._slash_set_approvals(command.arg)
+            case _ if command.name in {_SLASH_ALLOW_TOOLS, _SLASH_ALLOW_TOOL_ALIAS}:
+                return self._slash_allow_tools(command.arg)
+            case _ if command.name == _SLASH_STATUS:
+                return self._slash_status()
+            case _ if command.name in {_SLASH_STOP, _SLASH_STOP_ALIAS}:
+                return self._slash_stop()
+            case _:
+                return None
+
+    def _slash_set_approvals(self, mode: str | None) -> TextReply:
+        selected = _normalize_slash_arg(mode).lower()
+        policy = _approval_policy_for_mode(mode)
+        if policy is None:
+            return TextReply(
+                text=f"Choose one of: {_format_inline_code(_APPROVAL_MODE_CHOICES)}."
+            )
+        self.set_approval_policy(policy)
+        return TextReply(text=f"Approvals set to **{selected}**.")
+
+    def _slash_allow_tools(self, arg: str | None) -> TextReply:
+        tool_names = _parse_tool_names(arg)
+        if not tool_names:
+            return TextReply(
+                text="Choose one or more tool names to auto-approve for this session."
+            )
+        policy = self.current_approval_policy
+        for tool_name in tool_names:
+            policy = policy.with_tool_allowed(tool_name)
+        self.set_approval_policy(policy)
+        noun = "Tool" if len(tool_names) == 1 else "Tools"
+        return TextReply(
+            text=f"{noun} {_format_inline_code(tool_names)} will be auto-approved."
+        )
+
+    def _slash_status(self) -> TextReply:
+        return TextReply(text=_render_harness_status(self.current_status))
+
+    def _slash_stop(self) -> TextReply:
+        self._handle_close()
+        return TextReply(text="Agent stop requested.")
 
     # -- Subagents ----------------------------------------------------------
     #

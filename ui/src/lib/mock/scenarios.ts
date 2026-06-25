@@ -224,7 +224,7 @@ const frames: AgentSseFrame[] = [
     type: "turn_started",
     ...meta(2, 28),
     user_message:
-      '{"type":"slash_command","payload":{"name":"scope","arg":"docs"}}'
+      '{"type":"slash","payload":{"name":"scope","arg":"docs"}}'
   }),
   frame("reply", {
     type: "reply",
@@ -524,7 +524,7 @@ const frames: AgentSseFrame[] = [
     type: "turn_started",
     ...meta(6, 118),
     user_message:
-      '{"type":"slash_command","payload":{"name":"set-model","arg":"gemini-3.1-flash-lite"}}'
+      '{"type":"slash","payload":{"name":"set-model","arg":"gemini-3.1-flash-lite"}}'
   }),
   frame("reply", {
     type: "reply",

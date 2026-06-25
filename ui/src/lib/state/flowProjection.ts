@@ -2,6 +2,7 @@ import type { Edge, Node } from "@xyflow/svelte";
 import type {
   AgentInterfaceFunction,
   AgentSseFrame,
+  OperatorCommand,
   ToolId
 } from "$lib/api/types";
 import { formatTokens, summarizeCost, type CostSummary } from "$lib/cost/pricing";
@@ -59,6 +60,7 @@ export interface AgentGraphSource {
   subagentId?: string;
   agentKey?: string;
   agentInterface?: AgentInterfaceFunction[];
+  operatorInterface?: OperatorCommand[];
   stopped?: boolean;
 }
 
@@ -592,6 +594,9 @@ export function buildAgentGraph(
       };
       runtime.name = frame.data.tool_name;
       latestToolId = frame.data.tool_id;
+      if ("tool_input" in frame.data) {
+        runtime.detail = JSON.stringify(frame.data.tool_input);
+      }
       if (frame.event === "tool_start") {
         runtime.status = "running";
         runtime.tone = "tool";
@@ -631,10 +636,11 @@ export function buildAgentGraph(
       if (frame.event === "tool_approval_requested") {
         approvalState = "pending";
         approvalTone = "approval";
-        approvalDetail = JSON.stringify(frame.data.tool_input);
+        approvalDetail = undefined;
         runtime.status = "awaiting approval";
         runtime.tone = "tool";
         runtime.statusTone = "approval";
+        runtime.detail = JSON.stringify(frame.data.tool_input);
       } else {
         approvalState = frame.data.approved ? "approved" : "denied";
         approvalTone = frame.data.approved ? "done" : "error";
@@ -642,7 +648,6 @@ export function buildAgentGraph(
         runtime.status = frame.data.approved ? "approved" : "denied";
         runtime.tone = "tool";
         runtime.statusTone = frame.data.approved ? "done" : "error";
-        runtime.detail = frame.data.reason ?? undefined;
       }
       tools.set(frame.data.tool_id, runtime);
     } else if (
@@ -726,6 +731,7 @@ export function buildAgentGraph(
       };
     }
     if (id === "tool") {
+      const detail = latestTool?.detail;
       const toolData: AgentNodeData = {
         tone: latestTool?.tone ?? "neutral",
         dotTone: "tool",
@@ -734,7 +740,8 @@ export function buildAgentGraph(
         statusTone: latestTool?.statusTone,
         approvalPort: approvalSeen,
         subtitle: latestTool?.name ?? "tool lifecycle",
-        detail: latestTool?.detail,
+        detail,
+        nodeHeight: detail && hasScriptDetail(detail) ? 210 : undefined,
         active: latestNodeId === id
       };
       if (embeddedToolLayout) {
@@ -964,7 +971,9 @@ function scopedGraph(
       item.id === "agent-runtime"
         ? {
             ...item.data,
+            tone: agent.stopped ? "done" : item.data.tone,
             runtimeRole: agent.role,
+            state: agent.stopped ? "stopped" : item.data.state,
             title: `${graphSourceLabel(agent)} runtime`,
             subtitle: [graphSourceSubtitle(agent), item.data.subtitle]
               .filter(Boolean)

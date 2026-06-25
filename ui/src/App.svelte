@@ -155,6 +155,8 @@
         connecting={run.connecting}
         sending={run.sending}
         creatingSession={run.creatingSession}
+        closed={run.sessionClosed}
+        closedWorkflowIds={run.closedWorkflowIds}
         error={run.connectionError}
         {pendingApprovalCount}
         onNewSession={(workflowType) => run.startNewSession(workflowType)}
@@ -236,12 +238,18 @@
             agentLabel={run.runInfo.agentLabel}
             sessionId={run.runInfo.sessionId}
             agents={run.agents}
+            agentInterface={run.agentInterfaces[run.runInfo.sessionId] ?? []}
+            operatorTargets={run.operatorTargets}
             currentAgentWorkflowType={run.session?.agent_workflow_type ?? null}
             connecting={run.connecting}
             sending={run.sending}
             creatingSession={run.creatingSession}
+            closed={run.sessionClosed}
+            closedWorkflowIds={run.closedWorkflowIds}
             error={run.connectionError}
             onSend={(message) => run.sendMessage(message)}
+            onOperatorCommand={(name, arg, workflowId) =>
+              run.executeOperatorCommand(name, arg, workflowId)}
             onNewSession={(workflowType) => run.startNewSession(workflowType)}
             onSelectSession={(sessionId) => run.selectSession(sessionId)}
             onApproveTool={(toolId, approved, remember) =>

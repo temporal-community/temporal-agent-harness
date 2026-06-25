@@ -33,9 +33,17 @@ export interface Session {
   agent_workflow_type: AgentWorkflowType;
   is_message_queuing_enabled: boolean;
   initial_user_message?: string | null;
+  execution_status?: string | null;
+  closed?: boolean;
 }
 
 export type SessionsResponse = Session[];
+
+export interface WorkflowExecutionState {
+  workflow_id: WorkflowId;
+  execution_status: string;
+  closed: boolean;
+}
 
 export interface CreateSessionRequest {
   agent_workflow_type: AgentWorkflowType;
@@ -65,6 +73,34 @@ export interface AgentInterfaceFunction {
   output: JsonRecord;
 }
 
+export interface OperatorCommandArgument {
+  kind: "enum" | "text" | "tool_names";
+  required: boolean;
+  choices: string[];
+  placeholder?: string | null;
+  allow_multiple: boolean;
+}
+
+export interface OperatorCommand {
+  name: string;
+  payload_name: string;
+  label: string;
+  description: string;
+  aliases: string[];
+  argument?: OperatorCommandArgument | null;
+  source: "harness" | "agent";
+}
+
+export interface OperatorCommandRequest {
+  session_id: WorkflowId;
+  name: string;
+  arg?: string | null;
+}
+
+export interface OperatorCommandResponse {
+  text: string;
+}
+
 export interface AgentMessageObject {
   type: string;
   [key: string]: unknown;
@@ -72,19 +108,25 @@ export interface AgentMessageObject {
 
 export type AgentInboundMessage = string | AgentMessageObject;
 
-export type QaSlashCommandPayload =
-  | { name: "scope"; arg?: "all" | "docs" | "forum" }
-  | { name: "set-model"; arg?: "gemini-3.5-flash" | "gemini-3.1-flash-lite" }
-  | { name: "set-docs-store"; arg?: "temporal-docs-v2" }
-  | { name: "set-forum-store"; arg?: "temporal-forum" }
-  | {
-      name: "approval-policy";
-      arg?: "always-require" | "allow-safe" | "dangerously-skip-permissions";
-    };
+export type SlashCommandModel =
+  | "gemini-3.5-flash"
+  | "gemini-3.1-flash-lite";
 
-export interface QaSlashCommandMessage extends AgentMessageObject {
-  type: "slash_command";
-  payload: QaSlashCommandPayload;
+export type SlashCommandApprovalMode = "strict" | "safe" | "skip";
+
+export type SlashCommandPayload =
+  | { name: "set-model"; arg?: SlashCommandModel }
+  | { name: "set-approvals"; arg?: SlashCommandApprovalMode }
+  | { name: "allow-tools"; arg?: string }
+  | { name: "allow-tool"; arg?: string }
+  | { name: "status" }
+  | { name: "stop-agent" }
+  | { name: "stop" }
+  | { name: string; arg?: string };
+
+export interface SlashCommandMessage extends AgentMessageObject {
+  type: "slash";
+  payload: SlashCommandPayload;
 }
 
 export interface MontyRunScriptMessage extends AgentMessageObject {
@@ -94,7 +136,7 @@ export interface MontyRunScriptMessage extends AgentMessageObject {
   };
 }
 
-export type KnownAgentMessage = QaSlashCommandMessage | MontyRunScriptMessage;
+export type KnownAgentMessage = SlashCommandMessage | MontyRunScriptMessage;
 
 // ---------------------------------------------------------------------------
 // Chat, attach, approval, and status endpoints
@@ -104,6 +146,13 @@ export interface ChatRequest {
   session_id: WorkflowId;
   message: AgentInboundMessage;
   expected_turn: number;
+}
+
+export interface SubmitMessageResponse {
+  turn_number: number;
+  turn_id: TurnId;
+  accepted_offset: StreamOffset;
+  pending: boolean;
 }
 
 export interface ToolApprovalRequest {
@@ -173,6 +222,9 @@ export type AgentEventType =
   | "message_queued"
   | "turn_started"
   | "turn_end"
+  | "operator_command_started"
+  | "operator_command_completed"
+  | "operator_command_failed"
   | "model_interaction_started"
   | "model_interaction_ended"
   | "tool_requested"
@@ -216,6 +268,27 @@ export interface TurnStartedEvent extends AgentEventDataBase<"turn_started"> {
 }
 
 export interface TurnEndEvent extends AgentEventDataBase<"turn_end"> {}
+
+export interface OperatorCommandEventDataBase<TType extends AgentEventType>
+  extends AgentEventDataBase<TType> {
+  operator_command_id: string;
+  command_name: string;
+  command_label: string;
+  arg: string | null;
+}
+
+export interface OperatorCommandStartedEvent
+  extends OperatorCommandEventDataBase<"operator_command_started"> {}
+
+export interface OperatorCommandCompletedEvent
+  extends OperatorCommandEventDataBase<"operator_command_completed"> {
+  text: string;
+}
+
+export interface OperatorCommandFailedEvent
+  extends OperatorCommandEventDataBase<"operator_command_failed"> {
+  message: string;
+}
 
 export interface TokenUsage {
   input_tokens?: number | null;
@@ -383,6 +456,9 @@ export interface AgentSseEventMap {
   message_queued: MessageQueuedEvent;
   turn_started: TurnStartedEvent;
   turn_end: TurnEndEvent;
+  operator_command_started: OperatorCommandStartedEvent;
+  operator_command_completed: OperatorCommandCompletedEvent;
+  operator_command_failed: OperatorCommandFailedEvent;
   model_interaction_started: ModelInteractionStartedEvent;
   model_interaction_ended: ModelInteractionEndedEvent;
   tool_requested: ToolRequestedEvent;

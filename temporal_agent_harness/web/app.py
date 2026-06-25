@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -34,6 +35,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
     AgentEventType,
     AgentStatus,
+    OperatorCommand,
+    OperatorCommandResult,
 )
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
@@ -69,6 +72,14 @@ class ToolApprovalRequestBody(BaseModel):
     approved: bool
     reason: str | None = None
     remember: bool = False
+
+
+class OperatorCommandRequestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    name: str
+    arg: str | None = None
 
 
 def create_agent_harness_app(
@@ -143,7 +154,7 @@ def create_agent_harness_app(
             SessionManagerWorkflow.list_sessions,
             result_type=list[Session],
         )
-        return [asdict(session) for session in sessions]
+        return await _sessions_with_execution_state(app.state.temporal, sessions)
 
     @app.post("/api/sessions")
     async def create_session(req: CreateSessionRequestBody):
@@ -157,7 +168,12 @@ def create_agent_harness_app(
             ),
             result_type=Session,
         )
-        return asdict(session)
+        return await _session_with_execution_state(app.state.temporal, session)
+
+    @app.get("/api/workflow-status/{workflow_id}")
+    async def workflow_status(workflow_id: str):
+        content = await _workflow_execution_state(app.state.temporal, workflow_id)
+        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/status/{session_id}")
     async def get_status(session_id: str):
@@ -171,6 +187,13 @@ def create_agent_harness_app(
         client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
         functions = await client.get_agent_interface()
         return JSONResponse(content=[fn.model_dump(mode="json") for fn in functions])
+
+    @app.get("/api/operator-interface/{session_id}")
+    async def operator_interface(session_id: str):
+        client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
+        commands = await client.get_operator_interface()
+        content = TypeAdapter(list[OperatorCommand]).dump_python(commands, mode="json")
+        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/attach")
     async def attach(session_id: str, from_offset: int = 0) -> StreamingResponse:
@@ -190,6 +213,24 @@ def create_agent_harness_app(
             reason=req.reason,
             remember=req.remember,
         )
+        return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/operator-commands")
+    async def execute_operator_command(req: OperatorCommandRequestBody):
+        client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
+        result = await client.execute_operator_command(req.name, arg=req.arg)
+        content = TypeAdapter(OperatorCommandResult).dump_python(result, mode="json")
+        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/messages")
+    async def submit_message(req: ChatRequestBody):
+        client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
+        if isinstance(req.message, str):
+            msg_type, payload = "ask", {"text": req.message}
+        else:
+            msg_type, payload = req.message["type"], req.message.get("payload") or {}
+
+        result = await client.submit_message(msg_type, payload, req.expected_turn)
         return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
 
     @app.post("/api/chat")
@@ -268,6 +309,48 @@ def _resolve_registry(
     if registry_path is not None:
         return load_agent_registry(registry_path)
     raise ValueError("create_agent_harness_app requires registry or registry_path.")
+
+
+async def _workflow_execution_state(
+    temporal: Client,
+    workflow_id: str,
+) -> dict[str, object]:
+    handle = temporal.get_workflow_handle(workflow_id)
+    try:
+        desc = await handle.describe()
+    except RPCError as exc:
+        if exc.status != RPCStatusCode.NOT_FOUND:
+            raise
+        return {
+            "workflow_id": workflow_id,
+            "execution_status": "NOT_FOUND",
+            "closed": True,
+        }
+
+    return {
+        "workflow_id": workflow_id,
+        "execution_status": desc.status.name,
+        "closed": desc.status != WorkflowExecutionStatus.RUNNING,
+    }
+
+
+async def _session_with_execution_state(
+    temporal: Client,
+    session: Session,
+) -> dict[str, object]:
+    state = await _workflow_execution_state(temporal, session.workflow_id)
+    return {**asdict(session), **state}
+
+
+async def _sessions_with_execution_state(
+    temporal: Client,
+    sessions: list[Session],
+) -> list[dict[str, object]]:
+    return list(
+        await asyncio.gather(
+            *(_session_with_execution_state(temporal, session) for session in sessions)
+        )
+    )
 
 
 async def _ensure_session_manager_workflow(

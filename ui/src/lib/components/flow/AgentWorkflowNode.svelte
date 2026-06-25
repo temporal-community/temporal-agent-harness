@@ -46,7 +46,13 @@
     if (normalized.includes("running") || normalized.includes("stream")) {
       return runtimeRole === "subagent" ? "delegating" : "thinking";
     }
-    if (normalized.includes("replied") || normalized.includes("complete")) return "complete";
+    if (
+      normalized.includes("replied") ||
+      normalized.includes("complete") ||
+      normalized.includes("stopped")
+    ) {
+      return "complete";
+    }
     if (tone === "agent") return "available";
     return "idle";
   }

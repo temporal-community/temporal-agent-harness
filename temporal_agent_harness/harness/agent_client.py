@@ -17,6 +17,8 @@ from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
+    EXECUTE_OPERATOR_COMMAND_UPDATE,
+    OPERATOR_INTERFACE_QUERY,
     SEND_AGENT_MESSAGE_UPDATE,
     TOOL_APPROVAL_UPDATE,
     AcceptedFunction,
@@ -24,6 +26,9 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEventType,
     AgentMessage,
     AgentStatus,
+    OperatorCommand,
+    OperatorCommandRequest,
+    OperatorCommandResult,
     PendingApproval,
     ToolApprovalDecision,
     ToolApprovalResult,
@@ -188,6 +193,33 @@ class AgentClient:
             AGENT_INTERFACE_QUERY, result_type=list[AcceptedFunction]
         )
 
+    async def get_operator_interface(self) -> list[OperatorCommand]:
+        """Query the workflow for operator-only slash command metadata.
+
+        This is intentionally separate from :meth:`get_agent_interface`: operator commands
+        are for UI/control-plane clients and must not become parent-agent tool surfaces.
+        """
+        handle = self._temporal.get_workflow_handle(self._workflow_id)
+        return await handle.query(
+            OPERATOR_INTERFACE_QUERY, result_type=list[OperatorCommand]
+        )
+
+    async def execute_operator_command(
+        self, name: str, *, arg: str | None = None
+    ) -> OperatorCommandResult:
+        """Execute an operator-only command without creating an agent turn.
+
+        This is the execution counterpart to :meth:`get_operator_interface`. It routes to
+        the workflow's first-class operator update rather than ``send_agent_message``, so
+        it can change runtime controls even while a model turn is busy.
+        """
+        handle = self._temporal.get_workflow_handle(self._workflow_id)
+        return await handle.execute_update(
+            EXECUTE_OPERATOR_COMMAND_UPDATE,
+            OperatorCommandRequest(name=name, arg=arg),
+            result_type=OperatorCommandResult,
+        )
+
     async def _submit_message(
         self,
         msg_type: str,
@@ -227,6 +259,20 @@ class AgentClient:
             if error_type == "AgentBusy":
                 raise AgentBusyError(str(cause)) from e
             raise
+
+    async def submit_message(
+        self,
+        msg_type: str,
+        payload: dict[str, Any],
+        expected_turn: int,
+    ) -> AgentMessageReply:
+        """Submit one message to the agent without streaming the accepted turn.
+
+        UI clients that maintain a separate ``attach`` stream should use this to avoid
+        opening one long-lived stream per queued message. The returned
+        :class:`AgentMessageReply` confirms the workflow accepted or queued the turn.
+        """
+        return await self._submit_message(msg_type, payload, expected_turn)
 
     async def send_message(
         self,
@@ -391,9 +437,11 @@ class AgentClient:
         ``subagent_stall_grace_seconds`` — see :meth:`send_message`; same liveness backstop, applied
         to the merge that backs this attach.
 
-        Termination mirrors the per-turn close: ``turn_end`` is the sole end-of-turn signal, so on
-        each ROOT ``turn_end`` we re-query status and stop once ``turn_active`` is False and all
-        turns through ``current_turn`` have ended (a quiescent point with no open subagent brackets).
+        Termination mirrors the per-turn close, with one addition for operator-only events:
+        on each ROOT terminal event (``turn_end`` or an operator command terminal event) we
+        re-query status and stop once the workflow is idle and this attach has emitted every
+        root event that existed when it started. This lets a replay that ends with
+        out-of-band operator commands drain them without waiting for a nonexistent turn.
         """
         stream = WorkflowStreamClient.create(self._temporal, self._workflow_id)
         status = await self.get_status()
@@ -404,6 +452,7 @@ class AgentClient:
         return self._merged_attach(
             on_item=on_item,
             from_offset=from_offset,
+            stop_at_root_offset=head,
             stall_grace_seconds=subagent_stall_grace_seconds,
         )
 
@@ -413,7 +462,12 @@ class AgentClient:
         yield  # pragma: no cover — unreachable; makes this an async generator
 
     async def _merged_attach(
-        self, *, on_item: OnItemCallback[T], from_offset: int, stall_grace_seconds: float
+        self,
+        *,
+        on_item: OnItemCallback[T],
+        from_offset: int,
+        stop_at_root_offset: int,
+        stall_grace_seconds: float,
     ) -> AsyncIterator[T]:
         """Phase 2 of :meth:`attach`: drive the merge from ``from_offset`` to the next idle point.
 
@@ -426,15 +480,25 @@ class AgentClient:
 
         async def should_stop(cursor: Cursor, ev: AgentEvent) -> bool:
             nonlocal highest_completed_turn
-            if cursor.is_child or ev.event.type != AgentEventType.TURN_END:
+            if cursor.is_child:
                 return False
-            highest_completed_turn = max(highest_completed_turn, ev.turn_number)
+            terminal_operator_event = ev.event.type in {
+                AgentEventType.OPERATOR_COMMAND_COMPLETED,
+                AgentEventType.OPERATOR_COMMAND_FAILED,
+            }
+            if ev.event.type != AgentEventType.TURN_END and not terminal_operator_event:
+                return False
+            if ev.event.type == AgentEventType.TURN_END:
+                highest_completed_turn = max(highest_completed_turn, ev.turn_number)
+            if cursor.head_offset + 1 < stop_at_root_offset:
+                return False
             try:
                 status = await self.get_status()
             except Exception:  # noqa: BLE001 — workflow gone (e.g. failed after an errored turn)
                 return True
             return (
                 not status.turn_active
+                and not status.pending_turns
                 and highest_completed_turn >= status.current_turn
             )
 

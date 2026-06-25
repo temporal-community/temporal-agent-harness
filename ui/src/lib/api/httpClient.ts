@@ -6,9 +6,14 @@ import type {
   ChatRequest,
   CreateSessionRequest,
   CreateSessionResponse,
+  OperatorCommand,
+  OperatorCommandRequest,
+  OperatorCommandResponse,
   Session,
+  SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
+  WorkflowExecutionState,
   WorkflowId
 } from "./types";
 import type { AgentApi } from "./client";
@@ -77,6 +82,12 @@ export class HttpAgentApi implements AgentApi {
     });
   }
 
+  async workflowStatus(workflowId: WorkflowId): Promise<WorkflowExecutionState> {
+    return json<WorkflowExecutionState>(
+      apiPath(`workflow-status/${encodeURIComponent(workflowId)}`)
+    );
+  }
+
   async acceptedMessageTypes(
     sessionId: WorkflowId
   ): Promise<AcceptedMessageTypesResponse> {
@@ -96,6 +107,22 @@ export class HttpAgentApi implements AgentApi {
     );
   }
 
+  async operatorInterface(sessionId: WorkflowId): Promise<OperatorCommand[]> {
+    return json<OperatorCommand[]>(
+      apiPath(`operator-interface/${encodeURIComponent(sessionId)}`)
+    );
+  }
+
+  async executeOperatorCommand(
+    request: OperatorCommandRequest
+  ): Promise<OperatorCommandResponse> {
+    return json<OperatorCommandResponse>(apiPath("operator-commands"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request)
+    });
+  }
+
   async *attach(
     sessionId: WorkflowId,
     fromOffset = 0,
@@ -109,6 +136,18 @@ export class HttpAgentApi implements AgentApi {
       throw new Error(await responseErrorMessage(response, `Attach failed (${response.status})`));
     }
     yield* readSse(response);
+  }
+
+  async submitMessage(
+    request: ChatRequest,
+    signal?: AbortSignal
+  ): Promise<SubmitMessageResponse> {
+    return json<SubmitMessageResponse>(apiPath("messages"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      signal
+    });
   }
 
   async *chat(request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame> {

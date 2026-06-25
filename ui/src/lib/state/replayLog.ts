@@ -21,6 +21,7 @@ export type ReplayActor =
   | "queue"
   | "reasoning"
   | "subagent"
+  | "operator"
   | "system"
   | "error";
 
@@ -119,8 +120,14 @@ function renderUserMessage(value: string): string {
     };
     if (typeof message.payload?.text === "string") return message.payload.text;
     if (typeof message.script === "string") return message.script;
-    if (message.type !== "slash_command" || !message.payload?.name) return value;
-    return `/${message.payload.name}${message.payload.arg ? ` ${message.payload.arg}` : ""}`;
+    if (
+      (message.type !== "slash" && message.type !== "slash_command") ||
+      !message.payload?.name
+    ) {
+      return value;
+    }
+    const command = message.payload.name === "set-model" ? "model" : message.payload.name;
+    return `/${command}${message.payload.arg ? ` ${message.payload.arg}` : ""}`;
   } catch {
     return value;
   }
@@ -171,6 +178,15 @@ function citationBody(citations: FileCitationAnnotation[]): string {
 
 function modelUsageBody(usage: UsageTotals, cost: number | null): string {
   return `${formatTokens(usage.total)} tokens, ${formatCost(cost)}`;
+}
+
+function operatorCommandDisplay(data: {
+  command_label: string;
+  command_name: string;
+  arg?: string | null;
+}): string {
+  const label = data.command_label || `/${data.command_name}`;
+  return `${label}${data.arg ? ` ${data.arg}` : ""}`;
 }
 
 function normalizeReplayLogFrame(item: AgentSseFrame | ReplayLogFrame): ReplayLogFrame {
@@ -244,6 +260,43 @@ function rowFromFrame(
       body: renderUserMessage(frame.data.user_message),
       marker: "queue",
       markerLabel: "queued turn"
+    };
+  }
+
+  if (frame.event === "operator_command_started") {
+    return {
+      ...base,
+      actor: "operator",
+      tone: "queue",
+      label: "Operator command started",
+      body: operatorCommandDisplay(frame.data),
+      status: "running"
+    };
+  }
+
+  if (frame.event === "operator_command_completed") {
+    return {
+      ...base,
+      actor: "operator",
+      tone: "done",
+      label: "Operator command completed",
+      body: frame.data.text,
+      detail: operatorCommandDisplay(frame.data),
+      status: "completed"
+    };
+  }
+
+  if (frame.event === "operator_command_failed") {
+    return {
+      ...base,
+      actor: "operator",
+      tone: "error",
+      label: "Operator command failed",
+      body: frame.data.message,
+      detail: operatorCommandDisplay(frame.data),
+      status: "failed",
+      marker: "error",
+      markerLabel: "operator command failed"
     };
   }
 

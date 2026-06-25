@@ -159,6 +159,32 @@ Plain text is represented by an `ask` function that accepts a `text` field. For
 typed messages, send the handler name as the message `type` and the input model
 as `payload`.
 
+### `GET /api/operator-interface/{session_id}`
+
+Returns operator-only slash command metadata for one session. This is separate
+from `agent_interface`: models and parent agents should not treat these commands
+as tools.
+
+```ts
+type OperatorCommand = {
+  name: string
+  payload_name: string
+  label: string
+  description: string
+  aliases: string[]
+  argument?: OperatorCommandArgument | null
+  source: "harness" | "agent"
+}
+
+type OperatorCommandArgument = {
+  kind: "enum" | "text" | "tool_names"
+  required: boolean
+  choices: string[]
+  placeholder?: string | null
+  allow_multiple: boolean
+}
+```
+
 ### `POST /api/approve`
 
 Resolves a pending human approval for a gated tool call.
@@ -208,6 +234,55 @@ subagent event in one ordered sequence.
 
 The client does not pass a stream offset to `POST /api/chat`; the workflow
 acceptance response determines the exact turn-start offset internally.
+
+### `POST /api/messages`
+
+Submits a message without opening a turn stream.
+
+```ts
+type SubmitMessageResponse = {
+  turn_number: number
+  turn_id: string
+  accepted_offset: number
+  pending: boolean
+}
+```
+
+The shared UI uses this endpoint for queued sends, then keeps one
+`GET /api/attach` stream open from its last `resume_offset`. This avoids
+starting many concurrent Temporal Updates and long-lived merged streams when a
+user sends several queued messages quickly.
+
+Slash commands are discovered from `GET /api/operator-interface/{session_id}`
+and sent as structured messages. For example, the UI command
+`/model gemini-3.1-flash-lite` sends:
+
+```json
+{
+  "type": "slash",
+  "payload": {
+    "name": "set-model",
+    "arg": "gemini-3.1-flash-lite"
+  }
+}
+```
+
+The harness accepts these runtime commands for every agent:
+
+| UI command | Payload |
+| --- | --- |
+| `/approvals strict\|safe\|skip` | `{"name":"set-approvals","arg":"..."}` |
+| `/allow-tools search_flights` | `{"name":"allow-tools","arg":"search_flights"}` |
+| `/status` | `{"name":"status"}` |
+
+These harness runtime commands are operator controls. They are advertised in
+`operator_interface`, not as agent-to-agent tools in `agent_interface`.
+
+Monty conversational agents additionally accept:
+
+| UI command | Payload |
+| --- | --- |
+| `/model gemini-3.1-flash-lite` | `{"name":"set-model","arg":"gemini-3.1-flash-lite"}` |
 
 ### `GET /api/attach?session_id=...&from_offset=0`
 

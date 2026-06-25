@@ -262,6 +262,7 @@ export function buildStepTimeline(input: Array<AgentSseFrame | StepTimelineFrame
     const entry = frameFor(item);
     const { frame } = entry;
     if (!("type" in frame.data)) return;
+    if (frame.data.turn_number <= 0) return;
     const index = position + 1;
     const { turn_number: turnNumber, timestamp } = frame.data;
     const scope = scopeFor(entry, turnNumber);

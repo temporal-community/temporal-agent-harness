@@ -53,6 +53,9 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
+        OperatorCommand,
+        OperatorCommandArgument,
+        SlashCommand,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
@@ -63,7 +66,21 @@ with workflow.unsafe.imports_passed_through():
 
 
 TASK_QUEUE = "monty-dynamic-agent"
-DEFAULT_MODEL = "gemini-3.5-flash"
+SUPPORTED_MODELS = ("gemini-3.5-flash", "gemini-3.1-flash-lite")
+DEFAULT_MODEL = SUPPORTED_MODELS[0]
+SET_MODEL_COMMAND = "set-model"
+MODEL_OPERATOR_COMMAND = OperatorCommand(
+    name="model",
+    payload_name=SET_MODEL_COMMAND,
+    label="/model",
+    description="Set the model for this Monty session.",
+    argument=OperatorCommandArgument(
+        kind="enum",
+        choices=SUPPORTED_MODELS,
+        placeholder="model",
+    ),
+    source="agent",
+)
 
 
 # The script-writing contract the model must follow. The host functions are ASYNC — the
@@ -170,6 +187,8 @@ class MontyChatAgentWorkflow:
             # flights & hotels), since every call is dispatched through run_tool and gated.
             # always_require_approvals does not auto-approve even inherently_safe tools.
             approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            operator_commands=[MODEL_OPERATOR_COMMAND],
+            operator_command_handler=self._handle_operator_command,
         )
         self._model: str = DEFAULT_MODEL
         # Server-side conversation chaining id (Interactions API); updated each turn. Safe to
@@ -201,6 +220,31 @@ class MontyChatAgentWorkflow:
         scripts against a simulated travel backend as needed, and replies with the results."""
         reply_text = await self._handle_chat_turn(self._gemini, message.text)
         return TextReply(text=reply_text)
+
+    @agent.accepts
+    async def slash(self, command: SlashCommand) -> TextReply:
+        """Apply a slash command to this parent agent session."""
+        reply = self._handle_operator_command(command)
+        if reply is not None:
+            return reply
+        return TextReply(
+            text=(
+                f"Unknown Monty slash command: `{command.name}`. Try `/model`. "
+                "Harness commands include `/approvals`, `/allow-tools`, and `/status`."
+            )
+        )
+
+    def _handle_operator_command(self, command: SlashCommand) -> TextReply | None:
+        if command.name == SET_MODEL_COMMAND:
+            return self._set_model(command.arg)
+        return None
+
+    def _set_model(self, model: str | None) -> TextReply:
+        if model is None or model not in SUPPORTED_MODELS:
+            choices = ", ".join(f"`{model}`" for model in SUPPORTED_MODELS)
+            return TextReply(text=f"Choose one of: {choices}.")
+        self._model = model
+        return TextReply(text=f"Model set to **{self._model}**.")
 
     # ------------------------------------------------------------------ chat loop
 

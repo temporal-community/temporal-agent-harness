@@ -22,11 +22,16 @@ from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.web import (
     SESSION_MANAGER_TASK_QUEUE,
     AgentRegistry,
+    Session,
     SessionManagerWorkflow,
     create_agent_harness_app,
     create_session_manager_worker,
 )
-from temporal_agent_harness.web.app import _ensure_session_manager_workflow
+from temporal_agent_harness.web.app import (
+    _ensure_session_manager_workflow,
+    _session_with_execution_state,
+    _workflow_execution_state,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 WHEEL_UI_PREFIX = "temporal_agent_harness/ui/dist/"
@@ -102,6 +107,43 @@ def test_chat_request_rejects_client_supplied_from_offset() -> None:
     assert any("from_offset" in item.get("loc", []) for item in detail)
 
 
+def test_submit_message_request_rejects_client_supplied_from_offset() -> None:
+    app = create_agent_harness_app(registry=AgentRegistry())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/messages",
+        json={
+            "session_id": "agent-session-test",
+            "message": "hello",
+            "expected_turn": 1,
+            "from_offset": 42,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any("from_offset" in item.get("loc", []) for item in detail)
+
+
+def test_operator_command_request_rejects_client_supplied_from_offset() -> None:
+    app = create_agent_harness_app(registry=AgentRegistry())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/operator-commands",
+        json={
+            "session_id": "agent-session-test",
+            "name": "status",
+            "from_offset": 10,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any("from_offset" in item.get("loc", []) for item in detail)
+
+
 def test_legacy_session_manager_example_folder_is_removed() -> None:
     legacy_example = ROOT / "examples" / "session_manager"
 
@@ -157,6 +199,43 @@ async def test_session_manager_startup_attaches_to_running_workflow() -> None:
 
     assert result is handle
     assert temporal.start_calls == []
+
+
+async def test_workflow_execution_state_reports_running_workflow_open() -> None:
+    handle = _FakeWorkflowHandle(status=WorkflowExecutionStatus.RUNNING)
+    temporal = _FakeTemporalClient(handle)
+
+    result = await _workflow_execution_state(temporal, "agent-session-test")
+
+    assert result == {
+        "workflow_id": "agent-session-test",
+        "execution_status": "RUNNING",
+        "closed": False,
+    }
+
+
+async def test_session_execution_state_reports_completed_workflow_closed() -> None:
+    handle = _FakeWorkflowHandle(status=WorkflowExecutionStatus.COMPLETED)
+    temporal = _FakeTemporalClient(handle)
+    session = Session(
+        workflow_id="agent-session-test",
+        created_at=123.0,
+        label="Session 1",
+        agent_workflow_type="TestAgent",
+        is_message_queuing_enabled=True,
+    )
+
+    result = await _session_with_execution_state(temporal, session)
+
+    assert result == {
+        "workflow_id": "agent-session-test",
+        "created_at": 123.0,
+        "label": "Session 1",
+        "agent_workflow_type": "TestAgent",
+        "is_message_queuing_enabled": True,
+        "execution_status": "COMPLETED",
+        "closed": True,
+    }
 
 
 async def test_session_manager_startup_starts_when_missing() -> None:

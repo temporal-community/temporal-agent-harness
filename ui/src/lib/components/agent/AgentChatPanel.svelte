@@ -20,7 +20,16 @@
   } from "@lucide/svelte";
   import { tick } from "svelte";
   import { fade } from "svelte/transition";
-  import type { AgentDescriptor, FileCitationAnnotation, Session } from "$lib/api/types";
+  import type {
+    AgentDescriptor,
+    AgentInboundMessage,
+    AgentInterfaceFunction,
+    FileCitationAnnotation,
+    OperatorCommand,
+    OperatorCommandResponse,
+    Session,
+    SlashCommandMessage,
+  } from "$lib/api/types";
   import { formatCost } from "$lib/cost/pricing";
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
   import StatusChip, {
@@ -31,6 +40,24 @@
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
 
   type AgentChatLayout = "full" | "embedded";
+  type OperatorTargetRole = "parent" | "subagent";
+  interface OperatorTargetOption {
+    workflowId: string;
+    role: OperatorTargetRole;
+    label: string;
+    operatorInterface: OperatorCommand[];
+    closed?: boolean;
+  }
+  type SlashMenuItem =
+    | { kind: "target"; id: string; target: OperatorTargetOption }
+    | { kind: "command"; id: string; command: OperatorCommand }
+    | { kind: "choice"; id: string; command: OperatorCommand; value: string }
+    | { kind: "tool"; id: string; command: OperatorCommand; tool: string };
+  type ParsedOperatorCommand = {
+    name: string;
+    arg?: string;
+    displayText: string;
+  };
 
   interface Props {
     items: TranscriptItem[];
@@ -41,12 +68,24 @@
     layout?: AgentChatLayout;
     showHeader?: boolean;
     agents?: AgentDescriptor[];
+    agentInterface?: AgentInterfaceFunction[];
+    operatorInterface?: OperatorCommand[];
+    operatorTargetLabel?: string;
+    operatorTargetRole?: OperatorTargetRole;
+    operatorTargets?: OperatorTargetOption[];
     currentAgentWorkflowType?: string | null;
     connecting?: boolean;
     sending?: boolean;
     creatingSession?: boolean;
+    closed?: boolean;
+    closedWorkflowIds?: string[];
     error?: string | null;
-    onSend?: (message: string) => void | Promise<void>;
+    onSend?: (message: AgentInboundMessage) => void | Promise<void>;
+    onOperatorCommand?: (
+      name: string,
+      arg?: string | null,
+      workflowId?: string | null
+    ) => OperatorCommandResponse | Promise<OperatorCommandResponse>;
     onNewSession?: (workflowType: string) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
     onDeleteSession?: (sessionId: string) => void | Promise<void>;
@@ -59,7 +98,7 @@
 
   interface ChatMessage {
     id: string;
-    role: "user" | "assistant";
+    role: "user" | "assistant" | "operator-user" | "operator-assistant";
     turnNumber?: number;
     text: string;
     timestamp: number;
@@ -82,12 +121,20 @@
     layout = "full",
     showHeader = true,
     agents = [],
+    agentInterface = [],
+    operatorInterface = [],
+    operatorTargetLabel = "",
+    operatorTargetRole = "parent",
+    operatorTargets = [],
     currentAgentWorkflowType = null,
     connecting = false,
     sending = false,
     creatingSession = false,
+    closed = false,
+    closedWorkflowIds = [],
     error = null,
     onSend,
+    onOperatorCommand,
     onNewSession,
     onSelectSession,
     onDeleteSession,
@@ -107,6 +154,9 @@
   let resolvingApprovalIds = $state<string[]>([]);
   let approvalErrors = $state<Record<string, string>>({});
   let messageListElement = $state<HTMLDivElement | null>(null);
+  let slashSelectionIndex = $state(0);
+  let slashMenuSignature = $state("");
+  let slashTargetWorkflowId = $state<string | null>(null);
 
   const transcriptMessages = $derived(seedMessages(items));
   const messages = $derived([...transcriptMessages, ...localMessages]);
@@ -129,9 +179,54 @@
       agents.find((agent) => agent.workflow_type === currentAgentWorkflowType) ??
       null
   );
+  const operatorCommandTargets = $derived.by(() => {
+    if (operatorTargets.length > 0) return operatorTargets;
+    return [
+      {
+        workflowId: sessionId,
+        role: operatorTargetRole,
+        label: operatorTargetLabel || agentLabel,
+        operatorInterface,
+        closed
+      }
+    ];
+  });
+  const slashTarget = $derived.by(() => {
+    if (operatorCommandTargets.length === 1) {
+      const onlyTarget = operatorCommandTargets[0] ?? null;
+      return onlyTarget?.closed ? null : onlyTarget;
+    }
+    return (
+      operatorCommandTargets.find(
+        (target) => target.workflowId === slashTargetWorkflowId && !target.closed
+      ) ??
+      null
+    );
+  });
+  const slashNeedsTargetSelection = $derived(
+    operatorCommandTargets.length > 1 && slashTarget == null
+  );
+  const availableSlashCommands = $derived(slashTarget?.operatorInterface ?? []);
+  const acceptsSlashCommands = $derived(
+    !closed &&
+      operatorCommandTargets.some(
+        (target) => !target.closed && target.operatorInterface.length > 0
+      )
+  );
+  const slashTargetLabel = $derived(slashTarget?.label ?? agentLabel);
+  const slashTargetsSubagent = $derived(slashTarget?.role === "subagent");
+  const showSlashTarget = $derived(
+    slashTarget != null &&
+      !slashNeedsTargetSelection &&
+      (operatorCommandTargets.length > 1 || slashTargetsSubagent)
+  );
   const isMonty = $derived(currentAgentWorkflowType === "MontyDynamicAgent");
   const composerPlaceholder = $derived(
-    isMonty ? "Send a Python script to Monty" : `Ask ${agentLabel}`
+    closed
+      ? `${agentLabel} is closed`
+      : isMonty
+        ? "Send a Python script to Monty"
+        : `Ask ${agentLabel}`
   );
   const canCreateSession = $derived(
     Boolean(onNewSession) && agents.length > 0 && !creatingSession
@@ -141,6 +236,36 @@
   );
   const sendingBlocksInput = $derived(sending && !messageQueueingEnabled);
   const connectingBlocksInput = $derived(connecting && activeSession == null);
+  const composerDisabled = $derived(closed || connectingBlocksInput || creatingSession);
+  const slashDraft = $derived(parseSlashDraft(draft));
+  const slashMenuOpen = $derived(
+    acceptsSlashCommands &&
+      draft.trimStart().startsWith("/") &&
+      !composerDisabled
+  );
+  const slashCommand = $derived(commandForSlashDraft(slashDraft.command));
+  const slashEnumChoices = $derived(filteredSlashEnumChoices(slashDraft.arg, slashCommand));
+  const slashToolSuggestions = $derived(uniqueToolSuggestions());
+  const slashToolChoices = $derived(filteredSlashToolChoices(slashDraft.arg, slashToolSuggestions));
+  const slashMenuItems = $derived(
+    buildSlashMenuItems(
+      slashMenuOpen,
+      slashNeedsTargetSelection,
+      operatorCommandTargets,
+      slashDraft,
+      slashCommand,
+      slashEnumChoices,
+      slashToolChoices
+    )
+  );
+  const canSendDraft = $derived(
+    Boolean(draft.trim()) &&
+      !closed &&
+      !sendingBlocksInput &&
+      !connectingBlocksInput &&
+      !creatingSession &&
+      (!draft.trimStart().startsWith("/") || operatorCommandForDraft(draft) != null)
+  );
   const drawerActive = $derived(showHeader && layout === "embedded" && sessionDrawerOpen);
   const latestMessage = $derived(messages[messages.length - 1] ?? null);
   const latestLog = $derived(logs[logs.length - 1] ?? null);
@@ -162,7 +287,9 @@
     ].join("|")
   );
   const statusLabel = $derived(
-    creatingSession
+    closed
+      ? "Closed"
+      : creatingSession
       ? "Starting"
       : connecting
         ? "Connecting"
@@ -178,7 +305,9 @@
   );
   const statusKind = $derived(currentStatusKind());
   const statusDetail = $derived(
-    error
+    closed
+      ? "stopped"
+      : error
       ? "intervention"
       : pendingApprovalRows.length > 0
         ? "human gate"
@@ -228,12 +357,46 @@
     });
   });
 
+  $effect(() => {
+    if (!draft.trimStart().startsWith("/")) {
+      slashTargetWorkflowId = null;
+    }
+  });
+
+  $effect(() => {
+    if (
+      slashTargetWorkflowId &&
+      !operatorCommandTargets.some(
+        (target) => target.workflowId === slashTargetWorkflowId && !target.closed
+      )
+    ) {
+      slashTargetWorkflowId = null;
+    }
+  });
+
+  $effect(() => {
+    const signature = slashMenuItems.map((item) => item.id).join("|");
+    if (signature !== slashMenuSignature) {
+      slashMenuSignature = signature;
+      slashSelectionIndex = defaultSlashSelectionIndex(slashMenuItems);
+      return;
+    }
+
+    if (slashMenuItems.length === 0) {
+      slashSelectionIndex = 0;
+    } else if (slashSelectionIndex >= slashMenuItems.length) {
+      slashSelectionIndex = slashMenuItems.length - 1;
+    }
+  });
+
   function seedMessages(transcriptItems: TranscriptItem[]): ChatMessage[] {
     const messages: ChatMessage[] = [];
     const emittedUsers = new Set<number>();
 
     for (const item of transcriptItems) {
-      if (item.kind === "user" && !item.text.startsWith("/")) {
+      if (item.kind === "user" && item.text.startsWith("/")) {
+        emittedUsers.add(item.turnNumber);
+      } else if (item.kind === "user") {
         emittedUsers.add(item.turnNumber);
         messages.push({
           id: `chat-user-${item.turnNumber}`,
@@ -254,6 +417,25 @@
           text: item.text,
           timestamp: item.timestamp,
           citations: item.citations
+        });
+      }
+
+      if (item.kind === "operator") {
+        messages.push({
+          id: `${item.id}-command`,
+          role: "operator-user",
+          turnNumber: item.turnNumber,
+          text: item.command,
+          timestamp: item.timestamp,
+          citations: []
+        });
+        messages.push({
+          id: `${item.id}-result`,
+          role: "operator-assistant",
+          turnNumber: item.turnNumber,
+          text: item.text,
+          timestamp: item.timestamp,
+          citations: []
         });
       }
     }
@@ -655,6 +837,7 @@
   }
 
   function currentStatusKind(): StatusKind {
+    if (closed) return "closed";
     if (error) return "error";
     if (pendingApprovalRows.length > 0) return "approval";
     if (creatingSession) return "starting";
@@ -664,18 +847,29 @@
   }
 
   function sessionStatusKind(session: Session): StatusKind {
+    if (sessionClosedById(session.workflow_id)) return "closed";
     if (session.workflow_id === sessionId) return statusKind;
     return session.is_message_queuing_enabled ? "queued" : "idle";
   }
 
   function sessionStatusLabel(session: Session): string {
+    if (sessionClosedById(session.workflow_id)) return "Closed";
     if (session.workflow_id === sessionId) return "Active";
     return session.is_message_queuing_enabled ? "Queue on" : "Idle";
+  }
+
+  function sessionClosedById(nextSessionId: string): boolean {
+    return (
+      (nextSessionId === sessionId && closed) ||
+      closedWorkflowIds.includes(nextSessionId) ||
+      Boolean(sessions.find((session) => session.workflow_id === nextSessionId)?.closed)
+    );
   }
 
   function glyphStatusForSession(
     session: Session
   ): "available" | "busy" | "approval" | "error" | "idle" {
+    if (sessionClosedById(session.workflow_id)) return "idle";
     if (session.workflow_id !== sessionId) return "idle";
     if (statusKind === "error") return "error";
     if (statusKind === "approval") return "approval";
@@ -754,35 +948,429 @@
     return sources.slice(0, 2);
   }
 
+  function parseSlashDraft(value: string): { command: string; arg: string } {
+    const trimmed = value.trimStart();
+    if (!trimmed.startsWith("/")) return { command: "", arg: "" };
+    const withoutSlash = trimmed.slice(1);
+    const [command = "", ...rest] = withoutSlash.split(/\s+/);
+    return {
+      command: command.toLowerCase(),
+      arg: rest.join(" ").trim()
+    };
+  }
+
+  function operatorCommandNames(command: OperatorCommand): string[] {
+    return [command.name, ...command.aliases].map((name) => name.toLowerCase());
+  }
+
+  function commandForSlashDraft(commandName: string): OperatorCommand | null {
+    const normalized = commandName.toLowerCase();
+    return (
+      availableSlashCommands.find((command) =>
+        operatorCommandNames(command).includes(normalized)
+      ) ?? null
+    );
+  }
+
+  function commandMatchesDraft(command: OperatorCommand, draftCommand: string): boolean {
+    const normalized = draftCommand.toLowerCase();
+    if (!normalized) return true;
+    return operatorCommandNames(command).some((name) => name.startsWith(normalized));
+  }
+
+  function filteredSlashEnumChoices(
+    value: string,
+    command: OperatorCommand | null
+  ): string[] {
+    const choices = command?.argument?.kind === "enum" ? command.argument.choices : [];
+    const normalized = value.toLowerCase();
+    if (!normalized) return choices;
+    return choices.filter((choice) => choice.toLowerCase().includes(normalized));
+  }
+
+  function uniqueToolSuggestions(): string[] {
+    const pendingTools = pendingApprovalRows
+      .map((row) => row.toolName)
+      .filter((name): name is string => Boolean(name));
+    const commandChoices =
+      slashCommand?.argument?.kind === "tool_names" ? slashCommand.argument.choices : [];
+    return [...new Set([...pendingTools, ...commandChoices])].sort((a, b) =>
+      a.localeCompare(b)
+    );
+  }
+
+  function filteredSlashToolChoices(value: string, tools: string[]): string[] {
+    const normalized = value.toLowerCase();
+    if (!normalized) return tools;
+    return tools.filter((tool) => tool.toLowerCase().includes(normalized));
+  }
+
+  function buildSlashMenuItems(
+    open: boolean,
+    needsTargetSelection: boolean,
+    targets: OperatorTargetOption[],
+    parsed: { command: string; arg: string },
+    command: OperatorCommand | null,
+    enumChoices: string[],
+    tools: string[]
+  ): SlashMenuItem[] {
+    if (!open) return [];
+    const items: SlashMenuItem[] = [];
+    if (needsTargetSelection) {
+      items.push(
+        ...targets
+          .filter((target) => !target.closed)
+          .map((target) => ({
+            kind: "target" as const,
+            id: `target:${target.workflowId}`,
+            target
+          }))
+      );
+      return items;
+    }
+    if (command == null) {
+      items.push(
+        ...availableSlashCommands
+          .filter((item) => commandMatchesDraft(item, parsed.command))
+          .map((item) => ({
+            kind: "command" as const,
+            id: item.name,
+            command: item
+          }))
+      );
+      return items;
+    }
+    if (command.argument?.kind === "enum") {
+      items.push(
+        ...enumChoices.map((choice) => ({
+          kind: "choice" as const,
+          id: `${command.name}:${choice}`,
+          command,
+          value: choice
+        }))
+      );
+    }
+    if (command.argument?.kind === "tool_names") {
+      items.push(
+        ...tools.map((tool) => ({
+          kind: "tool" as const,
+          id: `${command.name}:${tool}`,
+          command,
+          tool
+        }))
+      );
+    }
+    return items;
+  }
+
+  function defaultSlashSelectionIndex(items: SlashMenuItem[]): number {
+    const firstChoiceIndex = items.findIndex((item) => item.kind !== "command");
+    return firstChoiceIndex === -1 ? 0 : firstChoiceIndex;
+  }
+
+  function operatorCommandForDraft(value: string): ParsedOperatorCommand | null {
+    if (slashNeedsTargetSelection || slashTarget == null || slashTarget.closed) return null;
+    const parsed = parseSlashDraft(value);
+    const command = commandForSlashDraft(parsed.command);
+    if (command == null) return null;
+    const argument = command.argument;
+    if (argument == null) {
+      if (parsed.arg) return null;
+      return {
+        name: command.payload_name,
+        displayText: `/${command.name}`
+      };
+    }
+    if (argument.required && !parsed.arg) return null;
+    if (argument.kind === "enum" && !argument.choices.includes(parsed.arg)) return null;
+    return {
+      name: command.payload_name,
+      arg: parsed.arg || undefined,
+      displayText: `/${command.name}${parsed.arg ? ` ${parsed.arg}` : ""}`
+    };
+  }
+
+  function slashMessageForDraft(value: string): SlashCommandMessage | null {
+    const parsed = parseSlashDraft(value);
+    const command = commandForSlashDraft(parsed.command);
+    if (command == null) return null;
+    const argument = command.argument;
+    if (argument == null) {
+      if (parsed.arg) return null;
+      return { type: "slash", payload: { name: command.payload_name } };
+    }
+    if (argument.required && !parsed.arg) return null;
+    if (argument.kind === "enum" && !argument.choices.includes(parsed.arg)) return null;
+    return {
+      type: "slash",
+      payload: parsed.arg
+        ? { name: command.payload_name, arg: parsed.arg }
+        : { name: command.payload_name }
+    };
+  }
+
+  function commandDisplayText(message: AgentInboundMessage): string {
+    if (typeof message === "string") return message;
+    if (
+      message.type === "slash" &&
+      typeof message.payload === "object" &&
+      message.payload != null &&
+      "name" in message.payload &&
+      typeof message.payload.name === "string"
+    ) {
+      const command = slashDisplayCommand(message.payload.name);
+      const arg =
+        "arg" in message.payload && typeof message.payload.arg === "string"
+          ? message.payload.arg
+          : "";
+      return `/${command}${arg ? ` ${arg}` : ""}`;
+    }
+    return JSON.stringify(message);
+  }
+
+  function slashDisplayCommand(name: string): string {
+    return (
+      availableSlashCommands.find(
+        (command) =>
+          command.payload_name === name ||
+          command.name === name ||
+          command.aliases.includes(name)
+      )?.name ?? name
+    );
+  }
+
+  async function sendCommandArgument(
+    command: OperatorCommand,
+    value: string
+  ): Promise<void> {
+    await sendMessage(`/${command.name} ${value}`);
+  }
+
+  function targetRoleLabel(target: OperatorTargetOption): string {
+    if (target.closed) return "Closed";
+    return target.role === "subagent" ? "Subagent" : "Parent agent";
+  }
+
+  function selectSlashTarget(target: OperatorTargetOption): void {
+    if (target.closed) return;
+    slashTargetWorkflowId = target.workflowId;
+    if (!draft.trimStart().startsWith("/")) draft = "/";
+  }
+
+  function isStopOperatorCommand(command: ParsedOperatorCommand): boolean {
+    return command.name === "stop-agent" || command.name === "stop";
+  }
+
+  function selectSlashCommand(command: OperatorCommand): void {
+    if (command.argument == null) {
+      void sendMessage(`/${command.name}`);
+      return;
+    }
+    draft = `/${command.name} `;
+  }
+
   async function sendMessage(text = draft): Promise<void> {
     const question = text.trim();
-    if (!question || sendingBlocksInput || connectingBlocksInput || creatingSession) return;
+    const operatorCommand = operatorCommandForDraft(question);
+    if (
+      !question ||
+      closed ||
+      sendingBlocksInput ||
+      connectingBlocksInput ||
+      creatingSession ||
+      (question.startsWith("/") && operatorCommand == null)
+    ) {
+      return;
+    }
 
     draft = "";
+    if (operatorCommand != null) {
+      const commandTarget = slashTarget;
+      if (onOperatorCommand) {
+        try {
+          const result = await onOperatorCommand(
+            operatorCommand.name,
+            operatorCommand.arg,
+            commandTarget?.workflowId
+          );
+          slashTargetWorkflowId = null;
+          if (isStopOperatorCommand(operatorCommand)) {
+            const now = Date.now() / 1000;
+            localMessages = [
+              ...localMessages,
+              {
+                id: `local-operator-user-${now}`,
+                role: "operator-user",
+                text: operatorCommand.displayText,
+                timestamp: now,
+                citations: []
+              },
+              {
+                id: `local-operator-assistant-${now}`,
+                role: "operator-assistant",
+                text: result.text,
+                timestamp: Date.now() / 1000,
+                citations: []
+              }
+            ];
+          }
+        } catch (error) {
+          slashTargetWorkflowId = null;
+          const now = Date.now() / 1000;
+          localMessages = [
+            ...localMessages,
+            {
+              id: `local-operator-user-${now}`,
+              role: "operator-user",
+              text: operatorCommand.displayText,
+              timestamp: now,
+              citations: []
+            },
+            {
+              id: `local-operator-error-${now}`,
+              role: "operator-assistant",
+              text:
+                error instanceof Error
+                  ? error.message
+                  : "Operator command failed.",
+              timestamp: Date.now() / 1000,
+              citations: []
+            }
+          ];
+        }
+        return;
+      }
+
+      slashTargetWorkflowId = null;
+      const now = Date.now() / 1000;
+      try {
+        localMessages = [
+          ...localMessages,
+          {
+            id: `local-operator-user-${now}`,
+            role: "operator-user",
+            text: operatorCommand.displayText,
+            timestamp: now,
+            citations: []
+          },
+          {
+            id: `local-operator-assistant-${now}`,
+            role: "operator-assistant",
+            text: responseFor(operatorCommand.displayText),
+            timestamp: Date.now() / 1000,
+            citations: []
+          }
+        ];
+      } catch (error) {
+        localMessages = [
+          ...localMessages,
+          {
+            id: `local-operator-error-${now}`,
+            role: "operator-assistant",
+            text:
+              error instanceof Error
+                ? error.message
+                : "Operator command failed.",
+            timestamp: Date.now() / 1000,
+            citations: []
+          }
+        ];
+      }
+      return;
+    }
+
+    const slashMessage = slashMessageForDraft(question);
+    const outbound: AgentInboundMessage = slashMessage ?? question;
+    const displayText = commandDisplayText(outbound);
     if (onSend) {
-      await onSend(question);
+      await onSend(outbound);
       return;
     }
 
     const now = Date.now() / 1000;
-    const citations = suggestedCitations(question);
+    const citations = suggestedCitations(displayText);
     localMessages = [
       ...localMessages,
       {
         id: `local-user-${now}`,
         role: "user",
-        text: question,
+        text: displayText,
         timestamp: now,
         citations: []
       },
       {
         id: `local-assistant-${now}`,
         role: "assistant",
-        text: responseFor(question),
+        text: responseFor(displayText),
         timestamp: now + 1,
         citations
       }
     ];
+  }
+
+  function selectedSlashMenuItem(): SlashMenuItem | null {
+    return slashMenuItems[slashSelectionIndex] ?? slashMenuItems[0] ?? null;
+  }
+
+  function slashItemActive(item: SlashMenuItem): boolean {
+    return selectedSlashMenuItem()?.id === item.id;
+  }
+
+  function acceptSlashSelection(): boolean {
+    if (!slashMenuOpen) return false;
+    const selected = selectedSlashMenuItem();
+    if (!selected) return false;
+
+    if (selected.kind === "target") {
+      selectSlashTarget(selected.target);
+      return true;
+    }
+
+    if (selected.kind === "choice") {
+      void sendCommandArgument(selected.command, selected.value);
+      return true;
+    }
+
+    if (selected.kind === "tool") {
+      void sendCommandArgument(selected.command, selected.tool);
+      return true;
+    }
+
+    if (selected.kind === "command") {
+      selectSlashCommand(selected.command);
+      return true;
+    }
+
+    return false;
+  }
+
+  function moveSlashSelection(delta: number): boolean {
+    if (!slashMenuOpen || slashMenuItems.length === 0) return false;
+    slashSelectionIndex =
+      (slashSelectionIndex + delta + slashMenuItems.length) % slashMenuItems.length;
+    return true;
+  }
+
+  function handleComposerKeydown(event: KeyboardEvent): void {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+
+    if ((event.key === "ArrowDown" || event.key === "ArrowRight") && moveSlashSelection(1)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
+    if ((event.key === "ArrowUp" || event.key === "ArrowLeft") && moveSlashSelection(-1)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
+    if ((event.key === "Tab" && !event.shiftKey) || event.key === "Enter") {
+      if (!acceptSlashSelection()) return;
+      event.preventDefault();
+      event.stopPropagation();
+    }
   }
 
   function handleSubmit(event: SubmitEvent): void {
@@ -834,7 +1422,7 @@
 </script>
 
 <section
-  class={`agent-chat ${layout} ${showHeader ? "" : "headerless"}`}
+  class={`agent-chat ${layout} ${showHeader ? "" : "headerless"} ${closed ? "closed" : ""}`}
   aria-label={`${agentLabel} customer chat`}
 >
   <div class="chat-shell">
@@ -848,7 +1436,7 @@
               ? "error"
               : statusKind === "approval"
                 ? "approval"
-                : statusKind === "available"
+                : statusKind === "available" || statusKind === "complete"
                   ? "available"
                   : "busy"}
             size={layout === "embedded" ? "md" : "lg"}
@@ -975,7 +1563,7 @@
                 label={sessionStatusLabel(item)}
                 kind={sessionStatusKind(item)}
                 compact
-                active={item.workflow_id === sessionId && statusKind !== "available"}
+                active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete" && statusKind !== "closed"}
               />
             </button>
           {/each}
@@ -988,6 +1576,11 @@
             <Sparkles size={18} />
             <span>Connecting to {agentLabel}...</span>
           </div>
+        {:else if closed && messages.length === 0}
+          <div class="empty-chat closed-empty">
+            <CheckCircle2 size={18} />
+            <span>{agentLabel} is closed.</span>
+          </div>
         {:else if error && messages.length === 0}
           <div class="empty-chat error">
             <span>{error}</span>
@@ -996,9 +1589,13 @@
 
         {#each messages as message}
           <article class={`message ${message.role}`}>
-            {#if message.role === "assistant"}
+            {#if message.role === "assistant" || message.role === "operator-assistant"}
               <div class="assistant-avatar" aria-hidden="true">
-                <Sparkles size={15} />
+                {#if message.role === "operator-assistant"}
+                  <span>/</span>
+                {:else}
+                  <Sparkles size={15} />
+                {/if}
               </div>
             {/if}
 
@@ -1111,7 +1708,7 @@
           {/if}
         {/each}
 
-        {#if sending}
+        {#if sending && !closed}
           <article class="message assistant">
             <div class="assistant-avatar" aria-hidden="true">
               <Sparkles size={15} />
@@ -1124,8 +1721,15 @@
       </div>
     {/if}
 
-    {#if !drawerActive && error && messages.length > 0}
+    {#if !drawerActive && !closed && error && messages.length > 0}
       <div class="error-banner">{error}</div>
+    {/if}
+
+    {#if !drawerActive && closed}
+      <div class="closed-banner">
+        <CheckCircle2 size={14} aria-hidden="true" />
+        <span>This agent is closed. Start a new session to continue.</span>
+      </div>
     {/if}
 
     {#if !drawerActive && pendingApprovalRows.length > 0}
@@ -1190,22 +1794,152 @@
       </section>
     {/if}
 
-    <form class="composer" onsubmit={handleSubmit}>
-      <Search size={17} />
-      <input
-        bind:value={draft}
-        placeholder={composerPlaceholder}
-        aria-label={`Message ${agentLabel}`}
-        disabled={connectingBlocksInput || creatingSession}
-      />
-      <button
-        type="submit"
-        aria-label="Send message"
-        disabled={!draft.trim() || sendingBlocksInput || connectingBlocksInput || creatingSession}
-      >
-        <ArrowUp size={17} />
-      </button>
-    </form>
+    <div class="composer-wrap">
+      {#if slashMenuOpen}
+        <section class="slash-menu" aria-label="Slash commands">
+          {#if showSlashTarget}
+            <div class="slash-target" title={`Slash commands target ${slashTargetLabel}`}>
+              <span aria-hidden="true">/</span>
+              <strong>{slashTargetLabel}</strong>
+            </div>
+          {/if}
+
+          {#if slashNeedsTargetSelection}
+            {#each operatorCommandTargets as target}
+              {@const targetItem = { kind: "target", id: `target:${target.workflowId}`, target } as const}
+              <button
+                type="button"
+                class={`slash-row slash-target-row ${target.closed ? "closed" : ""} ${slashItemActive(targetItem) ? "active" : ""}`}
+                disabled={target.closed}
+                onclick={() => selectSlashTarget(target)}
+              >
+                {#if target.role === "subagent"}
+                  <MessageCircle size={15} />
+                {:else}
+                  <Sparkles size={15} />
+                {/if}
+                <span>
+                  <strong>{target.label}</strong>
+                  <small>{targetRoleLabel(target)}</small>
+                </span>
+              </button>
+            {/each}
+          {:else}
+            {#each availableSlashCommands.filter((command) => commandMatchesDraft(command, slashDraft.command)) as command}
+              {#if slashCommand == null}
+                {@const commandItem = { kind: "command", id: command.name, command } as const}
+                <button
+                  type="button"
+                  class={`slash-row ${slashItemActive(commandItem) ? "active" : ""}`}
+                  onclick={() => selectSlashCommand(command)}
+                >
+                  {#if command.payload_name === "set-model"}
+                    <BrainCircuit class="model-command-icon" size={15} />
+                  {:else if command.payload_name === "set-approvals"}
+                    <ShieldCheck size={15} />
+                  {:else if command.payload_name === "status"}
+                    <span class="status-dot" aria-hidden="true"></span>
+                  {:else if command.payload_name === "stop-agent"}
+                    <XCircle class="stop-command-icon" size={15} />
+                  {:else if command.payload_name === "allow-tools"}
+                    <Wrench class="allow-tools-icon" size={15} fill="currentColor" strokeWidth={0} />
+                  {:else}
+                    <Wrench size={15} />
+                  {/if}
+                  <span>
+                    <strong>{command.label}</strong>
+                    <small>{command.description}</small>
+                  </span>
+                </button>
+              {/if}
+            {/each}
+
+            {#if slashCommand}
+              <div class="slash-row slash-command-summary">
+                {#if slashCommand.payload_name === "set-model"}
+                  <BrainCircuit class="model-command-icon" size={15} />
+                {:else if slashCommand.payload_name === "set-approvals"}
+                  <ShieldCheck size={15} />
+                {:else if slashCommand.payload_name === "status"}
+                  <span class="status-dot" aria-hidden="true"></span>
+                {:else if slashCommand.payload_name === "stop-agent"}
+                  <XCircle class="stop-command-icon" size={15} />
+                {:else if slashCommand.payload_name === "allow-tools"}
+                  <Wrench class="allow-tools-icon" size={15} fill="currentColor" strokeWidth={0} />
+                {:else}
+                  <Wrench size={15} />
+                {/if}
+                <span>
+                  <strong>{slashCommand.label}</strong>
+                  <small>{slashCommand.description}</small>
+                </span>
+              </div>
+            {/if}
+
+            {#if slashCommand?.argument?.kind === "enum"}
+              <div class="slash-models" aria-label="Argument choices">
+                {#each slashEnumChoices as choice}
+                  {@const choiceItem = { kind: "choice", id: `${slashCommand.name}:${choice}`, command: slashCommand, value: choice } as const}
+                  <button
+                    type="button"
+                    class={`slash-row model-choice ${slashItemActive(choiceItem) ? "active" : ""}`}
+                    onclick={() => void sendCommandArgument(slashCommand, choice)}
+                  >
+                    {#if slashCommand.payload_name === "set-model"}
+                      <Cpu size={15} />
+                    {:else if slashCommand.payload_name === "set-approvals"}
+                      <ShieldCheck size={15} />
+                    {:else}
+                      <Wrench size={15} />
+                    {/if}
+                    <span>
+                      <strong>{choice}</strong>
+                      <small>{slashCommand.payload_name}</small>
+                    </span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+            {#if slashCommand?.argument?.kind === "tool_names"}
+              <div class="slash-models" aria-label="Tool choices">
+                {#each slashToolChoices as tool}
+                  {@const toolItem = { kind: "tool", id: `${slashCommand.name}:${tool}`, command: slashCommand, tool } as const}
+                  <button
+                    type="button"
+                    class={`slash-row model-choice ${slashItemActive(toolItem) ? "active" : ""}`}
+                    onclick={() => void sendCommandArgument(slashCommand, tool)}
+                  >
+                    <Wrench size={15} />
+                    <span>
+                      <strong>{tool}</strong>
+                      <small>{slashCommand.payload_name}</small>
+                    </span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          {/if}
+        </section>
+      {/if}
+
+      <form class="composer" class:closed={closed} onsubmit={handleSubmit}>
+        <Search size={17} />
+        <input
+          bind:value={draft}
+          placeholder={composerPlaceholder}
+          aria-label={`Message ${agentLabel}`}
+          disabled={composerDisabled}
+          onkeydown={handleComposerKeydown}
+        />
+        <button
+          type="submit"
+          aria-label="Send message"
+          disabled={!canSendDraft}
+        >
+          <ArrowUp size={17} />
+        </button>
+      </form>
+    </div>
   </div>
 
   {#if layout === "full"}
@@ -1287,7 +2021,7 @@
               label={sessionStatusLabel(item)}
               kind={sessionStatusKind(item)}
               compact
-              active={item.workflow_id === sessionId && statusKind !== "available"}
+              active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete" && statusKind !== "closed"}
             />
             <button
               class="session-delete"
@@ -1727,6 +2461,12 @@
     border-color: color-mix(in srgb, var(--error) 35%, var(--border));
   }
 
+  .empty-chat.closed-empty {
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 32%, var(--border));
+    background: color-mix(in srgb, var(--success) 8%, var(--surface-1));
+  }
+
   .message {
     min-width: 0;
     display: flex;
@@ -1737,7 +2477,12 @@
     justify-content: flex-end;
   }
 
-  .message.assistant {
+  .message.operator-user {
+    justify-content: flex-end;
+  }
+
+  .message.assistant,
+  .message.operator-assistant {
     justify-content: flex-start;
   }
 
@@ -1755,6 +2500,16 @@
     color: var(--accent);
   }
 
+  .operator-assistant .assistant-avatar {
+    border-color: color-mix(in srgb, var(--model) 34%, transparent);
+    background: color-mix(in srgb, var(--model) 16%, var(--surface-2));
+    color: color-mix(in srgb, var(--model) 85%, white);
+    font-family: SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    font-size: 17px;
+    font-weight: 750;
+    line-height: 1;
+  }
+
   .bubble {
     max-width: min(720px, 82%);
     min-width: 0;
@@ -1767,6 +2522,28 @@
   }
 
   .message.assistant .bubble {
+    --markdown-font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI",
+      Roboto, "Helvetica Neue", Arial, sans-serif;
+    --markdown-body-size: 14px;
+    --markdown-body-line-height: 1.6;
+    --markdown-heading-size: 14.5px;
+    --markdown-heading-line-height: 1.42;
+    --markdown-block-gap: 11px;
+    --markdown-list-gap: 7px;
+    --markdown-strong-weight: 680;
+  }
+
+  .message.operator-user .bubble {
+    max-width: min(620px, 82%);
+    border-color: color-mix(in srgb, var(--model) 44%, var(--border));
+    background: color-mix(in srgb, var(--model) 20%, var(--surface-2));
+    color: var(--text-1);
+    font-family: SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+    font-weight: 650;
+  }
+
+  .message.operator-assistant .bubble {
     --markdown-font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI",
       Roboto, "Helvetica Neue", Arial, sans-serif;
     --markdown-body-size: 14px;
@@ -2228,21 +3005,199 @@
     margin: 0 12px 10px;
   }
 
+  .closed-banner {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 clamp(18px, 5vw, 72px) 10px;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border));
+    border-radius: 7px;
+    color: var(--text-2);
+    background: color-mix(in srgb, var(--success) 8%, var(--surface-1));
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .closed-banner :global(svg) {
+    flex: 0 0 auto;
+    color: var(--success);
+  }
+
+  .agent-chat.embedded .closed-banner {
+    margin: 0 12px 10px;
+  }
+
+  .composer-wrap {
+    position: relative;
+    margin: 0 clamp(18px, 5vw, 72px) 18px;
+  }
+
+  .agent-chat.embedded .composer-wrap {
+    margin: 0 12px 12px;
+  }
+
+  .slash-menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 8px);
+    left: 0;
+    z-index: 12;
+    display: grid;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--surface-1) 96%, black);
+    box-shadow: 0 12px 30px rgb(0 0 0 / 0.3);
+  }
+
+  .slash-target {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    justify-self: start;
+    max-width: 100%;
+    padding: 5px 8px;
+    border: 1px solid color-mix(in srgb, var(--model) 36%, var(--border));
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--model) 13%, var(--surface-2));
+    color: var(--text-2);
+    font-size: 11px;
+  }
+
+  .slash-target span {
+    width: 17px;
+    height: 17px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--model) 28%, var(--surface-1));
+    color: color-mix(in srgb, var(--model) 88%, white);
+    font-family: SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+    font-weight: 750;
+  }
+
+  .slash-target strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 680;
+  }
+
+  .slash-models {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .slash-row {
+    min-width: 0;
+    min-height: 42px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 9px;
+    align-items: center;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--surface-2);
+    color: var(--text-1);
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+  }
+
+  .slash-row:hover:not(.slash-command-summary),
+  .slash-row:focus-visible,
+  .slash-row.active {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    background: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
+    outline: 0;
+  }
+
+  .slash-row:disabled,
+  .slash-row.closed {
+    cursor: default;
+    opacity: 0.58;
+  }
+
+  .slash-row:disabled:hover,
+  .slash-row.closed:hover {
+    border-color: var(--border);
+    background: var(--surface-2);
+  }
+
+  .slash-row :global(svg) {
+    color: var(--accent);
+  }
+
+  .slash-row :global(svg.model-command-icon) {
+    color: var(--warning);
+  }
+
+  .slash-row :global(svg.allow-tools-icon) {
+    color: var(--text-3);
+  }
+
+  .slash-row :global(svg.stop-command-icon) {
+    color: var(--error);
+  }
+
+  .status-dot {
+    width: 11px;
+    height: 11px;
+    justify-self: center;
+    border-radius: 999px;
+    background: var(--success);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent),
+      0 0 13px color-mix(in srgb, var(--success) 82%, transparent);
+  }
+
+  .slash-command-summary {
+    cursor: default;
+  }
+
+  .slash-row span {
+    min-width: 0;
+    display: grid;
+    gap: 1px;
+  }
+
+  .slash-row strong,
+  .slash-row small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .slash-row strong {
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .slash-row small {
+    color: var(--text-3);
+    font-size: 11px;
+  }
+
   .composer {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 10px;
     align-items: center;
-    margin: 0 clamp(18px, 5vw, 72px) 18px;
     padding: 8px 8px 8px 12px;
     border: 1px solid var(--border-strong);
     border-radius: 8px;
     background: var(--surface-1);
     color: var(--text-3);
-  }
-
-  .agent-chat.embedded .composer {
-    margin: 0 12px 12px;
   }
 
   .composer input {
@@ -2261,6 +3216,11 @@
 
   .composer input:disabled {
     opacity: 0.6;
+  }
+
+  .composer.closed {
+    border-color: color-mix(in srgb, var(--success) 24%, var(--border));
+    background: color-mix(in srgb, var(--surface-1) 80%, var(--surface-0));
   }
 
   .composer button {
@@ -2509,6 +3469,10 @@
 
     .agent-chat.embedded .agent-controls {
       margin-left: 42px;
+    }
+
+    .slash-models {
+      grid-template-columns: minmax(0, 1fr);
     }
 
   }

@@ -314,6 +314,44 @@ async def test_merged_send_message_nests_live_subagent_events_in_brackets(client
     _assert_subagent_turns_nested_in_brackets(merged, expected_child_turns=2)
 
 
+async def test_operator_command_can_target_live_subagent_directly(client_and_queue):
+    client, task_queue = client_and_queue
+    _parent_id, merged = await _merged_send(
+        client, task_queue, [_const_script(42)], stop=False
+    )
+    started = [
+        e for e in merged if e.event.type == AgentEventType.SUBAGENT_STARTED
+    ]
+    assert len(started) == 1
+    child_workflow_id = started[0].event.workflow_id
+    child_agent_id = started[0].event.subagent_id
+
+    child_client = AgentClient(client, child_workflow_id)
+    result = await child_client.execute_operator_command("status")
+
+    stream = WorkflowStreamClient.create(client, child_workflow_id)
+    operator_events: list[AgentEvent] = []
+    async for item in stream.subscribe(
+        topics=[TURN_EVENTS_TOPIC], from_offset=0, result_type=AgentEvent
+    ):
+        envelope: AgentEvent = item.data
+        if envelope.event.type in {
+            AgentEventType.OPERATOR_COMMAND_STARTED,
+            AgentEventType.OPERATOR_COMMAND_COMPLETED,
+        }:
+            operator_events.append(envelope)
+        if envelope.event.type == AgentEventType.OPERATOR_COMMAND_COMPLETED:
+            break
+
+    assert [e.event.type for e in operator_events] == [
+        AgentEventType.OPERATOR_COMMAND_STARTED,
+        AgentEventType.OPERATOR_COMMAND_COMPLETED,
+    ]
+    assert all(e.agent_id == child_agent_id for e in operator_events)
+    assert operator_events[-1].event.command_name == "status"
+    assert operator_events[-1].event.text == result.text
+
+
 async def test_attach_after_stopped_subagent_degrades_gracefully(client_and_queue):
     # The REAL graceful-degradation path (distinct from the LIVE merge above, which reads the
     # child's detail in real time BEFORE the end-of-turn stop completes the child): here we drive
