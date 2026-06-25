@@ -735,11 +735,22 @@ export class AgentRunController {
 
     this.connectionError = null;
     try {
-      return await this.#api.executeOperatorCommand({
+      const result = await this.#api.executeOperatorCommand({
         session_id: session.workflow_id,
         name,
         arg: arg ?? null
       });
+      const shouldClearSendingOnIdle = this.sending;
+      void this.attach(this.lastResumeOffset, {
+        clearSendingOnIdle: shouldClearSendingOnIdle
+      }).catch((error: unknown) => {
+        if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
+          this.connectionError =
+            error instanceof Error ? error.message : "Failed to stream operator events.";
+          if (shouldClearSendingOnIdle) this.sending = false;
+        }
+      });
+      return result;
     } catch (error) {
       this.connectionError =
         error instanceof Error ? error.message : "Failed to execute operator command.";

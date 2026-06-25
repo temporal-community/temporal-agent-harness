@@ -67,8 +67,11 @@ from temporal_agent_harness.harness.agent_protocol import (
     MessageQueued,
     OperatorCommand,
     OperatorCommandArgument,
+    OperatorCommandCompleted,
+    OperatorCommandFailed,
     OperatorCommandRequest,
     OperatorCommandResult,
+    OperatorCommandStarted,
     PendingApproval,
     PendingTurn,
     RunSubagentTurnInput,
@@ -1439,11 +1442,61 @@ class AgentWorkflowRunner:
         extensions can opt in with ``operator_command_handler``.
         """
         command = SlashCommand(name=request.name, arg=request.arg)
+        operator_command_id = str(workflow.uuid4())
+        command_label = self._operator_command_label(command.name)
+        self._pub(
+            operator_command_id,
+            0,
+            OperatorCommandStarted(
+                operator_command_id=operator_command_id,
+                command_name=command.name,
+                command_label=command_label,
+                arg=command.arg,
+            ),
+        )
         reply = self._handle_harness_slash(command)
         if reply is None and self._operator_command_handler is not None:
-            reply = self._operator_command_handler(command)
+            try:
+                reply = self._operator_command_handler(command)
+            except Exception as e:  # noqa: BLE001 — make operator failures durable
+                message = str(e) or type(e).__name__
+                self._pub(
+                    operator_command_id,
+                    0,
+                    OperatorCommandFailed(
+                        operator_command_id=operator_command_id,
+                        command_name=command.name,
+                        command_label=command_label,
+                        arg=command.arg,
+                        message=message,
+                    ),
+                )
+                return OperatorCommandResult(text=f"Operator command failed: {message}")
         if reply is None:
-            reply = TextReply(text=f"Unknown operator command: `{command.name}`.")
+            text = f"Unknown operator command: `{command.name}`."
+            self._pub(
+                operator_command_id,
+                0,
+                OperatorCommandFailed(
+                    operator_command_id=operator_command_id,
+                    command_name=command.name,
+                    command_label=command_label,
+                    arg=command.arg,
+                    message=text,
+                ),
+            )
+            return OperatorCommandResult(text=text)
+        self._pub(
+            operator_command_id,
+            0,
+            OperatorCommandCompleted(
+                operator_command_id=operator_command_id,
+                command_name=command.name,
+                command_label=command_label,
+                arg=command.arg,
+                text=reply.text,
+            ),
+        )
         return OperatorCommandResult(text=reply.text)
 
     # -- Tool-approval policy ----------------------------------------------
@@ -1584,6 +1637,16 @@ class AgentWorkflowRunner:
         intentionally not consumed by generated subagent tools.
         """
         return [*_HARNESS_OPERATOR_COMMANDS, *self._operator_commands]
+
+    def _operator_command_label(self, command_name: str) -> str:
+        for command in self._handle_operator_interface():
+            if (
+                command.payload_name == command_name
+                or command.name == command_name
+                or command_name in command.aliases
+            ):
+                return command.label
+        return f"/{command_name}"
 
     @property
     def current_stream_context(self) -> TurnStreamContext | None:

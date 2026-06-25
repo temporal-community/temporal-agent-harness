@@ -437,9 +437,11 @@ class AgentClient:
         ``subagent_stall_grace_seconds`` — see :meth:`send_message`; same liveness backstop, applied
         to the merge that backs this attach.
 
-        Termination mirrors the per-turn close: ``turn_end`` is the sole end-of-turn signal, so on
-        each ROOT ``turn_end`` we re-query status and stop once ``turn_active`` is False and all
-        turns through ``current_turn`` have ended (a quiescent point with no open subagent brackets).
+        Termination mirrors the per-turn close, with one addition for operator-only events:
+        on each ROOT terminal event (``turn_end`` or an operator command terminal event) we
+        re-query status and stop once the workflow is idle and this attach has emitted every
+        root event that existed when it started. This lets a replay that ends with
+        out-of-band operator commands drain them without waiting for a nonexistent turn.
         """
         stream = WorkflowStreamClient.create(self._temporal, self._workflow_id)
         status = await self.get_status()
@@ -450,6 +452,7 @@ class AgentClient:
         return self._merged_attach(
             on_item=on_item,
             from_offset=from_offset,
+            stop_at_root_offset=head,
             stall_grace_seconds=subagent_stall_grace_seconds,
         )
 
@@ -459,7 +462,12 @@ class AgentClient:
         yield  # pragma: no cover — unreachable; makes this an async generator
 
     async def _merged_attach(
-        self, *, on_item: OnItemCallback[T], from_offset: int, stall_grace_seconds: float
+        self,
+        *,
+        on_item: OnItemCallback[T],
+        from_offset: int,
+        stop_at_root_offset: int,
+        stall_grace_seconds: float,
     ) -> AsyncIterator[T]:
         """Phase 2 of :meth:`attach`: drive the merge from ``from_offset`` to the next idle point.
 
@@ -472,15 +480,25 @@ class AgentClient:
 
         async def should_stop(cursor: Cursor, ev: AgentEvent) -> bool:
             nonlocal highest_completed_turn
-            if cursor.is_child or ev.event.type != AgentEventType.TURN_END:
+            if cursor.is_child:
                 return False
-            highest_completed_turn = max(highest_completed_turn, ev.turn_number)
+            terminal_operator_event = ev.event.type in {
+                AgentEventType.OPERATOR_COMMAND_COMPLETED,
+                AgentEventType.OPERATOR_COMMAND_FAILED,
+            }
+            if ev.event.type != AgentEventType.TURN_END and not terminal_operator_event:
+                return False
+            if ev.event.type == AgentEventType.TURN_END:
+                highest_completed_turn = max(highest_completed_turn, ev.turn_number)
+            if cursor.head_offset + 1 < stop_at_root_offset:
+                return False
             try:
                 status = await self.get_status()
             except Exception:  # noqa: BLE001 — workflow gone (e.g. failed after an errored turn)
                 return True
             return (
                 not status.turn_active
+                and not status.pending_turns
                 and highest_completed_turn >= status.current_turn
             )
 

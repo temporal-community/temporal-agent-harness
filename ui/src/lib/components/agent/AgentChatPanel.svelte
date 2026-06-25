@@ -83,7 +83,7 @@
 
   interface ChatMessage {
     id: string;
-    role: "user" | "assistant";
+    role: "user" | "assistant" | "operator-user" | "operator-assistant";
     turnNumber?: number;
     text: string;
     timestamp: number;
@@ -329,6 +329,25 @@
           text: item.text,
           timestamp: item.timestamp,
           citations: item.citations
+        });
+      }
+
+      if (item.kind === "operator") {
+        messages.push({
+          id: `${item.id}-command`,
+          role: "operator-user",
+          turnNumber: item.turnNumber,
+          text: item.command,
+          timestamp: item.timestamp,
+          citations: []
+        });
+        messages.push({
+          id: `${item.id}-result`,
+          role: "operator-assistant",
+          turnNumber: item.turnNumber,
+          text: item.text,
+          timestamp: item.timestamp,
+          citations: []
         });
       }
     }
@@ -1034,24 +1053,51 @@
     }
 
     draft = "";
-    if (operatorCommand != null && onOperatorCommand) {
+    if (operatorCommand != null) {
+      if (onOperatorCommand) {
+        try {
+          await onOperatorCommand(operatorCommand.name, operatorCommand.arg);
+        } catch (error) {
+          const now = Date.now() / 1000;
+          localMessages = [
+            ...localMessages,
+            {
+              id: `local-operator-user-${now}`,
+              role: "operator-user",
+              text: operatorCommand.displayText,
+              timestamp: now,
+              citations: []
+            },
+            {
+              id: `local-operator-error-${now}`,
+              role: "operator-assistant",
+              text:
+                error instanceof Error
+                  ? error.message
+                  : "Operator command failed.",
+              timestamp: Date.now() / 1000,
+              citations: []
+            }
+          ];
+        }
+        return;
+      }
+
       const now = Date.now() / 1000;
-      const userMessage: ChatMessage = {
-        id: `local-operator-user-${now}`,
-        role: "user",
-        text: operatorCommand.displayText,
-        timestamp: now,
-        citations: []
-      };
-      localMessages = [...localMessages, userMessage];
       try {
-        const result = await onOperatorCommand(operatorCommand.name, operatorCommand.arg);
         localMessages = [
           ...localMessages,
           {
+            id: `local-operator-user-${now}`,
+            role: "operator-user",
+            text: operatorCommand.displayText,
+            timestamp: now,
+            citations: []
+          },
+          {
             id: `local-operator-assistant-${now}`,
-            role: "assistant",
-            text: result.text,
+            role: "operator-assistant",
+            text: responseFor(operatorCommand.displayText),
             timestamp: Date.now() / 1000,
             citations: []
           }
@@ -1061,7 +1107,7 @@
           ...localMessages,
           {
             id: `local-operator-error-${now}`,
-            role: "assistant",
+            role: "operator-assistant",
             text:
               error instanceof Error
                 ? error.message
@@ -1374,9 +1420,13 @@
 
         {#each messages as message}
           <article class={`message ${message.role}`}>
-            {#if message.role === "assistant"}
+            {#if message.role === "assistant" || message.role === "operator-assistant"}
               <div class="assistant-avatar" aria-hidden="true">
-                <Sparkles size={15} />
+                {#if message.role === "operator-assistant"}
+                  <span>/</span>
+                {:else}
+                  <Sparkles size={15} />
+                {/if}
               </div>
             {/if}
 
@@ -2212,7 +2262,12 @@
     justify-content: flex-end;
   }
 
-  .message.assistant {
+  .message.operator-user {
+    justify-content: flex-end;
+  }
+
+  .message.assistant,
+  .message.operator-assistant {
     justify-content: flex-start;
   }
 
@@ -2230,6 +2285,16 @@
     color: var(--accent);
   }
 
+  .operator-assistant .assistant-avatar {
+    border-color: color-mix(in srgb, var(--model) 34%, transparent);
+    background: color-mix(in srgb, var(--model) 16%, var(--surface-2));
+    color: color-mix(in srgb, var(--model) 85%, white);
+    font-family: SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    font-size: 17px;
+    font-weight: 750;
+    line-height: 1;
+  }
+
   .bubble {
     max-width: min(720px, 82%);
     min-width: 0;
@@ -2242,6 +2307,28 @@
   }
 
   .message.assistant .bubble {
+    --markdown-font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI",
+      Roboto, "Helvetica Neue", Arial, sans-serif;
+    --markdown-body-size: 14px;
+    --markdown-body-line-height: 1.6;
+    --markdown-heading-size: 14.5px;
+    --markdown-heading-line-height: 1.42;
+    --markdown-block-gap: 11px;
+    --markdown-list-gap: 7px;
+    --markdown-strong-weight: 680;
+  }
+
+  .message.operator-user .bubble {
+    max-width: min(620px, 82%);
+    border-color: color-mix(in srgb, var(--model) 44%, var(--border));
+    background: color-mix(in srgb, var(--model) 20%, var(--surface-2));
+    color: var(--text-1);
+    font-family: SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    font-size: 13px;
+    font-weight: 650;
+  }
+
+  .message.operator-assistant .bubble {
     --markdown-font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI",
       Roboto, "Helvetica Neue", Arial, sans-serif;
     --markdown-body-size: 14px;

@@ -51,6 +51,22 @@ class AgentEventType(StrEnum):
     reply (success) or the ERROR event (the handler raised), so it is the single reliable
     end-of-turn signal a consumer can terminate on. See :class:`TurnEnded`."""
 
+    OPERATOR_COMMAND_STARTED = "operator_command_started"
+    """A human/operator command has begun executing outside the agent turn loop.
+
+    Operator command events are control-plane audit records, not model turns. They use
+    ``turn_number=0`` in the :class:`AgentEvent` envelope so clients can replay them
+    durably without grouping them into agent-turn summaries. See
+    :class:`OperatorCommandStarted`."""
+
+    OPERATOR_COMMAND_COMPLETED = "operator_command_completed"
+    """A human/operator command completed successfully. See
+    :class:`OperatorCommandCompleted`."""
+
+    OPERATOR_COMMAND_FAILED = "operator_command_failed"
+    """A human/operator command failed without creating an agent turn. See
+    :class:`OperatorCommandFailed`."""
+
     MODEL_INTERACTION_STARTED = "model_interaction_started"
     """The agent has begun ONE interaction with the model — a single streaming
     model call has started.
@@ -250,6 +266,61 @@ class TurnEnded(StreamEvent[Literal[AgentEventType.TURN_END]]):
     """
 
     type: Literal[AgentEventType.TURN_END] = AgentEventType.TURN_END
+
+
+class OperatorCommandEvent(StreamEvent[EventTypeT], Generic[EventTypeT]):
+    """Base for operator-command audit events.
+
+    Correlates the started/completed/failed records for one out-of-band operator action.
+    These events are published by the workflow update that handles the command, but they
+    are not agent turns and should not be exposed as model-callable behavior.
+    """
+
+    operator_command_id: str = Field(
+        description="Stable id correlating the lifecycle events for one operator command."
+    )
+    command_name: str = Field(
+        description="The command payload name executed by the workflow update."
+    )
+    command_label: str = Field(
+        description="The human-facing slash label, such as '/approvals'."
+    )
+    arg: str | None = Field(
+        default=None,
+        description="The optional command argument supplied by the operator.",
+    )
+
+
+class OperatorCommandStarted(
+    OperatorCommandEvent[Literal[AgentEventType.OPERATOR_COMMAND_STARTED]]
+):
+    """A human/operator command has begun executing."""
+
+    type: Literal[AgentEventType.OPERATOR_COMMAND_STARTED] = (
+        AgentEventType.OPERATOR_COMMAND_STARTED
+    )
+
+
+class OperatorCommandCompleted(
+    OperatorCommandEvent[Literal[AgentEventType.OPERATOR_COMMAND_COMPLETED]]
+):
+    """A human/operator command completed successfully."""
+
+    type: Literal[AgentEventType.OPERATOR_COMMAND_COMPLETED] = (
+        AgentEventType.OPERATOR_COMMAND_COMPLETED
+    )
+    text: str = Field(description="The operator-facing result text returned by the command.")
+
+
+class OperatorCommandFailed(
+    OperatorCommandEvent[Literal[AgentEventType.OPERATOR_COMMAND_FAILED]]
+):
+    """A human/operator command failed."""
+
+    type: Literal[AgentEventType.OPERATOR_COMMAND_FAILED] = (
+        AgentEventType.OPERATOR_COMMAND_FAILED
+    )
+    message: str = Field(description="The operator-facing failure message.")
 
 
 class TokenUsage(BaseModel):
@@ -668,6 +739,9 @@ AgentStreamItem = Annotated[
     MessageQueued
     | TurnStarted
     | TurnEnded
+    | OperatorCommandStarted
+    | OperatorCommandCompleted
+    | OperatorCommandFailed
     | ModelInteractionStarted
     | ModelInteractionEnded
     | ToolRequested

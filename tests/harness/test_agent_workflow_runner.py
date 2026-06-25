@@ -56,6 +56,7 @@ from temporal_agent_harness.harness.agent_protocol import (
 )
 from temporalio.exceptions import ApplicationError
 
+from temporal_agent_harness.harness.agent_client import AgentClient
 from temporal_agent_harness.harness.agent_workflow import _discover_handlers
 
 # ---------------------------------------------------------------------------
@@ -372,6 +373,68 @@ async def test_operator_command_status_does_not_create_turn(client_and_queue):
     assert status.pending_turns == []
 
 
+async def test_operator_command_publishes_durable_audit_events(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    await _operator(handle, "status")
+
+    events = await _collect_until_operator_terminal(client, handle.id)
+    assert [event.event.type for event in events] == [
+        AgentEventType.OPERATOR_COMMAND_STARTED,
+        AgentEventType.OPERATOR_COMMAND_COMPLETED,
+    ]
+    started, completed = events
+    assert started.turn_number == 0
+    assert completed.turn_number == 0
+    assert started.turn_id == completed.turn_id
+    assert started.event.operator_command_id == completed.event.operator_command_id
+    assert started.event.command_name == "status"
+    assert started.event.command_label == "/status"
+    assert completed.event.text.startswith("- Agent id:")
+
+
+async def test_unknown_operator_command_publishes_failed_event(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    result = await _operator(handle, "not-real")
+
+    assert result.text == "Unknown operator command: `not-real`."
+    events = await _collect_until_operator_terminal(client, handle.id)
+    assert [event.event.type for event in events] == [
+        AgentEventType.OPERATOR_COMMAND_STARTED,
+        AgentEventType.OPERATOR_COMMAND_FAILED,
+    ]
+    failed = events[-1]
+    assert failed.turn_number == 0
+    assert failed.event.command_name == "not-real"
+    assert failed.event.message == "Unknown operator command: `not-real`."
+
+
+async def test_attach_replays_operator_only_history_and_stops(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+    await _operator(handle, "status")
+    agent_client = AgentClient(client, handle.id)
+
+    stream = await agent_client.attach(
+        from_offset=0,
+        on_item=lambda item, _resume_offset: item,
+    )
+
+    items: list[AgentEvent] = []
+    async with asyncio.timeout(5):
+        async for item in stream:
+            assert isinstance(item, AgentEvent)
+            items.append(item)
+
+    assert [item.event.type for item in items] == [
+        AgentEventType.OPERATOR_COMMAND_STARTED,
+        AgentEventType.OPERATOR_COMMAND_COMPLETED,
+    ]
+
+
 async def test_operator_command_set_approvals_updates_policy_without_turn(
     client_and_queue,
 ):
@@ -441,6 +504,31 @@ async def _collect_until_turn_end(client: Client, workflow_id: str) -> list[Agen
         ):
             events.append(item.data)
             if item.data.event.type == AgentEventType.TURN_END:
+                break
+    return events
+
+
+async def _collect_until_operator_terminal(
+    client: Client, workflow_id: str
+) -> list[AgentEvent]:
+    from datetime import timedelta
+
+    from temporalio.contrib.workflow_streams import WorkflowStreamClient
+
+    stream = WorkflowStreamClient.create(client, workflow_id)
+    events: list[AgentEvent] = []
+    async with asyncio.timeout(30):
+        async for item in stream.subscribe(
+            topics=["turn_events"],
+            from_offset=0,
+            result_type=AgentEvent,
+            poll_cooldown=timedelta(milliseconds=10),
+        ):
+            events.append(item.data)
+            if item.data.event.type in {
+                AgentEventType.OPERATOR_COMMAND_COMPLETED,
+                AgentEventType.OPERATOR_COMMAND_FAILED,
+            }:
                 break
     return events
 

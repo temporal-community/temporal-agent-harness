@@ -212,6 +212,9 @@ export type AgentEventType =
   | "message_queued"
   | "turn_started"
   | "turn_end"
+  | "operator_command_started"
+  | "operator_command_completed"
+  | "operator_command_failed"
   | "model_interaction_started"
   | "model_interaction_ended"
   | "tool_requested"
@@ -255,6 +258,27 @@ export interface TurnStartedEvent extends AgentEventDataBase<"turn_started"> {
 }
 
 export interface TurnEndEvent extends AgentEventDataBase<"turn_end"> {}
+
+export interface OperatorCommandEventDataBase<TType extends AgentEventType>
+  extends AgentEventDataBase<TType> {
+  operator_command_id: string;
+  command_name: string;
+  command_label: string;
+  arg: string | null;
+}
+
+export interface OperatorCommandStartedEvent
+  extends OperatorCommandEventDataBase<"operator_command_started"> {}
+
+export interface OperatorCommandCompletedEvent
+  extends OperatorCommandEventDataBase<"operator_command_completed"> {
+  text: string;
+}
+
+export interface OperatorCommandFailedEvent
+  extends OperatorCommandEventDataBase<"operator_command_failed"> {
+  message: string;
+}
 
 export interface TokenUsage {
   input_tokens?: number | null;
@@ -422,6 +446,9 @@ export interface AgentSseEventMap {
   message_queued: MessageQueuedEvent;
   turn_started: TurnStartedEvent;
   turn_end: TurnEndEvent;
+  operator_command_started: OperatorCommandStartedEvent;
+  operator_command_completed: OperatorCommandCompletedEvent;
+  operator_command_failed: OperatorCommandFailedEvent;
   model_interaction_started: ModelInteractionStartedEvent;
   model_interaction_ended: ModelInteractionEndedEvent;
   tool_requested: ToolRequestedEvent;
