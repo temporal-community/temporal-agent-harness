@@ -17,6 +17,7 @@ from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
+    OPERATOR_INTERFACE_QUERY,
     SEND_AGENT_MESSAGE_UPDATE,
     TOOL_APPROVAL_UPDATE,
     AcceptedFunction,
@@ -24,6 +25,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEventType,
     AgentMessage,
     AgentStatus,
+    OperatorCommand,
     PendingApproval,
     ToolApprovalDecision,
     ToolApprovalResult,
@@ -186,6 +188,17 @@ class AgentClient:
         handle = self._temporal.get_workflow_handle(self._workflow_id)
         return await handle.query(
             AGENT_INTERFACE_QUERY, result_type=list[AcceptedFunction]
+        )
+
+    async def get_operator_interface(self) -> list[OperatorCommand]:
+        """Query the workflow for operator-only slash command metadata.
+
+        This is intentionally separate from :meth:`get_agent_interface`: operator commands
+        are for UI/control-plane clients and must not become parent-agent tool surfaces.
+        """
+        handle = self._temporal.get_workflow_handle(self._workflow_id)
+        return await handle.query(
+            OPERATOR_INTERFACE_QUERY, result_type=list[OperatorCommand]
         )
 
     async def _submit_message(

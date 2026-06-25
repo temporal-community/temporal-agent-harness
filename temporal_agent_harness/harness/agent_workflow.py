@@ -48,6 +48,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AGENT_ID_LENGTH,
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
+    OPERATOR_INTERFACE_QUERY,
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
     DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
     RUN_SUBAGENT_TURN_ACTIVITY,
@@ -63,6 +64,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentStatus,
     AgentStreamItem,
     MessageQueued,
+    OperatorCommand,
+    OperatorCommandArgument,
     PendingApproval,
     PendingTurn,
     RunSubagentTurnInput,
@@ -131,6 +134,42 @@ _SLASH_ALLOW_TOOLS = "allow-tools"
 _SLASH_ALLOW_TOOL_ALIAS = "allow-tool"
 _SLASH_STATUS = "status"
 _APPROVAL_MODE_CHOICES = ("strict", "safe", "skip")
+
+_HARNESS_OPERATOR_COMMANDS = (
+    OperatorCommand(
+        name=_SLASH_SET_APPROVALS_ALIAS,
+        payload_name=_SLASH_SET_APPROVALS,
+        label="/approvals",
+        description="Set the tool approval policy for this session.",
+        aliases=(_SLASH_SET_APPROVALS,),
+        argument=OperatorCommandArgument(
+            kind="enum",
+            choices=_APPROVAL_MODE_CHOICES,
+            placeholder="strict | safe | skip",
+        ),
+        source="harness",
+    ),
+    OperatorCommand(
+        name=_SLASH_ALLOW_TOOLS,
+        payload_name=_SLASH_ALLOW_TOOLS,
+        label="/allow-tools",
+        description="Auto-approve one or more named tools for this session.",
+        aliases=(_SLASH_ALLOW_TOOL_ALIAS,),
+        argument=OperatorCommandArgument(
+            kind="tool_names",
+            placeholder="tool_name",
+            allow_multiple=True,
+        ),
+        source="harness",
+    ),
+    OperatorCommand(
+        name=_SLASH_STATUS,
+        payload_name=_SLASH_STATUS,
+        label="/status",
+        description="Show the current harness status for this session.",
+        source="harness",
+    ),
+)
 
 _InjectedT = TypeVar("_InjectedT")
 
@@ -1124,6 +1163,7 @@ class AgentWorkflowRunner:
         approval_policy_default: ToolApprovalPolicy,
         enable_message_queuing_default: bool = False,
         custom_approval_fallback: CustomApprovalFallback | None = None,
+        operator_commands: Iterable[OperatorCommand] | None = None,
     ) -> None:
         """Construct the runner inside the agent's ``@workflow.init``::
 
@@ -1139,7 +1179,9 @@ class AgentWorkflowRunner:
         safe-by-default choice; ``enable_message_queuing_default`` defaults to the harness
         baseline of disabled). The accepted messages are NOT configured here — they are
         discovered from the agent's ``@agent.accepts`` handler methods. Registers the
-        workflow's update/query/signal handlers.
+        workflow's update/query/signal handlers. ``operator_commands`` extends the
+        harness-owned operator slash commands with agent-specific slash metadata for
+        interactive clients; it is never exposed through ``agent_interface``.
         """
         # The runner is built inside the agent's @workflow.init; enforce here that the
         # enclosing workflow honors the standardized agent-input contract (run/__init__
@@ -1151,6 +1193,10 @@ class AgentWorkflowRunner:
         cls = _enclosing_workflow_class()
         self._handlers: dict[str, _AcceptedHandler] = (
             agent_handlers(cls) if cls is not None else {}
+        )
+        self._operator_commands: tuple[OperatorCommand, ...] = tuple(
+            OperatorCommand.model_validate(command)
+            for command in (operator_commands or ())
         )
         # Resolve each knob: the caller's config value wins when given; otherwise fall back
         # to the agent's default. The caller can never be overridden — the agent only fills
@@ -1218,6 +1264,9 @@ class AgentWorkflowRunner:
         )
         workflow.set_query_handler(AGENT_STATUS_QUERY, self._handle_agent_status)
         workflow.set_query_handler(AGENT_INTERFACE_QUERY, self._handle_agent_interface)
+        workflow.set_query_handler(
+            OPERATOR_INTERFACE_QUERY, self._handle_operator_interface
+        )
         workflow.set_signal_handler("close", self._handle_close)
 
     # -- Protocol handlers --------------------------------------------------
@@ -1497,6 +1546,14 @@ class AgentWorkflowRunner:
             for h in self._handlers.values()
             if h.name != _SLASH_MESSAGE_TYPE
         ]
+
+    def _handle_operator_interface(self) -> list[OperatorCommand]:
+        """Answer the operator discovery query with slash-command metadata.
+
+        Unlike ``agent_interface``, this surface is for human/client control planes. It is
+        intentionally not consumed by generated subagent tools.
+        """
+        return [*_HARNESS_OPERATOR_COMMANDS, *self._operator_commands]
 
     @property
     def current_stream_context(self) -> TurnStreamContext | None:

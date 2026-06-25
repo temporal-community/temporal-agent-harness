@@ -6,6 +6,7 @@ import type {
   ChatRequest,
   CreateSessionRequest,
   CreateSessionResponse,
+  OperatorCommand,
   Session,
   SubmitMessageResponse,
   ToolApprovalRequest,
@@ -94,6 +95,12 @@ export class HttpAgentApi implements AgentApi {
   async agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]> {
     return json<AgentInterfaceFunction[]>(
       apiPath(`agent-interface/${encodeURIComponent(sessionId)}`)
+    );
+  }
+
+  async operatorInterface(sessionId: WorkflowId): Promise<OperatorCommand[]> {
+    return json<OperatorCommand[]>(
+      apiPath(`operator-interface/${encodeURIComponent(sessionId)}`)
     );
   }
 

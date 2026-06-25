@@ -34,6 +34,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
     AgentEventType,
     AgentStatus,
+    OperatorCommand,
 )
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
@@ -171,6 +172,13 @@ def create_agent_harness_app(
         client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
         functions = await client.get_agent_interface()
         return JSONResponse(content=[fn.model_dump(mode="json") for fn in functions])
+
+    @app.get("/api/operator-interface/{session_id}")
+    async def operator_interface(session_id: str):
+        client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
+        commands = await client.get_operator_interface()
+        content = TypeAdapter(list[OperatorCommand]).dump_python(commands, mode="json")
+        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/attach")
     async def attach(session_id: str, from_offset: int = 0) -> StreamingResponse:

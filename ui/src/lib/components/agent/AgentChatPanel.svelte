@@ -25,10 +25,9 @@
     AgentInboundMessage,
     AgentInterfaceFunction,
     FileCitationAnnotation,
+    OperatorCommand,
     Session,
-    SlashCommandApprovalMode,
     SlashCommandMessage,
-    SlashCommandModel
   } from "$lib/api/types";
   import { formatCost } from "$lib/cost/pricing";
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
@@ -40,36 +39,10 @@
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
 
   type AgentChatLayout = "full" | "embedded";
-  type SlashCommandId = "model" | "approvals" | "allow-tools" | "status";
   type SlashMenuItem =
-    | { kind: "command"; id: SlashCommandId }
-    | { kind: "model"; id: SlashCommandModel; model: SlashCommandModel }
-    | { kind: "approval"; id: SlashCommandApprovalMode; mode: SlashCommandApprovalMode }
-    | { kind: "tool"; id: string; tool: string };
-  const slashCommandModels: SlashCommandModel[] = [
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite"
-  ];
-  const harnessSlashCommands: { id: SlashCommandId; label: string; detail: string }[] = [
-    { id: "approvals", label: "/approvals", detail: "Set approval policy" },
-    { id: "allow-tools", label: "/allow-tools", detail: "Auto-approve tools" },
-    { id: "status", label: "/status", detail: "Show harness status" }
-  ];
-  const montySlashCommands: { id: SlashCommandId; label: string; detail: string }[] = [
-    { id: "model", label: "/model", detail: "Set model" }
-  ];
-  const slashApprovalModes: SlashCommandApprovalMode[] = ["strict", "safe", "skip"];
-  const montySlashAllowTools = [
-    "run_monty_script",
-    "search_flights",
-    "search_hotels",
-    "book_flight",
-    "book_hotel",
-    "get_trip_summary",
-    "start_monty",
-    "monty_run_script",
-    "stop_monty"
-  ];
+    | { kind: "command"; id: string; command: OperatorCommand }
+    | { kind: "choice"; id: string; command: OperatorCommand; value: string }
+    | { kind: "tool"; id: string; command: OperatorCommand; tool: string };
 
   interface Props {
     items: TranscriptItem[];
@@ -81,6 +54,7 @@
     showHeader?: boolean;
     agents?: AgentDescriptor[];
     agentInterface?: AgentInterfaceFunction[];
+    operatorInterface?: OperatorCommand[];
     currentAgentWorkflowType?: string | null;
     connecting?: boolean;
     sending?: boolean;
@@ -123,6 +97,7 @@
     showHeader = true,
     agents = [],
     agentInterface = [],
+    operatorInterface = [],
     currentAgentWorkflowType = null,
     connecting = false,
     sending = false,
@@ -172,16 +147,8 @@
       agents.find((agent) => agent.workflow_type === currentAgentWorkflowType) ??
       null
   );
-  const supportsMontyRuntimeCommands = $derived(
-    currentAgentWorkflowType === "MontyChatAgent" ||
-      currentAgentWorkflowType === "MontyChatSubagentAgent"
-  );
-  const availableSlashCommands = $derived(
-    supportsMontyRuntimeCommands
-      ? [...harnessSlashCommands, ...montySlashCommands]
-      : harnessSlashCommands
-  );
-  const acceptsSlashCommands = $derived(activeSession != null || agentInterface.length > 0);
+  const availableSlashCommands = $derived(operatorInterface);
+  const acceptsSlashCommands = $derived(operatorInterface.length > 0);
   const isMonty = $derived(currentAgentWorkflowType === "MontyDynamicAgent");
   const composerPlaceholder = $derived(
     isMonty ? "Send a Python script to Monty" : `Ask ${agentLabel}`
@@ -201,16 +168,16 @@
       !connectingBlocksInput &&
       !creatingSession
   );
-  const slashModelChoices = $derived(filteredSlashModelChoices(slashDraft.arg));
-  const slashApprovalChoices = $derived(filteredSlashApprovalChoices(slashDraft.arg));
+  const slashCommand = $derived(commandForSlashDraft(slashDraft.command));
+  const slashEnumChoices = $derived(filteredSlashEnumChoices(slashDraft.arg, slashCommand));
   const slashToolSuggestions = $derived(uniqueToolSuggestions());
   const slashToolChoices = $derived(filteredSlashToolChoices(slashDraft.arg, slashToolSuggestions));
   const slashMenuItems = $derived(
     buildSlashMenuItems(
       slashMenuOpen,
       slashDraft,
-      slashModelChoices,
-      slashApprovalChoices,
+      slashCommand,
+      slashEnumChoices,
       slashToolChoices
     )
   );
@@ -862,28 +829,44 @@
     };
   }
 
-  function filteredSlashModelChoices(value: string): SlashCommandModel[] {
-    const normalized = value.toLowerCase();
-    if (!normalized) return slashCommandModels;
-    return slashCommandModels.filter((model) =>
-      model.toLowerCase().includes(normalized)
+  function operatorCommandNames(command: OperatorCommand): string[] {
+    return [command.name, ...command.aliases].map((name) => name.toLowerCase());
+  }
+
+  function commandForSlashDraft(commandName: string): OperatorCommand | null {
+    const normalized = commandName.toLowerCase();
+    return (
+      availableSlashCommands.find((command) =>
+        operatorCommandNames(command).includes(normalized)
+      ) ?? null
     );
   }
 
-  function filteredSlashApprovalChoices(value: string): SlashCommandApprovalMode[] {
+  function commandMatchesDraft(command: OperatorCommand, draftCommand: string): boolean {
+    const normalized = draftCommand.toLowerCase();
+    if (!normalized) return true;
+    return operatorCommandNames(command).some((name) => name.startsWith(normalized));
+  }
+
+  function filteredSlashEnumChoices(
+    value: string,
+    command: OperatorCommand | null
+  ): string[] {
+    const choices = command?.argument?.kind === "enum" ? command.argument.choices : [];
     const normalized = value.toLowerCase();
-    if (!normalized) return slashApprovalModes;
-    return slashApprovalModes.filter((mode) => mode.includes(normalized));
+    if (!normalized) return choices;
+    return choices.filter((choice) => choice.toLowerCase().includes(normalized));
   }
 
   function uniqueToolSuggestions(): string[] {
     const pendingTools = pendingApprovalRows
       .map((row) => row.toolName)
       .filter((name): name is string => Boolean(name));
-    const tools = supportsMontyRuntimeCommands
-      ? [...pendingTools, ...montySlashAllowTools]
-      : pendingTools;
-    return [...new Set(tools)].sort((a, b) => a.localeCompare(b));
+    const commandChoices =
+      slashCommand?.argument?.kind === "tool_names" ? slashCommand.argument.choices : [];
+    return [...new Set([...pendingTools, ...commandChoices])].sort((a, b) =>
+      a.localeCompare(b)
+    );
   }
 
   function filteredSlashToolChoices(value: string, tools: string[]): string[] {
@@ -892,55 +875,43 @@
     return tools.filter((tool) => tool.toLowerCase().includes(normalized));
   }
 
-  function slashCommandIds(): string[] {
-    return availableSlashCommands.map((command) => command.id);
-  }
-
-  function canonicalSlashCommandId(command: string): SlashCommandId | null {
-    const canonical = command === "allow-tool" ? "allow-tools" : command;
-    return slashCommandIds().includes(canonical) ? (canonical as SlashCommandId) : null;
-  }
-
   function buildSlashMenuItems(
     open: boolean,
     parsed: { command: string; arg: string },
-    models: SlashCommandModel[],
-    approvalModes: SlashCommandApprovalMode[],
+    command: OperatorCommand | null,
+    enumChoices: string[],
     tools: string[]
   ): SlashMenuItem[] {
     if (!open) return [];
     const items: SlashMenuItem[] = [];
-    const command = canonicalSlashCommandId(parsed.command);
     if (command == null) {
       items.push(
         ...availableSlashCommands
-          .filter((command) => parsed.command === "" || command.id.startsWith(parsed.command))
-          .map((command) => ({ kind: "command" as const, id: command.id }))
+          .filter((item) => commandMatchesDraft(item, parsed.command))
+          .map((item) => ({
+            kind: "command" as const,
+            id: item.name,
+            command: item
+          }))
       );
+      return items;
     }
-    if (command === "model") {
+    if (command.argument?.kind === "enum") {
       items.push(
-        ...models.map((model) => ({
-          kind: "model" as const,
-          id: model,
-          model
+        ...enumChoices.map((choice) => ({
+          kind: "choice" as const,
+          id: `${command.name}:${choice}`,
+          command,
+          value: choice
         }))
       );
     }
-    if (command === "approvals") {
-      items.push(
-        ...approvalModes.map((mode) => ({
-          kind: "approval" as const,
-          id: mode,
-          mode
-        }))
-      );
-    }
-    if (command === "allow-tools") {
+    if (command.argument?.kind === "tool_names") {
       items.push(
         ...tools.map((tool) => ({
           kind: "tool" as const,
-          id: tool,
+          id: `${command.name}:${tool}`,
+          command,
           tool
         }))
       );
@@ -955,26 +926,21 @@
 
   function slashMessageForDraft(value: string): SlashCommandMessage | null {
     const parsed = parseSlashDraft(value);
-    const command = canonicalSlashCommandId(parsed.command);
+    const command = commandForSlashDraft(parsed.command);
     if (command == null) return null;
-    if (command === "model") {
-      const model = slashCommandModels.find((item) => item === parsed.arg);
-      if (!model) return null;
-      return { type: "slash", payload: { name: "set-model", arg: model } };
+    const argument = command.argument;
+    if (argument == null) {
+      if (parsed.arg) return null;
+      return { type: "slash", payload: { name: command.payload_name } };
     }
-    if (command === "approvals") {
-      const mode = slashApprovalModes.find((item) => item === parsed.arg);
-      if (!mode) return null;
-      return { type: "slash", payload: { name: "set-approvals", arg: mode } };
-    }
-    if (command === "allow-tools") {
-      if (!parsed.arg) return null;
-      return { type: "slash", payload: { name: "allow-tools", arg: parsed.arg } };
-    }
-    if (command === "status" && !parsed.arg) {
-      return { type: "slash", payload: { name: "status" } };
-    }
-    return null;
+    if (argument.required && !parsed.arg) return null;
+    if (argument.kind === "enum" && !argument.choices.includes(parsed.arg)) return null;
+    return {
+      type: "slash",
+      payload: parsed.arg
+        ? { name: command.payload_name, arg: parsed.arg }
+        : { name: command.payload_name }
+    };
   }
 
   function commandDisplayText(message: AgentInboundMessage): string {
@@ -997,30 +963,29 @@
   }
 
   function slashDisplayCommand(name: string): string {
-    if (name === "set-model") return "model";
-    if (name === "set-approvals") return "approvals";
-    if (name === "allow-tool") return "allow-tools";
-    return name;
+    return (
+      availableSlashCommands.find(
+        (command) =>
+          command.payload_name === name ||
+          command.name === name ||
+          command.aliases.includes(name)
+      )?.name ?? name
+    );
   }
 
-  async function sendModelCommand(model: SlashCommandModel): Promise<void> {
-    await sendMessage(`/model ${model}`);
+  async function sendCommandArgument(
+    command: OperatorCommand,
+    value: string
+  ): Promise<void> {
+    await sendMessage(`/${command.name} ${value}`);
   }
 
-  async function sendApprovalCommand(mode: SlashCommandApprovalMode): Promise<void> {
-    await sendMessage(`/approvals ${mode}`);
-  }
-
-  async function sendAllowToolCommand(tool: string): Promise<void> {
-    await sendMessage(`/allow-tools ${tool}`);
-  }
-
-  function selectSlashCommand(command: SlashCommandId): void {
-    if (command === "status") {
-      void sendMessage("/status");
+  function selectSlashCommand(command: OperatorCommand): void {
+    if (command.argument == null) {
+      void sendMessage(`/${command.name}`);
       return;
     }
-    draft = `/${command} `;
+    draft = `/${command.name} `;
   }
 
   async function sendMessage(text = draft): Promise<void> {
@@ -1078,27 +1043,18 @@
     const selected = selectedSlashMenuItem();
     if (!selected) return false;
 
-    if (selected.kind === "model") {
-      void sendModelCommand(selected.model);
-      return true;
-    }
-
-    if (selected.kind === "approval") {
-      void sendApprovalCommand(selected.mode);
+    if (selected.kind === "choice") {
+      void sendCommandArgument(selected.command, selected.value);
       return true;
     }
 
     if (selected.kind === "tool") {
-      void sendAllowToolCommand(selected.tool);
+      void sendCommandArgument(selected.command, selected.tool);
       return true;
     }
 
     if (selected.kind === "command") {
-      if (selected.id === "status") {
-        void sendMessage("/status");
-        return true;
-      }
-      draft = `/${selected.id} `;
+      selectSlashCommand(selected.command);
       return true;
     }
 
@@ -1542,97 +1498,90 @@
     <div class="composer-wrap">
       {#if slashMenuOpen}
         <section class="slash-menu" aria-label="Slash commands">
-          {#each availableSlashCommands.filter((command) => slashDraft.command === "" || command.id.startsWith(slashDraft.command)) as command}
-            {#if !slashCommandIds().includes(slashDraft.command)}
-              {@const commandItem = { kind: "command", id: command.id } as const}
+          {#each availableSlashCommands.filter((command) => commandMatchesDraft(command, slashDraft.command)) as command}
+            {#if slashCommand == null}
+              {@const commandItem = { kind: "command", id: command.name, command } as const}
               <button
                 type="button"
                 class={`slash-row ${slashItemActive(commandItem) ? "active" : ""}`}
-                onclick={() => selectSlashCommand(command.id)}
+                onclick={() => selectSlashCommand(command)}
               >
-                {#if command.id === "model"}
-                  <BrainCircuit size={15} />
-                {:else if command.id === "approvals"}
+                {#if command.payload_name === "set-model"}
+                  <BrainCircuit class="model-command-icon" size={15} />
+                {:else if command.payload_name === "set-approvals"}
                   <ShieldCheck size={15} />
+                {:else if command.payload_name === "status"}
+                  <span class="status-dot" aria-hidden="true"></span>
+                {:else if command.payload_name === "allow-tools"}
+                  <Wrench class="allow-tools-icon" size={15} fill="currentColor" strokeWidth={0} />
                 {:else}
                   <Wrench size={15} />
                 {/if}
                 <span>
                   <strong>{command.label}</strong>
-                  <small>{command.detail}</small>
+                  <small>{command.description}</small>
                 </span>
               </button>
             {/if}
           {/each}
 
-          {#if slashCommandIds().includes(slashDraft.command)}
-            {@const command = availableSlashCommands.find((item) => item.id === slashDraft.command)}
-            {#if command}
-              <div class="slash-row slash-command-summary">
-                {#if command.id === "model"}
-                  <BrainCircuit size={15} />
-                {:else if command.id === "approvals"}
-                  <ShieldCheck size={15} />
-                {:else}
-                  <Wrench size={15} />
-                {/if}
-                <span>
-                  <strong>{command.label}</strong>
-                  <small>{command.detail}</small>
-                </span>
-              </div>
-            {/if}
+          {#if slashCommand}
+            <div class="slash-row slash-command-summary">
+              {#if slashCommand.payload_name === "set-model"}
+                <BrainCircuit class="model-command-icon" size={15} />
+              {:else if slashCommand.payload_name === "set-approvals"}
+                <ShieldCheck size={15} />
+              {:else if slashCommand.payload_name === "status"}
+                <span class="status-dot" aria-hidden="true"></span>
+              {:else if slashCommand.payload_name === "allow-tools"}
+                <Wrench class="allow-tools-icon" size={15} fill="currentColor" strokeWidth={0} />
+              {:else}
+                <Wrench size={15} />
+              {/if}
+              <span>
+                <strong>{slashCommand.label}</strong>
+                <small>{slashCommand.description}</small>
+              </span>
+            </div>
           {/if}
 
-          {#if slashDraft.command === "model"}
-            <div class="slash-models" aria-label="Model choices">
-              {#each slashModelChoices as model}
-                {@const modelItem = { kind: "model", id: model, model } as const}
+          {#if slashCommand?.argument?.kind === "enum"}
+            <div class="slash-models" aria-label="Argument choices">
+              {#each slashEnumChoices as choice}
+                {@const choiceItem = { kind: "choice", id: `${slashCommand.name}:${choice}`, command: slashCommand, value: choice } as const}
                 <button
                   type="button"
-                  class={`slash-row model-choice ${slashItemActive(modelItem) ? "active" : ""}`}
-                  onclick={() => void sendModelCommand(model)}
+                  class={`slash-row model-choice ${slashItemActive(choiceItem) ? "active" : ""}`}
+                  onclick={() => void sendCommandArgument(slashCommand, choice)}
                 >
-                  <Cpu size={15} />
+                  {#if slashCommand.payload_name === "set-model"}
+                    <Cpu size={15} />
+                  {:else if slashCommand.payload_name === "set-approvals"}
+                    <ShieldCheck size={15} />
+                  {:else}
+                    <Wrench size={15} />
+                  {/if}
                   <span>
-                    <strong>{model}</strong>
-                    <small>set-model</small>
+                    <strong>{choice}</strong>
+                    <small>{slashCommand.payload_name}</small>
                   </span>
                 </button>
               {/each}
             </div>
           {/if}
-          {#if slashDraft.command === "approvals"}
-            <div class="slash-models" aria-label="Approval choices">
-              {#each slashApprovalChoices as mode}
-                {@const approvalItem = { kind: "approval", id: mode, mode } as const}
-                <button
-                  type="button"
-                  class={`slash-row model-choice ${slashItemActive(approvalItem) ? "active" : ""}`}
-                  onclick={() => void sendApprovalCommand(mode)}
-                >
-                  <ShieldCheck size={15} />
-                  <span>
-                    <strong>{mode}</strong>
-                    <small>set-approvals</small>
-                  </span>
-                </button>
-              {/each}
-            </div>
-          {/if}
-          {#if slashDraft.command === "allow-tools" || slashDraft.command === "allow-tool"}
+          {#if slashCommand?.argument?.kind === "tool_names"}
             <div class="slash-models" aria-label="Tool choices">
               {#each slashToolChoices as tool}
-                {@const toolItem = { kind: "tool", id: tool, tool } as const}
+                {@const toolItem = { kind: "tool", id: `${slashCommand.name}:${tool}`, command: slashCommand, tool } as const}
                 <button
                   type="button"
                   class={`slash-row model-choice ${slashItemActive(toolItem) ? "active" : ""}`}
-                  onclick={() => void sendAllowToolCommand(tool)}
+                  onclick={() => void sendCommandArgument(slashCommand, tool)}
                 >
                   <Wrench size={15} />
                   <span>
                     <strong>{tool}</strong>
-                    <small>allow-tools</small>
+                    <small>{slashCommand.payload_name}</small>
                   </span>
                 </button>
               {/each}
@@ -2738,6 +2687,25 @@
 
   .slash-row :global(svg) {
     color: var(--accent);
+  }
+
+  .slash-row :global(svg.model-command-icon) {
+    color: var(--warning);
+  }
+
+  .slash-row :global(svg.allow-tools-icon) {
+    color: var(--text-3);
+  }
+
+  .status-dot {
+    width: 11px;
+    height: 11px;
+    justify-self: center;
+    border-radius: 999px;
+    background: var(--success);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent),
+      0 0 13px color-mix(in srgb, var(--success) 82%, transparent);
   }
 
   .slash-command-summary {

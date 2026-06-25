@@ -159,6 +159,32 @@ Plain text is represented by an `ask` function that accepts a `text` field. For
 typed messages, send the handler name as the message `type` and the input model
 as `payload`.
 
+### `GET /api/operator-interface/{session_id}`
+
+Returns operator-only slash command metadata for one session. This is separate
+from `agent_interface`: models and parent agents should not treat these commands
+as tools.
+
+```ts
+type OperatorCommand = {
+  name: string
+  payload_name: string
+  label: string
+  description: string
+  aliases: string[]
+  argument?: OperatorCommandArgument | null
+  source: "harness" | "agent"
+}
+
+type OperatorCommandArgument = {
+  kind: "enum" | "text" | "tool_names"
+  required: boolean
+  choices: string[]
+  placeholder?: string | null
+  allow_multiple: boolean
+}
+```
+
 ### `POST /api/approve`
 
 Resolves a pending human approval for a gated tool call.
@@ -227,7 +253,8 @@ The shared UI uses this endpoint for queued sends, then keeps one
 starting many concurrent Temporal Updates and long-lived merged streams when a
 user sends several queued messages quickly.
 
-Slash commands are structured messages. For example, the UI command
+Slash commands are discovered from `GET /api/operator-interface/{session_id}`
+and sent as structured messages. For example, the UI command
 `/model gemini-3.1-flash-lite` sends:
 
 ```json
@@ -248,8 +275,8 @@ The harness accepts these runtime commands for every agent:
 | `/allow-tools search_flights` | `{"name":"allow-tools","arg":"search_flights"}` |
 | `/status` | `{"name":"status"}` |
 
-These harness runtime commands are operator controls and are not advertised as
-agent-to-agent tools in `agent_interface`.
+These harness runtime commands are operator controls. They are advertised in
+`operator_interface`, not as agent-to-agent tools in `agent_interface`.
 
 Monty conversational agents additionally accept:
 

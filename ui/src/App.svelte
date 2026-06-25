@@ -237,6 +237,7 @@
             sessionId={run.runInfo.sessionId}
             agents={run.agents}
             agentInterface={run.agentInterfaces[run.runInfo.sessionId] ?? []}
+            operatorInterface={run.operatorInterfaces[run.runInfo.sessionId] ?? []}
             currentAgentWorkflowType={run.session?.agent_workflow_type ?? null}
             connecting={run.connecting}
             sending={run.sending}

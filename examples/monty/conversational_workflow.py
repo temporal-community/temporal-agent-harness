@@ -53,6 +53,8 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
+        OperatorCommand,
+        OperatorCommandArgument,
         SlashCommand,
         TextMessage,
         TextReply,
@@ -67,6 +69,18 @@ TASK_QUEUE = "monty-dynamic-agent"
 SUPPORTED_MODELS = ("gemini-3.5-flash", "gemini-3.1-flash-lite")
 DEFAULT_MODEL = SUPPORTED_MODELS[0]
 SET_MODEL_COMMAND = "set-model"
+MODEL_OPERATOR_COMMAND = OperatorCommand(
+    name="model",
+    payload_name=SET_MODEL_COMMAND,
+    label="/model",
+    description="Set the model for this Monty session.",
+    argument=OperatorCommandArgument(
+        kind="enum",
+        choices=SUPPORTED_MODELS,
+        placeholder="model",
+    ),
+    source="agent",
+)
 
 
 # The script-writing contract the model must follow. The host functions are ASYNC — the
@@ -173,6 +187,7 @@ class MontyChatAgentWorkflow:
             # flights & hotels), since every call is dispatched through run_tool and gated.
             # always_require_approvals does not auto-approve even inherently_safe tools.
             approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            operator_commands=[MODEL_OPERATOR_COMMAND],
         )
         self._model: str = DEFAULT_MODEL
         # Server-side conversation chaining id (Interactions API); updated each turn. Safe to

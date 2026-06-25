@@ -2,7 +2,8 @@ import type {
   AgentInboundMessage,
   AgentInterfaceFunction,
   AgentMessageObject,
-  AgentSseFrame
+  AgentSseFrame,
+  OperatorCommand
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
 import type { AgentDescriptor, Session } from "$lib/api/types";
@@ -34,6 +35,7 @@ export interface ObservedSubagent {
   agentKey: string;
   label: string;
   agentInterface?: AgentInterfaceFunction[];
+  operatorInterface?: OperatorCommand[];
   targetTurn: number | null;
   stopped: boolean;
 }
@@ -189,6 +191,7 @@ export class AgentRunController {
   frames = $state<AgentSseFrame[]>([]);
   observedSubagents = $state<ObservedSubagent[]>([]);
   agentInterfaces = $state<Record<string, AgentInterfaceFunction[]>>({});
+  operatorInterfaces = $state<Record<string, OperatorCommand[]>>({});
   viewIndex = $state(0);
   playing = $state(false);
   following = $state(false);
@@ -207,6 +210,7 @@ export class AgentRunController {
   #sendVersion = 0;
   #streamAbort: AbortController | null = null;
   #interfaceRequests = new Set<string>();
+  #operatorInterfaceRequests = new Set<string>();
   #frameKeys = new Set<string>();
   #frameCacheTimer: number | null = null;
   #submitQueue: Promise<void> = Promise.resolve();
@@ -390,6 +394,8 @@ export class AgentRunController {
           frames: visibleSubagentFrames.get(agent.workflowId) ?? [],
           agentInterface:
             this.agentInterfaces[agent.workflowId] ?? agent.agentInterface ?? [],
+          operatorInterface:
+            this.operatorInterfaces[agent.workflowId] ?? agent.operatorInterface ?? [],
           stopped: agent.stopped
         }))
     ];
@@ -446,6 +452,8 @@ export class AgentRunController {
       label: this.#subagentLabel(agentKey, data.subagent_id),
       agentInterface:
         this.agentInterfaces[data.workflow_id] ?? existing?.agentInterface,
+      operatorInterface:
+        this.operatorInterfaces[data.workflow_id] ?? existing?.operatorInterface,
       targetTurn:
         data.targetTurn == null
           ? existing?.targetTurn ?? null
@@ -478,6 +486,32 @@ export class AgentRunController {
       // Agent-interface discovery is auxiliary UI metadata; streaming remains authoritative.
     } finally {
       this.#interfaceRequests.delete(workflowId);
+    }
+  }
+
+  async #fetchOperatorInterface(workflowId: string): Promise<void> {
+    if (
+      this.operatorInterfaces[workflowId] ||
+      this.#operatorInterfaceRequests.has(workflowId)
+    ) {
+      return;
+    }
+    this.#operatorInterfaceRequests.add(workflowId);
+    try {
+      const operatorInterface = await this.#api.operatorInterface(workflowId);
+      this.operatorInterfaces = {
+        ...this.operatorInterfaces,
+        [workflowId]: operatorInterface
+      };
+      if (this.observedSubagents.some((agent) => agent.workflowId === workflowId)) {
+        this.observedSubagents = this.observedSubagents.map((agent) =>
+          agent.workflowId === workflowId ? { ...agent, operatorInterface } : agent
+        );
+      }
+    } catch {
+      // Operator-interface discovery is auxiliary UI metadata; streaming remains authoritative.
+    } finally {
+      this.#operatorInterfaceRequests.delete(workflowId);
     }
   }
 
@@ -516,6 +550,7 @@ export class AgentRunController {
       }
       writeStoredActiveSessionId(this.session.workflow_id);
       void this.#fetchAgentInterface(this.session.workflow_id);
+      void this.#fetchOperatorInterface(this.session.workflow_id);
       this.#hydrateCachedFrames(this.session.workflow_id);
 
       if (!this.#isCurrentConnection(connectionVersion)) return;
@@ -563,6 +598,7 @@ export class AgentRunController {
       this.session = session;
       writeStoredActiveSessionId(session.workflow_id);
       void this.#fetchAgentInterface(session.workflow_id);
+      void this.#fetchOperatorInterface(session.workflow_id);
       await this.attach(0);
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
@@ -595,6 +631,7 @@ export class AgentRunController {
     this.session = session;
     writeStoredActiveSessionId(session.workflow_id);
     void this.#fetchAgentInterface(session.workflow_id);
+    void this.#fetchOperatorInterface(session.workflow_id);
     this.#hydrateCachedFrames(session.workflow_id);
 
     try {
@@ -824,6 +861,7 @@ export class AgentRunController {
     if (frame.event === "subagent_started") {
       this.#upsertSubagent(frame.data, parentWorkflowId);
       void this.#fetchAgentInterface(frame.data.workflow_id);
+      void this.#fetchOperatorInterface(frame.data.workflow_id);
       return;
     }
 
@@ -833,6 +871,7 @@ export class AgentRunController {
         parentWorkflowId
       );
       void this.#fetchAgentInterface(frame.data.workflow_id);
+      void this.#fetchOperatorInterface(frame.data.workflow_id);
       return;
     }
 
@@ -842,6 +881,7 @@ export class AgentRunController {
         parentWorkflowId
       );
       void this.#fetchAgentInterface(frame.data.workflow_id);
+      void this.#fetchOperatorInterface(frame.data.workflow_id);
       return;
     }
 

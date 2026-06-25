@@ -34,6 +34,7 @@ from temporal_agent_harness.harness import AgentWorkflowRunner, agent
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
+    OPERATOR_INTERFACE_QUERY,
     SEND_AGENT_MESSAGE_UPDATE,
     AcceptedFunction,
     AgentConfig,
@@ -41,6 +42,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEventType,
     AgentMessage,
     AgentStatus,
+    OperatorCommand,
+    OperatorCommandArgument,
     SubagentReplyReceived,
     TextMessage,
     TextReply,
@@ -79,6 +82,20 @@ class Picked(BaseModel):
     """The confirmed model selection."""
 
     model: str
+
+
+PROBE_MODEL_OPERATOR_COMMAND = OperatorCommand(
+    name="model",
+    payload_name="set-model",
+    label="/model",
+    description="Set the probe model.",
+    argument=OperatorCommandArgument(
+        kind="enum",
+        choices=("alpha", "beta"),
+        placeholder="model",
+    ),
+    source="agent",
+)
 
 
 @workflow.defn
@@ -139,6 +156,7 @@ class SlashExtensionProbeAgent:
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            operator_commands=[PROBE_MODEL_OPERATOR_COMMAND],
         )
 
     @workflow.run
@@ -284,6 +302,42 @@ async def test_agent_interface_hides_operator_slash_handler(client_and_queue):
     )
 
     assert {f.name for f in functions} == set()
+
+
+async def test_operator_interface_lists_harness_commands_for_every_agent(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    commands = await handle.query(
+        OPERATOR_INTERFACE_QUERY, result_type=list[OperatorCommand]
+    )
+    by_name = {command.name: command for command in commands}
+
+    assert set(by_name) == {"approvals", "allow-tools", "status"}
+    assert by_name["approvals"].source == "harness"
+    assert by_name["approvals"].payload_name == "set-approvals"
+    assert by_name["approvals"].argument is not None
+    assert by_name["approvals"].argument.kind == "enum"
+    assert by_name["approvals"].argument.choices == ("strict", "safe", "skip")
+    assert by_name["allow-tools"].argument is not None
+    assert by_name["allow-tools"].argument.kind == "tool_names"
+    assert "allow-tool" in by_name["allow-tools"].aliases
+
+
+async def test_operator_interface_includes_agent_extension_commands(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
+
+    commands = await handle.query(
+        OPERATOR_INTERFACE_QUERY, result_type=list[OperatorCommand]
+    )
+    by_name = {command.name: command for command in commands}
+
+    assert set(by_name) == {"approvals", "allow-tools", "status", "model"}
+    assert by_name["model"].source == "agent"
+    assert by_name["model"].payload_name == "set-model"
+    assert by_name["model"].argument is not None
+    assert by_name["model"].argument.choices == ("alpha", "beta")
 
 
 async def _collect_until_turn_end(client: Client, workflow_id: str) -> list[AgentEvent]:
@@ -615,10 +669,19 @@ def test_protocol_types_use_concrete_annotations():
         AgentMessage,
         AgentMessageReply,
         AgentStatus,
+        OperatorCommand,
+        OperatorCommandArgument,
         SlashCommand,
     )
 
-    for cls in (AgentMessage, AgentStatus, AgentMessageReply, SlashCommand):
+    for cls in (
+        AgentMessage,
+        AgentStatus,
+        AgentMessageReply,
+        SlashCommand,
+        OperatorCommand,
+        OperatorCommandArgument,
+    ):
         for field_name, annotation in cls.__annotations__.items():
             assert not isinstance(annotation, str), (
                 f"{cls.__name__}.{field_name} is a string annotation — "

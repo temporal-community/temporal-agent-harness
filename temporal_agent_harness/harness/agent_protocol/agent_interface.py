@@ -8,7 +8,7 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -20,6 +20,7 @@ SEND_AGENT_MESSAGE_UPDATE = "send_agent_message"
 TOOL_APPROVAL_UPDATE = "tool_approval"
 AGENT_STATUS_QUERY = "agent_status"
 AGENT_INTERFACE_QUERY = "agent_interface"
+OPERATOR_INTERFACE_QUERY = "operator_interface"
 
 # Width (hex chars) of ONE segment of an agent's short id. A top-level agent's id is a single
 # segment; a subagent's id is its parent's id plus one fresh segment, joined by ``-`` (see
@@ -266,6 +267,44 @@ class SlashCommand(BaseModel):
 
     name: str
     arg: str | None = None
+
+
+class OperatorCommandArgument(BaseModel):
+    """Argument metadata for an operator-only slash command.
+
+    ``kind`` is intentionally small and UI-oriented:
+
+      * ``enum`` — the argument must be one of ``choices``.
+      * ``text`` — arbitrary text.
+      * ``tool_names`` — one or more tool names, usually suggested from pending approvals.
+
+    The workflow still validates the resulting :class:`SlashCommand`; this model is discovery
+    metadata so operator clients can render menus and construct the payload without hardcoding
+    each command.
+    """
+
+    kind: Literal["enum", "text", "tool_names"]
+    required: bool = True
+    choices: tuple[str, ...] = ()
+    placeholder: str | None = None
+    allow_multiple: bool = False
+
+
+class OperatorCommand(BaseModel):
+    """One operator-only slash command accepted through the ``slash`` message channel.
+
+    This is the element type of the ``operator_interface`` query. It deliberately lives
+    outside :class:`AcceptedFunction`: operator commands are for human/client control planes,
+    not for parent agents to discover as model-callable tools.
+    """
+
+    name: str
+    payload_name: str
+    label: str
+    description: str
+    aliases: tuple[str, ...] = ()
+    argument: OperatorCommandArgument | None = None
+    source: Literal["harness", "agent"] = "harness"
 
 
 # ---------------------------------------------------------------------------

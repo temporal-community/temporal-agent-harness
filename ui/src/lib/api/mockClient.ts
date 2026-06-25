@@ -6,6 +6,7 @@ import type {
   ChatRequest,
   CreateSessionRequest,
   CreateSessionResponse,
+  OperatorCommand,
   Session,
   SubmitMessageResponse,
   ToolApprovalRequest,
@@ -34,31 +35,6 @@ const qaInterface: AgentInterfaceFunction[] = [
         text: { type: "string", title: "Text" }
       }
     }
-  },
-  {
-    name: "slash",
-    description: "Change QA agent runtime settings with slash commands.",
-    parameters: {
-      type: "object",
-      properties: {
-        name: {
-          type: "string",
-          title: "Name",
-          enum: ["set-model", "set-approvals", "allow-tools", "status"]
-        },
-        arg: {
-          type: "string",
-          title: "Arg"
-        }
-      },
-      required: ["name"]
-    },
-    output: {
-      type: "object",
-      properties: {
-        text: { type: "string", title: "Text" }
-      }
-    }
   }
 ];
 
@@ -79,6 +55,67 @@ const montyInterface: AgentInterfaceFunction[] = [
         text: { type: "string", title: "Text" }
       }
     }
+  }
+];
+
+const harnessOperatorInterface: OperatorCommand[] = [
+  {
+    name: "approvals",
+    payload_name: "set-approvals",
+    label: "/approvals",
+    description: "Set the tool approval policy for this session.",
+    aliases: ["set-approvals"],
+    argument: {
+      kind: "enum",
+      required: true,
+      choices: ["strict", "safe", "skip"],
+      placeholder: "strict | safe | skip",
+      allow_multiple: false
+    },
+    source: "harness"
+  },
+  {
+    name: "allow-tools",
+    payload_name: "allow-tools",
+    label: "/allow-tools",
+    description: "Auto-approve one or more named tools for this session.",
+    aliases: ["allow-tool"],
+    argument: {
+      kind: "tool_names",
+      required: true,
+      choices: [],
+      placeholder: "tool_name",
+      allow_multiple: true
+    },
+    source: "harness"
+  },
+  {
+    name: "status",
+    payload_name: "status",
+    label: "/status",
+    description: "Show the current harness status for this session.",
+    aliases: [],
+    argument: null,
+    source: "harness"
+  }
+];
+
+const montyOperatorInterface: OperatorCommand[] = [
+  ...harnessOperatorInterface,
+  {
+    name: "model",
+    payload_name: "set-model",
+    label: "/model",
+    description: "Set the model for this Monty session.",
+    aliases: [],
+    argument: {
+      kind: "enum",
+      required: true,
+      choices: ["gemini-3.5-flash", "gemini-3.1-flash-lite"],
+      placeholder: "model",
+      allow_multiple: false
+    },
+    source: "agent"
   }
 ];
 
@@ -120,6 +157,12 @@ export class MockAgentApi implements AgentApi {
 
   async agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]> {
     return sessionId.toLowerCase().includes("monty") ? montyInterface : qaInterface;
+  }
+
+  async operatorInterface(sessionId: WorkflowId): Promise<OperatorCommand[]> {
+    return sessionId.toLowerCase().includes("monty")
+      ? montyOperatorInterface
+      : harnessOperatorInterface;
   }
 
   async *attach(

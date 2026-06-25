@@ -65,6 +65,24 @@ export interface AgentInterfaceFunction {
   output: JsonRecord;
 }
 
+export interface OperatorCommandArgument {
+  kind: "enum" | "text" | "tool_names";
+  required: boolean;
+  choices: string[];
+  placeholder?: string | null;
+  allow_multiple: boolean;
+}
+
+export interface OperatorCommand {
+  name: string;
+  payload_name: string;
+  label: string;
+  description: string;
+  aliases: string[];
+  argument?: OperatorCommandArgument | null;
+  source: "harness" | "agent";
+}
+
 export interface AgentMessageObject {
   type: string;
   [key: string]: unknown;

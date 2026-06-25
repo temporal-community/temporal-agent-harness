@@ -79,7 +79,12 @@ with workflow.unsafe.imports_passed_through():
 
     # Reuse the script-writing contract verbatim from the inline agent — the rules the model
     # must follow to author a Monty script are identical; only the tool it calls differs.
-    from .conversational_workflow import SUPPORTED_MODELS, SET_MODEL_COMMAND, _SCRIPT_CONTRACT
+    from .conversational_workflow import (
+        MODEL_OPERATOR_COMMAND,
+        SUPPORTED_MODELS,
+        SET_MODEL_COMMAND,
+        _SCRIPT_CONTRACT,
+    )
     from .workflow import TASK_QUEUE, MontyDynamicAgentWorkflow
 
 
@@ -132,6 +137,7 @@ class MontyChatSubagentWorkflow:
             # escalates to a human (same stance as the inline MontyChatAgent). The script's
             # host calls run inside the child, which has its own dangerously_skip_all policy.
             approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            operator_commands=[MODEL_OPERATOR_COMMAND],
         )
         self._model: str = DEFAULT_MODEL
         # Server-side conversation chaining id (Interactions API); updated each turn. Safe to
