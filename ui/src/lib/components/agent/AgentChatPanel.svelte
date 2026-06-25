@@ -46,6 +46,7 @@
     role: OperatorTargetRole;
     label: string;
     operatorInterface: OperatorCommand[];
+    closed?: boolean;
   }
   type SlashMenuItem =
     | { kind: "target"; id: string; target: OperatorTargetOption }
@@ -76,6 +77,8 @@
     connecting?: boolean;
     sending?: boolean;
     creatingSession?: boolean;
+    closed?: boolean;
+    closedWorkflowIds?: string[];
     error?: string | null;
     onSend?: (message: AgentInboundMessage) => void | Promise<void>;
     onOperatorCommand?: (
@@ -127,6 +130,8 @@
     connecting = false,
     sending = false,
     creatingSession = false,
+    closed = false,
+    closedWorkflowIds = [],
     error = null,
     onSend,
     onOperatorCommand,
@@ -181,14 +186,20 @@
         workflowId: sessionId,
         role: operatorTargetRole,
         label: operatorTargetLabel || agentLabel,
-        operatorInterface
+        operatorInterface,
+        closed
       }
     ];
   });
   const slashTarget = $derived.by(() => {
-    if (operatorCommandTargets.length === 1) return operatorCommandTargets[0] ?? null;
+    if (operatorCommandTargets.length === 1) {
+      const onlyTarget = operatorCommandTargets[0] ?? null;
+      return onlyTarget?.closed ? null : onlyTarget;
+    }
     return (
-      operatorCommandTargets.find((target) => target.workflowId === slashTargetWorkflowId) ??
+      operatorCommandTargets.find(
+        (target) => target.workflowId === slashTargetWorkflowId && !target.closed
+      ) ??
       null
     );
   });
@@ -197,7 +208,10 @@
   );
   const availableSlashCommands = $derived(slashTarget?.operatorInterface ?? []);
   const acceptsSlashCommands = $derived(
-    operatorCommandTargets.some((target) => target.operatorInterface.length > 0)
+    !closed &&
+      operatorCommandTargets.some(
+        (target) => !target.closed && target.operatorInterface.length > 0
+      )
   );
   const slashTargetLabel = $derived(slashTarget?.label ?? agentLabel);
   const slashTargetsSubagent = $derived(slashTarget?.role === "subagent");
@@ -208,7 +222,11 @@
   );
   const isMonty = $derived(currentAgentWorkflowType === "MontyDynamicAgent");
   const composerPlaceholder = $derived(
-    isMonty ? "Send a Python script to Monty" : `Ask ${agentLabel}`
+    closed
+      ? `${agentLabel} is closed`
+      : isMonty
+        ? "Send a Python script to Monty"
+        : `Ask ${agentLabel}`
   );
   const canCreateSession = $derived(
     Boolean(onNewSession) && agents.length > 0 && !creatingSession
@@ -218,12 +236,12 @@
   );
   const sendingBlocksInput = $derived(sending && !messageQueueingEnabled);
   const connectingBlocksInput = $derived(connecting && activeSession == null);
+  const composerDisabled = $derived(closed || connectingBlocksInput || creatingSession);
   const slashDraft = $derived(parseSlashDraft(draft));
   const slashMenuOpen = $derived(
     acceptsSlashCommands &&
       draft.trimStart().startsWith("/") &&
-      !connectingBlocksInput &&
-      !creatingSession
+      !composerDisabled
   );
   const slashCommand = $derived(commandForSlashDraft(slashDraft.command));
   const slashEnumChoices = $derived(filteredSlashEnumChoices(slashDraft.arg, slashCommand));
@@ -242,6 +260,7 @@
   );
   const canSendDraft = $derived(
     Boolean(draft.trim()) &&
+      !closed &&
       !sendingBlocksInput &&
       !connectingBlocksInput &&
       !creatingSession &&
@@ -268,7 +287,9 @@
     ].join("|")
   );
   const statusLabel = $derived(
-    creatingSession
+    closed
+      ? "Closed"
+      : creatingSession
       ? "Starting"
       : connecting
         ? "Connecting"
@@ -284,7 +305,9 @@
   );
   const statusKind = $derived(currentStatusKind());
   const statusDetail = $derived(
-    error
+    closed
+      ? "stopped"
+      : error
       ? "intervention"
       : pendingApprovalRows.length > 0
         ? "human gate"
@@ -343,7 +366,9 @@
   $effect(() => {
     if (
       slashTargetWorkflowId &&
-      !operatorCommandTargets.some((target) => target.workflowId === slashTargetWorkflowId)
+      !operatorCommandTargets.some(
+        (target) => target.workflowId === slashTargetWorkflowId && !target.closed
+      )
     ) {
       slashTargetWorkflowId = null;
     }
@@ -812,6 +837,7 @@
   }
 
   function currentStatusKind(): StatusKind {
+    if (closed) return "complete";
     if (error) return "error";
     if (pendingApprovalRows.length > 0) return "approval";
     if (creatingSession) return "starting";
@@ -821,18 +847,29 @@
   }
 
   function sessionStatusKind(session: Session): StatusKind {
+    if (sessionClosedById(session.workflow_id)) return "complete";
     if (session.workflow_id === sessionId) return statusKind;
     return session.is_message_queuing_enabled ? "queued" : "idle";
   }
 
   function sessionStatusLabel(session: Session): string {
+    if (sessionClosedById(session.workflow_id)) return "Closed";
     if (session.workflow_id === sessionId) return "Active";
     return session.is_message_queuing_enabled ? "Queue on" : "Idle";
+  }
+
+  function sessionClosedById(nextSessionId: string): boolean {
+    return (
+      (nextSessionId === sessionId && closed) ||
+      closedWorkflowIds.includes(nextSessionId) ||
+      Boolean(sessions.find((session) => session.workflow_id === nextSessionId)?.closed)
+    );
   }
 
   function glyphStatusForSession(
     session: Session
   ): "available" | "busy" | "approval" | "error" | "idle" {
+    if (sessionClosedById(session.workflow_id)) return "idle";
     if (session.workflow_id !== sessionId) return "idle";
     if (statusKind === "error") return "error";
     if (statusKind === "approval") return "approval";
@@ -981,11 +1018,13 @@
     const items: SlashMenuItem[] = [];
     if (needsTargetSelection) {
       items.push(
-        ...targets.map((target) => ({
-          kind: "target" as const,
-          id: `target:${target.workflowId}`,
-          target
-        }))
+        ...targets
+          .filter((target) => !target.closed)
+          .map((target) => ({
+            kind: "target" as const,
+            id: `target:${target.workflowId}`,
+            target
+          }))
       );
       return items;
     }
@@ -1030,7 +1069,7 @@
   }
 
   function operatorCommandForDraft(value: string): ParsedOperatorCommand | null {
-    if (slashNeedsTargetSelection || slashTarget == null) return null;
+    if (slashNeedsTargetSelection || slashTarget == null || slashTarget.closed) return null;
     const parsed = parseSlashDraft(value);
     const command = commandForSlashDraft(parsed.command);
     if (command == null) return null;
@@ -1108,12 +1147,18 @@
   }
 
   function targetRoleLabel(target: OperatorTargetOption): string {
+    if (target.closed) return "Closed";
     return target.role === "subagent" ? "Subagent" : "Parent agent";
   }
 
   function selectSlashTarget(target: OperatorTargetOption): void {
+    if (target.closed) return;
     slashTargetWorkflowId = target.workflowId;
     if (!draft.trimStart().startsWith("/")) draft = "/";
+  }
+
+  function isStopOperatorCommand(command: ParsedOperatorCommand): boolean {
+    return command.name === "stop-agent" || command.name === "stop";
   }
 
   function selectSlashCommand(command: OperatorCommand): void {
@@ -1129,6 +1174,7 @@
     const operatorCommand = operatorCommandForDraft(question);
     if (
       !question ||
+      closed ||
       sendingBlocksInput ||
       connectingBlocksInput ||
       creatingSession ||
@@ -1142,12 +1188,32 @@
       const commandTarget = slashTarget;
       if (onOperatorCommand) {
         try {
-          await onOperatorCommand(
+          const result = await onOperatorCommand(
             operatorCommand.name,
             operatorCommand.arg,
             commandTarget?.workflowId
           );
           slashTargetWorkflowId = null;
+          if (isStopOperatorCommand(operatorCommand)) {
+            const now = Date.now() / 1000;
+            localMessages = [
+              ...localMessages,
+              {
+                id: `local-operator-user-${now}`,
+                role: "operator-user",
+                text: operatorCommand.displayText,
+                timestamp: now,
+                citations: []
+              },
+              {
+                id: `local-operator-assistant-${now}`,
+                role: "operator-assistant",
+                text: result.text,
+                timestamp: Date.now() / 1000,
+                citations: []
+              }
+            ];
+          }
         } catch (error) {
           slashTargetWorkflowId = null;
           const now = Date.now() / 1000;
@@ -1356,7 +1422,7 @@
 </script>
 
 <section
-  class={`agent-chat ${layout} ${showHeader ? "" : "headerless"}`}
+  class={`agent-chat ${layout} ${showHeader ? "" : "headerless"} ${closed ? "closed" : ""}`}
   aria-label={`${agentLabel} customer chat`}
 >
   <div class="chat-shell">
@@ -1370,7 +1436,7 @@
               ? "error"
               : statusKind === "approval"
                 ? "approval"
-                : statusKind === "available"
+                : statusKind === "available" || statusKind === "complete"
                   ? "available"
                   : "busy"}
             size={layout === "embedded" ? "md" : "lg"}
@@ -1497,7 +1563,7 @@
                 label={sessionStatusLabel(item)}
                 kind={sessionStatusKind(item)}
                 compact
-                active={item.workflow_id === sessionId && statusKind !== "available"}
+                active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete"}
               />
             </button>
           {/each}
@@ -1509,6 +1575,11 @@
           <div class="empty-chat">
             <Sparkles size={18} />
             <span>Connecting to {agentLabel}...</span>
+          </div>
+        {:else if closed && messages.length === 0}
+          <div class="empty-chat closed-empty">
+            <CheckCircle2 size={18} />
+            <span>{agentLabel} is closed.</span>
           </div>
         {:else if error && messages.length === 0}
           <div class="empty-chat error">
@@ -1637,7 +1708,7 @@
           {/if}
         {/each}
 
-        {#if sending}
+        {#if sending && !closed}
           <article class="message assistant">
             <div class="assistant-avatar" aria-hidden="true">
               <Sparkles size={15} />
@@ -1650,8 +1721,15 @@
       </div>
     {/if}
 
-    {#if !drawerActive && error && messages.length > 0}
+    {#if !drawerActive && !closed && error && messages.length > 0}
       <div class="error-banner">{error}</div>
+    {/if}
+
+    {#if !drawerActive && closed}
+      <div class="closed-banner">
+        <CheckCircle2 size={14} aria-hidden="true" />
+        <span>This agent is closed. Start a new session to continue.</span>
+      </div>
     {/if}
 
     {#if !drawerActive && pendingApprovalRows.length > 0}
@@ -1731,7 +1809,8 @@
               {@const targetItem = { kind: "target", id: `target:${target.workflowId}`, target } as const}
               <button
                 type="button"
-                class={`slash-row slash-target-row ${slashItemActive(targetItem) ? "active" : ""}`}
+                class={`slash-row slash-target-row ${target.closed ? "closed" : ""} ${slashItemActive(targetItem) ? "active" : ""}`}
+                disabled={target.closed}
                 onclick={() => selectSlashTarget(target)}
               >
                 {#if target.role === "subagent"}
@@ -1760,6 +1839,8 @@
                     <ShieldCheck size={15} />
                   {:else if command.payload_name === "status"}
                     <span class="status-dot" aria-hidden="true"></span>
+                  {:else if command.payload_name === "stop-agent"}
+                    <XCircle class="stop-command-icon" size={15} />
                   {:else if command.payload_name === "allow-tools"}
                     <Wrench class="allow-tools-icon" size={15} fill="currentColor" strokeWidth={0} />
                   {:else}
@@ -1781,6 +1862,8 @@
                   <ShieldCheck size={15} />
                 {:else if slashCommand.payload_name === "status"}
                   <span class="status-dot" aria-hidden="true"></span>
+                {:else if slashCommand.payload_name === "stop-agent"}
+                  <XCircle class="stop-command-icon" size={15} />
                 {:else if slashCommand.payload_name === "allow-tools"}
                   <Wrench class="allow-tools-icon" size={15} fill="currentColor" strokeWidth={0} />
                 {:else}
@@ -1839,13 +1922,13 @@
         </section>
       {/if}
 
-      <form class="composer" onsubmit={handleSubmit}>
+      <form class="composer" class:closed={closed} onsubmit={handleSubmit}>
         <Search size={17} />
         <input
           bind:value={draft}
           placeholder={composerPlaceholder}
           aria-label={`Message ${agentLabel}`}
-          disabled={connectingBlocksInput || creatingSession}
+          disabled={composerDisabled}
           onkeydown={handleComposerKeydown}
         />
         <button
@@ -1938,7 +2021,7 @@
               label={sessionStatusLabel(item)}
               kind={sessionStatusKind(item)}
               compact
-              active={item.workflow_id === sessionId && statusKind !== "available"}
+              active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete"}
             />
             <button
               class="session-delete"
@@ -2376,6 +2459,12 @@
   .empty-chat.error {
     color: var(--error);
     border-color: color-mix(in srgb, var(--error) 35%, var(--border));
+  }
+
+  .empty-chat.closed-empty {
+    color: var(--success);
+    border-color: color-mix(in srgb, var(--success) 32%, var(--border));
+    background: color-mix(in srgb, var(--success) 8%, var(--surface-1));
   }
 
   .message {
@@ -2916,6 +3005,30 @@
     margin: 0 12px 10px;
   }
 
+  .closed-banner {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 clamp(18px, 5vw, 72px) 10px;
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border));
+    border-radius: 7px;
+    color: var(--text-2);
+    background: color-mix(in srgb, var(--success) 8%, var(--surface-1));
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .closed-banner :global(svg) {
+    flex: 0 0 auto;
+    color: var(--success);
+  }
+
+  .agent-chat.embedded .closed-banner {
+    margin: 0 12px 10px;
+  }
+
   .composer-wrap {
     position: relative;
     margin: 0 clamp(18px, 5vw, 72px) 18px;
@@ -3009,6 +3122,18 @@
     outline: 0;
   }
 
+  .slash-row:disabled,
+  .slash-row.closed {
+    cursor: default;
+    opacity: 0.58;
+  }
+
+  .slash-row:disabled:hover,
+  .slash-row.closed:hover {
+    border-color: var(--border);
+    background: var(--surface-2);
+  }
+
   .slash-row :global(svg) {
     color: var(--accent);
   }
@@ -3019,6 +3144,10 @@
 
   .slash-row :global(svg.allow-tools-icon) {
     color: var(--text-3);
+  }
+
+  .slash-row :global(svg.stop-command-icon) {
+    color: var(--error);
   }
 
   .status-dot {
@@ -3087,6 +3216,11 @@
 
   .composer input:disabled {
     opacity: 0.6;
+  }
+
+  .composer.closed {
+    border-color: color-mix(in srgb, var(--success) 24%, var(--border));
+    background: color-mix(in srgb, var(--surface-1) 80%, var(--surface-0));
   }
 
   .composer button {

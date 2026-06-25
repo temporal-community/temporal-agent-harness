@@ -13,6 +13,7 @@ import type {
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
+  WorkflowExecutionState,
   WorkflowId
 } from "./types";
 import type { AgentApi } from "./client";
@@ -99,6 +100,15 @@ const harnessOperatorInterface: OperatorCommand[] = [
     aliases: [],
     argument: null,
     source: "harness"
+  },
+  {
+    name: "stop",
+    payload_name: "stop-agent",
+    label: "/stop",
+    description: "Stop this agent workflow.",
+    aliases: ["stop-agent"],
+    argument: null,
+    source: "harness"
   }
 ];
 
@@ -142,10 +152,21 @@ export class MockAgentApi implements AgentApi {
       label: `Session ${number}`,
       agent_workflow_type: request.agent_workflow_type,
       is_message_queuing_enabled: Boolean(request.is_message_queuing_enabled),
-      initial_user_message: null
+      initial_user_message: null,
+      execution_status: "RUNNING",
+      closed: false
     };
     this.#sessions = [...this.#sessions, session];
     return session;
+  }
+
+  async workflowStatus(workflowId: WorkflowId): Promise<WorkflowExecutionState> {
+    const session = this.#sessions.find((item) => item.workflow_id === workflowId);
+    return {
+      workflow_id: workflowId,
+      execution_status: session?.execution_status ?? "RUNNING",
+      closed: Boolean(session?.closed)
+    };
   }
 
   async acceptedMessageTypes(
@@ -185,6 +206,14 @@ export class MockAgentApi implements AgentApi {
     }
     if (request.name === "status") {
       return { text: "- Agent id: `mock`\n- Turn: `0` (idle)\n- Approvals: `strict`" };
+    }
+    if (request.name === "stop-agent") {
+      this.#sessions = this.#sessions.map((session) =>
+        session.workflow_id === request.session_id
+          ? { ...session, execution_status: "COMPLETED", closed: true }
+          : session
+      );
+      return { text: "Agent stop requested." };
     }
     return { text: `Unknown operator command: \`${request.name}\`.` };
   }

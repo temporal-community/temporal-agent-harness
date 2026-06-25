@@ -13,6 +13,8 @@
     connecting?: boolean;
     sending?: boolean;
     creatingSession?: boolean;
+    closed?: boolean;
+    closedWorkflowIds?: string[];
     error?: string | null;
     pendingApprovalCount?: number;
     onNewSession?: (workflowType: string) => void | Promise<void>;
@@ -26,6 +28,8 @@
     connecting = false,
     sending = false,
     creatingSession = false,
+    closed = false,
+    closedWorkflowIds = [],
     error = null,
     pendingApprovalCount = 0,
     onNewSession,
@@ -55,7 +59,9 @@
   );
   const statusKind = $derived(currentStatusKind());
   const statusLabel = $derived(
-    creatingSession
+    closed
+      ? "Closed"
+      : creatingSession
       ? "Starting"
       : connecting
         ? "Connecting"
@@ -68,7 +74,9 @@
               : "Available"
   );
   const statusDetail = $derived(
-    error
+    closed
+      ? "stopped"
+      : error
       ? "intervention"
       : pendingApprovalCount > 0
         ? "human gate"
@@ -106,6 +114,7 @@
   }
 
   function currentStatusKind(): StatusKind {
+    if (closed) return "complete";
     if (error) return "error";
     if (pendingApprovalCount > 0) return "approval";
     if (creatingSession) return "starting";
@@ -115,13 +124,34 @@
   }
 
   function sessionStatusKind(session: Session): StatusKind {
+    if (sessionClosedById(session.workflow_id)) return "complete";
     if (session.workflow_id === sessionId) return statusKind;
     return session.is_message_queuing_enabled ? "queued" : "idle";
   }
 
   function sessionStatusLabel(session: Session): string {
+    if (sessionClosedById(session.workflow_id)) return "Closed";
     if (session.workflow_id === sessionId) return "Active";
     return session.is_message_queuing_enabled ? "Queue on" : "Idle";
+  }
+
+  function sessionClosedById(nextSessionId: string): boolean {
+    return (
+      (nextSessionId === sessionId && closed) ||
+      closedWorkflowIds.includes(nextSessionId) ||
+      Boolean(sessions.find((session) => session.workflow_id === nextSessionId)?.closed)
+    );
+  }
+
+  function glyphStatusForSession(
+    session: Session
+  ): "available" | "busy" | "approval" | "error" | "idle" {
+    if (sessionClosedById(session.workflow_id)) return "idle";
+    if (session.workflow_id !== sessionId) return "idle";
+    if (statusKind === "error") return "error";
+    if (statusKind === "approval") return "approval";
+    if (statusKind === "available" || statusKind === "complete") return "available";
+    return "busy";
   }
 
   function agentDescription(agent: AgentDescriptor): string {
@@ -288,15 +318,7 @@
             <AgentGlyph
               label={sessionAgentLabel(item)}
               workflowType={item.agent_workflow_type}
-              status={item.workflow_id === sessionId
-                ? statusKind === "error"
-                  ? "error"
-                  : statusKind === "approval"
-                    ? "approval"
-                    : statusKind === "available"
-                      ? "available"
-                      : "busy"
-                : "idle"}
+              status={glyphStatusForSession(item)}
             />
             <span class="session-copy">
               <time>{sessionCreatedAt(item.created_at)}</time>
@@ -307,7 +329,7 @@
               label={sessionStatusLabel(item)}
               kind={sessionStatusKind(item)}
               compact
-              active={item.workflow_id === sessionId && statusKind !== "available"}
+              active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete"}
             />
           </button>
         {/each}

@@ -4,7 +4,8 @@ import type {
   AgentMessageObject,
   AgentSseFrame,
   OperatorCommand,
-  OperatorCommandResponse
+  OperatorCommandResponse,
+  WorkflowExecutionState
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
 import type { AgentDescriptor, Session } from "$lib/api/types";
@@ -46,6 +47,7 @@ export interface OperatorTarget {
   role: "parent" | "subagent";
   label: string;
   operatorInterface: OperatorCommand[];
+  closed: boolean;
 }
 
 type ReplayTimelineRole = "parent" | "subagent";
@@ -201,6 +203,10 @@ function isOperatorCommandFrame(frame: AgentSseFrame): boolean {
   );
 }
 
+function isStopOperatorCommandName(name: string): boolean {
+  return name === "stop-agent" || name === "stop";
+}
+
 export class AgentRunController {
   #api: AgentApi;
   #initialized = false;
@@ -209,6 +215,7 @@ export class AgentRunController {
   observedSubagents = $state<ObservedSubagent[]>([]);
   agentInterfaces = $state<Record<string, AgentInterfaceFunction[]>>({});
   operatorInterfaces = $state<Record<string, OperatorCommand[]>>({});
+  closedWorkflowIds = $state<string[]>([]);
   viewIndex = $state(0);
   playing = $state(false);
   following = $state(false);
@@ -256,6 +263,9 @@ export class AgentRunController {
   graphAgents = $derived(this.#graphAgents());
   graph = $derived(buildAgentTreeGraph(this.graphAgents));
   operatorTargets = $derived(this.#operatorTargets());
+  sessionClosed = $derived(
+    this.session != null && this.#isWorkflowClosed(this.session.workflow_id)
+  );
   replayLog = $derived(buildReplayLog(this.visibleReplayTimeline));
   fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
   chatTranscript = $derived(
@@ -416,7 +426,7 @@ export class AgentRunController {
             this.agentInterfaces[agent.workflowId] ?? agent.agentInterface ?? [],
           operatorInterface:
             this.operatorInterfaces[agent.workflowId] ?? agent.operatorInterface ?? [],
-          stopped: agent.stopped
+          stopped: agent.stopped || this.#isWorkflowClosed(agent.workflowId)
         }))
     ];
   }
@@ -466,6 +476,79 @@ export class AgentRunController {
     );
   }
 
+  #markWorkflowClosed(workflowId: string): void {
+    this.sessions = this.sessions.map((session) =>
+      session.workflow_id === workflowId
+        ? {
+            ...session,
+            execution_status: session.execution_status ?? "COMPLETED",
+            closed: true
+          }
+        : session
+    );
+    if (this.session?.workflow_id === workflowId) {
+      this.session = {
+        ...this.session,
+        execution_status: this.session.execution_status ?? "COMPLETED",
+        closed: true
+      };
+    }
+    if (this.closedWorkflowIds.includes(workflowId)) return;
+    this.closedWorkflowIds = [...this.closedWorkflowIds, workflowId];
+    if (workflowId === this.session?.workflow_id) {
+      this.#stopStream();
+    } else {
+      this.#stopWorkflowAttach(workflowId);
+    }
+  }
+
+  #markObservedSubagentStopped(workflowId: string): void {
+    this.observedSubagents = this.observedSubagents.map((agent) =>
+      agent.workflowId === workflowId ? { ...agent, stopped: true } : agent
+    );
+  }
+
+  #isWorkflowClosed(workflowId: string): boolean {
+    return (
+      this.closedWorkflowIds.includes(workflowId) ||
+      this.session?.workflow_id === workflowId && Boolean(this.session.closed) ||
+      this.sessions.some((session) => session.workflow_id === workflowId && session.closed)
+    );
+  }
+
+  #applyWorkflowExecutionState(state: WorkflowExecutionState): void {
+    this.sessions = this.sessions.map((session) =>
+      session.workflow_id === state.workflow_id
+        ? {
+            ...session,
+            execution_status: state.execution_status,
+            closed: state.closed
+          }
+        : session
+    );
+    if (this.session?.workflow_id === state.workflow_id) {
+      this.session = {
+        ...this.session,
+        execution_status: state.execution_status,
+        closed: state.closed
+      };
+    }
+    if (state.closed) this.#markWorkflowClosed(state.workflow_id);
+  }
+
+  #applySessionExecutionStates(sessions: Session[]): void {
+    for (const session of sessions) {
+      if (session.closed) {
+        this.#markWorkflowClosed(session.workflow_id);
+      }
+    }
+  }
+
+  async #refreshWorkflowExecutionState(workflowId: string): Promise<void> {
+    const state = await this.#api.workflowStatus(workflowId);
+    this.#applyWorkflowExecutionState(state);
+  }
+
   #resumeOffsetForWorkflow(workflowId: string): number {
     if (workflowId === this.session?.workflow_id) return this.lastResumeOffset;
     return this.#workflowResumeOffsets.get(workflowId) ?? 0;
@@ -479,10 +562,10 @@ export class AgentRunController {
         workflowId: session.workflow_id,
         role: "parent",
         label: this.runInfo.agentLabel,
-        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? []
+        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? [],
+        closed: this.#isWorkflowClosed(session.workflow_id)
       },
       ...this.observedSubagents
-        .filter((agent) => !agent.stopped)
         .map((agent) => ({
           workflowId: agent.workflowId,
           role: agent.role,
@@ -490,7 +573,8 @@ export class AgentRunController {
           operatorInterface:
             this.operatorInterfaces[agent.workflowId] ??
             agent.operatorInterface ??
-            []
+            [],
+          closed: agent.stopped || this.#isWorkflowClosed(agent.workflowId)
         }))
     ];
   }
@@ -503,7 +587,8 @@ export class AgentRunController {
         workflowId: session.workflow_id,
         role: "parent",
         label: this.runInfo.agentLabel,
-        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? []
+        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? [],
+        closed: this.#isWorkflowClosed(session.workflow_id)
       };
     }
 
@@ -515,7 +600,8 @@ export class AgentRunController {
         workflowId: session.workflow_id,
         role: "parent",
         label: this.runInfo.agentLabel,
-        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? []
+        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? [],
+        closed: this.#isWorkflowClosed(session.workflow_id)
       };
     }
 
@@ -526,7 +612,8 @@ export class AgentRunController {
       operatorInterface:
         this.operatorInterfaces[subagent.workflowId] ??
         subagent.operatorInterface ??
-        []
+        [],
+      closed: subagent.stopped || this.#isWorkflowClosed(subagent.workflowId)
     };
   }
 
@@ -633,6 +720,7 @@ export class AgentRunController {
 
       const sessions = await this.#api.listSessions();
       this.sessions = sessions;
+      this.#applySessionExecutionStates(sessions);
       const storedSessionId = readStoredActiveSessionId();
       const storedSession = storedSessionId
         ? sessions.find((item) => item.workflow_id === storedSessionId)
@@ -656,8 +744,10 @@ export class AgentRunController {
       void this.#fetchAgentInterface(this.session.workflow_id);
       void this.#fetchOperatorInterface(this.session.workflow_id);
       this.#hydrateCachedFrames(this.session.workflow_id);
+      await this.#refreshWorkflowExecutionState(this.session.workflow_id);
 
       if (!this.#isCurrentConnection(connectionVersion)) return;
+      if (this.#isWorkflowClosed(this.session.workflow_id)) return;
       await this.attach(this.lastResumeOffset);
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
@@ -703,6 +793,9 @@ export class AgentRunController {
       writeStoredActiveSessionId(session.workflow_id);
       void this.#fetchAgentInterface(session.workflow_id);
       void this.#fetchOperatorInterface(session.workflow_id);
+      await this.#refreshWorkflowExecutionState(session.workflow_id);
+      if (!this.#isCurrentConnection(connectionVersion)) return;
+      if (this.#isWorkflowClosed(session.workflow_id)) return;
       await this.attach(0);
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
@@ -739,6 +832,9 @@ export class AgentRunController {
     this.#hydrateCachedFrames(session.workflow_id);
 
     try {
+      await this.#refreshWorkflowExecutionState(session.workflow_id);
+      if (!this.#isCurrentConnection(connectionVersion)) return;
+      if (this.#isWorkflowClosed(session.workflow_id)) return;
       await this.attach(this.lastResumeOffset);
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
@@ -819,6 +915,20 @@ export class AgentRunController {
     await this.initialize();
     const session = this.session;
     if (!session) return;
+    try {
+      await this.#refreshWorkflowExecutionState(session.workflow_id);
+    } catch (error) {
+      this.connectionError =
+        error instanceof Error
+          ? error.message
+          : "Failed to check workflow status.";
+      return;
+    }
+    if (this.#isWorkflowClosed(session.workflow_id)) {
+      this.connectionError = null;
+      this.sending = false;
+      return;
+    }
 
     this.pause();
     const expectedTurn = this.expectedTurn;
@@ -877,11 +987,26 @@ export class AgentRunController {
 
     this.connectionError = null;
     try {
+      if (!isStopOperatorCommandName(name)) {
+        await this.#refreshWorkflowExecutionState(targetWorkflowId);
+        if (this.#isWorkflowClosed(targetWorkflowId)) {
+          return { text: "Agent is closed." };
+        }
+      }
       const result = await this.#api.executeOperatorCommand({
         session_id: targetWorkflowId,
         name,
         arg: arg ?? null
       });
+      if (isStopOperatorCommandName(name)) {
+        this.#markWorkflowClosed(targetWorkflowId);
+        if (targetWorkflowId === session.workflow_id) {
+          this.sending = false;
+        } else {
+          this.#markObservedSubagentStopped(targetWorkflowId);
+        }
+        return result;
+      }
       if (targetWorkflowId === session.workflow_id) {
         const shouldClearSendingOnIdle = this.sending;
         void this.attach(this.lastResumeOffset, {
@@ -1050,6 +1175,16 @@ export class AgentRunController {
     if (isRootFrame && frame.event === "turn_started" && frame.data.turn_number === 1) {
       this.#recordInitialUserMessage(renderUserMessage(frame.data.user_message));
     }
+    if (
+      publisherWorkflowId &&
+      frame.event === "operator_command_completed" &&
+      "type" in frame.data &&
+      isStopOperatorCommandName(frame.data.command_name)
+    ) {
+      this.#markWorkflowClosed(publisherWorkflowId);
+      if (!isRootFrame) this.#markObservedSubagentStopped(publisherWorkflowId);
+      if (isRootFrame) this.sending = false;
+    }
     this.#handleSubagentEvent(frame, publisherWorkflowId);
     if (options.persist !== false) this.#scheduleFrameCacheWrite();
   }
@@ -1095,6 +1230,7 @@ export class AgentRunController {
     }
 
     if (frame.event === "subagent_stopped") {
+      this.#markWorkflowClosed(frame.data.workflow_id);
       this.#upsertSubagent({ ...frame.data, stopped: true }, parentWorkflowId);
       return;
     }

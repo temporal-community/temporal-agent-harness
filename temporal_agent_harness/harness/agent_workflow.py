@@ -140,6 +140,8 @@ _SLASH_SET_APPROVALS_ALIAS = "approvals"
 _SLASH_ALLOW_TOOLS = "allow-tools"
 _SLASH_ALLOW_TOOL_ALIAS = "allow-tool"
 _SLASH_STATUS = "status"
+_SLASH_STOP = "stop-agent"
+_SLASH_STOP_ALIAS = "stop"
 _APPROVAL_MODE_CHOICES = ("strict", "safe", "skip")
 
 _HARNESS_OPERATOR_COMMANDS = (
@@ -174,6 +176,14 @@ _HARNESS_OPERATOR_COMMANDS = (
         payload_name=_SLASH_STATUS,
         label="/status",
         description="Show the current harness status for this session.",
+        source="harness",
+    ),
+    OperatorCommand(
+        name=_SLASH_STOP_ALIAS,
+        payload_name=_SLASH_STOP,
+        label="/stop",
+        description="Stop this agent workflow.",
+        aliases=(_SLASH_STOP,),
         source="harness",
     ),
 )
@@ -1744,6 +1754,8 @@ class AgentWorkflowRunner:
                 return self._slash_allow_tools(command.arg)
             case _ if command.name == _SLASH_STATUS:
                 return self._slash_status()
+            case _ if command.name in {_SLASH_STOP, _SLASH_STOP_ALIAS}:
+                return self._slash_stop()
             case _:
                 return None
 
@@ -1774,6 +1786,10 @@ class AgentWorkflowRunner:
 
     def _slash_status(self) -> TextReply:
         return TextReply(text=_render_harness_status(self.current_status))
+
+    def _slash_stop(self) -> TextReply:
+        self._handle_close()
+        return TextReply(text="Agent stop requested.")
 
     # -- Subagents ----------------------------------------------------------
     #

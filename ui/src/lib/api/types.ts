@@ -33,9 +33,17 @@ export interface Session {
   agent_workflow_type: AgentWorkflowType;
   is_message_queuing_enabled: boolean;
   initial_user_message?: string | null;
+  execution_status?: string | null;
+  closed?: boolean;
 }
 
 export type SessionsResponse = Session[];
+
+export interface WorkflowExecutionState {
+  workflow_id: WorkflowId;
+  execution_status: string;
+  closed: boolean;
+}
 
 export interface CreateSessionRequest {
   agent_workflow_type: AgentWorkflowType;
@@ -112,6 +120,8 @@ export type SlashCommandPayload =
   | { name: "allow-tools"; arg?: string }
   | { name: "allow-tool"; arg?: string }
   | { name: "status" }
+  | { name: "stop-agent" }
+  | { name: "stop" }
   | { name: string; arg?: string };
 
 export interface SlashCommandMessage extends AgentMessageObject {

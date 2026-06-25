@@ -333,7 +333,7 @@ async def test_operator_interface_lists_harness_commands_for_every_agent(client_
     )
     by_name = {command.name: command for command in commands}
 
-    assert set(by_name) == {"approvals", "allow-tools", "status"}
+    assert set(by_name) == {"approvals", "allow-tools", "status", "stop"}
     assert by_name["approvals"].source == "harness"
     assert by_name["approvals"].payload_name == "set-approvals"
     assert by_name["approvals"].argument is not None
@@ -342,6 +342,10 @@ async def test_operator_interface_lists_harness_commands_for_every_agent(client_
     assert by_name["allow-tools"].argument is not None
     assert by_name["allow-tools"].argument.kind == "tool_names"
     assert "allow-tool" in by_name["allow-tools"].aliases
+    assert by_name["stop"].source == "harness"
+    assert by_name["stop"].payload_name == "stop-agent"
+    assert by_name["stop"].label == "/stop"
+    assert "stop-agent" in by_name["stop"].aliases
 
 
 async def test_operator_interface_includes_agent_extension_commands(client_and_queue):
@@ -353,7 +357,7 @@ async def test_operator_interface_includes_agent_extension_commands(client_and_q
     )
     by_name = {command.name: command for command in commands}
 
-    assert set(by_name) == {"approvals", "allow-tools", "status", "model"}
+    assert set(by_name) == {"approvals", "allow-tools", "status", "stop", "model"}
     assert by_name["model"].source == "agent"
     assert by_name["model"].payload_name == "set-model"
     assert by_name["model"].argument is not None
@@ -371,6 +375,29 @@ async def test_operator_command_status_does_not_create_turn(client_and_queue):
     status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
     assert status.current_turn == 0
     assert status.pending_turns == []
+
+
+async def test_operator_command_stop_completes_workflow(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+    events_task = asyncio.create_task(
+        _collect_until_operator_terminal(client, handle.id)
+    )
+    await asyncio.sleep(0)
+
+    result = await _operator(handle, "stop-agent")
+    events = await events_task
+
+    assert result.text == "Agent stop requested."
+    assert [event.event.type for event in events] == [
+        AgentEventType.OPERATOR_COMMAND_STARTED,
+        AgentEventType.OPERATOR_COMMAND_COMPLETED,
+    ]
+    assert events[0].event.command_name == "stop-agent"
+    assert events[0].event.command_label == "/stop"
+    assert events[-1].event.text == "Agent stop requested."
+    async with asyncio.timeout(5):
+        await handle.result()
 
 
 async def test_operator_command_publishes_durable_audit_events(client_and_queue):

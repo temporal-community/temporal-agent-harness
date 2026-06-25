@@ -155,6 +155,8 @@
         connecting={run.connecting}
         sending={run.sending}
         creatingSession={run.creatingSession}
+        closed={run.sessionClosed}
+        closedWorkflowIds={run.closedWorkflowIds}
         error={run.connectionError}
         {pendingApprovalCount}
         onNewSession={(workflowType) => run.startNewSession(workflowType)}
@@ -242,6 +244,8 @@
             connecting={run.connecting}
             sending={run.sending}
             creatingSession={run.creatingSession}
+            closed={run.sessionClosed}
+            closedWorkflowIds={run.closedWorkflowIds}
             error={run.connectionError}
             onSend={(message) => run.sendMessage(message)}
             onOperatorCommand={(name, arg, workflowId) =>

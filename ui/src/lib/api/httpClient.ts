@@ -13,6 +13,7 @@ import type {
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
+  WorkflowExecutionState,
   WorkflowId
 } from "./types";
 import type { AgentApi } from "./client";
@@ -79,6 +80,12 @@ export class HttpAgentApi implements AgentApi {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request)
     });
+  }
+
+  async workflowStatus(workflowId: WorkflowId): Promise<WorkflowExecutionState> {
+    return json<WorkflowExecutionState>(
+      apiPath(`workflow-status/${encodeURIComponent(workflowId)}`)
+    );
   }
 
   async acceptedMessageTypes(

@@ -971,7 +971,9 @@ function scopedGraph(
       item.id === "agent-runtime"
         ? {
             ...item.data,
+            tone: agent.stopped ? "done" : item.data.tone,
             runtimeRole: agent.role,
+            state: agent.stopped ? "stopped" : item.data.state,
             title: `${graphSourceLabel(agent)} runtime`,
             subtitle: [graphSourceSubtitle(agent), item.data.subtitle]
               .filter(Boolean)
