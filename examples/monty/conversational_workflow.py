@@ -265,20 +265,26 @@ class MontyChatAgentWorkflow:
             result = await self._runner.run_tool(
                 call.id, self._monty_tool, **call.arguments
             )
-            return {
+            response: FunctionResultStepParam = {
                 "type": "function_result",
                 "call_id": call.id,
                 "name": call.name,
                 "result": str(result),
             }
+            if call.signature:
+                response["signature"] = call.signature
+            return response
         except Exception as e:
-            return {
+            response = {
                 "type": "function_result",
                 "call_id": call.id,
                 "name": call.name,
                 "result": str(e),
                 "is_error": True,
             }
+            if call.signature:
+                response["signature"] = call.signature
+            return response
 
     async def _execute_agent_interaction(
         self,
@@ -305,7 +311,6 @@ class MontyChatAgentWorkflow:
             system_instruction=system_instruction,
             tools=tools,
             stream=True,
-            generation_config={"thinking_summaries": "auto"},
         )
         if previous_interaction_id:
             stream = await interactions_create_fn(

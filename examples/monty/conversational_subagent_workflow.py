@@ -102,7 +102,6 @@ this ONCE at the start of the conversation, then reuse the same handle for every
 - `{SUBAGENT_KEY}_run_script`: send a script to a running script-runner. Pass the handle from \
 `start_{SUBAGENT_KEY}` as `subagent`, and the script in `message` (a RunScript object with a \
 `script` field). The reply carries the script's printed output and final value.
-- `stop_{SUBAGENT_KEY}`: stop a script-runner when the conversation's work is fully done.
 
 {_SCRIPT_CONTRACT}
 
@@ -176,7 +175,11 @@ class MontyChatSubagentWorkflow:
 
         Updates ``self._previous_interaction_id`` for chaining the next turn (no file_search
         here, so chaining is safe)."""
-        tools = [function_param(fn) for fn in self._tools]
+        tools = [
+            function_param(fn)
+            for fn in self._tools
+            if fn.__name__ != f"stop_{SUBAGENT_KEY}"
+        ]
         next_input: Input = user_text
         while True:
             (
@@ -221,7 +224,7 @@ class MontyChatSubagentWorkflow:
                 else {}
             )
             result = await self._runner.run_tool(call.id, tool_callable, **arguments)
-            return {
+            response: FunctionResultStepParam = {
                 "type": "function_result",
                 "call_id": call.id,
                 "name": call.name,
@@ -229,14 +232,20 @@ class MontyChatSubagentWorkflow:
                 if isinstance(result, BaseModel)
                 else str(result),
             }
+            if call.signature:
+                response["signature"] = call.signature
+            return response
         except Exception as e:
-            return {
+            response = {
                 "type": "function_result",
                 "call_id": call.id,
                 "name": call.name,
                 "result": str(e),
                 "is_error": True,
             }
+            if call.signature:
+                response["signature"] = call.signature
+            return response
 
     async def _execute_agent_interaction(
         self,
@@ -263,7 +272,6 @@ class MontyChatSubagentWorkflow:
             system_instruction=system_instruction,
             tools=tools,
             stream=True,
-            generation_config={"thinking_summaries": "auto"},
         )
         if previous_interaction_id:
             stream = await interactions_create_fn(
