@@ -13,11 +13,18 @@ from unittest.mock import patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from temporalio.api.enums.v1 import EventType
+from temporalio.api.history.v1 import HistoryEvent
 from temporalio.client import WorkflowExecutionStatus
 from temporalio.common import WorkflowIDConflictPolicy
+from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
+from temporal_agent_harness.harness.agent_protocol import (
+    AgentMessage,
+    SEND_AGENT_MESSAGE_UPDATE,
+)
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.web import (
     SESSION_MANAGER_TASK_QUEUE,
@@ -238,6 +245,32 @@ async def test_session_execution_state_reports_completed_workflow_closed() -> No
     }
 
 
+async def test_session_execution_state_includes_initial_user_message() -> None:
+    history_event = await _history_event_for_agent_message(
+        AgentMessage(
+            type="ask",
+            payload={"text": "Seven Nation Army"},
+            expected_turn=1,
+        )
+    )
+    handle = _FakeWorkflowHandle(
+        status=WorkflowExecutionStatus.RUNNING,
+        history_events=[history_event],
+    )
+    temporal = _FakeTemporalClient(handle)
+    session = Session(
+        workflow_id="agent-session-test",
+        created_at=123.0,
+        label="Session 1",
+        agent_workflow_type="TestAgent",
+        is_message_queuing_enabled=True,
+    )
+
+    result = await _session_with_execution_state(temporal, session)
+
+    assert result["initial_user_message"] == "Seven Nation Army"
+
+
 async def test_session_manager_startup_starts_when_missing() -> None:
     handle = _FakeWorkflowHandle(
         error=RPCError("not found", RPCStatusCode.NOT_FOUND, b"")
@@ -404,14 +437,20 @@ class _FakeWorkflowHandle:
         *,
         status: WorkflowExecutionStatus | None = None,
         error: Exception | None = None,
+        history_events: list[HistoryEvent] | None = None,
     ) -> None:
         self.status = status
         self.error = error
+        self.history_events = history_events or []
 
     async def describe(self):
         if self.error is not None:
             raise self.error
         return SimpleNamespace(status=self.status)
+
+    async def fetch_history_events(self, **_kwargs):
+        for event in self.history_events:
+            yield event
 
 
 class _FakeTemporalClient:
@@ -427,6 +466,7 @@ class _FakeTemporalClient:
         self.start_error = start_error
         self.get_handle_ids: list[str] = []
         self.start_calls: list[dict[str, object]] = []
+        self.data_converter = pydantic_data_converter
 
     def get_workflow_handle(self, workflow_id: str) -> _FakeWorkflowHandle:
         self.get_handle_ids.append(workflow_id)
@@ -437,6 +477,19 @@ class _FakeTemporalClient:
         if self.start_error is not None:
             raise self.start_error
         return self.start_result
+
+
+async def _history_event_for_agent_message(message: AgentMessage) -> HistoryEvent:
+    event = HistoryEvent(
+        event_id=1,
+        event_type=EventType.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED,
+    )
+    request = event.workflow_execution_update_accepted_event_attributes.accepted_request
+    request.input.name = SEND_AGENT_MESSAGE_UPDATE
+    request.input.args.payloads.extend(
+        await pydantic_data_converter.encode([message])
+    )
+    return event
 
 
 def _assert_ui_assets_present(names: set[str]) -> None:
