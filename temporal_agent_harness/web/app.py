@@ -7,6 +7,7 @@ import json
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, TypeAdapter
+from temporalio.api.enums.v1 import EventType
+from temporalio.api.history.v1 import HistoryEvent
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowHandle
 from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -34,9 +37,11 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentConfig,
     AgentEvent,
     AgentEventType,
+    AgentMessage,
     AgentStatus,
     OperatorCommand,
     OperatorCommandResult,
+    SEND_AGENT_MESSAGE_UPDATE,
 )
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
@@ -51,6 +56,9 @@ from temporal_agent_harness.web.session_manager import (
 )
 
 RegistrySource = AgentRegistry | Callable[[], AgentRegistry]
+_SESSION_PREVIEW_HISTORY_PAGE_SIZE = 16
+_SESSION_PREVIEW_HISTORY_MAX_EVENTS = 96
+_SESSION_PREVIEW_HISTORY_RPC_TIMEOUT = timedelta(seconds=1)
 
 
 class CreateSessionRequestBody(BaseModel):
@@ -338,8 +346,14 @@ async def _session_with_execution_state(
     temporal: Client,
     session: Session,
 ) -> dict[str, object]:
-    state = await _workflow_execution_state(temporal, session.workflow_id)
-    return {**asdict(session), **state}
+    state, initial_user_message = await asyncio.gather(
+        _workflow_execution_state(temporal, session.workflow_id),
+        _session_initial_user_message(temporal, session.workflow_id),
+    )
+    content = {**asdict(session), **state}
+    if initial_user_message is not None:
+        content["initial_user_message"] = initial_user_message
+    return content
 
 
 async def _sessions_with_execution_state(
@@ -351,6 +365,91 @@ async def _sessions_with_execution_state(
             *(_session_with_execution_state(temporal, session) for session in sessions)
         )
     )
+
+
+async def _session_initial_user_message(
+    temporal: Client,
+    workflow_id: str,
+) -> str | None:
+    handle = temporal.get_workflow_handle(workflow_id)
+    scanned_events = 0
+    try:
+        async for event in handle.fetch_history_events(
+            page_size=_SESSION_PREVIEW_HISTORY_PAGE_SIZE,
+            wait_new_event=False,
+            rpc_timeout=_SESSION_PREVIEW_HISTORY_RPC_TIMEOUT,
+        ):
+            scanned_events += 1
+            user_message = await _session_user_message_from_history_event(
+                temporal,
+                event,
+            )
+            if user_message is not None:
+                return _display_user_message(user_message.model_dump_json())
+            if scanned_events >= _SESSION_PREVIEW_HISTORY_MAX_EVENTS:
+                break
+    except Exception:
+        return None
+    return None
+
+
+async def _session_user_message_from_history_event(
+    temporal: Client,
+    event: HistoryEvent,
+) -> AgentMessage | None:
+    if event.event_type != EventType.EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED:
+        return None
+    if not event.HasField("workflow_execution_update_accepted_event_attributes"):
+        return None
+
+    request = (
+        event.workflow_execution_update_accepted_event_attributes.accepted_request
+    )
+    if request.input.name != SEND_AGENT_MESSAGE_UPDATE:
+        return None
+    if not request.input.args.payloads:
+        return None
+
+    try:
+        decoded = await temporal.data_converter.decode(
+            request.input.args.payloads,
+            [AgentMessage],
+        )
+    except Exception:
+        return None
+    if not decoded or not isinstance(decoded[0], AgentMessage):
+        return None
+    return decoded[0]
+
+
+def _display_user_message(value: str) -> str:
+    if not value.startswith("{"):
+        return value
+    try:
+        message = json.loads(value)
+    except json.JSONDecodeError:
+        return value
+    if not isinstance(message, dict):
+        return value
+
+    payload = message.get("payload")
+    if isinstance(payload, dict):
+        text = payload.get("text")
+        if isinstance(text, str):
+            return text
+        script = payload.get("script")
+        if isinstance(script, str):
+            return script
+        name = payload.get("name")
+        arg = payload.get("arg")
+        if isinstance(name, str) and message.get("type") in {"slash", "slash_command"}:
+            display_name = "model" if name == "set-model" else name
+            return f"/{display_name}{f' {arg}' if isinstance(arg, str) and arg else ''}"
+
+    script = message.get("script")
+    if isinstance(script, str):
+        return script
+    return value
 
 
 async def _ensure_session_manager_workflow(
