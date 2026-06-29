@@ -75,9 +75,8 @@ MODEL_OPERATOR_COMMAND = OPENAI_MODEL_OPERATOR_COMMAND
 # the script `await`s together via `asyncio.gather` run CONCURRENTLY, so the model is
 # pushed to parallelize independent work. See travel_models.HOST_FUNCTION_STUBS (the typed
 # stubs the script is type-checked against) and the workflow's batch driver.
-_SCRIPT_CONTRACT = """\
-You can RUN PYTHON by calling the `run_monty_script` tool with a `script` string. The script \
-runs in the Monty sandbox: no filesystem, no network, no arbitrary imports — just ordinary \
+_SCRIPT_AUTHORING_RULES = """\
+The script runs in the Monty sandbox: no filesystem, no network, no arbitrary imports — just ordinary \
 in-sandbox Python (arithmetic, comprehensions, f-strings, `print`) plus `asyncio` and the \
 host functions below. The value of the script's LAST EXPRESSION becomes the tool result \
 (along with anything printed).
@@ -139,6 +138,15 @@ Example script (note the concurrent search, then the dependent bookings):
     asyncio.run(main())
 """
 
+_INLINE_SCRIPT_CONTRACT = f"""\
+You can RUN PYTHON by calling the `run_monty_script` tool with a `script` string.
+
+{_SCRIPT_AUTHORING_RULES}"""
+
+# Compatibility alias for older imports. New prompts should choose either
+# _INLINE_SCRIPT_CONTRACT or _SCRIPT_AUTHORING_RULES based on the tool shape they expose.
+_SCRIPT_CONTRACT = _INLINE_SCRIPT_CONTRACT
+
 SYSTEM_INSTRUCTION = f"""\
 You are a friendly travel-booking assistant. You help users search and book flights and \
 hotels and assemble trip itineraries. You don't have these abilities directly — instead you \
@@ -147,7 +155,7 @@ script MUST be async: the host functions are coroutines you `await`, you run ind
 concurrently with `asyncio.gather`, and you wrap the body in `asyncio.run(main())` (full rules \
 below).
 
-{_SCRIPT_CONTRACT}
+{_INLINE_SCRIPT_CONTRACT}
 
 How to behave:
 - Converse naturally. Ask brief clarifying questions when you're missing something essential \
@@ -283,7 +291,7 @@ class MontyChatOpenAIAgentWorkflow:
         async def run_monty_script(script: str) -> str:
             return await self._monty.run_script(script)
 
-        # The model reads this; keep it aligned with _SCRIPT_CONTRACT.
+        # The model reads this; keep it aligned with _INLINE_SCRIPT_CONTRACT.
         run_monty_script.__doc__ = (
             "Execute a Python `script` in the Monty sandbox and return its printed output "
             "and final value. Use this to search/book flights and hotels and build "

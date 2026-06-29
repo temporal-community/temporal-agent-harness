@@ -57,7 +57,7 @@ with workflow.unsafe.imports_passed_through():
         OPENAI_MODEL_OPERATOR_COMMAND,
         OPENAI_SUPPORTED_MODELS,
         SET_MODEL_COMMAND,
-        _SCRIPT_CONTRACT,
+        _SCRIPT_AUTHORING_RULES,
         _HarnessOpenAIRunHooks,
     )
     from .workflow import TASK_QUEUE, MontyDynamicAgentWorkflow
@@ -84,7 +84,7 @@ this ONCE at the start of the conversation, then reuse the same handle for every
 `start_{SUBAGENT_KEY}` as `subagent`, and the script in `message` (a RunScript object with a \
 `script` field). The reply carries the script's printed output and final value.
 
-{_SCRIPT_CONTRACT}
+{_SCRIPT_AUTHORING_RULES}
 
 How to behave:
 - Converse naturally. Ask brief clarifying questions when you're missing something essential \
