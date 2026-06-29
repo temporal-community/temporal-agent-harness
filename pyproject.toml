@@ -27,7 +27,10 @@ openai-agents = [
 # S3-backed large-payload offload (temporal_agent_harness.harness.large_payload). The
 # default local-filesystem driver needs nothing extra; only the S3 driver needs aioboto3.
 s3 = [
-    "aioboto3>=15.5.0",
+    # temporalio's bundled S3 storage driver (temporalio.contrib.aws.s3driver) imports
+    # aioboto3 AND types_aiobotocore_s3 at runtime; the [aioboto3] extra pulls both. Bare
+    # aioboto3 is not enough to load the driver.
+    "temporalio[aioboto3]>=1.27.2",
 ]
 # Packaged FastAPI server and browser UI assets.
 ui = [
@@ -51,6 +54,8 @@ dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
     "setuptools>=68",  # package artifact tests call the build backend directly
+    "moto[server]>=5.2.1",  # threaded S3 mock for the utils/large_payload S3-driver test
+    "temporalio[aioboto3]>=1.27.2",  # S3 storage driver under test (mirrors the `s3` extra)
     { include-group = "examples" },
 ]
 
