@@ -30,7 +30,7 @@ from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from temporal_agent_harness.harness import AgentWorkflowRunner, agent
+from temporal_agent_harness.harness import AgentWorkflowRunner, agent, slash_commands
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
@@ -44,7 +44,6 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     AgentStatus,
     OperatorCommand,
-    OperatorCommandArgument,
     OperatorCommandRequest,
     OperatorCommandResult,
     SubagentReplyReceived,
@@ -88,18 +87,15 @@ class Picked(BaseModel):
     model: str
 
 
-PROBE_MODEL_OPERATOR_COMMAND = OperatorCommand(
-    name="model",
-    payload_name="set-model",
-    label="/model",
-    description="Set the probe model.",
-    argument=OperatorCommandArgument(
-        kind="enum",
-        choices=("alpha", "beta"),
-        placeholder="model",
-    ),
-    source="agent",
-)
+def probe_model_command(handler) -> slash_commands.SlashCommandDefinition:
+    return slash_commands.command(
+        name="model",
+        payload_name="set-model",
+        label="/model",
+        description="Set the probe model.",
+        argument=slash_commands.enum_arg(("alpha", "beta"), placeholder="model"),
+        handler=handler,
+    )
 
 
 @workflow.defn
@@ -160,8 +156,10 @@ class SlashExtensionProbeAgent:
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-            operator_commands=[PROBE_MODEL_OPERATOR_COMMAND],
-            operator_command_handler=self._handle_operator_command,
+            slash_commands=[
+                *slash_commands.default_commands(),
+                probe_model_command(self._handle_model_command),
+            ],
         )
 
     @workflow.run
@@ -173,10 +171,10 @@ class SlashExtensionProbeAgent:
         """Handle agent-specific slash commands."""
         return TextReply(text=f"custom:{command.name}:{command.arg or ''}")
 
-    def _handle_operator_command(self, command: SlashCommand) -> TextReply | None:
-        if command.name == "set-model":
-            return TextReply(text=f"operator:{command.name}:{command.arg or ''}")
-        return None
+    def _handle_model_command(
+        self, _context: slash_commands.SlashCommandContext, command: SlashCommand
+    ) -> TextReply:
+        return TextReply(text=f"operator:{command.name}:{command.arg or ''}")
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +346,20 @@ async def test_operator_interface_lists_harness_commands_for_every_agent(client_
     assert "stop-agent" in by_name["stop"].aliases
 
 
+def test_slash_commands_can_select_or_disable_packaged_commands(offline_build):
+    runner = offline_build(
+        AgentConfig(),
+        slash_commands=slash_commands.commands("status", "stop-agent"),
+    )
+    assert [command.name for command in runner._handle_operator_interface()] == [
+        "status",
+        "stop",
+    ]
+
+    runner = offline_build(AgentConfig(), slash_commands=[])
+    assert runner._handle_operator_interface() == []
+
+
 async def test_operator_interface_includes_agent_extension_commands(client_and_queue):
     client, task_queue = client_and_queue
     handle = await _start(client, task_queue, SlashExtensionProbeAgent)
@@ -492,7 +504,7 @@ async def test_operator_command_allow_tools_updates_policy_without_turn(
     assert status.current_turn == 0
 
 
-async def test_operator_command_uses_agent_extension_callback(client_and_queue):
+async def test_operator_command_uses_configured_slash_command(client_and_queue):
     client, task_queue = client_and_queue
     handle = await _start(client, task_queue, SlashExtensionProbeAgent)
 
@@ -503,7 +515,7 @@ async def test_operator_command_uses_agent_extension_callback(client_and_queue):
     assert status.current_turn == 0
 
 
-async def test_operator_command_preempts_agent_extension_for_core_commands(
+async def test_configured_core_command_preempts_agent_extension(
     client_and_queue,
 ):
     client, task_queue = client_and_queue
@@ -626,14 +638,24 @@ async def test_harness_slash_unknown_without_agent_handler_returns_reply(client_
     assert text == "Unknown slash command: `not-real`."
 
 
-async def test_harness_slash_falls_back_to_agent_extension(client_and_queue):
+async def test_configured_slash_command_handles_normal_slash_turn(client_and_queue):
     client, task_queue = client_and_queue
     handle = await _start(client, task_queue, SlashExtensionProbeAgent)
 
     await _send(handle, "slash", {"name": "set-model", "arg": "gemini"})
 
     text = _reply_text(await _collect_until_turn_end(client, handle.id))
-    assert text == "custom:set-model:gemini"
+    assert text == "operator:set-model:gemini"
+
+
+async def test_unknown_slash_falls_back_to_agent_extension(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
+
+    await _send(handle, "slash", {"name": "unknown-extension", "arg": "value"})
+
+    text = _reply_text(await _collect_until_turn_end(client, handle.id))
+    assert text == "custom:unknown-extension:value"
 
 
 async def test_harness_slash_preempts_agent_extension_for_core_commands(client_and_queue):
@@ -959,12 +981,19 @@ def offline_build(monkeypatch):
     # no workflow loop, so stub it with a plain uuid.
     monkeypatch.setattr(aw.workflow, "uuid4", lambda: uuid.uuid4())
 
-    def build(config: AgentConfig, *, default: bool | None = None):
+    def build(
+        config: AgentConfig,
+        *,
+        default: bool | None = None,
+        slash_commands=None,
+    ):
         stream = MagicMock()
         stream.topic.return_value = MagicMock()
         kwargs: dict[str, Any] = {}
         if default is not None:
             kwargs["enable_message_queuing_default"] = default
+        if slash_commands is not None:
+            kwargs["slash_commands"] = slash_commands
         return AgentWorkflowRunner(
             config,
             stream=stream,

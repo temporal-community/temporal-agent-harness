@@ -4,7 +4,7 @@
 # construct a runner via ``AgentWorkflowRunner(config, stream=..., approval_policy_default=...)``
 # in ``@workflow.init`` and drive it with ``await runner.run(self)`` in ``@workflow.run``.
 
-from temporal_agent_harness.harness import agent
+from temporal_agent_harness.harness import agent, slash_commands
 from temporal_agent_harness.harness.agent_workflow import (
     AgentToolContext,
     AgentWorkflowRunner,
@@ -12,6 +12,7 @@ from temporal_agent_harness.harness.agent_workflow import (
 
 __all__ = [
     "agent",
+    "slash_commands",
     "AgentToolContext",
     "AgentWorkflowRunner",
 ]

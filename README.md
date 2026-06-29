@@ -93,7 +93,7 @@ from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.workflow import ActivityConfig
 
-from temporal_agent_harness.harness import AgentWorkflowRunner, agent
+from temporal_agent_harness.harness import AgentWorkflowRunner, agent, slash_commands
 from temporal_agent_harness.harness.agent_protocol import AgentConfig, ToolApprovalPolicy
 
 
@@ -127,6 +127,7 @@ class TravelAgent:
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
+            slash_commands=slash_commands.default_commands(),
         )
 
     @workflow.run
@@ -140,6 +141,64 @@ class TravelAgent:
     @agent.accepts
     async def plan_trip(self, request: PlanTrip) -> Itinerary:
         ...
+```
+
+## Slash Commands
+
+Agents can expose human/operator slash commands through a small library of
+workflow-safe command definitions. A command bundles the UI metadata returned by
+the `operator_interface` query with the deterministic handler that runs inside
+the workflow.
+
+If `slash_commands` is omitted, `AgentWorkflowRunner` enables the packaged
+defaults:
+
+| Command | Effect |
+| --- | --- |
+| `/approvals strict\|safe\|skip` | Change the live tool-approval policy. |
+| `/allow-tools tool_name` | Auto-approve one or more named tools for this session. |
+| `/status` | Show the current harness status. |
+| `/stop` | Stop the agent workflow. |
+
+Configure exactly the packaged commands you want in one place:
+
+```python
+from temporal_agent_harness.harness import slash_commands
+
+self._runner = AgentWorkflowRunner(
+    config,
+    stream=WorkflowStream(),
+    approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+    slash_commands=slash_commands.commands("approvals", "status", "stop"),
+)
+```
+
+Pass an empty list to disable packaged slash commands:
+
+```python
+slash_commands=[]
+```
+
+Custom commands use the same registry. For example, a model selector can share
+one implementation across the first-class operator update path and the normal
+`slash` turn path:
+
+```python
+SUPPORTED_MODELS = ("gemini-3.5-flash", "gemini-3.1-flash-lite")
+
+self._runner = AgentWorkflowRunner(
+    config,
+    stream=WorkflowStream(),
+    approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+    slash_commands=[
+        *slash_commands.default_commands(),
+        slash_commands.model_selector(
+            choices=SUPPORTED_MODELS,
+            set_model=lambda model: setattr(self, "_model", model),
+            description="Set the model for this session.",
+        ),
+    ],
+)
 ```
 
 ## Repository layout
