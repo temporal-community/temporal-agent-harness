@@ -109,8 +109,8 @@ export interface AgentMessageObject {
 export type AgentInboundMessage = string | AgentMessageObject;
 
 export type SlashCommandModel =
-  | "gemini-3.5-flash"
-  | "gemini-3.1-flash-lite";
+  | "gpt-5.4-mini"
+  | "gpt-5.4";
 
 export type SlashCommandApprovalMode = "strict" | "safe" | "skip";
 

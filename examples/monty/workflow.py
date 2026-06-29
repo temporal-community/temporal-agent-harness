@@ -12,8 +12,8 @@ durable ``workflow.execute_activity`` call. The dynamically supplied script gets
 orchestrate durable work without itself being trusted with Temporal (or anything else).
 
 Contrast with the conversational Monty agents (``conversational_workflow.py``): those drive
-the Gemini Interactions API with a model in the loop. This one has no model in the loop at
-all — the "plan" arrives pre-written as the script. It reuses the same harness contract:
+the OpenAI Agents SDK with a model in the loop. This one has no model in the loop at all —
+the "plan" arrives pre-written as the script. It reuses the same harness contract:
 ``@agent.defn`` + an :class:`AgentWorkflowRunner` built in ``@workflow.init``, the turn
 loop driven by ``await runner.run(self)``, and a single ``@agent.accepts`` handler
 (``run_script``) whose return value becomes the turn's reply.

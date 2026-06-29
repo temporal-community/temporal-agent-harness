@@ -255,14 +255,14 @@ user sends several queued messages quickly.
 
 Slash commands are discovered from `GET /api/operator-interface/{session_id}`
 and sent as structured messages. For example, the UI command
-`/model gemini-3.1-flash-lite` sends:
+`/model gpt-5.4-mini` sends:
 
 ```json
 {
   "type": "slash",
   "payload": {
     "name": "set-model",
-    "arg": "gemini-3.1-flash-lite"
+    "arg": "gpt-5.4-mini"
   }
 }
 ```
@@ -282,7 +282,7 @@ Monty conversational agents additionally accept:
 
 | UI command | Payload |
 | --- | --- |
-| `/model gemini-3.1-flash-lite` | `{"name":"set-model","arg":"gemini-3.1-flash-lite"}` |
+| `/model gpt-5.4-mini` | `{"name":"set-model","arg":"gpt-5.4-mini"}` |
 
 ### `GET /api/attach?session_id=...&from_offset=0`
 

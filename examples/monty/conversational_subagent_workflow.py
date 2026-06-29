@@ -3,7 +3,7 @@
 This is the subagent-flavoured twin of :class:`MontyChatAgentWorkflow`
 (``conversational_workflow.py``). Both put a *model in the loop*: the user chats in plain
 text, the model converses to gather what it needs, then writes its own Python script and runs
-it in the Monty sandbox. The conversational front end — the Gemini Interactions tool-calling
+it in the Monty sandbox. The conversational front end — the OpenAI Agents SDK tool-calling
 loop and the script-writing system prompt — is IDENTICAL.
 
 The ONE difference is *where the script runs*. :class:`MontyChatAgentWorkflow` runs each
@@ -33,40 +33,14 @@ in the parent. (Forwarding a gating policy into the child is a possible follow-u
 
 from __future__ import annotations
 
-import asyncio
-import json
-from collections.abc import Sequence
-from datetime import timedelta
-from functools import partial
-from typing import Any, cast
-
 from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
-from temporalio.exceptions import ApplicationError
-from temporalio.workflow import ActivityConfig
 
 with workflow.unsafe.imports_passed_through():
-    from google.genai._interactions.types import (
-        ErrorEvent,
-        FunctionCallStep,
-        InteractionCompletedEvent,
-        StepDelta,
-        StepStart,
-        ToolParam,
-    )
-    from google.genai._interactions.types.error_event import Error
-    from google.genai._interactions.types.function_result_step_param import (
-        FunctionResultStepParam,
-    )
-    from google.genai._interactions.types.interaction_create_params import Input
-    from google.genai._interactions.types.step_delta import (
-        DeltaArgumentsDelta,
-        DeltaText,
-    )
-    from google.genai.client import AsyncClient
-    from temporal_agent_harness.ai_sdks.google_genai_plugin import function_param, google_genai_client
-    from pydantic import BaseModel
+    from agents import Agent as OpenAIAgent
+    from agents import Runner, TResponseInputItem
 
+    from temporal_agent_harness.ai_sdks.openai_agents_plugin import as_openai_agent_tools
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
@@ -84,6 +58,7 @@ with workflow.unsafe.imports_passed_through():
         SUPPORTED_MODELS,
         SET_MODEL_COMMAND,
         _SCRIPT_CONTRACT,
+        _HarnessOpenAIRunHooks,
     )
     from .workflow import TASK_QUEUE, MontyDynamicAgentWorkflow
 
@@ -141,9 +116,7 @@ class MontyChatSubagentWorkflow:
             operator_command_handler=self._handle_operator_command,
         )
         self._model: str = DEFAULT_MODEL
-        # Server-side conversation chaining id (Interactions API); updated each turn. Safe to
-        # chain here because this agent uses only function tools (no file_search).
-        self._previous_interaction_id: str | None = None
+        self._conversation: list[TResponseInputItem] = []
         # The model-facing tools: drive the barebones MontyDynamicAgent script-runner as a
         # subagent. Built statically from its @agent.accepts handlers — no child started here.
         # Yields start_monty / monty_run_script / stop_monty.
@@ -152,18 +125,9 @@ class MontyChatSubagentWorkflow:
             key=SUBAGENT_KEY,
             task_queue=TASK_QUEUE,
         )
-        self._callables_by_name = {fn.__name__: fn for fn in self._tools}
 
     @workflow.run
     async def run(self, _config: AgentConfig) -> None:
-        # Same Temporal-aware AsyncClient as the QA / inline-Monty agents; the runner is wired
-        # in so reply text streams to the workflow stream as it is generated.
-        self._gemini = google_genai_client(
-            activity_config=ActivityConfig(
-                start_to_close_timeout=timedelta(minutes=3),
-            ),
-            runner=self._runner,
-        )
         await self._runner.run(self)
 
     @agent.accepts
@@ -172,7 +136,7 @@ class MontyChatSubagentWorkflow:
         dates, traveler name) in plain text; the assistant converses, writes Python scripts,
         and runs them against a simulated travel backend via a script-runner subagent, then
         replies with the results."""
-        reply_text = await self._handle_chat_turn(self._gemini, message.text)
+        reply_text = await self._handle_chat_turn(message.text)
         return TextReply(text=reply_text)
 
     @agent.accepts
@@ -202,152 +166,29 @@ class MontyChatSubagentWorkflow:
 
     # ------------------------------------------------------------------ chat loop
 
-    async def _handle_chat_turn(self, gemini: AsyncClient, user_text: str) -> str:
-        """Run one conversational turn: stream the model, dispatch any subagent tool calls,
-        feed results back, and loop until the model replies with no further calls.
-
-        Updates ``self._previous_interaction_id`` for chaining the next turn (no file_search
-        here, so chaining is safe)."""
-        tools = [
-            function_param(fn)
-            for fn in self._tools
-            if fn.__name__ != f"stop_{SUBAGENT_KEY}"
-        ]
-        next_input: Input = user_text
-        while True:
-            (
-                reply_text,
-                pending_calls,
-                self._previous_interaction_id,
-            ) = await self._execute_agent_interaction(
-                gemini=gemini,
-                model=self._model,
-                input=next_input,
-                tools=tools,
-                system_instruction=SYSTEM_INSTRUCTION,
-                previous_interaction_id=self._previous_interaction_id,
-            )
-
-            if not pending_calls:
-                return reply_text
-
-            next_input = await asyncio.gather(
-                *(self._run_one_tool(fc) for fc in pending_calls)
-            )
-
-    async def _run_one_tool(self, call: FunctionCallStep) -> FunctionResultStepParam:
-        """Execute one subagent tool call via ``run_tool`` and return its result.
-
-        Dispatches through ``runner.run_tool``, which parks this call's id (so the tool's own
-        lifecycle events correlate with the streaming activity's ``tool_requested``) AND parks
-        the live runner in ``_CURRENT_RUNNER`` — which is exactly how the generated subagent
-        tools reach this runner's subagent registry + start/stop/run-turn methods. The generated
-        ``monty_run_script`` tool returns a typed ``TextReply`` (a pydantic ``BaseModel``), so
-        serialize it with ``model_dump_json()`` for the model rather than a Python repr."""
-        tool_callable = self._callables_by_name.get(call.name)
-        try:
-            if tool_callable is None:
-                raise ValueError(f"unknown tool: {call.name!r}")
-            # call.arguments is statically typed `object`; it's a dict once the streamed
-            # JSON fragments are parsed (see _execute_agent_interaction). Narrow it so the
-            # **-unpack into run_tool type-checks.
-            arguments = (
-                cast("dict[str, Any]", call.arguments)
-                if isinstance(call.arguments, dict)
-                else {}
-            )
-            result = await self._runner.run_tool(call.id, tool_callable, **arguments)
-            response: FunctionResultStepParam = {
-                "type": "function_result",
-                "call_id": call.id,
-                "name": call.name,
-                "result": result.model_dump_json()
-                if isinstance(result, BaseModel)
-                else str(result),
-            }
-            if call.signature:
-                response["signature"] = call.signature
-            return response
-        except Exception as e:
-            response = {
-                "type": "function_result",
-                "call_id": call.id,
-                "name": call.name,
-                "result": str(e),
-                "is_error": True,
-            }
-            if call.signature:
-                response["signature"] = call.signature
-            return response
-
-    async def _execute_agent_interaction(
-        self,
-        *,
-        gemini: AsyncClient,
-        model: str,
-        input: Input,
-        tools: Sequence[ToolParam],
-        system_instruction: str,
-        previous_interaction_id: str | None,
-    ) -> tuple[str, list[FunctionCallStep], str]:
-        """Stream one ``interactions.create`` and reduce it into actionable state.
-
-        Returns ``(reply_text, function_calls, interaction_id)``. Text comes from
-        ``DeltaText`` events; function calls are captured from each ``StepStart`` whose step
-        is a ``FunctionCallStep``, with their JSON-string ``arguments`` fragments buffered per
-        step index and ``json.loads``-ed once the stream ends. (Lifted verbatim from the inline
-        conversational Monty agent's loop.) Raises :class:`ApplicationError` on stream errors or if the
-        stream ends without a completed event."""
-        interactions_create_fn = partial(
-            gemini.interactions.create,
-            model=model,
-            input=input,
-            system_instruction=system_instruction,
-            tools=tools,
-            stream=True,
+    async def _handle_chat_turn(self, user_text: str) -> str:
+        """Run one conversational turn with the OpenAI Agents SDK."""
+        sdk_agent = OpenAIAgent(
+            name="MontySubagent",
+            instructions=SYSTEM_INSTRUCTION,
+            model=self._model,
+            tools=as_openai_agent_tools(
+                self._runner,
+                [
+                    fn
+                    for fn in self._tools
+                    if fn.__name__ != f"stop_{SUBAGENT_KEY}"
+                ],
+            ),
         )
-        if previous_interaction_id:
-            stream = await interactions_create_fn(
-                previous_interaction_id=previous_interaction_id
-            )
-        else:
-            stream = await interactions_create_fn()
-
-        text_parts: list[str] = []
-        calls_by_index: dict[int, FunctionCallStep] = {}
-        arg_buffers: dict[int, str] = {}
-        interaction_id: str | None = None
-        async for event in stream:
-            match event:
-                case ErrorEvent(error=Error(message=msg, code=code)):
-                    raise ApplicationError(
-                        msg or "stream error", type=code or "stream_error"
-                    )
-                case ErrorEvent():
-                    raise ApplicationError("unknown stream error", type="stream_error")
-                case StepStart(index=idx, step=FunctionCallStep() as call):
-                    calls_by_index[idx] = call
-                case StepDelta(
-                    index=idx, delta=DeltaArgumentsDelta(arguments=args)
-                ) if args:
-                    arg_buffers[idx] = arg_buffers.get(idx, "") + args
-                case StepDelta(delta=DeltaText(text=text)) if text:
-                    text_parts.append(text)
-                case InteractionCompletedEvent(interaction=interaction):
-                    interaction_id = interaction.id
-
-        if interaction_id is None:
-            raise ApplicationError(
-                "stream ended without interaction.completed event",
-                type="stream_error",
-            )
-
-        function_calls = [
-            calls_by_index[idx].model_copy(
-                update={"arguments": json.loads(arg_buffers[idx])}
-            )
-            if arg_buffers.get(idx)
-            else calls_by_index[idx]
-            for idx in sorted(calls_by_index)
+        input_items: list[TResponseInputItem] = [
+            *self._conversation,
+            {"role": "user", "content": user_text},
         ]
-        return "".join(text_parts), function_calls, interaction_id
+        result = await Runner.run(
+            sdk_agent,
+            input=input_items,
+            hooks=_HarnessOpenAIRunHooks(self._runner, self._model),
+        )
+        self._conversation = result.to_input_list()
+        return str(result.final_output)

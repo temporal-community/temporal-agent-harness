@@ -224,7 +224,7 @@ class AgentMessage(BaseModel):
     rejecting a bad shape) before dispatching::
 
         AgentMessage(type="slash",
-                     payload={"name": "set-model", "arg": "gemini-3.1-flash-lite"},
+                     payload={"name": "set-model", "arg": "gpt-5.4-mini"},
                      expected_turn=1)
 
     Routing is **by name**, not by a discriminator on the payload type — so two handlers
@@ -469,7 +469,7 @@ class AcceptedFunction(BaseModel):
 
     The element type of the ``agent_interface`` query result (a ``list[AcceptedFunction]``)
     — an agent-level analogue of MCP's ``list_tools`` / a model's function declarations,
-    announcing the callable surface this agent accepts. Gemini-tool-shaped:
+    announcing the callable surface this agent accepts:
 
       * ``name`` — the handler's function name; the value a caller puts in
         :attr:`AgentMessage.type`, and the tool name when this agent is wired as a subagent.

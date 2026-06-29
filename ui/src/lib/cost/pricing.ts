@@ -36,17 +36,15 @@ export interface UsageTimelinePoint {
 }
 
 const pricing: Record<string, ModelPricing> = {
-  "gemini-3.5-flash": {
-    inputPerMillion: 0.35,
-    outputPerMillion: 1.05,
-    thoughtPerMillion: 1.05,
-    cachedPerMillion: 0.0875
+  "gpt-5.4": {
+    inputPerMillion: 2.5,
+    outputPerMillion: 15,
+    cachedPerMillion: 0.25
   },
-  "gemini-3.1-flash-lite": {
-    inputPerMillion: 0.1,
-    outputPerMillion: 0.4,
-    thoughtPerMillion: 0.4,
-    cachedPerMillion: 0.025
+  "gpt-5.4-mini": {
+    inputPerMillion: 0.75,
+    outputPerMillion: 4.5,
+    cachedPerMillion: 0.075
   }
 };
 

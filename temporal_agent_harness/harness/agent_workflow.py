@@ -756,6 +756,17 @@ class AgentToolContext(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _event_with_discriminator_set(event: AgentStreamItem) -> AgentStreamItem:
+    """Return ``event`` with its pydantic discriminator marked as explicitly set.
+
+    Temporal's OpenAI Agents payload converter uses ``exclude_unset=True``. Most
+    harness event payload classes provide their ``type`` discriminator as a default,
+    so without this, the discriminator is omitted on encode and clients decode the
+    stream as raw dicts instead of typed events.
+    """
+    return event.model_copy(update={"type": event.type})
+
+
 class TurnEventPublisher:
     """Activity-side handle that publishes events to a workflow's stream.
 
@@ -786,7 +797,7 @@ class TurnEventPublisher:
         """
         self._events.publish(
             AgentEvent(
-                event=event,
+                event=_event_with_discriminator_set(event),
                 agent_id=self._context.agent_id,
                 turn_id=self._context.turn_id,
                 turn_number=self._context.turn_number,
@@ -1663,7 +1674,7 @@ class AgentWorkflowRunner:
         """Carrier identifying the in-flight turn for activity-side publishing.
 
         Read by code dispatching activities that need to publish back
-        to the workflow's stream (e.g. Gemini's streaming request path).
+        to the workflow's stream (e.g. a model SDK's streaming request path).
         Threaded through opaquely — see :class:`TurnStreamContext`.
         """
         return self._status.current_stream_context
@@ -2159,7 +2170,7 @@ class AgentWorkflowRunner:
         """Wrap ``event`` in an :class:`AgentEvent` envelope and publish it."""
         self._events.publish(
             AgentEvent(
-                event=event,
+                event=_event_with_discriminator_set(event),
                 # This agent's own short id — so every event on the stream self-identifies its
                 # source agent for the client stream-merge (and a single-agent consumer can filter
                 # by it). For a subagent this is the handle its parent references it by.

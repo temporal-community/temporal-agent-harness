@@ -111,10 +111,9 @@ def _make_send_tool(
     The synthesized signature is ``(subagent: str, <param>: InputModel) -> OutputModel`` using
     the handler's REAL input/output pydantic models, so the harness's ``function_param`` emits the
     correct nested object schema (field names + types + required) and the function is strongly
-    typed end-to-end. (Gemini's ``from_callable`` drops nested per-field descriptions; the
-    handler docstring still becomes the tool description.) At call time the model-supplied input
-    arrives as a dict; the tool validates it into the input model, drives one subagent turn via
-    the runner, and re-validates the reply dict into the output model (boundary validation)."""
+    typed end-to-end. At call time the model-supplied input arrives as a dict; the tool validates
+    it into the input model, drives one subagent turn via the runner, and re-validates the reply
+    dict into the output model (boundary validation)."""
     fn_name = handler.name
     input_type = handler.input_type
     output_type = handler.output_type

@@ -59,7 +59,7 @@ Support is growing across the Python AI SDKs and agent frameworks Temporal integ
 | AI SDK | Status | Notes |
 | --- | --- | --- |
 | [Google Gemini](temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** — not an officially supported integration in the Temporal Python SDK. |
-| [OpenAI Agents SDK](https://github.com/temporalio/sdk-python/blob/main/temporalio/contrib/openai_agents/README.md) | 🟡 Planned | Vendor [implementation](https://github.com/temporalio/sdk-python/tree/main/temporalio/contrib/openai_agents) to add harness support. |
+| [OpenAI Agents SDK](temporal_agent_harness/ai_sdks/openai_agents_plugin) | ✅ Available now | Uses Temporal's [`temporalio.contrib.openai_agents`](https://github.com/temporalio/sdk-python/blob/main/temporalio/contrib/openai_agents/README.md) integration and adds a harness tool adapter for approvals/events. |
 | [Pydantic AI](https://ai.pydantic.dev/durable_execution/temporal/) | 🟡 Planned | Vendor [implementation](https://ai.pydantic.dev/durable_execution/temporal/) to add harness support. |
 | [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | Vendor [implementation](https://github.com/temporalio/sdk-python/tree/main/temporalio/contrib/google_adk_agents) to add harness support. |
 | [Strands Agents](https://docs.temporal.io/develop/python/integrations/strands-agents) | 🟡 Planned | Vendor [implementation](https://github.com/temporalio/sdk-python/tree/main/temporalio/contrib/strands) to add harness support. |
@@ -136,7 +136,7 @@ class TravelAgent:
     # A typed, self-describing operation. The agent advertises this signature, so callers —
     # your code or another agent — can drive it programmatically. Your turn logic goes here:
     # call your AI SDK, run tools through the runner, and return the typed reply.
-    # (See examples/monty for a complete, model-in-the-loop agent on the Gemini integration.)
+    # (See examples/monty for a complete, model-in-the-loop OpenAI Agents SDK example.)
     @agent.accepts
     async def plan_trip(self, request: PlanTrip) -> Itinerary:
         ...
@@ -148,7 +148,7 @@ class TravelAgent:
 temporal_agent_harness/
 ├── harness/      # the core harness: agent contract, turn runner, tools,
 │                 #   the agent/subagent protocol, human-in-the-loop approvals
-├── ai_sdks/      # AI SDK integrations (Gemini today) — durable activity wrappers
+├── ai_sdks/      # AI SDK integrations — durable activity wrappers/adapters
 ├── web/          # packaged session-manager workflow + FastAPI app factory
 └── utils/        # general Temporal utilities (e.g. large-payload offload)
 
@@ -207,7 +207,7 @@ includes a conversational travel agent and a subagent-driven variant. From
 cp .env.example .env.local
 ```
 
-Set `GEMINI_API_KEY` in `.env.local` for the conversational agents. The example
+Set `OPENAI_API_KEY` in `.env.local` for the conversational agents. The example
 defaults to the committed `temporal.local.toml` profile, which points at a local
 Temporal dev server.
 

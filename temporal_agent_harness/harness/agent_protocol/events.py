@@ -327,7 +327,7 @@ class TokenUsage(BaseModel):
     """Provider-agnostic token accounting for one model interaction.
 
     A neutral summary the harness understands without knowing any model SDK — a
-    producer (e.g. the Gemini plugin) maps its own usage shape onto these fields. Every
+    producer (e.g. an AI SDK integration) maps its own usage shape onto these fields. Every
     field is optional: a provider that doesn't report a given count, or an interaction
     that ends before usage is known, simply leaves it ``None``. ``total_tokens`` is the
     provider's own grand total when given (not necessarily the sum of the parts, since
@@ -413,8 +413,8 @@ class ToolEvent(StreamEvent[EventTypeT], Generic[EventTypeT]):
     disambiguate two parallel calls to the same tool, so every tool event carries
     both. The id must be stable and re-derivable wherever the events are produced
     (e.g. the same value in the streaming activity that emits ``tool_requested`` and
-    in the workflow that emits ``tool_start``/``tool_end``); for the Gemini
-    integration it is the API's per-call id.
+    in the workflow that emits ``tool_start``/``tool_end``); integrations should use
+    the model SDK's per-call id when one is available.
     """
 
     tool_id: str = Field(
@@ -528,7 +528,7 @@ class ToolErrorEvent(ToolEvent[Literal[AgentEventType.TOOL_ERROR]]):
     """A tool invocation has failed.
 
     Terminal for that specific tool call — the UI can resolve the card out of its
-    "running" state. The turn itself may continue if the caller (e.g. Gemini AFC)
+    "running" state. The turn itself may continue if the caller
     decides to retry or surface the failure back to the model.
     """
 

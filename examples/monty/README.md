@@ -24,7 +24,7 @@ Copy the env template and fill it in (it's gitignored, so your secrets stay loca
 cp .env.example .env.local
 ```
 
-- Set `GEMINI_API_KEY` — the conversational agents need it.
+- Set `OPENAI_API_KEY` — the conversational agents need it.
 - `TEMPORAL_CONFIG_FILE` defaults to the repo's committed `temporal.local.toml` (a local dev
   server). To run against your own server or Temporal Cloud, create a private `temporal.toml`
   (gitignored) and point `TEMPORAL_CONFIG_FILE` at it (see `.env.example`).

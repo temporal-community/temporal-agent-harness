@@ -13,7 +13,7 @@ from the environment. The example sets these in ``.env.local`` (see examples/mon
 Env vars:
     TEMPORAL_CONFIG_FILE         path to a temporal.toml (set in .env.local)
     TEMPORAL_PROFILE             profile name to load (default: "default")
-    GEMINI_API_KEY               required — the conversational agents call the Gemini Interactions API
+    OPENAI_API_KEY               required — the conversational agents call the OpenAI API
     MONTY_AGENT_TASK_QUEUE       task queue to poll (default: monty-dynamic-agent)
 
 This worker hosts the three Monty agents (MontyDynamicAgent + the two conversational
@@ -28,12 +28,16 @@ import asyncio
 import logging
 import os
 import sys
+from datetime import timedelta
 
-from google.genai import Client as GeminiClient
-from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
+from temporal_agent_harness.ai_sdks.openai_agents_plugin import (
+    ModelActivityParameters,
+    OpenAIAgentsPlugin,
+    OpenAIPayloadConverter,
+)
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
 from temporalio.client import Client
-from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.converter import DataConverter
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
@@ -67,20 +71,25 @@ async def main() -> None:
     # exceed Temporal's payload limit; the codec offloads big payloads to external storage
     # and stores a reference. Every process that reads these payloads uses the same codec, so
     # the converters MUST match or offloaded payloads can't be read back.
-    # The conversational Monty agent (MontyChatAgent) drives the Gemini Interactions API,
-    # so this worker now needs the Gemini plugin (it auto-registers the interactions
-    # activity). The original script-only MontyDynamicAgent doesn't use it, but sharing one
-    # worker keeps the demo simple.
-    api_key = os.environ.get("GEMINI_API_KEY")
+    # The conversational Monty agents drive the OpenAI Agents SDK, so this worker needs
+    # Temporal's OpenAI Agents plugin. The original script-only MontyDynamicAgent doesn't
+    # use it, but sharing one worker keeps the demo simple.
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        sys.exit("error: GEMINI_API_KEY env var not set")
-    plugin = GoogleGenAIPlugin(GeminiClient(api_key=api_key))
+        sys.exit("error: OPENAI_API_KEY env var not set")
+    plugin = OpenAIAgentsPlugin(
+        model_params=ModelActivityParameters(
+            start_to_close_timeout=timedelta(minutes=3),
+        ),
+    )
 
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
         **connect_config,
         plugins=[plugin],
-        data_converter=await with_large_payload_offload(pydantic_data_converter),
+        data_converter=await with_large_payload_offload(
+            DataConverter(payload_converter_class=OpenAIPayloadConverter)
+        ),
     )
 
     # All three Monty agents run here: the script-only MontyDynamicAgent, the inline
@@ -104,7 +113,7 @@ async def main() -> None:
         # The travel-booking activities (the host functions) plus the Monty-stepping
         # activities (monty_start_batch / monty_resume_batch — the single async/concurrent
         # batch driver used by every Monty agent) plus the subagent-turn activity (drives the
-        # script-runner child for MontyChatSubagentAgent). The Gemini interactions activity is
+        # script-runner child for MontyChatSubagentAgent). The OpenAI model activity is
         # registered by the plugin above.
         activities=[
             *activities.ALL_ACTIVITIES,

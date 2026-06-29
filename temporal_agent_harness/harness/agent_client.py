@@ -183,7 +183,7 @@ class AgentClient:
         """Query the workflow for its callable surface — the ``@agent.accepts`` handlers.
 
         Returns one :class:`AcceptedFunction` per handler (``name`` / ``description`` /
-        input ``parameters`` schema / ``output`` schema), Gemini-tool-shaped. Callers
+        input ``parameters`` schema / ``output`` schema). Callers
         introspect this to construct a valid :class:`AgentMessage` for any handler (the
         ``name`` is the envelope ``type``), or — for a parent agent — to model each handler
         as a subagent tool, so the contract can evolve without client-side changes.

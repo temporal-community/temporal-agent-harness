@@ -1,7 +1,7 @@
 """A minimal, MODEL-FREE parent agent used only by the subagent end-to-end test.
 
 The real conversational parent (``conversational_subagent_workflow.py``) drives the Monty
-script-runner subagent through a live Gemini loop — which can't run in CI. This stand-in
+script-runner subagent through a live OpenAI model loop. This stand-in
 strips the model out entirely: its single ``@agent.accepts`` handler drives the subagent
 runner methods (``start_subagent`` → ``run_subagent_turn`` → ``stop_subagent``) directly, so a
 ``WorkflowEnvironment`` test can prove the whole subagent mechanism — the handle indirection,

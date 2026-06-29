@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 # Core runtime deps are deliberately minimal: the harness itself only needs Temporal and
 # pydantic. AI-SDK and external-storage needs are opt-in extras below, so installing the
-# harness doesn't drag in Gemini or boto3.
+# harness doesn't drag in OpenAI, Gemini, or boto3.
 dependencies = [
     "temporalio>=1.27.2",  # provides temporalio.contrib.workflow_streams (experimental)
     "pydantic>=2.0",
@@ -17,6 +17,12 @@ dependencies = [
 genai = [
     "google-genai>=2.0.0",
     "google-auth>=2.53.0",
+]
+# The OpenAI Agents SDK integration:
+# temporal_agent_harness.ai_sdks.openai_agents_plugin. The Temporal SDK owns the
+# concrete OpenAI Agents dependency versions for its contrib integration.
+openai-agents = [
+    "temporalio[openai-agents,opentelemetry]>=1.27.2",
 ]
 # S3-backed large-payload offload (temporal_agent_harness.harness.large_payload). The
 # default local-filesystem driver needs nothing extra; only the S3 driver needs aioboto3.
@@ -32,16 +38,17 @@ ui = [
 # Everything needed to RUN the bundled Monty example from a checkout. Not part of the
 # published package's runtime deps — examples are not shipped.
 examples = [
-    "google-genai>=2.0.0",
-    "google-auth>=2.53.0",
+    "temporalio[openai-agents,opentelemetry]>=1.27.2",
     "pydantic-monty>=0.0.18",  # the Monty sandbox the monty example runs scripts in
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
 ]
-# Test + lint tooling. The full tests/ suite imports both the Gemini SDK (the ai_sdks plugin
-# tests) and pydantic-monty (the monty example tests), which live in the `examples` group —
-# so dev includes it. uv installs the `dev` group by default, so a plain `uv run pytest`
+# Test + lint tooling. The full tests/ suite imports pydantic-monty/OpenAI for the Monty
+# example tests via the `examples` group, and the Gemini SDK for the legacy ai_sdks plugin
+# tests directly below. uv installs the `dev` group by default, so a plain `uv run pytest`
 # has everything the whole suite under tests/ needs.
 dev = [
+    "google-genai>=2.0.0",
+    "google-auth>=2.53.0",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
     "setuptools>=68",  # package artifact tests call the build backend directly
