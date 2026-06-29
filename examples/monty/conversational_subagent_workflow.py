@@ -1,12 +1,12 @@
-"""Conversational Monty agent that drives the script-runner as a SUBAGENT.
+"""OpenAI conversational Monty agent that drives the script-runner as a SUBAGENT.
 
-This is the subagent-flavoured twin of :class:`MontyChatAgentWorkflow`
+This is the subagent-flavoured twin of :class:`MontyChatOpenAIAgentWorkflow`
 (``conversational_workflow.py``). Both put a *model in the loop*: the user chats in plain
 text, the model converses to gather what it needs, then writes its own Python script and runs
 it in the Monty sandbox. The conversational front end — the OpenAI Agents SDK tool-calling
 loop and the script-writing system prompt — is IDENTICAL.
 
-The ONE difference is *where the script runs*. :class:`MontyChatAgentWorkflow` runs each
+The ONE difference is *where the script runs*. :class:`MontyChatOpenAIAgentWorkflow` runs each
 model-authored script inline, via a ``run_monty_script`` ``@agent.tool_defn`` backed by a
 :class:`MontyHostDriver` held on the workflow itself. This agent instead drives the barebones
 :class:`~.workflow.MontyDynamicAgentWorkflow` — whose sole ``@agent.accepts`` handler,
@@ -24,7 +24,7 @@ subagent (the per-subagent FIFO gate + turn counter + stream-offset resume), and
 ``run_subagent_turn`` activity against a live child workflow.
 
 Approval stance: this agent runs under ``always_require_approvals`` (like
-:class:`MontyChatAgentWorkflow`), so it **gates the subagent tools** — every ``start_monty`` /
+:class:`MontyChatOpenAIAgentWorkflow`), so it **gates the subagent tools** — every ``start_monty`` /
 ``monty_run_script`` / ``stop_monty`` call escalates to a human. The script's host calls
 (search/book flights & hotels) run *inside the child*, which keeps its own
 ``dangerously_skip_all`` policy, so — unlike the inline agent — those host calls are NOT gated
@@ -54,8 +54,8 @@ with workflow.unsafe.imports_passed_through():
     # Reuse the script-writing contract verbatim from the inline agent — the rules the model
     # must follow to author a Monty script are identical; only the tool it calls differs.
     from .conversational_workflow import (
-        MODEL_OPERATOR_COMMAND,
-        SUPPORTED_MODELS,
+        OPENAI_MODEL_OPERATOR_COMMAND,
+        OPENAI_SUPPORTED_MODELS,
         SET_MODEL_COMMAND,
         _SCRIPT_CONTRACT,
         _HarnessOpenAIRunHooks,
@@ -63,7 +63,7 @@ with workflow.unsafe.imports_passed_through():
     from .workflow import TASK_QUEUE, MontyDynamicAgentWorkflow
 
 
-DEFAULT_MODEL = SUPPORTED_MODELS[0]
+DEFAULT_MODEL = OPENAI_SUPPORTED_MODELS[0]
 
 # The namespace for the wired script-runner subagent. Tool names are derived from it:
 # start_monty / monty_run_script / stop_monty.
@@ -100,19 +100,19 @@ options, prices, confirmations. You may run more scripts in follow-up turns.
 - Never invent flight_ids/hotel_ids/confirmation codes — only use ones returned by a script."""
 
 
-@workflow.defn(name="MontyChatSubagentAgent")
+@workflow.defn(name="MontyChatOpenAISubagentAgent")
 @agent.defn
-class MontyChatSubagentWorkflow:
+class MontyChatOpenAISubagentWorkflow:
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
             # Gate the subagent tools: every start_monty / monty_run_script / stop_monty call
-            # escalates to a human (same stance as the inline MontyChatAgent). The script's
+            # escalates to a human (same stance as the inline MontyChatOpenAIAgent). The script's
             # host calls run inside the child, which has its own dangerously_skip_all policy.
             approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-            operator_commands=[MODEL_OPERATOR_COMMAND],
+            operator_commands=[OPENAI_MODEL_OPERATOR_COMMAND],
             operator_command_handler=self._handle_operator_command,
         )
         self._model: str = DEFAULT_MODEL
@@ -158,8 +158,8 @@ class MontyChatSubagentWorkflow:
         return None
 
     def _set_model(self, model: str | None) -> TextReply:
-        if model is None or model not in SUPPORTED_MODELS:
-            choices = ", ".join(f"`{model}`" for model in SUPPORTED_MODELS)
+        if model is None or model not in OPENAI_SUPPORTED_MODELS:
+            choices = ", ".join(f"`{model}`" for model in OPENAI_SUPPORTED_MODELS)
             return TextReply(text=f"Choose one of: {choices}.")
         self._model = model
         return TextReply(text=f"Model set to **{self._model}**.")
@@ -192,3 +192,8 @@ class MontyChatSubagentWorkflow:
         )
         self._conversation = result.to_input_list()
         return str(result.final_output)
+
+
+# Compatibility alias for older imports. The registered workflow type is now
+# ``MontyChatOpenAISubagentAgent``.
+MontyChatSubagentWorkflow = MontyChatOpenAISubagentWorkflow

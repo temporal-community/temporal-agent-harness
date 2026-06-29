@@ -4,7 +4,7 @@
 # run_subagent_turn / stop_subagent directly — so the whole subagent mechanism (the handle
 # indirection, the run_subagent_turn activity against a real child, the per-subagent FIFO gate,
 # and the turn-counter / stream-offset bookkeeping across turns) is exercised against a real
-# child workflow with NO model (so no OPENAI_API_KEY needed).
+# child workflow with NO model (so no provider API key needed).
 #
 # Run with: uv run pytest tests/examples/monty/test_subagent_e2e.py -v
 

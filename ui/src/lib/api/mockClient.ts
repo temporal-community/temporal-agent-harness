@@ -123,7 +123,12 @@ const montyOperatorInterface: OperatorCommand[] = [
     argument: {
       kind: "enum",
       required: true,
-      choices: ["gpt-5.4", "gpt-5.4-mini"],
+      choices: [
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite"
+      ],
       placeholder: "model",
       allow_multiple: false
     },
@@ -202,7 +207,7 @@ export class MockAgentApi implements AgentApi {
       };
     }
     if (request.name === "set-model") {
-      return { text: `Model set to **${request.arg ?? "gpt-5.4"}**.` };
+      return { text: `Model set to **${request.arg ?? "gpt-5.4-mini"}**.` };
     }
     if (request.name === "status") {
       return { text: "- Agent id: `mock`\n- Turn: `0` (idle)\n- Approvals: `strict`" };

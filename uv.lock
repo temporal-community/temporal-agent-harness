@@ -2400,6 +2400,8 @@ dev = [
 ]
 examples = [
     { name = "fastapi", extra = ["standard"] },
+    { name = "google-auth" },
+    { name = "google-genai" },
     { name = "pydantic-monty" },
     { name = "temporalio", extra = ["openai-agents", "opentelemetry"] },
 ]
@@ -2429,6 +2431,8 @@ dev = [
 ]
 examples = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
+    { name = "google-auth", specifier = ">=2.53.0" },
+    { name = "google-genai", specifier = ">=2.0.0" },
     { name = "pydantic-monty", specifier = ">=0.0.18" },
     { name = "temporalio", extras = ["openai-agents", "opentelemetry"], specifier = ">=1.27.2" },
 ]

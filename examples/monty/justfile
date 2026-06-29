@@ -8,9 +8,9 @@
 #   just worker            # 4. this example's agent worker
 # Optional: `just ui-dev` runs the Svelte Vite dev server on :5173 with /api proxied to :8000.
 #
-# uv installs the project's `examples` dependency group (pydantic-monty + OpenAI Agents SDK) on
+# uv installs the project's `examples` dependency group (pydantic-monty + OpenAI/Gemini SDKs) on
 # demand, so there's no separate install step. First-time setup: `cp .env.example .env.local`
-# and fill it in (Temporal connection + OPENAI_API_KEY). See README.md.
+# and fill it in (Temporal connection + OPENAI_API_KEY + GEMINI_API_KEY). See README.md.
 
 set dotenv-filename := ".env.local"
 set dotenv-load := true
@@ -61,6 +61,6 @@ package: app-build app-check
 ui-dev:
     pnpm --dir "{{ui}}" run dev
 
-# Run the Monty example agent worker (MontyDynamicAgent + the two conversational agents).
+# Run the Monty example agent worker (dynamic + OpenAI/Gemini conversational/subagent agents).
 worker:
     cd "{{root}}" && uv run --group examples python -m examples.monty.worker

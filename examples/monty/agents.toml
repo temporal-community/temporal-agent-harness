@@ -9,23 +9,42 @@
 # [[agents]] entry here.
 
 [[agents]]
-key = "monty-chat"
-workflow_type = "MontyChatAgent"
+key = "monty-chat-openai"
+workflow_type = "MontyChatOpenAIAgent"
 task_queue = "monty-dynamic-agent"
-label = "Monty (Conversational)"
+label = "Monty (OpenAI)"
 description = """
-A conversational travel-booking assistant. Chat in plain text; an LLM converses to
-gather your trip details, then WRITES its own pydantic-monty Python script and runs
-it via a tool to orchestrate durable flight/hotel search + booking activities,
-replying with the results."""
+A conversational travel-booking assistant backed by the OpenAI Agents SDK. Chat in
+plain text; the model writes its own pydantic-monty Python script and runs it via a
+tool to orchestrate durable flight/hotel search + booking activities."""
 
 [[agents]]
-key = "monty-chat-subagent"
-workflow_type = "MontyChatSubagentAgent"
+key = "monty-chat-gemini"
+workflow_type = "MontyChatGeminiAgent"
 task_queue = "monty-dynamic-agent"
-label = "Monty (Conversational, Subagent)"
+label = "Monty (Gemini)"
 description = """
-Same conversational travel-booking experience as Monty (Conversational), but instead
-of running its Python scripts inline it drives the barebones Monty (Dynamic) agent as
-a SUBAGENT — starting a script-runner instance and sending it each script over the
-harness subagent toolset. The first end-to-end demo of agents-as-subagents."""
+A conversational travel-booking assistant backed by Gemini Interactions. It exposes the
+same Monty scripting tool as the OpenAI workflow, but the workflow drives Gemini's
+streaming function-call loop directly."""
+
+[[agents]]
+key = "monty-chat-openai-subagent"
+workflow_type = "MontyChatOpenAISubagentAgent"
+task_queue = "monty-dynamic-agent"
+label = "Monty (OpenAI, Subagent)"
+description = """
+Same OpenAI conversational travel-booking experience as Monty (OpenAI), but instead of
+running its Python scripts inline it drives the barebones Monty (Dynamic) agent as a
+SUBAGENT — starting a script-runner instance and sending it each script over the harness
+subagent toolset."""
+
+[[agents]]
+key = "monty-chat-gemini-subagent"
+workflow_type = "MontyChatGeminiSubagentAgent"
+task_queue = "monty-dynamic-agent"
+label = "Monty (Gemini, Subagent)"
+description = """
+Same Gemini conversational travel-booking experience as Monty (Gemini), but instead of
+running its Python scripts inline it drives the barebones Monty (Dynamic) agent as a
+SUBAGENT through the Gemini Interactions function-call loop."""

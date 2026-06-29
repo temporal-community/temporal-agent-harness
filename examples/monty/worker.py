@@ -13,11 +13,12 @@ from the environment. The example sets these in ``.env.local`` (see examples/mon
 Env vars:
     TEMPORAL_CONFIG_FILE         path to a temporal.toml (set in .env.local)
     TEMPORAL_PROFILE             profile name to load (default: "default")
-    OPENAI_API_KEY               required — the conversational agents call the OpenAI API
+    OPENAI_API_KEY               required — the OpenAI conversational agents call OpenAI
+    GEMINI_API_KEY               required — the Gemini conversational agents call Gemini
     MONTY_AGENT_TASK_QUEUE       task queue to poll (default: monty-dynamic-agent)
 
-This worker hosts the three Monty agents (MontyDynamicAgent + the two conversational
-agents) — not the session manager. The packaged session manager is hosted by
+This worker hosts the Monty agents (dynamic + OpenAI/Gemini conversational variants) —
+not the session manager. The packaged session manager is hosted by
 examples.monty.session_manager_worker; because it launches agents by registered name,
 it dispatches these agents to this queue without this worker hosting it.
 """
@@ -30,6 +31,8 @@ import os
 import sys
 from datetime import timedelta
 
+from google.genai import Client as GeminiClient
+from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
 from temporal_agent_harness.ai_sdks.openai_agents_plugin import (
     ModelActivityParameters,
     OpenAIAgentsPlugin,
@@ -44,8 +47,10 @@ from temporalio.worker import Worker
 from temporal_agent_harness.harness.subagent_activities import SubagentActivities
 
 from . import activities
-from .conversational_subagent_workflow import MontyChatSubagentWorkflow
-from .conversational_workflow import MontyChatAgentWorkflow
+from .conversational_gemini_subagent_workflow import MontyChatGeminiSubagentWorkflow
+from .conversational_gemini_workflow import MontyChatGeminiAgentWorkflow
+from .conversational_subagent_workflow import MontyChatOpenAISubagentWorkflow
+from .conversational_workflow import MontyChatOpenAIAgentWorkflow
 from .monty_activities import monty_resume_batch, monty_start_batch
 from .workflow import TASK_QUEUE, MontyDynamicAgentWorkflow
 
@@ -71,32 +76,46 @@ async def main() -> None:
     # exceed Temporal's payload limit; the codec offloads big payloads to external storage
     # and stores a reference. Every process that reads these payloads uses the same codec, so
     # the converters MUST match or offloaded payloads can't be read back.
-    # The conversational Monty agents drive the OpenAI Agents SDK, so this worker needs
-    # Temporal's OpenAI Agents plugin. The original script-only MontyDynamicAgent doesn't
-    # use it, but sharing one worker keeps the demo simple.
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        sys.exit("error: OPENAI_API_KEY env var not set")
-    plugin = OpenAIAgentsPlugin(
-        model_params=ModelActivityParameters(
-            start_to_close_timeout=timedelta(minutes=3),
+    # The conversational Monty agents intentionally demonstrate two provider integrations
+    # side by side. The original script-only MontyDynamicAgent doesn't use either plugin,
+    # but sharing one worker keeps the demo simple. Register OpenAI first: its plugin
+    # requires OpenAIPayloadConverter, which can still serialize the Pydantic payloads used
+    # by the Gemini activity models.
+    openai_api_key = os.environ.get("OPENAI_API_KEY")
+    gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    missing = [
+        name
+        for name, value in (
+            ("OPENAI_API_KEY", openai_api_key),
+            ("GEMINI_API_KEY", gemini_api_key),
+        )
+        if not value
+    ]
+    if missing:
+        sys.exit(f"error: missing required env var(s): {', '.join(missing)}")
+    plugins = [
+        OpenAIAgentsPlugin(
+            model_params=ModelActivityParameters(
+                start_to_close_timeout=timedelta(minutes=3),
+            ),
         ),
-    )
+        GoogleGenAIPlugin(GeminiClient(api_key=gemini_api_key)),
+    ]
 
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
         **connect_config,
-        plugins=[plugin],
+        plugins=plugins,
         data_converter=await with_large_payload_offload(
             DataConverter(payload_converter_class=OpenAIPayloadConverter)
         ),
     )
 
-    # All three Monty agents run here: the script-only MontyDynamicAgent, the inline
-    # conversational MontyChatAgent, and the subagent-driven MontyChatSubagentAgent (which
-    # drives MontyDynamicAgent as a subagent — so the child runs on this same queue). The
-    # session manager is hosted by its own worker, not here; it dispatches these agents
-    # to this queue by name.
+    # Monty agents run here: the script-only MontyDynamicAgent, inline OpenAI and Gemini
+    # conversational agents, and both provider-specific subagent variants (which drive
+    # MontyDynamicAgent as a subagent — so the child runs on this same queue). The session
+    # manager is hosted by its own worker, not here; it dispatches these agents to this
+    # queue by name.
     #
     # SubagentActivities closes over this worker's client so its run_subagent_turn activity can
     # send updates to + stream the reply from the child MontyDynamicAgent workflow. It's the
@@ -107,14 +126,16 @@ async def main() -> None:
         task_queue=task_queue,
         workflows=[
             MontyDynamicAgentWorkflow,
-            MontyChatAgentWorkflow,
-            MontyChatSubagentWorkflow,
+            MontyChatOpenAIAgentWorkflow,
+            MontyChatGeminiAgentWorkflow,
+            MontyChatOpenAISubagentWorkflow,
+            MontyChatGeminiSubagentWorkflow,
         ],
         # The travel-booking activities (the host functions) plus the Monty-stepping
         # activities (monty_start_batch / monty_resume_batch — the single async/concurrent
         # batch driver used by every Monty agent) plus the subagent-turn activity (drives the
-        # script-runner child for MontyChatSubagentAgent). The OpenAI model activity is
-        # registered by the plugin above.
+        # script-runner child for both subagent workflows). The OpenAI and Gemini model
+        # activities are registered by the plugins above.
         activities=[
             *activities.ALL_ACTIVITIES,
             monty_start_batch,

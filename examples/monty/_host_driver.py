@@ -1,10 +1,10 @@
 """Shared Monty host-call driver for both Monty agents.
 
-Both :class:`MontyDynamicAgentWorkflow` (script-as-request) and
-:class:`MontyChatAgentWorkflow` (LLM writes the script) run a model/caller-authored Python
-script the same way: via the async batch driver in :mod:`.monty_activities`. They differ
-only in their front door — how the script arrives — not in how it executes. This driver is
-that shared execution half, used by **composition**: each agent workflow constructs one with
+Both :class:`MontyDynamicAgentWorkflow` (script-as-request) and the conversational Monty
+workflows (LLM writes the script) run a model/caller-authored Python script the same way:
+via the async batch driver in :mod:`.monty_activities`. They differ only in their front
+door — how the script arrives — not in how it executes. This driver is that shared
+execution half, used by **composition**: each agent workflow constructs one with
 its :class:`AgentWorkflowRunner` and calls :meth:`MontyHostDriver.run_script`.
 
   * :meth:`run_script` — the batch loop: ``monty_start_batch`` once, then repeatedly run

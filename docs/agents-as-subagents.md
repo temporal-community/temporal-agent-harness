@@ -556,17 +556,17 @@ The first real parent→subagent flow reuses the existing Monty pieces. The bare
 `MontyDynamicAgentWorkflow` (`agent/python/monty_dynamic_workflow/workflow.py`) — a no-model-in-
 the-loop agent whose single `@agent.accepts` handler `run_script(RunScript) -> TextReply` executes
 a script in the Monty sandbox — is the **ideal subagent**: it takes scripts and runs them. So a
-new parent agent (a sibling of `conversational_workflow.py`'s `MontyChatAgent`, which is left
-untouched) keeps the *same* conversational Gemini loop and script-writing system prompt, but
-instead of running scripts inline via a `run_monty_script` `tool_defn`, it wires the script-runner
-as a subagent: `subagent_toolset(MontyDynamicAgentWorkflow, key="monty", task_queue=TASK_QUEUE)`.
+new parent agent (a sibling of `conversational_workflow.py`'s `MontyChatOpenAIAgent`) keeps the
+*same* conversational OpenAI loop and script-writing system prompt, but instead of running scripts
+inline via a `run_monty_script` `tool_defn`, it wires the script-runner as a subagent:
+`subagent_toolset(MontyDynamicAgentWorkflow, key="monty", task_queue=TASK_QUEUE)`.
 The model now `start_monty()`s an instance, sends scripts via `monty_run_script(subagent, RunScript)`,
 and `stop_monty()`s it — a drop-in replacement for the inline tool. This exercises the whole design:
 the handle indirection, multiple turns per subagent (gate + turn counter + offset resume), and the
 `run_subagent_turn` activity against a real child.
 
 - **Approval stance (LOCKED 2026-06-17):** the parent runs under `always_require_approvals` (as
-  `MontyChatAgent` does), so it **gates the subagent tools** — every `start_monty` /
+  `MontyChatOpenAIAgent` does), so it **gates the subagent tools** — every `start_monty` /
   `monty_run_script` / `stop_monty` call escalates to a human. The child keeps its own
   `dangerously_skip_all`, so the script's host calls run unguarded *inside the child* (a known
   difference from the inline agent, where host calls were gated in the parent — forwarding a
@@ -576,9 +576,11 @@ the handle indirection, multiple turns per subagent (gate + turn counter + offse
   `BaseModel` tool results with `model_dump_json()` (per **Result rendering** above).
 - **Worker:** registers the new parent + `MontyDynamicAgentWorkflow` + the Monty/host activities +
   **`SubagentActivities(client).run_subagent_turn`** (the activity that was previously registered
-  nowhere). Runnable by hand with a `GEMINI_API_KEY`, like `MontyChatAgent`.
-- **End-to-end test:** since the full parent path needs the live Gemini API (so it can't run in
-  CI, exactly as `MontyChatAgent` has no automated test), the e2e assertion uses a tiny
+  nowhere). Runnable by hand with an `OPENAI_API_KEY`, like `MontyChatOpenAIAgent`.
+- **Provider matrix:** the demo now has explicit OpenAI and Gemini subagent parents:
+  `MontyChatOpenAISubagentAgent` and `MontyChatGeminiSubagentAgent`.
+- **End-to-end test:** since the full parent path needs the live OpenAI API (so it can't run in
+  CI, exactly as `MontyChatOpenAIAgent` has no automated test), the e2e assertion uses a tiny
   **model-free** test-only parent whose handler calls `runner.start_subagent` +
   `runner.run_subagent_turn` against a real `MontyDynamicAgentWorkflow` child under a
   `WorkflowEnvironment` — proving the activity + FIFO gate + offset-resume + registry against a

@@ -39,16 +39,15 @@ ui = [
 # published package's runtime deps — examples are not shipped.
 examples = [
     "temporalio[openai-agents,opentelemetry]>=1.27.2",
+    "google-genai>=2.0.0",
+    "google-auth>=2.53.0",
     "pydantic-monty>=0.0.18",  # the Monty sandbox the monty example runs scripts in
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
 ]
-# Test + lint tooling. The full tests/ suite imports pydantic-monty/OpenAI for the Monty
-# example tests via the `examples` group, and the Gemini SDK for the legacy ai_sdks plugin
-# tests directly below. uv installs the `dev` group by default, so a plain `uv run pytest`
-# has everything the whole suite under tests/ needs.
+# Test + lint tooling. The full tests/ suite imports pydantic-monty/OpenAI/Gemini for the
+# Monty example tests via the `examples` group. uv installs the `dev` group by default, so
+# a plain `uv run pytest` has everything the whole suite under tests/ needs.
 dev = [
-    "google-genai>=2.0.0",
-    "google-auth>=2.53.0",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
     "setuptools>=68",  # package artifact tests call the build backend directly

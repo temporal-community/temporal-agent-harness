@@ -11,8 +11,8 @@ exactly that: when the script calls a host function, the workflow turns it into 
 durable ``workflow.execute_activity`` call. The dynamically supplied script gets to
 orchestrate durable work without itself being trusted with Temporal (or anything else).
 
-Contrast with the conversational Monty agents (``conversational_workflow.py``): those drive
-the OpenAI Agents SDK with a model in the loop. This one has no model in the loop at all —
+Contrast with the conversational Monty agents: those drive provider SDKs with a model in
+the loop. This one has no model in the loop at all —
 the "plan" arrives pre-written as the script. It reuses the same harness contract:
 ``@agent.defn`` + an :class:`AgentWorkflowRunner` built in ``@workflow.init``, the turn
 loop driven by ``await runner.run(self)``, and a single ``@agent.accepts`` handler

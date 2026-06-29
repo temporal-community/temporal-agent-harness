@@ -29,9 +29,9 @@ from temporal_agent_harness.harness.agent_protocol import (
 
 from examples.monty import activities
 from examples.monty.conversational_workflow import (
-    MODEL_OPERATOR_COMMAND,
-    SUPPORTED_MODELS,
-    MontyChatAgentWorkflow,
+    OPENAI_MODEL_OPERATOR_COMMAND,
+    OPENAI_SUPPORTED_MODELS,
+    MontyChatOpenAIAgentWorkflow,
 )
 from examples.monty.monty_activities import monty_resume_batch, monty_start_batch
 
@@ -65,7 +65,7 @@ async def client_and_queue():
         async with Worker(
             client,
             task_queue=task_queue,
-            workflows=[MontyChatAgentWorkflow],
+            workflows=[MontyChatOpenAIAgentWorkflow],
             activities=[
                 *activities.ALL_ACTIVITIES,
                 monty_start_batch,
@@ -81,9 +81,9 @@ async def client_and_queue():
 async def test_openai_chat_agent_runs_monty_tool(client_and_queue):
     client, task_queue = client_and_queue
     handle = await client.start_workflow(
-        MontyChatAgentWorkflow.run,
+        MontyChatOpenAIAgentWorkflow.run,
         AgentConfig(approval_policy=ToolApprovalPolicy.dangerously_skip_all()),
-        id=f"MontyChatAgent-{uuid.uuid4()}",
+        id=f"MontyChatOpenAIAgent-{uuid.uuid4()}",
         task_queue=task_queue,
     )
     await handle.execute_update(
@@ -129,6 +129,6 @@ async def test_openai_chat_agent_runs_monty_tool(client_and_queue):
 
 
 async def test_openai_chat_agent_model_command_choices():
-    assert MODEL_OPERATOR_COMMAND.argument is not None
-    assert tuple(MODEL_OPERATOR_COMMAND.argument.choices) == SUPPORTED_MODELS
-    assert SUPPORTED_MODELS == ("gpt-5.4-mini", "gpt-5.4")
+    assert OPENAI_MODEL_OPERATOR_COMMAND.argument is not None
+    assert tuple(OPENAI_MODEL_OPERATOR_COMMAND.argument.choices) == OPENAI_SUPPORTED_MODELS
+    assert OPENAI_SUPPORTED_MODELS == ("gpt-5.4-mini", "gpt-5.4")

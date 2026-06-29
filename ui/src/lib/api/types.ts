@@ -108,9 +108,7 @@ export interface AgentMessageObject {
 
 export type AgentInboundMessage = string | AgentMessageObject;
 
-export type SlashCommandModel =
-  | "gpt-5.4-mini"
-  | "gpt-5.4";
+export type SlashCommandModel = string;
 
 export type SlashCommandApprovalMode = "strict" | "safe" | "skip";
 

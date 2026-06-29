@@ -136,7 +136,7 @@ class TravelAgent:
     # A typed, self-describing operation. The agent advertises this signature, so callers —
     # your code or another agent — can drive it programmatically. Your turn logic goes here:
     # call your AI SDK, run tools through the runner, and return the typed reply.
-    # (See examples/monty for a complete, model-in-the-loop OpenAI Agents SDK example.)
+    # (See examples/monty for complete model-in-the-loop OpenAI and Gemini examples.)
     @agent.accepts
     async def plan_trip(self, request: PlanTrip) -> Itinerary:
         ...
@@ -200,14 +200,15 @@ will still use them.
 ## Run The Example
 
 The [`examples/monty`](examples/monty) example is the best end-to-end path: it
-includes a conversational travel agent and a subagent-driven variant. From
+includes conversational travel agents for OpenAI and Gemini, plus subagent-driven variants.
+From
 `examples/monty`, create local environment settings first:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Set `OPENAI_API_KEY` in `.env.local` for the conversational agents. The example
+Set `OPENAI_API_KEY` and `GEMINI_API_KEY` in `.env.local` for the conversational agents. The example
 defaults to the committed `temporal.local.toml` profile, which points at a local
 Temporal dev server.
 

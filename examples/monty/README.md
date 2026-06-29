@@ -3,14 +3,18 @@
 A Temporal-native agent example built on the harness. A "Monty" agent runs a sandboxed Python
 script ([pydantic-monty](https://pypi.org/project/pydantic-monty/)) whose only escape hatches are
 host functions backed by durable Temporal activities (simulated flight/hotel search + booking).
-Three variants ship here:
+Five variants ship here:
 
 - **MontyDynamicAgent** — no model in the loop; each turn *is* a pre-written script that the
   workflow runs in the sandbox.
-- **MontyChatAgent** — conversational: you chat in plain text, a model writes its own script and
-  runs it via a tool, then replies in prose.
-- **MontyChatSubagentAgent** — same conversational experience, but it drives `MontyDynamicAgent`
-  as a *subagent* (the first end-to-end exercise of the harness subagent toolset).
+- **MontyChatOpenAIAgent** — conversational OpenAI Agents SDK path: you chat in plain text,
+  the model writes its own script and runs it via a tool, then replies in prose.
+- **MontyChatGeminiAgent** — conversational Gemini Interactions path with the same Monty
+  scripting tool, but a different provider-specific tool loop.
+- **MontyChatOpenAISubagentAgent** — same OpenAI conversational experience, but it drives
+  `MontyDynamicAgent` as a *subagent*.
+- **MontyChatGeminiSubagentAgent** — same Gemini conversational experience, but it drives
+  `MontyDynamicAgent` as a *subagent*.
 
 The agents are driven through the packaged session-manager workflow and shared
 Svelte UI (`ui`). The Monty example owns the local app, registry, and recipes, so
@@ -24,7 +28,8 @@ Copy the env template and fill it in (it's gitignored, so your secrets stay loca
 cp .env.example .env.local
 ```
 
-- Set `OPENAI_API_KEY` — the conversational agents need it.
+- Set `OPENAI_API_KEY` and `GEMINI_API_KEY` — the side-by-side conversational agents need
+  both provider credentials.
 - `TEMPORAL_CONFIG_FILE` defaults to the repo's committed `temporal.local.toml` (a local dev
   server). To run against your own server or Temporal Cloud, create a private `temporal.toml`
   (gitignored) and point `TEMPORAL_CONFIG_FILE` at it (see `.env.example`).
