@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel, Field
 from temporalio.exceptions import ApplicationError
 
 from temporal_agent_harness.harness import agent
+from temporal_agent_harness.harness import agent_workflow as _agent_workflow
 from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
     SlashCommand,
@@ -250,6 +252,46 @@ def test_send_tool_signature_uses_the_childs_real_models():
     # emitted schema is the child's real input model (nested, descriptions preserved) and the
     # return type is the real output model.
     assert ask.__annotations__ == {"subagent": str, "q": _Question, "return": _Answer}
+
+
+async def test_send_tool_accepts_positional_payload_from_schema(monkeypatch):
+    tools = {t.__name__: t for t in agent.subagent_toolset(
+        _SampleChildAgent, key="sample", task_queue="sample-q"
+    )}
+    ask = tools["sample_ask"]
+
+    class _FakeRunner:
+        current_stream_context = SimpleNamespace(turn_id="turn", turn_number=1)
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, dict[str, str]]] = []
+
+        def _auto_approves(
+            self, _tool_name: str, _tool_input: dict, *, inherently_safe: bool
+        ) -> bool:
+            return True
+
+        def _pub(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def run_subagent_turn(
+            self, subagent: str, fn_name: str, payload: dict[str, str]
+        ) -> dict[str, str]:
+            self.calls.append((subagent, fn_name, payload))
+            return {"text": "done"}
+
+    fake_runner = _FakeRunner()
+    monkeypatch.setattr(_agent_workflow.workflow, "in_workflow", lambda: True)
+    runner_token = _agent_workflow._CURRENT_RUNNER.set(fake_runner)
+    tool_id_token = _agent_workflow._CURRENT_TOOL_ID.set("tool-call")
+    try:
+        result = await ask("child-1", _Question(text="hello"))
+    finally:
+        _agent_workflow._CURRENT_TOOL_ID.reset(tool_id_token)
+        _agent_workflow._CURRENT_RUNNER.reset(runner_token)
+
+    assert result == _Answer(text="done")
+    assert fake_runner.calls == [("child-1", "ask", {"text": "hello"})]
 
 
 def test_send_tool_docstring_carries_the_handler_description():

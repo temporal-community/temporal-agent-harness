@@ -119,9 +119,29 @@ def _make_send_tool(
     output_type = handler.output_type
     param_name = _handler_param_name(handler)
 
-    async def _send(subagent: str, **model_kwargs: Any) -> BaseModel:
-        # The model passes the input under ``param_name`` as a raw dict; coerce + validate.
-        payload = input_type.model_validate(model_kwargs.get(param_name, {}))
+    async def _send(
+        subagent: str, *model_args: Any, **model_kwargs: Any
+    ) -> BaseModel:
+        # Schema adapters may dispatch the synthesized ``(subagent, <param>)`` signature
+        # positionally or by keyword. Normalize both shapes before validating.
+        if len(model_args) > 1:
+            raise TypeError(
+                f"{key}_{fn_name} expected at most one positional payload argument, "
+                f"got {len(model_args)}"
+            )
+        if model_args and param_name in model_kwargs:
+            raise TypeError(
+                f"{key}_{fn_name} got multiple values for argument {param_name!r}"
+            )
+        if model_args:
+            raw_payload = model_args[0]
+        else:
+            raw_payload = model_kwargs.pop(param_name, {})
+        if model_kwargs:
+            unexpected = ", ".join(sorted(model_kwargs))
+            raise TypeError(f"{key}_{fn_name} got unexpected argument(s): {unexpected}")
+
+        payload = input_type.model_validate(raw_payload)
         output = await _current_runner().run_subagent_turn(
             subagent, fn_name, payload.model_dump(mode="json")
         )
