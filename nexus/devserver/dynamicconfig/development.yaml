@@ -1,0 +1,42 @@
+# Dynamic config required for the Nexus agent-adapter's update-with-callback pattern.
+#
+# The Go Nexus handler uses UpdateWorkflowExecution with completion callbacks directly
+# on the gRPC wire (bypassing the SDK) because the Python SDK's Rust bridge strips
+# manually-attached callbacks before the gRPC call is made. These flags enable the
+# server-side infrastructure that callback pattern depends on.
+#
+# Use with the custom Temporal server built via `make install-dev-server`.
+
+limit.maxIDLength:
+  - value: 255
+
+system.maxCallbacksPerWorkflow:
+  - value: 500
+
+# Nexus callback endpoint — must match the server's HTTP address.
+component.nexusoperations.callback.endpoint.template:
+  - value: http://localhost:7243/namespaces/{{.NamespaceName}}/nexus/callback
+
+# Allow callbacks to reach localhost (insecure is fine for local dev).
+callback.allowedAddresses:
+  - value:
+      - Pattern: "*"
+        AllowInsecure: true
+
+# Required for update-with-callback (the mechanism pollMessages relies on).
+history.enableUpdateCallbacks:
+  - value: true
+
+# CHASM / transition history — needed for the extended Nexus operation lifecycle.
+history.enableTransitionHistory:
+  - value: true
+history.enableChasm:
+  - value: true
+history.enableCHASMCallbacks:
+  - value: true
+
+# Standalone Nexus operation and activity support.
+nexusoperation.enableStandalone:
+  - value: true
+activity.enableStandalone:
+  - value: true

@@ -1,0 +1,64 @@
+nexusrpc: "1.0.0"
+
+services:
+  RegistryService:
+    description: >
+      Cross-namespace gateway for registering and deregistering MCP services.
+      Service workers in any Temporal namespace call these operations to register
+      with the gateway's ToolRegistryWorkflow — a Nexus call rather than a direct
+      workflow signal so it works across namespace boundaries.
+    operations:
+      register_nexus:
+        description: Register a 1st-party Nexus service with the gateway.
+        input:
+          $ref: "#/types/RegisterNexusInput"
+        output:
+          type: "null"
+      register_external:
+        description: Register a 3rd-party external MCP server with the gateway.
+        input:
+          $ref: "#/types/RegisterExternalInput"
+        output:
+          type: "null"
+      deregister:
+        description: Remove a service registration from the gateway.
+        input:
+          $ref: "#/types/DeregisterInput"
+        output:
+          type: "null"
+
+types:
+  RegisterNexusInput:
+    type: object
+    description: Input for registering a 1st-party Nexus service.
+    properties:
+      name:
+        type: string
+        description: Service name prefix, e.g. "docsproxy".
+      endpoint:
+        type: string
+        description: Temporal Nexus endpoint the service handlers are registered on.
+      tools:
+        type: array
+        description: Serialised mcp.types.Tool dicts with prefixed names.
+        items:
+          type: object
+
+  RegisterExternalInput:
+    type: object
+    description: Input for registering a 3rd-party external MCP server.
+    properties:
+      name:
+        type: string
+        description: Service name prefix for the external server.
+      url:
+        type: string
+        description: Streamable-HTTP MCP endpoint URL.
+
+  DeregisterInput:
+    type: object
+    description: Input for removing a service registration.
+    properties:
+      name:
+        type: string
+        description: Service name to remove.
