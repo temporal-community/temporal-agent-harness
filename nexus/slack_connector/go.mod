@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/nexus-rpc/sdk-go v0.6.0
-	github.com/slack-go/slack v0.20.0
+	github.com/slack-go/slack v0.23.1
 	github.com/stretchr/testify v1.11.1
 	go.temporal.io/api v1.62.3-0.20260330144107-1e2b1facde20
 	go.temporal.io/sdk v1.41.1
