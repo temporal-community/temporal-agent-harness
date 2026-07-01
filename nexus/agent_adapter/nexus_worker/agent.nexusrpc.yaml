@@ -1,0 +1,370 @@
+nexusrpc: "1.0.0"
+
+services:
+  AgentService:
+    description: "Nexus service that exposes an agent session to external callers (e.g. the Slack connector). The connector calls sendAgentMessage to deliver user input and pollMessages to consume the agent's response stream."
+    operations:
+      sendAgentMessage:
+        description: "Start or reuse an agent workflow session and deliver a message to a named @agent.accepts handler. Mirrors AgentClient.send_message() - msgType is the handler name (e.g. 'ask', 'slash'), payload is its JSON-encoded input model. Returns the turn output for polling via pollMessages."
+        input:
+          $ref: "#/types/SendAgentMessageInput"
+        output:
+          $ref: "#/types/SendMessageOutput"
+      executeOperatorCommand:
+        description: "Execute a harness-level operator command (e.g. /approvals, /stop, /status). Does not create a turn - the harness applies the change directly and returns a reply string synchronously."
+        input:
+          $ref: "#/types/ExecuteOperatorCommandInput"
+        output:
+          $ref: "#/types/ExecuteOperatorCommandOutput"
+      approveToolCall:
+        description: "Resolve a pending tool-approval gate. The workflow's tool_approval update records the decision; the gated tool call proceeds (or is rejected) immediately."
+        input:
+          $ref: "#/types/ApproveToolCallInput"
+        output:
+          $ref: "#/types/ApproveToolCallOutput"
+      queryAgentInterface:
+        description: "Return the list of @agent.accepts handlers the agent exposes - name, description, and input/output schemas - mirroring AgentClient.get_agent_interface(). Use this to construct valid sendAgentMessage payloads or to model the agent as a subagent tool."
+        input:
+          $ref: "#/types/QuerySessionInput"
+        output:
+          $ref: "#/types/AgentInterfaceOutput"
+      queryOperatorInterface:
+        description: "Return the list of operator commands the agent accepts. Use this to build the Slack App manifest slash_commands section and to route incoming slash commands to the correct operation."
+        input:
+          $ref: "#/types/QuerySessionInput"
+        output:
+          $ref: "#/types/QueryOperatorInterfaceOutput"
+      queryAgentStatus:
+        description: "Return a snapshot of the agent session's current state: turn counter, whether a turn is active, pending tool approvals, and message-queuing configuration. Mirrors AgentClient.get_status()."
+        input:
+          $ref: "#/types/QuerySessionInput"
+        output:
+          $ref: "#/types/AgentStatusOutput"
+      pollMessages:
+        description: "Async operation - attaches a completion callback to WorkflowStream's built-in poll update so reply_delta events published from the agent workflow are delivered. Returns a batch of stream items (WorkflowStream PollResult wire format) plus the next cursor."
+        input:
+          $ref: "#/types/PollMessagesInput"
+        output:
+          $ref: "#/types/PollMessagesOutput"
+
+types:
+  SendAgentMessageInput:
+    type: object
+    properties:
+      sessionId:
+        type: string
+        description: "Provider-prefixed session identifier (e.g. slack:C12345)"
+      msgType:
+        type: string
+        description: "Target @agent.accepts handler name (e.g. 'ask', 'slash')"
+      payload:
+        type: string
+        description: "JSON-encoded input matching the target handler's input model (e.g. '{\"text\":\"hello\"}' for the 'ask' handler)"
+    required:
+      - sessionId
+      - msgType
+      - payload
+    additionalProperties: false
+
+  SendMessageOutput:
+    type: object
+    properties:
+      turnNumber:
+        type: integer
+        description: "Monotonic turn counter for this session"
+      turnId:
+        type: string
+        description: "Unique ID for this turn"
+      streamHeadOffset:
+        type: integer
+        description: "Stream log offset at message-accept time; start the first pollMessages call from this offset to skip prior-turn history"
+      pending:
+        type: boolean
+        description: "True if the message was queued behind an active turn rather than dispatched immediately"
+    required:
+      - turnNumber
+      - turnId
+    additionalProperties: false
+
+  ExecuteOperatorCommandInput:
+    type: object
+    properties:
+      sessionId:
+        type: string
+        description: "Provider-prefixed session identifier"
+      name:
+        type: string
+        description: "Operator command name (e.g. 'approvals', 'stop', 'status')"
+      arg:
+        type: string
+        description: "Optional argument string"
+    required:
+      - sessionId
+      - name
+    additionalProperties: false
+
+  ExecuteOperatorCommandOutput:
+    type: object
+    properties:
+      reply:
+        type: string
+        description: "Human-readable reply text from the harness"
+    required:
+      - reply
+    additionalProperties: false
+
+  ApproveToolCallInput:
+    type: object
+    properties:
+      sessionId:
+        type: string
+        description: "Provider-prefixed session identifier"
+      toolId:
+        type: string
+        description: "The tool_id from the ToolApprovalRequested stream event"
+      approved:
+        type: boolean
+        description: "True to allow the tool call, false to deny it"
+      reason:
+        type: string
+        description: "Optional note surfaced on the resolution event and, on denial, fed back to the model"
+      remember:
+        type: boolean
+        description: "If true and approved, adds the tool to the session's auto-approve list so it won't be gated again"
+    required:
+      - sessionId
+      - toolId
+      - approved
+    additionalProperties: false
+
+  ApproveToolCallOutput:
+    type: object
+    properties:
+      toolId:
+        type: string
+        description: "Echo of the resolved tool ID"
+      accepted:
+        type: boolean
+        description: "Always true on success (the update validator rejects invalid decisions before the handler runs)"
+    required:
+      - toolId
+      - accepted
+    additionalProperties: false
+
+  QuerySessionInput:
+    type: object
+    properties:
+      sessionId:
+        type: string
+        description: "Provider-prefixed session identifier"
+    required:
+      - sessionId
+    additionalProperties: false
+
+  AgentInterfaceOutput:
+    type: object
+    properties:
+      handlers:
+        type: array
+        items:
+          $ref: "#/types/AcceptedFunction"
+        description: "Ordered list of @agent.accepts handlers the agent exposes"
+    required:
+      - handlers
+    additionalProperties: false
+
+  AcceptedFunction:
+    type: object
+    description: "One @agent.accepts handler exposed by the agent, described tool-style (mirrors harness AcceptedFunction)"
+    properties:
+      name:
+        type: string
+        description: "Handler name - the value to pass as msgType in sendAgentMessage"
+      description:
+        type: string
+        description: "Handler docstring describing when and how to use it"
+      parameters:
+        type: string
+        description: "JSON-encoded JSON Schema for the handler's input model"
+      output:
+        type: string
+        description: "JSON-encoded JSON Schema for the handler's return model"
+    required:
+      - name
+      - description
+      - parameters
+      - output
+    additionalProperties: false
+
+  QueryOperatorInterfaceOutput:
+    type: object
+    properties:
+      commands:
+        type: array
+        items:
+          $ref: "#/types/OperatorCommand"
+        description: "Ordered list of operator commands the agent accepts"
+    required:
+      - commands
+    additionalProperties: false
+
+  OperatorCommand:
+    type: object
+    properties:
+      name:
+        type: string
+        description: "Canonical command name used as the routing key (e.g. 'scope')"
+      label:
+        type: string
+        description: "Display label including the slash (e.g. '/scope')"
+      description:
+        type: string
+        description: "Human-readable description suitable for a Slack manifest entry"
+      source:
+        type: string
+        description: "'harness' for built-in commands, 'agent' for agent-registered ones"
+      argument:
+        $ref: "#/types/OperatorCommandArgument"
+    required:
+      - name
+      - label
+      - description
+      - source
+    additionalProperties: false
+
+  OperatorCommandArgument:
+    type: object
+    description: "Argument metadata for rendering a UI hint or menu"
+    properties:
+      kind:
+        type: string
+        description: "'enum' | 'text' | 'tool_names'"
+      required:
+        type: boolean
+        description: "Whether the argument must be provided"
+      choices:
+        type: array
+        items:
+          type: string
+        description: "Valid choices when kind is 'enum'"
+      placeholder:
+        type: string
+        description: "Hint text for the argument (e.g. 'docs|forum|all')"
+      allowMultiple:
+        type: boolean
+        description: "Whether multiple space-separated values are accepted"
+    required:
+      - kind
+      - required
+    additionalProperties: false
+
+  AgentStatusOutput:
+    type: object
+    description: "Mirrors harness AgentStatus - the single source of truth for session state"
+    properties:
+      agentId:
+        type: string
+        description: "This agent's own short ID (stamped on every event it publishes)"
+      currentTurn:
+        type: integer
+        description: "Monotonic turn counter"
+      turnActive:
+        type: boolean
+        description: "True if a turn is currently running"
+      isMessageQueuingEnabled:
+        type: boolean
+        description: "True if the session accepts messages while a turn is active"
+      pendingApprovals:
+        type: array
+        items:
+          $ref: "#/types/PendingApproval"
+        description: "Gated tool calls currently awaiting a human decision"
+    required:
+      - agentId
+      - currentTurn
+      - turnActive
+      - isMessageQueuingEnabled
+      - pendingApprovals
+    additionalProperties: false
+
+  PendingApproval:
+    type: object
+    description: "A gated tool call awaiting a human decision (mirrors harness PendingApproval)"
+    properties:
+      toolId:
+        type: string
+        description: "ID to pass to approveToolCall"
+      toolName:
+        type: string
+        description: "Human-readable tool name"
+      toolInput:
+        type: string
+        description: "JSON-encoded model-facing tool input (injected parameters excluded)"
+      turnNumber:
+        type: integer
+        description: "Turn that triggered this approval request"
+    required:
+      - toolId
+      - toolName
+      - toolInput
+      - turnNumber
+    additionalProperties: false
+
+  PollMessagesInput:
+    type: object
+    properties:
+      sessionId:
+        type: string
+        description: "Provider-prefixed session identifier"
+      cursor:
+        type: integer
+      timeoutSeconds:
+        type: number
+        description: "How long the WorkflowStream poll update waits for new events before returning empty"
+    required:
+      - sessionId
+      - cursor
+    additionalProperties: false
+
+  PollMessagesOutput:
+    type: object
+    description: "Mirrors WorkflowStream PollResult wire format so the async update-with-callback payload decodes correctly without transformation."
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/types/StreamItem"
+        description: "Stream events since cursor; decode each as TurnEvent and map to Slack output"
+      next_offset:
+        type: integer
+        description: "Next cursor value to use in the following pollMessages call"
+      more_ready:
+        type: boolean
+        description: "True when more items are immediately available (batch was capped)"
+      closed:
+        type: boolean
+        description: "True only in the sync error path when the agent workflow has already completed"
+    required:
+      - items
+      - next_offset
+      - more_ready
+    additionalProperties: false
+
+  StreamItem:
+    type: object
+    description: "One event from WorkflowStream._log. Data is base64(proto Payload{encoding:json/plain, data:TurnEvent JSON})."
+    properties:
+      topic:
+        type: string
+        description: "Stream topic name (turn_events)"
+      data:
+        type: string
+        description: "base64-encoded proto Payload containing a TurnEvent"
+      offset:
+        type: integer
+        description: "Absolute position of this item in the stream"
+    required:
+      - topic
+      - data
+      - offset
+    additionalProperties: false

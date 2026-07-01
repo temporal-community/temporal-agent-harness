@@ -1,0 +1,100 @@
+# NOTE: this is only a manual template for now.
+# TODO: make this a geneated manifest based on a script that reads the harness config
+#       and generate the right slash commands, keeping both in sync.
+
+_metadata:
+  major_version: 1
+  minor_version: 1
+
+display_information:
+  name: Temporal Support Agent
+  description: AI-powered assistant for Temporal docs and forum, backed by a durable Temporal agent workflow.
+  background_color: "#141414"
+
+features:
+  bot_user:
+    display_name: Temporal Support Agent
+    always_online: true
+
+  slash_commands:
+    # -----------------------------------------------------------------------
+    # Agent-owned commands — create a turn, reply streams back via pollMessages
+    # -----------------------------------------------------------------------
+    - command: /scope
+      description: Set the retrieval scope for this session.
+      usage_hint: "[all | docs | forum]"
+      url: YOUR_URL_HERE/slack/commands
+      should_escape: false
+
+    - command: /set-model
+      description: Switch the LLM model used for this session.
+      usage_hint: "[gemini-3.5-flash | gemini-3.1-flash-lite]"
+      url: YOUR_URL_HERE/slack/commands
+      should_escape: false
+
+    - command: /set-docs-store
+      description: Switch the Temporal docs File Search store for this session.
+      usage_hint: "[store-display-name]"
+      url: YOUR_URL_HERE/slack/commands
+      should_escape: false
+
+    - command: /set-forum-store
+      description: Switch the Temporal forum File Search store for this session.
+      usage_hint: "[store-display-name]"
+      url: YOUR_URL_HERE/slack/commands
+      should_escape: false
+
+    - command: /approval-policy
+      description: Set the tool-approval policy for this session.
+      usage_hint: "[always-require | allow-safe | dangerously-skip-permissions]"
+      url: YOUR_URL_HERE/slack/commands
+      should_escape: false
+
+    # -----------------------------------------------------------------------
+    # Harness-owned commands — operator control plane, no agent turn created
+    # -----------------------------------------------------------------------
+    - command: /approvals
+      description: Set the harness tool-approval stance for this session (alias for /set-approvals).
+      usage_hint: "[strict | safe | skip]"
+      url: YOUR_URL_HERE/slack/commands
+      should_escape: false
+
+    - command: /allow-tools
+      description: Auto-approve one or more named tools so they skip the gate for this session.
+      usage_hint: "[tool_name ...]"
+      url: YOUR_URL_HERE/slack/commands
+      should_escape: false
+
+    - command: /stop
+      description: Stop the agent workflow for this session.
+      url: YOUR_URL_HERE/slack/commands
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      - commands            # enable slash commands
+      - chat:write          # post messages and stream replies
+      - chat:write.public   # post to channels the bot hasn't joined
+      - channels:history    # read message history (public channels)
+      - groups:history      # read message history (private channels)
+      - im:history          # read message history (DMs)
+      - mpim:history        # read message history (group DMs)
+      - users:read          # resolve user display names
+
+settings:
+  event_subscriptions:
+    request_url: YOUR_URL_HERE/slack/events
+    bot_events:
+      - message.channels   # messages in public channels
+      - message.groups     # messages in private channels
+      - message.im         # direct messages
+      - message.mpim       # group direct messages
+
+  interactivity:
+    is_enabled: true
+    request_url: YOUR_URL_HERE/slack/interactions  # tool-approval Approve/Deny buttons
+
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

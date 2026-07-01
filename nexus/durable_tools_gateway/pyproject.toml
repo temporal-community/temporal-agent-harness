@@ -1,0 +1,21 @@
+[project]
+name = "durable-tools-gateway"
+version = "0.1.0"
+description = "MCP Streamable HTTP entry point for the durable tool call gateway"
+requires-python = ">=3.13"
+dependencies = [
+    "mcp>=1.13.0",
+    "nexus-mcp",
+    "starlette>=0.40.0",
+    "temporal-agent-harness",
+    "temporalio>=1.15.0",
+    "uvicorn>=0.30.0",
+]
+
+[tool.uv.sources]
+nexus-mcp = { path = "nexus_mcp", editable = true }
+temporal-agent-harness = { git = "ssh://git@github.com/temporalio/temporal-agent-harness.git", branch = "main" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mcp_server*"]
