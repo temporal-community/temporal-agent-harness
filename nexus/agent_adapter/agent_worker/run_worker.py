@@ -14,6 +14,11 @@ Env vars:
                             activity-backed tools, e.g. "my_pkg.tools:search"
     AGENT_TASK_QUEUE        task queue name (default: "agent"; must match
                             the Go nexus-worker's AGENT_TASK_QUEUE env var)
+    AGENT_INIT              optional — "module:function" called with the connected
+                            Client after connect() and before the worker starts;
+                            use for any agent-specific post-connect setup
+                            (e.g. "my_pkg.tools:init_tools" to wire a Temporal
+                            client into tool activities that need it)
     GEMINI_API_KEY          enables the Gemini Interactions API plugin
     TEMPORAL_CONFIG_FILE    path to temporal.toml
     TEMPORAL_PROFILE        profile name (default: "default")
@@ -105,6 +110,13 @@ async def main() -> None:
         plugins=plugins,
         data_converter=pydantic_data_converter,
     )
+
+    init_spec = os.environ.get("AGENT_INIT")
+    if init_spec:
+        init_fn = _import(init_spec)
+        result = init_fn(client)
+        if asyncio.iscoroutine(result):
+            await result
 
     worker = Worker(
         client,
