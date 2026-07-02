@@ -8,8 +8,8 @@ import (
 
 	"go.temporal.io/sdk/client"
 
-	slackmsg "github.com/temporalio/nexus_connector_slack/messaging/slack"
-	slackwebhook "github.com/temporalio/nexus_connector_slack/messaging/slack/webhook"
+	slackmsg "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging/slack"
+	slackwebhook "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging/slack/webhook"
 )
 
 type flags struct {
