@@ -3,20 +3,19 @@
 This is the subagent-flavoured twin of :class:`MontyChatAgentWorkflow`
 (``conversational_workflow.py``). Both put a *model in the loop*: the user chats in plain
 text, the model converses to gather what it needs, then writes its own Python script and runs
-it in the Monty sandbox. The conversational front end — the Gemini Interactions tool-calling
-loop and the script-writing system prompt — is IDENTICAL.
+it. The conversational front end — the Gemini Interactions tool-calling loop — is the same shape.
 
 The ONE difference is *where the script runs*. :class:`MontyChatAgentWorkflow` runs each
-model-authored script inline, via a ``run_monty_script`` ``@agent.tool_defn`` backed by a
-:class:`MontyHostDriver` held on the workflow itself. This agent instead drives the barebones
-:class:`~.workflow.MontyDynamicAgentWorkflow` — whose sole ``@agent.accepts`` handler,
-``run_script(RunScript) -> TextReply``, executes a script in the Monty sandbox — as a
-**subagent**. The script-runner is wired with
+model-authored script inline, via a ``run_travel_code`` Code Mode tool
+(``agent.code_mode_tool`` over the travel tools) held on the workflow itself. This agent instead
+drives the barebones :class:`~.workflow.MontyDynamicAgentWorkflow` — whose sole ``@agent.accepts``
+handler, ``run_script(RunScript) -> TextReply``, runs a script in its own Code Mode over the same
+travel tools — as a **subagent**. The script-runner is wired with
 ``agent.subagent_toolset(MontyDynamicAgentWorkflow, key="monty", task_queue=TASK_QUEUE)``,
 which generates three model-facing tools: ``start_monty`` (start an instance, returns a short
 handle), ``monty_run_script`` (send a script to that instance and get its reply), and
-``stop_monty`` (shut it down). So ``monty_run_script`` is a drop-in replacement for the inline
-``run_monty_script`` tool — same capability, now across a real parent→subagent boundary.
+``stop_monty`` (shut it down). So ``monty_run_script`` is the subagent counterpart of the inline
+agent's ``run_travel_code`` tool — same capability, now across a real parent→subagent boundary.
 
 Why this exists: it's the first real end-to-end exercise of the subagent toolset
 (``docs/agents-as-subagents.md``). It validates the handle indirection, multiple turns per
@@ -77,13 +76,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
-    # Reuse the script-writing contract verbatim from the inline agent — the rules the model
-    # must follow to author a Monty script are identical; only the tool it calls differs.
-    from .conversational_workflow import (
-        SUPPORTED_MODELS,
-        _SCRIPT_CONTRACT,
-        model_slash_command,
-    )
+    from .conversational_workflow import SUPPORTED_MODELS, model_slash_command
     from .workflow import TASK_QUEUE, MontyDynamicAgentWorkflow
 
 
@@ -97,18 +90,15 @@ SUBAGENT_KEY = "monty"
 SYSTEM_INSTRUCTION = f"""\
 You are a friendly travel-booking assistant. You help users search and book flights and \
 hotels and assemble trip itineraries. You don't have these abilities directly — instead you \
-write small **async** Python scripts and run them in a Monty sandbox. Every script MUST be \
-async: the host functions are coroutines you `await`, you run independent ones concurrently \
-with `asyncio.gather`, and you wrap the body in `asyncio.run(main())` (full rules below).
-
-You run scripts through a dedicated **script-runner subagent**, using these tools:
+write small async Python scripts and run them on a dedicated script-runner subagent, using \
+these tools:
 - `start_{SUBAGENT_KEY}`: start a script-runner and get back a short `subagent` handle. Call \
 this ONCE at the start of the conversation, then reuse the same handle for every script.
-- `{SUBAGENT_KEY}_run_script`: send a script to a running script-runner. Pass the handle from \
+- `{SUBAGENT_KEY}_run_script`: send a script to the running script-runner. Pass the handle from \
 `start_{SUBAGENT_KEY}` as `subagent`, and the script in `message` (a RunScript object with a \
-`script` field). The reply carries the script's printed output and final value.
-
-{_SCRIPT_CONTRACT}
+`script` field). Its description documents the full sandbox contract — the async script \
+structure, the concurrency rules, and the exact host-function signatures and result shapes; \
+follow it. The reply carries the script's printed output and final value.
 
 How to behave:
 - Converse naturally. Ask brief clarifying questions when you're missing something essential \
@@ -117,11 +107,11 @@ and state them.
 - Before running your first script, call `start_{SUBAGENT_KEY}` to get a handle. Keep using \
 that one handle for the rest of the conversation; don't start a new script-runner per script.
 - When you have enough to make progress, WRITE A SCRIPT and run it with \
-`{SUBAGENT_KEY}_run_script`. Keep each script focused (search, or book, or summarize) so you \
-can react to results.
+`{SUBAGENT_KEY}_run_script`. Run independent host calls concurrently with `asyncio.gather`; keep \
+each script focused (search, or book, or summarize) so you can react to results.
 - After a tool result, read it and reply to the user in plain, friendly prose — summarize \
 options, prices, confirmations. You may run more scripts in follow-up turns.
-- Never invent flight_ids/hotel_ids/confirmation codes — only use ones returned by a script."""
+- Never invent flight/hotel ids or confirmation codes — only use ones returned by a script."""
 
 
 @workflow.defn(name="MontyChatSubagentAgent")
