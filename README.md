@@ -12,6 +12,8 @@ build yourself:
   sign-off — handing control to a human only then, and resuming the moment it's granted —
 - agents **compose programmatically**, through real typed contracts (not limited to just text in,
   text out);
+- **Code Mode** — one tool that runs a Python script over your toolset — so a single
+  turn orchestrates many tool calls with real control flow and concurrency;
 - agents are **fully observable** — a standardized, full-lifecycle event stream lets you watch them
   live or replay exactly what they did;
 
@@ -82,6 +84,16 @@ Because agents have typed, self-describing interfaces, any harness agent can bec
 **strongly-typed toolset** another agent drives — start it, call its operations, stop it.
 Multi-agent systems compose through real contracts, not strings pasted between prompts.
 
+### 🧑‍💻 Code Mode — give the model code, not just a call menu
+Hand a model **one tool that runs a Python script** over your existing tools, instead of a long
+menu of individual calls. `agent.code_mode_tool([...tools...])` turns any set of harness tools
+into a single run-a-script tool: the model writes Python that calls them as async host functions,
+with real control flow — loops, conditionals, `min`/`max`, and `asyncio.gather` concurrency — so
+one turn orchestrates many calls. Each host call is still dispatched through the runner as a
+durable, approval-gated, observable activity, and the script is statically type-checked against
+your tools' signatures **before it runs**. And since a subagent toolset is just a list of tools,
+Code Mode composes over subagents for free.
+
 
 ## A taste
 
@@ -142,6 +154,67 @@ class TravelAgent:
     async def plan_trip(self, request: PlanTrip) -> Itinerary:
         ...
 ```
+
+## Code Mode
+
+Most agents call tools one at a time — a round-trip per call. **Code Mode** hands the model a
+single tool that runs a Python *script* over your tools, so one turn can search, filter, branch,
+and act across many calls with ordinary control flow and `asyncio.gather` concurrency.
+
+`agent.code_mode_tool(tools, name=...)` takes any list of harness tools and returns one inline
+tool. Its generated description tells the model the sandbox contract and every host function's
+signature + result shape — derived from your tools, so you never hand-write or maintain it. Hand
+the returned tool to your model's tool-calling loop like any other tool.
+
+```python
+from temporal_agent_harness.harness import agent
+
+# Any @agent.activity_tool_defn / @agent.tool_defn tools — including a subagent toolset.
+run_code = agent.code_mode_tool(
+    [search_flights, search_hotels, book_flight, get_trip_summary],
+    name="run_travel_code",
+)
+# The model then writes, e.g., a script like this and calls run_travel_code with it:
+#
+#     import asyncio
+#     async def main():
+#         flights, hotels = await asyncio.gather(  # independent calls run concurrently
+#             search_flights({"origin": "SFO", "destination": "JFK", "date": "2026-07-01"}),
+#             search_hotels({"city": "New York", "check_in": "2026-07-01", "check_out": "2026-07-05"}),
+#         )
+#         cheapest = min(flights["flights"], key=lambda f: f["price_usd"])
+#         return await book_flight({"flight_id": cheapest["flight_id"], "passenger_name": "Ada Lovelace"})
+#     asyncio.run(main())
+```
+
+- **Durable, gated, and observable per call.** The script runs in a sandbox; each host call is
+  dispatched back through the runner as its own durable activity — keeping that tool's approval
+  policy and `tool_start`/`tool_end` events. Writing the script is inert; only the host calls act.
+- **Type-checked before it runs.** Code Mode generates static type-check stubs from your tools'
+  signatures, so a wrong argument or an unknown result key comes back as an error to fix rather
+  than a bad run.
+- **Composes over subagents.** `agent.subagent_toolset(...)` returns a list of tools, so drop it
+  straight into `code_mode_tool([...])` — the model's script can drive subagents too.
+- **Several per agent.** Give one agent multiple `code_mode_tool`s (distinct `name`s) over
+  disjoint or overlapping tool sets.
+
+A worker that hosts a Code Mode agent registers the two sandbox-stepping activities (this needs
+the `code-mode` extra, which pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/),
+the sandbox scripts run in) alongside the durable bodies of any activity-backed host tools:
+
+```python
+from temporal_agent_harness.harness.code_mode.activities import CODE_MODE_ACTIVITIES
+
+worker = Worker(
+    client,
+    task_queue=...,
+    workflows=[MyAgent],
+    activities=[*CODE_MODE_ACTIVITIES, *(agent.tool_activity(t) for t in my_activity_tools)],
+)
+```
+
+See [`examples/monty`](examples/monty) for three agents all built on Code Mode: a no-model script
+runner, a conversational agent that writes its own scripts, and a subagent-driven variant.
 
 ## Slash Commands
 
@@ -205,7 +278,7 @@ self._runner = AgentWorkflowRunner(
 
 ```
 temporal_agent_harness/
-├── harness/      # the core harness: agent contract, turn runner, tools,
+├── harness/      # the core harness: agent contract, turn runner, tools, Code Mode,
 │                 #   the agent/subagent protocol, human-in-the-loop approvals
 ├── ai_sdks/      # AI SDK integrations (Gemini today) — durable activity wrappers
 ├── web/          # packaged session-manager workflow + FastAPI app factory
@@ -258,8 +331,8 @@ will still use them.
 
 ## Run The Example
 
-The [`examples/monty`](examples/monty) example is the best end-to-end path: it
-includes a conversational travel agent and a subagent-driven variant. From
+The [`examples/monty`](examples/monty) example is the best end-to-end path: a
+conversational travel agent and a subagent-driven variant, all built on Code Mode. From
 `examples/monty`, create local environment settings first:
 
 ```bash
@@ -327,6 +400,16 @@ uv add "temporal-agent-harness[ui]"
 The built Svelte assets are included in the package artifacts, but the server
 runtime dependencies (`fastapi[standard]`, including Uvicorn) are opt-in through
 the `ui` extra so core agent-worker installs stay smaller.
+
+Install the `code-mode` extra on workers that host **Code Mode** agents — it pulls in
+`pydantic-monty`, the sandbox the scripts run in (the workflow-side `agent.code_mode_tool` factory
+itself needs nothing extra, so importing it never requires this dependency):
+
+```bash
+pip install "temporal-agent-harness[code-mode]"
+# or, in a uv-managed project:
+uv add "temporal-agent-harness[code-mode]"
+```
 
 Agent authors use the harness runtime from `temporal_agent_harness.harness`.
 Applications that want the built-in session manager and UI use

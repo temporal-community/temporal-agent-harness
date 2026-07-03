@@ -30,6 +30,12 @@ s3 = [
 ui = [
     "fastapi[standard]>=0.136.3",
 ]
+# Code Mode: the pydantic-monty sandbox that Code Mode runs model-authored scripts in
+# (temporal_agent_harness.harness.code_mode). Only the worker-side stepping activities import
+# it; the workflow-side factory (agent.code_mode_tool) stays free of this dependency.
+code-mode = [
+    "pydantic-monty>=0.0.18",
+]
 
 [dependency-groups]
 # Everything needed to RUN the bundled Monty example from a checkout. Not part of the

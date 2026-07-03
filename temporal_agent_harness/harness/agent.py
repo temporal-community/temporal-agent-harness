@@ -54,6 +54,7 @@ from temporal_agent_harness.harness.agent_workflow import (
     tool_activity,
     tool_defn,
 )
+from temporal_agent_harness.harness.code_mode import code_mode_tool
 from temporal_agent_harness.harness.subagent_toolset import subagent_toolset
 
 __all__ = [
@@ -65,6 +66,7 @@ __all__ = [
     "ToolApprovalPolicy",
     "accepts",
     "activity_tool_defn",
+    "code_mode_tool",
     "defn",
     "subagent_toolset",
     "tool_activity",
