@@ -47,6 +47,12 @@ temporal worker deployment set-current-version \
   --deployment-name nexus-connector-slack --build-id <WORKER_BUILD_ID>
 ```
 
+> **Set `WORKER_BUILD_ID` to the git SHA (or another unique per-build value) in
+> CI.** It defaults to `"dev"`; if you deploy changed code without changing the
+> build ID, Pinned versioning re-pins workflows onto a build ID whose code has
+> silently changed — defeating the point of pinning. One build ID must map to
+> one immutable build.
+
 ## Build & deploy
 
 Build a Linux binary named `bootstrap` and deploy on the `provided.al2023`
@@ -69,6 +75,14 @@ shutdown buffer (~7s). A **minimum 60s timeout** is recommended.
 For backlog-driven scaling of serverless workers, see Temporal's
 [`auto-scaled-workers`](https://github.com/temporalio/sdk-go) project — out of
 scope for this binary.
+
+> **Streaming is the part that fits Lambda's model least.** The connector's
+> `Stream` activity streams agent output back over the life of a turn. If a turn
+> runs longer than the invocation's remaining time, the worker drains and the
+> activity is cut mid-stream, then retried on a fresh invocation. Size the
+> function timeout for your longest expected turn, and be aware that very
+> long-running or open-ended streams are a poor fit for per-invocation Lambda
+> execution — the always-on `cmd/worker` is better suited to those.
 
 ## Observability (optional)
 
