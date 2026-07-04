@@ -4,15 +4,10 @@ import (
 	"log"
 	"os"
 
-	agentiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/agent"
-	msgiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging"
-	"github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging/slack"
-	"github.com/temporalio/temporal-agent-harness/nexus/slack_connector/connector"
+	"github.com/temporalio/temporal-agent-harness/nexus/slack_connector/connectorworker"
 
-	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
-	"go.temporal.io/sdk/workflow"
 )
 
 type flags struct {
@@ -56,21 +51,10 @@ func main() {
 	}
 	defer tc.Close()
 
-	bot, err := slack.NewSlackBot(flags.slackBotToken)
-	if err != nil {
-		log.Fatalf("Failed to initialise Slack bot: %v", err)
-	}
-	if bot.UserID != "" {
-		log.Printf("Bot user ID: %s", bot.UserID)
-	}
-
-	driver := slack.NewSlackPlatform(bot.Client, bot.TeamID)
-	c := connector.NewConnectorWorkflow(&agentiface.TemporalNativeHarnessDriver{})
 	w := worker.New(tc, flags.taskQueue, worker.Options{})
-	w.RegisterWorkflowWithOptions(c.Run, workflow.RegisterOptions{Name: connector.WorkflowName})
-	w.RegisterActivityWithOptions(driver.Stream, activity.RegisterOptions{Name: msgiface.StreamActivity})
-	w.RegisterActivityWithOptions(driver.PostMessage, activity.RegisterOptions{Name: msgiface.PostMessageActivity})
-	w.RegisterActivityWithOptions(driver.PostApprovalPrompt, activity.RegisterOptions{Name: msgiface.PostApprovalPromptActivity})
+	if err := connectorworker.Register(w, flags.slackBotToken); err != nil {
+		log.Fatalf("Failed to register connector worker: %v", err)
+	}
 
 	log.Printf("Starting worker on task queue %q", flags.taskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {

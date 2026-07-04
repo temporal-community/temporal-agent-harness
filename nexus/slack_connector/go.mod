@@ -6,13 +6,16 @@ require (
 	github.com/nexus-rpc/sdk-go v0.6.0
 	github.com/slack-go/slack v0.23.1
 	github.com/stretchr/testify v1.11.1
-	go.temporal.io/api v1.62.3-0.20260330144107-1e2b1facde20
+	go.temporal.io/api v1.62.5
 	go.temporal.io/sdk v1.41.1
+	go.temporal.io/sdk/contrib/aws/lambdaworker v0.1.1
 	google.golang.org/protobuf v1.36.10
 )
 
 require (
-	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/BurntSushi/toml v1.4.0 // indirect
+	github.com/aws/aws-lambda-go v1.47.0 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/mock v1.6.0 // indirect
@@ -20,9 +23,11 @@ require (
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
+	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
+	go.temporal.io/sdk/contrib/envconfig v1.0.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect

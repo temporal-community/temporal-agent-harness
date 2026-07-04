@@ -41,8 +41,50 @@ without disturbing the existing always-on worker binary.
   in the same namespace simultaneously (which avoids versioned/unversioned task-routing
   surprises).
 - **Versioning behavior:** **Pinned** (`workflow.VersioningBehaviorPinned`) as the default.
-- **SDK upgrade:** bump `go.temporal.io/sdk` from `v1.41.1` to the latest `v1.45.0` as part
-  of this change.
+- **SDK upgrade:** _abandoned._ The upgrade was explored (`v1.41.1` → `v1.45.0`) but dropped
+  because it worsened the api dependency conflict described below (SDK v1.45.0 floors
+  `go.temporal.io/api` at v1.62.12) for no benefit to the Lambda work. The Lambda worker
+  runs on the existing SDK v1.41.1.
+
+## Dependency conflict: the custom `go.temporal.io/api` build
+
+The whole `nexus` workspace pins a **custom, unreleased `go.temporal.io/api` build**:
+`v1.62.3-0.20260330144107-1e2b1facde20`. That pseudo-version is the head of the
+`update-callback` branch on `github.com/temporalio/api-go`; it adds
+`update.v1.Request.RequestId` and `.CompletionCallbacks`, which `nexus_worker`'s
+`handler/handler.go` uses (`buildCompletionCallbacks`) for the nexus-workflow-update
+streaming feature (backed by the custom `Quinn-With-Two-Ns/temporal` server fork referenced
+in the Makefile). No public api release carries those fields.
+
+`lambdaworker@v0.1.1` floors `go.temporal.io/api` at **v1.62.5**. The pinned pseudo-version
+sorts *below* v1.62.5 (a `-0.` pre-release of v1.62.3, ≈ v1.62.2), so under a Go workspace's
+single-version resolution (MVS across all modules), adding lambdaworker drags the whole
+workspace up to public v1.62.5 — which drops the `update-callback` fields and breaks
+`nexus_worker` **in workspace mode**.
+
+Scope of the break: **workspace mode only** (gopls, and `go build ./...` run inside a module
+without `GOWORK=off`). This repo builds **per-module** (each module's `Makefile` runs
+`go build ./...`; there are no CI workflows or Dockerfiles), and per-module builds are
+unaffected — each module resolves its own go.mod.
+
+**Resolution (verified):** a single `replace` in `nexus/go.work` forces the whole workspace
+onto the pinned `update-callback` build:
+
+```
+replace go.temporal.io/api => go.temporal.io/api v1.62.3-0.20260330144107-1e2b1facde20
+```
+
+All three modules build + vet + test cleanly in workspace mode with this replace, and
+sibling modules keep building per-module. lambdaworker/envconfig/SDK v1.41.1 reference
+nothing added between the pinned commit and v1.62.5, so pinning down is safe.
+`slack_connector/go.mod` still *requires* api v1.62.5 (lambdaworker's floor) — correct, since
+building slack_connector in isolation (e.g. a Lambda CI/Docker build without `go.work`)
+compiles fine against public v1.62.5, which it never uses the extra fields from. The replace
+governs local/workspace resolution only.
+
+**Caveat:** do not run `go work sync` — it rewrites the sibling go.mod `require` lines to
+v1.62.5 (the pre-replace MVS pick) and breaks their per-module builds. A comment in
+`go.work` records this.
 
 ## Architecture
 
@@ -112,11 +154,13 @@ Notes:
 
 ### 4. Dependencies
 
-- Add `go.temporal.io/sdk/contrib/aws/lambdaworker v0.1.1` (brings `aws-lambda-go`,
-  `contrib/envconfig`).
-- Upgrade `go.temporal.io/sdk` `v1.41.1` → `v1.45.0`.
-- `go mod tidy` will settle `go.temporal.io/api` and transitive versions. Confirm the whole
-  module still builds (`go build ./...`) and vets after the bump.
+- Add `go.temporal.io/sdk/contrib/aws/lambdaworker v0.1.1` to `slack_connector/go.mod`
+  (brings `aws-lambda-go`, `contrib/envconfig`; floors `go.temporal.io/api` at v1.62.5).
+- Keep `go.temporal.io/sdk` at `v1.41.1` (SDK upgrade abandoned — see the dependency-conflict
+  section above).
+- Add the `go.temporal.io/api` `replace` to `nexus/go.work` (see above).
+- `go mod tidy` (slack_connector) then confirm `go build`/`go vet`/`go test` pass across the
+  workspace **and** that sibling modules still build per-module (`GOWORK=off`).
 
 ## Operational notes (documented, not enforced in code)
 
