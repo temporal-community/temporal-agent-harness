@@ -71,6 +71,7 @@ interface ToolRuntime {
   tone: AgentNodeTone;
   statusTone?: AgentNodeTone;
   detail?: string;
+  subtitle?: string;
 }
 
 interface AgentGraphOptions {
@@ -85,11 +86,14 @@ type RuntimeNodeId =
   | "input"
   | "model"
   | "reasoning"
-  | "tool"
+  | "tool-container"
   | "subagent"
-  | "output";
+  | "output"
+  | ToolRuntimeNodeId;
 
-type LocalNodeId = RuntimeNodeId | "approval";
+type ToolRuntimeNodeId = `tool:${ToolId}`;
+
+type LocalNodeId = RuntimeNodeId;
 
 type EdgeKind =
   | "main"
@@ -181,13 +185,6 @@ function outputPosition(boundaryWidth: number): { x: number; y: number } {
   };
 }
 
-function approvalPosition(): { x: number; y: number } {
-  return {
-    x: layout.input.x,
-    y: layout.input.y + stateNodeHeight + 36
-  };
-}
-
 function summarizeAgentInterface(
   agentInterface: AgentInterfaceFunction[] | undefined
 ): AgentInterfaceSummary[] {
@@ -254,6 +251,22 @@ function thoughtText(delta: { [key: string]: unknown }): string {
 
 function scopedId(workflowId: string, localId: string): string {
   return `${workflowId}::${localId}`;
+}
+
+function toolRuntimeNodeId(toolId: ToolId): ToolRuntimeNodeId {
+  return `tool:${toolId}`;
+}
+
+function isToolRuntimeNodeId(id: string): id is ToolRuntimeNodeId {
+  return id.startsWith("tool:");
+}
+
+function toolIdFromRuntimeNodeId(id: ToolRuntimeNodeId): ToolId {
+  return id.slice("tool:".length);
+}
+
+function isToolLikeRuntimeNodeId(id: RuntimeNodeId): boolean {
+  return id === "tool-container" || isToolRuntimeNodeId(id);
 }
 
 function numericData(
@@ -428,6 +441,78 @@ function offsetGraph(
   };
 }
 
+function runtimeEdgeOptions(
+  source: string,
+  target: string,
+  runtimeLayout: RuntimeLayout
+): Parameters<typeof edge>[5] {
+  const sourcePosition = runtimeLayout.positions.get(source as RuntimeNodeId);
+  const targetPosition = runtimeLayout.positions.get(target as RuntimeNodeId);
+  return sourcePosition && targetPosition && sourcePosition.y !== targetPosition.y
+    ? { sourceHandle: "source-bottom", targetHandle: "target-top", kind: "main" }
+    : { kind: "main" };
+}
+
+function runtimeFlowSegments(
+  order: RuntimeNodeId[]
+): Array<{ kind: "single"; ids: [RuntimeNodeId] } | { kind: "tools"; ids: RuntimeNodeId[] }> {
+  const segments: Array<
+    { kind: "single"; ids: [RuntimeNodeId] } | { kind: "tools"; ids: RuntimeNodeId[] }
+  > = [];
+  let index = 0;
+  while (index < order.length) {
+    const id = order[index];
+    if (!isToolLikeRuntimeNodeId(id)) {
+      segments.push({ kind: "single", ids: [id] });
+      index += 1;
+      continue;
+    }
+
+    const ids: RuntimeNodeId[] = [];
+    while (index < order.length && isToolLikeRuntimeNodeId(order[index])) {
+      ids.push(order[index]);
+      index += 1;
+    }
+    segments.push({ kind: "tools", ids });
+  }
+  return segments;
+}
+
+function addRuntimeFlowEdges(
+  edges: Edge[],
+  order: RuntimeNodeId[],
+  runtimeLayout: RuntimeLayout,
+  inputSeen: boolean,
+  inputPlacement: AgentGraphOptions["inputPlacement"],
+  latestNodeId: LocalNodeId | null
+): void {
+  let sources: string[] = inputSeen && inputPlacement === "external" ? ["input"] : [];
+  for (const segment of runtimeFlowSegments(order)) {
+    if (sources.length > 0) {
+      for (const source of sources) {
+        for (const target of segment.ids) {
+          edges.push(
+            edge(
+              `flow-${source}-${target}`,
+              source,
+              target,
+              latestNodeId === target,
+              undefined,
+              runtimeEdgeOptions(source, target, runtimeLayout)
+            )
+          );
+        }
+      }
+    }
+    sources = segment.ids;
+  }
+}
+
+function terminalRuntimeSources(order: RuntimeNodeId[]): RuntimeNodeId[] {
+  const segments = runtimeFlowSegments(order);
+  return segments.at(-1)?.ids ?? [];
+}
+
 function textFromReply(data: { text?: unknown; output?: unknown }): string {
   if (typeof data.text === "string") return data.text;
   const output = data.output;
@@ -472,18 +557,12 @@ export function buildAgentGraph(
   let replyState = "waiting";
   let queued = 0;
   let runtimeHeaderPrefix: string | undefined;
-  let approvalState = "clear";
-  let approvalTone: AgentNodeTone = "neutral";
-  let approvalToolName = "no pending decisions";
-  let approvalDetail: string | undefined;
   let subagentState = "idle";
   let subagentSubtitle = "";
   let subagentDetail = "";
   const tools = new Map<ToolId, ToolRuntime>();
-  let latestToolId: ToolId | null = null;
   const runtimeNodeOrder: RuntimeNodeId[] = [];
   let inputSeen = false;
-  let approvalSeen = false;
   let outputSeen = false;
   let latestNodeId: LocalNodeId | null = null;
 
@@ -501,17 +580,40 @@ export function buildAgentGraph(
     latestNodeId = id;
   }
 
-  function markApproval(): void {
-    approvalSeen = true;
-    latestNodeId = "approval";
-  }
-
   function markOutput(): void {
     outputSeen = true;
     if (outputPlacement === "runtime") {
       markRuntimeNode("output");
     } else {
       latestNodeId = "output";
+    }
+  }
+
+  function markTool(toolId: ToolId): ToolRuntimeNodeId {
+    const nodeId = toolRuntimeNodeId(toolId);
+    markRuntimeNode(nodeId);
+    return nodeId;
+  }
+
+  function toolRuntime(toolId: ToolId, name: string): ToolRuntime {
+    const existing = tools.get(toolId);
+    if (existing) return existing;
+    return {
+      id: toolId,
+      name,
+      status: "requested by model",
+      tone: "tool",
+      statusTone: "queue",
+      subtitle: "waiting to dispatch"
+    };
+  }
+
+  function resetTurnTools(): void {
+    tools.clear();
+    for (let index = runtimeNodeOrder.length - 1; index >= 0; index -= 1) {
+      if (isToolRuntimeNodeId(runtimeNodeOrder[index])) {
+        runtimeNodeOrder.splice(index, 1);
+      }
     }
   }
 
@@ -535,6 +637,7 @@ export function buildAgentGraph(
       reasoningDetail = "";
       replyText = "";
       replyState = "waiting";
+      resetTurnTools();
       runtimeHeaderPrefix = undefined;
       if (queued > 0) queued -= 1;
     } else if (frame.event === "model_interaction_started") {
@@ -585,36 +688,40 @@ export function buildAgentGraph(
       frame.event === "tool_end" ||
       frame.event === "tool_error"
     ) {
-      markRuntimeNode("tool");
-      const runtime = tools.get(frame.data.tool_id) ?? {
-        id: frame.data.tool_id,
-        name: frame.data.tool_name,
-        status: "requested",
-        tone: "tool"
-      };
+      markTool(frame.data.tool_id);
+      const runtime = toolRuntime(frame.data.tool_id, frame.data.tool_name);
       runtime.name = frame.data.tool_name;
-      latestToolId = frame.data.tool_id;
       if ("tool_input" in frame.data) {
         runtime.detail = JSON.stringify(frame.data.tool_input);
       }
-      if (frame.event === "tool_start") {
+      if (frame.event === "tool_requested") {
+        runtime.status = "requested by model";
+        runtime.tone = "tool";
+        runtime.statusTone = "queue";
+        runtime.subtitle =
+          modelState === "running" ? "model still running" : "waiting to dispatch";
+      } else if (frame.event === "tool_start") {
         runtime.status = "running";
         runtime.tone = "tool";
         runtime.statusTone = "tool";
+        runtime.subtitle = "execution started";
       } else if (frame.event === "tool_progress_delta") {
         runtime.status = "running";
         runtime.tone = "tool";
         runtime.statusTone = "tool";
+        runtime.subtitle = "execution in progress";
         runtime.detail = frame.data.progress_delta;
       } else if (frame.event === "tool_end") {
         runtime.status = "done";
-        runtime.tone = "tool";
+        runtime.tone = "done";
         runtime.statusTone = "done";
+        runtime.subtitle = "execution completed";
         runtime.detail = frame.data.tool_output;
       } else if (frame.event === "tool_error") {
         runtime.status = "failed";
-        runtime.tone = "tool";
+        runtime.tone = "error";
         runtime.statusTone = "error";
+        runtime.subtitle = "execution failed";
         runtime.detail = frame.data.message;
       }
       tools.set(frame.data.tool_id, runtime);
@@ -622,32 +729,21 @@ export function buildAgentGraph(
       frame.event === "tool_approval_requested" ||
       frame.event === "tool_approval_resolved"
     ) {
-      markRuntimeNode("tool");
-      markApproval();
-      const runtime = tools.get(frame.data.tool_id) ?? {
-        id: frame.data.tool_id,
-        name: frame.data.tool_name,
-        status: "requested",
-        tone: "tool"
-      };
+      markTool(frame.data.tool_id);
+      const runtime = toolRuntime(frame.data.tool_id, frame.data.tool_name);
       runtime.name = frame.data.tool_name;
-      latestToolId = frame.data.tool_id;
-      approvalToolName = frame.data.tool_name;
       if (frame.event === "tool_approval_requested") {
-        approvalState = "pending";
-        approvalTone = "approval";
-        approvalDetail = undefined;
         runtime.status = "awaiting approval";
-        runtime.tone = "tool";
+        runtime.tone = "approval";
         runtime.statusTone = "approval";
+        runtime.subtitle = "human approval gate";
         runtime.detail = JSON.stringify(frame.data.tool_input);
       } else {
-        approvalState = frame.data.approved ? "approved" : "denied";
-        approvalTone = frame.data.approved ? "done" : "error";
-        approvalDetail = frame.data.reason ?? undefined;
         runtime.status = frame.data.approved ? "approved" : "denied";
-        runtime.tone = "tool";
+        runtime.tone = frame.data.approved ? "done" : "error";
         runtime.statusTone = frame.data.approved ? "done" : "error";
+        runtime.subtitle = frame.data.approved ? "approval granted" : "approval denied";
+        runtime.detail = frame.data.reason ?? runtime.detail;
       }
       tools.set(frame.data.tool_id, runtime);
     } else if (
@@ -679,10 +775,9 @@ export function buildAgentGraph(
   }
 
   const embeddedToolLayout = layoutEmbeddedToolGraphs(options.embeddedToolGraphs ?? []);
-  if (embeddedToolLayout && !runtimeNodeOrder.includes("tool")) {
-    runtimeNodeOrder.push("tool");
+  if (embeddedToolLayout && !runtimeNodeOrder.includes("tool-container")) {
+    runtimeNodeOrder.push("tool-container");
   }
-  const latestTool = latestToolId ? tools.get(latestToolId) : [...tools.values()].at(-1);
   const usage = summarizeCost(frames);
 
   function nodeDataFor(id: LocalNodeId): AgentNodeData {
@@ -730,40 +825,33 @@ export function buildAgentGraph(
         active: latestNodeId === id
       };
     }
-    if (id === "tool") {
-      const detail = latestTool?.detail;
-      const toolData: AgentNodeData = {
-        tone: latestTool?.tone ?? "neutral",
+    if (isToolRuntimeNodeId(id)) {
+      const runtime = tools.get(toolIdFromRuntimeNodeId(id));
+      const detail = runtime?.detail;
+      return {
+        tone: runtime?.tone ?? "neutral",
         dotTone: "tool",
-        title: "Tool",
-        state: latestTool?.status ?? "idle",
-        statusTone: latestTool?.statusTone,
-        approvalPort: approvalSeen,
-        subtitle: latestTool?.name ?? "tool lifecycle",
+        title: runtime?.name ?? "Tool",
+        state: runtime?.status ?? "idle",
+        statusTone: runtime?.statusTone,
+        subtitle: runtime?.subtitle ?? "tool lifecycle",
         detail,
         nodeHeight: detail && hasScriptDetail(detail) ? 210 : undefined,
-        active: latestNodeId === id
+        active: latestNodeId === id,
+        toolId: runtime?.id
       };
-      if (embeddedToolLayout) {
-        return {
-          ...toolData,
-          size: "container",
-          nodeWidth: embeddedToolLayout.dimensions.width,
-          nodeHeight: embeddedToolLayout.dimensions.height
-        };
-      }
-      return toolData;
     }
-    if (id === "approval") {
+    if (id === "tool-container") {
       return {
-        tone: approvalTone,
-        dotTone: "approval",
-        title: "Approval",
-        state: approvalState,
-        subtitle: approvalToolName,
-        detail: approvalDetail,
-        approvalDecisionPort: true,
-        active: latestNodeId === id
+        tone: "tool",
+        dotTone: "tool",
+        title: "Tool calls",
+        state: "delegating",
+        subtitle: "subagent runtimes",
+        active: latestNodeId === id,
+        size: "container",
+        nodeWidth: embeddedToolLayout?.dimensions.width ?? stateNodeWidth,
+        nodeHeight: embeddedToolLayout?.dimensions.height ?? stateNodeHeight
       };
     }
     if (id === "subagent") {
@@ -824,9 +912,6 @@ export function buildAgentGraph(
   if (inputSeen && inputPlacement === "external") {
     nodes.push(node("input", layout.input, nodeDataFor("input")));
   }
-  if (approvalSeen) {
-    nodes.push(node("approval", approvalPosition(), nodeDataFor("approval")));
-  }
   nodes.push(
     ...runtimeNodeOrder.map((id) =>
       node(
@@ -841,7 +926,7 @@ export function buildAgentGraph(
   }
 
   const edges: Edge[] = [];
-  const toolPosition = runtimeLayout.positions.get("tool");
+  const toolPosition = runtimeLayout.positions.get("tool-container");
   if (toolPosition && embeddedToolLayout) {
     for (const placement of embeddedToolLayout.placements) {
       const embeddedGraph = offsetGraph(
@@ -859,8 +944,6 @@ export function buildAgentGraph(
   const runtimeFlowOrder = reasoningAttachedToModel
     ? runtimeNodeOrder.filter((id) => id !== "reasoning")
     : runtimeNodeOrder;
-  const firstRuntimeNode = runtimeFlowOrder[0] ?? null;
-  const lastRuntimeNode = runtimeFlowOrder.at(-1) ?? null;
   if (reasoningAttachedToModel) {
     edges.push(
       edge(
@@ -877,62 +960,27 @@ export function buildAgentGraph(
       )
     );
   }
-  if (approvalSeen && runtimeNodeOrder.includes("tool")) {
-    edges.push(
-      edge(
-        "flow-tool-approval",
-        "tool",
-        "approval",
-        latestNodeId === "approval",
-        "approval",
-        {
-          sourceHandle: "approval-out",
-          targetHandle: "approval-request-in",
-          kind: "approval"
-        }
-      )
-    );
-  }
-  if (inputSeen && inputPlacement === "external" && firstRuntimeNode) {
-    edges.push(
-      edge(
-        `flow-input-${firstRuntimeNode}`,
-        "input",
-        firstRuntimeNode,
-        latestNodeId === firstRuntimeNode
-      )
-    );
-  }
-  for (let index = 1; index < runtimeFlowOrder.length; index += 1) {
-    const source = runtimeFlowOrder[index - 1];
-    const target = runtimeFlowOrder[index];
-    const sourcePosition = runtimeLayout.positions.get(source);
-    const targetPosition = runtimeLayout.positions.get(target);
-    edges.push(
-      edge(
-        `flow-${source}-${target}`,
-        source,
-        target,
-        latestNodeId === target,
-        undefined,
-          sourcePosition?.y === targetPosition?.y
-          ? { kind: "main" }
-          : { sourceHandle: "source-bottom", targetHandle: "target-top", kind: "main" }
-      )
-    );
-  }
+  addRuntimeFlowEdges(edges, runtimeFlowOrder, runtimeLayout, inputSeen, inputPlacement, latestNodeId);
   if (outputSeen && outputPlacement === "external") {
-    const source = lastRuntimeNode ?? (inputSeen ? "input" : null);
-    if (source) {
+    const outputSources = terminalRuntimeSources(runtimeFlowOrder);
+    if (outputSources.length > 0) {
       edges.push(
-        edge(
-          `flow-${source}-output`,
-          source,
-          "output",
-          latestNodeId === "output",
-          undefined,
-          { kind: "output" }
+        ...outputSources.map((source) =>
+          edge(
+            `flow-${source}-output`,
+            source,
+            "output",
+            latestNodeId === "output",
+            undefined,
+            { kind: "output" }
+          )
         )
+      );
+    } else if (inputSeen) {
+      edges.push(
+        edge("flow-input-output", "input", "output", latestNodeId === "output", undefined, {
+          kind: "output"
+        })
       );
     }
   }

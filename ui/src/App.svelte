@@ -52,7 +52,11 @@
       transcriptFilter = "model";
     } else {
       transcriptFilter =
-        localNodeId === "tool" || localNodeId === "approval" ? localNodeId : "all";
+        localNodeId.startsWith("tool:") || localNodeId === "tool-container"
+          ? "tool"
+          : localNodeId === "approval"
+            ? "approval"
+            : "all";
     }
   }
 
