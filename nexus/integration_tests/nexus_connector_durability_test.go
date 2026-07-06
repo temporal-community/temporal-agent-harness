@@ -109,7 +109,7 @@ func TestConnector_WorkerDiesMidActivity_OtherWorkerCompletes(t *testing.T) {
 	worker0 := startConnectorWorker(t, temporalClient, connectorTaskQueue, blocker)
 
 	msg := agentiface.IncomingMessage{MessageID: "m1", Sender: "user", Text: "hello", Timestamp: "1000.0"}
-	wfID := agentiface.MessageConnectorWorkflowID("integ", "slack:C003", msg.MessageID)
+	wfID := agentiface.ConnectorWorkflowID("integ", "slack:C003", msg.MessageID)
 	require.NoError(t, startMessageConnector(t, temporalClient, connectorTaskQueue, "integ", "slack:C003", msg))
 
 	select {
@@ -136,14 +136,14 @@ func TestConnector_WorkerDiesMidActivity_OtherWorkerCompletes(t *testing.T) {
 
 // -- helpers -----------------------------------------------------------------
 
-// startMessageConnector starts a fresh MessageConnectorWorkflow for one message.
+// startMessageConnector starts a fresh ConnectorWorkflow for one message.
 func startMessageConnector(t *testing.T, tc client.Client, taskQueue, identity, sessionID string, msg agentiface.IncomingMessage) error {
 	t.Helper()
-	wfID := agentiface.MessageConnectorWorkflowID(identity, sessionID, msg.MessageID)
+	wfID := agentiface.ConnectorWorkflowID(identity, sessionID, msg.MessageID)
 	_, err := tc.ExecuteWorkflow(context.Background(),
 		client.StartWorkflowOptions{ID: wfID, TaskQueue: taskQueue},
 		connector.WorkflowName,
-		agentiface.MessageConnectorWorkflowInput{Identity: identity, SessionID: sessionID, Message: msg},
+		agentiface.ConnectorWorkflowInput{Identity: identity, SessionID: sessionID, Message: &msg},
 	)
 	return err
 }
@@ -176,7 +176,7 @@ type agentTurnEvent struct {
 
 // makeAgentStreamItem encodes an agentStreamItem into the wire format
 // expected by the driver's decoder.
-func makeAgentStreamItem(t *testing.T, item agentStreamItem, offset int64, topic string) agentgen.AgentNexusrpc {
+func makeAgentStreamItem(t *testing.T, item agentStreamItem, offset int64, topic string) agentgen.ItemElement {
 	t.Helper()
 	data, err := json.Marshal(item)
 	require.NoError(t, err)
@@ -186,7 +186,7 @@ func makeAgentStreamItem(t *testing.T, item agentStreamItem, offset int64, topic
 	}
 	b, err := proto.Marshal(payload)
 	require.NoError(t, err)
-	return agentgen.AgentNexusrpc{
+	return agentgen.ItemElement{
 		Topic:  topic,
 		Offset: offset,
 		Data:   base64.StdEncoding.EncodeToString(b),
@@ -200,18 +200,18 @@ func makeAgentStreamItem(t *testing.T, item agentStreamItem, offset int64, topic
 //   - sendMessage always succeeds and reports TurnNumber=1.
 //   - pollMessages returns at most 2 items per call (one complete turn) starting
 //     at the requested cursor, then Closed=true once all items are exhausted.
-func mockAgentSvc(items []agentgen.AgentNexusrpc) *nexus.Service {
+func mockAgentSvc(items []agentgen.ItemElement) *nexus.Service {
 	svc := nexus.NewService(agentgen.AgentService.ServiceName)
 	svc.MustRegister(nexus.NewSyncOperation(
-		agentgen.AgentService.SendMessage.Name(),
-		func(_ context.Context, _ agentgen.SendMessageInput, _ nexus.StartOperationOptions) (agentgen.SendMessageOutput, error) {
+		agentgen.AgentService.SendAgentMessage.Name(),
+		func(_ context.Context, _ agentgen.SendAgentMessageInput, _ nexus.StartOperationOptions) (agentgen.SendMessageOutput, error) {
 			return agentgen.SendMessageOutput{TurnNumber: 1, TurnID: "t1"}, nil
 		},
 	))
 	svc.MustRegister(nexus.NewSyncOperation(
 		agentgen.AgentService.PollMessages.Name(),
 		func(_ context.Context, input agentgen.PollMessagesInput, _ nexus.StartOperationOptions) (agentgen.PollMessagesOutput, error) {
-			var out []agentgen.AgentNexusrpc
+			var out []agentgen.ItemElement
 			for _, item := range items {
 				if item.Offset >= input.Cursor {
 					out = append(out, item)
@@ -232,7 +232,7 @@ func mockAgentSvc(items []agentgen.AgentNexusrpc) *nexus.Service {
 	return svc
 }
 
-func startMockAgentWorker(t *testing.T, tc client.Client, agentTaskQueue string, items []agentgen.AgentNexusrpc) sdkworker.Worker {
+func startMockAgentWorker(t *testing.T, tc client.Client, agentTaskQueue string, items []agentgen.ItemElement) sdkworker.Worker {
 	t.Helper()
 	w := sdkworker.New(tc, agentTaskQueue, sdkworker.Options{DisableWorkflowWorker: true})
 	w.RegisterNexusService(mockAgentSvc(items))
@@ -245,7 +245,7 @@ func startConnectorWorker(t *testing.T, tc client.Client, connectorTaskQueue str
 	t.Helper()
 	c := connector.NewConnectorWorkflow(&agentiface.TemporalNativeHarnessDriver{})
 	w := sdkworker.New(tc, connectorTaskQueue, sdkworker.Options{})
-	w.RegisterWorkflowWithOptions(c.MessageConnectorWorkflow, workflow.RegisterOptions{Name: connector.WorkflowName})
+	w.RegisterWorkflowWithOptions(c.Run, workflow.RegisterOptions{Name: connector.WorkflowName})
 	w.RegisterActivityWithOptions(platform.Stream, activity.RegisterOptions{Name: msgiface.StreamActivity})
 	w.RegisterActivityWithOptions(platform.PostMessage, activity.RegisterOptions{Name: msgiface.PostMessageActivity})
 	require.NoError(t, w.Start())
@@ -254,9 +254,9 @@ func startConnectorWorker(t *testing.T, tc client.Client, connectorTaskQueue str
 
 // connectorTurnItems pre-generates stream items for n complete turns.
 // Each turn i gets two events: a reply_delta at offset 2i and a reply at 2i+1.
-func connectorTurnItems(t *testing.T, n int) []agentgen.AgentNexusrpc {
+func connectorTurnItems(t *testing.T, n int) []agentgen.ItemElement {
 	t.Helper()
-	items := make([]agentgen.AgentNexusrpc, 0, n*2)
+	items := make([]agentgen.ItemElement, 0, n*2)
 	for i := 0; i < n; i++ {
 		base := int64(i * 2)
 		items = append(items,
@@ -315,6 +315,12 @@ func (p *mockMsgPlatform) PostMessage(_ context.Context, _ msgiface.TextMetadata
 	return nil
 }
 
+// PostApprovalPrompt is a no-op here — none of these durability tests exercise
+// the tool-approval flow, but the mock must still satisfy MessagingPlatform.
+func (p *mockMsgPlatform) PostApprovalPrompt(_ context.Context, _ msgiface.ApprovalPromptInput) error {
+	return nil
+}
+
 func (p *mockMsgPlatform) counts() (starts, appends, stops, posts int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -354,4 +360,8 @@ func (b *blockOnStart) Stream(ctx context.Context, in msgiface.StreamInput) (str
 
 func (b *blockOnStart) PostMessage(ctx context.Context, in msgiface.TextMetadata) error {
 	return b.recording.PostMessage(ctx, in)
+}
+
+func (b *blockOnStart) PostApprovalPrompt(ctx context.Context, in msgiface.ApprovalPromptInput) error {
+	return b.recording.PostApprovalPrompt(ctx, in)
 }
