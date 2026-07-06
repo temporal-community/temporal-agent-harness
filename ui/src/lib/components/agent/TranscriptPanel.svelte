@@ -66,9 +66,79 @@
     return true;
   }
 
+  interface PrimaryPayload {
+    label: string;
+    text: string;
+    kind: "block" | "text";
+  }
+
+  function formatLogValue(value: unknown): string {
+    if (value == null) return "";
+    if (typeof value === "string") return value.trim();
+    return JSON.stringify(value, null, 2);
+  }
+
+  function inputText(row: ReplayLogRow): string {
+    return formatLogValue(row.input);
+  }
+
+  function primaryPayload(row: ReplayLogRow): PrimaryPayload | null {
+    const output = formatLogValue(row.output);
+    if (output) return { label: "output", text: output, kind: "block" };
+
+    return null;
+  }
+
+  function fullLogDetail(row: ReplayLogRow): string {
+    const sections: string[] = [];
+    const body = formatLogValue(row.body);
+    const detail = formatLogValue(row.detail);
+    const input = inputText(row);
+    const output = formatLogValue(row.output);
+    const citations = row.citations
+      .map(
+        (citation) =>
+          citation.custom_metadata?.deep_url ??
+          citation.document_uri ??
+          citation.file_name ??
+          "Source"
+      )
+      .filter(Boolean);
+    const metadata = [
+      `event: ${row.event}`,
+      `actor: ${row.actor}`,
+      `turn: ${row.turnNumber}`,
+      `source_turn: ${row.sourceTurnNumber}`,
+      row.sourceLabel ? `source: ${row.sourceLabel}` : "",
+      row.workflowId ? `workflow_id: ${row.workflowId}` : "",
+      row.status ? `status: ${row.status}` : "",
+      row.toolName ? `tool: ${row.toolName}` : "",
+      row.toolId ? `tool_id: ${row.toolId}` : "",
+      row.model ? `model: ${row.model}` : "",
+      `timestamp: ${time(row.timestamp)}`
+    ].filter(Boolean);
+
+    if (output) sections.push(`output:\n${output}`);
+    if (body) sections.push(`message:\n${body}`);
+    if (detail) sections.push(`detail:\n${detail}`);
+    if (input) sections.push(`input:\n${input}`);
+    if (citations.length > 0) sections.push(`citations:\n${citations.join("\n")}`);
+    sections.push(metadata.join("\n"));
+
+    return sections.join("\n\n");
+  }
+
   function matchesQuery(row: ReplayLogRow, needle: string): boolean {
     if (!needle) return true;
-    const haystack = [row.label, row.body, row.status, row.toolName, row.output]
+    const haystack = [
+      row.label,
+      row.body,
+      row.detail,
+      row.status,
+      row.toolName,
+      row.output,
+      inputText(row)
+    ]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
@@ -334,21 +404,18 @@
                   </button>
 
                   {#if expanded}
+                    {@const primary = primaryPayload(row)}
+                    {@const fullDetail = fullLogDetail(row)}
                     <div class="line-details" id={`log-row-${row.id}-details`}>
-                      {#if row.body}
-                        <p>{row.body}</p>
-                      {/if}
-                      {#if row.input}
-                        <details>
-                          <summary>input</summary>
-                          <pre>{JSON.stringify(row.input, null, 2)}</pre>
-                        </details>
-                      {/if}
-                      {#if row.output}
-                        <details>
-                          <summary>output</summary>
-                          <pre>{row.output}</pre>
-                        </details>
+                      {#if primary}
+                        <section class="primary-payload" aria-label={`${primary.label} preview`}>
+                          <span class="payload-label">{primary.label}</span>
+                          {#if primary.kind === "text"}
+                            <p>{primary.text}</p>
+                          {:else}
+                            <pre class="primary-pre">{primary.text}</pre>
+                          {/if}
+                        </section>
                       {/if}
                       {#if row.citations.length}
                         <div class="citations">
@@ -363,6 +430,10 @@
                           {/each}
                         </div>
                       {/if}
+                      <section class="full-details" aria-label="Full details">
+                        <span class="payload-label">Full details</span>
+                        <pre>{fullDetail}</pre>
+                      </section>
                     </div>
                   {/if}
                 </div>
@@ -736,7 +807,9 @@
   }
 
   .line-details {
-    margin-top: 6px;
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
   }
 
   p {
@@ -747,20 +820,20 @@
     word-break: break-word;
   }
 
-  details {
-    margin: 6px 0 0;
+  .primary-payload {
+    min-width: 0;
+    display: grid;
+    gap: 5px;
   }
 
-  summary {
-    display: inline-flex;
-    cursor: pointer;
+  .payload-label {
     color: var(--text-3);
     font-size: 11px;
-    user-select: none;
+    font-weight: 650;
   }
 
   pre {
-    margin: 6px 0 0;
+    margin: 0;
     padding: 8px;
     border-radius: 6px;
     overflow-x: auto;
@@ -769,11 +842,19 @@
     font-size: 11px;
   }
 
+  .primary-pre {
+    color: var(--text-1);
+  }
+
+  .full-details pre {
+    margin-top: 6px;
+    color: var(--text-2);
+  }
+
   .citations {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    margin-top: 8px;
   }
 
   .citations a {

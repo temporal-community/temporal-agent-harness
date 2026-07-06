@@ -34,6 +34,7 @@ export interface AgentNodeData {
   approvalDecisionPort?: boolean;
   nodeWidth?: number;
   nodeHeight?: number;
+  flowGroup?: number;
   metrics?: Array<{ label: string; value: string }>;
   interfaces?: AgentInterfaceSummary[];
 }
@@ -72,6 +73,10 @@ interface ToolRuntime {
   statusTone?: AgentNodeTone;
   detail?: string;
   subtitle?: string;
+  isCodeMode?: boolean;
+  script?: string;
+  parentToolId?: ToolId;
+  flowGroup?: number;
 }
 
 interface AgentGraphOptions {
@@ -140,6 +145,11 @@ const modelReasoningGap = 24;
 const embeddedToolPadding = 18;
 const embeddedToolHeaderHeight = 116;
 const embeddedToolGap = 32;
+const codeModePadding = 18;
+const codeModeHeaderHeight = 126;
+const codeModeColumns = 2;
+const codeModeColumnGap = 32;
+const codeModeRowGap = 26;
 const layout = {
   input: { x: 0, y: 245 },
   runtime: { x: 300, y: 20 },
@@ -265,8 +275,10 @@ function toolIdFromRuntimeNodeId(id: ToolRuntimeNodeId): ToolId {
   return id.slice("tool:".length);
 }
 
-function isToolLikeRuntimeNodeId(id: RuntimeNodeId): boolean {
-  return id === "tool-container" || isToolRuntimeNodeId(id);
+function codeModeScriptFromToolInput(input: unknown): string | null {
+  if (typeof input !== "object" || input == null || Array.isArray(input)) return null;
+  const script = (input as Record<string, unknown>).script;
+  return typeof script === "string" && script.trim() ? script : null;
 }
 
 function numericData(
@@ -295,52 +307,32 @@ function runtimeLayoutFor(
   const flowOrder = attachReasoning
     ? order.filter((id) => id !== "reasoning")
     : order;
-  const columns = runtimeColumns(flowOrder.length);
-  const rows = runtimeRows(flowOrder.length);
-  const columnWidths = Array.from({ length: columns }, () => stateNodeWidth);
-  const rowHeights = Array.from({ length: rows }, () => stateNodeHeight);
-  for (const [index, id] of flowOrder.entries()) {
+  const positions = new Map<RuntimeNodeId, { x: number; y: number }>();
+  let nextX = layout.gridStartX;
+  let contentWidth = stateNodeWidth;
+  let contentHeight = stateNodeHeight;
+
+  for (const id of flowOrder) {
     const data = dataById.get(id);
-    if (!data) continue;
-    const dimensions = dimensionsForData(data);
+    const dimensions = data ? dimensionsForData(data) : {
+      width: stateNodeWidth,
+      height: stateNodeHeight
+    };
+    const reasoningData = dataById.get("reasoning");
+    const reasoningDimensions = reasoningData
+      ? dimensionsForData(reasoningData)
+      : dimensions;
     const effectiveDimensions =
       attachReasoning && id === "model"
         ? {
-            width: Math.max(
-              dimensions.width,
-              dimensionsForData(dataById.get("reasoning") ?? data).width
-            ),
-            height:
-              dimensions.height +
-              modelReasoningGap +
-              dimensionsForData(dataById.get("reasoning") ?? data).height
+            width: Math.max(dimensions.width, reasoningDimensions.width),
+            height: dimensions.height + modelReasoningGap + reasoningDimensions.height
           }
         : dimensions;
-    const column = index % layout.columns;
-    const row = Math.floor(index / layout.columns);
-    columnWidths[column] = Math.max(
-      columnWidths[column] ?? stateNodeWidth,
-      effectiveDimensions.width
-    );
-    rowHeights[row] = Math.max(
-      rowHeights[row] ?? stateNodeHeight,
-      effectiveDimensions.height
-    );
-  }
-
-  const positions = new Map<RuntimeNodeId, { x: number; y: number }>();
-  for (const [index, id] of flowOrder.entries()) {
-    const column = index % layout.columns;
-    const row = Math.floor(index / layout.columns);
-    const x =
-      layout.gridStartX +
-      columnWidths.slice(0, column).reduce((sum, width) => sum + width, 0) +
-      column * runtimeColumnGap;
-    const y =
-      layout.gridStartY +
-      rowHeights.slice(0, row).reduce((sum, height) => sum + height, 0) +
-      row * runtimeRowGap;
-    positions.set(id, { x, y });
+    positions.set(id, { x: nextX, y: layout.gridStartY });
+    contentHeight = Math.max(contentHeight, effectiveDimensions.height);
+    contentWidth = nextX - layout.gridStartX + effectiveDimensions.width;
+    nextX += effectiveDimensions.width + runtimeColumnGap;
   }
   if (attachReasoning) {
     const modelPosition = positions.get("model");
@@ -352,13 +344,6 @@ function runtimeLayoutFor(
       });
     }
   }
-
-  const contentWidth =
-    columnWidths.reduce((sum, width) => sum + width, 0) +
-    Math.max(0, columns - 1) * runtimeColumnGap;
-  const contentHeight =
-    rowHeights.reduce((sum, height) => sum + height, 0) +
-    Math.max(0, rows - 1) * runtimeRowGap;
 
   return {
     positions,
@@ -421,6 +406,32 @@ function layoutEmbeddedToolGraphs(graphs: AgentGraph[]): EmbeddedToolLayout | nu
   };
 }
 
+function codeModeContainerDimensions(childCount: number): NodeDimensions {
+  const count = Math.max(1, childCount);
+  const columns = Math.min(codeModeColumns, count);
+  const rows = Math.ceil(count / columns);
+  return {
+    width:
+      codeModePadding * 2 +
+      columns * stateNodeWidth +
+      Math.max(0, columns - 1) * codeModeColumnGap,
+    height:
+      codeModeHeaderHeight +
+      rows * stateNodeHeight +
+      Math.max(0, rows - 1) * codeModeRowGap +
+      codeModePadding
+  };
+}
+
+function codeModeChildPosition(index: number): { x: number; y: number } {
+  const column = index % codeModeColumns;
+  const row = Math.floor(index / codeModeColumns);
+  return {
+    x: codeModePadding + column * (stateNodeWidth + codeModeColumnGap),
+    y: codeModeHeaderHeight + row * (stateNodeHeight + codeModeRowGap)
+  };
+}
+
 function offsetGraph(
   graph: AgentGraph,
   xOffset: number,
@@ -454,7 +465,8 @@ function runtimeEdgeOptions(
 }
 
 function runtimeFlowSegments(
-  order: RuntimeNodeId[]
+  order: RuntimeNodeId[],
+  dataById: Map<RuntimeNodeId, AgentNodeData>
 ): Array<{ kind: "single"; ids: [RuntimeNodeId] } | { kind: "tools"; ids: RuntimeNodeId[] }> {
   const segments: Array<
     { kind: "single"; ids: [RuntimeNodeId] } | { kind: "tools"; ids: RuntimeNodeId[] }
@@ -462,18 +474,30 @@ function runtimeFlowSegments(
   let index = 0;
   while (index < order.length) {
     const id = order[index];
-    if (!isToolLikeRuntimeNodeId(id)) {
+    if (!isToolRuntimeNodeId(id)) {
       segments.push({ kind: "single", ids: [id] });
       index += 1;
       continue;
     }
 
-    const ids: RuntimeNodeId[] = [];
-    while (index < order.length && isToolLikeRuntimeNodeId(order[index])) {
+    const flowGroup = dataById.get(id)?.flowGroup;
+    if (typeof flowGroup !== "number") {
+      segments.push({ kind: "single", ids: [id] });
+      index += 1;
+      continue;
+    }
+
+    const ids: RuntimeNodeId[] = [id];
+    index += 1;
+    while (
+      index < order.length &&
+      isToolRuntimeNodeId(order[index]) &&
+      dataById.get(order[index])?.flowGroup === flowGroup
+    ) {
       ids.push(order[index]);
       index += 1;
     }
-    segments.push({ kind: "tools", ids });
+    segments.push(ids.length > 1 ? { kind: "tools", ids } : { kind: "single", ids: [id] });
   }
   return segments;
 }
@@ -481,13 +505,14 @@ function runtimeFlowSegments(
 function addRuntimeFlowEdges(
   edges: Edge[],
   order: RuntimeNodeId[],
+  dataById: Map<RuntimeNodeId, AgentNodeData>,
   runtimeLayout: RuntimeLayout,
   inputSeen: boolean,
   inputPlacement: AgentGraphOptions["inputPlacement"],
   latestNodeId: LocalNodeId | null
 ): void {
   let sources: string[] = inputSeen && inputPlacement === "external" ? ["input"] : [];
-  for (const segment of runtimeFlowSegments(order)) {
+  for (const segment of runtimeFlowSegments(order, dataById)) {
     if (sources.length > 0) {
       for (const source of sources) {
         for (const target of segment.ids) {
@@ -508,8 +533,11 @@ function addRuntimeFlowEdges(
   }
 }
 
-function terminalRuntimeSources(order: RuntimeNodeId[]): RuntimeNodeId[] {
-  const segments = runtimeFlowSegments(order);
+function terminalRuntimeSources(
+  order: RuntimeNodeId[],
+  dataById: Map<RuntimeNodeId, AgentNodeData>
+): RuntimeNodeId[] {
+  const segments = runtimeFlowSegments(order, dataById);
   return segments.at(-1)?.ids ?? [];
 }
 
@@ -561,6 +589,10 @@ export function buildAgentGraph(
   let subagentSubtitle = "";
   let subagentDetail = "";
   const tools = new Map<ToolId, ToolRuntime>();
+  const codeModeChildren = new Map<ToolId, ToolId[]>();
+  const activeCodeModeToolIds: ToolId[] = [];
+  const activeRuntimeToolIds = new Set<ToolId>();
+  let runtimeToolFlowGroup = 0;
   const runtimeNodeOrder: RuntimeNodeId[] = [];
   let inputSeen = false;
   let outputSeen = false;
@@ -589,27 +621,78 @@ export function buildAgentGraph(
     }
   }
 
-  function markTool(toolId: ToolId): ToolRuntimeNodeId {
+  function markTool(toolId: ToolId, parentToolId?: ToolId): ToolRuntimeNodeId {
     const nodeId = toolRuntimeNodeId(toolId);
+    if (parentToolId) {
+      const childIds = codeModeChildren.get(parentToolId) ?? [];
+      if (!childIds.includes(toolId)) {
+        codeModeChildren.set(parentToolId, [...childIds, toolId]);
+      }
+      latestNodeId = nodeId;
+      return nodeId;
+    }
     markRuntimeNode(nodeId);
     return nodeId;
   }
 
-  function toolRuntime(toolId: ToolId, name: string): ToolRuntime {
+  function flowGroupForTool(toolId: ToolId, parentToolId?: ToolId): number | undefined {
+    if (parentToolId) return undefined;
+    const existing = tools.get(toolId)?.flowGroup;
+    if (typeof existing === "number") return existing;
+    if (activeRuntimeToolIds.size === 0) runtimeToolFlowGroup += 1;
+    activeRuntimeToolIds.add(toolId);
+    return runtimeToolFlowGroup;
+  }
+
+  function markToolSettled(toolId: ToolId, parentToolId?: ToolId): void {
+    if (!parentToolId) activeRuntimeToolIds.delete(toolId);
+  }
+
+  function toolRuntime(toolId: ToolId, name: string, parentToolId?: ToolId): ToolRuntime {
     const existing = tools.get(toolId);
-    if (existing) return existing;
+    if (existing) {
+      if (parentToolId && !existing.parentToolId) existing.parentToolId = parentToolId;
+      if (!parentToolId && typeof existing.flowGroup !== "number") {
+        existing.flowGroup = flowGroupForTool(toolId, parentToolId);
+      }
+      return existing;
+    }
     return {
       id: toolId,
       name,
       status: "requested by model",
       tone: "tool",
       statusTone: "queue",
-      subtitle: "waiting to dispatch"
+      subtitle: parentToolId ? "Code Mode host call" : "waiting to dispatch",
+      parentToolId,
+      flowGroup: flowGroupForTool(toolId, parentToolId)
     };
+  }
+
+  function codeModeHostChildIds(toolId: ToolId): ToolId[] {
+    return (codeModeChildren.get(toolId) ?? []).filter((childId) => tools.has(childId));
+  }
+
+  function childToolParent(toolId: ToolId, isCodeModeTool: boolean): ToolId | undefined {
+    if (isCodeModeTool) return undefined;
+    return tools.get(toolId)?.parentToolId ?? activeCodeModeToolIds.at(-1);
+  }
+
+  function markCodeModeStarted(toolId: ToolId): void {
+    if (!activeCodeModeToolIds.includes(toolId)) activeCodeModeToolIds.push(toolId);
+  }
+
+  function markCodeModeFinished(toolId: ToolId): void {
+    const index = activeCodeModeToolIds.lastIndexOf(toolId);
+    if (index !== -1) activeCodeModeToolIds.splice(index, 1);
   }
 
   function resetTurnTools(): void {
     tools.clear();
+    codeModeChildren.clear();
+    activeCodeModeToolIds.splice(0, activeCodeModeToolIds.length);
+    activeRuntimeToolIds.clear();
+    runtimeToolFlowGroup = 0;
     for (let index = runtimeNodeOrder.length - 1; index >= 0; index -= 1) {
       if (isToolRuntimeNodeId(runtimeNodeOrder[index])) {
         runtimeNodeOrder.splice(index, 1);
@@ -688,9 +771,21 @@ export function buildAgentGraph(
       frame.event === "tool_end" ||
       frame.event === "tool_error"
     ) {
-      markTool(frame.data.tool_id);
-      const runtime = toolRuntime(frame.data.tool_id, frame.data.tool_name);
+      const script =
+        "tool_input" in frame.data
+          ? codeModeScriptFromToolInput(frame.data.tool_input)
+          : null;
+      const isCodeModeTool = script != null || Boolean(tools.get(frame.data.tool_id)?.isCodeMode);
+      const parentToolId = childToolParent(frame.data.tool_id, isCodeModeTool);
+      markTool(frame.data.tool_id, parentToolId);
+      const runtime = toolRuntime(frame.data.tool_id, frame.data.tool_name, parentToolId);
       runtime.name = frame.data.tool_name;
+      runtime.parentToolId = parentToolId ?? runtime.parentToolId;
+      if (script) {
+        runtime.isCodeMode = true;
+        runtime.script = script;
+        runtime.subtitle = "Code Mode script";
+      }
       if ("tool_input" in frame.data) {
         runtime.detail = JSON.stringify(frame.data.tool_input);
       }
@@ -698,45 +793,86 @@ export function buildAgentGraph(
         runtime.status = "requested by model";
         runtime.tone = "tool";
         runtime.statusTone = "queue";
-        runtime.subtitle =
-          modelState === "running" ? "model still running" : "waiting to dispatch";
+        runtime.subtitle = runtime.isCodeMode
+          ? "Code Mode script"
+          : parentToolId
+            ? "Code Mode host call"
+            : modelState === "running"
+              ? "model still running"
+              : "waiting to dispatch";
       } else if (frame.event === "tool_start") {
         runtime.status = "running";
         runtime.tone = "tool";
         runtime.statusTone = "tool";
-        runtime.subtitle = "execution started";
+        runtime.subtitle = runtime.isCodeMode
+          ? "Code Mode running"
+          : parentToolId
+            ? "host call running"
+            : "execution started";
+        if (runtime.isCodeMode) markCodeModeStarted(frame.data.tool_id);
       } else if (frame.event === "tool_progress_delta") {
         runtime.status = "running";
         runtime.tone = "tool";
         runtime.statusTone = "tool";
-        runtime.subtitle = "execution in progress";
+        runtime.subtitle = runtime.isCodeMode
+          ? "Code Mode running"
+          : parentToolId
+            ? "host call running"
+            : "execution in progress";
         runtime.detail = frame.data.progress_delta;
       } else if (frame.event === "tool_end") {
         runtime.status = "done";
         runtime.tone = "done";
         runtime.statusTone = "done";
-        runtime.subtitle = "execution completed";
+        runtime.subtitle = runtime.isCodeMode
+          ? "Code Mode completed"
+          : parentToolId
+            ? "host call completed"
+            : "execution completed";
         runtime.detail = frame.data.tool_output;
+        if (runtime.isCodeMode) markCodeModeFinished(frame.data.tool_id);
+        markToolSettled(frame.data.tool_id, parentToolId);
       } else if (frame.event === "tool_error") {
         runtime.status = "failed";
         runtime.tone = "error";
         runtime.statusTone = "error";
-        runtime.subtitle = "execution failed";
+        runtime.subtitle = runtime.isCodeMode
+          ? "Code Mode failed"
+          : parentToolId
+            ? "host call failed"
+            : "execution failed";
         runtime.detail = frame.data.message;
+        if (runtime.isCodeMode) markCodeModeFinished(frame.data.tool_id);
+        markToolSettled(frame.data.tool_id, parentToolId);
       }
       tools.set(frame.data.tool_id, runtime);
     } else if (
       frame.event === "tool_approval_requested" ||
       frame.event === "tool_approval_resolved"
     ) {
-      markTool(frame.data.tool_id);
-      const runtime = toolRuntime(frame.data.tool_id, frame.data.tool_name);
+      const script =
+        "tool_input" in frame.data
+          ? codeModeScriptFromToolInput(frame.data.tool_input)
+          : null;
+      const isCodeModeTool = script != null || Boolean(tools.get(frame.data.tool_id)?.isCodeMode);
+      const parentToolId = childToolParent(frame.data.tool_id, isCodeModeTool);
+      markTool(frame.data.tool_id, parentToolId);
+      const runtime = toolRuntime(frame.data.tool_id, frame.data.tool_name, parentToolId);
       runtime.name = frame.data.tool_name;
+      runtime.parentToolId = parentToolId ?? runtime.parentToolId;
+      if (script) {
+        runtime.isCodeMode = true;
+        runtime.script = script;
+      }
       if (frame.event === "tool_approval_requested") {
         runtime.status = "awaiting approval";
         runtime.tone = "approval";
         runtime.statusTone = "approval";
-        runtime.subtitle = "human approval gate";
+        runtime.subtitle = runtime.isCodeMode
+          ? "Code Mode approval gate"
+          : parentToolId
+            ? "host call approval gate"
+            : "human approval gate";
         runtime.detail = JSON.stringify(frame.data.tool_input);
       } else {
         runtime.status = frame.data.approved ? "approved" : "denied";
@@ -744,6 +880,7 @@ export function buildAgentGraph(
         runtime.statusTone = frame.data.approved ? "done" : "error";
         runtime.subtitle = frame.data.approved ? "approval granted" : "approval denied";
         runtime.detail = frame.data.reason ?? runtime.detail;
+        if (!frame.data.approved) markToolSettled(frame.data.tool_id, parentToolId);
       }
       tools.set(frame.data.tool_id, runtime);
     } else if (
@@ -828,6 +965,11 @@ export function buildAgentGraph(
     if (isToolRuntimeNodeId(id)) {
       const runtime = tools.get(toolIdFromRuntimeNodeId(id));
       const detail = runtime?.detail;
+      const childCount = runtime?.id ? codeModeHostChildIds(runtime.id).length : 0;
+      const codeModeDimensions =
+        runtime?.isCodeMode && childCount > 0
+          ? codeModeContainerDimensions(childCount)
+          : null;
       return {
         tone: runtime?.tone ?? "neutral",
         dotTone: "tool",
@@ -836,18 +978,23 @@ export function buildAgentGraph(
         statusTone: runtime?.statusTone,
         subtitle: runtime?.subtitle ?? "tool lifecycle",
         detail,
-        nodeHeight: detail && hasScriptDetail(detail) ? 210 : undefined,
+        size: codeModeDimensions ? "container" : undefined,
+        nodeWidth: codeModeDimensions?.width,
+        nodeHeight: codeModeDimensions?.height ??
+          (detail && hasScriptDetail(detail) ? 210 : undefined),
         active: latestNodeId === id,
-        toolId: runtime?.id
+        toolId: runtime?.id,
+        codeMode: runtime?.isCodeMode,
+        flowGroup: runtime?.flowGroup
       };
     }
     if (id === "tool-container") {
       return {
         tone: "tool",
         dotTone: "tool",
-        title: "Tool calls",
+        title: "Subagent activity",
         state: "delegating",
-        subtitle: "subagent runtimes",
+        subtitle: "delegated runtimes",
         active: latestNodeId === id,
         size: "container",
         nodeWidth: embeddedToolLayout?.dimensions.width ?? stateNodeWidth,
@@ -921,6 +1068,26 @@ export function buildAgentGraph(
       )
     )
   );
+  for (const [parentToolId, childToolIds] of codeModeChildren) {
+    const parentNodeId = toolRuntimeNodeId(parentToolId);
+    const parentPosition = runtimeLayout.positions.get(parentNodeId);
+    if (!parentPosition) continue;
+    for (const [index, childToolId] of childToolIds.entries()) {
+      const childNodeId = toolRuntimeNodeId(childToolId);
+      const childOffset = codeModeChildPosition(index);
+      nodes.push({
+        ...node(
+          childNodeId,
+          {
+            x: parentPosition.x + childOffset.x,
+            y: parentPosition.y + childOffset.y
+          },
+          nodeDataFor(childNodeId)
+        ),
+        zIndex: 14
+      });
+    }
+  }
   if (outputSeen && outputPlacement === "external") {
     nodes.push(node("output", outputPosition(boundaryWidth), nodeDataFor("output")));
   }
@@ -960,9 +1127,17 @@ export function buildAgentGraph(
       )
     );
   }
-  addRuntimeFlowEdges(edges, runtimeFlowOrder, runtimeLayout, inputSeen, inputPlacement, latestNodeId);
+  addRuntimeFlowEdges(
+    edges,
+    runtimeFlowOrder,
+    runtimeDataById,
+    runtimeLayout,
+    inputSeen,
+    inputPlacement,
+    latestNodeId
+  );
   if (outputSeen && outputPlacement === "external") {
-    const outputSources = terminalRuntimeSources(runtimeFlowOrder);
+    const outputSources = terminalRuntimeSources(runtimeFlowOrder, runtimeDataById);
     if (outputSources.length > 0) {
       edges.push(
         ...outputSources.map((source) =>
