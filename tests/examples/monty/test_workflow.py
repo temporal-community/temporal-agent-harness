@@ -29,8 +29,9 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessageReply,
 )
 
+from temporal_agent_harness.harness.code_mode.activities import CODE_MODE_ACTIVITIES
+
 from examples.monty import activities
-from examples.monty.monty_activities import monty_resume_batch, monty_start_batch
 from examples.monty.workflow import MontyDynamicAgentWorkflow
 
 
@@ -44,7 +45,7 @@ async def client_and_queue():
         env.client,
         task_queue=task_queue,
         workflows=[MontyDynamicAgentWorkflow],
-        activities=[*activities.ALL_ACTIVITIES, monty_start_batch, monty_resume_batch],
+        activities=[*activities.ALL_ACTIVITIES, *CODE_MODE_ACTIVITIES],
     ):
         try:
             yield env.client, task_queue
@@ -86,14 +87,15 @@ async def test_script_calls_host_functions(client_and_queue):
     script = (
         "import asyncio\n"
         "async def main():\n"
-        '    flights, hotels = await asyncio.gather(\n'
-        '        search_flights("SFO", "JFK", "2026-07-01"),\n'
-        '        search_hotels("New York", "2026-07-01", "2026-07-05"),\n'
+        "    flights, hotels = await asyncio.gather(\n"
+        '        search_flights({"origin": "SFO", "destination": "JFK", "date": "2026-07-01"}),\n'
+        '        search_hotels({"city": "New York", "check_in": "2026-07-01", "check_out": "2026-07-05"}),\n'
         "    )\n"
-        '    cheapest = min(flights, key=lambda f: f["price_usd"])\n'
-        '    flight = await book_flight(cheapest["flight_id"], "Ada Lovelace")\n'
-        "    print(f\"airline={cheapest['airline']} hotels={len(hotels)}\")\n"
-        '    return await get_trip_summary([flight["confirmation_code"]])\n'
+        '    cheapest = min(flights["flights"], key=lambda f: f["price_usd"])\n'
+        '    flight = await book_flight({"flight_id": cheapest["flight_id"], "passenger_name": "Ada Lovelace"})\n'
+        "    print(f\"airline={cheapest['airline']} hotels={len(hotels['hotels'])}\")\n"
+        '    summary = await get_trip_summary({"booking_refs": [flight["confirmation_code"]]})\n'
+        '    return summary["summary"]\n'
         "asyncio.run(main())"
     )
     await handle.execute_update(

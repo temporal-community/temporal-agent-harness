@@ -4,10 +4,10 @@ import (
 	"log"
 	"os"
 
-	agentiface "github.com/temporalio/nexus_connector_slack/agent"
-	msgiface "github.com/temporalio/nexus_connector_slack/messaging"
-	"github.com/temporalio/nexus_connector_slack/messaging/slack"
-	"github.com/temporalio/nexus_connector_slack/connector"
+	agentiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/agent"
+	msgiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging"
+	"github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging/slack"
+	"github.com/temporalio/temporal-agent-harness/nexus/slack_connector/connector"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"

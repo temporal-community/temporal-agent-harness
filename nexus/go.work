@@ -2,5 +2,6 @@ go 1.25.0
 
 use (
 	./agent_adapter/nexus_worker
+	./integration_tests
 	./slack_connector
 )
