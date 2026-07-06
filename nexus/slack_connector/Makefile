@@ -31,8 +31,8 @@ lint:
 
 ci: vet workflowcheck lint test
 
-TEMPORAL_SERVER_REPO ?= https://github.com/Quinn-With-Two-Ns/temporal.git
-TEMPORAL_SERVER_REF ?= nexus-workflow-update
+TEMPORAL_SERVER_REPO ?= https://github.com/temporalio/temporal.git
+TEMPORAL_SERVER_REF ?= main
 
 install-dev-server:
 	@BUILDDIR=$$(pwd)/.build/temporal-server-src && \
