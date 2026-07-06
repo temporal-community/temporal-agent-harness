@@ -90,6 +90,7 @@
     onSelectSession?: (sessionId: string) => void | Promise<void>;
     onDeleteSession?: (sessionId: string) => void | Promise<void>;
     onApproveTool?: (
+      workflowId: string,
       toolId: string,
       approved: boolean,
       remember?: boolean
@@ -161,7 +162,7 @@
   const transcriptMessages = $derived(seedMessages(items));
   const messages = $derived([...transcriptMessages, ...localMessages]);
   const logsByTurn = $derived(groupLogsByTurn(logs));
-  const resolvedApprovalToolIds = $derived(resolvedApprovalIds(logs));
+  const resolvedApprovalKeys = $derived(resolvedApprovalIds(logs));
   const pendingApprovalRows = $derived(logs.filter((row) => isApprovalPending(row)));
   const sources = $derived(uniqueCitations(messages.flatMap((message) => message.citations)));
   const sessionItems = $derived(sortedSessions(sessions));
@@ -470,25 +471,37 @@
   function resolvedApprovalIds(rows: ReplayLogRow[]): Set<string> {
     const result = new Set<string>();
     for (const row of rows) {
-      if (row.event === "tool_approval_resolved" && row.toolId) result.add(row.toolId);
+      const key = approvalKey(row);
+      if (row.event === "tool_approval_resolved" && key) result.add(key);
     }
     return result;
   }
 
+  function approvalWorkflowId(row: ReplayLogRow): string {
+    return row.workflowId ?? sessionId;
+  }
+
+  function approvalKey(row: ReplayLogRow): string | null {
+    return row.toolId ? `${approvalWorkflowId(row)}:${row.toolId}` : null;
+  }
+
   function isApprovalPending(row: ReplayLogRow): boolean {
+    const key = approvalKey(row);
     return (
       row.event === "tool_approval_requested" &&
-      row.toolId != null &&
-      !resolvedApprovalToolIds.has(row.toolId)
+      key != null &&
+      !resolvedApprovalKeys.has(key)
     );
   }
 
-  function isApprovalResolving(toolId: string | undefined): boolean {
-    return toolId != null && resolvingApprovalIds.includes(toolId);
+  function isApprovalResolving(row: ReplayLogRow): boolean {
+    const key = approvalKey(row);
+    return key != null && resolvingApprovalIds.includes(key);
   }
 
-  function approvalError(toolId: string | undefined): string | null {
-    return toolId ? approvalErrors[toolId] ?? null : null;
+  function approvalError(row: ReplayLogRow): string | null {
+    const key = approvalKey(row);
+    return key ? approvalErrors[key] ?? null : null;
   }
 
   function logsForTurn(turnNumber: number | undefined): ReplayLogRow[] {
@@ -786,19 +799,20 @@
   ): Promise<void> {
     event.stopPropagation();
     const toolId = row.toolId;
-    if (!toolId || !onApproveTool || isApprovalResolving(toolId)) return;
+    const key = approvalKey(row);
+    if (!toolId || !key || !onApproveTool || isApprovalResolving(row)) return;
 
-    resolvingApprovalIds = [...resolvingApprovalIds, toolId];
-    approvalErrors = { ...approvalErrors, [toolId]: "" };
+    resolvingApprovalIds = [...resolvingApprovalIds, key];
+    approvalErrors = { ...approvalErrors, [key]: "" };
     try {
-      await onApproveTool(toolId, approved, remember);
+      await onApproveTool(approvalWorkflowId(row), toolId, approved, remember);
     } catch (error) {
       approvalErrors = {
         ...approvalErrors,
-        [toolId]: error instanceof Error ? error.message : "Approval request failed."
+        [key]: error instanceof Error ? error.message : "Approval request failed."
       };
     } finally {
-      resolvingApprovalIds = resolvingApprovalIds.filter((item) => item !== toolId);
+      resolvingApprovalIds = resolvingApprovalIds.filter((item) => item !== key);
     }
   }
 
@@ -1757,7 +1771,7 @@
                 <button
                   type="button"
                   class="approval-approve"
-                  disabled={!onApproveTool || isApprovalResolving(approval.toolId)}
+                  disabled={!onApproveTool || isApprovalResolving(approval)}
                   onclick={(event) => void resolveApproval(event, approval, true)}
                   onkeydown={(event) => event.stopPropagation()}
                 >
@@ -1767,7 +1781,7 @@
                 <button
                   type="button"
                   class="approval-remember"
-                  disabled={!onApproveTool || isApprovalResolving(approval.toolId)}
+                  disabled={!onApproveTool || isApprovalResolving(approval)}
                   onclick={(event) => void resolveApproval(event, approval, true, true)}
                   onkeydown={(event) => event.stopPropagation()}
                 >
@@ -1777,15 +1791,15 @@
                 <button
                   type="button"
                   class="approval-reject"
-                  disabled={!onApproveTool || isApprovalResolving(approval.toolId)}
+                  disabled={!onApproveTool || isApprovalResolving(approval)}
                   onclick={(event) => void resolveApproval(event, approval, false)}
                   onkeydown={(event) => event.stopPropagation()}
                 >
                   <XCircle size={13} />
                   <span>Reject</span>
                 </button>
-                {#if approvalError(approval.toolId)}
-                  <span class="approval-error">{approvalError(approval.toolId)}</span>
+                {#if approvalError(approval)}
+                  <span class="approval-error">{approvalError(approval)}</span>
                 {/if}
               </div>
             </article>

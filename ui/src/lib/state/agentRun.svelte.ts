@@ -1040,17 +1040,21 @@ export class AgentRunController {
   }
 
   async approveTool(
+    workflowId: string,
     toolId: string,
     approved: boolean,
     remember = false
   ): Promise<void> {
     const session = this.session;
     if (!session) throw new Error("No active session.");
+    if (!this.#isKnownWorkflowId(workflowId)) {
+      throw new Error("Cannot resolve approval for an unknown agent workflow.");
+    }
 
     this.connectionError = null;
     try {
       await this.#api.approve({
-        session_id: session.workflow_id,
+        session_id: workflowId,
         tool_id: toolId,
         approved,
         reason: approved ? null : "Rejected in chat.",
