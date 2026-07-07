@@ -1,0 +1,137 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Slack connector Temporal Serverless Worker (cmd/worker-lambda) as a zip-based
+  Go Lambda on the provided.al2023 runtime. Temporal Cloud invokes this function
+  when tasks arrive; see deploy/README-lambda.md for the end-to-end runbook and
+  temporal-cloud-serverless-worker-role.yaml for the invocation role.
+
+Parameters:
+  ArtifactBucket:
+    Type: String
+    Description: S3 bucket holding the worker-lambda.zip artifact.
+  ArtifactKey:
+    Type: String
+    Description: >-
+      S3 key of the zip artifact. Key it by git SHA (e.g. worker-lambda/<sha>.zip)
+      so a stack update actually picks up new code — CloudFormation only
+      re-deploys when the S3 key or object version changes.
+
+  FunctionName:
+    Type: String
+    Default: nexus-connector-slack-worker
+
+  TemporalAddress:
+    Type: String
+    Description: Temporal Cloud gRPC endpoint, e.g. <region>.aws.api.temporal.io:7233
+  TemporalNamespace:
+    Type: String
+    Description: Temporal namespace, e.g. connector.<account-id>
+  TemporalTaskQueue:
+    Type: String
+    Default: nexus-connector-slack
+  WorkerDeploymentName:
+    Type: String
+    Default: nexus-connector-slack
+    Description: Must match the Worker Deployment name registered in Temporal Cloud.
+  WorkerBuildId:
+    Type: String
+    Description: >-
+      Build ID for Worker Deployment Versioning. MUST match both the artifact
+      (use the git SHA) and the build-id registered via
+      `temporal worker deployment create-version`. Pinned versioning routes tasks
+      by this value.
+
+  TemporalApiKeySecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret (plain string) holding the Temporal Cloud API key.
+  SlackBotTokenSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret (plain string) holding the Slack bot token.
+
+  MemorySize:
+    Type: Number
+    Default: 512
+  Timeout:
+    Type: Number
+    Default: 120
+    Description: >-
+      Seconds. Must exceed the longest activity StartToClose plus the ~7s worker
+      shutdown buffer; 60s minimum recommended.
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: {default: 'Artifact'}
+        Parameters: [ArtifactBucket, ArtifactKey, FunctionName]
+      - Label: {default: 'Temporal'}
+        Parameters: [TemporalAddress, TemporalNamespace, TemporalTaskQueue, WorkerDeploymentName, WorkerBuildId]
+      - Label: {default: 'Secrets'}
+        Parameters: [TemporalApiKeySecretArn, SlackBotTokenSecretArn]
+      - Label: {default: 'Function tuning'}
+        Parameters: [MemorySize, Timeout, LogRetentionDays]
+
+Resources:
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: read-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref TemporalApiKeySecretArn
+                  - !Ref SlackBotTokenSecretArn
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${FunctionName}'
+      RetentionInDays: !Ref LogRetentionDays
+
+  WorkerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroup
+    Properties:
+      FunctionName: !Ref FunctionName
+      Description: Slack connector Temporal serverless worker.
+      Runtime: provided.al2023
+      Handler: bootstrap
+      Architectures: [arm64] # MUST match LAMBDA_ARCH in the Makefile's build-lambda target.
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref ArtifactKey
+      Role: !GetAtt ExecutionRole.Arn
+      MemorySize: !Ref MemorySize
+      Timeout: !Ref Timeout
+      Environment:
+        Variables:
+          TEMPORAL_ADDRESS: !Ref TemporalAddress
+          TEMPORAL_NAMESPACE: !Ref TemporalNamespace
+          TEMPORAL_TASK_QUEUE: !Ref TemporalTaskQueue
+          WORKER_DEPLOYMENT_NAME: !Ref WorkerDeploymentName
+          WORKER_BUILD_ID: !Ref WorkerBuildId
+          TEMPORAL_API_KEY_SECRET_ARN: !Ref TemporalApiKeySecretArn
+          SLACK_BOT_TOKEN_SECRET_ARN: !Ref SlackBotTokenSecretArn
+
+Outputs:
+  FunctionArn:
+    Description: Function ARN — pass to the invocation-role template (LambdaFunctionARNs) and to `temporal worker deployment create-version --aws-lambda-function-arn`.
+    Value: !GetAtt WorkerFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-FunctionArn'
+  FunctionName:
+    Value: !Ref FunctionName

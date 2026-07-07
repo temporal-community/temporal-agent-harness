@@ -22,16 +22,23 @@ resolved from `TEMPORAL_CONFIG_FILE`, then `temporal.toml` under
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `SLACK_BOT_TOKEN` | Slack bot token (required). Use Secrets Manager in prod. | — |
+| `TEMPORAL_API_KEY_SECRET_ARN` | ARN of a Secrets Manager secret (plain string) with the Temporal Cloud API key. When set, it's fetched at cold start and installed as API-key credentials with TLS on. | — |
+| `SLACK_BOT_TOKEN_SECRET_ARN` | ARN of a Secrets Manager secret (plain string) with the Slack bot token. Falls back to `SLACK_BOT_TOKEN` if unset. | — |
+| `SLACK_BOT_TOKEN` | Slack bot token, used only when `SLACK_BOT_TOKEN_SECRET_ARN` is unset (local/dev). | — |
 | `TEMPORAL_ADDRESS` | Temporal frontend address | (envconfig default) |
 | `TEMPORAL_NAMESPACE` | Namespace | `connector` |
 | `TEMPORAL_TASK_QUEUE` | Task queue | `nexus-connector-slack` |
-| `TEMPORAL_API_KEY` / `TEMPORAL_TLS*` | Auth / TLS for Temporal Cloud | — |
+| `TEMPORAL_API_KEY` / `TEMPORAL_TLS*` | Direct auth / TLS (used when `TEMPORAL_API_KEY_SECRET_ARN` is unset) | — |
 | `WORKER_DEPLOYMENT_NAME` | Deployment name for versioning | `nexus-connector-slack` |
 | `WORKER_BUILD_ID` | Build ID for versioning (set to the git SHA in CI) | `dev` |
 
 The namespace and task-queue defaults match `cmd/worker` so behavior is
-consistent unless explicitly overridden.
+consistent unless explicitly overridden. In production the API key and Slack
+token come from Secrets Manager via the `*_SECRET_ARN` vars; envconfig's direct
+`TEMPORAL_API_KEY` / `SLACK_BOT_TOKEN` are the local/dev fallback.
+
+**For a full AWS deploy (CloudFormation + Temporal Cloud registration), see
+[`../deploy/README-lambda.md`](../deploy/README-lambda.md).**
 
 ## Versioning
 
@@ -55,26 +62,24 @@ temporal worker deployment set-current-version \
 
 ## Build & deploy
 
-Build a Linux binary named `bootstrap` and deploy on the `provided.al2023`
-runtime:
+Build the arm64 `bootstrap` artifact with the Makefile target:
 
 ```
-GOOS=linux GOARCH=arm64 go build -o bootstrap ./cmd/worker-lambda   # use amd64 for x86_64 Lambdas
-zip function.zip bootstrap
-# create/update the Lambda function with runtime=provided.al2023, handler=bootstrap
+make build-lambda   # -> build/worker-lambda/worker-lambda.zip (provided.al2023, arm64)
 ```
 
-## Invocation cadence (important)
+The full AWS + Temporal Cloud deploy (CloudFormation stacks, secrets, Worker
+Deployment registration) is in [`../deploy/README-lambda.md`](../deploy/README-lambda.md).
 
-A Lambda worker only polls for tasks **while an invocation is running**, then
-drains before the deadline. To behave like an always-on worker, invoke it on a
-tight recurring schedule — e.g. an EventBridge rule every ~1 minute — with the
-function timeout set to at least the longest activity `StartToClose` plus the
-shutdown buffer (~7s). A **minimum 60s timeout** is recommended.
+## Invocation (handled by Temporal Cloud)
 
-For backlog-driven scaling of serverless workers, see Temporal's
-[`auto-scaled-workers`](https://github.com/temporalio/sdk-go) project — out of
-scope for this binary.
+With Temporal Cloud Serverless Workers you don't schedule invocations — **Temporal
+Cloud invokes the function when tasks arrive**, assuming an IAM role in your
+account (see `../deploy/temporal-cloud-serverless-worker-role.yaml`). Each
+invocation polls, processes tasks, then drains before the deadline.
+
+Set the function **timeout** to at least the longest activity `StartToClose` plus
+the shutdown buffer (~7s); a **60s minimum** is recommended.
 
 > **Streaming is the part that fits Lambda's model least.** The connector's
 > `Stream` activity streams agent output back over the life of a turn. If a turn

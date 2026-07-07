@@ -162,22 +162,31 @@ Notes:
 - `go mod tidy` (each module) then confirm `go build`/`go vet`/`go test` pass across the
   workspace **and** that each module still builds per-module (`GOWORK=off`).
 
-## Operational notes (documented, not enforced in code)
+## Deployment (added 2026-07-06)
 
-These belong in the README / deployment docs for the new binary:
+Deployment targets **Temporal Cloud Serverless Workers**: Temporal Cloud invokes the Lambda
+when tasks arrive (assuming an IAM role in the account, guarded by an external ID) — there is
+no EventBridge/cron. Artifacts live under `nexus/slack_connector/deploy/` with the runbook in
+`deploy/README-lambda.md`:
 
-- **Polling is invocation-scoped.** A Lambda worker only polls for tasks while an invocation
-  is running, then drains before the deadline. To behave like an always-on worker it must be
-  invoked on a tight recurring schedule (e.g. an EventBridge rule every ~1 minute), with the
-  function timeout set to at least the longest activity StartToClose plus the shutdown buffer
-  (~7s); a 60s minimum timeout is recommended. Temporal's `auto-scaled-workers` project is
-  the more sophisticated, backlog-driven way to drive invocations and is out of scope here.
-- **Pinned versioning requires server-side ramp.** For each new `BuildID`, the deployment's
-  current version must be set on the server (e.g.
-  `temporal worker deployment set-current-version`) or tasks will not route to the new build.
-- **Build & package:** `GOOS=linux GOARCH=arm64 go build -o bootstrap ./cmd/worker-lambda`,
-  zip the `bootstrap` binary, deploy on the `provided.al2023` runtime. Optionally ship a
-  `temporal.toml`; env vars are the recommended default with secrets from Secrets Manager.
+- **App:** `cmd/worker-lambda/secrets.go` fetches the Temporal Cloud API key and Slack bot
+  token from Secrets Manager (plain-string secrets) when `TEMPORAL_API_KEY_SECRET_ARN` /
+  `SLACK_BOT_TOKEN_SECRET_ARN` are set — the API key becomes TLS-enabled API-key credentials;
+  both fall back to env vars for local/dev.
+- **Build:** `make build-lambda` produces an arm64 `bootstrap` zip (`provided.al2023`). The
+  arm64 choice is a single source of truth: `LAMBDA_ARCH` in the Makefile must match
+  `Architectures` in `deploy/worker-lambda.cfn.yaml`.
+- **IaC:** `deploy/worker-lambda.cfn.yaml` (function + execution role scoped to
+  `secretsmanager:GetSecretValue` on the two ARNs + log group) and
+  `deploy/temporal-cloud-serverless-worker-role.yaml` (Temporal's official invocation role,
+  copied verbatim; external ID defaulted to `tmprl-<uuid>`). Both pass `cfn-lint`.
+- **Registration:** `temporal worker deployment create` / `create-version --aws-lambda-*` /
+  `set-current-version`. The `WORKER_BUILD_ID` (git SHA), `WORKER_DEPLOYMENT_NAME`, task
+  queue, and external ID form a contract that must match on both the AWS and Cloud sides.
+- **Pinned versioning requires server-side ramp:** each new `BuildID` must be set current or
+  tasks won't route to it.
+- **Verification boundary:** verified through compile, arm64 package, and `cfn-lint`; the
+  runtime path (Cloud invocation, assume-role, secret fetch, API-key TLS) needs a real deploy.
 
 ## Testing
 
@@ -192,8 +201,9 @@ These belong in the README / deployment docs for the new binary:
 
 ## Out of scope
 
-- Infrastructure-as-code (Terraform/CloudFormation) for the Lambda, EventBridge trigger, or
-  Secrets Manager wiring.
+- ~~Infrastructure-as-code for the Lambda + Secrets Manager wiring.~~ Added 2026-07-06 (see
+  the Deployment section). Still out: creating the Secrets Manager secrets and the S3 artifact
+  bucket themselves, and any CI pipeline automating build → upload → deploy → set-current.
 - OpenTelemetry / ADOT observability (the `lambdaworker/otel` sub-package) — can be added
   later via `Options.OnShutdown` + client options.
 - Making the `cmd/webhook` HTTP receiver serverless (different mechanism; not requested).

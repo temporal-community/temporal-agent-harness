@@ -1,4 +1,4 @@
-.PHONY: generate build test test-contract lint fmt vet workflowcheck ci install-dev-server start-dev-server
+.PHONY: generate build build-lambda test test-contract lint fmt vet workflowcheck ci install-dev-server start-dev-server
 
 generate:
 	npx nexus-rpc-gen@alpha --lang go --package agent \
@@ -7,6 +7,21 @@ generate:
 
 build:
 	go build ./...
+
+# Build the AWS Lambda deployment artifact for cmd/worker-lambda.
+# Produces $(LAMBDA_BUILD_DIR)/bootstrap and $(LAMBDA_BUILD_DIR)/worker-lambda.zip.
+#
+# LAMBDA_ARCH MUST match `Architectures` in deploy/worker-lambda.cfn.yaml (arm64).
+# A mismatch builds and packages fine but fails at invocation with "exec format error".
+# GOWORK=off so the artifact resolves against this module's go.mod, not the workspace.
+LAMBDA_ARCH ?= arm64
+LAMBDA_BUILD_DIR ?= build/worker-lambda
+build-lambda:
+	mkdir -p $(LAMBDA_BUILD_DIR)
+	GOWORK=off GOOS=linux GOARCH=$(LAMBDA_ARCH) CGO_ENABLED=0 \
+	  go build -tags lambda.norpc -ldflags="-s -w" -o $(LAMBDA_BUILD_DIR)/bootstrap ./cmd/worker-lambda
+	cd $(LAMBDA_BUILD_DIR) && rm -f worker-lambda.zip && zip -q -X worker-lambda.zip bootstrap
+	@echo "Built $(LAMBDA_BUILD_DIR)/worker-lambda.zip (GOARCH=$(LAMBDA_ARCH))"
 
 # Run all tests. Contract tests (requiring uv/Python) skip gracefully if unavailable.
 test:

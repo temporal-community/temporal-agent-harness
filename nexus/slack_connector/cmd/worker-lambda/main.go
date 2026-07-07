@@ -41,6 +41,13 @@ func main() {
 			o.ClientOptions.Namespace = "connector"
 		}
 
-		return connectorworker.Register(o, os.Getenv("SLACK_BOT_TOKEN"))
+		// Source the Temporal Cloud API key and Slack bot token from Secrets
+		// Manager when their *_SECRET_ARN vars are set (falling back to env).
+		slackToken, err := resolveSecrets(o)
+		if err != nil {
+			return err
+		}
+
+		return connectorworker.Register(o, slackToken)
 	})
 }
