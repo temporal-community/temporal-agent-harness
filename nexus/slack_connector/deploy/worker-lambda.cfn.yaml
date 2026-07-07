@@ -46,7 +46,19 @@ Parameters:
     Description: ARN of the Secrets Manager secret (plain string) holding the Temporal Cloud API key.
   SlackBotTokenSecretArn:
     Type: String
-    Description: ARN of the Secrets Manager secret (plain string) holding the Slack bot token.
+    Default: ''
+    Description: >-
+      Optional. ARN of the Secrets Manager secret (plain string) holding the Slack
+      bot token. If empty, provide the token via the SLACK_BOT_TOKEN env var by
+      another means (e.g. set it on the function directly).
+  SecretsKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional. ARN of the customer-managed KMS key that encrypts the secrets. Leave
+      empty if the secrets use the default aws/secretsmanager key. If a CMK is used,
+      GetSecretValue also needs kms:Decrypt on it — set this so the execution role
+      gets that permission (otherwise the fetch fails at runtime with AccessDenied).
 
   MemorySize:
     Type: Number
@@ -69,9 +81,13 @@ Metadata:
       - Label: {default: 'Temporal'}
         Parameters: [TemporalAddress, TemporalNamespace, TemporalTaskQueue, WorkerDeploymentName, WorkerBuildId]
       - Label: {default: 'Secrets'}
-        Parameters: [TemporalApiKeySecretArn, SlackBotTokenSecretArn]
+        Parameters: [TemporalApiKeySecretArn, SlackBotTokenSecretArn, SecretsKmsKeyArn]
       - Label: {default: 'Function tuning'}
         Parameters: [MemorySize, Timeout, LogRetentionDays]
+
+Conditions:
+  HasSlackSecret: !Not [!Equals [!Ref SlackBotTokenSecretArn, '']]
+  HasKmsKey: !Not [!Equals [!Ref SecretsKmsKeyArn, '']]
 
 Resources:
   ExecutionRole:
@@ -92,9 +108,17 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource:
-                  - !Ref TemporalApiKeySecretArn
-                  - !Ref SlackBotTokenSecretArn
+                Resource: !If
+                  - HasSlackSecret
+                  - [!Ref TemporalApiKeySecretArn, !Ref SlackBotTokenSecretArn]
+                  - [!Ref TemporalApiKeySecretArn]
+              # kms:Decrypt is required only when the secrets use a customer-managed KMS key.
+              - !If
+                - HasKmsKey
+                - Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: !Ref SecretsKmsKeyArn
+                - !Ref AWS::NoValue
 
   LogGroup:
     Type: AWS::Logs::LogGroup
@@ -125,7 +149,7 @@ Resources:
           WORKER_DEPLOYMENT_NAME: !Ref WorkerDeploymentName
           WORKER_BUILD_ID: !Ref WorkerBuildId
           TEMPORAL_API_KEY_SECRET_ARN: !Ref TemporalApiKeySecretArn
-          SLACK_BOT_TOKEN_SECRET_ARN: !Ref SlackBotTokenSecretArn
+          SLACK_BOT_TOKEN_SECRET_ARN: !If [HasSlackSecret, !Ref SlackBotTokenSecretArn, !Ref 'AWS::NoValue']
 
 Outputs:
   FunctionArn:

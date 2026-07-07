@@ -18,8 +18,13 @@ binary's runtime behavior and config.
 
 ## Prerequisites
 
-- Two **plain-string** Secrets Manager secrets: the Temporal Cloud **API key** and the
-  **Slack bot token**. Note their ARNs.
+- A **plain-string** Secrets Manager secret for the Temporal Cloud **API key** (required).
+  Optionally a second plain-string secret for the **Slack bot token** — recommended, but if
+  you skip it, set `SLACK_BOT_TOKEN` on the function another way. Note the ARNs.
+- **Check how those secrets are encrypted.** If either uses a **customer-managed KMS key**
+  (not the default `aws/secretsmanager` key), pass its ARN as `SecretsKmsKeyArn` so the
+  execution role also gets `kms:Decrypt` — otherwise `GetSecretValue` fails at runtime with
+  `AccessDeniedException` despite the `secretsmanager:GetSecretValue` grant.
 - An **S3 bucket** for the deployment artifact.
 - `aws` CLI + `temporal` CLI, and a Temporal Cloud namespace.
 - Go toolchain (for `make build-lambda`).
@@ -67,6 +72,8 @@ aws cloudformation deploy \
     WorkerBuildId="$SHA" \
     TemporalApiKeySecretArn="$API_KEY_SECRET_ARN" \
     SlackBotTokenSecretArn="$SLACK_SECRET_ARN"
+    # Optional: SlackBotTokenSecretArn may be omitted (then set SLACK_BOT_TOKEN another way).
+    # Optional: add SecretsKmsKeyArn=<cmk-arn> if the secrets use a customer-managed KMS key.
 
 # Grab the function ARN for the next steps:
 export FUNCTION_ARN=$(aws cloudformation describe-stacks \
