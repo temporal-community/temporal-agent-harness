@@ -67,24 +67,22 @@ without `GOWORK=off`). This repo builds **per-module** (each module's `Makefile`
 `go build ./...`; there are no CI workflows or Dockerfiles), and per-module builds are
 unaffected — each module resolves its own go.mod.
 
-**Resolution (verified):** a single `replace` in `nexus/go.work` forces the whole workspace
-onto the pinned `update-callback` build:
+**Interim resolution (superseded):** a temporary `replace go.temporal.io/api => …<pinned>`
+in `nexus/go.work` forced the whole workspace onto the pinned `update-callback` build. This
+was the correct fix while the fields lived only on the unmerged branch.
 
-```
-replace go.temporal.io/api => go.temporal.io/api v1.62.3-0.20260330144107-1e2b1facde20
-```
+**Final resolution (2026-07-06, verified):** the `update-callback` feature merged upstream
+and shipped publicly — `update.v1.Request.RequestId`/`CompletionCallbacks` are present in
+**public api v1.62.13+** (field decls byte-identical to the pinned build). PR #24 un-forked
+the dev server to `temporalio/temporal@main`. So all three modules were moved off the custom
+pseudo-version onto **public api v1.62.14**, and the `go.work` replace was removed. api
+v1.62.14 requires `go 1.25.4`, so the module and `go.work` `go` directives were bumped to
+1.25.4. lambdaworker's v1.62.5 floor is satisfied by v1.62.14.
 
-All three modules build + vet + test cleanly in workspace mode with this replace, and
-sibling modules keep building per-module. lambdaworker/envconfig/SDK v1.41.1 reference
-nothing added between the pinned commit and v1.62.5, so pinning down is safe.
-`slack_connector/go.mod` still *requires* api v1.62.5 (lambdaworker's floor) — correct, since
-building slack_connector in isolation (e.g. a Lambda CI/Docker build without `go.work`)
-compiles fine against public v1.62.5, which it never uses the extra fields from. The replace
-governs local/workspace resolution only.
-
-**Caveat:** do not run `go work sync` — it rewrites the sibling go.mod `require` lines to
-v1.62.5 (the pre-replace MVS pick) and breaks their per-module builds. A comment in
-`go.work` records this.
+Verified: all three modules build + vet + test in both workspace and per-module (`GOWORK=off`)
+modes; the standalone Lambda artifact cross-compiles; and the durability integration suite
+(`nexus/Makefile` `test-integration`, embedded dev server) passes — confirming the
+completion-callback wire protocol works against the mainline server with the public api.
 
 ## Architecture
 
@@ -158,9 +156,11 @@ Notes:
   (brings `aws-lambda-go`, `contrib/envconfig`; floors `go.temporal.io/api` at v1.62.5).
 - Keep `go.temporal.io/sdk` at `v1.41.1` (SDK upgrade abandoned — see the dependency-conflict
   section above).
-- Add the `go.temporal.io/api` `replace` to `nexus/go.work` (see above).
-- `go mod tidy` (slack_connector) then confirm `go build`/`go vet`/`go test` pass across the
-  workspace **and** that sibling modules still build per-module (`GOWORK=off`).
+- Unify all three modules on public `go.temporal.io/api v1.62.14` (see the final resolution
+  above); no `go.work` replace is needed. Bump module + `go.work` `go` directives to 1.25.4
+  (required by api v1.62.14).
+- `go mod tidy` (each module) then confirm `go build`/`go vet`/`go test` pass across the
+  workspace **and** that each module still builds per-module (`GOWORK=off`).
 
 ## Operational notes (documented, not enforced in code)
 

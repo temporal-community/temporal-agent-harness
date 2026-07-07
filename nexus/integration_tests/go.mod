@@ -4,14 +4,14 @@
 // so go mod tidy works as long as the workspace is active.
 module github.com/temporalio/temporal-agent-harness/nexus/integration_tests
 
-go 1.25.0
+go 1.25.4
 
 require (
 	github.com/nexus-rpc/sdk-go v0.6.0
 	github.com/stretchr/testify v1.11.1
 	github.com/temporalio/temporal-agent-harness/nexus/agent_adapter/nexus_worker v0.0.0-20260702161158-fe910fd096c2
 	github.com/temporalio/temporal-agent-harness/nexus/slack_connector v0.0.0-20260702161158-fe910fd096c2
-	go.temporal.io/api v1.62.3-0.20260330144107-1e2b1facde20
+	go.temporal.io/api v1.62.14
 	go.temporal.io/sdk v1.41.1
 	google.golang.org/protobuf v1.36.10
 )
@@ -24,6 +24,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
+	github.com/nexus-rpc/nexus-proto-annotations v0.1.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect

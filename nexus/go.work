@@ -1,18 +1,7 @@
-go 1.25.0
+go 1.25.4
 
 use (
 	./agent_adapter/nexus_worker
 	./integration_tests
 	./slack_connector
 )
-
-// slack_connector depends on the lambdaworker contrib module, which floors
-// go.temporal.io/api at v1.62.5. nexus_worker/integration_tests pin the
-// update-callback build (v1.62.3-0.2026...-1e2b1facde20 on temporalio/api-go),
-// which adds Request.RequestId/CompletionCallbacks that nexus_worker requires but
-// no public release carries. This replace forces the whole workspace onto that
-// build so all modules resolve consistently. It only affects workspace-mode
-// resolution; each module still builds standalone against its own go.mod.
-// Do NOT run `go work sync` — it rewrites the sibling go.mod requires to v1.62.5
-// (the pre-replace MVS pick) and breaks their per-module builds.
-replace go.temporal.io/api => go.temporal.io/api v1.62.3-0.20260330144107-1e2b1facde20
