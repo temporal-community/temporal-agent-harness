@@ -57,6 +57,7 @@ from temporalio.exceptions import ApplicationError
 
 from temporal_agent_harness.harness.agent_client import AgentClient
 from temporal_agent_harness.harness.agent_workflow import _discover_handlers
+from temporal_agent_harness.harness.subagent_transport import ChildWorkflowTransport
 
 # ---------------------------------------------------------------------------
 # Message models + probe workflows
@@ -929,7 +930,12 @@ def test_errored_subagent_turn_closes_bracket_on_actual_accepted_turn(offline_bu
         AgentMessage(type="x", payload={}, expected_turn=1), "turn-1"
     )
     runner._status.start_next_turn()
-    inst = runner._status.register_subagent("aaaaaa-bbbbbb", "child-wf-1", "k")
+    inst = runner._status.register_subagent(
+        "aaaaaa-bbbbbb",
+        "child-wf-1",
+        "k",
+        transport=ChildWorkflowTransport(workflow_type="dummy", task_queue="dummy-q"),
+    )
 
     # The activity raises with the child's ACTUAL accepted turn number (7) in the details —
     # deliberately different from the ``expected``/default we pass (2), so the assertion proves we

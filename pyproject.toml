@@ -56,8 +56,18 @@ dev = [
     "setuptools>=68",  # package artifact tests call the build backend directly
     "moto[server]>=5.2.1",  # threaded S3 mock for the utils/large_payload S3-driver test
     "temporalio[aioboto3]>=1.27.2",  # S3 storage driver under test (mirrors the `s3` extra)
+    "agent-registry",  # tests/nexus/test_agent_registry.py exercises the real package, not a copy
+    "subagents",  # nexus/subagents' NexusTransport + registry discovery, exercised by nexus/tests
     { include-group = "examples" },
 ]
+
+[tool.uv.sources]
+# Local path for now, while validating the package structure in-repo. Once pushed upstream,
+# external consumers (e.g. internal-ai-prototypes) point at the same package via
+# `{ git = "...", subdirectory = "nexus/agent_registry" }` instead — the dependency
+# declaration above doesn't change, only this source mapping would for an external consumer.
+agent-registry = { path = "nexus/agent_registry", editable = true }
+subagents = { path = "nexus/subagents", editable = true }
 
 [build-system]
 requires = ["setuptools>=68"]

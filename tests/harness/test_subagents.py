@@ -22,6 +22,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     ToolApprovalPolicy,
 )
 from temporal_agent_harness.harness.agent_workflow import _SubagentInstance, _WorkflowStatus
+from temporal_agent_harness.harness.subagent_transport import ChildWorkflowTransport
 
 
 # A minimal child agent for exercising the toolset generator. No @workflow.defn is needed —
@@ -72,15 +73,21 @@ def _status() -> _WorkflowStatus:
     )
 
 
+def _transport() -> ChildWorkflowTransport:
+    """A placeholder transport for tests exercising pure bookkeeping (the FIFO gate, the
+    registry) that never actually drive a turn — any SubagentTransport works."""
+    return ChildWorkflowTransport(workflow_type="dummy", task_queue="dummy-q")
+
+
 def test_gate_hands_out_tickets_in_call_order():
-    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k")
+    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k", transport=_transport())
     # Tickets are monotonic so gathered callers are ordered by the order they call take_ticket
     # (i.e. the model's call order), not by await scheduling.
     assert [inst.take_ticket() for _ in range(3)] == [0, 1, 2]
 
 
 def test_gate_serves_one_ticket_at_a_time_in_order():
-    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k")
+    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k", transport=_transport())
     t0, t1, t2 = inst.take_ticket(), inst.take_ticket(), inst.take_ticket()
 
     # Only the first ticket is admitted initially.
@@ -99,7 +106,7 @@ def test_gate_serves_one_ticket_at_a_time_in_order():
 
 
 def test_gate_sequential_take_serve_release_never_blocks():
-    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k")
+    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k", transport=_transport())
     # The common (non-concurrent) path: take → already serving → release, repeatedly. Each
     # ticket is served the moment it is taken (no waiting), since the prior one released.
     for expected in range(3):
@@ -114,7 +121,7 @@ def test_gate_sequential_take_serve_release_never_blocks():
 
 def test_register_keys_by_handle_and_stores_workflow_id():
     st = _status()
-    inst = st.register_subagent("a3f9c2", "sample-subagent-<uuid>", "sample")
+    inst = st.register_subagent("a3f9c2", "sample-subagent-<uuid>", "sample", transport=_transport())
     assert inst.handle == "a3f9c2"
     assert inst.workflow_id == "sample-subagent-<uuid>"  # the real child id, hidden from the model
     assert inst.agent_key == "sample"
@@ -137,7 +144,7 @@ def test_lookup_unknown_subagent_raises_typed_error():
 
 def test_remove_subagent_is_idempotent_and_then_unknown():
     st = _status()
-    st.register_subagent("a3f9c2", "wf", "sample")
+    st.register_subagent("a3f9c2", "wf", "sample", transport=_transport())
     st.remove_subagent("a3f9c2")
     with pytest.raises(ApplicationError):
         st.subagent("a3f9c2")
@@ -147,7 +154,7 @@ def test_remove_subagent_is_idempotent_and_then_unknown():
 
 def test_agent_status_lists_subagents_without_gate_internals():
     st = _status()
-    inst = st.register_subagent("a3f9c2", "sample-subagent-wf", "sample")
+    inst = st.register_subagent("a3f9c2", "sample-subagent-wf", "sample", transport=_transport())
     inst.next_expected_turn = 4
     # Hand out a couple of gate tickets so the internal counters are non-default.
     inst.take_ticket()
@@ -279,10 +286,50 @@ def test_toolset_requires_at_least_one_handler():
 
 def test_distinct_subagents_have_independent_gates_and_counters():
     st = _status()
-    a = st.register_subagent("aaa111", "wf-a", "sample")
-    b = st.register_subagent("bbb222", "wf-b", "sample")
+    a = st.register_subagent("aaa111", "wf-a", "sample", transport=_transport())
+    b = st.register_subagent("bbb222", "wf-b", "sample", transport=_transport())
     # Same agent_key, but independent instances/gates so different subagents run concurrently.
     assert a is not b
     a.take_ticket()
     assert a._next_ticket == 1
     assert b._next_ticket == 0
+
+
+# -- SubagentTransport ---------------------------------------------------------------------
+#
+# subagent_toolset() is transport-agnostic: omitting `transport` builds the harness's default
+# ChildWorkflowTransport from workflow_type/task_queue (the only behavior it had before the
+# SubagentTransport seam existed); passing one (e.g. a NexusTransport from
+# nexus/subagents/transport — not exercised here, to keep this suite free of that dependency)
+# uses it as-is and workflow_type/task_queue go unused. Dynamic discovery
+# (registry_subagent_toolset) is a Nexus-only concept and lives entirely in
+# nexus/subagents/registry now; see that package's own tests.
+
+
+class _FakeTransport:
+    """A minimal stand-in SubagentTransport — just enough to prove start_<key> threads
+    whatever transport it's given through to runner.start_subagent unchanged."""
+
+    async def start(self, **kwargs):
+        raise NotImplementedError
+
+    async def send_turn(self, *args, **kwargs):
+        raise NotImplementedError
+
+    async def stop(self, inst):
+        raise NotImplementedError
+
+
+def test_toolset_defaults_to_child_workflow_transport_when_omitted():
+    tools = agent.subagent_toolset(_SampleChildAgent, key="sample", task_queue="sample-q")
+    assert [t.__name__ for t in tools][0] == "start_sample"
+
+
+def test_toolset_accepts_an_explicit_transport():
+    tools = {
+        t.__name__: t
+        for t in agent.subagent_toolset(
+            _SampleChildAgent, key="sample", transport=_FakeTransport()
+        )
+    }
+    assert list(tools) == ["start_sample", "sample_ask", "sample_summarize", "stop_sample"]

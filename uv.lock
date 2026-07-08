@@ -8,6 +8,29 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "agent-registry"
+version = "0.1.0"
+source = { editable = "nexus/agent_registry" }
+dependencies = [
+    { name = "nexus-rpc" },
+    { name = "pydantic" },
+    { name = "temporalio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "nexus-rpc", specifier = ">=1.1.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "temporalio", specifier = ">=1.27.2" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=1.0" },
+]
+
+[[package]]
 name = "aioboto3"
 version = "15.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2607,6 +2630,31 @@ wheels = [
 ]
 
 [[package]]
+name = "subagents"
+version = "0.1.0"
+source = { editable = "nexus/subagents" }
+dependencies = [
+    { name = "nexus-rpc" },
+    { name = "pydantic" },
+    { name = "temporal-agent-harness" },
+    { name = "temporalio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "nexus-rpc", specifier = ">=1.1.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "temporal-agent-harness", editable = "." },
+    { name = "temporalio", specifier = ">=1.27.2" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=1.0" },
+]
+
+[[package]]
 name = "sympy"
 version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2644,6 +2692,7 @@ ui = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "agent-registry" },
     { name = "fastapi", extra = ["standard"] },
     { name = "google-auth" },
     { name = "google-genai" },
@@ -2652,6 +2701,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "setuptools" },
+    { name = "subagents" },
     { name = "temporalio", extra = ["aioboto3"] },
 ]
 examples = [
@@ -2675,6 +2725,7 @@ provides-extras = ["genai", "s3", "ui", "code-mode"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "agent-registry", editable = "nexus/agent_registry" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
     { name = "google-auth", specifier = ">=2.53.0" },
     { name = "google-genai", specifier = ">=2.0.0" },
@@ -2683,6 +2734,7 @@ dev = [
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "setuptools", specifier = ">=68" },
+    { name = "subagents", editable = "nexus/subagents" },
     { name = "temporalio", extras = ["aioboto3"], specifier = ">=1.27.2" },
 ]
 examples = [

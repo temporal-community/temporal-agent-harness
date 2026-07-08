@@ -38,3 +38,14 @@ history.enableChasm:
   - value: true
 history.enableCHASMCallbacks:
   - value: true
+
+# Standalone Nexus operations — a CLIENT (not workflow) can call
+# `client.create_nexus_client(...)`, with no workflow driving the call. Required by the agent
+# registry's client-side self-registration helper (subagent_registry/registration.py:
+# register_agent_with_registry / deregister_agent_from_registry) and covered end-to-end by
+# nexus/tests/test_agent_registry_nexus.py. Also unreleased — a stock `temporal server
+# start-dev` rejects these calls with "unknown method StartNexusOperationExecution".
+nexusoperation.enableStandalone:
+  - value: true
+activity.enableStandalone:
+  - value: true

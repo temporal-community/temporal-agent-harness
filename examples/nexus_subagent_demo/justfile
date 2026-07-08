@@ -1,0 +1,98 @@
+# Nexus-brokered subagent demo (examples/nexus_subagent_demo).
+# Run from this directory: `just <recipe>`.
+#
+# Demonstrates the harness's NEXUS_SUBAGENT path: a model-free parent discovers and drives a
+# subagent dynamically, via the agent registry + the AgentService Nexus contract, instead of a
+# same-cluster child workflow.
+#
+# Each command in its own terminal:
+#   just install-dev-server   # 1. once — build the standalone-Nexus-capable temporal-server
+#   just temporal             # 2. run it
+#   just setup-nexus          # 3. once per server run — namespace + Nexus endpoints
+#   just agent-registry       # 4. the shared agent directory
+#   just echo-nexus           # 5. Go Nexus front door for the Echo subagent
+#   just echo-worker          # 6. Python EchoSubagentWorkflow worker (self-registers)
+#   just demo-parent          # 7. SubagentDemoParentWorkflow worker (the "parent")
+# Then, from any terminal:
+#   just start                # start a parent session
+#   just send                 # send it a message; reply streams onto the workflow's own stream
+
+root := justfile_directory() / ".." / ".."
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Build the standalone-Nexus-capable temporal-server binary (one-time; installs to
+# `$(go env GOPATH)/bin/temporal-server`). A stock `temporal server start-dev` does NOT support
+# the standalone Nexus operations the agent registry's self-registration needs.
+install-dev-server:
+    make -C "{{root}}/nexus/slack_connector" install-dev-server
+
+# Run the standalone-Nexus-capable temporal-server (Web UI: http://localhost:8233).
+temporal:
+    cd "{{root}}/nexus/devserver" && "$(go env GOPATH)/bin/temporal-server" --config-file config.yaml --allow-no-auth start
+
+# Register the default namespace + the two Nexus endpoints this demo needs. Idempotent —
+# safe to re-run; run it once per fresh server start.
+setup-nexus:
+    temporal operator namespace create -n default --address localhost:7233 || true
+    temporal operator nexus endpoint create \
+        --name agent-registry-endpoint \
+        --target-namespace default \
+        --target-task-queue agent-registry \
+        --address localhost:7233 || true
+    temporal operator nexus endpoint create \
+        --name echo-agent-nexus-endpoint \
+        --target-namespace default \
+        --target-task-queue echo-agent \
+        --address localhost:7233 || true
+
+# Run the agent registry worker (the shared Nexus directory agents register with).
+agent-registry:
+    cd "{{root}}" && TEMPORAL_CONFIG_FILE=temporal.local.toml TEMPORAL_PROFILE=default \
+        uv run python -m agent_registry.run_worker
+
+# Run the Echo subagent's own Nexus front door (Go) — sendAgentMessage/pollMessages/
+# executeOperatorCommand against EchoSubagentWorkflow on the echo-agent task queue.
+echo-nexus:
+    cd "{{root}}/nexus/agent_adapter/nexus_worker" && \
+        AGENT_NAMESPACE=default \
+        AGENT_TASK_QUEUE=echo-agent \
+        NEXUS_AGENT_TASK_QUEUE=echo-agent \
+        AGENT_WORKFLOW_NAME=EchoSubagent \
+        AGENT_WORKFLOW_ID_PREFIX=echo-subagent- \
+        go run ./cmd/
+
+# Run the Echo subagent's Python worker. Self-registers with the agent registry on startup
+# (key "echo"), deregisters on shutdown.
+echo-worker:
+    cd "{{root}}" && TEMPORAL_CONFIG_FILE=temporal.local.toml TEMPORAL_PROFILE=default \
+        uv run python -m examples.nexus_subagent_demo.echo_worker
+
+# Run the demo parent worker (SubagentDemoParentWorkflow) — drives the Echo subagent
+# dynamically via the agent registry.
+demo-parent:
+    cd "{{root}}" && TEMPORAL_CONFIG_FILE=temporal.local.toml TEMPORAL_PROFILE=default \
+        uv run python -m examples.nexus_subagent_demo.demo_parent_worker
+
+# Start a parent session. Re-run with a different SESSION_ID if this one is already running.
+start SESSION_ID="subagent-demo-1":
+    temporal workflow start \
+        --address localhost:7233 --namespace default \
+        --task-queue subagent-demo-parent --type SubagentDemoParent \
+        --workflow-id {{SESSION_ID}} --input '{}'
+
+# Send one message to a session started with `just start`. TURN must match the session's next
+# expected turn number (1 for the first send, 2 for the second, ...). The update result below
+# is only the accept-ack (turn number, whether it's pending) — NOT the reply. The reply text
+# itself streams onto the workflow's own event stream (WorkflowStream), which the plain
+# `temporal workflow show` history viewer doesn't decode. `temporal workflow show
+# --workflow-id <SESSION_ID> -o json` will show the NexusOperationScheduled/Completed events
+# confirming the round trip happened (discover -> start -> sendAgentMessage/pollMessages ->
+# stop), and no WorkflowExecutionFailed — that's the signal to look for from the CLI alone.
+send SESSION_ID="subagent-demo-1" TEXT="hello nexus" TURN="1":
+    temporal workflow update execute \
+        --address localhost:7233 --namespace default \
+        --workflow-id {{SESSION_ID}} --name send_agent_message \
+        --input '{"type": "echo_via_subagent", "payload": {"text": "{{TEXT}}"}, "expected_turn": {{TURN}}}'

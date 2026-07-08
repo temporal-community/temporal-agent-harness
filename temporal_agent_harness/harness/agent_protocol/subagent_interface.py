@@ -8,11 +8,14 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from temporal_agent_harness.harness.agent_protocol.agent_interface import AgentConfig
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
 # The registered name of the subagent-turn activity. Used by the activity's ``@activity.defn``
@@ -101,3 +104,73 @@ class SubagentTurnResult(BaseModel):
         "stores it and threads it back as the next turn's from_offset, so each turn streams "
         "from where the last one ended (cheap resume, no full-history replay)."
     )
+
+
+class SubagentTransport(ABC):
+    """How a parent starts, drives, and stops one subagent instance — the harness's pluggable
+    transport seam. Two implementations exist: ``ChildWorkflowTransport``
+    (``harness/subagent_transport.py`` — a same-cluster child workflow + the
+    ``run_subagent_turn`` activity, the harness's default) and ``NexusTransport``
+    (``nexus/subagents`` — an externally-fronted agent driven purely over Nexus operations, no
+    activity). ``AgentWorkflowRunner`` (``agent_workflow.py``) holds one per subagent instance
+    and delegates to it; it never branches on transport kind itself.
+
+    Every method here takes only primitives, :class:`AgentConfig`, :class:`SubagentTurnResult`,
+    and the already-leaf-module :class:`TurnStreamContext` — NEVER ``AgentWorkflowRunner`` or
+    its internal subagent bookkeeping. That's deliberate, not incidental: it's what lets this
+    ABC live in ``agent_protocol`` (stdlib + pydantic only, sandbox-safe) with zero dependency
+    on ``agent_workflow.py`` in either direction — mirroring exactly why
+    :class:`TurnStreamContext` itself is a standalone leaf type (see ``stream_context.py``'s own
+    docstring). The runner does the work of unpacking its own state into these primitives
+    before calling in, and of turning ``on_sent``'s callback back into a real
+    ``SubagentMessageSent`` publish — that orchestration belongs in the runner, not here.
+    """
+
+    @abstractmethod
+    async def start(
+        self,
+        *,
+        handle: str,
+        agent_key: str,
+        session_id: str,
+        config: AgentConfig | None,
+    ) -> None:
+        """Start (or, for a lazily-started remote agent, merely accept) the instance that will
+        be addressed as ``session_id`` from here on — already minted by the caller, so every
+        transport agrees on the same id whether it's a real child ``workflow_id`` or a remote
+        session id."""
+        ...
+
+    @abstractmethod
+    async def send_turn(
+        self,
+        *,
+        session_id: str,
+        handle: str,
+        agent_key: str,
+        msg_type: str,
+        payload: dict[str, Any],
+        expected_turn: int,
+        last_consumed_offset: int,
+        stream_context: TurnStreamContext | None,
+        on_sent: Callable[[int], None],
+    ) -> SubagentTurnResult:
+        """Drive one turn to completion and return its result.
+
+        The caller supplies BOTH ``stream_context`` and ``on_sent``; use whichever mechanism
+        applies to this transport and ignore the other:
+
+        * ``stream_context`` is for a transport that dispatches an ACTIVITY to do the actual
+          send — the activity can't get a synchronous callback out to workflow code mid-flight,
+          so it needs this threaded into its own input to publish its dispatch marker
+          autonomously (heartbeat-deduped, surviving retries). See ``ChildWorkflowTransport``.
+        * ``on_sent`` is for a transport that sends directly from workflow code and so CAN
+          report back synchronously the instant the send lands, called with the turn number the
+          remote/child actually accepted. See ``NexusTransport``.
+        """
+        ...
+
+    @abstractmethod
+    async def stop(self, *, session_id: str) -> None:
+        """Tear the instance down (signal ``close``, a remote operator command, ...)."""
+        ...

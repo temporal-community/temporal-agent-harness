@@ -19,6 +19,15 @@
 # approve-a-tool capability (``tool_approval``) and no slash-command runtime controls
 # (``slash``), so a child's gated tools still escalate to a human and approval policy stays
 # operator-owned.
+#
+# TRANSPORT: this module is transport-agnostic — ``subagent_toolset`` takes an optional
+# ``transport: SubagentTransport``, defaulting to the harness's own same-cluster
+# ``ChildWorkflowTransport`` when omitted. Driving a subagent over Nexus instead means passing
+# a ``NexusTransport`` built by ``nexus/subagents/transport`` — this module never imports
+# anything Nexus-specific, by design (see ``SubagentTransport``'s own docstring in
+# ``agent_protocol/subagent_interface.py``). The dynamic-discovery sibling of this generator,
+# ``registry_subagent_toolset``, lives entirely in ``nexus/subagents/registry`` for the same
+# reason: dynamic discovery is inherently a Nexus-only concept.
 
 from __future__ import annotations
 
@@ -29,6 +38,7 @@ from typing import Any
 from pydantic import BaseModel
 from temporalio import workflow
 
+from temporal_agent_harness.harness.agent_protocol import SubagentTransport
 from temporal_agent_harness.harness.agent_workflow import (
     _AcceptedHandler,
     _SLASH_MESSAGE_TYPE,
@@ -58,12 +68,14 @@ def _handler_param_name(handler: _AcceptedHandler) -> str:
 
 
 def _make_start_tool(
-    *, key: str, workflow_type: str, task_queue: str
+    *, key: str, workflow_type: str, task_queue: str, transport: SubagentTransport | None
 ) -> Callable[..., Awaitable[str]]:
     """Build the ``start_<key>`` tool: start a child instance and return its short handle."""
 
     async def _start() -> str:
-        return await _current_runner().start_subagent(key, workflow_type, task_queue)
+        return await _current_runner().start_subagent(
+            key, workflow_type, task_queue, transport=transport
+        )
 
     _start.__name__ = f"start_{key}"
     _start.__qualname__ = _start.__name__
@@ -161,8 +173,9 @@ def subagent_toolset(
     agent_cls: type,
     *,
     key: str,
-    task_queue: str,
+    task_queue: str = "",
     workflow_type: str | None = None,
+    transport: SubagentTransport | None = None,
 ) -> list[Callable[..., Awaitable[Any]]]:
     """Convert a harness agent into a toolset a parent agent can use to drive it as a subagent.
 
@@ -177,9 +190,15 @@ def subagent_toolset(
         agent_cls: the child agent's ``@workflow.defn`` + ``@agent.defn`` class.
         key: short, stable namespace for this wired agent (a parent may wire several). Tool
             names are ``start_<key>`` / ``<key>_<fn>`` / ``stop_<key>``.
-        task_queue: the task queue the child agent's worker polls (where instances are started).
+        task_queue: the task queue the child agent's worker polls (where instances are
+            started). Unused when ``transport`` is given (see below).
         workflow_type: the child's registered workflow type name; defaults to its ``@workflow.defn``
-            name.
+            name. Unused when ``transport`` is given.
+        transport: how ``start_<key>`` actually starts an instance. Omit to use the harness's
+            default :class:`~temporal_agent_harness.harness.subagent_transport.ChildWorkflowTransport`
+            (a same-cluster child workflow, built from ``workflow_type``/``task_queue``). Pass
+            an explicit transport — e.g. a ``NexusTransport`` from ``nexus/subagents/transport``
+            — to drive an externally-hosted agent instead.
     """
     resolved_type = workflow_type or _resolve_workflow_type(agent_cls)
     handlers = {
@@ -194,7 +213,12 @@ def subagent_toolset(
         )
 
     tools: list[Callable[..., Awaitable[Any]]] = [
-        _make_start_tool(key=key, workflow_type=resolved_type, task_queue=task_queue)
+        _make_start_tool(
+            key=key,
+            workflow_type=resolved_type,
+            task_queue=task_queue,
+            transport=transport,
+        )
     ]
     tools.extend(
         _make_send_tool(key=key, handler=handler) for handler in handlers.values()

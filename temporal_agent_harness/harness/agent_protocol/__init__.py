@@ -83,9 +83,9 @@ from temporal_agent_harness.harness.agent_protocol.subagent_interface import (
     DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
     RUN_SUBAGENT_TURN_ACTIVITY,
     RunSubagentTurnInput,
+    SubagentTransport,
     SubagentTurnResult,
 )
-
 __all__ = [
     # Signal/update/query interface
     "AGENT_ID_LENGTH",
@@ -162,5 +162,6 @@ __all__ = [
     "DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT",
     "DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT",
     "RunSubagentTurnInput",
+    "SubagentTransport",
     "SubagentTurnResult",
 ]
