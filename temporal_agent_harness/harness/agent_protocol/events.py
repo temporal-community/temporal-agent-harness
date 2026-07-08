@@ -138,6 +138,31 @@ class AgentEventType(StrEnum):
     """A tool invocation failed. Terminal for that tool call; the turn itself may
     continue. See :class:`ToolErrorEvent`."""
 
+    CALLBACK_REQUESTED = "callback_requested"
+    """A callback tool is awaiting a result from an external client.
+
+    Published by a callback tool's in-workflow body (an ``@agent.callback_tool_defn`` tool)
+    after it has passed the approval gate and emitted TOOL_START — the tool has no worker-side
+    implementation, so it hands the call to an attached client to fulfill on its own machine
+    (read a local file, snap a photo, run a shell command). Carries the same ``tool_id`` +
+    ``tool_name`` as the surrounding tool lifecycle, plus the call args (``tool_input``) and the
+    JSON schema of the expected result (``output_schema``) so the client knows what to return.
+    The agent parks on an in-workflow wait condition (with an optional timeout) until a
+    ``provide_callback_result`` update resolves it; a client renders a fulfillment affordance off
+    this event. Outstanding requests are also discoverable via the ``agent_status`` query
+    (``pending_callbacks``) so a client that attaches late can still act on them. Nests between
+    TOOL_START and TOOL_END for the same call. See :class:`CallbackRequested`."""
+
+    CALLBACK_RESOLVED = "callback_resolved"
+    """A pending callback tool call was resolved — the client returned a result, reported an
+    error, or the wait timed out (or the agent closed while it was pending).
+
+    Published once per :data:`CALLBACK_REQUESTED`, carrying the same ``tool_id`` + ``tool_name``.
+    On ``ok`` the client-supplied result (validated against the tool's declared output type)
+    becomes the tool's return value and TOOL_END follows; on ``error`` / ``timeout`` the call
+    fails and TOOL_ERROR follows (the model receives an error result). See
+    :class:`CallbackResolved`."""
+
     SUBAGENT_STARTED = "subagent_started"
     """This agent started a subagent (a child agent it drives), carrying the subagent's
     short ``subagent_id`` and its real ``workflow_id``. Analogous to TOOL_START but for a
@@ -536,6 +561,46 @@ class ToolErrorEvent(ToolEvent[Literal[AgentEventType.TOOL_ERROR]]):
     message: str = Field(description="A description of why the tool invocation failed.")
 
 
+class CallbackRequested(ToolEvent[Literal[AgentEventType.CALLBACK_REQUESTED]]):
+    """A callback tool call is awaiting a result from an external client.
+
+    Sits between :class:`ToolStartEvent` and :class:`ToolEndEvent` for the same call, sharing
+    their ``tool_id`` + ``tool_name``. The tool has no worker-side body: an attached client
+    fulfills it on its own machine and returns the result via a ``provide_callback_result``
+    update keyed on ``tool_id``.
+    """
+
+    type: Literal[AgentEventType.CALLBACK_REQUESTED] = AgentEventType.CALLBACK_REQUESTED
+    tool_input: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The model-facing arguments of the callback call (injected parameters "
+        "excluded), so the fulfilling client sees exactly what the model asked for.",
+    )
+    output_schema: dict[str, Any] = Field(
+        default_factory=dict,
+        description="JSON schema of the result the client must return — derived from the "
+        "callback tool's declared output type. The client's result is validated against this "
+        "before it resolves the call.",
+    )
+
+
+class CallbackResolved(ToolEvent[Literal[AgentEventType.CALLBACK_RESOLVED]]):
+    """A pending callback tool call was resolved — result returned, error, or timeout."""
+
+    type: Literal[AgentEventType.CALLBACK_RESOLVED] = AgentEventType.CALLBACK_RESOLVED
+    outcome: Literal["ok", "error", "timeout"] = Field(
+        description="'ok' if the client returned a result (validated against the tool's output "
+        "type) — TOOL_END follows; 'error' if the client reported a failure fulfilling the call; "
+        "'timeout' if the wait elapsed (or the agent closed) before any result arrived. On "
+        "'error'/'timeout' the call fails and TOOL_ERROR follows."
+    )
+    error: str | None = Field(
+        default=None,
+        description="The client-reported failure message ('error'), the timeout/close note "
+        "('timeout'), or None on 'ok'.",
+    )
+
+
 class SubagentStarted(StreamEvent[Literal[AgentEventType.SUBAGENT_STARTED]]):
     """This agent started a subagent (a child agent it drives)."""
 
@@ -751,6 +816,8 @@ AgentStreamItem = Annotated[
     | ToolEndEvent
     | ToolProgressDelta
     | ToolErrorEvent
+    | CallbackRequested
+    | CallbackResolved
     | SubagentStarted
     | SubagentStopped
     | SubagentMessageSent
