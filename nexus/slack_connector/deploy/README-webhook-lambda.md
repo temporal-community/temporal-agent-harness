@@ -64,6 +64,8 @@ aws cloudformation deploy \
     SlackSigningSecretArn="$SIGNING_SECRET_ARN" \
     SlackBotTokenSecretArn="$SLACK_SECRET_ARN"
     # Optional: add SecretsKmsKeyArn=<cmk-arn> if the secrets use a customer-managed KMS key.
+    # Cold-start tip: pass BotUserId=U0123ABC instead of SlackBotTokenSecretArn to skip the
+    # Slack auth.test call at cold start (which counts against Slack's 3s response budget).
 ```
 
 Grab the Slack-facing URLs:
@@ -99,6 +101,25 @@ Information** page, or every request is rejected with 401.
 
 New code → new `$SHA` → rebuild/upload → `cloudformation deploy` with the new `ArtifactKey`.
 The API URL is stable across deploys, so you don't re-configure Slack.
+
+## Things to watch on the first real deploy
+
+- **Raw-body integrity is the #1 thing to confirm.** Slack's HMAC is over the exact request
+  bytes. Between Slack and the handler sit API Gateway (which may set `isBase64Encoded`) and the
+  `httpadapter` v2 adapter (which decodes it back). The adapter handles this correctly, but if
+  anything transforms the bytes, **every request 401s even with the right secret**. Slack's
+  "Verified ✓" on the Events URL is exactly the signal that the body + signature survived the
+  round trip — treat it as the first checkpoint.
+- **Cold start vs Slack's 3s timeout.** Cold start stacks secret fetches + the Temporal Cloud
+  TLS dial (+ `auth.test` if `BotUserId` is unset) before the first response. If it drifts past
+  3s, Slack retries and can disable event delivery. Set `BotUserId` to drop the `auth.test`
+  call; use provisioned concurrency if cold starts remain a problem.
+
+## Note: the standalone `cmd/webhook` also verifies signatures now
+
+Signature verification lives in the shared handler (`messaging/slack/webhook/server.go`), so the
+non-Lambda `cmd/webhook` binary now enforces it too. Any client hitting it without a valid Slack
+signature (local `curl`, a plain health check) gets 401 — intended parity, but worth knowing.
 
 ## Verification boundary
 

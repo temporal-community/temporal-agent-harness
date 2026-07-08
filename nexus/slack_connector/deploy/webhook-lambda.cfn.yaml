@@ -38,7 +38,17 @@ Parameters:
     Description: ARN of the Secrets Manager secret (plain string) holding the Slack signing secret.
   SlackBotTokenSecretArn:
     Type: String
-    Description: ARN of the Secrets Manager secret (plain string) holding the Slack bot token.
+    Default: ''
+    Description: >-
+      ARN of the Secrets Manager secret (plain string) holding the Slack bot token, used to
+      derive the bot user ID. Optional if BotUserId is set (which avoids an auth.test call on
+      every cold start). Provide one of the two.
+  BotUserId:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional. The Slack bot user ID (e.g. U0123ABC). When set, the function skips the
+      auth.test round-trip at cold start and the bot token is not needed.
   SecretsKmsKeyArn:
     Type: String
     Default: ''
@@ -66,12 +76,14 @@ Metadata:
       - Label: {default: 'Temporal'}
         Parameters: [TemporalAddress, TemporalNamespace, TemporalTaskQueue]
       - Label: {default: 'Secrets'}
-        Parameters: [TemporalApiKeySecretArn, SlackSigningSecretArn, SlackBotTokenSecretArn, SecretsKmsKeyArn]
+        Parameters: [TemporalApiKeySecretArn, SlackSigningSecretArn, SlackBotTokenSecretArn, BotUserId, SecretsKmsKeyArn]
       - Label: {default: 'Function tuning'}
         Parameters: [MemorySize, Timeout, LogRetentionDays]
 
 Conditions:
   HasKmsKey: !Not [!Equals [!Ref SecretsKmsKeyArn, '']]
+  HasSlackBotSecret: !Not [!Equals [!Ref SlackBotTokenSecretArn, '']]
+  HasBotUserId: !Not [!Equals [!Ref BotUserId, '']]
 
 Resources:
   ExecutionRole:
@@ -92,10 +104,10 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource:
-                  - !Ref TemporalApiKeySecretArn
-                  - !Ref SlackSigningSecretArn
-                  - !Ref SlackBotTokenSecretArn
+                Resource: !If
+                  - HasSlackBotSecret
+                  - [!Ref TemporalApiKeySecretArn, !Ref SlackSigningSecretArn, !Ref SlackBotTokenSecretArn]
+                  - [!Ref TemporalApiKeySecretArn, !Ref SlackSigningSecretArn]
               # kms:Decrypt is required only when the secrets use a customer-managed KMS key.
               - !If
                 - HasKmsKey
@@ -132,7 +144,8 @@ Resources:
           TEMPORAL_TASK_QUEUE: !Ref TemporalTaskQueue
           TEMPORAL_API_KEY_SECRET_ARN: !Ref TemporalApiKeySecretArn
           SLACK_SIGNING_SECRET_ARN: !Ref SlackSigningSecretArn
-          SLACK_BOT_TOKEN_SECRET_ARN: !Ref SlackBotTokenSecretArn
+          SLACK_BOT_TOKEN_SECRET_ARN: !If [HasSlackBotSecret, !Ref SlackBotTokenSecretArn, !Ref 'AWS::NoValue']
+          BOT_USER_ID: !If [HasBotUserId, !Ref BotUserId, !Ref 'AWS::NoValue']
 
   # --- API Gateway HTTP API (the public front door) ---
 

@@ -21,13 +21,15 @@ secrets, fetched once at cold start), falling back to plain env vars for local/d
 | `SLACK_SIGNING_SECRET_ARN` | Secret ARN for the Slack signing secret (request verification). | — |
 | `SLACK_BOT_TOKEN_SECRET_ARN` | Secret ARN for the Slack bot token (bot user ID). | — |
 | `TEMPORAL_API_KEY` / `SLACK_SIGNING_SECRET` / `SLACK_BOT_TOKEN` | Plain-value fallbacks used when the matching `*_ARN` is unset (local/dev). | — |
+| `BOT_USER_ID` | Slack bot user ID. If set, the bot token is not needed and the cold-start `auth.test` call is skipped. | — |
 | `TEMPORAL_ADDRESS` | Temporal frontend address | `localhost:7233` |
 | `TEMPORAL_NAMESPACE` | Namespace | `connector` |
 | `TEMPORAL_TASK_QUEUE` | Task queue connector workflows start on | `nexus-connector-slack` |
 
-The signing secret and bot token are required (the process exits at startup if
-neither the ARN nor the plain var yields a value). The API key may be empty for a
-local dev server with no auth.
+The signing secret is required, and so is the bot user ID — supply it directly via
+`BOT_USER_ID`, or let it be derived from the bot token (`SLACK_BOT_TOKEN_SECRET_ARN`
+/ `SLACK_BOT_TOKEN`). The process exits at startup if neither is available. The API
+key may be empty for a local dev server with no auth.
 
 ## Build & deploy
 

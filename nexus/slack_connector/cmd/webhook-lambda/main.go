@@ -45,8 +45,21 @@ func main() {
 	if signingSecret == "" {
 		log.Fatal("Slack signing secret is required (SLACK_SIGNING_SECRET_ARN or SLACK_SIGNING_SECRET)")
 	}
-	if botToken == "" {
-		log.Fatal("Slack bot token is required (SLACK_BOT_TOKEN_SECRET_ARN or SLACK_BOT_TOKEN)")
+
+	// The bot user ID is used only to filter for messages that mention the bot.
+	// Prefer BOT_USER_ID (set on the function) to avoid an auth.test round-trip on
+	// every cold start — that call counts against Slack's 3s response budget.
+	// Fall back to deriving it from the bot token when BOT_USER_ID is unset.
+	botUserID := os.Getenv("BOT_USER_ID")
+	if botUserID == "" {
+		if botToken == "" {
+			log.Fatal("provide BOT_USER_ID, or a bot token via SLACK_BOT_TOKEN_SECRET_ARN / SLACK_BOT_TOKEN")
+		}
+		bot, err := slackmsg.NewSlackBot(botToken)
+		if err != nil {
+			log.Fatalf("Failed to initialise Slack bot: %v", err)
+		}
+		botUserID = bot.UserID
 	}
 
 	opts := client.Options{
@@ -64,13 +77,8 @@ func main() {
 	}
 	defer tc.Close()
 
-	bot, err := slackmsg.NewSlackBot(botToken)
-	if err != nil {
-		log.Fatalf("Failed to initialise Slack bot: %v", err)
-	}
-
 	taskQueue := getenvOr("TEMPORAL_TASK_QUEUE", "nexus-connector-slack")
-	server := slackwebhook.NewServer(tc, taskQueue, signingSecret, bot.UserID)
+	server := slackwebhook.NewServer(tc, taskQueue, signingSecret, botUserID)
 
 	// Adapt the net/http handler to API Gateway HTTP API (payload v2) events.
 	lambda.Start(httpadapter.NewV2(server).ProxyWithContext)
