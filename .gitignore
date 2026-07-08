@@ -36,6 +36,7 @@ pyrightconfig.json
 # Temporal server build artifacts
 .build/
 devserver/temporal-server
+nexus/devserver/temporal-server
 
 # Local LLM configs
 .claude/

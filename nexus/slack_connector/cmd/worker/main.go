@@ -5,9 +5,10 @@ import (
 	"os"
 
 	agentiface "github.com/temporalio/nexus_connector_slack/agent"
+	"github.com/temporalio/nexus_connector_slack/connector"
 	msgiface "github.com/temporalio/nexus_connector_slack/messaging"
 	"github.com/temporalio/nexus_connector_slack/messaging/slack"
-	"github.com/temporalio/nexus_connector_slack/connector"
+	"github.com/temporalio/nexus_connector_slack/messaging/teams"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
@@ -15,18 +16,49 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+const (
+	platformSlack = "slack"
+	platformTeams = "teams"
+)
+
 type flags struct {
 	slackBotToken      string
+	microsoftAppID     string
+	microsoftAppPass   string
+	teamsServiceURL    string
+	messagingPlatform  string
 	temporalAddress    string
 	connectorNamespace string
 	taskQueue          string
 }
 
 func ensureFlags() *flags {
-	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
-	if slackBotToken == "" {
-		log.Fatal("SLACK_BOT_TOKEN is required")
+	messagingPlatform := os.Getenv("MESSAGING_PLATFORM")
+	if messagingPlatform == "" {
+		messagingPlatform = platformSlack
 	}
+
+	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
+	microsoftAppID := os.Getenv("MICROSOFT_APP_ID")
+	microsoftAppPass := os.Getenv("MICROSOFT_APP_PASSWORD")
+	teamsServiceURL := os.Getenv("TEAMS_SERVICE_URL")
+
+	switch messagingPlatform {
+	case platformSlack:
+		if slackBotToken == "" {
+			log.Fatal("SLACK_BOT_TOKEN is required")
+		}
+	case platformTeams:
+		if microsoftAppID == "" {
+			log.Fatal("MICROSOFT_APP_ID is required")
+		}
+		if microsoftAppPass == "" {
+			log.Fatal("MICROSOFT_APP_PASSWORD is required")
+		}
+	default:
+		log.Fatalf("Unsupported MESSAGING_PLATFORM %q", messagingPlatform)
+	}
+
 	temporalAddress := os.Getenv("TEMPORAL_ADDRESS")
 	if temporalAddress == "" {
 		temporalAddress = "localhost:7233"
@@ -37,10 +69,14 @@ func ensureFlags() *flags {
 	}
 	taskQueue := os.Getenv("CONNECTOR_TASK_QUEUE")
 	if taskQueue == "" {
-		taskQueue = "nexus-connector-slack"
+		taskQueue = "nexus-connector-" + messagingPlatform
 	}
 	return &flags{
 		slackBotToken:      slackBotToken,
+		microsoftAppID:     microsoftAppID,
+		microsoftAppPass:   microsoftAppPass,
+		teamsServiceURL:    teamsServiceURL,
+		messagingPlatform:  messagingPlatform,
 		temporalAddress:    temporalAddress,
 		connectorNamespace: connectorNamespace,
 		taskQueue:          taskQueue,
@@ -56,15 +92,8 @@ func main() {
 	}
 	defer tc.Close()
 
-	bot, err := slack.NewSlackBot(flags.slackBotToken)
-	if err != nil {
-		log.Fatalf("Failed to initialise Slack bot: %v", err)
-	}
-	if bot.UserID != "" {
-		log.Printf("Bot user ID: %s", bot.UserID)
-	}
+	driver := newMessagingPlatform(flags)
 
-	driver := slack.NewSlackPlatform(bot.Client, bot.TeamID)
 	c := connector.NewConnectorWorkflow(&agentiface.TemporalNativeHarnessDriver{})
 	w := worker.New(tc, flags.taskQueue, worker.Options{})
 	w.RegisterWorkflowWithOptions(c.Run, workflow.RegisterOptions{Name: connector.WorkflowName})
@@ -75,5 +104,31 @@ func main() {
 	log.Printf("Starting worker on task queue %q", flags.taskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {
 		log.Fatalf("Worker exited with error: %v", err)
+	}
+}
+
+func newMessagingPlatform(flags *flags) msgiface.MessagingPlatform {
+	switch flags.messagingPlatform {
+	case platformSlack:
+		bot, err := slack.NewSlackBot(flags.slackBotToken)
+		if err != nil {
+			log.Fatalf("Failed to initialise Slack bot: %v", err)
+		}
+		if bot.UserID != "" {
+			log.Printf("Slack bot user ID: %s", bot.UserID)
+		}
+		return slack.NewSlackPlatform(bot.Client, bot.TeamID)
+
+	case platformTeams:
+		bot, err := teams.NewTeamsBot(flags.microsoftAppID, flags.microsoftAppPass)
+		if err != nil {
+			log.Fatalf("Failed to initialise Teams bot: %v", err)
+		}
+		log.Printf("Teams bot app ID: %s", bot.AppID)
+		return teams.NewTeamsPlatform(bot, flags.teamsServiceURL)
+
+	default:
+		log.Fatalf("Unsupported MESSAGING_PLATFORM %q", flags.messagingPlatform)
+		return nil
 	}
 }

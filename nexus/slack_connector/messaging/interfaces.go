@@ -1,13 +1,16 @@
 package messaging
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Activity name constants for messaging platform activities.
 // Used in both workflow code (ExecuteActivity) and worker registration (RegisterActivityWithOptions).
 const (
-	StreamActivity              = "Stream"
-	PostMessageActivity         = "PostMessage"
-	PostApprovalPromptActivity  = "PostApprovalPrompt"
+	StreamActivity             = "Stream"
+	PostMessageActivity        = "PostMessage"
+	PostApprovalPromptActivity = "PostApprovalPrompt"
 )
 
 // ApprovalPromptInput carries the information needed to render a tool-approval
@@ -25,6 +28,49 @@ type TextMetadata struct {
 	SessionID string
 	ThreadID  string
 	Text      string
+}
+
+// TeamMessageActivity is the Bot Framework Activity JSON shape used by Teams
+// webhooks and outbound Teams message sends.
+type TeamMessageActivity struct {
+	Type         string                   `json:"type"`
+	ID           string                   `json:"id,omitempty"`
+	ReplyToID    string                   `json:"replyToId,omitempty"`
+	Timestamp    string                   `json:"timestamp,omitempty"`
+	ServiceURL   string                   `json:"serviceUrl,omitempty"`
+	ChannelID    string                   `json:"channelId,omitempty"`
+	From         *TeamChannelAccount      `json:"from,omitempty"`
+	Conversation *TeamConversationAccount `json:"conversation,omitempty"`
+	Recipient    *TeamChannelAccount      `json:"recipient,omitempty"`
+	Text         string                   `json:"text,omitempty"`
+	TextFormat   string                   `json:"textFormat,omitempty"`
+	// Value carries an Adaptive Card Action.Submit's data object on incoming
+	// button-click activities (delivered as type "message" with empty text).
+	Value       json.RawMessage        `json:"value,omitempty"`
+	Attachments []TeamAttachment       `json:"attachments,omitempty"`
+	Entities    []TeamStreamInfoEntity `json:"entities,omitempty"`
+}
+
+// TeamAttachment is a Bot Framework Attachment, used to send rich cards
+// (e.g. Adaptive Cards) as part of a Teams activity.
+type TeamAttachment struct {
+	ContentType string          `json:"contentType"`
+	Content     json.RawMessage `json:"content,omitempty"`
+}
+
+type TeamChannelAccount struct {
+	ID string `json:"id,omitempty"`
+}
+
+type TeamConversationAccount struct {
+	ID string `json:"id,omitempty"`
+}
+
+type TeamStreamInfoEntity struct {
+	Type           string `json:"type"`
+	StreamID       string `json:"streamId,omitempty"`
+	StreamType     string `json:"streamType,omitempty"`
+	StreamSequence *int   `json:"streamSequence,omitempty"`
 }
 
 // DeltaType indicates which phase of the streaming lifecycle a Stream call represents.
