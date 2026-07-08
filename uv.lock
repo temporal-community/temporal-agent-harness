@@ -2628,6 +2628,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+code-mode = [
+    { name = "pydantic-monty" },
+]
 genai = [
     { name = "google-auth" },
     { name = "google-genai" },
@@ -2664,10 +2667,11 @@ requires-dist = [
     { name = "google-auth", marker = "extra == 'genai'", specifier = ">=2.53.0" },
     { name = "google-genai", marker = "extra == 'genai'", specifier = ">=2.0.0" },
     { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic-monty", marker = "extra == 'code-mode'", specifier = ">=0.0.18" },
     { name = "temporalio", specifier = ">=1.27.2" },
     { name = "temporalio", extras = ["aioboto3"], marker = "extra == 's3'", specifier = ">=1.27.2" },
 ]
-provides-extras = ["genai", "s3", "ui"]
+provides-extras = ["genai", "s3", "ui", "code-mode"]
 
 [package.metadata.requires-dev]
 dev = [

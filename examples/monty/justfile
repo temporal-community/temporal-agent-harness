@@ -12,7 +12,8 @@
 # demand, so there's no separate install step. First-time setup: `cp .env.example .env.local`
 # and fill it in (Temporal connection + GEMINI_API_KEY). See README.md.
 
-set dotenv-filename := ".env.local"
+# Read the single shared env file at the repo root (resolved relative to this justfile).
+set dotenv-path := "../../.env.local"
 set dotenv-load := true
 
 root := justfile_directory() / ".." / ".."
@@ -31,13 +32,14 @@ config:
 temporal:
     temporal server start-dev
 
-# Run the packaged session-manager worker for the Monty example.
+# Run the shared session-manager worker (examples/session_manager_worker.py).
 session-manager:
-    cd "{{root}}" && uv run --group examples python -m examples.monty.session_manager_worker
+    cd "{{root}}" && uv run --group examples python -m examples.session_manager_worker
 
-# Build and serve the Svelte UI + FastAPI API on http://localhost:8000.
+# Build and serve the Svelte UI + FastAPI API on http://localhost:8000. The shared examples app
+# entrypoint is pointed at this example's registry.
 server: app-build
-    cd "{{root}}" && uv run --group examples uvicorn examples.monty.app:app --host 0.0.0.0 --port 8000 --reload
+    cd "{{root}}" && uv run --group examples python -m examples.app "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
 
 # Install the shared Svelte UI dependencies.
 app-install:

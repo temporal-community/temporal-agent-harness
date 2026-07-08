@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	msgiface "github.com/temporalio/nexus_connector_slack/messaging"
+	msgiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging"
 )
 
 const (

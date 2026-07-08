@@ -45,19 +45,23 @@
 from temporal_agent_harness.harness.agent_protocol import ToolApprovalContext, ToolApprovalPolicy
 from temporal_agent_harness.harness.agent_workflow import (
     AgentToolContext,
+    CallbackToolError,
     CustomApprovalFallback,
     Injected,
     ToolApprovalDenied,
     accepts,
     activity_tool_defn,
+    callback_tool_defn,
     defn,
     tool_activity,
     tool_defn,
 )
+from temporal_agent_harness.harness.code_mode import code_mode_tool
 from temporal_agent_harness.harness.subagent_toolset import subagent_toolset
 
 __all__ = [
     "AgentToolContext",
+    "CallbackToolError",
     "CustomApprovalFallback",
     "Injected",
     "ToolApprovalContext",
@@ -65,6 +69,8 @@ __all__ = [
     "ToolApprovalPolicy",
     "accepts",
     "activity_tool_defn",
+    "callback_tool_defn",
+    "code_mode_tool",
     "defn",
     "subagent_toolset",
     "tool_activity",

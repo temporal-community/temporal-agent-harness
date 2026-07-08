@@ -17,8 +17,8 @@ Env vars:
     MONTY_AGENT_TASK_QUEUE       task queue to poll (default: monty-dynamic-agent)
 
 This worker hosts the three Monty agents (MontyDynamicAgent + the two conversational
-agents) — not the session manager. The packaged session manager is hosted by
-examples.monty.session_manager_worker; because it launches agents by registered name,
+agents) — not the session manager. The packaged session manager is hosted by the shared
+examples.session_manager_worker; because it launches agents by registered name,
 it dispatches these agents to this queue without this worker hosting it.
 """
 
@@ -37,12 +37,12 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
+from temporal_agent_harness.harness.code_mode.activities import CODE_MODE_ACTIVITIES
 from temporal_agent_harness.harness.subagent_activities import SubagentActivities
 
 from . import activities
 from .conversational_subagent_workflow import MontyChatSubagentWorkflow
 from .conversational_workflow import MontyChatAgentWorkflow
-from .monty_activities import monty_resume_batch, monty_start_batch
 from .workflow import TASK_QUEUE, MontyDynamicAgentWorkflow
 
 
@@ -101,15 +101,14 @@ async def main() -> None:
             MontyChatAgentWorkflow,
             MontyChatSubagentWorkflow,
         ],
-        # The travel-booking activities (the host functions) plus the Monty-stepping
-        # activities (monty_start_batch / monty_resume_batch — the single async/concurrent
-        # batch driver used by every Monty agent) plus the subagent-turn activity (drives the
+        # The travel-booking activities (the host functions, dispatched by Code Mode) plus the
+        # Code Mode sandbox-stepping activities (shared by all three agents — every one runs its
+        # scripts through the harness Code Mode). Plus the subagent-turn activity (drives the
         # script-runner child for MontyChatSubagentAgent). The Gemini interactions activity is
         # registered by the plugin above.
         activities=[
             *activities.ALL_ACTIVITIES,
-            monty_start_batch,
-            monty_resume_batch,
+            *CODE_MODE_ACTIVITIES,
             subagents.run_subagent_turn,
         ],
     )

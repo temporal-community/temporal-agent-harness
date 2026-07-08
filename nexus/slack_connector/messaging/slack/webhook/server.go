@@ -11,9 +11,9 @@ import (
 
 	slackapi "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
-	agentiface "github.com/temporalio/nexus_connector_slack/agent"
-	"github.com/temporalio/nexus_connector_slack/connector"
-	slackmsg "github.com/temporalio/nexus_connector_slack/messaging/slack"
+	agentiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/agent"
+	"github.com/temporalio/temporal-agent-harness/nexus/slack_connector/connector"
+	slackmsg "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging/slack"
 	"go.temporal.io/sdk/client"
 )
 

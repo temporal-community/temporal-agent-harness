@@ -262,9 +262,25 @@ const frames: AgentSseFrame[] = [
       top_k: 5
     }
   }),
+  frame("tool_requested", {
+    type: "tool_requested",
+    ...meta(3, 43),
+    tool_id: "tool-forum-search-3",
+    tool_name: "search_forum",
+    tool_input: {
+      query: "Temporal update vs signal query agent UI",
+      top_k: 4
+    }
+  }),
+  frame("model_interaction_ended", {
+    type: "model_interaction_ended",
+    ...meta(3, 44),
+    model: "gemini-3.5-flash",
+    usage: usage(3450, 180, 260, 1120, 40)
+  }),
   frame("tool_start", {
     type: "tool_start",
-    ...meta(3, 43),
+    ...meta(3, 45),
     tool_id: "tool-doc-search-3",
     tool_name: "search_docs",
     tool_input: {
@@ -272,12 +288,29 @@ const frames: AgentSseFrame[] = [
       top_k: 5
     }
   }),
+  frame("tool_start", {
+    type: "tool_start",
+    ...meta(3, 45),
+    tool_id: "tool-forum-search-3",
+    tool_name: "search_forum",
+    tool_input: {
+      query: "Temporal update vs signal query agent UI",
+      top_k: 4
+    }
+  }),
   frame("tool_progress_delta", {
     type: "tool_progress_delta",
-    ...meta(3, 45),
+    ...meta(3, 46),
     tool_id: "tool-doc-search-3",
     tool_name: "search_docs",
     progress_delta: "Ranked workflow message-passing docs above SDK reference snippets."
+  }),
+  frame("tool_progress_delta", {
+    type: "tool_progress_delta",
+    ...meta(3, 46),
+    tool_id: "tool-forum-search-3",
+    tool_name: "search_forum",
+    progress_delta: "Found community explanations about using updates for acknowledged commands."
   }),
   frame("tool_end", {
     type: "tool_end",
@@ -287,11 +320,13 @@ const frames: AgentSseFrame[] = [
     tool_output:
       '{"hits":[{"title":"Signals","score":0.92},{"title":"Updates","score":0.89},{"title":"Queries","score":0.81}]}'
   }),
-  frame("model_interaction_ended", {
-    type: "model_interaction_ended",
-    ...meta(3, 49),
-    model: "gemini-3.5-flash",
-    usage: usage(3450, 180, 260, 1120, 40)
+  frame("tool_end", {
+    type: "tool_end",
+    ...meta(3, 48),
+    tool_id: "tool-forum-search-3",
+    tool_name: "search_forum",
+    tool_output:
+      '{"hits":[{"title":"Use Updates for command acknowledgment","score":0.86},{"title":"Signals for fire-and-forget messages","score":0.78}]}'
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",

@@ -14,7 +14,6 @@ from __future__ import annotations
 import re
 import uuid
 
-import pytest
 import pytest_asyncio
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -36,8 +35,9 @@ from temporal_agent_harness.harness.subagent_activities import SubagentActivitie
 
 from temporal_agent_harness.harness.agent_client import AgentClient
 
+from temporal_agent_harness.harness.code_mode.activities import CODE_MODE_ACTIVITIES
+
 from examples.monty import activities
-from examples.monty.monty_activities import monty_resume_batch, monty_start_batch
 from examples.monty.workflow import MontyDynamicAgentWorkflow
 from ._subagent_e2e_parent import (
     ApprovalGatedSubagentParentWorkflow,
@@ -65,8 +65,7 @@ async def client_and_queue():
         ],
         activities=[
             *activities.ALL_ACTIVITIES,
-            monty_start_batch,
-            monty_resume_batch,
+            *CODE_MODE_ACTIVITIES,
             SubagentActivities(env.client).run_subagent_turn,
         ],
     ):
@@ -118,8 +117,8 @@ async def _drive(
     return reply, events
 
 
-# A script with no host calls — fast + deterministic. MontyHostDriver renders the final value
-# as ``result: <repr>`` (see _host_driver.run_script), so we assert on that.
+# A script with no host calls — fast + deterministic. Code Mode renders the final value as
+# ``result: <repr>``, so we assert on that.
 def _const_script(value: int) -> str:
     return (
         "import asyncio\n"
@@ -193,10 +192,11 @@ async def test_subagent_runs_host_call_script(client_and_queue):
     script = (
         "import asyncio\n"
         "async def main():\n"
-        '    flights = await search_flights("SFO", "JFK", "2026-07-01")\n'
-        '    cheapest = min(flights, key=lambda f: f["price_usd"])\n'
-        '    booking = await book_flight(cheapest["flight_id"], "Ada Lovelace")\n'
-        '    return await get_trip_summary([booking["confirmation_code"]])\n'
+        '    resp = await search_flights({"origin": "SFO", "destination": "JFK", "date": "2026-07-01"})\n'
+        '    cheapest = min(resp["flights"], key=lambda f: f["price_usd"])\n'
+        '    booking = await book_flight({"flight_id": cheapest["flight_id"], "passenger_name": "Ada Lovelace"})\n'
+        '    summary = await get_trip_summary({"booking_refs": [booking["confirmation_code"]]})\n'
+        '    return summary["summary"]\n'
         "asyncio.run(main())"
     )
     reply, _ = await _drive(client, task_queue, [script])

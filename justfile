@@ -1,4 +1,7 @@
-# Project-level recipes for building, checking, and packaging the harness.
+# Project-level recipes for building, checking, and packaging the harness. Each example owns its
+# own justfile (its server / worker / registry / recipes); this top-level file stays lean and
+# just delegates the Monty stack + build/package. The shared repo-root .env.local is read by each
+# example's justfile via dotenv-path.
 
 ui := justfile_directory() / "ui"
 monty := justfile_directory() / "examples" / "monty"

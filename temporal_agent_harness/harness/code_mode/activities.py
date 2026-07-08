@@ -1,4 +1,4 @@
-"""Activities that step the Monty sandbox, surfacing host calls for the workflow to run.
+"""Worker-side activities that step the Monty sandbox, surfacing host calls for the workflow.
 
 The core of the suspend-at-external-call design. Monty's *synchronous* stepping API
 (``Monty(code).start()`` / ``snapshot.resume(...)``) runs the sandboxed script until it
@@ -15,16 +15,22 @@ Why this lives in activities (not the workflow):
     async *concurrency* the script sees does NOT use Monty's async API; it's the
     defer-future / FutureSnapshot protocol over this synchronous stepping API.)
   * Even so, executing arbitrary (sandboxed) user code is not something to do inside a
-    workflow. So the workflow stays the pure orchestrator: it calls ``monty_start_batch``
+    workflow. So the workflow stays the pure orchestrator: it calls ``code_start_batch``
     once, then alternates running each awaited batch of host calls (durable activities,
-    concurrently) with ``monty_resume_batch`` until the script completes.
+    concurrently) with ``code_resume_batch`` until the script completes.
+
+This module imports ``pydantic_monty`` (the optional ``code-mode`` extra). It is WORKER-SIDE
+only — never import it from workflow code or from ``harness.agent``. The workflow-side driver
+dispatches these activities by NAME (``CODE_START_BATCH_ACTIVITY`` /
+``CODE_RESUME_BATCH_ACTIVITY`` in :mod:`.batch_models`), so it never imports this module and
+thus never requires ``pydantic_monty`` to be installed.
 
 The snapshot crosses the activity boundary as bytes (``FutureSnapshot.dump()`` /
 ``load_snapshot``). Those bytes can be large and end up in workflow history, which is why
-the worker connects with the large-payload offload data converter.
+every client/worker must connect with the large-payload offload data converter.
 
-No ``from __future__ import annotations`` — the models below cross Temporal's pydantic
-converter, and stringized annotations trip its TypeAdapter build.
+No ``from __future__ import annotations`` — the models crossing Temporal's pydantic converter
+require concrete annotations (see :mod:`.batch_models`).
 
 === Async / concurrent driver (FutureSnapshot batches) ===
 
@@ -53,69 +59,19 @@ are async by contract.
 from typing import Any
 
 import pydantic_monty as monty
-from pydantic import BaseModel, ConfigDict, Field
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-# Snapshot bytes are arbitrary binary (a serialized Monty continuation), so they are NOT
-# valid UTF-8. Pydantic's default JSON encoding for ``bytes`` is UTF-8 and would fail
-# ("invalid utf-8 sequence") — base64 encodes/decodes them losslessly on both legs.
-_BYTES_AS_BASE64 = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
+from .batch_models import (
+    CODE_RESUME_BATCH_ACTIVITY,
+    CODE_START_BATCH_ACTIVITY,
+    CodeBatchStep,
+    PendingCall,
+    ResumeBatchInput,
+)
 
 
-class PendingCall(BaseModel):
-    """One host call the script is awaiting, surfaced to the workflow to run durably.
-
-    ``call_id`` keys the result back when resuming the FutureSnapshot. ``function_name`` /
-    ``args`` / ``kwargs`` are the call the workflow dispatches (same shape the sequential
-    ``MontyStep`` carries)."""
-
-    call_id: int
-    function_name: str
-    args: list[Any] = Field(default_factory=list)
-    kwargs: dict[str, Any] = Field(default_factory=dict)
-
-
-class MontyBatchStep(BaseModel):
-    """One step of the async driver: either done, or blocked awaiting a batch of host calls.
-
-    When ``done`` is False the script is awaiting ``pending`` (one or more concurrent host
-    calls) and ``snapshot`` is the serialized FutureSnapshot to resume once their results are
-    known. When ``done`` is True, ``output_json`` holds the script's final value or ``error``
-    holds a script-level Monty error (a bad script is data, not a workflow failure)."""
-
-    model_config = _BYTES_AS_BASE64
-
-    done: bool
-    stdout: str = ""
-
-    # Awaiting-a-batch fields (set when done is False).
-    snapshot: bytes | None = None
-    pending: list[PendingCall] = Field(default_factory=list)
-
-    # Terminal fields (set when done is True).
-    output_json: str | None = None
-    error: str | None = None
-
-
-class CallResult(BaseModel):
-    """A host call's result, keyed by ``call_id`` for resuming the FutureSnapshot."""
-
-    call_id: int
-    return_value: Any = None
-
-
-class MontyResumeBatchInput(BaseModel):
-    """Input to :func:`monty_resume_batch`: the serialized FutureSnapshot plus the results
-    for every call the workflow just ran (one :class:`CallResult` per pending call)."""
-
-    model_config = _BYTES_AS_BASE64
-
-    snapshot: bytes
-    results: list[CallResult] = Field(default_factory=list)
-
-
-def _drive_to_batch(snap: Any, stdout: monty.CollectString) -> MontyBatchStep:
+def _drive_to_batch(snap: Any, stdout: monty.CollectString) -> CodeBatchStep:
     """Run Monty forward, deferring each external call as a future, until it awaits a batch.
 
     Loops: a FunctionSnapshot (an ``async`` host call) is recorded and resumed with
@@ -126,7 +82,7 @@ def _drive_to_batch(snap: Any, stdout: monty.CollectString) -> MontyBatchStep:
     seen: dict[int, PendingCall] = {}
     while True:
         if isinstance(snap, monty.MontyComplete):
-            return MontyBatchStep(
+            return CodeBatchStep(
                 done=True, stdout=stdout.output, output_json=snap.output_json()
             )
         if isinstance(snap, monty.FunctionSnapshot):
@@ -152,7 +108,7 @@ def _drive_to_batch(snap: Any, stdout: monty.CollectString) -> MontyBatchStep:
                     type="UnsupportedMontyFuture",
                     non_retryable=True,
                 )
-            return MontyBatchStep(
+            return CodeBatchStep(
                 done=False,
                 stdout=stdout.output,
                 snapshot=snap.dump(),
@@ -166,17 +122,17 @@ def _drive_to_batch(snap: Any, stdout: monty.CollectString) -> MontyBatchStep:
         )
 
 
-@activity.defn
-async def monty_start_batch(
+@activity.defn(name=CODE_START_BATCH_ACTIVITY)
+async def code_start_batch(
     script: str, type_check_stubs: str | None = None
-) -> MontyBatchStep:
+) -> CodeBatchStep:
     """Compile + start ``script`` (async driver), running to the first awaited batch or done.
 
-    Type-checks against ``type_check_stubs`` when provided (the conversational agent always
-    passes async host-function stubs). See the module's async-driver section for the
+    Type-checks against ``type_check_stubs`` when provided (Code Mode always passes the
+    auto-generated host-function stubs). See the module's async-driver section for the
     defer-future / FutureSnapshot protocol."""
     activity.logger.info(
-        "monty_start_batch: compiling + starting (script_len=%d, type_check=%s)",
+        "code_start_batch: compiling + starting (script_len=%d, type_check=%s)",
         len(script),
         type_check_stubs is not None,
     )
@@ -190,12 +146,12 @@ async def monty_start_batch(
         snap = instance.start(print_callback=stdout)
         step = _drive_to_batch(snap, stdout)
     except monty.MontyError as e:
-        activity.logger.warning("monty_start_batch: %s: %s", type(e).__name__, e)
-        return MontyBatchStep(
+        activity.logger.warning("code_start_batch: %s: %s", type(e).__name__, e)
+        return CodeBatchStep(
             done=True, stdout=stdout.output, error=f"{type(e).__name__}: {e}"
         )
     activity.logger.info(
-        "monty_start_batch: %s",
+        "code_start_batch: %s",
         "done"
         if step.done
         else f"awaiting {[c.function_name for c in step.pending]}",
@@ -203,8 +159,8 @@ async def monty_start_batch(
     return step
 
 
-@activity.defn
-async def monty_resume_batch(input: MontyResumeBatchInput) -> MontyBatchStep:
+@activity.defn(name=CODE_RESUME_BATCH_ACTIVITY)
+async def code_resume_batch(input: ResumeBatchInput) -> CodeBatchStep:
     """Resume a FutureSnapshot with the workflow-computed results, then run to the next batch.
 
     ``input.results`` carries one :class:`CallResult` per call the workflow ran (the batch
@@ -214,7 +170,7 @@ async def monty_resume_batch(input: MontyResumeBatchInput) -> MontyBatchStep:
     snap = monty.load_snapshot(input.snapshot, print_callback=stdout)
     if not isinstance(snap, monty.FutureSnapshot):
         raise ApplicationError(
-            f"monty_resume_batch expected a FutureSnapshot, got {type(snap).__name__}",
+            f"code_resume_batch expected a FutureSnapshot, got {type(snap).__name__}",
             type="MontyResumeKind",
             non_retryable=True,
         )
@@ -225,14 +181,23 @@ async def monty_resume_batch(input: MontyResumeBatchInput) -> MontyBatchStep:
         resumed = snap.resume(results_map)
         step = _drive_to_batch(resumed, stdout)
     except monty.MontyError as e:
-        activity.logger.warning("monty_resume_batch: %s: %s", type(e).__name__, e)
-        return MontyBatchStep(
+        activity.logger.warning("code_resume_batch: %s: %s", type(e).__name__, e)
+        return CodeBatchStep(
             done=True, stdout=stdout.output, error=f"{type(e).__name__}: {e}"
         )
     activity.logger.info(
-        "monty_resume_batch: %s",
+        "code_resume_batch: %s",
         "done"
         if step.done
         else f"awaiting {[c.function_name for c in step.pending]}",
     )
     return step
+
+
+# The two sandbox-stepping activities every Code Mode worker registers, regardless of which
+# tools its Code Mode tools expose (they are tool-agnostic — the tools are dispatched through the
+# runner as their own activities). Register the durable bodies of any activity-backed host tools
+# separately, the same way you register any @agent.activity_tool_defn (via agent.tool_activity)::
+#
+#     Worker(..., activities=[*CODE_MODE_ACTIVITIES, agent.tool_activity(my_tool), ...])
+CODE_MODE_ACTIVITIES = [code_start_batch, code_resume_batch]

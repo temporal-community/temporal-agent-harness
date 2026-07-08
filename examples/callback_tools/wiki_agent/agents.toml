@@ -1,0 +1,16 @@
+# Registry of agents the wiki callback-tools example can launch.
+#
+# The FastAPI server in app.py reads this file and passes the parsed registry into the packaged
+# SessionManagerWorkflow, which launches the agent as a child workflow on its task queue.
+
+[[agents]]
+key = "wiki"
+workflow_type = "WikiAgent"
+task_queue = "wiki-agent"
+label = "Wiki Keeper (Callback Tools)"
+description = """
+A conversational agent that organizes a tree of Markdown files into a personal wiki. Tell it
+things to remember or ask it to tidy up; an LLM decides when to create, append to, or delete
+notes and calls read_file / write_file / ls / tree / delete_file / grep. Those are CALLBACK
+tools: the agent has no disk of its own, so a thin client on your machine executes each call
+against a local wiki directory and returns the result."""

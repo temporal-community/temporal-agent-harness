@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"strings"
 
-	agentiface "github.com/temporalio/nexus_connector_slack/agent"
-	"github.com/temporalio/nexus_connector_slack/connector"
-	msgiface "github.com/temporalio/nexus_connector_slack/messaging"
-	"github.com/temporalio/nexus_connector_slack/messaging/teams"
+	agentiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/agent"
+	"github.com/temporalio/temporal-agent-harness/nexus/slack_connector/connector"
+	msgiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging"
+	"github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging/teams"
 	"go.temporal.io/sdk/client"
 )
 
@@ -23,8 +23,8 @@ const (
 type webhookServer struct {
 	tc        client.Client
 	taskQueue string
-	platform *teams.TeamsPlatform
-	mux      *http.ServeMux
+	platform  *teams.TeamsPlatform
+	mux       *http.ServeMux
 }
 
 func NewServer(tc client.Client, taskQueue string, platform *teams.TeamsPlatform) *webhookServer {

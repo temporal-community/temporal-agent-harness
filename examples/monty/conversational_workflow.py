@@ -1,20 +1,18 @@
-"""Conversational Monty agent: chat in text, and the model writes + runs its own scripts.
+"""Conversational travel agent that gives the model Code Mode over the travel tools.
 
-This is a demo-oriented twist on :class:`MontyDynamicAgentWorkflow`. That agent receives a
-pre-written script per turn and runs it. This one puts a *model in the loop*: the user
-chats in plain text, the model converses to gather what it needs, and when it decides it's
-ready it **writes its own Python script and calls the ``run_monty_script`` tool** to execute
-it in the Monty sandbox. The model then reads the script's output and replies in prose.
+The user chats in plain text; a *model in the loop* converses to gather what it needs, then
+**writes a Python script and runs it** to search and book flights/hotels, and replies in prose.
+It does this through the harness Code Mode feature: :func:`agent.code_mode_tool` turns the travel
+activity tools into a single ``run_travel_code`` tool that executes a model-authored script in a
+sandbox, where each tool is an async host function the script calls. Every host call runs as a
+durable, approval-gated activity, and the script can combine many with real control flow (loops,
+``asyncio.gather`` concurrency).
 
-The Monty side is IDENTICAL to :class:`MontyDynamicAgentWorkflow`: the same async batch
-driver (``monty_start_batch`` → ``monty_resume_batch``) backed by the same durable travel
-activities (``_dispatch_host_call`` / ``_run_activity_tool``). The only new part is the
-conversational front end — a Gemini Interactions tool-calling loop exposing a single tool,
-``run_monty_script``.
-
-This agent uses only a custom *function* tool (not the built-in ``file_search``), which
-chains cleanly across turns via ``previous_interaction_id`` — so multi-turn conversation
-works.
+The conversational front end is a Gemini Interactions tool-calling loop exposing that one Code
+Mode tool. It uses only a custom *function* tool, which chains cleanly across turns via 
+``previous_interaction_id`` — so multi-turn conversation works. The Code Mode tool advertises the 
+exact host-function signatures + result shapes in its own (generated) description, so the system 
+prompt only needs to set the persona and point the model at the tool.
 """
 
 from __future__ import annotations
@@ -23,7 +21,7 @@ import asyncio
 import json
 from datetime import timedelta
 from functools import partial
-from typing import Any
+from typing import Sequence
 
 from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
@@ -60,7 +58,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
-    from ._host_driver import MontyHostDriver
+    from . import activities
 
 
 TASK_QUEUE = "monty-dynamic-agent"
@@ -76,95 +74,24 @@ def model_slash_command(set_model) -> slash_commands.SlashCommandDefinition:
     )
 
 
-# The script-writing contract the model must follow. The host functions are ASYNC — the
-# script awaits them, and the runtime executes each as a durable Temporal activity. Calls
-# the script `await`s together via `asyncio.gather` run CONCURRENTLY, so the model is
-# pushed to parallelize independent work. See travel_models.HOST_FUNCTION_STUBS (the typed
-# stubs the script is type-checked against) and the workflow's batch driver.
-_SCRIPT_CONTRACT = """\
-You can RUN PYTHON by calling the `run_monty_script` tool with a `script` string. The script \
-runs in the Monty sandbox: no filesystem, no network, no arbitrary imports — just ordinary \
-in-sandbox Python (arithmetic, comprehensions, f-strings, `print`) plus `asyncio` and the \
-host functions below. The value of the script's LAST EXPRESSION becomes the tool result \
-(along with anything printed).
-
-The host functions are ASYNC — you MUST `await` them. Structure every script as:
-
-    import asyncio
-    async def main():
-        ...        # await host functions here
-        return <final value>
-    asyncio.run(main())
-
-CONCURRENCY (important): independent host calls should run AT THE SAME TIME with \
-`asyncio.gather` — the runtime executes a gathered batch concurrently, so don't await them \
-one-by-one when they don't depend on each other. Only await sequentially when a later call \
-needs an earlier call's result (e.g. you must search before you can book).
-
-Your script is STATICALLY TYPE-CHECKED against the host-function signatures below before it \
-runs. Forgetting `await`, passing a wrong argument type, or reading a result key that \
-doesn't exist all come back as a type error instead of a result — read it and fix the \
-script. The result keys listed for each function are exact; only those keys exist.
-
-Host functions (all `async`, all must be awaited):
-
-  • async search_flights(origin: str, destination: str, date: str) -> list[dict]
-        Flights between two airport codes on a date ("YYYY-MM-DD"). Each dict:
-        flight_id, airline, departure_time ("HH:MM"), arrival_time ("HH:MM"),
-        price_usd (float), stops (int).
-  • async search_hotels(city: str, check_in: str, check_out: str) -> list[dict]
-        Hotels in a city for a date range. Each dict: hotel_id, name, star_rating (int),
-        price_per_night_usd (float), neighborhood (str).
-  • async book_flight(flight_id: str, passenger_name: str) -> dict
-        Returns: confirmation_code, flight_id, passenger_name, status.
-  • async book_hotel(hotel_id: str, guest_name: str) -> dict
-        Returns: confirmation_code, hotel_id, guest_name, status.
-  • async get_trip_summary(booking_refs: list[str]) -> str
-        Human-readable itinerary from confirmation codes.
-
-Index results with normal Python (e.g. flights[0]["price_usd"], min(...)). Bind any values \
-you need as literals in the script — there are no inputs.
-
-Example script (note the concurrent search, then the dependent bookings):
-    import asyncio
-    async def main():
-        # independent searches run concurrently
-        flights, hotels = await asyncio.gather(
-            search_flights("SFO", "JFK", "2026-07-01"),
-            search_hotels("New York", "2026-07-01", "2026-07-05"),
-        )
-        cheapest = min(flights, key=lambda f: f["price_usd"])
-        nicest = max(hotels, key=lambda h: h["star_rating"])
-        # these depend on the searches, but are independent of each other -> gather
-        flight, hotel = await asyncio.gather(
-            book_flight(cheapest["flight_id"], "Ada Lovelace"),
-            book_hotel(nicest["hotel_id"], "Ada Lovelace"),
-        )
-        print(f"booked {cheapest['airline']} at ${cheapest['price_usd']}")
-        return await get_trip_summary([flight["confirmation_code"], hotel["confirmation_code"]])
-    asyncio.run(main())
-"""
-
-SYSTEM_INSTRUCTION = f"""\
+SYSTEM_INSTRUCTION = """\
 You are a friendly travel-booking assistant. You help users search and book flights and \
 hotels and assemble trip itineraries. You don't have these abilities directly — instead you \
-write small **async** Python scripts and execute them with the `run_monty_script` tool. Every \
-script MUST be async: the host functions are coroutines you `await`, you run independent ones \
-concurrently with `asyncio.gather`, and you wrap the body in `asyncio.run(main())` (full rules \
-below).
-
-{_SCRIPT_CONTRACT}
+write small async Python scripts and run them with the `run_travel_code` tool, which exposes the \
+travel operations as async host functions your script calls. The tool's description gives the \
+exact host-function signatures and result shapes — follow them; index results with normal Python.
 
 How to behave:
 - Converse naturally. Ask brief clarifying questions when you're missing something essential \
 (origin/destination, dates, traveler name) — don't interrogate; make reasonable assumptions \
 and state them.
-- When you have enough to make progress, WRITE A SCRIPT and call `run_monty_script`. Keep \
-each script focused (search, or book, or summarize) so you can react to results.
+- When you have enough to make progress, WRITE A SCRIPT and call `run_travel_code`. Run \
+independent host calls concurrently with `asyncio.gather`; keep each script focused (search, or \
+book, or summarize) so you can react to results.
 - After a tool result, read it and reply to the user in plain, friendly prose — summarize \
 options, prices, confirmations. You may run more scripts in follow-up turns as the \
 conversation continues.
-- Never invent flight_ids/hotel_ids/confirmation codes — only use ones returned by a script."""
+- Never invent flight/hotel ids or confirmation codes — only use ones returned by a script."""
 
 
 @workflow.defn(name="MontyChatAgent")
@@ -176,8 +103,8 @@ class MontyChatAgentWorkflow:
             config,
             stream=WorkflowStream(),
             # Demo stance: require human approval for EVERY tool call — both the
-            # `run_monty_script` tool and each host call the script makes (search/book
-            # flights & hotels), since every call is dispatched through run_tool and gated.
+            # `run_travel_code` tool and each host call the script makes (search/book flights &
+            # hotels), since every call is dispatched through run_tool and gated.
             # always_require_approvals does not auto-approve even inherently_safe tools.
             approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
             slash_commands=[
@@ -189,12 +116,19 @@ class MontyChatAgentWorkflow:
         # Server-side conversation chaining id (Interactions API); updated each turn. Safe to
         # chain here because this agent uses only a function tool (no file_search).
         self._previous_interaction_id: str | None = None
-        # Shared execution half: runs the model-authored script via the async batch loop
-        # (composition — same driver the script-only MontyDynamicAgent uses).
-        self._monty = MontyHostDriver(self._runner)
-        # The single model-facing tool: an inline workflow tool that runs a model-authored
-        # script through the Monty async batch driver. Built once, closing over `self`.
-        self._monty_tool = self._build_monty_tool()
+        # The single model-facing tool: Code Mode over the travel tools. The model writes a
+        # Python script that calls the travel operations as async host functions; each host call
+        # runs as a durable, approval-gated activity via run_tool.
+        self._code_tool = agent.code_mode_tool(
+            [
+                activities.search_flights_activity,
+                activities.search_hotels_activity,
+                activities.book_flight_activity,
+                activities.book_hotel_activity,
+                activities.get_trip_summary_activity,
+            ],
+            name="run_travel_code",
+        )
 
     @workflow.run
     async def run(self, _config: AgentConfig) -> None:
@@ -231,34 +165,13 @@ class MontyChatAgentWorkflow:
 
     # ------------------------------------------------------------------ chat loop
 
-    def _build_monty_tool(self) -> Any:
-        """Build the ``run_monty_script`` inline tool, closing over this workflow instance.
-
-        It's an ``@agent.tool_defn`` so it runs IN the workflow (the Monty async batch
-        loop must orchestrate durable activities) and publishes its own tool lifecycle. The
-        docstring is the model-facing contract."""
-
-        @agent.tool_defn(inherently_safe=True)
-        async def run_monty_script(script: str) -> str:
-            return await self._monty.run_script(script)
-
-        # The model reads this; keep it aligned with _SCRIPT_CONTRACT.
-        run_monty_script.__doc__ = (
-            "Execute a Python `script` in the Monty sandbox and return its printed output "
-            "and final value. Use this to search/book flights and hotels and build "
-            "itineraries via the host functions (search_flights, search_hotels, book_flight, "
-            "book_hotel, get_trip_summary). The script's LAST EXPRESSION is returned. See the "
-            "system instructions for the full sandbox contract and host-function signatures."
-        )
-        return run_monty_script
-
     async def _handle_chat_turn(self, gemini: AsyncClient, user_text: str) -> str:
-        """Run one conversational turn: stream the model, dispatch any ``run_monty_script``
+        """Run one conversational turn: stream the model, dispatch any ``run_travel_code``
         calls, feed results back, and loop until the model replies with no further calls.
 
         Updates ``self._previous_interaction_id`` for chaining the next turn (no file_search
         here, so chaining is safe)."""
-        tools = [function_param(self._monty_tool)]
+        tools = [function_param(self._code_tool)]
         next_input: Input = user_text
         while True:
             (
@@ -282,15 +195,15 @@ class MontyChatAgentWorkflow:
             )
 
     async def _run_one_tool(self, call: FunctionCallStep) -> FunctionResultStepParam:
-        """Execute one ``run_monty_script`` call via ``run_tool`` and return its result.
+        """Execute one ``run_travel_code`` call via ``run_tool`` and return its result.
 
         ``run_tool`` parks the call id so the script's host calls and the tool's own
         lifecycle events correlate with the streaming activity's ``tool_requested``."""
         try:
-            if call.name != self._monty_tool.__name__:
+            if call.name != self._code_tool.__name__:
                 raise ValueError(f"unknown tool: {call.name!r}")
             result = await self._runner.run_tool(
-                call.id, self._monty_tool, **call.arguments
+                call.id, self._code_tool, **call.arguments
             )
             response: FunctionResultStepParam = {
                 "type": "function_result",
@@ -319,7 +232,7 @@ class MontyChatAgentWorkflow:
         gemini: AsyncClient,
         model: str,
         input: Input,
-        tools: list[ToolParam],
+        tools: Sequence[ToolParam],
         system_instruction: str,
         previous_interaction_id: str | None,
     ) -> tuple[str, list[FunctionCallStep], str]:
@@ -384,6 +297,3 @@ class MontyChatAgentWorkflow:
             for idx in sorted(calls_by_index)
         ]
         return "".join(text_parts), function_calls, interaction_id
-
-    # Monty execution (the async batch loop + host-call dispatch) lives in the shared
-    # MontyHostDriver held in self._monty (composition); call self._monty.run_script(...).
