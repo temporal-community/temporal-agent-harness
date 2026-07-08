@@ -17,8 +17,8 @@ Env vars:
     MONTY_AGENT_TASK_QUEUE       task queue to poll (default: monty-dynamic-agent)
 
 This worker hosts the three Monty agents (MontyDynamicAgent + the two conversational
-agents) — not the session manager. The packaged session manager is hosted by
-examples.monty.session_manager_worker; because it launches agents by registered name,
+agents) — not the session manager. The packaged session manager is hosted by the shared
+examples.session_manager_worker; because it launches agents by registered name,
 it dispatches these agents to this queue without this worker hosting it.
 """
 

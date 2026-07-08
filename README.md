@@ -14,6 +14,8 @@ build yourself:
   text out);
 - **Code Mode** — one tool that runs a Python script over your toolset — so a single
   turn orchestrates many tool calls with real control flow and concurrency;
+- **callback tools** let an agent invoke a tool that runs on the *client* — reading a file on a
+  user's laptop, capturing a photo on their phone — even though the agent runs on a remote worker;
 - agents are **fully observable** — a standardized, full-lifecycle event stream lets you watch them
   live or replay exactly what they did;
 
@@ -68,9 +70,24 @@ Support is growing across the Python AI SDKs and agent frameworks Temporal integ
 | [LangGraph](https://docs.temporal.io/develop/python/integrations/langgraph) | 🟡 Planned | Vendor [implementation](https://github.com/temporalio/sdk-python/tree/main/temporalio/contrib/langgraph) to add harness support. |
 
 ### 📡 Durable and inline tools
-Tools come in two flavors — durable, activity-backed tools (`@agent.activity_tool_defn`) that run
-as retried, observable Temporal activities, and inline workflow tools (`@agent.tool_defn`). Each
-publishes its own start/end lifecycle events onto the agent's standardized event stream.
+Tools come in two on-worker flavors — durable, activity-backed tools (`@agent.activity_tool_defn`)
+that run as retried, observable Temporal activities, and inline workflow tools
+(`@agent.tool_defn`). Each publishes its own start/end lifecycle events onto the agent's
+standardized event stream. (A third flavor — **callback tools** — runs on an attached client
+instead of the worker; see below.)
+
+### 📞 Callback tools — let the client run the tool
+An agent running on a Temporal worker often needs to act somewhere it can't reach — a file on the
+user's laptop, a photo from their phone, a device on a private network. A **callback tool**
+(`@agent.callback_tool_defn`) has no worker-side body: the agent **pauses inside the workflow**,
+publishes the call, and an **attached client executes it on its own machine** and sends the result
+back. You declare only the tool's typed contract (its `...` body is enforced) — the harness
+supplies the single generic implementation. Because it's dispatched like any other tool, a callback
+tool inherits the *same* approval policy, `tool_start`/`tool_end` events, and durable pause/resume:
+the workflow simply waits (seconds or days) until a result arrives, and that result is validated
+against the tool's declared output type before the turn continues. See
+[`examples/callback_tools/wiki_agent`](examples/callback_tools/wiki_agent) — a cloud-shaped agent
+that organizes a Markdown wiki on *your* local disk through a thin terminal client.
 
 ### 🧩 Agents that are more than chatbots
 Most frameworks treat an agent as a single text-in / text-out function. Here, an agent exposes a
@@ -285,7 +302,9 @@ temporal_agent_harness/
 └── utils/        # general Temporal utilities (e.g. large-payload offload)
 
 examples/
-└── monty/        # a travel-booking agent example with packaged web/UI wiring
+├── monty/          # a travel-booking agent example with packaged web/UI wiring
+└── callback_tools/
+    └── wiki_agent/ # a wiki-organizing agent built on callback tools, with a thin terminal client
 
 ui/               # shared Svelte frontend for the Monty example
 
@@ -325,15 +344,16 @@ just monty-worker      # Monty agent worker
 just ui-dev            # Vite hot reload on http://127.0.0.1:5173
 ```
 
-The delegation matters because `examples/monty/justfile` loads
-`examples/monty/.env.local`. Keep example-specific settings there; root commands
-will still use them.
+All example recipes read one shared env file, `.env.local` at the repo root: the root
+justfile loads it directly, and `examples/*/justfile` read the same root file (via
+`dotenv-path`). Keep your Temporal profile + `GEMINI_API_KEY` there.
 
 ## Run The Example
 
 The [`examples/monty`](examples/monty) example is the best end-to-end path: a
-conversational travel agent and a subagent-driven variant, all built on Code Mode. From
-`examples/monty`, create local environment settings first:
+conversational travel agent and a subagent-driven variant, all built on Code Mode. First
+create local environment settings at the **repo root** (one `.env.local` serves every
+example):
 
 ```bash
 cp .env.example .env.local
@@ -358,9 +378,9 @@ just server            # builds and serves the Svelte UI + /api on http://localh
 just monty-worker      # Monty agent worker
 ```
 
-These root recipes delegate into `examples/monty`, so `.env.local` is still read
-from that example directory. You can also run the same recipes directly from
-`examples/monty`; there the agent worker recipe is named `just worker`.
+These root recipes delegate into `examples/monty`, which reads the same repo-root
+`.env.local`. You can also run the same recipes directly from `examples/monty`; there the
+agent worker recipe is named `just worker`.
 
 Open <http://localhost:8000> and select a Monty agent. `just server` runs
 `app-build` first, so port 8000 serves the current built Svelte UI from

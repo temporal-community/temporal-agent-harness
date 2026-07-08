@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 SEND_AGENT_MESSAGE_UPDATE = "send_agent_message"
 TOOL_APPROVAL_UPDATE = "tool_approval"
+PROVIDE_CALLBACK_RESULT_UPDATE = "provide_callback_result"
 EXECUTE_OPERATOR_COMMAND_UPDATE = "execute_operator_command"
 AGENT_STATUS_QUERY = "agent_status"
 AGENT_INTERFACE_QUERY = "agent_interface"
@@ -388,6 +389,49 @@ class ToolApprovalResult:
 
 
 @dataclass
+class CallbackResult:
+    """Update payload sent to the workflow to fulfill a pending callback tool call.
+
+    A callback tool (``@agent.callback_tool_defn``) has no worker-side implementation: it
+    pauses in-workflow and an attached client executes it on its own machine, then submits
+    the outcome through the ``provide_callback_result`` update.
+
+    ``tool_id`` is the id carried by the :class:`CallbackRequested` event (and listed under
+    :attr:`AgentStatus.pending_callbacks`). Exactly one of ``result`` / ``error`` is meaningful:
+
+      * ``result`` — the value the client produced, as JSON-native data (a dict for a pydantic
+        model output, or a scalar/list). The workflow validates it against the tool's declared
+        output type; a mismatch rejects the update (without consuming the one-shot gate) so the
+        client can correct and resubmit. On success it becomes the tool's return value.
+      * ``error`` — set instead when the client could not fulfill the call (e.g. file not found,
+        permission denied). The call fails and the model receives this as the tool's error
+        result, rather than crashing the turn.
+
+    The workflow's update validator rejects a submission for an unknown ``tool_id`` or one
+    already resolved (idempotent — a double-submit fails rather than overwriting a settled
+    result).
+    """
+
+    tool_id: str
+    result: Any = None
+    error: str | None = None
+
+
+@dataclass
+class CallbackResultAck:
+    """Returned by the workflow's ``provide_callback_result`` update once the result is recorded.
+
+    ``accepted`` is always True on a successful return (the update validator rejects anything
+    that should not be recorded — unknown id, already resolved, or a result that fails output-type
+    validation — before the handler runs); it exists so the contract has an explicit, evolvable
+    acknowledgement payload.
+    """
+
+    tool_id: str
+    accepted: bool = True
+
+
+@dataclass
 class PendingApproval:
     """A gated tool call awaiting a human decision, surfaced via ``agent_status``.
 
@@ -399,6 +443,23 @@ class PendingApproval:
     tool_id: str
     tool_name: str
     tool_input: dict[str, Any]
+    turn_number: int
+
+
+@dataclass
+class PendingCallback:
+    """A callback tool call awaiting a client-supplied result, surfaced via ``agent_status``.
+
+    Lets a client that attaches after the :class:`CallbackRequested` event was published still
+    discover and fulfill outstanding callback calls. ``tool_input`` is the model-facing input
+    (injected parameters excluded); ``output_schema`` is the JSON schema of the result the
+    client must return.
+    """
+
+    tool_id: str
+    tool_name: str
+    tool_input: dict[str, Any]
+    output_schema: dict[str, Any]
     turn_number: int
 
 
@@ -449,6 +510,10 @@ class AgentStatus:
     pending_turns: list[PendingTurn] = field(default_factory=list)
     is_message_queuing_enabled: bool = False
     pending_approvals: list[PendingApproval] = field(default_factory=list)
+    # Callback tool calls currently awaiting a client-supplied result (its own machine executes
+    # them), each a :class:`PendingCallback`. Distinct from ``pending_approvals``: an approval is a
+    # human gate BEFORE a tool runs; a pending callback is a client fulfilling the tool's body.
+    pending_callbacks: list[PendingCallback] = field(default_factory=list)
     # Subagents this agent is currently driving (its own child agents), each a
     # :class:`SubagentInfo` — short subagent id, agent key, real child workflow id, next turn. Gate
     # internals are excluded by construction.

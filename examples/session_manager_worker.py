@@ -1,12 +1,14 @@
-"""Worker that hosts the packaged session-manager workflow for the Monty example.
+"""Shared session-manager worker for the bundled examples.
 
-Run from the repo root with:
-    uv run python -m examples.monty.session_manager_worker
+The packaged ``SessionManagerWorkflow`` is agent-agnostic — it launches whichever agents the
+example's server registered (from that example's ``agents.toml``) as child workflows on their own
+task queues — so one worker serves every example. Each example's justfile ``session-manager``
+recipe runs this same module:
 
-The session manager owns browser-visible session lifecycle and launches registered
-Monty agents as child workflows on their own task queue from ``agents.toml``. It
-runs on the packaged ``SESSION_MANAGER_TASK_QUEUE`` and registers no agent
-workflows or activities.
+    python -m examples.session_manager_worker
+
+It runs on the packaged ``SESSION_MANAGER_TASK_QUEUE`` and registers no agent workflows or
+activities of its own.
 """
 
 from __future__ import annotations

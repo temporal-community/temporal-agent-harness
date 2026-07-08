@@ -18,10 +18,11 @@ the whole stack runs from this directory.
 
 ## Setup
 
-Copy the env template and fill it in (it's gitignored, so your secrets stay local):
+Copy the shared env template at the **repo root** and fill it in (it's gitignored, so your secrets
+stay local). One `.env.local` at the repo root serves every example:
 
 ```bash
-cp .env.example .env.local
+cp .env.example .env.local     # run from the repo root
 ```
 
 - Set `GEMINI_API_KEY` — the conversational agents need it.
