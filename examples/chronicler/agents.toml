@@ -1,0 +1,36 @@
+# Registry of agents the Chronicler example UI can launch.
+#
+# The FastAPI server in examples/chronicler/app.py reads this file and passes the parsed
+# registry into the packaged SessionManagerWorkflow as its workflow init arg. The manager then
+# serves it back over the `available_agents` query, so the app server can expose it at
+# /api/agents without hardcoding the agent list.
+#
+# To expose a new agent: register its @workflow.defn on a worker, then add a [[agents]] entry.
+
+[[agents]]
+key = "chronicler"
+workflow_type = "ChroniclerAgent"
+task_queue = "chronicler-agent"
+label = "Chronicler (D&D archivist)"
+description = """
+A conversational D&D campaign archivist. Chat in plain text; an LLM converses, then WRITES its
+own Python script and runs it via Code Mode to transcribe session recordings, summarize them,
+track NPCs/locations/quests, and synthesize spoken 'previously on' recaps — each step a durable,
+approval-gated Gemini-backed activity. It pings you (pluggable notifier) when a long
+transcription is ready.
+First time? Just ask it to "generate a sample session" and it'll create a short synthetic
+recording you can transcribe right away — no audio files needed."""
+
+[[agents]]
+key = "chronicler-subagent"
+workflow_type = "ChroniclerSubagentAgent"
+task_queue = "chronicler-agent"
+label = "Chronicler (Subagent map-reduce)"
+description = """
+The same D&D archivist, done with SUBAGENTS instead of Code Mode. This conductor fans out one
+SessionScribe child agent per session (map) — each its own durable, resumable workflow that
+transcribes/summarizes/extracts and answers questions about its session — then combines their
+typed digests into a campaign-wide recap (reduce). The child (ChroniclerScribeAgent) is launched
+internally by the conductor, so it needs no registry entry of its own.
+First time? Just ask it to "generate a sample session" to create a short synthetic recording to
+try the pipeline on — no audio files needed."""
