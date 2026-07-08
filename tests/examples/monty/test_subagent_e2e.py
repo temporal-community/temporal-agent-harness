@@ -52,9 +52,9 @@ async def client_and_queue():
     )
     task_queue = f"subagent-e2e-{uuid.uuid4()}"
     # One worker hosts BOTH the parent and the child agent (the parent starts the child on this
-    # same queue), the Monty batch + host activities the child needs, and the subagent-turn
-    # activity the parent's runner dispatches — closed over the env client so it can talk to the
-    # child workflow.
+    # same queue), the Monty batch + host activities the child needs, and the two subagent-turn
+    # activities the parent's runner dispatches — closed over the env client so it can talk to
+    # the child workflow.
     async with Worker(
         env.client,
         task_queue=task_queue,
@@ -66,7 +66,8 @@ async def client_and_queue():
         activities=[
             *activities.ALL_ACTIVITIES,
             *CODE_MODE_ACTIVITIES,
-            SubagentActivities(env.client).run_subagent_turn,
+            SubagentActivities(env.client).submit_subagent_turn,
+            SubagentActivities(env.client).consume_subagent_turn,
         ],
     ):
         try:

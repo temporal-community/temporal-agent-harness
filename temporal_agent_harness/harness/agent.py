@@ -42,7 +42,11 @@
 #     @agent.activity_tool_defn()
 #     async def read_page(store: Injected[str], page_url: str) -> str: ...
 
-from temporal_agent_harness.harness.agent_protocol import ToolApprovalContext, ToolApprovalPolicy
+from temporal_agent_harness.harness.agent_protocol import (
+    SubagentTransport,
+    ToolApprovalContext,
+    ToolApprovalPolicy,
+)
 from temporal_agent_harness.harness.agent_workflow import (
     AgentToolContext,
     CallbackToolError,
@@ -58,12 +62,19 @@ from temporal_agent_harness.harness.agent_workflow import (
 )
 from temporal_agent_harness.harness.code_mode import code_mode_tool
 from temporal_agent_harness.harness.subagent_toolset import subagent_toolset
+from temporal_agent_harness.harness.subagent_transport import ChildWorkflowTransport
+
+# Nexus-brokered subagent driving (NexusTransport, dynamic-discovery registry_subagent_toolset)
+# is NOT re-exported here — it lives entirely in nexus/subagents/{transport,registry}, which
+# depend on this package rather than the other way around. Import from there directly.
 
 __all__ = [
     "AgentToolContext",
     "CallbackToolError",
+    "ChildWorkflowTransport",
     "CustomApprovalFallback",
     "Injected",
+    "SubagentTransport",
     "ToolApprovalContext",
     "ToolApprovalDenied",
     "ToolApprovalPolicy",

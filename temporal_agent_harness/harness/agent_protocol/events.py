@@ -693,6 +693,11 @@ class SubagentMessageSent(StreamEvent[Literal[AgentEventType.SUBAGENT_MESSAGE_SE
         "markers are not on the merged stream and could otherwise never be ordered. Unrelated "
         "address space from the parent stream's offsets.",
     )
+    nexus_endpoint: str | None = Field(
+        default=None,
+        description="Non-None if this subagent needs a Nexus poll loop to mount its stream "
+        "(from SubagentTransport.nexus_endpoint()); None for same-cluster transports.",
+    )
 
 
 class SubagentReplyReceived(

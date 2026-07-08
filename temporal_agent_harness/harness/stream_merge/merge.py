@@ -18,7 +18,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     SubagentReplyReceived,
     SubagentStreamUnavailable,
 )
-from temporal_agent_harness.harness.stream_merge.cursor import Cursor
+from temporal_agent_harness.harness.stream_merge.cursor import Cursor, StreamSource
 from temporal_agent_harness.harness.stream_merge.gates import (
     Gates,
     MountChild,
@@ -83,11 +83,16 @@ class _Merge:
         select: SelectPolicy,
         should_stop: ShouldStop,
         stall_grace_seconds: float = DEFAULT_STALL_GRACE_SECONDS,
+        remote_stream_source: Callable[[str], StreamSource] | None = None,
     ) -> None:
         self._client = client
         self._select = select
         self._should_stop = should_stop
         self._stall_grace = stall_grace_seconds
+        # Builds a Nexus-routed child's StreamSource given its endpoint. None (default): every
+        # child mounts the default way, and a Nexus-routed one just fails on first pull —
+        # absorbed by the existing graceful-degradation give-up path.
+        self._remote_stream_source = remote_stream_source
         self._gates = Gates()
         self._cursors: dict[str, Cursor] = {}
         self._mount_seq = 0
@@ -123,6 +128,7 @@ class _Merge:
         from_offset: int,
         is_child: bool,
         skip_until_turn_id: str | None = None,
+        nexus_endpoint: str | None = None,
     ) -> None:
         """Mount a stream as a new cursor (idempotent — a re-used child is mounted once).
 
@@ -130,7 +136,8 @@ class _Merge:
         re-emitting ``subagent_message_sent`` for that child — but the child's cursor is mounted on
         the FIRST and keeps advancing sequentially; later turns' ``from_offset`` just equal where
         the cursor already sits. The ``skip_until_turn_id`` preamble is only ever meaningful for the
-        ROOT cursor (send_message)."""
+        ROOT cursor (send_message). ``nexus_endpoint`` (child-only) picks a Nexus-poll stream
+        source via ``self._remote_stream_source`` when configured."""
         if workflow_id in self._cursors:
             return
         if is_child:
@@ -143,6 +150,9 @@ class _Merge:
             self._root_workflow_id = workflow_id
             # Resuming there again would lose nothing — seed the resume offset to the start point.
             self._root_resume_offset = from_offset
+        stream_source = None
+        if nexus_endpoint is not None and self._remote_stream_source is not None:
+            stream_source = self._remote_stream_source(nexus_endpoint)
         self._cursors[workflow_id] = Cursor.mount(
             self._client,
             workflow_id=workflow_id,
@@ -150,6 +160,7 @@ class _Merge:
             mount_index=self._mount_seq,
             from_offset=from_offset,
             skip_until_turn_id=skip_until_turn_id,
+            stream_source=stream_source,
         )
         self._mount_seq += 1
 
@@ -224,7 +235,10 @@ class _Merge:
                 if isinstance(action, MountChild):
                     self._subagent_ids[action.workflow_id] = action.subagent_id
                     self._mount(
-                        action.workflow_id, from_offset=action.from_offset, is_child=True
+                        action.workflow_id,
+                        from_offset=action.from_offset,
+                        is_child=True,
+                        nexus_endpoint=action.nexus_endpoint,
                     )
                 elif isinstance(action, UnmountChild):
                     # The child is drained + idle by the time its subagent_stopped surfaces, so
@@ -460,8 +474,13 @@ async def merge_stream(
     select: SelectPolicy,
     should_stop: ShouldStop,
     stall_grace_seconds: float = DEFAULT_STALL_GRACE_SECONDS,
+    remote_stream_source: Callable[[str], StreamSource] | None = None,
 ) -> AsyncIterator[MergedItem]:
     """Drive one gated k-way merge, yielding ``(event, resume_offset)`` pairs (see :data:`MergedItem`).
+
+    ``remote_stream_source`` builds the :data:`StreamSource` for a Nexus-routed subagent (see
+    ``nexus/subagents/stream_source.py``). Omit it to leave Nexus-routed children unmounted
+    (absorbed by graceful degradation) instead.
 
     Mounts ``root_workflow_id`` at ``root_from_offset``, then interleaves the root with every subagent
     stream it mounts on a ``subagent_message_sent``, recursively. ``skip_until_turn_id`` skips the root
@@ -485,6 +504,7 @@ async def merge_stream(
         select=select,
         should_stop=should_stop,
         stall_grace_seconds=stall_grace_seconds,
+        remote_stream_source=remote_stream_source,
     )
     async for item in engine.run(
         root_workflow_id=root_workflow_id,

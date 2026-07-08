@@ -40,11 +40,15 @@ class MountChild:
     remember ``workflow_id → subagent_id``, so if it later has to give up on this child it can label
     the synthesized ``subagent_stream_unavailable`` marker with the id a UI knows the subagent by — even
     though the child delivered no events of its own to carry that id.
+
+    ``nexus_endpoint``: non-None if this child needs a Nexus poll loop instead of a
+    same-cluster subscription.
     """
 
     workflow_id: str
     from_offset: int
     subagent_id: str
+    nexus_endpoint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -140,6 +144,7 @@ class Gates:
                 workflow_id=ev.event.workflow_id,
                 from_offset=ev.event.from_offset,
                 subagent_id=ev.event.subagent_id,
+                nexus_endpoint=ev.event.nexus_endpoint,
             )
         if isinstance(ev.event, SubagentStopped):
             return UnmountChild(workflow_id=ev.event.workflow_id)

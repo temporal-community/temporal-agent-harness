@@ -78,14 +78,18 @@ from temporal_agent_harness.harness.agent_protocol.events import (
     TurnStarted,
 )
 from temporal_agent_harness.harness.agent_protocol.subagent_interface import (
+    CONSUME_SUBAGENT_TURN_ACTIVITY,
     DEFAULT_SUBAGENT_HEARTBEAT_INTERVAL,
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
     DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
-    RUN_SUBAGENT_TURN_ACTIVITY,
-    RunSubagentTurnInput,
+    DEFAULT_SUBAGENT_SUBMIT_START_TO_CLOSE_TIMEOUT,
+    SUBMIT_SUBAGENT_TURN_ACTIVITY,
+    ConsumeSubagentTurnInput,
+    SubagentTransport,
     SubagentTurnResult,
+    SubmitSubagentTurnInput,
+    SubmitSubagentTurnResult,
 )
-
 __all__ = [
     # Signal/update/query interface
     "AGENT_ID_LENGTH",
@@ -156,11 +160,16 @@ __all__ = [
     "AgentError",
     "AgentStreamItem",
     "AgentEvent",
-    # Subagent-turn activity contract (parent workflow ↔ harness activity)
-    "RUN_SUBAGENT_TURN_ACTIVITY",
+    # Subagent-turn activity contract (parent workflow ↔ harness activities)
+    "SUBMIT_SUBAGENT_TURN_ACTIVITY",
+    "CONSUME_SUBAGENT_TURN_ACTIVITY",
     "DEFAULT_SUBAGENT_HEARTBEAT_INTERVAL",
     "DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT",
     "DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT",
-    "RunSubagentTurnInput",
+    "DEFAULT_SUBAGENT_SUBMIT_START_TO_CLOSE_TIMEOUT",
+    "SubmitSubagentTurnInput",
+    "SubmitSubagentTurnResult",
+    "ConsumeSubagentTurnInput",
+    "SubagentTransport",
     "SubagentTurnResult",
 ]

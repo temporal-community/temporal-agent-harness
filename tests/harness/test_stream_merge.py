@@ -71,7 +71,15 @@ def _te(agent_id: str, turn: int) -> AgentEvent:
     return _ev(agent_id, turn, TurnEnded())
 
 
-def _ms(agent_id: str, parent_turn: int, *, child: str, child_turn: int, from_offset: int = 0) -> AgentEvent:
+def _ms(
+    agent_id: str,
+    parent_turn: int,
+    *,
+    child: str,
+    child_turn: int,
+    from_offset: int = 0,
+    nexus_endpoint: str | None = None,
+) -> AgentEvent:
     return _ev(
         agent_id,
         parent_turn,
@@ -82,6 +90,7 @@ def _ms(agent_id: str, parent_turn: int, *, child: str, child_turn: int, from_of
             function="f",
             subagent_turn=child_turn,
             from_offset=from_offset,
+            nexus_endpoint=nexus_endpoint,
         ),
     )
 
@@ -242,6 +251,7 @@ async def _run_merge(
     drip_workflows: dict[str, float] | None = None,
     stall_grace_seconds: float = 5.0,
     resume_offsets: list[int] | None = None,
+    remote_stream_source: Any = None,
 ) -> list[AgentEvent]:
     """Drive the merge over scripted streams to exhaustion (or should_stop), returning the output.
 
@@ -270,6 +280,7 @@ async def _run_merge(
             select=select,
             should_stop=should_stop or _never_stop,
             stall_grace_seconds=stall_grace_seconds,
+            remote_stream_source=remote_stream_source,
         ):
             out.append(ev)
             if resume_offsets is not None:
@@ -370,6 +381,26 @@ def test_on_emit_returns_mount_only_for_message_sent():
         is_child=False, source_workflow_id="P", ev=_ms("P", 1, child="C", child_turn=1)
     )
     assert isinstance(mount, MountChild)
+
+
+def test_mount_child_nexus_endpoint_defaults_to_none_for_same_cluster_children():
+    gates = Gates()
+    mount = gates.on_emit(
+        is_child=False, source_workflow_id="P", ev=_ms("P", 1, child="C", child_turn=1)
+    )
+    assert isinstance(mount, MountChild)
+    assert mount.nexus_endpoint is None
+
+
+def test_mount_child_carries_nexus_endpoint_from_message_sent():
+    gates = Gates()
+    mount = gates.on_emit(
+        is_child=False,
+        source_workflow_id="P",
+        ev=_ms("P", 1, child="C", child_turn=1, nexus_endpoint="echo-agent-nexus-endpoint"),
+    )
+    assert isinstance(mount, MountChild)
+    assert mount.nexus_endpoint == "echo-agent-nexus-endpoint"
 
 
 # ---------------------------------------------------------------------------
@@ -978,3 +1009,101 @@ async def test_redispatched_given_up_child_reenables_its_close_gate():
     open_i, close_i = ms_positions[-1], rr_positions[-1]
     child_pos = [i for i, m in enumerate(merged) if m.agent_id == "C"]
     assert child_pos and all(open_i < i < close_i for i in child_pos)
+
+
+# ---------------------------------------------------------------------------
+# Nexus-routed children — remote_stream_source mounts them; with none configured, graceful
+# degradation absorbs an unreadable one like any other.
+# ---------------------------------------------------------------------------
+
+
+def _fake_remote_stream_source(streams: dict[str, list[AgentEvent]]) -> Any:
+    """Stands in for nexus_remote_stream_source's real Nexus-polling implementation."""
+
+    def factory(_endpoint: str) -> Any:
+        async def events(
+            _client: Any, workflow_id: str, from_offset: int
+        ) -> AsyncIterator[WorkflowStreamItem[AgentEvent]]:
+            backlog = streams.get(workflow_id, [])
+            for offset in range(from_offset, len(backlog)):
+                yield WorkflowStreamItem(topic=TURN_EVENTS_TOPIC, data=backlog[offset], offset=offset)
+
+        return events
+
+    return factory
+
+
+@pytest.mark.parametrize("select", [select_replay, select_live])
+async def test_nexus_routed_child_mounts_via_configured_remote_stream_source(select):
+    # Same bracket shape as _parent_one_child_turn, except C is Nexus-routed (nexus_endpoint set
+    # on its subagent_message_sent) — proving a configured remote_stream_source, not the default
+    # same-cluster WorkflowStreamClient path, is what mounts and merges its events correctly.
+    streams = {
+        "P": [
+            _ts("P", 1),
+            _ms("P", 1, child="C", child_turn=1, nexus_endpoint="echo-agent-nexus-endpoint"),
+            _rr("P", 1, child="C", child_turn=1),
+            _reply("P", 1),
+            _te("P", 1),
+        ],
+        "C": [
+            _ts("C", 1),
+            _tool("C", 1, "t1", start=True),
+            _tool("C", 1, "t1", start=False),
+            _reply("C", 1),
+            _te("C", 1),
+        ],
+    }
+    merged = await _run_merge(
+        streams,
+        root="P",
+        select=select,
+        remote_stream_source=_fake_remote_stream_source(streams),
+    )
+    assert [e.event.type for e in merged if e.agent_id == "C"] == [
+        AgentEventType.TURN_STARTED,
+        AgentEventType.TOOL_START,
+        AgentEventType.TOOL_END,
+        AgentEventType.REPLY,
+        AgentEventType.TURN_END,
+    ]
+    assert not [m for m in merged if m.event.type == AgentEventType.SUBAGENT_STREAM_UNAVAILABLE]
+    assert_valid_merge(merged, streams)
+
+
+@pytest.mark.parametrize("select", [select_replay, select_live])
+async def test_nexus_routed_child_without_configured_source_degrades_gracefully(select):
+    # Same scenario, but merge_stream is called with NO remote_stream_source at all — the
+    # engine falls back to the default same-cluster construction, which (there being no same-
+    # cluster stream for a Nexus-only task id) is immediately exhausted. The existing graceful-
+    # degradation path must absorb this exactly like any other unreadable child: release the
+    # close gate, let the parent's tail flow, and surface a subagent_stream_unavailable marker.
+    streams = {
+        "P": [
+            _ts("P", 1),
+            _ms("P", 1, child="C", child_turn=1, nexus_endpoint="echo-agent-nexus-endpoint"),
+            _rr("P", 1, child="C", child_turn=1),
+            _reply("P", 1),
+            _te("P", 1),
+        ],
+        # Deliberately no "C" entry: the default same-cluster WorkflowStreamClient path has
+        # nothing to find for a Nexus-only task id (this simulates that unreachability directly
+        # rather than merely leaving it unconsulted).
+    }
+    merged = await _run_merge(streams, root="P", select=select)  # no remote_stream_source
+    assert [e.event.type for e in merged if e.agent_id == "P"] == [
+        AgentEventType.TURN_STARTED,
+        AgentEventType.SUBAGENT_MESSAGE_SENT,
+        AgentEventType.SUBAGENT_REPLY_RECEIVED,
+        AgentEventType.REPLY,
+        AgentEventType.TURN_END,
+    ]
+    # No real turn detail from C — only the synthesized unavailable marker (itself stamped
+    # agent_id == subagent_id == "C", so it's excluded by type rather than by agent_id here).
+    assert not [
+        m
+        for m in merged
+        if m.agent_id == "C" and m.event.type != AgentEventType.SUBAGENT_STREAM_UNAVAILABLE
+    ]
+    markers = [m for m in merged if m.event.type == AgentEventType.SUBAGENT_STREAM_UNAVAILABLE]
+    assert len(markers) == 1 and markers[0].event.subagent_id == "C"

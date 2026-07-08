@@ -3,5 +3,6 @@ go 1.25.0
 use (
 	./agent_adapter/nexus_worker
 	./integration_tests
+	./subagent_adapter/nexus_worker
 	./ui_connector
 )

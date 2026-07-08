@@ -5,6 +5,7 @@
 # docs/internal/unified-subagent-event-stream.md for the full design; gates.py holds the load-bearing
 # happens-before invariants.
 
+from temporal_agent_harness.harness.stream_merge.cursor import StreamSource
 from temporal_agent_harness.harness.stream_merge.gates import (
     Gates,
     MountChild,
@@ -25,6 +26,7 @@ __all__ = [
     "select_replay",
     "SelectPolicy",
     "ShouldStop",
+    "StreamSource",
     "DEFAULT_STALL_GRACE_SECONDS",
     "Gates",
     "MountChild",

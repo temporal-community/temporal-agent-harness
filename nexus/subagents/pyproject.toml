@@ -1,0 +1,31 @@
+[project]
+name = "subagents"
+version = "0.1.0"
+description = "Nexus-brokered subagent support for the harness: subagents.transport (NexusTransport, the harness's SubagentTransport implemented over Nexus, against a KNOWN endpoint) and subagents.registry (dynamic discovery + self-registration via the agent registry, built on subagents.transport). Import the submodule you need directly; nothing here is re-exported from the top-level subagents package, so subagents.transport stays usable with zero dependency on the registry concept."
+requires-python = ">=3.11"
+dependencies = [
+    "nexus-rpc>=1.1.0",
+    "pydantic>=2.0",
+    "temporal-agent-harness",
+    "temporalio>=1.27.2",
+]
+
+[tool.uv.sources]
+temporal-agent-harness = { path = "../..", editable = true }
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["subagents*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=1.0",
+]

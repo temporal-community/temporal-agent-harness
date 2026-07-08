@@ -57,6 +57,7 @@ from temporalio.exceptions import ApplicationError
 
 from temporal_agent_harness.harness.agent_client import AgentClient
 from temporal_agent_harness.harness.agent_workflow import _discover_handlers
+from temporal_agent_harness.harness.subagent_transport import ChildWorkflowTransport
 
 # ---------------------------------------------------------------------------
 # Message models + probe workflows
@@ -915,54 +916,37 @@ def test_protocol_types_use_concrete_annotations():
             )
 
 
-def test_errored_subagent_turn_closes_bracket_on_actual_accepted_turn(offline_build):
-    """On an accepted-but-errored child turn, the parent closes the
-    [subagent_message_sent … subagent_reply_received] bracket on the child's ACTUAL accepted turn
-    number — which the activity threads through the error details — not a re-derived ``expected``.
+def test_publish_subagent_reply_received_closes_bracket_on_given_turn(offline_build):
+    """_publish_subagent_reply_received closes the [subagent_message_sent …
+    subagent_reply_received] bracket on whatever turn number it's given.
 
-    Keeps the close-gate key (``workflow_id``, ``subagent_turn``) matching the open marker by
-    construction, independent of the validator+enqueue invariant that makes them equal in practice.
-    """
+    In ``run_subagent_turn``, that's always the exact turn ``dispatch()`` confirmed — since the
+    ``SubagentTransport.dispatch``/``await_reply`` split, the parent always has the child's real
+    accepted turn number in hand from ``dispatch``'s own return value, so (unlike the old
+    combined-activity design) there's no more need to dig it out of an error's details."""
     runner = offline_build(AgentConfig())
     # Make a turn active so publish() has a stream context to publish against.
     runner._status.enqueue_message(
         AgentMessage(type="x", payload={}, expected_turn=1), "turn-1"
     )
     runner._status.start_next_turn()
-    inst = runner._status.register_subagent("aaaaaa-bbbbbb", "child-wf-1", "k")
+    inst = runner._status.register_subagent(
+        "aaaaaa-bbbbbb",
+        "child-wf-1",
+        "k",
+        transport=ChildWorkflowTransport(workflow_type="dummy", task_queue="dummy-q"),
+    )
 
-    # The activity raises with the child's ACTUAL accepted turn number (7) in the details —
-    # deliberately different from the ``expected``/default we pass (2), so the assertion proves we
-    # use the threaded value and not ``expected``.
-    err = ApplicationError(
-        "subagent turn failed",
-        {"subagent_turn": 7},
-        type="SubagentTurnError",
-        non_retryable=True,
-    )
-    accepted = runner._accepted_turn_from_error(err, default=2)
-    assert accepted == 7
-    runner._publish_subagent_reply_received(
-        inst, "run_script", accepted, outcome="error"
-    )
+    runner._publish_subagent_reply_received(inst, "run_script", 7, outcome="error")
 
     published = [c.args[0] for c in runner._events.publish.call_args_list]
     replies = [e for e in published if isinstance(e.event, SubagentReplyReceived)]
     assert len(replies) == 1
     rr = replies[0].event
-    assert rr.subagent_turn == 7  # the actual accepted turn, NOT the (wrong) expected=2
+    assert rr.subagent_turn == 7
     assert rr.outcome == "error"
     assert rr.workflow_id == "child-wf-1"
     assert rr.subagent_id == "aaaaaa-bbbbbb"
-    # The local turn counter advances off the same accepted turn.
-    assert accepted + 1 == 8
-
-
-def test_accepted_turn_from_error_falls_back_when_detail_absent():
-    """If an error carries no ``subagent_turn`` detail (older activity build / unexpected shape),
-    the parent falls back to the supplied ``default`` (``expected``) rather than failing."""
-    err = ApplicationError("no reply", type="SubagentNoReply", non_retryable=True)
-    assert AgentWorkflowRunner._accepted_turn_from_error(err, default=3) == 3
 
 
 # ---------------------------------------------------------------------------

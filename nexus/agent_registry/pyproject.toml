@@ -1,0 +1,27 @@
+[project]
+name = "agent-registry"
+version = "0.1.0"
+description = "Nexus-based directory agents register their capability with, so a parent agent can discover and invoke them as subagents."
+requires-python = ">=3.11"
+dependencies = [
+    "nexus-rpc>=1.1.0",
+    "pydantic>=2.0",
+    "temporalio>=1.27.2",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent_registry*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=1.0",
+]

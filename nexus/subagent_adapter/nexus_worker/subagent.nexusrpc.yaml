@@ -1,0 +1,203 @@
+nexusrpc: "1.0.0"
+
+services:
+  SubagentService:
+    description: "Fronts one harness agent as an A2A-shaped subagent (Task/Message/Artifact). task_id is caller-minted and doubles as the Temporal workflow id; sendMessage uses UpdateWithStartWorkflow (USE_EXISTING) so one call starts or continues a task. No AgentCard/capability op here — that's the registry layer's job."
+    operations:
+      sendMessage:
+        description: "Start-or-continue the task named by message.taskId. Returns immediately once accepted (state 'working') — poll pollTaskUpdates for the outcome."
+        input:
+          $ref: "#/types/SendMessageInput"
+        output:
+          $ref: "#/types/Task"
+      getTask:
+        description: "Point-in-time task status snapshot; doesn't consume a pollTaskUpdates cursor."
+        input:
+          $ref: "#/types/GetTaskInput"
+        output:
+          $ref: "#/types/Task"
+      pollTaskUpdates:
+        description: "Async op, delivers stream items as they're published. Delegates to the workflow's own stream-poll handler, so it can't report task state directly — caller derives it from the items (see turn_driver.py)."
+        input:
+          $ref: "#/types/PollTaskUpdatesInput"
+        output:
+          $ref: "#/types/PollTaskUpdatesOutput"
+      cancelTask:
+        description: "Best-effort cancel — maps to the harness's generic 'stop' operator command."
+        input:
+          $ref: "#/types/CancelTaskInput"
+        output:
+          $ref: "#/types/Task"
+
+types:
+  Part:
+    type: object
+    description: "One piece of a Message/Artifact. 'data' parts carry {handler, input} — our dispatch convention, not standard A2A."
+    properties:
+      kind:
+        type: string
+        description: "'text' | 'data'"
+      text:
+        type: string
+        description: "Present when kind == 'text'"
+      data:
+        type: string
+        description: "JSON-encoded object, present when kind == 'data'"
+    required:
+      - kind
+    additionalProperties: false
+
+  Message:
+    type: object
+    description: "parts[0] is always a 'data' part JSON-encoding {handler, input} — handler is the target @agent.accepts name."
+    properties:
+      role:
+        type: string
+        description: "'user' | 'agent'"
+      parts:
+        type: array
+        items:
+          $ref: "#/types/Part"
+      taskId:
+        type: string
+        description: "Caller-minted. Fresh id = new task; reuse = continue. Also the Temporal workflow id (via WorkflowIDPrefix)."
+      messageId:
+        type: string
+        description: "Disposable per-message correlation id, minted by the accepting workflow."
+    required:
+      - role
+      - parts
+      - taskId
+    additionalProperties: false
+
+  TaskStatus:
+    type: object
+    properties:
+      state:
+        type: string
+        description: "'submitted' | 'working' | 'input-required' | 'completed' | 'failed' | 'canceled'"
+      message:
+        $ref: "#/types/Message"
+    required:
+      - state
+    additionalProperties: false
+
+  Artifact:
+    type: object
+    properties:
+      name:
+        type: string
+      parts:
+        type: array
+        items:
+          $ref: "#/types/Part"
+    required:
+      - name
+      - parts
+    additionalProperties: false
+
+  Task:
+    type: object
+    properties:
+      id:
+        type: string
+      contextId:
+        type: string
+        description: "Always equal to id today — no separate context grouping yet."
+      status:
+        $ref: "#/types/TaskStatus"
+      artifacts:
+        type: array
+        items:
+          $ref: "#/types/Artifact"
+      streamHeadOffset:
+        type: integer
+        description: "Seed the first pollTaskUpdates cursor with this."
+      turnNumber:
+        type: integer
+        description: "Harness extension, not standard A2A — needed by the FIFO gate/stream merge. Only set on sendMessage's response."
+    required:
+      - id
+      - contextId
+      - status
+    additionalProperties: false
+
+  SendMessageInput:
+    type: object
+    properties:
+      message:
+        $ref: "#/types/Message"
+    required:
+      - message
+    additionalProperties: false
+
+  GetTaskInput:
+    type: object
+    properties:
+      taskId:
+        type: string
+    required:
+      - taskId
+    additionalProperties: false
+
+  PollTaskUpdatesInput:
+    type: object
+    properties:
+      taskId:
+        type: string
+      cursor:
+        type: integer
+      timeoutSeconds:
+        type: number
+        description: "How long the stream poll waits for new events before returning empty."
+    required:
+      - taskId
+      - cursor
+    additionalProperties: false
+
+  PollTaskUpdatesOutput:
+    type: object
+    description: "Mirrors WorkflowStream's PollResult wire format directly."
+    properties:
+      items:
+        type: array
+        items:
+          $ref: "#/types/StreamItem"
+      next_offset:
+        type: integer
+      more_ready:
+        type: boolean
+        description: "More items ready immediately (batch was capped)."
+      closed:
+        type: boolean
+        description: "The underlying agent workflow has completed."
+    required:
+      - items
+      - next_offset
+      - more_ready
+    additionalProperties: false
+
+  StreamItem:
+    type: object
+    description: "One WorkflowStream._log event. data is base64(proto Payload{...AgentEvent JSON})."
+    properties:
+      topic:
+        type: string
+      data:
+        type: string
+      offset:
+        type: integer
+    required:
+      - topic
+      - data
+      - offset
+    additionalProperties: false
+
+  CancelTaskInput:
+    type: object
+    properties:
+      taskId:
+        type: string
+    required:
+      - taskId
+    additionalProperties: false

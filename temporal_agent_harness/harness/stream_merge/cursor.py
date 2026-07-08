@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
 
 from temporalio.client import Client
@@ -28,6 +28,23 @@ from temporal_agent_harness.harness.agent_protocol import (
 _POLL_COOLDOWN = timedelta(milliseconds=10)
 
 _log = logging.getLogger(__name__)
+
+# How a Cursor gets its events for one mounted stream. Default subscribes to a same-cluster
+# WorkflowStream; a Nexus-routed subagent supplies a different one (merge.py's
+# ``remote_stream_source``) — Cursor doesn't care WHERE a stream lives, only how to iterate it.
+StreamSource = Callable[[Client, str, int], AsyncIterator[WorkflowStreamItem[AgentEvent]]]
+
+
+def _default_stream_source(
+    client: Client, workflow_id: str, from_offset: int
+) -> AsyncIterator[WorkflowStreamItem[AgentEvent]]:
+    """Same-cluster WorkflowStreamClient subscription — the default for root/ChildWorkflowTransport agents."""
+    return WorkflowStreamClient.create(client, workflow_id).subscribe(
+        topics=[TURN_EVENTS_TOPIC],
+        from_offset=from_offset,
+        result_type=AgentEvent,
+        poll_cooldown=_POLL_COOLDOWN,
+    )
 
 
 class Cursor:
@@ -89,14 +106,15 @@ class Cursor:
         mount_index: int,
         from_offset: int,
         skip_until_turn_id: str | None = None,
+        stream_source: StreamSource | None = None,
     ) -> "Cursor":
-        """Open a subscription to ``workflow_id`` from ``from_offset`` and wrap it as a cursor."""
-        events = WorkflowStreamClient.create(client, workflow_id).subscribe(
-            topics=[TURN_EVENTS_TOPIC],
-            from_offset=from_offset,
-            result_type=AgentEvent,
-            poll_cooldown=_POLL_COOLDOWN,
-        )
+        """Open a subscription to ``workflow_id`` from ``from_offset`` and wrap it as a cursor.
+
+        ``stream_source`` defaults to same-cluster; a Nexus-routed child with no
+        ``remote_stream_source`` configured just fails on first ``pull()``, absorbed by the
+        merge's existing graceful-degradation path."""
+        build = stream_source or _default_stream_source
+        events = build(client, workflow_id, from_offset)
         return cls(
             workflow_id=workflow_id,
             is_child=is_child,

@@ -1,0 +1,134 @@
+nexusrpc: "1.0.0"
+
+services:
+  AgentRegistryService:
+    description: "Directory service agents register their Nexus-facing capability with, and parent agents query to discover what's available. A directory only - discovered agents are driven directly via their own AgentService, never through the registry."
+    operations:
+      register_agent:
+        description: "An agent announces itself: its key, where to reach it (its own AgentService Nexus endpoint), and its capability (the same AcceptedFunction list agent_interface exposes)."
+        input:
+          $ref: "#/types/RegisterAgentInput"
+        output:
+          $ref: "#/types/RegisterAgentOutput"
+      deregister_agent:
+        description: "Remove an agent's directory entry. Idempotent."
+        input:
+          $ref: "#/types/DeregisterAgentInput"
+        output:
+          $ref: "#/types/DeregisterAgentOutput"
+      discover_agents:
+        description: "Return the full current directory - every registered agent's key, endpoint, description, and capability."
+        input:
+          $ref: "#/types/DiscoverAgentsInput"
+        output:
+          $ref: "#/types/DiscoverAgentsOutput"
+
+types:
+  AcceptedFunction:
+    type: object
+    description: "One @agent.accepts handler an agent exposes, described tool-style (mirrors harness AcceptedFunction)."
+    properties:
+      name:
+        type: string
+        description: "Handler name - the value to pass as msgType in sendAgentMessage."
+      description:
+        type: string
+        description: "Handler docstring describing when and how to use it."
+      parameters:
+        type: object
+        description: "JSON Schema for the handler's input model."
+      output:
+        type: object
+        description: "JSON Schema for the handler's return model."
+    required:
+      - name
+      - description
+      - parameters
+      - output
+    additionalProperties: false
+
+  RegisterAgentInput:
+    type: object
+    properties:
+      agent_key:
+        type: string
+        description: "Stable key other agents discover this agent by."
+      endpoint:
+        type: string
+        description: "This agent's own AgentService Nexus endpoint."
+      handlers:
+        type: array
+        items:
+          $ref: "#/types/AcceptedFunction"
+        description: "This agent's capability, supplied at registration time."
+      description:
+        type: string
+        description: "Human-readable summary shown to a discovering parent."
+    required:
+      - agent_key
+      - endpoint
+      - handlers
+    additionalProperties: false
+
+  RegisterAgentOutput:
+    type: object
+    properties:
+      registered:
+        type: boolean
+    required:
+      - registered
+    additionalProperties: false
+
+  DeregisterAgentInput:
+    type: object
+    properties:
+      agent_key:
+        type: string
+    required:
+      - agent_key
+    additionalProperties: false
+
+  DeregisterAgentOutput:
+    type: object
+    properties:
+      deregistered:
+        type: boolean
+    required:
+      - deregistered
+    additionalProperties: false
+
+  AgentRegistryEntry:
+    type: object
+    description: "One directory entry, as returned by discover_agents."
+    properties:
+      agent_key:
+        type: string
+      endpoint:
+        type: string
+      handlers:
+        type: array
+        items:
+          $ref: "#/types/AcceptedFunction"
+      description:
+        type: string
+    required:
+      - agent_key
+      - endpoint
+      - handlers
+    additionalProperties: false
+
+  DiscoverAgentsInput:
+    type: object
+    properties: {}
+    additionalProperties: false
+
+  DiscoverAgentsOutput:
+    type: object
+    properties:
+      agents:
+        type: array
+        items:
+          $ref: "#/types/AgentRegistryEntry"
+    required:
+      - agents
+    additionalProperties: false

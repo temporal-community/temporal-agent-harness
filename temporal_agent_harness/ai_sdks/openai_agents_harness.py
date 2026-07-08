@@ -94,6 +94,12 @@ _INSTALL_MESSAGE = (
 
 _HARNESS_TOOL_ATTRS = ("__agent_tool__", "__agent_activity_tool__")
 
+# Same string value as nexus/subagents' registry.toolset.SCHEMA_ATTR (duplicated, no import
+# dependency on the optional nexus packages). Dynamically-discovered tools have no real Python
+# type to introspect (schema came from Nexus, signature is `**kwargs`), so when a tool carries
+# this attribute, use its JSON schema directly instead of `agents.function_schema`.
+_DYNAMIC_SCHEMA_ATTR = "_nexus_schema"
+
 
 # ---------------------------------------------------------------------------
 # Live streaming: raw OpenAI Responses events -> harness turn vocabulary
@@ -349,7 +355,20 @@ def as_openai_agent_tool(
     harness tool lifecycle events.
     """
     _require_harness_tool(tool_callable)
-    function_schema, function_tool_cls = _agents_tool_symbols()
+    function_tool_cls = _agents_tool_symbols()[1]
+
+    dynamic_schema = getattr(tool_callable, _DYNAMIC_SCHEMA_ATTR, None)
+    if dynamic_schema is not None:
+        return _dynamic_schema_openai_tool(
+            runner,
+            tool_callable,
+            dynamic_schema,
+            injections=injections,
+            strict_json_schema=strict_json_schema,
+            function_tool_cls=function_tool_cls,
+        )
+
+    function_schema = _agents_tool_symbols()[0]
     schema = function_schema(tool_callable)
 
     async def on_invoke_tool(_ctx: Any, input: str) -> str:
@@ -399,6 +418,61 @@ def as_openai_agent_tool(
         name=schema.name,
         description=schema.description or "",
         params_json_schema=schema.params_json_schema,
+        on_invoke_tool=on_invoke_tool,
+        strict_json_schema=strict_json_schema,
+    )
+
+
+def _dynamic_schema_openai_tool(
+    runner: AgentWorkflowRunner,
+    tool_callable: Callable[..., Awaitable[Any]],
+    dynamic_schema: Mapping[str, Any],
+    *,
+    injections: Mapping[str, Any] | None,
+    strict_json_schema: bool,
+    function_tool_cls: type,
+) -> "Tool":
+    """Build a ``FunctionTool`` from a pre-fetched JSON schema instead of introspecting
+    ``tool_callable``'s signature (there's no Python type to introspect). The raw JSON input
+    passes straight through to ``runner.run_tool`` as kwargs; validation happens on the far side.
+
+    CAVEAT: ``dynamic_schema["parameters"]`` is a plain ``model_json_schema()`` output, missing
+    ``additionalProperties: false`` — pass ``strict_json_schema=False`` for dynamic toolsets."""
+    name = tool_callable.__name__
+    description = tool_callable.__doc__ or ""
+
+    async def on_invoke_tool(_ctx: Any, input: str) -> str:
+        try:
+            json_data = json.loads(input or "{}")
+        except Exception as exc:  # noqa: BLE001 - converted to workflow-visible error
+            raise ApplicationError(
+                f"Invalid JSON input for tool {name}: {input}",
+                type="InvalidToolInput",
+                non_retryable=True,
+            ) from exc
+        if not isinstance(json_data, dict):
+            raise ApplicationError(
+                f"Tool {name} expected a JSON object input, got {type(json_data).__name__}.",
+                type="InvalidToolInput",
+                non_retryable=True,
+            )
+
+        tool_call_id = getattr(_ctx, "tool_call_id", None)
+        if not isinstance(tool_call_id, str) or not tool_call_id:
+            tool_call_id = _new_tool_call_id(name)
+
+        try:
+            result = await runner.run_tool(
+                tool_call_id, tool_callable, injections=injections, **json_data
+            )
+        except Exception as exc:  # noqa: BLE001 - model-visible tool failure
+            return f"Tool {name!r} failed: {exc}"
+        return _stringify_tool_result(result)
+
+    return function_tool_cls(
+        name=name,
+        description=description,
+        params_json_schema=dynamic_schema["parameters"],
         on_invoke_tool=on_invoke_tool,
         strict_json_schema=strict_json_schema,
     )

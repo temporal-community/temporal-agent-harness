@@ -14,7 +14,7 @@ dependencies = [
 
 [tool.uv.sources]
 nexus-mcp = { path = "nexus_mcp", editable = true }
-temporal-agent-harness = { git = "ssh://git@github.com/temporal-community/temporal-agent-harness.git", branch = "main" }
+temporal-agent-harness = { git = "ssh://git@github.com/temporal-community/temporal-agent-harness.git", branch = "long/nexus-subagents" }
 
 [tool.setuptools.packages.find]
 where = ["."]

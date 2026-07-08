@@ -89,9 +89,9 @@ async def main() -> None:
     # session manager is hosted by its own worker, not here; it dispatches these agents
     # to this queue by name.
     #
-    # SubagentActivities closes over this worker's client so its run_subagent_turn activity can
-    # send updates to + stream the reply from the child MontyDynamicAgent workflow. It's the
-    # activity the subagent toolset's monty_run_script tool dispatches each turn.
+    # SubagentActivities closes over this worker's client so its submit/consume activities can
+    # send updates to + stream the reply from the child MontyDynamicAgent workflow. They're the
+    # activities the subagent toolset's monty_run_script tool dispatches each turn.
     subagents = SubagentActivities(client)
     worker = Worker(
         client,
@@ -103,13 +103,14 @@ async def main() -> None:
         ],
         # The travel-booking activities (the host functions, dispatched by Code Mode) plus the
         # Code Mode sandbox-stepping activities (shared by all three agents — every one runs its
-        # scripts through the harness Code Mode). Plus the subagent-turn activity (drives the
-        # script-runner child for MontyChatSubagentAgent). The Gemini interactions activity is
-        # registered by the plugin above.
+        # scripts through the harness Code Mode). Plus the two subagent-turn activities (drive
+        # the script-runner child for MontyChatSubagentAgent). The Gemini interactions activity
+        # is registered by the plugin above.
         activities=[
             *activities.ALL_ACTIVITIES,
             *CODE_MODE_ACTIVITIES,
-            subagents.run_subagent_turn,
+            subagents.submit_subagent_turn,
+            subagents.consume_subagent_turn,
         ],
     )
     print(

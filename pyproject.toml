@@ -80,8 +80,20 @@ dev = [
     "temporalio[opentelemetry]>=1.30.0",
     # Pydantic AI integration (the ai_sdks glue + its tests) — mirrors the `pydantic-ai` extra.
     "pydantic-ai-slim[temporal]>=2.13",
+    "agent-registry",  # tests/nexus/test_agent_registry.py exercises the real package, not a copy
+    "subagents",  # nexus/subagents' NexusTransport + registry discovery, exercised by nexus/tests
+    "subagent-gateway",  # the inbound A2A gateway, exercised by tests/nexus/test_subagent_gateway.py
     { include-group = "examples" },
 ]
+
+[tool.uv.sources]
+# Local path for now, while validating the package structure in-repo. Once pushed upstream,
+# external consumers (e.g. internal-ai-prototypes) point at the same package via
+# `{ git = "...", subdirectory = "nexus/agent_registry" }` instead — the dependency
+# declaration above doesn't change, only this source mapping would for an external consumer.
+agent-registry = { path = "nexus/agent_registry", editable = true }
+subagents = { path = "nexus/subagents", editable = true }
+subagent-gateway = { path = "nexus/subagent_gateway", editable = true }
 
 [build-system]
 requires = ["setuptools>=68"]
