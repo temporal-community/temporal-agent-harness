@@ -3,8 +3,10 @@ module github.com/temporalio/temporal-agent-harness/nexus/slack_connector
 go 1.25.4
 
 require (
+	github.com/aws/aws-lambda-go v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.28
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.43.0
+	github.com/awslabs/aws-lambda-go-api-proxy v0.16.2
 	github.com/nexus-rpc/sdk-go v0.6.0
 	github.com/slack-go/slack v0.23.1
 	github.com/stretchr/testify v1.11.1
@@ -16,7 +18,6 @@ require (
 
 require (
 	github.com/BurntSushi/toml v1.4.0 // indirect
-	github.com/aws/aws-lambda-go v1.47.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.42.1 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.27 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.30 // indirect
@@ -48,7 +49,7 @@ require (
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
-	golang.org/x/time v0.3.0 // indirect
+	golang.org/x/time v0.5.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/grpc v1.79.3 // indirect

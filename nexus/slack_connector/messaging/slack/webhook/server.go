@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -47,7 +48,36 @@ func NewServer(tc client.Client, taskQueue, signingSecret, botUserID string) *we
 }
 
 func (s *webhookServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Verify the Slack signature before routing. Slack signs every request with
+	// the app signing secret over the raw body, so we must read and verify the
+	// body here, then hand a fresh reader to the route handlers.
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+	if err := s.verifySignature(r.Header, body); err != nil {
+		log.Printf("webhook: signature verification failed: %v", err)
+		http.Error(w, "invalid request signature", http.StatusUnauthorized)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
 	s.mux.ServeHTTP(w, r)
+}
+
+// verifySignature validates the Slack request signature and timestamp using the
+// signing secret (HMAC-SHA256 over "v0:{timestamp}:{body}", with a 5-minute
+// timestamp window enforced by NewSecretsVerifier). See
+// https://api.slack.com/authentication/verifying-requests-from-slack.
+func (s *webhookServer) verifySignature(header http.Header, body []byte) error {
+	verifier, err := slackapi.NewSecretsVerifier(header, s.signingSecret)
+	if err != nil {
+		return err
+	}
+	if _, err := verifier.Write(body); err != nil {
+		return err
+	}
+	return verifier.Ensure()
 }
 
 func (s *webhookServer) handleEvents(w http.ResponseWriter, r *http.Request) {

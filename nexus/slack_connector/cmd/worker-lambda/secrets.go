@@ -3,12 +3,10 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"os"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/temporalio/temporal-agent-harness/nexus/slack_connector/internal/awssecrets"
 
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/contrib/aws/lambdaworker"
@@ -45,14 +43,13 @@ func resolveSecrets(o *lambdaworker.Options) (slackToken string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	awsCfg, err := config.LoadDefaultConfig(ctx)
+	fetcher, err := awssecrets.NewFetcher(ctx)
 	if err != nil {
-		return "", fmt.Errorf("load AWS config: %w", err)
+		return "", err
 	}
-	sm := secretsmanager.NewFromConfig(awsCfg)
 
 	if apiARN != "" {
-		key, err := getPlainSecret(ctx, sm, apiARN)
+		key, err := fetcher.GetPlain(ctx, apiARN)
 		if err != nil {
 			return "", err
 		}
@@ -65,24 +62,11 @@ func resolveSecrets(o *lambdaworker.Options) (slackToken string, err error) {
 	}
 
 	if slackARN != "" {
-		slackToken, err = getPlainSecret(ctx, sm, slackARN)
+		slackToken, err = fetcher.GetPlain(ctx, slackARN)
 		if err != nil {
 			return "", err
 		}
 	}
 
 	return slackToken, nil
-}
-
-// getPlainSecret fetches a plain-string secret value by ARN, erroring if the
-// secret is missing a string value.
-func getPlainSecret(ctx context.Context, sm *secretsmanager.Client, arn string) (string, error) {
-	out, err := sm.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{SecretId: &arn})
-	if err != nil {
-		return "", fmt.Errorf("get secret %q: %w", arn, err)
-	}
-	if out.SecretString == nil || *out.SecretString == "" {
-		return "", fmt.Errorf("secret %q has no plain-string value", arn)
-	}
-	return *out.SecretString, nil
 }

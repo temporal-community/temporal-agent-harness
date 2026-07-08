@@ -1,0 +1,194 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Slack webhook receiver (cmd/webhook-lambda) as a zip-based Go Lambda on the
+  provided.al2023 runtime, fronted by an API Gateway HTTP API. Slack posts signed
+  requests to the API; the Lambda verifies the signature and starts connector
+  workflows. See deploy/README-webhook-lambda.md for the runbook.
+
+Parameters:
+  ArtifactBucket:
+    Type: String
+    Description: S3 bucket holding the webhook-lambda.zip artifact.
+  ArtifactKey:
+    Type: String
+    Description: >-
+      S3 key of the zip artifact. Key it by git SHA (e.g. webhook-lambda/<sha>.zip)
+      so a stack update picks up new code — CloudFormation only redeploys when the
+      S3 key or object version changes.
+
+  FunctionName:
+    Type: String
+    Default: nexus-connector-slack-webhook
+
+  TemporalAddress:
+    Type: String
+    Description: Temporal Cloud gRPC endpoint, e.g. <region>.aws.api.temporal.io:7233
+  TemporalNamespace:
+    Type: String
+    Description: Temporal namespace, e.g. connector.<account-id>
+  TemporalTaskQueue:
+    Type: String
+    Default: nexus-connector-slack
+
+  TemporalApiKeySecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret (plain string) holding the Temporal Cloud API key.
+  SlackSigningSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret (plain string) holding the Slack signing secret.
+  SlackBotTokenSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret (plain string) holding the Slack bot token.
+  SecretsKmsKeyArn:
+    Type: String
+    Default: ''
+    Description: >-
+      Optional. ARN of the customer-managed KMS key that encrypts the secrets. Leave
+      empty for the default aws/secretsmanager key. If a CMK is used, the execution
+      role also needs kms:Decrypt or GetSecretValue fails at runtime with AccessDenied.
+
+  MemorySize:
+    Type: Number
+    Default: 256
+  Timeout:
+    Type: Number
+    Default: 15
+    Description: Seconds. The webhook only acks Slack + starts a workflow, so this is short.
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: {default: 'Artifact'}
+        Parameters: [ArtifactBucket, ArtifactKey, FunctionName]
+      - Label: {default: 'Temporal'}
+        Parameters: [TemporalAddress, TemporalNamespace, TemporalTaskQueue]
+      - Label: {default: 'Secrets'}
+        Parameters: [TemporalApiKeySecretArn, SlackSigningSecretArn, SlackBotTokenSecretArn, SecretsKmsKeyArn]
+      - Label: {default: 'Function tuning'}
+        Parameters: [MemorySize, Timeout, LogRetentionDays]
+
+Conditions:
+  HasKmsKey: !Not [!Equals [!Ref SecretsKmsKeyArn, '']]
+
+Resources:
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: read-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref TemporalApiKeySecretArn
+                  - !Ref SlackSigningSecretArn
+                  - !Ref SlackBotTokenSecretArn
+              # kms:Decrypt is required only when the secrets use a customer-managed KMS key.
+              - !If
+                - HasKmsKey
+                - Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: !Ref SecretsKmsKeyArn
+                - !Ref AWS::NoValue
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${FunctionName}'
+      RetentionInDays: !Ref LogRetentionDays
+
+  WebhookFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LogGroup
+    Properties:
+      FunctionName: !Ref FunctionName
+      Description: Slack webhook receiver — verifies signatures and starts connector workflows.
+      Runtime: provided.al2023
+      Handler: bootstrap
+      Architectures: [arm64] # MUST match LAMBDA_ARCH in the Makefile's build-webhook-lambda target.
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref ArtifactKey
+      Role: !GetAtt ExecutionRole.Arn
+      MemorySize: !Ref MemorySize
+      Timeout: !Ref Timeout
+      Environment:
+        Variables:
+          TEMPORAL_ADDRESS: !Ref TemporalAddress
+          TEMPORAL_NAMESPACE: !Ref TemporalNamespace
+          TEMPORAL_TASK_QUEUE: !Ref TemporalTaskQueue
+          TEMPORAL_API_KEY_SECRET_ARN: !Ref TemporalApiKeySecretArn
+          SLACK_SIGNING_SECRET_ARN: !Ref SlackSigningSecretArn
+          SLACK_BOT_TOKEN_SECRET_ARN: !Ref SlackBotTokenSecretArn
+
+  # --- API Gateway HTTP API (the public front door) ---
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${FunctionName}-api'
+      ProtocolType: HTTP
+
+  # Lambda proxy integration: forward the whole request to the function.
+  Integration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt WebhookFunction.Arn
+      IntegrationMethod: POST
+      PayloadFormatVersion: '2.0'
+
+  # Catch-all route: every request goes to the one integration; the handler's
+  # ServeMux does the /slack/events vs /interactions vs /commands routing.
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: $default
+      Target: !Sub 'integrations/${Integration}'
+
+  # $default stage with auto-deploy: clean URL with no stage prefix in the path,
+  # so the ServeMux paths line up (…/slack/events, not …/<stage>/slack/events).
+  DefaultStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+
+  # Allow API Gateway to invoke the function.
+  InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WebhookFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*'
+
+Outputs:
+  ApiEndpoint:
+    Description: Base HTTPS URL of the webhook API.
+    Value: !GetAtt HttpApi.ApiEndpoint
+  SlackEventsUrl:
+    Description: Slack Event Subscriptions request URL.
+    Value: !Sub '${HttpApi.ApiEndpoint}/slack/events'
+  SlackInteractionsUrl:
+    Description: Slack Interactivity request URL.
+    Value: !Sub '${HttpApi.ApiEndpoint}/slack/interactions'
+  SlackCommandsUrl:
+    Description: Slack slash-command request URL.
+    Value: !Sub '${HttpApi.ApiEndpoint}/slack/commands'
