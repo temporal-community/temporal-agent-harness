@@ -24,30 +24,25 @@ Gemini-backed activity**.
 - **"Long job done → ping me."** A long transcription completes → the agent calls a pluggable
   `notify(...)` tool (see `notifier.py`): in-app by default, or a real webhook out-of-band.
 
-## Setup
+## Run — zero to running
+
+From this directory:
 
 ```bash
-cp .env.example .env.local     # then set GEMINI_API_KEY
+just setup     # creates .env.local from the template (then set GEMINI_API_KEY in it)
+just dev       # builds the UI and runs the WHOLE stack in one terminal
 ```
 
-- `GEMINI_API_KEY` — required (transcription, summarization, and TTS all call Gemini).
-- `TEMPORAL_CONFIG_FILE` defaults to the repo's committed `temporal.local.toml` (a local dev
-  server). For your own server / Temporal Cloud, create a private `temporal.toml` and point
-  `TEMPORAL_CONFIG_FILE` at it (see `.env.example`).
-- Audio/TTS model names are overridable (`CHRONICLER_TRANSCRIBE_MODEL`, `CHRONICLER_TTS_MODEL`) —
-  availability varies by API access.
+`just dev` starts temporal + session-manager + server + worker together via [honcho](https://github.com/nickstenning/honcho), interleaving their logs; one Ctrl-C stops everything. The two workers auto-restart on code changes (`watchfiles`) and the server hot-reloads. It self-heals the env: if `.env.local` is missing it creates it, and it fails fast with a clear message if `GEMINI_API_KEY` isn't set. Then open <http://localhost:8000>.
 
-## Run
+- `GEMINI_API_KEY` — required. Get one at <https://aistudio.google.com/apikey>. The free tier has low daily quotas; enable billing for sustained use.
+- `TEMPORAL_CONFIG_FILE` defaults to the repo's committed `temporal.local.toml` (a local dev server). For your own server / Temporal Cloud, create a private `temporal.toml` and point `TEMPORAL_CONFIG_FILE` at it (see `.env.example`).
+- Bring your own Temporal? Run a subset: `honcho start session-manager server worker`.
+- Model names are overridable (`CHRONICLER_TRANSCRIBE_MODEL`, `CHRONICLER_SUMMARY_MODEL`, `CHRONICLER_TTS_MODEL`) — availability varies by API access.
 
-Each command in its own terminal, all from this directory:
+### Run processes individually (alternative)
 
-```bash
-just temporal          # 1. local Temporal dev server (skip if you bring your own)
-just session-manager   # 2. session-manager worker
-just server            # 3. FastAPI API + built Svelte UI  ->  http://localhost:8000
-just worker            # 4. the Chronicler agent
-just seed              # (optional) generate a short fake session recording via Gemini TTS
-```
+Each in its own terminal, all from this directory: `just temporal`, `just session-manager`, `just server`, `just worker`. `just seed` generates a sample recording from the CLI.
 
 You don't even need `just seed` — with the stack running, just **ask the agent** *"generate a
 sample session"* and it creates a short synthetic recording for you (the `generate_sample_session`
