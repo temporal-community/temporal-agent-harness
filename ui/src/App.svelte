@@ -52,7 +52,11 @@
       transcriptFilter = "model";
     } else {
       transcriptFilter =
-        localNodeId === "tool" || localNodeId === "approval" ? localNodeId : "all";
+        localNodeId.startsWith("tool:") || localNodeId === "tool-container"
+          ? "tool"
+          : localNodeId === "approval"
+            ? "approval"
+            : "all";
     }
   }
 
@@ -252,8 +256,8 @@
               run.executeOperatorCommand(name, arg, workflowId)}
             onNewSession={(workflowType) => run.startNewSession(workflowType)}
             onSelectSession={(sessionId) => run.selectSession(sessionId)}
-            onApproveTool={(toolId, approved, remember) =>
-              run.approveTool(toolId, approved, remember)}
+            onApproveTool={(workflowId, toolId, approved, remember) =>
+              run.approveTool(workflowId, toolId, approved, remember)}
           />
         {:else if rightPanelView === "latency"}
           <LatencyWaterfall

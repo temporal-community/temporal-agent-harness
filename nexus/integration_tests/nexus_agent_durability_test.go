@@ -28,6 +28,13 @@ import (
 
 const nexusAgentEndpoint = "test-nexus-agent-endpoint"
 
+// mockAgentWorkflowName/mockAgentWorkflowIDPrefix stand in for the values a real
+// deployment would set via handler.Config — the handler used to hardcode a single
+// agent's workflow name/ID prefix; now they're caller-supplied, so the test supplies
+// its own.
+const mockAgentWorkflowName = "QaAgent"
+const mockAgentWorkflowIDPrefix = "qa-agent-"
+
 // -- Tests --------------------------------------------------------------------
 
 func TestAgent_SendMessage_HandlerWorkerRestart(t *testing.T) {
@@ -134,7 +141,7 @@ func TestAgent_PollMessages_WorkflowCompleted(t *testing.T) {
 	defer handlerWorker.Stop()
 
 	const sessionID = "closed-sess"
-	agentWfID := "qa-agent-" + sessionID
+	agentWfID := mockAgentWorkflowIDPrefix + sessionID
 
 	run, err := temporalClient.ExecuteWorkflow(context.Background(), client.StartWorkflowOptions{
 		ID: "caller-closed-msg1", TaskQueue: callerTaskQueue,
@@ -165,7 +172,12 @@ func TestAgent_PollMessages_WorkflowCompleted(t *testing.T) {
 func startNexusHandlerWorker(t *testing.T, temporalClient client.Client, handlerTaskQueue, agentTaskQueue string) sdkworker.Worker {
 	t.Helper()
 	w := sdkworker.New(temporalClient, handlerTaskQueue, sdkworker.Options{DisableWorkflowWorker: true})
-	w.RegisterNexusService(h.NewAgentNexusService(agentTaskQueue))
+	w.RegisterNexusService(h.NewAgentNexusService(h.Config{
+		AgentTaskQueue:          agentTaskQueue,
+		WorkflowName:            mockAgentWorkflowName,
+		WorkflowIDPrefix:        mockAgentWorkflowIDPrefix,
+		IsMessageQueuingEnabled: true,
+	}))
 	require.NoError(t, w.Start())
 	return w
 }
@@ -173,7 +185,7 @@ func startNexusHandlerWorker(t *testing.T, temporalClient client.Client, handler
 func startFakeAgentWorkerInteg(t *testing.T, temporalClient client.Client, agentTaskQueue string) sdkworker.Worker {
 	t.Helper()
 	w := sdkworker.New(temporalClient, agentTaskQueue, sdkworker.Options{})
-	w.RegisterWorkflowWithOptions(mockQaAgentWorkflow, workflow.RegisterOptions{Name: h.AgentWorkflowName})
+	w.RegisterWorkflowWithOptions(mockQaAgentWorkflow, workflow.RegisterOptions{Name: mockAgentWorkflowName})
 	require.NoError(t, w.Start())
 	t.Cleanup(func() { w.Stop() })
 	return w
@@ -191,10 +203,17 @@ func startCallerWorkerInteg(t *testing.T, temporalClient client.Client, callerTQ
 
 // -- mockQaAgentWorkflow ------------------------------------------------------
 
+// mockAgentStartConfig mirrors the JSON shape the handler sends when starting the
+// agent workflow (handler.agentStartConfig is unexported, so we replicate its wire
+// shape here rather than depend on package internals).
+type mockAgentStartConfig struct {
+	IsMessageQueuingEnabled bool `json:"is_message_queuing_enabled"`
+}
+
 // mockQaAgentWorkflow mimics QaAgentWorkflow in Go so the handler can be tested
 // without a Python runtime. It handles send_agent_message updates and agent_status
 // queries, then blocks until the "fake-shutdown" signal arrives.
-func mockQaAgentWorkflow(ctx workflow.Context, cfg h.QaAgentConfig) error {
+func mockQaAgentWorkflow(ctx workflow.Context, cfg mockAgentStartConfig) error {
 	var currentTurn int
 
 	if err := workflow.SetQueryHandler(ctx, h.AgentStatusQuery, func() (h.AgentStatus, error) {
@@ -249,11 +268,12 @@ func callerWorkflow(ctx workflow.Context, input callerInput) (callerOutput, erro
 	opOpts := workflow.NexusOperationOptions{ScheduleToCloseTimeout: 60 * time.Second}
 
 	var sendOut h.SendMessageOutput
-	if err := nc.ExecuteOperation(ctx, h.AgentService.SendMessage, h.SendMessageInput{
+	if err := nc.ExecuteOperation(ctx, h.AgentService.SendAgentMessage, h.SendAgentMessageInput{
 		SessionID: input.SessionID,
-		Message:   input.Message,
+		MsgType:   "ask",
+		Payload:   fmt.Sprintf(`{"text":%q}`, input.Message),
 	}, opOpts).Get(ctx, &sendOut); err != nil {
-		return callerOutput{}, fmt.Errorf("sendMessage: %w", err)
+		return callerOutput{}, fmt.Errorf("sendAgentMessage: %w", err)
 	}
 	return callerOutput{TurnNumber: sendOut.TurnNumber}, nil
 }

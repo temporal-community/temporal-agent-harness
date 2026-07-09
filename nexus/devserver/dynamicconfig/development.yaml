@@ -5,7 +5,11 @@
 # manually-attached callbacks before the gRPC call is made. These flags enable the
 # server-side infrastructure that callback pattern depends on.
 #
-# Use with the custom Temporal server built via `make install-dev-server`.
+# This runs against Temporal server with some unreleased features, namely update-with-callback,
+# which are manually enabled below. These features already exist in the server, just
+# not fully rolled out.
+# 
+# TODO: remove these custom flags once fully rolled out.
 
 limit.maxIDLength:
   - value: 255
@@ -33,10 +37,4 @@ history.enableTransitionHistory:
 history.enableChasm:
   - value: true
 history.enableCHASMCallbacks:
-  - value: true
-
-# Standalone Nexus operation and activity support.
-nexusoperation.enableStandalone:
-  - value: true
-activity.enableStandalone:
   - value: true

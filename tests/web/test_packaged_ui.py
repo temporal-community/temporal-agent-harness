@@ -62,8 +62,9 @@ def test_packaged_ui_dist_contains_relative_vite_entrypoints() -> None:
 
 
 def test_just_server_app_serves_packaged_svelte_ui() -> None:
-    from examples.monty.app import app
+    from examples.app import create_app
 
+    app = create_app(ROOT / "examples" / "monty" / "agents.toml")
     client = TestClient(app)
 
     response = client.get("/")
