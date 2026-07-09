@@ -2,15 +2,13 @@
 // All sibling modules (agent_adapter/nexus_worker, slack_connector) are
 // resolved via the workspace (go.work) and published at the same repo path,
 // so go mod tidy works as long as the workspace is active.
-module github.com/temporalio/temporal-agent-harness/nexus/integration_tests
+module github.com/temporal-community/temporal-agent-harness/nexus/integration_tests
 
 go 1.25.0
 
 require (
 	github.com/nexus-rpc/sdk-go v0.6.0
 	github.com/stretchr/testify v1.11.1
-	github.com/temporalio/temporal-agent-harness/nexus/agent_adapter/nexus_worker v0.0.0-20260702161158-fe910fd096c2
-	github.com/temporalio/temporal-agent-harness/nexus/slack_connector v0.0.0-20260702161158-fe910fd096c2
 	go.temporal.io/api v1.62.3-0.20260330144107-1e2b1facde20
 	go.temporal.io/sdk v1.41.1
 	google.golang.org/protobuf v1.36.10
