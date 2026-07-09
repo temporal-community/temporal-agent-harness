@@ -3,8 +3,8 @@ package connector
 import (
 	"testing"
 
-	agentiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/agent"
 	"github.com/stretchr/testify/require"
+	agentiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/agent"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )

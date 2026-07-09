@@ -9,7 +9,7 @@ import (
 
 	slackapi "github.com/slack-go/slack"
 
-	msgiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging"
+	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging"
 )
 
 // ApprovalButtonValue is encoded in each Approve/Deny button's value field so the

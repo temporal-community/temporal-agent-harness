@@ -181,7 +181,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.13.0" },
     { name = "nexus-mcp", editable = "nexus_mcp" },
     { name = "starlette", specifier = ">=0.40.0" },
-    { name = "temporal-agent-harness", git = "ssh://git@github.com/temporalio/temporal-agent-harness.git?branch=main" },
+    { name = "temporal-agent-harness", git = "ssh://git@github.com/temporal-community/temporal-agent-harness.git?branch=main" },
     { name = "temporalio", specifier = ">=1.15.0" },
     { name = "uvicorn", specifier = ">=0.30.0" },
 ]
@@ -611,7 +611,7 @@ wheels = [
 [[package]]
 name = "temporal-agent-harness"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/temporalio/temporal-agent-harness.git?branch=main#5f70680f8ee6de22d889f038638f76c2daea90e7" }
+source = { git = "ssh://git@github.com/temporal-community/temporal-agent-harness.git?branch=main#5f70680f8ee6de22d889f038638f76c2daea90e7" }
 dependencies = [
     { name = "pydantic" },
     { name = "temporalio" },
