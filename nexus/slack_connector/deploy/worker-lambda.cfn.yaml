@@ -44,13 +44,11 @@ Parameters:
   TemporalApiKeySecretArn:
     Type: String
     Description: ARN of the Secrets Manager secret (plain string) holding the Temporal Cloud API key.
-  SlackBotTokenSecretArn:
+  SlackSecretArn:
     Type: String
-    Default: ''
     Description: >-
-      Optional. ARN of the Secrets Manager secret (plain string) holding the Slack
-      bot token. If empty, provide the token via the SLACK_BOT_TOKEN env var by
-      another means (e.g. set it on the function directly).
+      ARN of the Secrets Manager secret holding a JSON object of Slack values. The worker
+      reads the SLACK_BOT_TOKEN field.
   SecretsKmsKeyArn:
     Type: String
     Default: ''
@@ -81,12 +79,11 @@ Metadata:
       - Label: {default: 'Temporal'}
         Parameters: [TemporalAddress, TemporalNamespace, TemporalTaskQueue, WorkerDeploymentName, WorkerBuildId]
       - Label: {default: 'Secrets'}
-        Parameters: [TemporalApiKeySecretArn, SlackBotTokenSecretArn, SecretsKmsKeyArn]
+        Parameters: [TemporalApiKeySecretArn, SlackSecretArn, SecretsKmsKeyArn]
       - Label: {default: 'Function tuning'}
         Parameters: [MemorySize, Timeout, LogRetentionDays]
 
 Conditions:
-  HasSlackSecret: !Not [!Equals [!Ref SlackBotTokenSecretArn, '']]
   HasKmsKey: !Not [!Equals [!Ref SecretsKmsKeyArn, '']]
 
 Resources:
@@ -108,10 +105,9 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource: !If
-                  - HasSlackSecret
-                  - [!Ref TemporalApiKeySecretArn, !Ref SlackBotTokenSecretArn]
-                  - [!Ref TemporalApiKeySecretArn]
+                Resource:
+                  - !Ref TemporalApiKeySecretArn
+                  - !Ref SlackSecretArn
               # kms:Decrypt is required only when the secrets use a customer-managed KMS key.
               - !If
                 - HasKmsKey
@@ -149,7 +145,7 @@ Resources:
           WORKER_DEPLOYMENT_NAME: !Ref WorkerDeploymentName
           WORKER_BUILD_ID: !Ref WorkerBuildId
           TEMPORAL_API_KEY_SECRET_ARN: !Ref TemporalApiKeySecretArn
-          SLACK_BOT_TOKEN_SECRET_ARN: !If [HasSlackSecret, !Ref SlackBotTokenSecretArn, !Ref 'AWS::NoValue']
+          SLACK_SECRETS_ARN: !Ref SlackSecretArn
 
 Outputs:
   FunctionArn:

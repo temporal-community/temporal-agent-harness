@@ -6,6 +6,7 @@ package awssecrets
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -39,4 +40,22 @@ func (f *Fetcher) GetPlain(ctx context.Context, arn string) (string, error) {
 		return "", fmt.Errorf("secret %q has no plain-string value", arn)
 	}
 	return *out.SecretString, nil
+}
+
+// GetJSON fetches a secret whose value is a JSON object of string fields and
+// returns it as a map. Use this for a secret that bundles several values (e.g.
+// the Slack secret holding SLACK_SIGNING_SECRET, SLACK_BOT_TOKEN, ...).
+func (f *Fetcher) GetJSON(ctx context.Context, arn string) (map[string]string, error) {
+	out, err := f.sm.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{SecretId: &arn})
+	if err != nil {
+		return nil, fmt.Errorf("get secret %q: %w", arn, err)
+	}
+	if out.SecretString == nil || *out.SecretString == "" {
+		return nil, fmt.Errorf("secret %q has no string value", arn)
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(*out.SecretString), &m); err != nil {
+		return nil, fmt.Errorf("secret %q is not a JSON object of strings: %w", arn, err)
+	}
+	return m, nil
 }

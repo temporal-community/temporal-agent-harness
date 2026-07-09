@@ -23,8 +23,8 @@ resolved from `TEMPORAL_CONFIG_FILE`, then `temporal.toml` under
 | Variable | Purpose | Default |
 |---|---|---|
 | `TEMPORAL_API_KEY_SECRET_ARN` | ARN of a Secrets Manager secret (plain string) with the Temporal Cloud API key. When set, it's fetched at cold start and installed as API-key credentials with TLS on. | — |
-| `SLACK_BOT_TOKEN_SECRET_ARN` | ARN of a Secrets Manager secret (plain string) with the Slack bot token. Falls back to `SLACK_BOT_TOKEN` if unset. | — |
-| `SLACK_BOT_TOKEN` | Slack bot token, used only when `SLACK_BOT_TOKEN_SECRET_ARN` is unset (local/dev). | — |
+| `SLACK_SECRETS_ARN` | ARN of a Secrets Manager JSON secret; the `SLACK_BOT_TOKEN` field is read from it. Falls back to `SLACK_BOT_TOKEN` if unset. | — |
+| `SLACK_BOT_TOKEN` | Slack bot token, used only when `SLACK_SECRETS_ARN` is unset (local/dev). | — |
 | `TEMPORAL_ADDRESS` | Temporal frontend address | (envconfig default) |
 | `TEMPORAL_NAMESPACE` | Namespace | `connector` |
 | `TEMPORAL_TASK_QUEUE` | Task queue | `nexus-connector-slack` |

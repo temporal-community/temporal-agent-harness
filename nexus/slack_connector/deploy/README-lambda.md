@@ -18,9 +18,9 @@ binary's runtime behavior and config.
 
 ## Prerequisites
 
-- A **plain-string** Secrets Manager secret for the Temporal Cloud **API key** (required).
-  Optionally a second plain-string secret for the **Slack bot token** — recommended, but if
-  you skip it, set `SLACK_BOT_TOKEN` on the function another way. Note the ARNs.
+- A **plain-string** Secrets Manager secret for the Temporal Cloud **API key**, and the
+  **Slack JSON secret** — a secret whose value is a JSON object of Slack values; the worker
+  reads its `SLACK_BOT_TOKEN` field. Note both ARNs.
 - **Check how those secrets are encrypted.** If either uses a **customer-managed KMS key**
   (not the default `aws/secretsmanager` key), pass its ARN as `SecretsKmsKeyArn` so the
   execution role also gets `kms:Decrypt` — otherwise `GetSecretValue` fails at runtime with
@@ -41,7 +41,7 @@ export ARTIFACT_BUCKET=my-lambda-artifacts
 export SHA=$(git rev-parse --short HEAD)
 export NAMESPACE=connector.<account-id>
 export API_KEY_SECRET_ARN=arn:aws:secretsmanager:...:temporal-api-key
-export SLACK_SECRET_ARN=arn:aws:secretsmanager:...:slack-bot-token
+export SLACK_SECRET_ARN=arn:aws:secretsmanager:...:slack        # JSON: {"SLACK_BOT_TOKEN":"xoxb-...", ...}
 ```
 
 ## 1. Build & upload the artifact
@@ -71,7 +71,7 @@ aws cloudformation deploy \
     TemporalNamespace="$NAMESPACE" \
     WorkerBuildId="$SHA" \
     TemporalApiKeySecretArn="$API_KEY_SECRET_ARN" \
-    SlackBotTokenSecretArn="$SLACK_SECRET_ARN"
+    SlackSecretArn="$SLACK_SECRET_ARN"
     # Optional: SlackBotTokenSecretArn may be omitted (then set SLACK_BOT_TOKEN another way).
     # Optional: add SecretsKmsKeyArn=<cmk-arn> if the secrets use a customer-managed KMS key.
 

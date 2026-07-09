@@ -20,8 +20,10 @@ All five are created by `webhook-lambda.cfn.yaml`.
 
 ## Prerequisites
 
-- Three **plain-string** Secrets Manager secrets: Temporal Cloud **API key**, Slack **signing
-  secret** (Slack app → Basic Information), Slack **bot token**. Note the ARNs.
+- Two Secrets Manager secrets: a **plain-string** Temporal Cloud **API key**, and the **Slack
+  JSON secret** — a secret whose value is a JSON object of Slack values. The webhook reads its
+  `SLACK_SIGNING_SECRET` (request verification) and `SLACK_BOT_TOKEN` (bot user ID) fields.
+  Note both ARNs.
 - If those secrets use a **customer-managed KMS key**, pass its ARN as `SecretsKmsKeyArn`
   (adds `kms:Decrypt`); otherwise leave it empty.
 - An **S3 bucket** for the artifact; `aws` CLI; a Temporal Cloud namespace.
@@ -34,8 +36,7 @@ export ARTIFACT_BUCKET=my-lambda-artifacts
 export SHA=$(git rev-parse --short HEAD)
 export NAMESPACE=connector.<account-id>
 export API_KEY_SECRET_ARN=arn:aws:secretsmanager:...:temporal-api-key
-export SIGNING_SECRET_ARN=arn:aws:secretsmanager:...:slack-signing-secret
-export SLACK_SECRET_ARN=arn:aws:secretsmanager:...:slack-bot-token
+export SLACK_SECRET_ARN=arn:aws:secretsmanager:...:slack   # JSON: {"SLACK_SIGNING_SECRET":"...","SLACK_BOT_TOKEN":"xoxb-...", ...}
 ```
 
 ## 1. Build & upload
@@ -61,11 +62,10 @@ aws cloudformation deploy \
     TemporalAddress="$AWS_REGION.aws.api.temporal.io:7233" \
     TemporalNamespace="$NAMESPACE" \
     TemporalApiKeySecretArn="$API_KEY_SECRET_ARN" \
-    SlackSigningSecretArn="$SIGNING_SECRET_ARN" \
-    SlackBotTokenSecretArn="$SLACK_SECRET_ARN"
+    SlackSecretArn="$SLACK_SECRET_ARN"
     # Optional: add SecretsKmsKeyArn=<cmk-arn> if the secrets use a customer-managed KMS key.
-    # Cold-start tip: pass BotUserId=U0123ABC instead of SlackBotTokenSecretArn to skip the
-    # Slack auth.test call at cold start (which counts against Slack's 3s response budget).
+    # Cold-start tip: add BotUserId=U0123ABC to skip the Slack auth.test call at cold start
+    # (which counts against Slack's 3s response budget).
 ```
 
 Grab the Slack-facing URLs:

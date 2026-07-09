@@ -16,9 +16,11 @@ const (
 	// envAPIKeySecretARN names the env var holding the ARN of a Secrets Manager
 	// secret whose plain-string value is the Temporal Cloud API key.
 	envAPIKeySecretARN = "TEMPORAL_API_KEY_SECRET_ARN"
-	// envSlackTokenSecretARN names the env var holding the ARN of a Secrets
-	// Manager secret whose plain-string value is the Slack bot token.
-	envSlackTokenSecretARN = "SLACK_BOT_TOKEN_SECRET_ARN"
+	// envSlackSecretsARN names the env var holding the ARN of a Secrets Manager
+	// secret whose value is a JSON object of Slack values (SLACK_BOT_TOKEN, ...).
+	envSlackSecretsARN = "SLACK_SECRETS_ARN"
+	// keySlackBotToken is the field read from the Slack JSON secret.
+	keySlackBotToken = "SLACK_BOT_TOKEN"
 )
 
 // resolveSecrets sources sensitive configuration for the Lambda worker from AWS
@@ -26,16 +28,15 @@ const (
 //
 //   - If TEMPORAL_API_KEY_SECRET_ARN is set, the Temporal Cloud API key is fetched
 //     and installed as TLS-enabled API-key credentials on o.ClientOptions.
-//   - The Slack bot token comes from SLACK_BOT_TOKEN_SECRET_ARN (fetched) when set,
-//     otherwise from the SLACK_BOT_TOKEN env var.
+//   - If SLACK_SECRETS_ARN is set, the Slack bot token is read from the SLACK_BOT_TOKEN
+//     field of that JSON secret; otherwise it comes from the SLACK_BOT_TOKEN env var.
 //
-// Secret values are plain strings, fetched once per Lambda cold start. When no
-// secret ARNs are set, existing env/envconfig behavior is preserved so local and
-// dev-server runs still work.
+// Secrets are fetched once per Lambda cold start. When no secret ARNs are set,
+// existing env/envconfig behavior is preserved so local and dev-server runs still work.
 func resolveSecrets(o *lambdaworker.Options) (slackToken string, err error) {
 	slackToken = os.Getenv("SLACK_BOT_TOKEN")
 	apiARN := os.Getenv(envAPIKeySecretARN)
-	slackARN := os.Getenv(envSlackTokenSecretARN)
+	slackARN := os.Getenv(envSlackSecretsARN)
 	if apiARN == "" && slackARN == "" {
 		return slackToken, nil
 	}
@@ -62,10 +63,11 @@ func resolveSecrets(o *lambdaworker.Options) (slackToken string, err error) {
 	}
 
 	if slackARN != "" {
-		slackToken, err = fetcher.GetPlain(ctx, slackARN)
+		slack, err := fetcher.GetJSON(ctx, slackARN)
 		if err != nil {
 			return "", err
 		}
+		slackToken = slack[keySlackBotToken]
 	}
 
 	return slackToken, nil

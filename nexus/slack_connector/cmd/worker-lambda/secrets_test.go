@@ -11,7 +11,7 @@ import (
 // touches AWS or the client credentials.
 func TestResolveSecretsNoARNsUsesEnvToken(t *testing.T) {
 	t.Setenv(envAPIKeySecretARN, "")
-	t.Setenv(envSlackTokenSecretARN, "")
+	t.Setenv(envSlackSecretsARN, "")
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
 
 	var o lambdaworker.Options
