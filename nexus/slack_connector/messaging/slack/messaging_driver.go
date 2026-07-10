@@ -22,13 +22,16 @@ type ApprovalButtonValue struct {
 	Approved  bool   `json:"a"`
 }
 
-// parseChannel strips the provider prefix from a session ID (e.g. "slack:C12345" → "C12345").
+// parseChannel extracts the channel from a session ID. Sessions are
+// "provider:channel" or, when thread-scoped, "provider:channel:threadRoot"
+// (e.g. "slack:C12345" or "slack:C12345:1699.0001" → "C12345"). The channel is
+// always the second colon-delimited segment; a trailing thread root is ignored.
 func parseChannel(sessionID string) (string, error) {
-	_, ch, found := strings.Cut(sessionID, ":")
-	if !found || ch == "" {
-		return "", fmt.Errorf("invalid session ID %q: expected \"provider:id\" format", sessionID)
+	parts := strings.SplitN(sessionID, ":", 3)
+	if len(parts) < 2 || parts[1] == "" {
+		return "", fmt.Errorf("invalid session ID %q: expected \"provider:channel[:threadRoot]\" format", sessionID)
 	}
-	return ch, nil
+	return parts[1], nil
 }
 
 // Compile-time check that SlackPlatform implements MessagingPlatform.
