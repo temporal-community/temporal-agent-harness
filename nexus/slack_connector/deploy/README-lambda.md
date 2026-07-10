@@ -98,7 +98,7 @@ aws cloudformation deploy \
 export ROLE_ARN=$(aws cloudformation describe-stacks \
   --stack-name temporal-cloud-invoke-role --region "$AWS_REGION" \
   --query 'Stacks[0].Outputs[?OutputKey==`RoleARN`].OutputValue' --output text)
-export EXTERNAL_ID=''   # must match the template
+export EXTERNAL_ID='<your Temporal Cloud external ID>'   # tmprl-<uuid>; must match the role stack param
 ```
 
 ## 4. Register with Temporal Cloud

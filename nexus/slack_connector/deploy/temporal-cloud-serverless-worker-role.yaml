@@ -2,8 +2,8 @@
 #
 # This is Temporal's official Serverless Worker invocation-role template, copied verbatim
 # (the wci-lambda-invoke principal ARNs below are Temporal Cloud's invoker roles — do NOT edit them).
-# The only local change is a Default for AssumeRoleExternalId (generated as "tmprl-<uuid>"); override
-# it if you rotate the external ID. Whatever value is used here MUST also be given to Temporal Cloud
+# AssumeRoleExternalId is required (no default): pass your own Temporal Cloud external ID
+# (generated as "tmprl-<uuid>") at deploy time. The same value MUST also be given to Temporal Cloud
 # via `temporal worker deployment create-version --aws-lambda-assume-role-external-id`.
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Creates an IAM role that Temporal Cloud can assume to invoke multiple Lambda functions for Serverless Workers.
@@ -11,9 +11,10 @@ Description: Creates an IAM role that Temporal Cloud can assume to invoke multip
 Parameters:
   AssumeRoleExternalId:
     Type: String
-    Description: The External ID shared with Temporal Cloud (confused-deputy protection)
-    Default: ''
-    AllowedPattern: '[a-zA-Z0-9_+=,.@-]*'
+    Description: >-
+      The External ID shared with Temporal Cloud (confused-deputy protection).
+      Required — supply your own; do not commit a real value.
+    AllowedPattern: '[a-zA-Z0-9_+=,.@-]+'
     MinLength: 5
     MaxLength: 45
 
