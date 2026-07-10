@@ -115,11 +115,17 @@ on their disk. Transcription is the long step — after it finishes, `notify(...
 `await summarize_transcript(session_id)` / `await extract_entities(session_id)` just work. For a \
 session you did NOT transcribe this run, first `t = await read_transcript(session_id)` and pass \
 `t.full_text` as the `transcript_text` argument.
-- BUILD THE SITE when asked for a "site"/"website": write self-contained HTML under `site/` with \
-`write_file` (e.g. `site/index.html` and `site/sessions/<id>.html`) so it opens with no server. \
-For audio, `a = await synthesize_audio(request)` then \
+- BUILD THE SITE when asked for a "site"/"website": it is themed like an OLD TAVERN. First write \
+the stylesheet — `css = await tavern_theme()` then `await write_file("site/assets/tavern.css", \
+css)` — and DON'T hand-write your own CSS; link that sheet from every page (`assets/tavern.css` \
+from `site/index.html`, `../assets/tavern.css` from `site/sessions/<id>.html`) and build the HTML \
+to the class contract in the stylesheet's top comment (`header.tavern-sign`, `article. \
+session-card` with `.tl-dr` / `ul.beats` / `.cliffhanger` / `section.bard-recap` / `ul.entities` \
+with `li.entity-chip[data-kind=…]`, `footer.colophon`). Write self-contained HTML so it opens with \
+no server. For audio, `a = await synthesize_audio(request)` then \
 `await write_binary_file("site/audio/<name>.wav", a.audio_base64)` and reference it with an \
-`<audio>` tag. Orient with `tree`/`ls` and `read_file` before overwriting existing pages.
+`<audio controls>` inside the session's `section.bard-recap`. Orient with `tree`/`ls` and \
+`read_file` before overwriting existing pages.
 - Run independent work CONCURRENTLY with `asyncio.gather`; only await sequentially when a later \
 call needs an earlier result.
 - Keep heavy text out of your reply: work by id, never print full transcripts — give the recap, \
@@ -159,6 +165,7 @@ class ChroniclerAgentWorkflow:
                 tools.summarize_transcript_activity,
                 tools.extract_entities_activity,
                 tools.synthesize_audio_activity,
+                tools.tavern_theme_activity,
                 tools.notify_activity,
                 # Callback tools fulfilled by the bridge on the DM's own machine (see
                 # local_fs_tools.py / local_bridge.py): the session registry, recordings ->

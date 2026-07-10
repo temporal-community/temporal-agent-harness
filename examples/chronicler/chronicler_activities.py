@@ -475,6 +475,160 @@ async def synthesize_audio_activity(request: SynthesizeRequest) -> AudioArtifact
     )
 
 
+# A self-contained "old tavern" stylesheet for the generated campaign site. No external fonts or
+# assets (system serif stacks + CSS-drawn parchment/wood), so the site opens straight off disk with
+# no server or internet. The HTML the agent writes targets the documented class contract below.
+_TAVERN_CSS = """\
+/* Chronicler — "old tavern" theme. Self-contained: no external fonts/assets.
+   HTML contract (classes the pages should use):
+     header.tavern-sign  > h1 (tavern/site name) + p.campaign
+     main.ledger         > article.session-card (one per session)
+     .session-card       > h2 (title) + p.session-meta + p.tl-dr + ul.beats
+                           + p.cliffhanger + section.bard-recap (holds <audio>)
+                           + ul.entities > li.entity-chip[data-kind=npc|pc|location|item|faction|quest]
+     footer.colophon
+   On index.html link this as "assets/tavern.css"; from site/sessions/*.html use "../assets/tavern.css". */
+
+:root {
+  --parchment: #efe0bd;
+  --parchment-deep: #e3cf9f;
+  --ink: #3a2a17;
+  --ink-soft: #6b5334;
+  --wood: #3a2413;
+  --wood-light: #5a3a20;
+  --gold: #b4842b;
+  --wine: #7d2b25;
+  --shadow: rgba(38, 22, 8, 0.35);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 2rem 1rem 4rem;
+  color: var(--ink);
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  line-height: 1.6;
+  background-color: var(--parchment);
+  background-image:
+    radial-gradient(circle at 20% 15%, rgba(255, 250, 235, 0.6), transparent 45%),
+    radial-gradient(circle at 85% 80%, rgba(120, 80, 30, 0.18), transparent 55%),
+    repeating-linear-gradient(90deg, rgba(120, 85, 40, 0.04) 0 2px, transparent 2px 4px);
+}
+
+a { color: var(--wine); }
+
+.tavern-sign {
+  max-width: 820px;
+  margin: 0 auto 2.5rem;
+  padding: 1.6rem 1rem 1.9rem;
+  text-align: center;
+  color: var(--parchment);
+  background:
+    linear-gradient(180deg, var(--wood-light), var(--wood));
+  border: 3px solid var(--gold);
+  border-radius: 10px;
+  box-shadow: 0 10px 24px var(--shadow), inset 0 0 0 6px rgba(0, 0, 0, 0.15);
+}
+
+.tavern-sign h1 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3rem);
+  letter-spacing: 0.06em;
+  font-variant: small-caps;
+  color: var(--gold);
+  text-shadow: 0 2px 2px rgba(0, 0, 0, 0.5);
+}
+
+.tavern-sign h1::before,
+.tavern-sign h1::after { content: "\\2766"; color: var(--parchment); margin: 0 0.5em; opacity: 0.7; }
+
+.tavern-sign .campaign { margin: 0.3rem 0 0; font-style: italic; opacity: 0.9; }
+
+.ledger { max-width: 820px; margin: 0 auto; }
+
+.session-card {
+  position: relative;
+  margin: 0 0 2rem;
+  padding: 1.6rem 1.8rem;
+  background: linear-gradient(180deg, #f6ead0, var(--parchment-deep));
+  border: 1px solid var(--wood-light);
+  border-left: 6px solid var(--gold);
+  border-radius: 6px;
+  box-shadow: 0 6px 16px var(--shadow);
+}
+
+.session-card h2 {
+  margin: 0 0 0.2rem;
+  color: var(--wine);
+  font-size: 1.6rem;
+  border-bottom: 3px double var(--gold);
+  padding-bottom: 0.4rem;
+}
+
+.session-meta { margin: 0.2rem 0 1rem; font-style: italic; color: var(--ink-soft); font-size: 0.9rem; }
+.tl-dr { font-size: 1.08rem; }
+
+ul.beats { list-style: none; padding-left: 1.4rem; }
+ul.beats li { position: relative; margin: 0.25rem 0; }
+ul.beats li::before { content: "\\2694"; position: absolute; left: -1.4rem; color: var(--gold); }
+
+.cliffhanger {
+  margin-top: 1rem;
+  padding: 0.7rem 1rem;
+  font-style: italic;
+  background: rgba(125, 43, 37, 0.08);
+  border-left: 4px solid var(--wine);
+  border-radius: 0 4px 4px 0;
+}
+
+.bard-recap {
+  margin-top: 1.2rem;
+  padding: 1rem 1.1rem 1.1rem;
+  background: var(--wood);
+  color: var(--parchment);
+  border-radius: 6px;
+  border: 2px solid var(--gold);
+}
+.bard-recap h3 { margin: 0 0 0.6rem; font-variant: small-caps; letter-spacing: 0.05em; color: var(--gold); }
+.bard-recap h3::before { content: "\\266B"; margin-right: 0.5em; }
+.bard-recap audio { width: 100%; }
+
+ul.entities { list-style: none; padding: 0; margin: 1.1rem 0 0; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.entity-chip {
+  padding: 0.2rem 0.7rem;
+  font-size: 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--wood-light);
+  background: rgba(180, 132, 43, 0.16);
+}
+.entity-chip[data-kind="npc"]      { background: rgba(125, 43, 37, 0.16); }
+.entity-chip[data-kind="pc"]       { background: rgba(60, 100, 60, 0.18); }
+.entity-chip[data-kind="location"] { background: rgba(60, 90, 130, 0.16); }
+.entity-chip[data-kind="item"]     { background: rgba(180, 132, 43, 0.22); }
+.entity-chip[data-kind="faction"]  { background: rgba(90, 58, 32, 0.20); }
+.entity-chip[data-kind="quest"]    { background: rgba(110, 70, 130, 0.16); }
+
+.colophon { max-width: 820px; margin: 2.5rem auto 0; text-align: center; font-style: italic; color: var(--ink-soft); }
+.colophon::before { content: "\\2766"; color: var(--gold); margin-right: 0.5em; }
+"""
+
+
+@agent.activity_tool_defn(
+    name="tavern_theme",
+    activity_config=ActivityConfig(start_to_close_timeout=_QUICK_TIMEOUT),
+    inherently_safe=True,
+)
+async def tavern_theme_activity() -> str:
+    """Return a self-contained 'old tavern' CSS stylesheet for the campaign site (aged parchment,
+    dark wood, candlelight gold, wine-red — system fonts only, so it opens straight off disk).
+    Write it to `site/assets/tavern.css` with `write_file`, link it from every page, and build the
+    HTML to the class contract in the stylesheet's top comment (header.tavern-sign, article.
+    session-card with .tl-dr / ul.beats / .cliffhanger / section.bard-recap / ul.entities, etc.).
+    Use this instead of hand-writing CSS so the whole site looks consistent."""
+    return _TAVERN_CSS
+
+
 @agent.activity_tool_defn(
     name="notify",
     activity_config=ActivityConfig(start_to_close_timeout=_QUICK_TIMEOUT),
@@ -499,6 +653,7 @@ ALL_ACTIVITIES = [
         extract_entities_activity,
         answer_question_activity,
         synthesize_audio_activity,
+        tavern_theme_activity,
         notify_activity,
     )
 ]
