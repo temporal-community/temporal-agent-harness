@@ -104,13 +104,16 @@ func (s *webhookServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	case slackevents.CallbackEvent:
 		if ev, ok := evt.InnerEvent.Data.(*slackevents.MessageEvent); ok {
-			if ev.BotID != "" {
-				return
+			// Ignore the bot's own messages (including its streamed replies, which
+			// Slack echoes back as events) and any message that doesn't @-mention
+			// the bot. These are expected non-actions — but we must still ack with
+			// 200 below, never bare-return: the Lambda proxy adapter treats an
+			// unwritten status code as an error ("Status code not set on
+			// response"), which surfaces to Slack as a 5xx and triggers retries.
+			if ev.BotID == "" &&
+				(s.botUserID == "" || strings.Contains(ev.Text, "<@"+s.botUserID+">")) {
+				s.signalIncomingMessage(r.Context(), ev)
 			}
-			if s.botUserID != "" && !strings.Contains(ev.Text, "<@"+s.botUserID+">") {
-				return
-			}
-			s.signalIncomingMessage(r.Context(), ev)
 		}
 	}
 	w.WriteHeader(http.StatusOK)
