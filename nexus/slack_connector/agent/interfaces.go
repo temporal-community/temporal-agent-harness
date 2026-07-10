@@ -28,6 +28,10 @@ type IncomingMessage struct {
 	Sender    string
 	Text      string
 	Timestamp string
+	// ThreadID is the thread root the reply should be posted under: the thread's
+	// parent ts for a threaded reply, or the message's own ts for a top-level
+	// message (which starts a new thread). Also scopes the agent session.
+	ThreadID string
 }
 
 // SlashCommand carries a slash command invocation from the platform.
@@ -61,7 +65,7 @@ type ConnectorWorkflowInput struct {
 // which interaction sub-field is set.
 func (i ConnectorWorkflowInput) ThreadID() string {
 	if i.Message != nil {
-		return i.Message.Timestamp
+		return i.Message.ThreadID
 	}
 	if i.Slash != nil {
 		return i.Slash.ThreadID

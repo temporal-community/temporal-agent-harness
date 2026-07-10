@@ -78,7 +78,10 @@ func main() {
 	defer tc.Close()
 
 	taskQueue := getenvOr("TEMPORAL_TASK_QUEUE", "nexus-connector-slack")
-	server := slackwebhook.NewServer(tc, taskQueue, signingSecret, botUserID)
+	// Must match the adapter's AGENT_WORKFLOW_ID_PREFIX so the webhook can find a
+	// thread's existing agent session (for mention-free in-thread continuation).
+	agentWFPrefix := getenvOr("AGENT_WORKFLOW_ID_PREFIX", "agent-")
+	server := slackwebhook.NewServer(tc, taskQueue, signingSecret, botUserID, agentWFPrefix)
 
 	// Adapt the net/http handler to API Gateway HTTP API (payload v2) events.
 	lambda.Start(httpadapter.NewV2(server).ProxyWithContext)
