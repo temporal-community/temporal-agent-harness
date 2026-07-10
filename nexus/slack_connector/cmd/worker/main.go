@@ -23,6 +23,7 @@ const (
 
 type flags struct {
 	slackBotToken      string
+	microsoftTenantID  string
 	microsoftAppID     string
 	microsoftAppPass   string
 	teamsServiceURL    string
@@ -39,6 +40,7 @@ func ensureFlags() *flags {
 	}
 
 	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
+	microsoftTenantID := os.Getenv("MICROSOFT_TENANT_ID")
 	microsoftAppID := os.Getenv("MICROSOFT_APP_ID")
 	microsoftAppPass := os.Getenv("MICROSOFT_APP_PASSWORD")
 	teamsServiceURL := os.Getenv("TEAMS_SERVICE_URL")
@@ -49,6 +51,9 @@ func ensureFlags() *flags {
 			log.Fatal("SLACK_BOT_TOKEN is required")
 		}
 	case platformTeams:
+		if microsoftTenantID == "" {
+			log.Fatal("MICROSOFT_TENANT_ID is required")
+		}
 		if microsoftAppID == "" {
 			log.Fatal("MICROSOFT_APP_ID is required")
 		}
@@ -73,6 +78,7 @@ func ensureFlags() *flags {
 	}
 	return &flags{
 		slackBotToken:      slackBotToken,
+		microsoftTenantID:  microsoftTenantID,
 		microsoftAppID:     microsoftAppID,
 		microsoftAppPass:   microsoftAppPass,
 		teamsServiceURL:    teamsServiceURL,
@@ -120,7 +126,7 @@ func newMessagingPlatform(flags *flags) msgiface.MessagingPlatform {
 		return slack.NewSlackPlatform(bot.Client, bot.TeamID)
 
 	case platformTeams:
-		bot, err := teams.NewTeamsBot(flags.microsoftAppID, flags.microsoftAppPass)
+		bot, err := teams.NewTeamsBot(flags.microsoftTenantID, flags.microsoftAppID, flags.microsoftAppPass)
 		if err != nil {
 			log.Fatalf("Failed to initialise Teams bot: %v", err)
 		}

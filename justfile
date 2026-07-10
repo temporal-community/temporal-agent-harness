@@ -111,10 +111,11 @@ slack-connector:
     go run ./cmd/worker/
 
 # Run the Teams connector worker. Safe to run multiple instances.
-# Requires: MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD
+# Requires: MICROSOFT_TENANT_ID, MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD
 teams-connector:
     cd "{{nexus_dir}}/slack_connector" && \
     MESSAGING_PLATFORM=teams \
+    MICROSOFT_TENANT_ID="${MICROSOFT_TENANT_ID}" \
     MICROSOFT_APP_ID="${MICROSOFT_APP_ID}" \
     MICROSOFT_APP_PASSWORD="${MICROSOFT_APP_PASSWORD}" \
     TEAMS_SERVICE_URL="${TEAMS_SERVICE_URL:-}" \
@@ -136,9 +137,13 @@ slack-webhook:
     go run ./cmd/webhook/
 
 # Run the Teams webhook server.
+# Requires: MICROSOFT_TENANT_ID, MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD
 teams-webhook:
     cd "{{nexus_dir}}/slack_connector" && \
     MESSAGING_PLATFORM=teams \
+    MICROSOFT_TENANT_ID="${MICROSOFT_TENANT_ID}" \
+    MICROSOFT_APP_ID="${MICROSOFT_APP_ID}" \
+    MICROSOFT_APP_PASSWORD="${MICROSOFT_APP_PASSWORD}" \
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \

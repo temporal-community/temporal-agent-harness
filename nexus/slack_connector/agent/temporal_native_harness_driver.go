@@ -75,9 +75,9 @@ func turnEventToDelta(e turnEvent) *agentDelta {
 	case "tool_start":
 		return &agentDelta{Text: "\n_" + e.ToolName + "..._"}
 	case "tool_end":
-		return &agentDelta{Text: " ✅\n"}
+		return &agentDelta{Text: " ✅\n\n"}
 	case "tool_error":
-		return &agentDelta{Text: " ❌ Error: " + e.Message + "_\n"}
+		return &agentDelta{Text: "\n❌ Error: " + e.Message + "\n\n"}
 	case "reply":
 		// Text was already fully streamed via reply_delta events; this just signals completion.
 		return &agentDelta{IsFinal: true}

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultTokenURL = "https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token"
+	tokenURLFormat  = "https://login.microsoftonline.com/%s/oauth2/v2.0/token"
 	defaultScope    = "https://api.botframework.com/.default"
 	tokenExpirySkew = time.Minute
 )
@@ -33,8 +33,12 @@ type TeamsBot struct {
 	expiresAt   time.Time
 }
 
-// NewTeamsBot creates a TeamsBot from Microsoft app credentials.
-func NewTeamsBot(appID, appPassword string) (*TeamsBot, error) {
+// NewTeamsBot creates a TeamsBot from Microsoft tenant and app credentials.
+func NewTeamsBot(tenantID, appID, appPassword string) (*TeamsBot, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return nil, errors.New("Microsoft tenant ID is required")
+	}
 	appID = strings.TrimSpace(appID)
 	if appID == "" {
 		return nil, errors.New("Microsoft app ID is required")
@@ -46,7 +50,7 @@ func NewTeamsBot(appID, appPassword string) (*TeamsBot, error) {
 		Client:      http.DefaultClient,
 		AppID:       appID,
 		appPassword: appPassword,
-		tokenURL:    defaultTokenURL,
+		tokenURL:    fmt.Sprintf(tokenURLFormat, url.PathEscape(tenantID)),
 		scope:       defaultScope,
 	}, nil
 }
