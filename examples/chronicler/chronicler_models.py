@@ -34,8 +34,9 @@ ArtifactKind = Literal["recap", "intro", "custom"]
 
 
 class SessionRef(BaseModel):
-    """A recorded session in the archive. ``audio_path`` is worker-local; the model never needs
-    it — it addresses sessions by ``session_id`` and the activities resolve the file."""
+    """A recorded session in the archive. The audio lives on the USER's machine (the worker has no
+    disk); the model addresses sessions by ``session_id`` and the local bridge resolves the file.
+    ``transcribed`` reflects whether a transcript has been persisted on the user's machine."""
 
     session_id: str
     campaign_id: str
@@ -54,11 +55,38 @@ class SessionList(BaseModel):
 
 
 class IngestResult(BaseModel):
-    """Result of scanning the sessions/ directory for audio and updating the registry."""
+    """Result of scanning the user's local recordings for audio and updating the registry."""
 
     added: list[str]
     already_registered: int
     sessions: list[SessionRef]
+
+
+# ---------------------------------------------------------------------------
+# Audio transfer between the user's machine and the stateless worker
+# ---------------------------------------------------------------------------
+# The worker never touches disk. Recordings live on the user's machine; the local bridge uploads
+# one to the Gemini Files API and hands back this reference, which the worker transcribes from —
+# so raw audio bytes never travel through the worker.
+
+
+class GeminiFileRef(BaseModel):
+    """A handle to a recording the local bridge uploaded to the Gemini Files API. The worker
+    transcribes from this (re-fetching by ``name``) without ever holding the audio bytes. The
+    bridge waits for the file to reach ACTIVE before returning, so the worker can use it directly."""
+
+    name: str
+    uri: str
+    mime_type: str
+
+
+class SampleRecording(BaseModel):
+    """A freshly synthesized sample recording, returned as bytes (base64 WAV) for the local bridge
+    to save on the user's machine — the worker keeps nothing. ``title`` seeds the session title."""
+
+    title: str
+    audio_base64: str
+    script: str
 
 
 # ---------------------------------------------------------------------------
@@ -74,9 +102,10 @@ class TranscriptSegment(BaseModel):
 
 
 class Transcript(BaseModel):
-    """The full transcript. Potentially large — fetched deliberately with ``get_transcript``.
-    Most orchestration works off :class:`TranscriptMeta` and addresses the transcript by id so
-    the full text never round-trips through the model's context."""
+    """The full transcript. Potentially large — it is persisted on the user's machine (via the
+    ``save_transcript`` callback) and re-read with ``read_transcript`` when needed. Most
+    orchestration works off :class:`TranscriptMeta` so the full text never round-trips through the
+    model's context."""
 
     session_id: str
     model: str
@@ -144,14 +173,15 @@ class SynthesizeRequest(BaseModel):
 
 
 class AudioArtifact(BaseModel):
-    """A synthesized clip. ``audio_path`` is worker-local (also offloaded via the large-payload
-    codec); the UI/agent surface it by ``artifact_id``/path rather than shipping raw bytes."""
+    """A synthesized clip, returned as bytes (base64 WAV). The worker has no disk, so the agent
+    writes these bytes onto the user's machine (e.g. into the static site) via a callback tool
+    rather than the worker saving a file. Clips are short (recaps/intros), so base64 is fine."""
 
     artifact_id: str
     kind: ArtifactKind
     voice: str
     script_text: str
-    audio_path: str
+    audio_base64: str
     duration_s: float
 
 
@@ -182,9 +212,14 @@ class NotificationResult(BaseModel):
 
 
 class ScribeTask(BaseModel):
-    """Tell a SessionScribe which session to process (transcribe + summarize + extract)."""
+    """Tell a SessionScribe which session to process (transcribe + summarize + extract).
+
+    ``file_ref`` is the Gemini upload the CONDUCTOR obtained for this session's recording (via the
+    ``upload_recording`` callback on its own machine-facing bridge) and threads down to the child —
+    the scribe is a child workflow the bridge can't reach, so the parent supplies the audio handle."""
 
     session_id: str
+    file_ref: GeminiFileRef
 
 
 class SessionDigest(BaseModel):

@@ -1,34 +1,41 @@
-"""Durable activity-backed tools for the Chronicler agent — real Gemini audio work.
+"""Durable activity-backed tools for the Chronicler agent — real Gemini audio work, NO local disk.
 
 Each tool is an ``@agent.activity_tool_defn``: the decorated name is the in-workflow dispatcher
 the workflow calls (via ``run_tool``); ``agent.tool_activity(tool)`` returns the activity body the
-worker registers (see ``ALL_ACTIVITIES``). Because they run as Temporal activities on the worker
-— outside the workflow sandbox, with no determinism constraints — they call the ``google.genai``
-SDK directly. The workflow never touches Gemini for audio; it just orchestrates these durable
-calls (via a Code Mode script the model writes).
+worker registers (see ``ALL_ACTIVITIES``). Because they run as Temporal activities on the worker —
+outside the workflow sandbox, no determinism constraints — they call the ``google.genai`` SDK
+directly. The workflow never touches Gemini for audio; it just orchestrates these durable calls
+(via a Code Mode script the model writes, or the SessionScribe subagent).
 
-Design choices that matter:
-  * **Address heavy data by id, not by value.** ``transcribe_session`` caches the full transcript
-    worker-side and returns a lightweight :class:`TranscriptMeta`; ``summarize_transcript`` /
-    ``extract_entities`` read the cached transcript by ``session_id``. So a multi-hour transcript
-    never round-trips through the model's context or a tool-result string.
-  * **The same pydantic models are the Gemini response schema AND the tool return type.** Gemini
-    structured output is asked to fill these models, and the tool returns them — one typed shape
-    end to end.
-  * **Transcription heartbeats.** It's the long job; it heartbeats while the model call is in
-    flight so a multi-minute transcription isn't mistaken for a stalled activity.
+**Stateless worker.** These activities write NOTHING to the worker's filesystem — imagine the
+worker as an ephemeral k8s pod. All durable state (recordings, the session registry, transcripts,
+synthesized audio, the static site) lives on the USER's machine and is reached through callback
+tools fulfilled by the local bridge (see ``local_fs_tools.py`` / ``local_bridge.py``). So:
+
+  * **Recordings** are uploaded to the Gemini Files API by the bridge; ``transcribe_recording``
+    takes that :class:`GeminiFileRef` and transcribes from it — raw audio never reaches the worker.
+  * **Synthesized audio** is returned as bytes (base64 WAV); the agent writes it onto the user's
+    machine via a callback. The worker does not save a file.
+  * **Transcripts** are persisted on the user's machine (``save_transcript`` callback). A transient
+    in-process cache (:data:`_TRANSCRIPTS`) is kept only as a same-worker optimization so
+    ``summarize``/``extract``/``answer`` can address a just-produced transcript by id; it is memory,
+    not disk, and the user's machine remains the source of truth. Those tools also accept the
+    transcript text directly, so a cold worker can be fed the transcript re-read from the user's disk.
+
+The same pydantic models are the Gemini response schema AND the tool return type. Transcription
+heartbeats — it's the long job.
 
 No ``from __future__ import annotations`` — these modules cross Temporal's pydantic converter and
 stringized annotations trip its TypeAdapter build.
 """
 
 import asyncio
-import json
+import base64
+import io
 import os
 import uuid
 import wave
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import timedelta
 from typing import Awaitable, TypeVar
 
 from google import genai
@@ -44,15 +51,13 @@ from .chronicler_models import (
     AudioArtifact,
     CampaignEntities,
     Entity,
-    IngestResult,
+    GeminiFileRef,
     NotificationResult,
     NotifyRequest,
-    SessionList,
-    SessionRef,
+    SampleRecording,
     SessionSummary,
     SynthesizeRequest,
     Transcript,
-    TranscriptMeta,
     TranscriptSegment,
 )
 from .notifier import get_notifier
@@ -68,13 +73,9 @@ TTS_MODEL = os.environ.get("CHRONICLER_TTS_MODEL", "gemini-2.5-flash-preview-tts
 _TRANSCRIBE_TIMEOUT = timedelta(minutes=20)
 _QUICK_TIMEOUT = timedelta(minutes=3)
 
-# --- On-disk archive + worker-side caches -----------------------------------------------------
-SESSIONS_DIR = Path(__file__).parent / "sessions"
-REGISTRY_PATH = SESSIONS_DIR / "sessions.json"
-ARTIFACTS_DIR = SESSIONS_DIR / "artifacts"
-
-# Full transcripts, cached by session_id so heavy text stays worker-side and is addressed by id.
-# In-process for the demo's lifetime — fine for a single-worker prototype (mirrors Monty's store).
+# Full transcripts, cached by session_id so summarize/extract/answer can address a just-produced
+# transcript by id without re-sending the text. In-PROCESS only (memory, never disk) — a same-worker
+# optimization; the user's machine is the durable source of truth (see the module docstring).
 _TRANSCRIPTS: dict[str, Transcript] = {}
 
 T = TypeVar("T")
@@ -96,47 +97,6 @@ def _client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
-# Audio containers Gemini can transcribe. Used to discover recordings in the sessions/ dir.
-_AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".aiff", ".aif"}
-
-
-def _load_records() -> list[dict]:
-    """Read the raw ordered list of session records from the registry (empty if none)."""
-    if not REGISTRY_PATH.exists():
-        return []
-    return json.loads(REGISTRY_PATH.read_text()).get("sessions", [])
-
-
-def _write_records(records: list[dict]) -> None:
-    """Write the registry atomically (temp file + rename) so a concurrent read can't see a
-    half-written file."""
-    REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = REGISTRY_PATH.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps({"sessions": records}, indent=2) + "\n")
-    os.replace(tmp, REGISTRY_PATH)
-
-
-def _load_registry() -> dict[str, dict]:
-    """Read the session archive registry (session_id -> record). Empty if none seeded yet."""
-    return {rec["session_id"]: rec for rec in _load_records()}
-
-
-def _prettify(stem: str) -> str:
-    """Turn a filename stem into a human title, e.g. 'the_black_bell-02' -> 'The Black Bell 02'."""
-    return " ".join(w for w in stem.replace("-", " ").replace("_", " ").split()).title()
-
-
-def _session_ref(rec: dict) -> SessionRef:
-    return SessionRef(
-        session_id=rec["session_id"],
-        campaign_id=rec["campaign_id"],
-        title=rec["title"],
-        recorded_at=rec["recorded_at"],
-        number=rec["number"],
-        transcribed=rec["session_id"] in _TRANSCRIPTS,
-    )
-
-
 async def _run_with_heartbeat(coro: Awaitable[T], *, every: float = 15.0) -> T:
     """Await ``coro`` while emitting a Temporal heartbeat every ``every`` seconds, so a long
     transcription is visibly alive (and cancellation/timeout behave correctly)."""
@@ -148,42 +108,51 @@ async def _run_with_heartbeat(coro: Awaitable[T], *, every: float = 15.0) -> T:
         activity.heartbeat("working")
 
 
-def _require_transcript(session_id: str) -> Transcript:
-    transcript = _TRANSCRIPTS.get(session_id)
-    if transcript is None:
+def _require_transcript(session_id: str, transcript_text: str | None) -> str:
+    """Resolve the transcript text to work from: the caller-supplied text (from a transcript the
+    agent re-read off the user's machine) if given, else the same-worker cache. Raises a clear,
+    non-retryable error if neither is available (cold worker, no text passed)."""
+    if transcript_text is not None:
+        return transcript_text
+    cached = _TRANSCRIPTS.get(session_id)
+    if cached is None:
         raise ApplicationError(
-            f"session {session_id!r} has not been transcribed yet — call "
-            f"transcribe_session({session_id!r}) first.",
+            f"no transcript for {session_id!r} on this worker — transcribe it first, or pass "
+            f"transcript_text (read it from the user's machine with read_transcript).",
             type="NotTranscribed",
             non_retryable=True,
         )
-    return transcript
+    return cached.full_text
 
 
-def _pcm_to_wav(pcm: bytes, path: Path, *, rate: int = 24000) -> float:
-    """Wrap raw 16-bit mono PCM (Gemini TTS output) in a WAV container. Returns duration (s)."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(path), "wb") as wf:
+def _pcm_to_wav_bytes(pcm: bytes, *, rate: int = 24000) -> tuple[bytes, float]:
+    """Wrap raw 16-bit mono PCM (Gemini TTS output) in a WAV container IN MEMORY. Returns
+    ``(wav_bytes, duration_seconds)`` — no file is written (the worker has no disk)."""
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(rate)
         wf.writeframes(pcm)
-    return len(pcm) / (rate * 2)
+    return buffer.getvalue(), len(pcm) / (rate * 2)
 
 
-# Short two-voice scenes used by generate_sample_session. Speaker tags "DM"/"Player" match the
-# multi-speaker TTS config below. Kept brief so a sample is cheap to synthesize (and transcribe).
+# A CONTINUING campaign arc, in play order — each scene picks up the previous one's cliffhanger,
+# with a recurring party (Aurelius), NPC (Borne Ironhand), and threads (the Duskblade cult, the
+# black bell, the fear-compass). generate_sample_audio indexes into this by installment, so N
+# samples come out as installments 1..N — a story that continues, never a random duplicate. Two
+# voices; speaker tags "DM"/"Player" match the multi-speaker TTS config below. Kept brief so each
+# sample is cheap to synthesize (and transcribe).
 _SAMPLE_SCENES: list[dict[str, str]] = [
     {
         "title": "The Whispering Crypt",
         "script": (
             'DM: The tavern door groans open. A one-eyed dwarf behind the bar eyes your muddy '
             'boots. "You\'re the ones asking about the Whispering Crypt," he grunts.\n'
-            'Player: I slide a gold piece across the bar. "Depends who\'s asking. What do you '
-            'know about it?"\n'
-            'DM: He pockets the coin. "The Duskblade cult took it a fortnight past. Folk who go '
-            'up the hill don\'t come back. Take the goat path, not the road — and whatever you '
-            'do, don\'t ring the black bell."\n'
+            'Player: Aurelius slides a gold piece across the bar. "Depends who\'s asking. What do '
+            'you know about it, Borne?"\n'
+            'DM: Borne pockets the coin. "The Duskblade cult took it a fortnight past. Take the '
+            'goat path, not the road — and whatever you do, don\'t ring the black bell."\n'
             'Player: "Naturally, now I want to ring the black bell. But fine — the goat path it '
             'is."'
         ),
@@ -191,32 +160,60 @@ _SAMPLE_SCENES: list[dict[str, str]] = [
     {
         "title": "The Sunken Market",
         "script": (
-            'DM: Lantern light wavers over stalls half-drowned in black water. A hooded merchant '
-            'beckons. "Fresh from the deep — a compass that points to what you fear most."\n'
-            'Player: "That is the worst possible product. How much?"\n'
-            'DM: "One memory. Your choice which." She smiles too widely.\n'
-            'Player: I check the exits before I answer. "Give me a moment to browse."'
+            'DM: The goat path drops you into a flooded market, stalls half-drowned in black '
+            'water. A hooded merchant beckons. "Fresh from the deep — a compass that points to '
+            'what you fear most."\n'
+            'Player: Aurelius eyes it. "That is the worst possible product. How much?"\n'
+            'DM: "One memory. Your choice which." She smiles too widely. "The cult buys them by '
+            'the crateful, you know. For the bell."\n'
+            'Player: I check the exits, filing that away. "Hold it for me. We have a crypt to '
+            'reach first."'
+        ),
+    },
+    {
+        "title": "The Black Bell",
+        "script": (
+            'DM: The goat path ends at the crypt. Below the altar hangs the black bell, and '
+            'around it Duskblade cultists chant over a ring of stolen memories.\n'
+            'Player: Aurelius\'s hand drifts to the bell-rope. "Borne said don\'t. So naturally." '
+            'Then I stop. "No. We cut it down instead."\n'
+            'DM: Your blade parts the rope. The bell drops — silent — into the dark, and the '
+            'chanting chokes off. Every hooded head turns toward you at once.\n'
+            'Player: "Well. That got their attention. Weapons out."'
         ),
     },
     {
         "title": "The Ashen Council",
         "script": (
-            'DM: Five masked figures sit around a ring of cold ash. The eldest speaks: "You '
-            'burned the Duskblade banner. That was our banner once."\n'
-            'Player: "It was flying over a village you\'d have let starve."\n'
-            'DM: A long silence. Then: "Sit. If you would fight them properly, you\'ll need to '
-            'know what they buried under the crypt."\n'
-            'Player: I sit, but I keep one hand near my blade. "Start talking."'
+            'DM: They don\'t fight — they parley. Five masked elders sit around a ring of cold '
+            'ash. The eldest speaks: "You cut down our bell. That bell was our banner once."\n'
+            'Player: Aurelius stays standing. "It was ringing over villages you let starve. What '
+            'are you really digging for down here?"\n'
+            'DM: A long silence. "The thing the bell was keeping asleep. Sit — if you\'d fight it, '
+            'you\'ll need the compass you left with the merchant."\n'
+            'Player: "Of course we will." I keep one hand near my blade. "Start talking."'
+        ),
+    },
+    {
+        "title": "The Memory's Price",
+        "script": (
+            'DM: Back at the sunken market, the merchant already has the compass waiting. "To '
+            'find what sleeps under the crypt, it must point inward. The price stands. One '
+            'memory."\n'
+            'Player: Aurelius turns the compass over. "Then take the day I earned this sword. I '
+            'remember what it cost. I don\'t need to remember the ceremony."\n'
+            'DM: The needle shivers, then swings — not to the crypt, but back toward Borne\'s '
+            'tavern. The merchant\'s smile finally falters.\n'
+            'Player: "...The compass thinks our friendly dwarf is what I fear most. Let\'s go ask '
+            'him why."'
         ),
     },
 ]
 
 
-def _synthesize_session_wav(script: str, out_path: Path) -> float:
-    """Synthesize a two-voice (DM + Player) sample recording to ``out_path``; returns duration.
-
-    Worker-side helper for :func:`generate_sample_session_activity` — mirrors the standalone
-    ``seed_session.py`` script, but as a durable-tool building block."""
+def _synthesize_sample_pcm(script: str) -> bytes:
+    """Synthesize a two-voice (DM + Player) sample recording; returns raw PCM. Worker-side helper
+    for :func:`generate_sample_audio_activity` — mirrors ``seed_session.py`` but as a tool."""
     client = _client()
     resp = client.models.generate_content(
         model=TTS_MODEL,
@@ -247,8 +244,7 @@ def _synthesize_session_wav(script: str, out_path: Path) -> float:
             ),
         ),
     )
-    pcm = resp.candidates[0].content.parts[0].inline_data.data
-    return _pcm_to_wav(pcm, out_path)
+    return resp.candidates[0].content.parts[0].inline_data.data
 
 
 # Internal response-schema drafts: the shapes Gemini fills. We add the session_id ourselves so
@@ -269,165 +265,53 @@ class _EntitiesDraft(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Tools
+# Tools — pure Gemini compute, no filesystem
 # ---------------------------------------------------------------------------
 
 
 @agent.activity_tool_defn(
-    name="generate_sample_session",
+    name="generate_sample_audio",
     activity_config=ActivityConfig(start_to_close_timeout=_QUICK_TIMEOUT),
 )
-async def generate_sample_session_activity(
-    campaign_id: str | None = None, title: str | None = None
-) -> SessionRef:
-    """Generate a short SYNTHETIC sample session recording (two voices, via Gemini TTS) and
-    register it — so a fresh project has something to transcribe/process without a real recording.
-    Use this when there are no sessions yet and the user wants to try the pipeline. `campaign_id`
-    defaults to 'duskblade'; each call produces a different scene. Returns the new session."""
-    records = _load_records()
-    number = max((r["number"] for r in records), default=0) + 1
-    scene = _SAMPLE_SCENES[(number - 1) % len(_SAMPLE_SCENES)]
-    session_id = f"sample-{number:02d}"
-    while any(r["session_id"] == session_id for r in records):
-        number += 1
-        session_id = f"sample-{number:02d}"
-
-    out_path = SESSIONS_DIR / f"{session_id}.wav"
-    duration = await asyncio.to_thread(_synthesize_session_wav, scene["script"], out_path)
+async def generate_sample_audio_activity(installment: int = 1) -> SampleRecording:
+    """Synthesize a short SYNTHETIC sample session recording (two voices, via Gemini TTS) and
+    return it as bytes — so a fresh setup has something to transcribe/process without a real
+    recording. `installment` is the 1-based position in a CONTINUING story: installment 1 is the
+    opening scene, 2 continues it, and so on, so successive samples form one campaign rather than
+    repeating. To create several at once, pass consecutive installments (1, 2, 3, …) — never the
+    same one twice. Returns the WAV as base64 plus a title and the script; SAVE it onto the user's
+    machine with `save_recording` to register it. Use this when there are no sessions yet."""
+    scene = _SAMPLE_SCENES[(max(1, installment) - 1) % len(_SAMPLE_SCENES)]
+    pcm = await asyncio.to_thread(_synthesize_sample_pcm, scene["script"])
+    wav_bytes, duration = _pcm_to_wav_bytes(pcm)
     activity.logger.info(
-        "generate_sample_session: wrote %s (%.1fs) — %r", out_path.name, duration, scene["title"]
+        "generate_sample_audio: %.1fs of %r (%d bytes)", duration, scene["title"], len(wav_bytes)
     )
-
-    record = {
-        "session_id": session_id,
-        "campaign_id": campaign_id or "duskblade",
-        "title": title or scene["title"],
-        "recorded_at": datetime.now().date().isoformat(),
-        "number": number,
-        "audio_file": out_path.name,
-    }
-    records.append(record)
-    _write_records(records)
-    return _session_ref(record)
-
-
-@agent.activity_tool_defn(
-    name="ingest_sessions",
-    activity_config=ActivityConfig(start_to_close_timeout=_QUICK_TIMEOUT),
-)
-async def ingest_sessions_activity(campaign_id: str) -> IngestResult:
-    """Scan the sessions/ directory for audio recordings not yet in the registry, register any
-    new ones under the given campaign (auto-assigning id, play-order number, and title from the
-    filename), and return what was added plus the campaign's full session list. Call this to pick
-    up recordings the user just dropped in — no manual registry editing needed."""
-    records = _load_records()
-    known_files = {rec["audio_file"] for rec in records}
-    max_number = max((rec["number"] for rec in records), default=0)
-    existing_ids = {rec["session_id"] for rec in records}
-
-    # Discover audio files directly in sessions/ (skip the artifacts/ output dir and non-audio).
-    found = sorted(
-        p for p in SESSIONS_DIR.iterdir() if p.is_file() and p.suffix.lower() in _AUDIO_EXTS
-    )
-    added: list[str] = []
-    for path in found:
-        if path.name in known_files:
-            continue
-        session_id = path.stem
-        while session_id in existing_ids:  # keep ids unique if two stems collide
-            session_id = f"{session_id}-x"
-        existing_ids.add(session_id)
-        max_number += 1
-        recorded_at = datetime.fromtimestamp(path.stat().st_mtime).date().isoformat()
-        records.append(
-            {
-                "session_id": session_id,
-                "campaign_id": campaign_id,
-                "title": _prettify(path.stem),
-                "recorded_at": recorded_at,
-                "number": max_number,
-                "audio_file": path.name,
-            }
-        )
-        added.append(session_id)
-
-    if added:
-        _write_records(records)
-    activity.logger.info("ingest_sessions: added %d new recording(s): %s", len(added), added)
-
-    campaign = [_session_ref(rec) for rec in records if rec["campaign_id"] == campaign_id]
-    campaign.sort(key=lambda r: r.number)
-    return IngestResult(
-        added=added, already_registered=len(known_files), sessions=campaign
+    return SampleRecording(
+        title=scene["title"],
+        audio_base64=base64.b64encode(wav_bytes).decode("ascii"),
+        script=scene["script"],
     )
 
 
 @agent.activity_tool_defn(
-    name="list_sessions",
-    activity_config=ActivityConfig(start_to_close_timeout=_QUICK_TIMEOUT),
-)
-async def list_sessions_activity(campaign_id: str | None = None) -> SessionList:
-    """List recorded sessions in play order. Pass a `campaign_id` to filter to one campaign, or
-    pass `null` to list ALL sessions across every campaign — each SessionRef includes its
-    `campaign_id`, so passing null is how you discover what campaigns exist (don't guess a
-    campaign name). `transcribed` tells you which already have a transcript cached. Also reports
-    `unregistered_files`: audio in the archive not registered yet — offer to ingest them."""
-    records = _load_records()
-    refs = [
-        _session_ref(rec)
-        for rec in sorted(records, key=lambda r: r["number"])
-        if not campaign_id or rec["campaign_id"] == campaign_id
-    ]
-    known_files = {rec["audio_file"] for rec in records}
-    unregistered = sorted(
-        p.name
-        for p in SESSIONS_DIR.iterdir()
-        if p.is_file() and p.suffix.lower() in _AUDIO_EXTS and p.name not in known_files
-    )
-    return SessionList(sessions=refs, unregistered_files=unregistered)
-
-
-@agent.activity_tool_defn(
-    name="transcribe_session",
+    name="transcribe_recording",
     activity_config=ActivityConfig(
         start_to_close_timeout=_TRANSCRIBE_TIMEOUT,
         heartbeat_timeout=timedelta(seconds=60),
     ),
 )
-async def transcribe_session_activity(session_id: str) -> TranscriptMeta:
-    """Transcribe a session's audio with Gemini (speaker labels + timestamps) and CACHE the full
-    transcript. Returns lightweight metadata (duration, speakers, a preview) — fetch the full
-    text with get_transcript only if you need it. This is the long-running step; it heartbeats
-    while Gemini works."""
-    registry = _load_registry()
-    rec = registry.get(session_id)
-    if rec is None:
-        raise ApplicationError(
-            f"unknown session_id {session_id!r}", type="UnknownSession", non_retryable=True
-        )
-    audio_path = SESSIONS_DIR / rec["audio_file"]
-    if not audio_path.exists():
-        raise ApplicationError(
-            f"audio file missing for {session_id!r}: {audio_path}",
-            type="MissingAudio",
-            non_retryable=True,
-        )
-
-    activity.logger.info("Transcribing %s from %s", session_id, audio_path.name)
+async def transcribe_recording_activity(
+    file_ref: GeminiFileRef, session_id: str
+) -> Transcript:
+    """Transcribe a session's audio with Gemini (speaker labels + timestamps) and return the FULL
+    transcript. `file_ref` is a Gemini upload the local bridge produced from the user's recording
+    (get it first with `upload_recording`) — the worker never holds the audio. This is the
+    long-running step; it heartbeats while Gemini works. Persist the result on the user's machine
+    with `save_transcript`; summarize/extract can then address it by session_id this same run."""
     client = _client()
-
-    # Upload via the Files API (handles multi-hour sessions that exceed the inline request cap),
-    # then wait for it to become ACTIVE.
-    uploaded = await _run_with_heartbeat(client.aio.files.upload(file=str(audio_path)))
-    while getattr(uploaded, "state", None) and str(uploaded.state) not in (
-        "ACTIVE",
-        "FileState.ACTIVE",
-    ):
-        if str(uploaded.state) in ("FAILED", "FileState.FAILED"):
-            raise ApplicationError("Gemini file processing failed", type="FileProcessingFailed")
-        await asyncio.sleep(2)
-        activity.heartbeat("uploading")
-        uploaded = await client.aio.files.get(name=uploaded.name)
+    uploaded = await client.aio.files.get(name=file_ref.name)
+    activity.logger.info("Transcribing %s from %s", session_id, file_ref.name)
 
     prompt = (
         "Transcribe this tabletop RPG (D&D) session audio verbatim. Produce diarized segments "
@@ -470,46 +354,28 @@ async def transcribe_session_activity(session_id: str) -> TranscriptMeta:
         full_text=full_text,
         segments=segments,
     )
-    _TRANSCRIPTS[session_id] = transcript
-
-    speakers = sorted({s.speaker for s in segments})
-    word_count = sum(len(s.text.split()) for s in segments)
-    return TranscriptMeta(
-        session_id=session_id,
-        model=TRANSCRIBE_MODEL,
-        duration_s=duration_s,
-        segment_count=len(segments),
-        word_count=word_count,
-        speakers=speakers,
-        preview=full_text[:600],
-    )
-
-
-@agent.activity_tool_defn(
-    name="get_transcript",
-    activity_config=ActivityConfig(start_to_close_timeout=_QUICK_TIMEOUT),
-)
-async def get_transcript_activity(session_id: str) -> Transcript:
-    """Fetch the full cached transcript for a session. Large — prefer working from
-    transcribe_session's metadata / summaries, and only fetch this when you truly need the text."""
-    return _require_transcript(session_id)
+    _TRANSCRIPTS[session_id] = transcript  # same-worker cache; persist to the user's disk yourself
+    return transcript
 
 
 @agent.activity_tool_defn(
     name="summarize_transcript",
     activity_config=ActivityConfig(start_to_close_timeout=_QUICK_TIMEOUT),
 )
-async def summarize_transcript_activity(session_id: str) -> SessionSummary:
+async def summarize_transcript_activity(
+    session_id: str, transcript_text: str | None = None
+) -> SessionSummary:
     """Summarize an already-transcribed session into a TL;DR, key beats, and the cliffhanger.
-    Reads the cached transcript by id (no need to pass the text)."""
-    transcript = _require_transcript(session_id)
+    Addresses the transcript by `session_id` (from a transcription done this run); if the worker
+    doesn't have it, read it from the user's machine and pass its `full_text` as `transcript_text`."""
+    full_text = _require_transcript(session_id, transcript_text)
     client = _client()
     resp = await client.aio.models.generate_content(
         model=SUMMARY_MODEL,
         contents=[
             "Summarize this D&D session transcript. Give a punchy TL;DR (2-3 sentences), the "
             "key story beats as short bullets, and the cliffhanger / where it left off (or null "
-            "if none).\n\n" + transcript.full_text
+            "if none).\n\n" + full_text
         ],
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -526,17 +392,20 @@ async def summarize_transcript_activity(session_id: str) -> SessionSummary:
     name="extract_entities",
     activity_config=ActivityConfig(start_to_close_timeout=_QUICK_TIMEOUT),
 )
-async def extract_entities_activity(session_id: str) -> CampaignEntities:
+async def extract_entities_activity(
+    session_id: str, transcript_text: str | None = None
+) -> CampaignEntities:
     """Extract the notable entities from a transcribed session — NPCs, player characters,
-    locations, items, factions, and quests — with a short description and any aliases."""
-    transcript = _require_transcript(session_id)
+    locations, items, factions, and quests — with a short description and any aliases. Addresses
+    the transcript by `session_id`; pass `transcript_text` if this worker doesn't have it cached."""
+    full_text = _require_transcript(session_id, transcript_text)
     client = _client()
     resp = await client.aio.models.generate_content(
         model=SUMMARY_MODEL,
         contents=[
             "Extract notable entities from this D&D session transcript. For each: name, kind "
             "(one of npc, pc, location, item, faction, quest), any aliases, and a one-line "
-            "description.\n\n" + transcript.full_text
+            "description.\n\n" + full_text
         ],
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
@@ -551,10 +420,13 @@ async def extract_entities_activity(session_id: str) -> CampaignEntities:
     name="answer_question",
     activity_config=ActivityConfig(start_to_close_timeout=_QUICK_TIMEOUT),
 )
-async def answer_question_activity(session_id: str, question: str) -> str:
-    """Answer a question about a single session, grounded in its cached transcript. Used by the
-    SessionScribe subagent for per-session Q&A."""
-    transcript = _require_transcript(session_id)
+async def answer_question_activity(
+    session_id: str, question: str, transcript_text: str | None = None
+) -> str:
+    """Answer a question about a single session, grounded in its transcript. Addresses the
+    transcript by `session_id`; pass `transcript_text` if this worker doesn't have it cached.
+    Used by the SessionScribe subagent for per-session Q&A."""
+    full_text = _require_transcript(session_id, transcript_text)
     client = _client()
     resp = await client.aio.models.generate_content(
         model=SUMMARY_MODEL,
@@ -563,7 +435,7 @@ async def answer_question_activity(session_id: str, question: str) -> str:
             "doesn't cover it, say so plainly.\n\nQuestion: "
             + question
             + "\n\nTranscript:\n"
-            + transcript.full_text
+            + full_text
         ],
     )
     return resp.text or ""
@@ -575,7 +447,8 @@ async def answer_question_activity(session_id: str, question: str) -> str:
 )
 async def synthesize_audio_activity(request: SynthesizeRequest) -> AudioArtifact:
     """Synthesize narrated audio from text via Gemini TTS (e.g. a 'previously on' recap or a
-    session intro). Writes a WAV to the artifacts dir and returns a reference to it."""
+    session intro) and return it as bytes (base64 WAV). The worker saves nothing — write the bytes
+    onto the user's machine (e.g. into the static site under site/) with `write_binary_file`."""
     client = _client()
     resp = await client.aio.models.generate_content(
         model=TTS_MODEL,
@@ -590,16 +463,14 @@ async def synthesize_audio_activity(request: SynthesizeRequest) -> AudioArtifact
         ),
     )
     pcm = resp.candidates[0].content.parts[0].inline_data.data
-    artifact_id = uuid.uuid4().hex[:12]
-    out_path = ARTIFACTS_DIR / f"{request.kind}-{artifact_id}.wav"
-    duration_s = _pcm_to_wav(pcm, out_path)
-    activity.logger.info("Synthesized %s audio -> %s (%.1fs)", request.kind, out_path.name, duration_s)
+    wav_bytes, duration_s = _pcm_to_wav_bytes(pcm)
+    activity.logger.info("Synthesized %s audio (%.1fs, %d bytes)", request.kind, duration_s, len(wav_bytes))
     return AudioArtifact(
-        artifact_id=artifact_id,
+        artifact_id=uuid.uuid4().hex[:12],
         kind=request.kind,
         voice=request.voice,
         script_text=request.script_text,
-        audio_path=str(out_path),
+        audio_base64=base64.b64encode(wav_bytes).decode("ascii"),
         duration_s=duration_s,
     )
 
@@ -616,15 +487,14 @@ async def notify_activity(request: NotifyRequest) -> NotificationResult:
 
 
 # The durable activity bodies to register on the worker (the module-level names above are the
-# in-workflow dispatchers the workflow calls via run_tool).
+# in-workflow dispatchers the workflow calls via run_tool). The session registry, recordings,
+# transcripts, and the static site are NOT here — they live on the user's machine, reached via the
+# callback tools in local_fs_tools.py.
 ALL_ACTIVITIES = [
     agent.tool_activity(t)
     for t in (
-        generate_sample_session_activity,
-        ingest_sessions_activity,
-        list_sessions_activity,
-        transcribe_session_activity,
-        get_transcript_activity,
+        generate_sample_audio_activity,
+        transcribe_recording_activity,
         summarize_transcript_activity,
         extract_entities_activity,
         answer_question_activity,

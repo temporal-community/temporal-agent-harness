@@ -1,8 +1,9 @@
 """Seed a short, fake D&D session recording so the example is runnable without a real recording.
 
 Uses Gemini multi-speaker TTS to voice a ~1-minute scripted scene (a DM and a player), writes it
-to ``sessions/session-01.wav``, and registers it in ``sessions/sessions.json``. Then the
-Chronicler agent has something real to transcribe → summarize → recap.
+into the local bridge's directory (``local/recordings/session-01.wav``), and registers it in
+``local/sessions.json`` — the same machine-local layout the bridge owns, since the worker keeps
+no recordings. Then the Chronicler agent has something real to transcribe → summarize → recap.
 
 Run from the repo root:
     uv run --group examples python -m examples.chronicler.seed_session
@@ -23,9 +24,11 @@ from google.genai import types
 
 from .chronicler_activities import TTS_MODEL
 
-SESSIONS_DIR = Path(__file__).parent / "sessions"
-AUDIO_PATH = SESSIONS_DIR / "session-01.wav"
-REGISTRY_PATH = SESSIONS_DIR / "sessions.json"
+# The local bridge's root (examples/chronicler/local). Keep this in sync with the --dir the
+# bridge runs with (see the Procfile / justfile). Recordings live under recordings/.
+LOCAL_DIR = Path(__file__).parent / "local"
+AUDIO_PATH = LOCAL_DIR / "recordings" / "session-01.wav"
+REGISTRY_PATH = LOCAL_DIR / "sessions.json"
 
 # A short scripted scene to voice as the "recording". Speaker tags match the multi-speaker config.
 SCRIPT = """\

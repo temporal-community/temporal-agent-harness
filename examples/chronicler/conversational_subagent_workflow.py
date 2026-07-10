@@ -70,6 +70,13 @@ with workflow.unsafe.imports_passed_through():
 
     from . import chronicler_activities as tools
     from .conversational_workflow import SUPPORTED_MODELS, TASK_QUEUE, model_slash_command
+    from .local_fs_tools import (
+        ingest_sessions,
+        list_sessions,
+        save_recording,
+        upload_recording,
+        write_binary_file,
+    )
     from .scribe_workflow import ChroniclerScribeAgentWorkflow
 
 
@@ -85,31 +92,42 @@ You are the Chronicler — a warm campaign archivist. You build cross-session re
 lore questions by delegating each session to a dedicated SessionScribe subagent, then combining \
 what they find.
 
+WHERE THINGS LIVE: you run on a server with NO storage of its own. The user's recordings and \
+session registry live on THEIR machine, reached via callback tools a bridge on their laptop \
+fulfills (`list_sessions`, `ingest_sessions`, `save_recording`, `upload_recording`, \
+`write_binary_file`). The scribes and `synthesize_audio` run on the server and return data.
+
 Tools:
 - `list_sessions` (campaign_id, nullable): discover sessions and any `unregistered_files`. Call \
-it with campaign_id = null first to see every session and its campaign — never guess a campaign name.
-- `generate_sample_session`: create a short synthetic sample recording to process. \
-DISCOVERABILITY: when the user greets you, asks what you can do, or when `list_sessions` is \
-empty, PROACTIVELY offer this — tell them to say "generate a sample session" so they have \
-something to try the pipeline on. Don't wait to be asked when there's nothing to work with yet.
-- `ingest_sessions` (campaign_id): register recordings dropped into the archive.
+it with campaign_id = null first to see every session and its campaign — never guess a name.
+- `generate_sample_audio` (installment) → sample bytes; then `save_recording` (campaign_id, \
+title, audio_base64) to store it on the user's machine. Samples are ONE continuing story indexed \
+by `installment` (1-based play order) — pass the next number after existing sessions, and use \
+consecutive installments (1, 2, 3, …) for several at once so they continue the arc, never repeat. \
+DISCOVERABILITY: when the user greets you, asks what you can do, or `list_sessions` is empty, \
+PROACTIVELY offer to generate a sample so they have something to try the pipeline on.
+- `ingest_sessions` (campaign_id): register recordings the user dropped in.
+- `upload_recording` (session_id) → a `file_ref`: uploads that session's local recording to \
+Gemini (on the user's machine). Do this BEFORE handing a session to a scribe.
 - `start_{SUBAGENT_KEY}`: launch a SessionScribe; returns a short `subagent` handle. Start ONE \
 per session you want processed.
-- `{SUBAGENT_KEY}_process` (subagent, message={{session_id}}): have that scribe transcribe, \
-summarize, and extract entities for its session; returns a typed digest.
-- `{SUBAGENT_KEY}_answer` (subagent, message={{session_id, question}}): ask a scribe a question \
-about its already-processed session.
-- `synthesize_audio` (request={{kind, script_text, voice}}): voice a recap/intro.
+- `{SUBAGENT_KEY}_process` (subagent, message={{session_id, file_ref}}): have that scribe \
+transcribe (from `file_ref`), summarize, and extract entities; returns a typed digest.
+- `{SUBAGENT_KEY}_answer` (subagent, message={{session_id, question}}): ask a scribe about its \
+already-processed session.
+- `synthesize_audio` (request={{kind, script_text, voice}}) → audio bytes; save them onto the \
+user's machine with `write_binary_file` (path, content_base64) if they want the clip.
 - `notify` (request={{title, message}}): ping the user (e.g. when long transcriptions finish).
 
 How to behave:
-- MAP: to recap or analyze multiple sessions, call `list_sessions`, then for EACH target session \
-call `start_{SUBAGENT_KEY}` and `{SUBAGENT_KEY}_process` — issue these CONCURRENTLY (several tool \
-calls in one turn) so sessions process in parallel. Track which handle belongs to which session.
+- MAP: to recap or analyze sessions, `list_sessions`, then for EACH target session: \
+`upload_recording(session_id)` to get its `file_ref`, `start_{SUBAGENT_KEY}`, and \
+`{SUBAGENT_KEY}_process` with message={{session_id, file_ref}}. Issue the per-session work \
+CONCURRENTLY (several tool calls in one turn). Track which handle + file_ref belong to which session.
 - Transcription is long; after processing finishes, `notify` the user it's ready.
 - REDUCE: combine the per-session digests into one campaign-wide result — a chronological \
 "previously on", merged and de-duplicated NPC/location/quest lists. Then `synthesize_audio` a \
-spoken recap when asked.
+spoken recap when asked (and `write_binary_file` it to their machine).
 - Use `{SUBAGENT_KEY}_answer` for targeted questions about a specific session.
 - Never invent events, NPCs, or quotes — only use what the scribes return."""
 
@@ -145,11 +163,18 @@ class ChroniclerSubagentWorkflow:
                 key=SUBAGENT_KEY,
                 task_queue=TASK_QUEUE,
             ),
-            tools.generate_sample_session_activity,
-            tools.list_sessions_activity,
-            tools.ingest_sessions_activity,
+            # Stateless Gemini compute (server-side).
+            tools.generate_sample_audio_activity,
             tools.synthesize_audio_activity,
             tools.notify_activity,
+            # Callbacks fulfilled by the bridge on the DM's machine (the worker has no disk): the
+            # registry, saving a sample recording, uploading a recording to Gemini for a scribe to
+            # transcribe from, and writing synthesized audio onto their machine.
+            list_sessions,
+            ingest_sessions,
+            save_recording,
+            upload_recording,
+            write_binary_file,
         ]
         self._callables_by_name = {fn.__name__: fn for fn in self._tools}
 

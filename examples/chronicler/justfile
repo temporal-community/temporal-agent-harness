@@ -44,15 +44,22 @@ server: app-build
 worker:
     cd "{{root}}" && uv run --group examples python -m examples.chronicler.worker
 
+# Fulfills the agent's callback filesystem tools against a local dir (examples/chronicler/local by
+# default; override with `just local-bridge --dir ~/my-campaign`), so a remotely-deployed
+# Chronicler can read/write the DM's local files while chat stays in the web UI.
+local-bridge *ARGS:
+    cd "{{root}}" && uv run --group examples python -m examples.chronicler.local_bridge --dir examples/chronicler/local {{ARGS}}
+
 # One-time setup: create .env.local from the template (no-clobber). Then set GEMINI_API_KEY in it.
 setup:
     @test -f .env.local && echo ".env.local already exists — leaving it as is." \
         || { cp .env.example .env.local && echo "Created .env.local — now set GEMINI_API_KEY in it, then run 'just dev'."; }
 
-# Run the ENTIRE stack with one command (honcho): temporal + session-manager + server + worker.
-# The workers auto-restart on code changes (watchfiles) and the server hot-reloads (uvicorn
-# --reload); one Ctrl-C stops all of it. Bring your own Temporal? Run a subset:
-# `honcho start session-manager server worker`.
+# Run the ENTIRE stack with one command (honcho): temporal + session-manager + server + worker +
+# local-bridge. The workers auto-restart on code changes (watchfiles) and the server hot-reloads
+# (uvicorn --reload); the local-bridge fulfills the agent's filesystem callback tools against
+# examples/chronicler/local; one Ctrl-C stops all of it. Bring your own Temporal? Run a subset:
+# `honcho start session-manager server worker local-bridge`.
 dev: app-build
     #!/usr/bin/env bash
     set -euo pipefail

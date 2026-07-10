@@ -1,0 +1,4 @@
+# The local directory the callback filesystem bridge (local_bridge.py) reads and writes on the
+# DM's machine — campaign notes the agent reads and the static site it builds. Runtime-only; the
+# bridge creates it on first run. Not committed.
+local/

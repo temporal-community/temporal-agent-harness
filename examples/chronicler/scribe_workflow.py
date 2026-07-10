@@ -34,6 +34,7 @@ with workflow.unsafe.imports_passed_through():
         ScribeQuestion,
         ScribeTask,
         SessionDigest,
+        TranscriptMeta,
     )
 
 
@@ -56,11 +57,16 @@ class ChroniclerScribeAgentWorkflow:
 
     @agent.accepts
     async def process(self, message: ScribeTask) -> SessionDigest:
-        """Process one session end to end: transcribe its audio, summarize it, and extract the
-        notable entities. Returns a typed digest for the parent to reduce over."""
+        """Process one session end to end: transcribe its audio (from the Gemini upload the parent
+        threaded in via ``file_ref`` — the child can't reach the user's machine itself), summarize
+        it, and extract the notable entities. Returns a lightweight digest for the parent to reduce
+        over (the full transcript stays worker-side; only metadata crosses the boundary)."""
         sid = message.session_id
         transcript = await self._runner.run_tool(
-            str(workflow.uuid4()), tools.transcribe_session_activity, session_id=sid
+            str(workflow.uuid4()),
+            tools.transcribe_recording_activity,
+            file_ref=message.file_ref,
+            session_id=sid,
         )
         summary = await self._runner.run_tool(
             str(workflow.uuid4()), tools.summarize_transcript_activity, session_id=sid
@@ -68,14 +74,23 @@ class ChroniclerScribeAgentWorkflow:
         entities = await self._runner.run_tool(
             str(workflow.uuid4()), tools.extract_entities_activity, session_id=sid
         )
+        meta = TranscriptMeta(
+            session_id=sid,
+            model=transcript.model,
+            duration_s=transcript.duration_s,
+            segment_count=len(transcript.segments),
+            word_count=sum(len(s.text.split()) for s in transcript.segments),
+            speakers=sorted({s.speaker for s in transcript.segments}),
+            preview=transcript.full_text[:600],
+        )
         return SessionDigest(
-            session_id=sid, transcript=transcript, summary=summary, entities=entities
+            session_id=sid, transcript=meta, summary=summary, entities=entities
         )
 
     @agent.accepts
     async def answer(self, message: ScribeQuestion) -> ScribeAnswer:
         """Answer a question about this session, grounded in its transcript (must be processed
-        first so the transcript is cached)."""
+        first this run so the transcript is cached on the worker)."""
         answer = await self._runner.run_tool(
             str(workflow.uuid4()),
             tools.answer_question_activity,
