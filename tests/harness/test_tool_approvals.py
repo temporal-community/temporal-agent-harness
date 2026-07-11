@@ -1,7 +1,7 @@
 # ABOUTME: End-to-end tests for the safe-by-default, policy-driven human-in-the-loop tool
 # approvals, run against the Temporal time-skipping test server (the only faithful way —
 # the in-workflow approval gate + activity-side publishing only exist when a real workflow
-# + activity execute). Demonstrates docs/human-in-the-loop-tool-approvals.md:
+# + activity execute). Demonstrates docs/internal/human-in-the-loop-tool-approvals.md:
 #   * a gated tool runs only AFTER approval (approval_requested -> resolved(approved) ->
 #     tool_start -> tool_end); a denied one never executes (ToolApprovalDenied);
 #   * the agent's ToolApprovalPolicy decides gating, NOT the tool: an inherently_safe tool
