@@ -28,9 +28,7 @@ agent development, so you get the power without hand-rolling the orchestration.
 
 ## Installation
 
-The harness is **not published to PyPI**. Add it to your project as a **git dependency**.
-
-In a [`uv`](https://docs.astral.sh/uv/)-managed project, the quickest way is `uv add`:
+Add it to your project as a **git dependency**. In a [`uv`](https://docs.astral.sh/uv/)-managed project, the quickest way is `uv add`:
 
 ```bash
 # core harness — define and run agent workflows
