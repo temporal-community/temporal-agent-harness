@@ -7,6 +7,8 @@ from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from datetime import timedelta
 
+from temporal_agent_harness.ai_sdks.integration_helpers import ObserverFactory
+
 import pydantic
 from agents import ModelProvider, Trace, set_trace_provider
 from agents.run import get_default_agent_runner, set_default_agent_runner
@@ -219,6 +221,7 @@ class OpenAIAgentsPlugin(SimplePlugin):
         register_activities: bool = True,
         add_temporal_spans: bool = True,
         use_otel_instrumentation: bool = False,
+        observer_factory: ObserverFactory | None = None,
     ) -> None:
         """Initialize the OpenAI agents plugin.
 
@@ -246,6 +249,13 @@ class OpenAIAgentsPlugin(SimplePlugin):
             use_otel_instrumentation: If set to true, enable open telemetry instrumentation.
                 Warning: use_otel_instrumentation is experimental and behavior may change in future versions.
                 Use with caution in production environments.
+            observer_factory: Optional factory turning each streamed model call's
+                opaque routing token into a fresh live :class:`StreamObserver`.
+                Pair with ``model_params.stream_to_provider`` to route streamed
+                events into an embedding runtime (e.g. the agent harness turn
+                stream). If ``None``, streaming publishes raw events to
+                ``model_params.streaming_topic`` as before.
+                Warning: streaming support is experimental and behavior may change in future versions.
 
         """
         if model_params is None:
@@ -275,7 +285,9 @@ class OpenAIAgentsPlugin(SimplePlugin):
             if not register_activities:
                 return activities or []
 
-            model_activity = ModelActivity(model_provider)
+            model_activity = ModelActivity(
+                model_provider, observer_factory=observer_factory
+            )
             new_activities = [
                 model_activity.invoke_model_activity,
                 model_activity.invoke_model_activity_streaming,

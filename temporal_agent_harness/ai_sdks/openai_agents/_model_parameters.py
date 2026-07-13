@@ -1,6 +1,7 @@
 """Parameters for configuring Temporal activity execution for model calls."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -90,6 +91,24 @@ class ModelActivityParameters:
     streaming_batch_interval: timedelta = timedelta(milliseconds=100)
     """Interval between automatic flushes for the stream publisher used
     by the streaming activity.
+
+    .. warning::
+        Streaming support is experimental and may change in future
+        versions."""
+
+    stream_to_provider: Callable[[str | None], Any] | None = None
+    """Optional per-call provider of an opaque routing token for streamed
+    requests. Called once (in workflow context) at the start of each
+    ``Runner.run_streamed`` model call, with the requested model id; its return
+    value is handed, opaquely, to the streaming activity's observer factory to
+    resolve where live stream events go (and to carry any per-call metadata the
+    observer needs, such as the model). Returning ``None`` falls back to
+    :attr:`streaming_topic`.
+
+    This is the seam that lets an embedding runtime (e.g. the agent harness)
+    target a per-turn stream instead of a static worker-level topic, without
+    the plugin knowing anything about the token's concrete type. When left
+    ``None``, streaming uses :attr:`streaming_topic` exactly as before.
 
     .. warning::
         Streaming support is experimental and may change in future

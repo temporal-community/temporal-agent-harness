@@ -45,8 +45,11 @@ from openai.types.responses.tool_param import Mcp
 from typing_extensions import Required, TypedDict
 
 from temporalio import activity
+from temporal_agent_harness.ai_sdks.integration_helpers import (
+    ObserverFactory,
+    select_observer,
+)
 from temporal_agent_harness.ai_sdks.openai_agents._heartbeat_decorator import auto_heartbeater
-from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.exceptions import ApplicationError
 
 
@@ -207,7 +210,12 @@ class StreamingActivityModelInput(ActivityModelInput, total=False):
     Adds the streaming-only fields on top of :class:`ActivityModelInput`.
     """
 
-    streaming_topic: Required[str]
+    stream_to: Required[Any]
+    """Opaque per-call routing token resolved on the workflow side (see
+    ``ModelActivityParameters.stream_to_provider`` / ``streaming_topic``). The
+    activity hands it, unexamined, to its configured observer factory; a plain
+    ``str`` with no factory is treated as a ``WorkflowStream`` topic name."""
+
     streaming_batch_interval: timedelta
 
 
@@ -327,11 +335,24 @@ class ModelActivity:
     Disabling retries in your model of choice is recommended to allow activity retries to define the retry model.
     """
 
-    def __init__(self, model_provider: ModelProvider | None = None):
-        """Initialize the activity with a model provider."""
+    def __init__(
+        self,
+        model_provider: ModelProvider | None = None,
+        *,
+        observer_factory: ObserverFactory | None = None,
+    ):
+        """Initialize the activity with a model provider.
+
+        ``observer_factory``, when given, turns each streamed model call's
+        opaque routing token into a fresh live observer (see
+        :func:`temporal_agent_harness.ai_sdks.integration_helpers.select_observer`).
+        Left ``None``, streaming falls back to publishing raw events to a
+        ``WorkflowStream`` topic named by the token (today's behavior).
+        """
         self._model_provider = model_provider or OpenAIProvider(
             openai_client=AsyncOpenAI(max_retries=0)
         )
+        self._observer_factory = observer_factory
 
     @activity.defn
     @auto_heartbeater
@@ -373,9 +394,13 @@ class ModelActivity:
         framework, which builds the final ``ModelResponse`` from the
         terminal ``ResponseCompletedEvent``.
 
-        Each event is also published to the workflow's stream on
-        ``streaming_topic`` so external consumers (UIs, tracing,
-        etc.) can observe events as they arrive.
+        Each event is also handed live to an observer resolved from the
+        request's opaque ``stream_to`` token (via ``select_observer``): a
+        configured ``observer_factory`` translates events into the embedding
+        runtime's own vocabulary, while the default (no factory, ``str``
+        token) republishes raw events to a ``WorkflowStream`` topic so
+        external consumers (UIs, tracing, etc.) observe them as they arrive.
+        The collected-and-returned list is unaffected either way.
 
         Heartbeats run on a background task via ``auto_heartbeater`` so
         long initial-token latency or long pauses between chunks do not
@@ -384,22 +409,21 @@ class ModelActivity:
         model = self._model_provider.get_model(input.get("model_name"))
         tools, handoffs = _build_tools_and_handoffs(input)
 
-        topic = input["streaming_topic"]
         batch_interval = input.get(
             "streaming_batch_interval", timedelta(milliseconds=100)
         )
         events: list[TResponseStreamEvent] = []
 
-        stream = WorkflowStreamClient.from_within_activity(
-            batch_interval=batch_interval
-        )
         # TResponseStreamEvent is a typing.Annotated[Union[...]] — a typing
-        # special form, not a class — so it cannot be passed as type[T].
-        # Leave the topic untyped (default Any); subscribers that want
-        # typed decode can pass result_type=TResponseStreamEvent on
-        # their own subscribe call.
-        events_topic = stream.topic(topic)
-        async with stream:
+        # special form, not a class — so it cannot be passed as type[T]. The
+        # observer leaves its topic untyped (event_type=None); subscribers that
+        # want a typed decode pass result_type=TResponseStreamEvent themselves.
+        observer_cm = select_observer(
+            factory=self._observer_factory,
+            token=input["stream_to"],
+            batch_ms=int(batch_interval / timedelta(milliseconds=1)),
+        )
+        async with observer_cm as obs:
             try:
                 async for event in model.stream_response(
                     system_instructions=input.get("system_instructions"),
@@ -417,7 +441,8 @@ class ModelActivity:
                     # schema may still be an unbuilt placeholder.
                     type(event).model_rebuild()
                     events.append(event)
-                    events_topic.publish(event)
+                    if obs is not None:
+                        await obs.on_event(event)
             except APIStatusError as e:
                 _raise_for_openai_status(e)
 
