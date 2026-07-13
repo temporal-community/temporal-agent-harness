@@ -16,7 +16,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # The pubsub topic the agent publishes its turn events on. The workflow must use
 # this exact name when publishing and clients when subscribing.
@@ -260,6 +260,28 @@ class StreamEvent(BaseModel, Generic[EventTypeT]):
     model_config = ConfigDict(frozen=True)
 
     type: EventTypeT
+
+    @model_validator(mode="after")
+    def _pin_discriminator(self) -> StreamEvent[EventTypeT]:
+        """Keep ``type`` in the model's fields-set so it always serializes.
+
+        Every event pins ``type`` to a single ``Literal`` with a default, so it is
+        normally left implicit at construction (``TurnStarted(user_message=...)``).
+        A serializer run with ``exclude_unset=True`` — notably the OpenAI Agents
+        plugin's payload converter — would then DROP the discriminator, and the read
+        side could no longer resolve the :data:`AgentStreamItem` union (a
+        ``union_tag_not_found`` error). Marking ``type`` as explicitly set makes the
+        discriminator survive any such lossy serialization, so harness stream events
+        round-trip regardless of which AI-SDK plugin's converter is installed.
+
+        ``model_fields_set`` is pydantic's public accessor and returns the live
+        fields-set (not a copy), so adding to it in place is the supported way to do
+        this; it works on a frozen model because it mutates a set rather than assigning
+        an attribute. The round-trip regression test exercises the real converter, so a
+        future pydantic change here fails loudly rather than silently.
+        """
+        self.model_fields_set.add("type")
+        return self
 
 
 class MessageQueued(StreamEvent[Literal[AgentEventType.MESSAGE_QUEUED]]):
