@@ -1007,6 +1007,18 @@ wheels = [
 ]
 
 [[package]]
+name = "honcho"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/65/c8/d860888358bf5c8a6e7d78d1b508b59b0e255afd5655f243b8f65166dafd/honcho-2.0.0.tar.gz", hash = "sha256:af3815c03c634bf67d50f114253ea9fef72ecff26e4fd06b29234789ac5b8b2e", size = 45618, upload-time = "2024-10-06T14:26:53.871Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/1c/25631fc359955569e63f5446dbb7022c320edf9846cbe892ee5113433a7e/honcho-2.0.0-py3-none-any.whl", hash = "sha256:56dcd04fc72d362a4befb9303b1a1a812cba5da283526fbc6509be122918ddf3", size = 22093, upload-time = "2024-10-06T14:26:52.181Z" },
+]
+
+[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -2647,18 +2659,22 @@ dev = [
     { name = "fastapi", extra = ["standard"] },
     { name = "google-auth" },
     { name = "google-genai" },
+    { name = "honcho" },
     { name = "moto", extra = ["server"] },
     { name = "pydantic-monty" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "setuptools" },
     { name = "temporalio", extra = ["aioboto3"] },
+    { name = "watchfiles" },
 ]
 examples = [
     { name = "fastapi", extra = ["standard"] },
     { name = "google-auth" },
     { name = "google-genai" },
+    { name = "honcho" },
     { name = "pydantic-monty" },
+    { name = "watchfiles" },
 ]
 
 [package.metadata]
@@ -2678,18 +2694,22 @@ dev = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
     { name = "google-auth", specifier = ">=2.53.0" },
     { name = "google-genai", specifier = ">=2.0.0" },
+    { name = "honcho", specifier = ">=2.0.0" },
     { name = "moto", extras = ["server"], specifier = ">=5.2.1" },
     { name = "pydantic-monty", specifier = ">=0.0.18" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "setuptools", specifier = ">=68" },
     { name = "temporalio", extras = ["aioboto3"], specifier = ">=1.27.2" },
+    { name = "watchfiles", specifier = ">=1.0.0" },
 ]
 examples = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
     { name = "google-auth", specifier = ">=2.53.0" },
     { name = "google-genai", specifier = ">=2.0.0" },
+    { name = "honcho", specifier = ">=2.0.0" },
     { name = "pydantic-monty", specifier = ">=0.0.18" },
+    { name = "watchfiles", specifier = ">=1.0.0" },
 ]
 
 [[package]]

@@ -1,0 +1,6 @@
+# Generated session audio, synthesized artifacts, and the runtime registry — not committed.
+# A fresh checkout starts with no sessions; `just seed` or the generate_sample_session /
+# ingest_sessions tools create these locally. The code handles a missing registry.
+*.wav
+artifacts/
+sessions.json

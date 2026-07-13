@@ -1,0 +1,20 @@
+# Chronicler dev stack, run by honcho via `just dev` (from examples/chronicler).
+# honcho runs these with the repo root as the working directory (-d) so the
+# `examples.chronicler.*` module paths and the watch paths below resolve.
+#
+# The two plain-Python workers are wrapped in `watchfiles` so they auto-restart when the example
+# OR the harness package changes; the server hot-reloads via uvicorn --reload. One Ctrl-C stops
+# everything. To bring your own Temporal server, run a subset: `honcho start session-manager server worker`.
+# The dependent processes wait for Temporal to accept connections first (honcho starts everything
+# at once, so they'd otherwise race the `temporal server start-dev` boot). wait_for_temporal.py
+# proceeds after 30s regardless, so a remote/bring-your-own Temporal isn't blocked.
+#
+# local-bridge is the callback-tools fulfiller: it runs on THIS machine and executes the agent's
+# filesystem tools (ls/read_file/write_file/…) against examples/chronicler/local, so a Chronicler
+# running on the worker (imagine it in the cloud) can read/write the DM's local files. It polls the
+# server over HTTP and tolerates the server not being up yet, so no explicit wait is needed.
+temporal: temporal server start-dev
+session-manager: python examples/chronicler/wait_for_temporal.py && watchfiles "python -m examples.chronicler.session_manager_worker" examples/chronicler temporal_agent_harness
+server: python examples/chronicler/wait_for_temporal.py && uvicorn examples.chronicler.app:app --host 0.0.0.0 --port 8000 --reload
+worker: python examples/chronicler/wait_for_temporal.py && watchfiles "python -m examples.chronicler.worker" examples/chronicler temporal_agent_harness
+local-bridge: watchfiles "python -m examples.chronicler.local_bridge --dir examples/chronicler/local" examples/chronicler

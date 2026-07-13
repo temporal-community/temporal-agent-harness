@@ -1,0 +1,95 @@
+# Scoped justfile for the Chronicler D&D-archivist example (examples/chronicler).
+# Run from this directory: `just <recipe>`.
+#
+# Self-contained local stack:
+#   just temporal          # 1. local Temporal dev server (or bring your own)
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API + UI on :8000
+#   just worker            # 4. this example's agent worker
+#   just seed              # (optional) generate a short fake session recording via Gemini TTS
+# Optional: `just ui-dev` runs the Svelte Vite dev server on :5173 with /api proxied to :8000.
+#
+# uv installs the project's `examples` dependency group on demand. First-time setup:
+# `cp .env.example .env.local` and fill it in (Temporal connection + GEMINI_API_KEY). See README.md.
+
+set dotenv-filename := ".env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+ui := root / "ui"
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Show the Temporal connection these recipes will use (read from .env.local).
+config:
+    @echo "TEMPORAL_CONFIG_FILE = ${TEMPORAL_CONFIG_FILE:-<unset — set it in .env.local; see .env.example>}"
+    @echo "TEMPORAL_PROFILE     = ${TEMPORAL_PROFILE:-default}"
+    @echo "CHRONICLER_NOTIFIER  = ${CHRONICLER_NOTIFIER:-inapp}"
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Run the packaged session-manager worker for the Chronicler example.
+session-manager:
+    cd "{{root}}" && uv run --group examples python -m examples.chronicler.session_manager_worker
+
+# Build and serve the Svelte UI + FastAPI API on http://localhost:8000.
+server: app-build
+    cd "{{root}}" && uv run --group examples uvicorn examples.chronicler.app:app --host 0.0.0.0 --port 8000 --reload
+
+# Run the Chronicler agent worker.
+worker:
+    cd "{{root}}" && uv run --group examples python -m examples.chronicler.worker
+
+# Fulfills the agent's callback filesystem tools against a local dir (examples/chronicler/local by
+# default; override with `just local-bridge --dir ~/my-campaign`), so a remotely-deployed
+# Chronicler can read/write the DM's local files while chat stays in the web UI.
+local-bridge *ARGS:
+    cd "{{root}}" && uv run --group examples python -m examples.chronicler.local_bridge --dir examples/chronicler/local {{ARGS}}
+
+# One-time setup: create .env.local from the template (no-clobber). Then set GEMINI_API_KEY in it.
+setup:
+    @test -f .env.local && echo ".env.local already exists — leaving it as is." \
+        || { cp .env.example .env.local && echo "Created .env.local — now set GEMINI_API_KEY in it, then run 'just dev'."; }
+
+# Run the ENTIRE stack with one command (honcho): temporal + session-manager + server + worker +
+# local-bridge. The workers auto-restart on code changes (watchfiles) and the server hot-reloads
+# (uvicorn --reload); the local-bridge fulfills the agent's filesystem callback tools against
+# examples/chronicler/local; one Ctrl-C stops all of it. Bring your own Temporal? Run a subset:
+# `honcho start session-manager server worker local-bridge`.
+dev: app-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -f .env.local ]; then
+        cp .env.example .env.local
+        echo "→ Created .env.local from the template. Set GEMINI_API_KEY in it, then re-run 'just dev'."
+        exit 1
+    fi
+    if [ -z "${GEMINI_API_KEY:-}" ]; then
+        echo "→ GEMINI_API_KEY is not set in .env.local. Add your key (see https://aistudio.google.com/apikey), then re-run 'just dev'."
+        exit 1
+    fi
+    cd "{{root}}"
+    export TEMPORAL_CONFIG_FILE="${TEMPORAL_CONFIG_FILE:-temporal.local.toml}"
+    export TEMPORAL_PROFILE="${TEMPORAL_PROFILE:-default}"
+    exec uv run --group examples honcho start -d "{{root}}" -f "{{justfile_directory()}}/Procfile"
+
+# Generate a short fake D&D session recording (via Gemini TTS) + register it, so the demo is
+# runnable without a real recording. Writes sessions/session-01.wav and sessions/sessions.json.
+seed:
+    cd "{{root}}" && uv run --group examples python -m examples.chronicler.seed_session
+
+# Install the shared Svelte UI dependencies.
+app-install:
+    pnpm --dir "{{ui}}" install
+
+# Build the shared Svelte UI into temporal_agent_harness/ui/dist for packaging/server use.
+app-build:
+    pnpm --dir "{{ui}}" run build
+
+# Run the shared Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
+ui-dev:
+    pnpm --dir "{{ui}}" run dev

@@ -39,3 +39,6 @@ devserver/temporal-server
 
 # Local LLM configs
 .claude/
+
+# oh-my-claudecode tooling state (local only)
+.omc/
