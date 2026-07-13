@@ -22,8 +22,6 @@ client. See ``README.md``.
 
 from __future__ import annotations
 
-from typing import Any
-
 from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 
@@ -53,6 +51,15 @@ asks about the weather somewhere, call it (don't guess), then tell them the answ
 or two. For anything else, just reply directly."""
 
 
+@agent.tool_defn(inherently_safe=True)
+async def get_weather(city: str) -> str:
+    """Return the current weather for a city. `city` is a plain city name, e.g. "Paris"."""
+    # Canned lookup — this is a hello-world, no real weather service — but a genuine harness
+    # tool call: adapted onto the SDK with as_openai_agent_tool, it flows through run_tool and
+    # shows up on the turn stream as tool_requested -> tool_start -> tool_end.
+    return f"It's 72°F and sunny in {city}."
+
+
 @workflow.defn(name="OpenAIHelloAgent")
 @agent.defn
 class OpenAIHelloAgentWorkflow:
@@ -69,8 +76,6 @@ class OpenAIHelloAgentWorkflow:
         )
         # OpenAI conversation state, threaded across turns as the SDK's input-item list.
         self._conversation: list[TResponseInputItem] = []
-        # The single model-facing tool, built once (closes over nothing stateful).
-        self._weather_tool = _build_weather_tool()
 
     @workflow.run
     async def run(self, _config: AgentConfig) -> None:
@@ -84,7 +89,7 @@ class OpenAIHelloAgentWorkflow:
             name="Hello",
             instructions=SYSTEM_INSTRUCTION,
             model=DEFAULT_MODEL,
-            tools=[as_openai_agent_tool(self._runner, self._weather_tool)],
+            tools=[as_openai_agent_tool(self._runner, get_weather)],
         )
         input_items: list[TResponseInputItem] = [
             *self._conversation,
@@ -102,21 +107,3 @@ class OpenAIHelloAgentWorkflow:
 
         self._conversation = result.to_input_list()
         return TextReply(text=str(result.final_output))
-
-
-def _build_weather_tool() -> Any:
-    """Build the single ``get_weather`` harness tool.
-
-    An ``@agent.tool_defn`` so it runs in-workflow with the harness owning its approval +
-    lifecycle events; its docstring is the model-facing description. The body is a canned
-    lookup — this is a hello-world, so there is no real weather service — but it is a genuine
-    harness tool call: it flows through ``run_tool`` and shows up on the turn stream as
-    ``tool_requested`` → ``tool_start`` → ``tool_end``.
-    """
-
-    @agent.tool_defn(inherently_safe=True)
-    async def get_weather(city: str) -> str:
-        """Return the current weather for a city. `city` is a plain city name, e.g. "Paris"."""
-        return f"It's 72°F and sunny in {city}."
-
-    return get_weather
