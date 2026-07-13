@@ -2897,6 +2897,7 @@ examples = [
     { name = "fastapi", extra = ["standard"] },
     { name = "google-auth" },
     { name = "google-genai" },
+    { name = "openai-agents" },
     { name = "pydantic-monty" },
 ]
 
@@ -2934,6 +2935,7 @@ examples = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
     { name = "google-auth", specifier = ">=2.53.0" },
     { name = "google-genai", specifier = ">=2.0.0" },
+    { name = "openai-agents", specifier = ">=0.17.5" },
     { name = "pydantic-monty", specifier = ">=0.0.18" },
 ]
 

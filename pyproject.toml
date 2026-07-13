@@ -53,6 +53,7 @@ examples = [
     "google-auth>=2.53.0",
     "pydantic-monty>=0.0.18",  # the Monty sandbox the monty example runs scripts in
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
+    "openai-agents>=0.17.5",  # the OpenAI Agents SDK example (examples/openai_hello)
 ]
 # Test + lint tooling. The full tests/ suite imports both the Gemini SDK (the ai_sdks plugin
 # tests) and pydantic-monty (the monty example tests), which live in the `examples` group —
