@@ -1,0 +1,60 @@
+# Scoped justfile for the coding-agent callback-tools example.
+# Run from this directory: `just <recipe>`.
+#
+# This example fronts a durable Temporal CodingAgent with the stock OpenCode TUI (via the
+# `opencode_shim` server) AND the packaged Svelte UI — both observe the same workflow.
+#
+# Full stack, each in its own terminal, from THIS directory:
+#   just temporal          # 1. local Temporal dev server (skip if you bring your own)
+#   just session-manager   # 2. shared session-manager worker
+#   just server            # 3. packaged FastAPI API + Svelte UI on http://localhost:8000
+#   just worker            # 4. the CodingAgent worker
+#   just serve             # 5. the OpenCode shim (harness backend) on :4096
+# then attach the TUI:      opencode attach http://127.0.0.1:4096
+#
+# First-time setup: create the shared repo-root .env.local (`cp .env.example .env.local` from the
+# repo root) and set GEMINI_API_KEY. See README.md.
+
+# Read the single shared env file at the repo root (resolved relative to this justfile).
+set dotenv-path := "../../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".." / ".."
+shim := "examples.callback_tools.coding_agent.opencode_shim"
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Show the Temporal connection these recipes will use (read from the repo-root .env.local).
+config:
+    @echo "TEMPORAL_CONFIG_FILE = ${TEMPORAL_CONFIG_FILE:-<unset — set it in the repo-root .env.local>}"
+    @echo "TEMPORAL_PROFILE     = ${TEMPORAL_PROFILE:-default}"
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Run the shared session-manager worker (examples/session_manager_worker.py).
+session-manager:
+    cd "{{root}}" && uv run --group examples python -m examples.session_manager_worker
+
+# Serve the packaged FastAPI API + Svelte UI on http://localhost:8000, pointed at this example's
+# registry via the shared examples app entrypoint. Gives visibility/debuggability of the agent.
+server:
+    cd "{{root}}" && uv run --group examples python -m examples.app "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Run the CodingAgent worker.
+worker:
+    cd "{{root}}" && uv run --group examples python -m examples.callback_tools.coding_agent.worker
+
+# Run the OpenCode shim — fronts the CodingAgent workflow via the packaged server on :8000 (start
+# `server`, `session-manager`, and `worker` first). `dir` is the project the agent works on, given
+# FIRST and resolved relative to where you run `just` (defaults to that directory); any extra flags
+# follow. Examples:  just serve ~/some/project  |  just serve ./sub --port 4096
+#
+# `join` resolves `dir` against the invocation directory (and returns it unchanged if absolute),
+# so the project path is independent of the `cd` below — which is only so `python -m examples...`
+# finds the `examples` package, exactly like the worker/server recipes.
+serve dir="." *ARGS:
+    cd "{{root}}" && uv run --group examples python -m {{shim}} "{{join(invocation_directory(), dir)}}" {{ARGS}}
