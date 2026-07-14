@@ -1,12 +1,9 @@
 """The model router Nexus handler.
 
-``chat_completion`` is an **asynchronous, workflow-backed** Nexus operation, not a
-sync one: it starts a :class:`ModelRouterWorkflow` and returns its handle, so the
-operation completes when that workflow completes. This is required because model
-calls routinely take longer than the ~10s a Nexus sync operation allows (a sync
-operation resolves inline in the StartOperation RPC). The workflow runs the actual
-provider call as an activity (see ``activities.py``), making the whole thing
-durable and retryable.
+``chat_completion`` is an **asynchronous, workflow-backed** operation: it starts a
+:class:`ModelRouterWorkflow` and returns its handle, so the operation completes
+when that workflow does. See ``workflow.py`` for why it's workflow-backed rather
+than a (time-capped) sync operation.
 """
 
 from __future__ import annotations

@@ -2,13 +2,14 @@
 
 One operation, ``chat_completion``, takes a :class:`ChatCompletionRequest` and
 returns an OpenAI-SDK :class:`~openai.types.chat.ChatCompletion`. This is the LLM
-API, exposed over Nexus rather than HTTP. The handler implements it as an
-asynchronous, workflow-backed operation (model calls exceed the ~10s a Nexus sync
-operation allows) — but that is a handler concern; the contract is just in→out.
+API, exposed over Nexus rather than HTTP. Sync-vs-async is a handler concern
+(see ``handler.py`` / ``workflow.py``); the contract is just in→out.
 
-Light and side-effect-free to import (no OpenAI client, no worker) so callers can
-import it in workflow context to build a Nexus client. The handler lives in
-``handler.py``; the worker in ``worker.py``.
+Constructs nothing, but importing it does pull in the OpenAI SDK (for the
+``ChatCompletion`` type), so workflow-context callers import it under
+``workflow.unsafe.imports_passed_through()`` (see the example's
+``nexus_transport.py``). The handler lives in ``handler.py``; the worker in
+``worker.py``.
 """
 
 from __future__ import annotations

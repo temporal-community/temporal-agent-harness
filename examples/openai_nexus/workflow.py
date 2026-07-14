@@ -3,9 +3,8 @@
 This is the sibling of ``examples/openai_hello`` — same harness shape (one ``ask``
 handler, one ``get_weather`` tool) so it plugs into the shared web UI the same
 way — but with one difference that is the whole point: the LLM call does not go
-to the provider from a Temporal activity. It goes over a Nexus **sync
-operation** to a standalone model router (``nexus/model_router``), which is what
-calls OpenAI.
+to the provider from a Temporal activity. It goes over a Nexus operation to a
+standalone model router (``nexus/model_router``), which is what calls OpenAI.
 
 Why this needs the plugin's workflow-side seam rather than a plain custom model
 provider: in the Temporal integration the model call runs inside an activity,

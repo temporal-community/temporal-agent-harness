@@ -42,16 +42,15 @@ from .workflow import ModelRouterWorkflow
 
 
 def _connect_config() -> dict[str, Any]:
-    try:
-        cfg = ClientConfig.load_client_connect_config()
-        if cfg.get("target_host"):
-            return cfg
-    except Exception:
-        pass
-    return {
-        "target_host": os.environ.get("TEMPORAL_ADDRESS", "localhost:7233"),
-        "namespace": os.environ.get("TEMPORAL_NAMESPACE", "default"),
-    }
+    # Use the configured Temporal profile if there is one, else default to a local
+    # dev server so `just router` works with zero config. (Not swallowing errors:
+    # load_client_connect_config returns None fields rather than raising when unset.)
+    cfg = ClientConfig.load_client_connect_config()
+    if not cfg.get("target_host"):
+        cfg["target_host"] = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
+    if not cfg.get("namespace"):
+        cfg["namespace"] = os.environ.get("TEMPORAL_NAMESPACE", "default")
+    return cfg
 
 
 async def ensure_endpoint(client: Client, namespace: str) -> None:
