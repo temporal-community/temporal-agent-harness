@@ -1,0 +1,21 @@
+# Registry of agents the OpenAI-over-Nexus example UI can launch.
+#
+# The shared FastAPI server (examples/app.py) reads this file and passes the parsed
+# registry into the packaged SessionManagerWorkflow as its workflow init arg. The
+# manager then serves it back over the `available_agents` query, so the app server
+# can expose it at /api/agents without hardcoding the agent list.
+#
+# To expose a new agent: register its @workflow.defn on a worker, then add a
+# [[agents]] entry here.
+
+[[agents]]
+key = "openai-nexus"
+workflow_type = "OpenAINexusAgent"
+task_queue = "openai-nexus"
+label = "OpenAI over Nexus"
+description = """
+A hello-world OpenAI Agents SDK agent whose LLM calls travel over Temporal Nexus (not
+HTTP). Chat in plain text; it replies in prose and can call one tool (get_weather). Each
+model call is dispatched from the workflow over a Nexus sync operation to a standalone
+model router (nexus/model_router) that calls OpenAI. Non-streaming (Runner.run), so the
+UI shows the final reply plus tool_start / tool_end — but no live token stream."""
