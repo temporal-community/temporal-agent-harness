@@ -32,9 +32,10 @@ with workflow.unsafe.imports_passed_through():
     from nexus.model_router.models import ChatCompletionRequest
     from nexus.model_router.service import NEXUS_ENDPOINT, ModelRouterService
 
-# Bounds the whole Nexus operation (a model call, run as a router workflow +
-# activity with retries) — generous, since model calls can be slow.
-_OP_TIMEOUT = timedelta(minutes=5)
+# Bounds the whole Nexus operation. Set above the router's own total budget
+# (its activity schedule_to_close is 5m, incl. retries) so the operation doesn't
+# time out mid-retry — the router's timeouts are the real cap.
+_OP_TIMEOUT = timedelta(minutes=6)
 
 # Keys the OpenAI SDK sets on the create call that are client/transport-only or
 # streaming — they don't belong on the router wire.

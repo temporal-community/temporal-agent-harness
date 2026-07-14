@@ -61,7 +61,13 @@ async def main() -> None:
     )
 
     # The plugin supplies its own (OpenAI-aware, pydantic-compatible) data converter.
+    # Use the configured Temporal profile if any, else default to a local dev
+    # server (matching the router worker) so `just worker` runs with zero config.
     connect_config = ClientConfig.load_client_connect_config()
+    if not connect_config.get("target_host"):
+        connect_config["target_host"] = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
+    if not connect_config.get("namespace"):
+        connect_config["namespace"] = os.environ.get("TEMPORAL_NAMESPACE", "default")
     client = await Client.connect(**connect_config, plugins=[plugin])
 
     worker = Worker(

@@ -283,6 +283,12 @@ class TemporalOpenAIRunner(AgentRunner):
                 "use_local_activity (local activities do not support "
                 "heartbeats or the workflow stream signal channel)."
             )
+        if self.model_params.workflow_model_provider is not None:
+            raise AgentsWorkflowError(
+                "Runner.run_streamed is incompatible with "
+                "ModelActivityParameters.workflow_model_provider (a "
+                "non-streaming seam). Use Runner.run instead."
+            )
 
         converted_agent = self._prepare_workflow_run(starting_agent, kwargs)
 

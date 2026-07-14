@@ -30,6 +30,11 @@ class ModelRouterWorkflow:
         return await workflow.execute_activity_method(
             ModelRouterActivities.invoke_chat_completion,
             request,
-            start_to_close_timeout=timedelta(minutes=5),
+            # Per-attempt cap; schedule_to_close bounds the whole activity
+            # INCLUDING retries, so the total stays below the caller's Nexus
+            # operation timeout (nexus_transport._OP_TIMEOUT) — otherwise retries
+            # would be cut off mid-flight when the operation times out.
+            start_to_close_timeout=timedelta(minutes=2),
+            schedule_to_close_timeout=timedelta(minutes=5),
             retry_policy=RetryPolicy(maximum_attempts=3),
         )

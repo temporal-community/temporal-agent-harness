@@ -274,6 +274,17 @@ class _TemporalModelStub(Model):  # type:ignore[reportUnusedClass]
                 "workflow stream signal channel)."
             )
 
+        # workflow_model_provider is a non-streaming seam: get_response resolves
+        # and calls the model in workflow context, but the streaming path runs in
+        # an activity. Fail loudly rather than silently ignoring the configured
+        # provider and streaming via the (possibly unconfigured) activity path.
+        if self.model_params.workflow_model_provider is not None:
+            raise ValueError(
+                "workflow_model_provider is not supported with "
+                "Runner.run_streamed (it is a non-streaming seam). Use "
+                "Runner.run, or drive streaming through the activity path."
+            )
+
         # Resolve the opaque per-call routing token: prefer the configured
         # provider (called here, in workflow context), falling back to the
         # static streaming_topic. The activity hands whatever this is to its
