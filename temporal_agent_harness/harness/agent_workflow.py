@@ -431,6 +431,29 @@ def _enclosing_workflow_class() -> type | None:
     return None
 
 
+def current_stream_context() -> TurnStreamContext | None:
+    """Resolve the in-flight turn's stream context for the running harness agent.
+
+    Ambient lookup, no threading required: gets the currently-executing workflow
+    instance (:func:`temporalio.workflow.instance`) and reads the
+    :class:`AgentWorkflowRunner` it holds — harness agents store it as ``self._runner``.
+    Returns the runner's :attr:`~AgentWorkflowRunner.current_stream_context` (which is
+    ``None`` between turns), or ``None`` when we're not in a workflow at all, or the
+    running workflow is not a harness agent (no ``_runner``).
+
+    This lets an AI-SDK client/model-stub obtain the routing context for its streamed
+    activity without being handed the runner explicitly. It is concurrency- and
+    replay-safe: ``workflow.instance()`` resolves per running workflow execution, so it
+    always returns the right agent's context even with many workflows on one worker.
+    """
+    if not workflow.in_workflow():
+        return None
+    runner = getattr(workflow.instance(), "_runner", None)
+    if not isinstance(runner, AgentWorkflowRunner):
+        return None
+    return runner.current_stream_context
+
+
 def _assert_standardized_agent_signature() -> None:
     """Enforce the uniform agent-input contract for the workflow building this runner.
 

@@ -8,7 +8,7 @@ requires-python = ">=3.11"
 # pydantic. AI-SDK and external-storage needs are opt-in extras below, so installing the
 # harness doesn't drag in Gemini or boto3.
 dependencies = [
-    "temporalio>=1.27.2",  # provides temporalio.contrib.workflow_streams (experimental)
+    "temporalio>=1.30.0",  # provides temporalio.contrib.workflow_streams (experimental)
     "pydantic>=2.0",
 ]
 
@@ -24,7 +24,15 @@ s3 = [
     # temporalio's bundled S3 storage driver (temporalio.contrib.aws.s3driver) imports
     # aioboto3 AND types_aiobotocore_s3 at runtime; the [aioboto3] extra pulls both. Bare
     # aioboto3 is not enough to load the driver.
-    "temporalio[aioboto3]>=1.27.2",
+    "temporalio[aioboto3]>=1.30.0",
+]
+# The OpenAI Agents SDK integration: temporal_agent_harness.ai_sdks.openai_agents
+# (vendored from temporalio.contrib.openai_agents @ sdk-python main). The trace interceptor
+# imports opentelemetry at module load, so this extra pulls temporalio's opentelemetry extra.
+openai-agents = [
+    "openai-agents>=0.17.5",
+    "mcp>=1.9.4,<2",
+    "temporalio[opentelemetry]>=1.30.0",
 ]
 # Packaged FastAPI server and browser UI assets.
 ui = [
@@ -45,6 +53,7 @@ examples = [
     "google-auth>=2.53.0",
     "pydantic-monty>=0.0.18",  # the Monty sandbox the monty example runs scripts in
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
+    "openai-agents>=0.17.5",  # the OpenAI Agents SDK example (examples/openai_hello)
 ]
 # Test + lint tooling. The full tests/ suite imports both the Gemini SDK (the ai_sdks plugin
 # tests) and pydantic-monty (the monty example tests), which live in the `examples` group —
@@ -55,7 +64,12 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "setuptools>=68",  # package artifact tests call the build backend directly
     "moto[server]>=5.2.1",  # threaded S3 mock for the utils/large_payload S3-driver test
-    "temporalio[aioboto3]>=1.27.2",  # S3 storage driver under test (mirrors the `s3` extra)
+    "temporalio[aioboto3]>=1.30.0",  # S3 storage driver under test (mirrors the `s3` extra)
+    # OpenAI Agents integration + its opentelemetry/mcp deps, so the vendored plugin and its
+    # tests import under a plain `uv run pytest` (mirrors the `openai-agents` extra).
+    "openai-agents>=0.17.5",
+    "mcp>=1.9.4,<2",
+    "temporalio[opentelemetry]>=1.30.0",
     { include-group = "examples" },
 ]
 
