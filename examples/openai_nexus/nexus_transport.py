@@ -18,6 +18,7 @@ and the router owns the wire types.
 from __future__ import annotations
 
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any
 
 from openai import NotGiven, Omit
@@ -28,14 +29,12 @@ with workflow.unsafe.imports_passed_through():
     from agents import Model, OpenAIChatCompletionsModel
     from openai.types.chat import ChatCompletion
 
-    from nexus.model_router import (
-        NEXUS_ENDPOINT,
-        ChatCompletionRequest,
-        ModelRouterService,
-    )
+    from nexus.model_router.models import ChatCompletionRequest
+    from nexus.model_router.service import NEXUS_ENDPOINT, ModelRouterService
 
-# Bounds the Nexus operation (a single model call).
-_OP_TIMEOUT = timedelta(minutes=2)
+# Bounds the whole Nexus operation (a model call, run as a router workflow +
+# activity with retries) — generous, since model calls can be slow.
+_OP_TIMEOUT = timedelta(minutes=5)
 
 # Keys the OpenAI SDK sets on the create call that are client/transport-only or
 # streaming — they don't belong on the router wire.
@@ -83,17 +82,14 @@ class NexusChatClient:
     base_url = "nexus://model-router"
 
     def __init__(self) -> None:
-        self.chat = _NexusChat()
-
-
-class _NexusChat:
-    def __init__(self) -> None:
-        self.completions = NexusChatCompletions()
+        self.chat = SimpleNamespace(completions=NexusChatCompletions())
 
 
 def nexus_model_provider(model_name: str | None) -> Model:
     """Resolve a workflow-side Model whose transport is the router Nexus service."""
+    if model_name is None:
+        raise ValueError("nexus_model_provider requires a model name")
     return OpenAIChatCompletionsModel(
-        model=model_name or "gpt-4.1-mini",
+        model=model_name,
         openai_client=NexusChatClient(),  # type: ignore[arg-type]
     )

@@ -17,7 +17,8 @@ Streaming is intentionally **not** implemented — this uses `Runner.run`.
 
  nexus/model_router/               the "LLM API over Nexus" (standalone)
    models.py / service.py   ChatCompletionRequest -> ChatCompletion (its own wire types)
-   handler.py               forwards to OpenAI today; the seam for LiteLLM/multi-provider
+   handler.py / workflow.py  async, workflow-backed operation (model calls exceed sync's ~10s)
+   activities.py            the OpenAI call; the seam for LiteLLM/multi-provider
    worker.py                `just router` — creates the endpoint, calls OpenAI
 ```
 
@@ -44,12 +45,17 @@ Runner.run (workflow)
        └─ OpenAIChatCompletionsModel(client = NexusChatClient)
             └─ chat.completions.create(...)                 # LiteLLM/OpenAI-shaped request
                  └─ create_nexus_client(ModelRouterService) → chat_completion op
-                      └─ nexus/model_router handler → OpenAI → ChatCompletion
+                      └─ ModelRouterWorkflow → invoke_chat_completion activity → OpenAI
 ```
+
+The `chat_completion` operation is asynchronous (workflow-backed), not sync,
+because model calls exceed the ~10s a Nexus sync operation allows — so the router
+starts a `ModelRouterWorkflow` that runs the call as a retryable activity, and the
+caller's `execute_operation` durably waits for it.
 
 The wire format is the OpenAI Chat Completions shape (what LiteLLM/OpenRouter
 standardize on); `nexus/model_router` owns those wire types. LiteLLM's real value
-(multi-provider fan-out) belongs **in the router handler**, server-side, where it
+(multi-provider fan-out) belongs **in the router's activity**, server-side, where it
 can run unrestricted — today it just calls OpenAI.
 
 Because `get_weather` is adapted with `as_openai_agent_tool`, a weather question
@@ -86,4 +92,4 @@ The turn's UI-visible event sequence is
   Nexus call can originate there. Its converters are pure/deterministic and the
   only workflow command is the Nexus op, so the run is replay-safe.
 - The router forwards to OpenAI with retries disabled; making it multi-provider is
-  a `handler.py` change (drop in `litellm.acompletion`), no client changes.
+  an `activities.py` change (drop in `litellm.acompletion`), no client changes.

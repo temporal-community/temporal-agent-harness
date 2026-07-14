@@ -3,9 +3,11 @@
 Run from the repo root with:
     uv run --group examples python -m nexus.model_router.worker
 
-Registers ``ModelRouterServiceHandler`` on the ``model-router`` task queue and
-creates the Nexus endpoint (idempotent) that maps ``NEXUS_ENDPOINT`` -> this
-worker. Any workflow (in this namespace) can then call the router over Nexus.
+Registers the ``ModelRouterServiceHandler`` Nexus service, the
+``ModelRouterWorkflow`` that backs its (asynchronous) operation, and the activity
+that calls the model — all on the ``model-router`` task queue — and creates the
+Nexus endpoint (idempotent) mapping ``NEXUS_ENDPOINT`` -> this worker. Any
+workflow (in this namespace) can then call the router over Nexus.
 
 Uses the pydantic data converter so the router's dataclass request and the
 OpenAI ``ChatCompletion`` response serialize cleanly — and compatibly with the
@@ -33,8 +35,10 @@ from temporalio.envconfig import ClientConfig
 from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import Worker
 
+from .activities import ModelRouterActivities
 from .handler import ModelRouterServiceHandler
 from .service import NEXUS_ENDPOINT, TASK_QUEUE
+from .workflow import ModelRouterWorkflow
 
 
 def _connect_config() -> dict[str, Any]:
@@ -94,9 +98,12 @@ async def main() -> None:
     namespace = cfg.get("namespace") or client.namespace
     await ensure_endpoint(client, namespace)
 
+    activities = ModelRouterActivities()
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
+        workflows=[ModelRouterWorkflow],
+        activities=[activities.invoke_chat_completion],
         nexus_service_handlers=[ModelRouterServiceHandler()],
     )
     print(

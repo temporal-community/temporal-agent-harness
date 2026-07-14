@@ -30,8 +30,10 @@ class ModelRouterService:
 |---|---|
 | `models.py` | `ChatCompletionRequest` — the router's own request model. |
 | `service.py` | `ModelRouterService` contract + `NEXUS_ENDPOINT` / `TASK_QUEUE`. Light, import-safe in workflow context. |
-| `handler.py` | `ModelRouterServiceHandler` — forwards to OpenAI. The seam for LiteLLM / multi-provider routing. |
-| `worker.py` | Standalone worker; creates the Nexus endpoint and serves the handler. |
+| `handler.py` | `ModelRouterServiceHandler` — the async, workflow-backed operation; starts `ModelRouterWorkflow` per call. |
+| `workflow.py` | `ModelRouterWorkflow` — backs the operation so it isn't time-capped; runs the model call as an activity. |
+| `activities.py` | `ModelRouterActivities.invoke_chat_completion` — the actual provider call. The seam for LiteLLM / multi-provider routing. |
+| `worker.py` | Standalone worker; serves the handler + workflow + activity and creates the Nexus endpoint. |
 
 ## Run
 
@@ -60,7 +62,10 @@ to build its Nexus client.
 
 ## Limitations (prototype)
 
-- Non-streaming only (`chat_completion` is a sync operation).
+- `chat_completion` is an asynchronous, **workflow-backed** operation (a Nexus
+  *sync* operation caps at ~10s, which model calls exceed): each call starts a
+  `ModelRouterWorkflow` that runs the provider call as a retryable activity. Still
+  non-streaming (one request → one response).
 - Always routes to OpenAI; `handler.py` is where provider selection / LiteLLM
   would go.
 - Uses `temporalio.contrib.pydantic.pydantic_data_converter`, compatible with the

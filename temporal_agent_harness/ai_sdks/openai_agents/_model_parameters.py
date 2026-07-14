@@ -80,9 +80,9 @@ class ModelActivityParameters:
     callable (given the requested model name) and awaits its ``get_response``
     directly, INSTEAD of scheduling the ``invoke_model_activity`` activity. The
     resolved model runs in workflow context, so — unlike the activity path's
-    worker-side ``model_provider`` — it may do workflow-only things, most usefully
-    make its transport a Nexus call (``workflow.create_nexus_client(...)``), which
-    is impossible from an activity.
+    worker-side ``model_provider`` — it may do workflow-only things, e.g. make its
+    transport a Nexus call (``workflow.create_nexus_client(...)``), which is
+    impossible from an activity.
 
     It is the workflow-side analog of the activity path's ``model_provider``: the
     plugin stays agnostic about the model's transport. Because the stub hands the

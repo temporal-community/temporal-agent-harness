@@ -16,6 +16,6 @@ label = "OpenAI over Nexus"
 description = """
 A hello-world OpenAI Agents SDK agent whose LLM calls travel over Temporal Nexus (not
 HTTP). Chat in plain text; it replies in prose and can call one tool (get_weather). Each
-model call is dispatched from the workflow over a Nexus sync operation to a standalone
+model call is dispatched from the workflow over a Nexus operation to a standalone
 model router (nexus/model_router) that calls OpenAI. Non-streaming (Runner.run), so the
 UI shows the final reply plus tool_start / tool_end — but no live token stream."""

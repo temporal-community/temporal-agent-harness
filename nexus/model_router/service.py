@@ -1,8 +1,10 @@
 """The model router Nexus service contract.
 
-One sync operation, ``chat_completion``, takes a :class:`ChatCompletionRequest`
-and returns an OpenAI-SDK :class:`~openai.types.chat.ChatCompletion`. This is the
-LLM API, exposed over Nexus rather than HTTP.
+One operation, ``chat_completion``, takes a :class:`ChatCompletionRequest` and
+returns an OpenAI-SDK :class:`~openai.types.chat.ChatCompletion`. This is the LLM
+API, exposed over Nexus rather than HTTP. The handler implements it as an
+asynchronous, workflow-backed operation (model calls exceed the ~10s a Nexus sync
+operation allows) — but that is a handler concern; the contract is just in→out.
 
 Light and side-effect-free to import (no OpenAI client, no worker) so callers can
 import it in workflow context to build a Nexus client. The handler lives in

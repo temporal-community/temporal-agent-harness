@@ -4,20 +4,16 @@ Run from the repo root with:
     uv run --group examples python -m examples.openai_nexus.worker
 
 The sibling of ``examples/openai_hello``'s worker, with one change: model calls
-are routed over Nexus to the standalone model router
-(``nexus/model_router``) instead of running as the ``invoke_model_activity``
-activity. That routing is wired here via the plugin's workflow-side seam:
+are routed over Nexus to the standalone model router (``nexus/model_router``)
+instead of running as the ``invoke_model_activity`` activity. That routing is
+wired here via the plugin's workflow-side seam:
 
     ModelActivityParameters(workflow_model_provider=nexus_model_provider)
 
-``nexus_model_provider`` (see ``nexus_transport.py``) hands the SDK an
-``OpenAIChatCompletionsModel`` whose transport is a Nexus call. The router worker
-must be running too (``uv run --group examples python -m nexus.model_router.worker``,
-or ``just router`` in ``nexus/model_router``); it owns and creates the endpoint.
-
-Unlike ``openai_hello``, there is NO streaming seam (no ``stream_to_provider`` /
-``observer_factory``): the router path is non-streaming, so the agent uses
-``Runner.run``. The UI still shows the final reply and tool lifecycle events.
+See ``nexus_transport.py`` for how that provider swaps the transport. The router
+worker must be running too (``just router`` in ``nexus/model_router``); it owns
+and creates the endpoint. There is no streaming seam — the router path is
+non-streaming, so the agent uses ``Runner.run``.
 
 Env vars (set in .env.local — see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile

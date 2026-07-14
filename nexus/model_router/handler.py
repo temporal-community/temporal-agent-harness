@@ -1,47 +1,42 @@
 """The model router Nexus handler.
 
-Runs in a normal worker (no workflow sandbox), so it can do real I/O freely. It
-receives a chat-completions request and returns the model's response.
-
-Today it routes every request straight to OpenAI's chat-completions endpoint.
-This is exactly the seam where a real router would select a backend from
-``request.model`` and fan out to many providers — e.g. by calling
-``litellm.acompletion(...)`` here instead of the OpenAI client. Because this runs
-server-side (not in a workflow), a heavy multi-provider library like LiteLLM
-belongs here, not on the caller.
+``chat_completion`` is an **asynchronous, workflow-backed** Nexus operation, not a
+sync one: it starts a :class:`ModelRouterWorkflow` and returns its handle, so the
+operation completes when that workflow completes. This is required because model
+calls routinely take longer than the ~10s a Nexus sync operation allows (a sync
+operation resolves inline in the StartOperation RPC). The workflow runs the actual
+provider call as an activity (see ``activities.py``), making the whole thing
+durable and retryable.
 """
 
 from __future__ import annotations
 
+import uuid
+
 import nexusrpc.handler
-from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
+
+from temporalio import nexus
 
 from .models import ChatCompletionRequest
 from .service import ModelRouterService
+from .workflow import ModelRouterWorkflow
 
 
 @nexusrpc.handler.service_handler(service=ModelRouterService)
 class ModelRouterServiceHandler:
-    """Routes chat-completion requests to a provider. Today: always OpenAI.
+    """Serves ``chat_completion`` by starting a router workflow per call."""
 
-    Defaults to an ``AsyncOpenAI`` client with retries disabled (so Temporal /
-    Nexus retries govern retry behavior); pass a client to point elsewhere.
-    """
-
-    def __init__(self, client: AsyncOpenAI | None = None) -> None:
-        self._client = client or AsyncOpenAI(max_retries=0)
-
-    @nexusrpc.handler.sync_operation
+    @nexus.workflow_run_operation
     async def chat_completion(
         self,
-        ctx: nexusrpc.handler.StartOperationContext,  # noqa: ARG002
+        ctx: nexus.WorkflowRunOperationContext,
         request: ChatCompletionRequest,
-    ) -> ChatCompletion:
-        # TODO(router): pick a backend from request.model instead of always OpenAI.
-        # A multi-provider router would call litellm.acompletion(...) here.
-        return await self._client.chat.completions.create(
-            model=request.model,
-            messages=request.messages,
-            **request.params,
+    ) -> nexus.WorkflowHandle[ChatCompletion]:
+        # The workflow runs on this handler worker's task queue by default — the
+        # same worker that registers ModelRouterWorkflow (see worker.py).
+        return await ctx.start_workflow(
+            ModelRouterWorkflow.run,
+            request,
+            id=f"model-router-{uuid.uuid4()}",
         )
