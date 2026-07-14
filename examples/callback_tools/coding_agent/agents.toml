@@ -1,0 +1,16 @@
+# Registry of agents the coding callback-tools example can launch.
+#
+# The FastAPI server in app.py reads this file and passes the parsed registry into the packaged
+# SessionManagerWorkflow, which launches the agent as a child workflow on its task queue. Both
+# frontends observe the SAME workflow: the OpenCode TUI (via the shim) and the packaged Svelte UI.
+
+[[agents]]
+key = "coding"
+workflow_type = "CodingAgent"
+task_queue = "coding-agent"
+label = "Coding Agent (Callback Tools)"
+description = """
+A conversational coding agent that works on your project. Ask it to explain code, fix a bug, add a
+feature, write tests, or run a command; an LLM reasons and calls bash / read / write / edit / grep
+/ glob. Those are CALLBACK tools: the agent has no disk of its own, so a client on your machine
+(the OpenCode shim) executes each call — after you approve it — against your local project."""
