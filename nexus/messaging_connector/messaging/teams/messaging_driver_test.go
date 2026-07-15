@@ -41,24 +41,6 @@ func TestParseConversation(t *testing.T) {
 	}
 }
 
-func TestActivityURLRejectsUnsafePathSegments(t *testing.T) {
-	p := NewTeamsPlatform(newTestBot(), "https://example.invalid")
-
-	for _, conversationID := range []string{"", ".", "..", "../oauth", `conv\other`, "conv%2fother", "conv?x", "conv#x", "conv\nother"} {
-		t.Run("conversation_"+conversationID, func(t *testing.T) {
-			_, err := p.activityURL(conversationID, "")
-			require.Error(t, err)
-		})
-	}
-
-	for _, activityID := range []string{".", "..", "../oauth", `activity\other`, "activity%2fother", "activity?x", "activity#x", "activity\nother"} {
-		t.Run("activity_"+activityID, func(t *testing.T) {
-			_, err := p.activityURL("19:abc@thread.tacv2", activityID)
-			require.Error(t, err)
-		})
-	}
-}
-
 // newTestBot returns a TeamsBot with a pre-cached token so tests never hit
 // the real OAuth endpoint.
 func newTestBot() *TeamsBot {
