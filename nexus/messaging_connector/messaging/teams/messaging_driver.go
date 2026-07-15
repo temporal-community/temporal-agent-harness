@@ -43,6 +43,50 @@ type TeamsPlatform struct {
 	serviceURL string
 }
 
+// TeamMessageActivity is the Bot Framework Activity JSON shape used by Teams
+// webhooks and outbound Teams message sends.
+type TeamMessageActivity struct {
+	Type         string                   `json:"type"`
+	ID           string                   `json:"id,omitempty"`
+	ReplyToID    string                   `json:"replyToId,omitempty"`
+	Timestamp    string                   `json:"timestamp,omitempty"`
+	ServiceURL   string                   `json:"serviceUrl,omitempty"`
+	ChannelID    string                   `json:"channelId,omitempty"`
+	From         *TeamChannelAccount      `json:"from,omitempty"`
+	Conversation *TeamConversationAccount `json:"conversation,omitempty"`
+	Recipient    *TeamChannelAccount      `json:"recipient,omitempty"`
+	Text         string                   `json:"text,omitempty"`
+	TextFormat   string                   `json:"textFormat,omitempty"`
+	// Value carries an Adaptive Card Action.Submit's data object on incoming
+	// button-click activities (delivered as type "message" with empty text).
+	Value       json.RawMessage        `json:"value,omitempty"`
+	Attachments []TeamAttachment       `json:"attachments,omitempty"`
+	Entities    []TeamStreamInfoEntity `json:"entities,omitempty"`
+}
+
+// TeamAttachment is a Bot Framework Attachment, used to send rich cards
+// (e.g. Adaptive Cards) as part of a Teams activity.
+type TeamAttachment struct {
+	ContentType string          `json:"contentType"`
+	Content     json.RawMessage `json:"content,omitempty"`
+}
+
+type TeamChannelAccount struct {
+	ID string `json:"id,omitempty"`
+}
+
+type TeamConversationAccount struct {
+	ID               string `json:"id,omitempty"`
+	ConversationType string `json:"conversationType,omitempty"`
+}
+
+type TeamStreamInfoEntity struct {
+	Type           string `json:"type"`
+	StreamID       string `json:"streamId,omitempty"`
+	StreamType     string `json:"streamType,omitempty"`
+	StreamSequence *int   `json:"streamSequence,omitempty"`
+}
+
 // NewTeamsPlatform creates a TeamsPlatform from a Teams bot and Bot Framework service URL.
 func NewTeamsPlatform(bot *TeamsBot, serviceURL string) *TeamsPlatform {
 	serviceURL = strings.TrimSpace(serviceURL)
@@ -245,9 +289,9 @@ func (p *TeamsPlatform) PostApprovalPrompt(ctx context.Context, input msgiface.A
 	if err != nil {
 		return err
 	}
-	_, err = p.sendActivity(ctx, http.MethodPost, endpoint, msgiface.TeamMessageActivity{
+	_, err = p.sendActivity(ctx, http.MethodPost, endpoint, TeamMessageActivity{
 		Type: activityTypeMessage,
-		Attachments: []msgiface.TeamAttachment{{
+		Attachments: []TeamAttachment{{
 			ContentType: adaptiveCardContentType,
 			Content:     card,
 		}},
@@ -269,7 +313,7 @@ func (p *TeamsPlatform) UpdateActivity(ctx context.Context, sessionID, activityI
 	if err != nil {
 		return err
 	}
-	_, err = p.sendActivity(ctx, http.MethodPut, endpoint, msgiface.TeamMessageActivity{
+	_, err = p.sendActivity(ctx, http.MethodPut, endpoint, TeamMessageActivity{
 		Type:       activityTypeMessage,
 		Text:       text,
 		TextFormat: "markdown",
@@ -302,7 +346,7 @@ func (p *TeamsPlatform) postActivity(ctx context.Context, conversationID, replyT
 	if err != nil {
 		return "", err
 	}
-	resp, err := p.sendActivity(ctx, http.MethodPost, endpoint, msgiface.TeamMessageActivity{
+	resp, err := p.sendActivity(ctx, http.MethodPost, endpoint, TeamMessageActivity{
 		Type:       activityTypeMessage,
 		Text:       text,
 		TextFormat: "markdown",
@@ -321,7 +365,7 @@ func (p *TeamsPlatform) updateMessageActivity(ctx context.Context, conversationI
 	if err != nil {
 		return err
 	}
-	_, err = p.sendActivity(ctx, http.MethodPut, endpoint, msgiface.TeamMessageActivity{
+	_, err = p.sendActivity(ctx, http.MethodPut, endpoint, TeamMessageActivity{
 		Type:       activityTypeMessage,
 		Text:       text,
 		TextFormat: "markdown",
@@ -337,18 +381,18 @@ func (p *TeamsPlatform) sendStreamingActivity(ctx context.Context, input streami
 	if err != nil {
 		return "", err
 	}
-	resp, err := p.sendActivity(ctx, http.MethodPost, endpoint, msgiface.TeamMessageActivity{
+	resp, err := p.sendActivity(ctx, http.MethodPost, endpoint, TeamMessageActivity{
 		Type:       input.ActivityType,
 		ServiceURL: p.serviceURL,
 		ChannelID:  defaultChannelID,
-		From: &msgiface.TeamChannelAccount{
+		From: &TeamChannelAccount{
 			ID: p.bot.AppID,
 		},
-		Conversation: &msgiface.TeamConversationAccount{
+		Conversation: &TeamConversationAccount{
 			ID: input.ConversationID,
 		},
 		Text: input.Text,
-		Entities: []msgiface.TeamStreamInfoEntity{{
+		Entities: []TeamStreamInfoEntity{{
 			Type:           streamInfoType,
 			StreamID:       input.StreamID,
 			StreamType:     input.StreamType,
@@ -361,7 +405,7 @@ func (p *TeamsPlatform) sendStreamingActivity(ctx context.Context, input streami
 	return resp.ID, nil
 }
 
-func (p *TeamsPlatform) sendActivity(ctx context.Context, method, endpoint string, act msgiface.TeamMessageActivity) (resourceResponse, error) {
+func (p *TeamsPlatform) sendActivity(ctx context.Context, method, endpoint string, act TeamMessageActivity) (resourceResponse, error) {
 	if p.bot == nil {
 		return resourceResponse{}, errors.New("Teams bot is required")
 	}

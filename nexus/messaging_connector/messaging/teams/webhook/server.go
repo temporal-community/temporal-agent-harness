@@ -10,7 +10,6 @@ import (
 
 	agentiface "github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/agent"
 	"github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/connector"
-	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/messaging"
 	"github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/messaging/teams"
 	"go.temporal.io/sdk/client"
 )
@@ -49,7 +48,7 @@ func (s *webhookServer) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var act msgiface.TeamMessageActivity
+	var act teams.TeamMessageActivity
 	if err := json.NewDecoder(r.Body).Decode(&act); err != nil {
 		http.Error(w, "failed to parse activity", http.StatusBadRequest)
 		return
@@ -82,7 +81,7 @@ func (s *webhookServer) handleMessages(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *webhookServer) signalIncomingMessage(ctx context.Context, act msgiface.TeamMessageActivity) {
+func (s *webhookServer) signalIncomingMessage(ctx context.Context, act teams.TeamMessageActivity) {
 	wfID, input := messageWorkflowInput(act)
 	if _, err := s.tc.ExecuteWorkflow(ctx,
 		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
@@ -93,7 +92,7 @@ func (s *webhookServer) signalIncomingMessage(ctx context.Context, act msgiface.
 	}
 }
 
-func messageWorkflowInput(act msgiface.TeamMessageActivity) (string, agentiface.ConnectorWorkflowInput) {
+func messageWorkflowInput(act teams.TeamMessageActivity) (string, agentiface.ConnectorWorkflowInput) {
 	sessionID := fmt.Sprintf("teams:%s", conversationID(act))
 	interactionID := act.ID
 	if interactionID == "" {
@@ -139,7 +138,7 @@ func decodeApprovalValue(raw json.RawMessage) (teams.ApprovalButtonValue, bool) 
 // handleApprovalSubmit routes an approval button click to the connector
 // workflow, then replaces the card so the buttons can't be clicked again.
 // The workflow ID dedupes repeat clicks for the same tool ID.
-func (s *webhookServer) handleApprovalSubmit(ctx context.Context, act msgiface.TeamMessageActivity, val teams.ApprovalButtonValue) {
+func (s *webhookServer) handleApprovalSubmit(ctx context.Context, act teams.TeamMessageActivity, val teams.ApprovalButtonValue) {
 	wfID := agentiface.ConnectorWorkflowID(defaultIdentity, val.SessionID, "approval-"+val.ToolID)
 	if _, err := s.tc.ExecuteWorkflow(ctx,
 		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
@@ -172,14 +171,14 @@ func (s *webhookServer) handleApprovalSubmit(ctx context.Context, act msgiface.T
 	}
 }
 
-func conversationID(act msgiface.TeamMessageActivity) string {
+func conversationID(act teams.TeamMessageActivity) string {
 	if act.Conversation == nil {
 		return ""
 	}
 	return act.Conversation.ID
 }
 
-func senderID(act msgiface.TeamMessageActivity) string {
+func senderID(act teams.TeamMessageActivity) string {
 	if act.From == nil {
 		return ""
 	}

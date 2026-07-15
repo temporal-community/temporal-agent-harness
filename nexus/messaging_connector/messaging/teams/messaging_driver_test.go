@@ -55,7 +55,7 @@ func newTestBot() *TeamsBot {
 func TestPostApprovalPrompt(t *testing.T) {
 	var gotURL string
 	var gotAuth string
-	var gotBody msgiface.TeamMessageActivity
+	var gotBody TeamMessageActivity
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotURL = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
@@ -104,7 +104,7 @@ func TestUpdateActivity(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotURL = r.URL.Path
-		var body msgiface.TeamMessageActivity
+		var body TeamMessageActivity
 		raw, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(raw, &body)
 		gotText = body.Text
@@ -131,11 +131,11 @@ func TestStreamLifecycle(t *testing.T) {
 	type request struct {
 		method string
 		path   string
-		body   msgiface.TeamMessageActivity
+		body   TeamMessageActivity
 	}
 	var requests []request
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body msgiface.TeamMessageActivity
+		var body TeamMessageActivity
 		raw, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(raw, &body)
 		requests = append(requests, request{method: r.Method, path: r.URL.Path, body: body})
@@ -204,11 +204,11 @@ func TestStreamChannelAndGroupChatUseMessageUpdates(t *testing.T) {
 			type request struct {
 				method string
 				path   string
-				body   msgiface.TeamMessageActivity
+				body   TeamMessageActivity
 			}
 			var requests []request
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				var body msgiface.TeamMessageActivity
+				var body TeamMessageActivity
 				raw, _ := io.ReadAll(r.Body)
 				require.NoError(t, json.Unmarshal(raw, &body))
 				requests = append(requests, request{method: r.Method, path: r.URL.Path, body: body})
@@ -274,11 +274,11 @@ func TestStreamUnknownConversationFallsBackOnStreaming405(t *testing.T) {
 	type request struct {
 		method string
 		path   string
-		body   msgiface.TeamMessageActivity
+		body   TeamMessageActivity
 	}
 	var requests []request
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body msgiface.TeamMessageActivity
+		var body TeamMessageActivity
 		raw, _ := io.ReadAll(r.Body)
 		require.NoError(t, json.Unmarshal(raw, &body))
 		requests = append(requests, request{method: r.Method, path: r.URL.Path, body: body})

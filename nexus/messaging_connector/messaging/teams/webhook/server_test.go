@@ -6,13 +6,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/messaging"
+	"github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/messaging/teams"
 )
 
 func TestMessageWorkflowInputPropagatesConversationType(t *testing.T) {
 	for _, conversationType := range []string{"personal", "channel", "groupChat"} {
 		t.Run(conversationType, func(t *testing.T) {
-			var activity msgiface.TeamMessageActivity
+			var activity teams.TeamMessageActivity
 			require.NoError(t, json.Unmarshal([]byte(`{
 				"type":"message",
 				"id":"message-1",
