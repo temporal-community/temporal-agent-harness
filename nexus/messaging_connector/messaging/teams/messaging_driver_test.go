@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/messaging"
 
@@ -38,17 +37,6 @@ func TestParseConversation(t *testing.T) {
 				assert.Equal(t, tc.want, got)
 			}
 		})
-	}
-}
-
-// newTestBot returns a TeamsBot with a pre-cached token so tests never hit
-// the real OAuth endpoint.
-func newTestBot() *TeamsBot {
-	return &TeamsBot{
-		Client:      http.DefaultClient,
-		AppID:       "test-app-id",
-		accessToken: "test-token",
-		expiresAt:   time.Now().Add(time.Hour),
 	}
 }
 

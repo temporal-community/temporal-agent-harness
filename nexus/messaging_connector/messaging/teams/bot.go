@@ -1,6 +1,7 @@
 package teams
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,9 +15,10 @@ import (
 )
 
 const (
-	tokenURLFormat  = "https://login.microsoftonline.com/%s/oauth2/v2.0/token"
-	defaultScope    = "https://api.botframework.com/.default"
-	tokenExpirySkew = time.Minute
+	tokenURLFormat   = "https://login.microsoftonline.com/%s/oauth2/v2.0/token"
+	defaultScope     = "https://api.botframework.com/.default"
+	defaultChannelID = "msteams"
+	tokenExpirySkew  = time.Minute
 )
 
 // TeamsBot holds authenticated Microsoft Bot Framework credentials.
@@ -121,7 +123,136 @@ func (b *TeamsBot) httpClient() *http.Client {
 	return http.DefaultClient
 }
 
+func activityURL(serviceURL, conversationID, replyToID string) (string, error) {
+	segments := []string{"v3", "conversations", conversationID, "activities"}
+	if replyToID != "" {
+		segments = append(segments, replyToID)
+	}
+	endpoint, err := url.JoinPath(serviceURL, segments...)
+	if err != nil {
+		return "", fmt.Errorf("build Teams activity URL: %w", err)
+	}
+	return endpoint, nil
+}
+
+func (b *TeamsBot) postActivity(ctx context.Context, serviceURL, conversationID, replyToID, text string) (string, error) {
+	resp, err := b.sendActivity(ctx, http.MethodPost, serviceURL, conversationID, replyToID, TeamMessageActivity{
+		Type:       activityTypeMessage,
+		Text:       text,
+		TextFormat: "markdown",
+	})
+	if err != nil {
+		return "", err
+	}
+	if resp.ID == "" {
+		return "", errors.New("Teams activity response missing id")
+	}
+	return resp.ID, nil
+}
+
+func (b *TeamsBot) updateMessageActivity(ctx context.Context, serviceURL, conversationID, activityID, text string) error {
+	_, err := b.sendActivity(ctx, http.MethodPut, serviceURL, conversationID, activityID, TeamMessageActivity{
+		Type:       activityTypeMessage,
+		Text:       text,
+		TextFormat: "markdown",
+	})
+	return err
+}
+
+func (b *TeamsBot) sendStreamingActivity(ctx context.Context, serviceURL string, input streamingActivityInput) (string, error) {
+	if b == nil {
+		return "", errors.New("Teams bot is required")
+	}
+	resp, err := b.sendActivity(ctx, http.MethodPost, serviceURL, input.ConversationID, "", TeamMessageActivity{
+		Type:       input.ActivityType,
+		ServiceURL: serviceURL,
+		ChannelID:  defaultChannelID,
+		From: &TeamChannelAccount{
+			ID: b.AppID,
+		},
+		Conversation: &TeamConversationAccount{
+			ID: input.ConversationID,
+		},
+		Text: input.Text,
+		Entities: []TeamStreamInfoEntity{{
+			Type:           streamInfoType,
+			StreamID:       input.StreamID,
+			StreamType:     input.StreamType,
+			StreamSequence: input.StreamSequence,
+		}},
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
+func (b *TeamsBot) sendActivity(ctx context.Context, method, serviceURL, conversationID, replyToID string, act TeamMessageActivity) (resourceResponse, error) {
+	endpoint, err := activityURL(serviceURL, conversationID, replyToID)
+	if err != nil {
+		return resourceResponse{}, err
+	}
+	token, err := b.bearerToken(ctx)
+	if err != nil {
+		return resourceResponse{}, err
+	}
+
+	body, err := json.Marshal(act)
+	if err != nil {
+		return resourceResponse{}, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return resourceResponse{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := b.httpClient().Do(req)
+	if err != nil {
+		return resourceResponse{}, fmt.Errorf("send Teams activity: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return resourceResponse{}, &teamsHTTPError{
+			StatusCode: resp.StatusCode,
+			Body:       strings.TrimSpace(string(respBody)),
+		}
+	}
+
+	var out resourceResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil && !errors.Is(err, io.EOF) {
+		return resourceResponse{}, fmt.Errorf("decode Teams activity response: %w", err)
+	}
+	return out, nil
+}
+
 type tokenResponse struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int64  `json:"expires_in"`
+}
+
+type teamsHTTPError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *teamsHTTPError) Error() string {
+	return fmt.Sprintf("send Teams activity: status %d: %s", e.StatusCode, e.Body)
+}
+
+type resourceResponse struct {
+	ID string `json:"id"`
+}
+
+type streamingActivityInput struct {
+	ConversationID string
+	ActivityType   string
+	Text           string
+	StreamID       string
+	StreamType     string
+	StreamSequence *int
 }

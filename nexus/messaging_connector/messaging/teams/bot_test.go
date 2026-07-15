@@ -11,6 +11,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newTestBot returns a TeamsBot with a pre-cached token so tests never hit
+// the real OAuth endpoint.
+func newTestBot() *TeamsBot {
+	return &TeamsBot{
+		Client:      http.DefaultClient,
+		AppID:       "test-app-id",
+		accessToken: "test-token",
+		expiresAt:   time.Now().Add(time.Hour),
+	}
+}
+
 func TestNewTeamsBotUsesTenantTokenEndpoint(t *testing.T) {
 	bot, err := NewTeamsBot("tenant-id", "app-id", "app-password")
 	require.NoError(t, err)

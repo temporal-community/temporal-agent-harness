@@ -1,14 +1,11 @@
 package teams
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -17,7 +14,6 @@ import (
 
 const (
 	defaultServiceURL    = "https://smba.trafficmanager.net/teams/"
-	defaultChannelID     = "msteams"
 	initialStreamingText = "Thinking..."
 
 	activityTypeTyping  = "typing"
@@ -153,7 +149,7 @@ func (p *TeamsPlatform) UpdateStream(ctx context.Context, input msgiface.UpdateS
 		return nil
 	}
 	if input.Handle.TransportMode == streamModeMessageUpdate {
-		return p.updateMessageActivity(ctx, conversationID, input.Handle.ID, input.FullText)
+		return p.bot.updateMessageActivity(ctx, p.serviceURL, conversationID, input.Handle.ID, input.FullText)
 	}
 	if input.Handle.TransportMode != streamModeNative {
 		return fmt.Errorf("unknown Teams stream transport mode %q", input.Handle.TransportMode)
@@ -162,7 +158,7 @@ func (p *TeamsPlatform) UpdateStream(ctx context.Context, input msgiface.UpdateS
 		return fmt.Errorf("Teams stream update sequence must be greater than %d", initialStreamSequence)
 	}
 	sequence := input.Sequence
-	_, err = p.sendStreamingActivity(ctx, streamingActivityInput{
+	_, err = p.bot.sendStreamingActivity(ctx, p.serviceURL, streamingActivityInput{
 		ConversationID: conversationID,
 		ActivityType:   activityTypeTyping,
 		Text:           input.FullText,
@@ -180,12 +176,12 @@ func (p *TeamsPlatform) FinishStream(ctx context.Context, input msgiface.FinishS
 		return err
 	}
 	if input.Handle.TransportMode == streamModeMessageUpdate {
-		return p.updateMessageActivity(ctx, conversationID, input.Handle.ID, input.FullText)
+		return p.bot.updateMessageActivity(ctx, p.serviceURL, conversationID, input.Handle.ID, input.FullText)
 	}
 	if input.Handle.TransportMode != streamModeNative {
 		return fmt.Errorf("unknown Teams stream transport mode %q", input.Handle.TransportMode)
 	}
-	_, err = p.sendStreamingActivity(ctx, streamingActivityInput{
+	_, err = p.bot.sendStreamingActivity(ctx, p.serviceURL, streamingActivityInput{
 		ConversationID: conversationID,
 		ActivityType:   activityTypeMessage,
 		Text:           input.FullText,
@@ -229,7 +225,7 @@ func (p *TeamsPlatform) beginNativeStream(ctx context.Context, conversationID, t
 		displayText = initialStreamingText
 	}
 	sequence := initialStreamSequence
-	streamID, err := p.sendStreamingActivity(ctx, streamingActivityInput{
+	streamID, err := p.bot.sendStreamingActivity(ctx, p.serviceURL, streamingActivityInput{
 		ConversationID: conversationID,
 		ActivityType:   activityTypeTyping,
 		Text:           displayText,
@@ -250,7 +246,7 @@ func (p *TeamsPlatform) beginMessageUpdates(ctx context.Context, conversationID,
 	if strings.TrimSpace(displayText) == "" {
 		displayText = initialStreamingText
 	}
-	streamID, err := p.postActivity(ctx, conversationID, threadID, displayText)
+	streamID, err := p.bot.postActivity(ctx, p.serviceURL, conversationID, threadID, displayText)
 	if err != nil {
 		return "", err
 	}
@@ -269,7 +265,7 @@ func (p *TeamsPlatform) PostMessage(ctx context.Context, input msgiface.TextMeta
 		return errors.New("text is required")
 	}
 
-	_, err = p.postActivity(ctx, conversationID, input.ThreadID, input.Text)
+	_, err = p.bot.postActivity(ctx, p.serviceURL, conversationID, input.ThreadID, input.Text)
 	return err
 }
 
@@ -285,11 +281,7 @@ func (p *TeamsPlatform) PostApprovalPrompt(ctx context.Context, input msgiface.A
 	if err != nil {
 		return fmt.Errorf("build Teams approval card: %w", err)
 	}
-	endpoint, err := p.activityURL(conversationID, input.ThreadID)
-	if err != nil {
-		return err
-	}
-	_, err = p.sendActivity(ctx, http.MethodPost, endpoint, TeamMessageActivity{
+	_, err = p.bot.sendActivity(ctx, http.MethodPost, p.serviceURL, conversationID, input.ThreadID, TeamMessageActivity{
 		Type: activityTypeMessage,
 		Attachments: []TeamAttachment{{
 			ContentType: adaptiveCardContentType,
@@ -309,16 +301,7 @@ func (p *TeamsPlatform) UpdateActivity(ctx context.Context, sessionID, activityI
 	if err != nil {
 		return err
 	}
-	endpoint, err := p.activityURL(conversationID, activityID)
-	if err != nil {
-		return err
-	}
-	_, err = p.sendActivity(ctx, http.MethodPut, endpoint, TeamMessageActivity{
-		Type:       activityTypeMessage,
-		Text:       text,
-		TextFormat: "markdown",
-	})
-	return err
+	return p.bot.updateMessageActivity(ctx, p.serviceURL, conversationID, activityID, text)
 }
 
 func parseConversation(sessionID string) (string, error) {
@@ -327,144 +310,4 @@ func parseConversation(sessionID string) (string, error) {
 		return "", fmt.Errorf("invalid session ID %q: expected \"teams:<conversationID>\" format", sessionID)
 	}
 	return conversationID, nil
-}
-
-func (p *TeamsPlatform) activityURL(conversationID, replyToID string) (string, error) {
-	segments := []string{"v3", "conversations", conversationID, "activities"}
-	if replyToID != "" {
-		segments = append(segments, replyToID)
-	}
-	endpoint, err := url.JoinPath(p.serviceURL, segments...)
-	if err != nil {
-		return "", fmt.Errorf("build Teams activity URL: %w", err)
-	}
-	return endpoint, nil
-}
-
-func (p *TeamsPlatform) postActivity(ctx context.Context, conversationID, replyToID, text string) (string, error) {
-	endpoint, err := p.activityURL(conversationID, replyToID)
-	if err != nil {
-		return "", err
-	}
-	resp, err := p.sendActivity(ctx, http.MethodPost, endpoint, TeamMessageActivity{
-		Type:       activityTypeMessage,
-		Text:       text,
-		TextFormat: "markdown",
-	})
-	if err != nil {
-		return "", err
-	}
-	if resp.ID == "" {
-		return "", errors.New("Teams activity response missing id")
-	}
-	return resp.ID, nil
-}
-
-func (p *TeamsPlatform) updateMessageActivity(ctx context.Context, conversationID, activityID, text string) error {
-	endpoint, err := p.activityURL(conversationID, activityID)
-	if err != nil {
-		return err
-	}
-	_, err = p.sendActivity(ctx, http.MethodPut, endpoint, TeamMessageActivity{
-		Type:       activityTypeMessage,
-		Text:       text,
-		TextFormat: "markdown",
-	})
-	return err
-}
-
-func (p *TeamsPlatform) sendStreamingActivity(ctx context.Context, input streamingActivityInput) (string, error) {
-	if p.bot == nil {
-		return "", errors.New("Teams bot is required")
-	}
-	endpoint, err := p.activityURL(input.ConversationID, "")
-	if err != nil {
-		return "", err
-	}
-	resp, err := p.sendActivity(ctx, http.MethodPost, endpoint, TeamMessageActivity{
-		Type:       input.ActivityType,
-		ServiceURL: p.serviceURL,
-		ChannelID:  defaultChannelID,
-		From: &TeamChannelAccount{
-			ID: p.bot.AppID,
-		},
-		Conversation: &TeamConversationAccount{
-			ID: input.ConversationID,
-		},
-		Text: input.Text,
-		Entities: []TeamStreamInfoEntity{{
-			Type:           streamInfoType,
-			StreamID:       input.StreamID,
-			StreamType:     input.StreamType,
-			StreamSequence: input.StreamSequence,
-		}},
-	})
-	if err != nil {
-		return "", err
-	}
-	return resp.ID, nil
-}
-
-func (p *TeamsPlatform) sendActivity(ctx context.Context, method, endpoint string, act TeamMessageActivity) (resourceResponse, error) {
-	if p.bot == nil {
-		return resourceResponse{}, errors.New("Teams bot is required")
-	}
-	token, err := p.bot.bearerToken(ctx)
-	if err != nil {
-		return resourceResponse{}, err
-	}
-
-	body, err := json.Marshal(act)
-	if err != nil {
-		return resourceResponse{}, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return resourceResponse{}, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.bot.httpClient().Do(req)
-	if err != nil {
-		return resourceResponse{}, fmt.Errorf("send Teams activity: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return resourceResponse{}, &teamsHTTPError{
-			StatusCode: resp.StatusCode,
-			Body:       strings.TrimSpace(string(respBody)),
-		}
-	}
-
-	var out resourceResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil && !errors.Is(err, io.EOF) {
-		return resourceResponse{}, fmt.Errorf("decode Teams activity response: %w", err)
-	}
-	return out, nil
-}
-
-type teamsHTTPError struct {
-	StatusCode int
-	Body       string
-}
-
-func (e *teamsHTTPError) Error() string {
-	return fmt.Sprintf("send Teams activity: status %d: %s", e.StatusCode, e.Body)
-}
-
-type resourceResponse struct {
-	ID string `json:"id"`
-}
-
-type streamingActivityInput struct {
-	ConversationID string
-	ActivityType   string
-	Text           string
-	StreamID       string
-	StreamType     string
-	StreamSequence *int
 }
