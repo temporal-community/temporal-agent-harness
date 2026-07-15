@@ -102,7 +102,10 @@ async def main() -> None:
         client,
         task_queue=TASK_QUEUE,
         workflows=[ModelRouterWorkflow],
-        activities=[activities.invoke_chat_completion],
+        activities=[
+            activities.invoke_chat_completion,
+            activities.invoke_chat_completion_error,
+        ],
         nexus_service_handlers=[ModelRouterServiceHandler()],
     )
     print(

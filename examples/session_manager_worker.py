@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -35,6 +36,13 @@ async def main() -> None:
     )
 
     connect_config = ClientConfig.load_client_connect_config()
+    if not connect_config.get("target_host"):
+        connect_config["target_host"] = os.environ.get(
+            "TEMPORAL_ADDRESS", "localhost:7233"
+        )
+    if not connect_config.get("namespace"):
+        connect_config["namespace"] = os.environ.get("TEMPORAL_NAMESPACE", "default")
+
     client = await Client.connect(
         **connect_config,
         data_converter=await with_large_payload_offload(pydantic_data_converter),

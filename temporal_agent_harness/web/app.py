@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -35,6 +36,7 @@ from temporal_agent_harness.harness.agent_client import (
     ToolApprovalError,
 )
 from temporal_agent_harness.harness.agent_protocol import (
+    SEND_AGENT_MESSAGE_UPDATE,
     AgentConfig,
     AgentEvent,
     AgentEventType,
@@ -42,7 +44,6 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentStatus,
     OperatorCommand,
     OperatorCommandResult,
-    SEND_AGENT_MESSAGE_UPDATE,
 )
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
@@ -51,10 +52,11 @@ from temporal_agent_harness.web.session_manager import (
     SESSION_MANAGER_ID,
     SESSION_MANAGER_TASK_QUEUE,
     AgentRegistry,
-    CreateSessionRequest as ManagerCreateSessionRequest,
-    Session,
-    SessionManagerWorkflow,
 )
+from temporal_agent_harness.web.session_manager import (
+    CreateSessionRequest as ManagerCreateSessionRequest,
+)
+from temporal_agent_harness.web.session_manager import Session, SessionManagerWorkflow
 
 RegistrySource = AgentRegistry | Callable[[], AgentRegistry]
 _SESSION_PREVIEW_HISTORY_PAGE_SIZE = 16
@@ -131,6 +133,14 @@ def create_agent_harness_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         connect_config = ClientConfig.load_client_connect_config()
+        if not connect_config.get("target_host"):
+            connect_config["target_host"] = os.environ.get(
+                "TEMPORAL_ADDRESS", "localhost:7233"
+            )
+        if not connect_config.get("namespace"):
+            connect_config["namespace"] = os.environ.get(
+                "TEMPORAL_NAMESPACE", "default"
+            )
         app.state.temporal = await Client.connect(
             **connect_config,
             data_converter=await with_large_payload_offload(pydantic_data_converter),
@@ -243,19 +253,24 @@ def create_agent_harness_app(
             reason=req.reason,
             remember=req.remember,
         )
-        return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
+        return JSONResponse(
+            content=asdict(result), headers={"Cache-Control": "no-store"}
+        )
 
     @app.post("/api/callback-result")
     async def provide_callback_result(req: CallbackResultRequestBody):
         """Fulfill a pending callback tool call: a client that executed the tool on its own
         machine submits the result (or an error), keyed by the ``tool_id`` from the
         ``callback_requested`` event. Forwards to the workflow's ``provide_callback_result``
-        update; the result is validated against the tool's declared output type there."""
+        update; the result is validated against the tool's declared output type there.
+        """
         client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
         result = await client.provide_callback_result(
             req.tool_id, result=req.result, error=req.error
         )
-        return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
+        return JSONResponse(
+            content=asdict(result), headers={"Cache-Control": "no-store"}
+        )
 
     @app.post("/api/operator-commands")
     async def execute_operator_command(req: OperatorCommandRequestBody):
@@ -273,7 +288,9 @@ def create_agent_harness_app(
             msg_type, payload = req.message["type"], req.message.get("payload") or {}
 
         result = await client.submit_message(msg_type, payload, req.expected_turn)
-        return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
+        return JSONResponse(
+            content=asdict(result), headers={"Cache-Control": "no-store"}
+        )
 
     @app.post("/api/chat")
     async def chat(req: ChatRequestBody):
@@ -446,9 +463,7 @@ async def _session_user_message_from_history_event(
     if not event.HasField("workflow_execution_update_accepted_event_attributes"):
         return None
 
-    request = (
-        event.workflow_execution_update_accepted_event_attributes.accepted_request
-    )
+    request = event.workflow_execution_update_accepted_event_attributes.accepted_request
     if request.input.name != SEND_AGENT_MESSAGE_UPDATE:
         return None
     if not request.input.args.payloads:
@@ -529,8 +544,7 @@ async def _ensure_session_manager_workflow(
     except WorkflowAlreadyStartedError:
         handle = temporal.get_workflow_handle(manager_workflow_id)
         print(
-            "Connected to session manager started concurrently: "
-            f"{manager_workflow_id}"
+            f"Connected to session manager started concurrently: {manager_workflow_id}"
         )
     else:
         print(f"Ensured session manager is running: {manager_workflow_id}")

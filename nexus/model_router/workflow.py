@@ -27,14 +27,37 @@ class ModelRouterWorkflow:
 
     @workflow.run
     async def run(self, request: ChatCompletionRequest) -> ChatCompletion:
-        return await workflow.execute_activity_method(
-            ModelRouterActivities.invoke_chat_completion,
-            request,
-            # Per-attempt cap; schedule_to_close bounds the whole activity
-            # INCLUDING retries, so the total stays below the caller's Nexus
-            # operation timeout (nexus_transport._OP_TIMEOUT) — otherwise retries
-            # would be cut off mid-flight when the operation times out.
-            start_to_close_timeout=timedelta(minutes=2),
-            schedule_to_close_timeout=timedelta(minutes=5),
-            retry_policy=RetryPolicy(maximum_attempts=3),
-        )
+        ai_model = self.preferred_model(request)
+
+        if ai_model == "openai":
+            return await workflow.execute_activity_method(
+                ModelRouterActivities.invoke_chat_completion,
+                request,
+                # Per-attempt cap; schedule_to_close bounds the whole activity
+                # INCLUDING retries, so the total stays below the caller's Nexus
+                # operation timeout (nexus_transport._OP_TIMEOUT) — otherwise retries
+                # would be cut off mid-flight when the operation times out.
+                start_to_close_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(minutes=5),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        else:
+            return await workflow.execute_activity_method(
+                ModelRouterActivities.invoke_chat_completion_error,
+                request,
+                # Per-attempt cap; schedule_to_close bounds the whole activity
+                # INCLUDING retries, so the total stays below the caller's Nexus
+                # operation timeout (nexus_transport._OP_TIMEOUT) — otherwise retries
+                # would be cut off mid-flight when the operation times out.
+                start_to_close_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(minutes=5),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+
+    def preferred_model(self, request: ChatCompletionRequest) -> str:
+        for entry in request.messages:
+            if entry.get("role") != "user":
+                continue
+            if "Boston" in (entry.get("content") or ""):
+                return "error"
+        return "openai"
