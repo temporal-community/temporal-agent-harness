@@ -1,23 +1,14 @@
-"""A hello-world OpenAI Agents SDK agent, on the harness, with one tool call.
+"""A hello-world OpenAI Agents SDK agent on the harness, with one tool call.
 
-The smallest interesting thing you can build with the vendored OpenAI Agents integration: a
-conversational agent that answers in plain text and can call a single tool (``get_weather``).
-It exists to exercise — end to end — the harness *streaming* path added for the OpenAI plugin:
-
-- The turn runs the model with ``Runner.run_streamed(...)`` (NOT ``Runner.run``). Only the
-  streamed path routes model calls through the streaming activity, and it is that activity that
-  hands each raw OpenAI event to the harness observer.
-- The observer (wired on the worker via ``harness_observer_factory`` +
-  ``stream_to_provider``) translates those raw events into the harness turn-stream vocabulary
-  live: ``model_interaction_started`` → ``reply_delta`` … ``tool_requested`` …
-  ``model_interaction_ended``. There are NO run hooks here — the model-interaction bracket comes
-  from the observer, not from workflow-side ``RunHooksBase``.
-- The tool is a normal harness tool adapted onto the SDK with ``as_openai_agent_tool``, so the
-  harness still owns approval + ``tool_start`` / ``tool_end`` / ``tool_error`` for it.
+A conversational agent that answers in plain text and can call a single tool
+(``get_weather``). The turn runs the model with ``Runner.run_streamed(...)``, which routes
+model calls through the streaming activity so the harness observer can translate raw
+OpenAI events into the turn-stream events an attached client sees. The tool is a normal
+harness tool adapted onto the SDK with ``as_openai_agent_tool``, so the harness still owns
+approval and its ``tool_start`` / ``tool_end`` / ``tool_error`` events.
 
 Run it with the shared example stack (session-manager worker + FastAPI/UI); this agent is
-registered in ``agents.toml`` and driven by the packaged web app, so there is no per-example
-client. See ``README.md``.
+registered in ``agents.toml`` and driven by the packaged web app. See ``README.md``.
 """
 
 from __future__ import annotations
@@ -54,9 +45,7 @@ or two. For anything else, just reply directly."""
 @agent.tool_defn(inherently_safe=True)
 async def get_weather(city: str) -> str:
     """Return the current weather for a city. `city` is a plain city name, e.g. "Paris"."""
-    # Canned lookup — this is a hello-world, no real weather service — but a genuine harness
-    # tool call: adapted onto the SDK with as_openai_agent_tool, it flows through run_tool and
-    # shows up on the turn stream as tool_requested -> tool_start -> tool_end.
+    # Canned lookup — a hello-world, not a real weather service.
     return f"It's 72°F and sunny in {city}."
 
 
@@ -70,8 +59,8 @@ class OpenAIHelloAgentWorkflow:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            # Hello-world stance: don't gate tool calls. `get_weather` is a read-only lookup;
-            # a caller can still tighten this per session via AgentConfig.approval_policy.
+            # Hello-world stance: don't gate tool calls. A caller can tighten this per
+            # session via AgentConfig.approval_policy.
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
         # OpenAI conversation state, threaded across turns as the SDK's input-item list.
@@ -96,11 +85,7 @@ class OpenAIHelloAgentWorkflow:
             {"role": "user", "content": message.text},
         ]
 
-        # Runner.run_streamed is the streaming entry point: it drives model calls through the
-        # streaming activity (→ the harness observer → live turn-stream events). It returns a
-        # streaming result immediately; iterate its events to run the turn to completion. The
-        # rich per-token/tool events reach any attached client via the harness stream — we don't
-        # translate them here, so this loop just drains to the end.
+        # run_streamed returns immediately; iterate its events to drive the turn to completion.
         result = Runner.run_streamed(sdk_agent, input=input_items)
         async for _event in result.stream_events():
             pass
