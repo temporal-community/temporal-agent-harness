@@ -1,4 +1,4 @@
-module github.com/temporalio/temporal-agent-harness/nexus/agent_adapter/nexus_worker
+module github.com/temporal-community/temporal-agent-harness/nexus/agent_adapter/nexus_worker
 
 go 1.25.0
 

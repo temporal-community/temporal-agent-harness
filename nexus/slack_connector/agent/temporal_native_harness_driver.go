@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	agentgen "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/agent/generated"
-	msgiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging"
+	agentgen "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/agent/generated"
+	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"

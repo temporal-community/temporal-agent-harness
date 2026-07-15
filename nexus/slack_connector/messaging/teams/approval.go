@@ -3,7 +3,7 @@ package teams
 import (
 	"encoding/json"
 
-	msgiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging"
+	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging"
 )
 
 // adaptiveCardContentType is the Bot Framework attachment content type for

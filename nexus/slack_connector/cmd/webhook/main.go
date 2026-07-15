@@ -8,10 +8,10 @@ import (
 
 	"go.temporal.io/sdk/client"
 
-	slackmsg "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging/slack"
-	slackwebhook "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging/slack/webhook"
-	"github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging/teams"
-	teamswebhook "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging/teams/webhook"
+	slackmsg "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging/slack"
+	slackwebhook "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging/slack/webhook"
+	"github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging/teams"
+	teamswebhook "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging/teams/webhook"
 )
 
 const (

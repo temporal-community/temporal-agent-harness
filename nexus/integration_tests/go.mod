@@ -2,23 +2,23 @@
 // Sibling modules (agent_adapter/nexus_worker, slack_connector) use the
 // published repo import path but are resolved locally by the replace directives
 // below during local development and integration tests.
-module github.com/temporalio/temporal-agent-harness/nexus/integration_tests
+module github.com/temporal-community/temporal-agent-harness/nexus/integration_tests
 
 go 1.25.0
 
 require (
 	github.com/nexus-rpc/sdk-go v0.6.0
 	github.com/stretchr/testify v1.11.1
-	github.com/temporalio/temporal-agent-harness/nexus/agent_adapter/nexus_worker v0.0.0-20260702161158-fe910fd096c2
-	github.com/temporalio/temporal-agent-harness/nexus/slack_connector v0.0.0-20260702161158-fe910fd096c2
+	github.com/temporal-community/temporal-agent-harness/nexus/agent_adapter/nexus_worker v0.0.0-20260702161158-fe910fd096c2
+	github.com/temporal-community/temporal-agent-harness/nexus/slack_connector v0.0.0-20260702161158-fe910fd096c2
 	go.temporal.io/api v1.62.3-0.20260330144107-1e2b1facde20
 	go.temporal.io/sdk v1.41.1
 	google.golang.org/protobuf v1.36.10
 )
 
-replace github.com/temporalio/temporal-agent-harness/nexus/agent_adapter/nexus_worker => ../agent_adapter/nexus_worker
+replace github.com/temporal-community/temporal-agent-harness/nexus/agent_adapter/nexus_worker => ../agent_adapter/nexus_worker
 
-replace github.com/temporalio/temporal-agent-harness/nexus/slack_connector => ../slack_connector
+replace github.com/temporal-community/temporal-agent-harness/nexus/slack_connector => ../slack_connector
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
