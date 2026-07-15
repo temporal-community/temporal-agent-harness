@@ -103,7 +103,9 @@ func main() {
 	c := connector.NewConnectorWorkflow(&agentiface.TemporalNativeHarnessDriver{})
 	w := worker.New(tc, flags.taskQueue, worker.Options{})
 	w.RegisterWorkflowWithOptions(c.Run, workflow.RegisterOptions{Name: connector.WorkflowName})
-	w.RegisterActivityWithOptions(driver.Stream, activity.RegisterOptions{Name: msgiface.StreamActivity})
+	w.RegisterActivityWithOptions(driver.BeginStream, activity.RegisterOptions{Name: msgiface.BeginStreamActivity})
+	w.RegisterActivityWithOptions(driver.UpdateStream, activity.RegisterOptions{Name: msgiface.UpdateStreamActivity})
+	w.RegisterActivityWithOptions(driver.FinishStream, activity.RegisterOptions{Name: msgiface.FinishStreamActivity})
 	w.RegisterActivityWithOptions(driver.PostMessage, activity.RegisterOptions{Name: msgiface.PostMessageActivity})
 	w.RegisterActivityWithOptions(driver.PostApprovalPrompt, activity.RegisterOptions{Name: msgiface.PostApprovalPromptActivity})
 

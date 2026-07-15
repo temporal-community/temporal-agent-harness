@@ -46,54 +46,77 @@ func NewSlackPlatform(client *slackapi.Client, teamID string) *SlackPlatform {
 	return &SlackPlatform{client: client, teamID: teamID}
 }
 
-// Stream starts, appends to, or finalises a Slack streaming message.
-// DeltaTypeStart opens a new stream; DeltaTypeAppend appends text; DeltaTypeEnd stops it.
-// StreamID must be empty for Start and non-empty for Append/End.
-func (p *SlackPlatform) Stream(ctx context.Context, input msgiface.StreamInput) (string, error) {
+// BeginStream opens a native Slack stream. Slack consumes incremental deltas,
+// does not require workflow-side throttling, and can remain open across an
+// approval prompt.
+func (p *SlackPlatform) BeginStream(ctx context.Context, input msgiface.BeginStreamInput) (msgiface.StreamHandle, error) {
 	channel, err := parseChannel(input.SessionID)
 	if err != nil {
-		return "", err
+		return msgiface.StreamHandle{}, err
 	}
 
-	if input.DeltaType != msgiface.DeltaTypeStart && input.StreamID == "" {
-		return "", errors.New("StreamID is required for Append and End phases")
+	opts := []slackapi.MsgOption{slackapi.MsgOptionStartStream()}
+	if input.ThreadID != "" {
+		opts = append(opts, slackapi.MsgOptionTS(input.ThreadID))
 	}
-
-	switch input.DeltaType {
-	case msgiface.DeltaTypeStart:
-		opts := []slackapi.MsgOption{slackapi.MsgOptionStartStream()}
-		if input.ThreadID != "" {
-			opts = append(opts, slackapi.MsgOptionTS(input.ThreadID))
-		}
-		if input.SenderID != "" {
-			opts = append(opts, slackapi.MsgOptionRecipientUserID(input.SenderID))
-		}
-		if p.teamID != "" {
-			opts = append(opts, slackapi.MsgOptionRecipientTeamID(p.teamID))
-		}
-		_, ts, err := p.client.StartStreamContext(ctx, channel, opts...)
-		if err != nil {
-			return "", fmt.Errorf("chat.startStream: %w", err)
-		}
-		return ts, nil
-
-	case msgiface.DeltaTypeEnd:
-		if _, _, err := p.client.StopStreamContext(ctx, channel, input.StreamID); err != nil {
-			return "", fmt.Errorf("chat.stopStream: %w", err)
-		}
-		return input.StreamID, nil
-
-	default: // DeltaTypeAppend
-		if input.Text == "" {
-			return input.StreamID, nil
-		}
-		if _, _, err := p.client.AppendStreamContext(ctx, channel, input.StreamID,
-			slackapi.MsgOptionMarkdownText(input.Text),
-		); err != nil {
-			return "", fmt.Errorf("chat.appendStream: %w", err)
-		}
-		return input.StreamID, nil
+	if input.SenderID != "" {
+		opts = append(opts, slackapi.MsgOptionRecipientUserID(input.SenderID))
 	}
+	if p.teamID != "" {
+		opts = append(opts, slackapi.MsgOptionRecipientTeamID(p.teamID))
+	}
+	_, ts, err := p.client.StartStreamContext(ctx, channel, opts...)
+	if err != nil {
+		return msgiface.StreamHandle{}, fmt.Errorf("chat.startStream: %w", err)
+	}
+	return msgiface.StreamHandle{
+		ID:                  ts,
+		SessionID:           input.SessionID,
+		TransportMode:       "native",
+		WireTextMode:        msgiface.StreamWireTextDelta,
+		CloseBeforeApproval: false,
+	}, nil
+}
+
+// UpdateStream appends the pending agent delta to a native Slack stream.
+func (p *SlackPlatform) UpdateStream(ctx context.Context, input msgiface.UpdateStreamInput) error {
+	channel, err := parseChannel(input.SessionID)
+	if err != nil {
+		return err
+	}
+	if input.Handle.ID == "" {
+		return errors.New("stream handle ID is required")
+	}
+	if input.Handle.SessionID != input.SessionID {
+		return errors.New("stream handle session does not match input session")
+	}
+	if input.Delta == "" {
+		return nil
+	}
+	if _, _, err := p.client.AppendStreamContext(ctx, channel, input.Handle.ID,
+		slackapi.MsgOptionMarkdownText(input.Delta),
+	); err != nil {
+		return fmt.Errorf("chat.appendStream: %w", err)
+	}
+	return nil
+}
+
+// FinishStream stops and finalises a native Slack stream.
+func (p *SlackPlatform) FinishStream(ctx context.Context, input msgiface.FinishStreamInput) error {
+	channel, err := parseChannel(input.SessionID)
+	if err != nil {
+		return err
+	}
+	if input.Handle.ID == "" {
+		return errors.New("stream handle ID is required")
+	}
+	if input.Handle.SessionID != input.SessionID {
+		return errors.New("stream handle session does not match input session")
+	}
+	if _, _, err := p.client.StopStreamContext(ctx, channel, input.Handle.ID); err != nil {
+		return fmt.Errorf("chat.stopStream: %w", err)
+	}
+	return nil
 }
 
 func (p *SlackPlatform) PostMessage(ctx context.Context, input msgiface.TextMetadata) error {

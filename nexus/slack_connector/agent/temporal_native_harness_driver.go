@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	agentgen "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/agent/generated"
@@ -90,6 +91,17 @@ func turnEventToDelta(e turnEvent) *agentDelta {
 // TemporalNativeHarnessDriver implements MessageHandler using the Nexus agent service.
 type TemporalNativeHarnessDriver struct{}
 
+// deliveryState is workflow-owned state for one platform response segment.
+// Temporal rebuilds it through replay, so stream activities can run on any
+// worker without relying on process-local maps.
+type deliveryState struct {
+	Handle       *msgiface.StreamHandle
+	FullText     string
+	PendingDelta string
+	LastFlush    time.Time
+	Segment      int
+}
+
 // ReceiveMessageFromPlatform dispatches the incoming message to the Nexus agent and
 // returns a TurnHandle that RespondToPlatform uses to consume the response stream.
 func (d *TemporalNativeHarnessDriver) ReceiveMessageFromPlatform(ctx workflow.Context, input ConnectorWorkflowInput) (TurnHandle, error) {
@@ -109,22 +121,115 @@ func (d *TemporalNativeHarnessDriver) ReceiveMessageFromPlatform(ctx workflow.Co
 		return TurnHandle{}, err
 	}
 	return TurnHandle{
+		TurnID:           sendOut.TurnID,
 		TurnNumber:       sendOut.TurnNumber,
 		StreamHeadOffset: sendOut.StreamHeadOffset,
 	}, nil
 }
 
 // RespondToPlatform polls the Nexus agent response stream starting from the cursor in
-// handle and delivers each delta back to the platform via the registered Stream activity.
+// handle and delivers each delta through stateless platform activities.
 func (d *TemporalNativeHarnessDriver) RespondToPlatform(ctx workflow.Context, handle TurnHandle, input ConnectorWorkflowInput) error {
 	agentClient := workflow.NewNexusClient(AgentNexusEndpoint, agentgen.AgentService.ServiceName)
+	isTeams := strings.HasPrefix(input.SessionID, "teams:")
+	activityTimeout := 30 * time.Second
+	if isTeams {
+		// Teams activities may wait inside an attempt to honor Retry-After.
+		activityTimeout = 5 * time.Minute
+	}
 	actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
-		StartToCloseTimeout: 30 * time.Second,
+		StartToCloseTimeout: activityTimeout,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	})
 
 	cursor := handle.StreamHeadOffset
-	var streamID string
+	conversationType := ""
+	if input.Message != nil {
+		conversationType = input.Message.ConversationType
+	}
+	turnID := handle.TurnID
+	if turnID == "" {
+		turnID = fmt.Sprintf("turn-%d", handle.TurnNumber)
+	}
+	workflowID := workflow.GetInfo(ctx).WorkflowExecution.ID
+	state := deliveryState{}
+
+	operationID := func(phase string, sequence int) string {
+		return fmt.Sprintf("%s/%s/segment/%d/%s/%d", workflowID, turnID, state.Segment, phase, sequence)
+	}
+
+	beginStream := func() error {
+		if state.Handle != nil {
+			return nil
+		}
+		var streamHandle msgiface.StreamHandle
+		if err := workflow.ExecuteActivity(actCtx, msgiface.BeginStreamActivity, msgiface.BeginStreamInput{
+			TextMetadata: msgiface.TextMetadata{
+				SessionID: input.SessionID,
+				ThreadID:  input.ThreadID(),
+				SenderID:  input.SenderID(),
+			},
+			ConversationType: conversationType,
+			OperationID:      operationID("begin", 0),
+		}).Get(ctx, &streamHandle); err != nil {
+			return err
+		}
+		state.Handle = &streamHandle
+		state.LastFlush = workflow.Now(ctx)
+		return nil
+	}
+
+	flushUpdate := func(force bool) error {
+		if state.Handle == nil || state.PendingDelta == "" {
+			return nil
+		}
+		now := workflow.Now(ctx)
+		if !force && state.Handle.MinUpdateInterval > 0 && now.Sub(state.LastFlush) < state.Handle.MinUpdateInterval {
+			return nil
+		}
+		sequence := state.Handle.NextSequence
+		if err := workflow.ExecuteActivity(actCtx, msgiface.UpdateStreamActivity, msgiface.UpdateStreamInput{
+			TextMetadata: msgiface.TextMetadata{SessionID: input.SessionID},
+			Handle:       *state.Handle,
+			Delta:        state.PendingDelta,
+			FullText:     state.FullText,
+			Sequence:     sequence,
+			OperationID:  operationID("update", sequence),
+		}).Get(ctx, nil); err != nil {
+			workflow.GetLogger(ctx).Warn("RespondToPlatform: stream update failed", "error", err)
+			return err
+		}
+		state.PendingDelta = ""
+		if state.Handle.NextSequence > 0 {
+			state.Handle.NextSequence++
+		}
+		state.LastFlush = workflow.Now(ctx)
+		return nil
+	}
+
+	finishStream := func() {
+		if state.Handle == nil {
+			return
+		}
+		// Full-text transports are caught up by FinishStream itself. Delta
+		// transports need one final append before the provider stream is stopped.
+		if state.Handle.WireTextMode == msgiface.StreamWireTextDelta {
+			_ = flushUpdate(true)
+		}
+		if err := workflow.ExecuteActivity(actCtx, msgiface.FinishStreamActivity, msgiface.FinishStreamInput{
+			TextMetadata: msgiface.TextMetadata{SessionID: input.SessionID},
+			Handle:       *state.Handle,
+			FullText:     state.FullText,
+			OperationID:  operationID("finish", state.Handle.NextSequence),
+		}).Get(ctx, nil); err != nil {
+			workflow.GetLogger(ctx).Warn("RespondToPlatform: stream finish failed", "error", err)
+		}
+	}
+
+	resetForNextSegment := func() {
+		nextSegment := state.Segment + 1
+		state = deliveryState{Segment: nextSegment}
+	}
 
 	for {
 		var pollOut agentgen.PollMessagesOutput
@@ -137,26 +242,14 @@ func (d *TemporalNativeHarnessDriver) RespondToPlatform(ctx workflow.Context, ha
 			workflow.NexusOperationOptions{ScheduleToCloseTimeout: 120 * time.Second},
 		).Get(ctx, &pollOut); err != nil {
 			workflow.GetLogger(ctx).Warn("RespondToPlatform: pollMessages failed", "error", err)
-			if streamID != "" {
-				_ = workflow.ExecuteActivity(actCtx, msgiface.StreamActivity, msgiface.StreamInput{
-					TextMetadata: msgiface.TextMetadata{SessionID: input.SessionID},
-					StreamID:     streamID,
-					DeltaType:    msgiface.DeltaTypeEnd,
-				}).Get(ctx, nil)
-			}
+			finishStream()
 			return nil
 		}
 
 		cursor = pollOut.NextOffset
 
 		if pollOut.Closed {
-			if streamID != "" {
-				_ = workflow.ExecuteActivity(actCtx, msgiface.StreamActivity, msgiface.StreamInput{
-					TextMetadata: msgiface.TextMetadata{SessionID: input.SessionID},
-					StreamID:     streamID,
-					DeltaType:    msgiface.DeltaTypeEnd,
-				}).Get(ctx, nil)
-			}
+			finishStream()
 			return nil
 		}
 
@@ -176,6 +269,12 @@ func (d *TemporalNativeHarnessDriver) RespondToPlatform(ctx workflow.Context, ha
 			// Tool approval gates — post interactive prompt and let the approval
 			// workflow (started by the interaction webhook) call approveToolCall.
 			if event.Type == "tool_approval_requested" {
+				if state.Handle != nil && state.Handle.CloseBeforeApproval {
+					finishStream()
+					// Always force post-approval output into a new platform message, even
+					// if finalising the prior stream failed.
+					resetForNextSegment()
+				}
 				inputJSON, _ := json.Marshal(event.ToolInput)
 				_ = workflow.ExecuteActivity(actCtx, msgiface.PostApprovalPromptActivity,
 					msgiface.ApprovalPromptInput{
@@ -194,49 +293,22 @@ func (d *TemporalNativeHarnessDriver) RespondToPlatform(ctx workflow.Context, ha
 			}
 
 			if delta.Text != "" {
-				// streamID == "" iff this is the first delta, so we start the platform
-				// stream to get the ID for subsequent appends.
-				if streamID == "" {
-					var sid string
-					if err := workflow.ExecuteActivity(actCtx, msgiface.StreamActivity, msgiface.StreamInput{
-						TextMetadata: msgiface.TextMetadata{
-							SessionID: input.SessionID,
-							ThreadID:  input.ThreadID(),
-							SenderID:  input.SenderID(),
-						},
-						DeltaType: msgiface.DeltaTypeStart,
-					}).Get(ctx, &sid); err != nil {
-						workflow.GetLogger(ctx).Warn("RespondToPlatform: stream start failed, falling back to postMessage", "error", err)
-						_ = workflow.ExecuteActivity(actCtx, msgiface.PostMessageActivity, msgiface.TextMetadata{
-							SessionID: input.SessionID,
-							ThreadID:  input.ThreadID(),
-							Text:      delta.Text,
-						}).Get(ctx, nil)
-						return nil
-					}
-					streamID = sid
-				}
-
-				if err := workflow.ExecuteActivity(actCtx, msgiface.StreamActivity, msgiface.StreamInput{
-					TextMetadata: msgiface.TextMetadata{
+				state.FullText += delta.Text
+				state.PendingDelta += delta.Text
+				if err := beginStream(); err != nil {
+					workflow.GetLogger(ctx).Warn("RespondToPlatform: stream begin failed, falling back to postMessage", "error", err)
+					_ = workflow.ExecuteActivity(actCtx, msgiface.PostMessageActivity, msgiface.TextMetadata{
 						SessionID: input.SessionID,
-						Text:      delta.Text,
-					},
-					StreamID:  streamID,
-					DeltaType: msgiface.DeltaTypeAppend,
-				}).Get(ctx, nil); err != nil {
-					workflow.GetLogger(ctx).Warn("RespondToPlatform: stream append failed", "error", err)
+						ThreadID:  input.ThreadID(),
+						Text:      state.FullText,
+					}).Get(ctx, nil)
+					return nil
 				}
+				_ = flushUpdate(false)
 			}
 
 			if delta.IsFinal {
-				if streamID != "" {
-					_ = workflow.ExecuteActivity(actCtx, msgiface.StreamActivity, msgiface.StreamInput{
-						TextMetadata: msgiface.TextMetadata{SessionID: input.SessionID},
-						StreamID:     streamID,
-						DeltaType:    msgiface.DeltaTypeEnd,
-					}).Get(ctx, nil)
-				}
+				finishStream()
 				return nil
 			}
 		}

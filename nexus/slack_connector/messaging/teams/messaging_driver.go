@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	msgiface "github.com/temporalio/temporal-agent-harness/nexus/slack_connector/messaging"
@@ -29,8 +28,10 @@ const (
 	streamTypeStreaming   = "streaming"
 	streamTypeFinal       = "final"
 
-	initialStreamSequence = 1
-	minStreamUpdateDelay  = time.Second
+	initialStreamSequence   = 1
+	minStreamUpdateDelay    = 1500 * time.Millisecond
+	streamModeNative        = "native"
+	streamModeMessageUpdate = "message-update"
 )
 
 // Compile-time check that TeamsPlatform implements MessagingPlatform.
@@ -40,9 +41,6 @@ var _ msgiface.MessagingPlatform = (*TeamsPlatform)(nil)
 type TeamsPlatform struct {
 	bot        *TeamsBot
 	serviceURL string
-
-	mu      sync.Mutex
-	streams map[string]streamState
 }
 
 // NewTeamsPlatform creates a TeamsPlatform from a Teams bot and Bot Framework service URL.
@@ -54,42 +52,134 @@ func NewTeamsPlatform(bot *TeamsBot, serviceURL string) *TeamsPlatform {
 	return &TeamsPlatform{
 		bot:        bot,
 		serviceURL: serviceURL,
-		streams:    make(map[string]streamState),
 	}
 }
 
-// Stream starts, appends to, or finalises a Teams streaming message.
-// Teams has no server-side append, so accumulated text is tracked per stream
-// and each update re-sends the full text, throttled to one update per
-// minStreamUpdateDelay as required by the Bot Framework.
-func (p *TeamsPlatform) Stream(ctx context.Context, input msgiface.StreamInput) (string, error) {
+// BeginStream starts a stateless Teams response. Personal chats use Teams'
+// native streaming protocol. Channels and group chats use one ordinary message
+// followed by updates because native streaming is unavailable in those scopes.
+func (p *TeamsPlatform) BeginStream(ctx context.Context, input msgiface.BeginStreamInput) (msgiface.StreamHandle, error) {
 	conversationID, err := parseConversation(input.SessionID)
 	if err != nil {
-		return "", err
-	}
-	if input.DeltaType != msgiface.DeltaTypeStart && input.StreamID == "" {
-		return "", errors.New("StreamID is required for Append and End phases")
+		return msgiface.StreamHandle{}, err
 	}
 
-	switch input.DeltaType {
-	case msgiface.DeltaTypeStart:
-		return p.startStream(ctx, conversationID, input.Text)
-	case msgiface.DeltaTypeAppend:
-		if err := p.appendStream(ctx, conversationID, input.StreamID, input.Text); err != nil {
-			return "", err
+	mode := streamModeNative
+	var streamID string
+	if !isStreamingAllowed(input.ConversationType) {
+		mode = streamModeMessageUpdate
+		streamID, err = p.beginMessageUpdates(ctx, conversationID, input.ThreadID, input.Text)
+	} else {
+		streamID, err = p.beginNativeStream(ctx, conversationID, input.Text)
+		// Older webhook payloads can omit conversationType. If Teams explicitly
+		// rejects native streaming for a non-personal scope, fall back to an
+		// ordinary message whose activity can be updated.
+		if err != nil && strings.TrimSpace(input.ConversationType) == "" && isNonPersonalStreamingError(err) {
+			mode = streamModeMessageUpdate
+			streamID, err = p.beginMessageUpdates(ctx, conversationID, input.ThreadID, input.Text)
 		}
-		return input.StreamID, nil
-	case msgiface.DeltaTypeEnd:
-		if err := p.endStream(ctx, conversationID, input.StreamID); err != nil {
-			return "", err
-		}
-		return input.StreamID, nil
+	}
+	if err != nil {
+		return msgiface.StreamHandle{}, err
+	}
+
+	nextSequence := 0
+	if mode == streamModeNative {
+		nextSequence = initialStreamSequence + 1
+	}
+	return msgiface.StreamHandle{
+		ID:                  streamID,
+		SessionID:           input.SessionID,
+		TransportMode:       mode,
+		WireTextMode:        msgiface.StreamWireTextFullText,
+		MinUpdateInterval:   minStreamUpdateDelay,
+		CloseBeforeApproval: true,
+		NextSequence:        nextSequence,
+	}, nil
+}
+
+// UpdateStream sends the latest cumulative text. Agent output arrives as
+// deltas, but Teams REST requires every update to contain prior streamed text.
+func (p *TeamsPlatform) UpdateStream(ctx context.Context, input msgiface.UpdateStreamInput) error {
+	conversationID, err := p.validateStreamInput(input.SessionID, input.Handle)
+	if err != nil {
+		return err
+	}
+	if input.FullText == "" {
+		return nil
+	}
+	if input.Handle.TransportMode == streamModeMessageUpdate {
+		return p.updateMessageActivity(ctx, conversationID, input.Handle.ID, input.FullText)
+	}
+	if input.Handle.TransportMode != streamModeNative {
+		return fmt.Errorf("unknown Teams stream transport mode %q", input.Handle.TransportMode)
+	}
+	if input.Sequence <= initialStreamSequence {
+		return fmt.Errorf("Teams stream update sequence must be greater than %d", initialStreamSequence)
+	}
+	sequence := input.Sequence
+	_, err = p.sendStreamingActivity(ctx, streamingActivityInput{
+		ConversationID: conversationID,
+		ActivityType:   activityTypeTyping,
+		Text:           input.FullText,
+		StreamID:       input.Handle.ID,
+		StreamType:     streamTypeStreaming,
+		StreamSequence: &sequence,
+	})
+	return err
+}
+
+// FinishStream finalises the response using the workflow-owned full text.
+func (p *TeamsPlatform) FinishStream(ctx context.Context, input msgiface.FinishStreamInput) error {
+	conversationID, err := p.validateStreamInput(input.SessionID, input.Handle)
+	if err != nil {
+		return err
+	}
+	if input.Handle.TransportMode == streamModeMessageUpdate {
+		return p.updateMessageActivity(ctx, conversationID, input.Handle.ID, input.FullText)
+	}
+	if input.Handle.TransportMode != streamModeNative {
+		return fmt.Errorf("unknown Teams stream transport mode %q", input.Handle.TransportMode)
+	}
+	_, err = p.sendStreamingActivity(ctx, streamingActivityInput{
+		ConversationID: conversationID,
+		ActivityType:   activityTypeMessage,
+		Text:           input.FullText,
+		StreamID:       input.Handle.ID,
+		StreamType:     streamTypeFinal,
+	})
+	return err
+}
+
+func (p *TeamsPlatform) validateStreamInput(sessionID string, handle msgiface.StreamHandle) (string, error) {
+	if handle.ID == "" {
+		return "", errors.New("stream handle ID is required")
+	}
+	if handle.SessionID != sessionID {
+		return "", errors.New("Teams stream handle session does not match input session")
+	}
+	return parseConversation(sessionID)
+}
+
+func isStreamingAllowed(conversationType string) bool {
+	switch strings.ToLower(strings.TrimSpace(conversationType)) {
+	case "channel", "groupchat":
+		return false
 	default:
-		return "", fmt.Errorf("unknown delta type: %d", input.DeltaType)
+		return true
 	}
 }
 
-func (p *TeamsPlatform) startStream(ctx context.Context, conversationID, text string) (string, error) {
+func isNonPersonalStreamingError(err error) bool {
+	var httpErr *teamsHTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusMethodNotAllowed {
+		return false
+	}
+	body := strings.ToLower(httpErr.Body)
+	return strings.Contains(body, "streaming") && strings.Contains(body, "non personal")
+}
+
+func (p *TeamsPlatform) beginNativeStream(ctx context.Context, conversationID, text string) (string, error) {
 	displayText := text
 	if strings.TrimSpace(displayText) == "" {
 		displayText = initialStreamingText
@@ -108,100 +198,19 @@ func (p *TeamsPlatform) startStream(ctx context.Context, conversationID, text st
 	if streamID == "" {
 		return "", errors.New("Teams initial streaming response missing stream id")
 	}
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.streams == nil {
-		p.streams = make(map[string]streamState)
-	}
-	// Track the original text, not the placeholder: the placeholder is an
-	// informative status message, not part of the streamed response.
-	p.streams[streamID] = streamState{
-		ConversationID: conversationID,
-		Text:           text,
-		NextSequence:   initialStreamSequence + 1,
-		LastSentAt:     time.Now(),
-	}
 	return streamID, nil
 }
 
-func (p *TeamsPlatform) appendStream(ctx context.Context, conversationID, streamID, delta string) error {
-	if delta == "" {
-		return nil
+func (p *TeamsPlatform) beginMessageUpdates(ctx context.Context, conversationID, threadID, text string) (string, error) {
+	displayText := text
+	if strings.TrimSpace(displayText) == "" {
+		displayText = initialStreamingText
 	}
-	text, sequence, send, err := p.bufferDelta(conversationID, streamID, delta)
-	if err != nil || !send {
-		return err
-	}
-	_, err = p.sendStreamingActivity(ctx, streamingActivityInput{
-		ConversationID: conversationID,
-		ActivityType:   activityTypeTyping,
-		Text:           text,
-		StreamID:       streamID,
-		StreamType:     streamTypeStreaming,
-		StreamSequence: &sequence,
-	})
-	return err
-}
-
-func (p *TeamsPlatform) endStream(ctx context.Context, conversationID, streamID string) error {
-	p.mu.Lock()
-	state, err := p.lookupStreamLocked(conversationID, streamID)
-	p.mu.Unlock()
+	streamID, err := p.postActivity(ctx, conversationID, threadID, displayText)
 	if err != nil {
-		return err
+		return "", err
 	}
-
-	if _, err := p.sendStreamingActivity(ctx, streamingActivityInput{
-		ConversationID: conversationID,
-		ActivityType:   activityTypeMessage,
-		Text:           state.Text,
-		StreamID:       streamID,
-		StreamType:     streamTypeFinal,
-	}); err != nil {
-		return err
-	}
-
-	p.mu.Lock()
-	delete(p.streams, streamID)
-	p.mu.Unlock()
-	return nil
-}
-
-// bufferDelta appends delta to the stream's accumulated text and decides
-// whether to send an update now. It returns send=false when the update is
-// throttled; buffered text is flushed by the next unthrottled Append or by End.
-func (p *TeamsPlatform) bufferDelta(conversationID, streamID, delta string) (text string, sequence int, send bool, err error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	state, err := p.lookupStreamLocked(conversationID, streamID)
-	if err != nil {
-		return "", 0, false, err
-	}
-	state.Text += delta
-	now := time.Now()
-	if now.Sub(state.LastSentAt) >= minStreamUpdateDelay {
-		send = true
-		sequence = state.NextSequence
-		state.NextSequence++
-		state.LastSentAt = now
-	}
-	p.streams[streamID] = state
-	return state.Text, sequence, send, nil
-}
-
-// lookupStreamLocked returns the state for streamID, validating that it
-// belongs to conversationID. The caller must hold p.mu.
-func (p *TeamsPlatform) lookupStreamLocked(conversationID, streamID string) (streamState, error) {
-	state, ok := p.streams[streamID]
-	if !ok {
-		return streamState{}, fmt.Errorf("unknown Teams stream ID %q", streamID)
-	}
-	if state.ConversationID != conversationID {
-		return streamState{}, errors.New("Teams stream ID conversation does not match session ID")
-	}
-	return state, nil
+	return streamID, nil
 }
 
 func (p *TeamsPlatform) PostMessage(ctx context.Context, input msgiface.TextMetadata) error {
@@ -307,6 +316,19 @@ func (p *TeamsPlatform) postActivity(ctx context.Context, conversationID, replyT
 	return resp.ID, nil
 }
 
+func (p *TeamsPlatform) updateMessageActivity(ctx context.Context, conversationID, activityID, text string) error {
+	endpoint, err := p.activityURL(conversationID, activityID)
+	if err != nil {
+		return err
+	}
+	_, err = p.sendActivity(ctx, http.MethodPut, endpoint, msgiface.TeamMessageActivity{
+		Type:       activityTypeMessage,
+		Text:       text,
+		TextFormat: "markdown",
+	})
+	return err
+}
+
 func (p *TeamsPlatform) sendStreamingActivity(ctx context.Context, input streamingActivityInput) (string, error) {
 	if p.bot == nil {
 		return "", errors.New("Teams bot is required")
@@ -368,7 +390,10 @@ func (p *TeamsPlatform) sendActivity(ctx context.Context, method, endpoint strin
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return resourceResponse{}, fmt.Errorf("send Teams activity: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return resourceResponse{}, &teamsHTTPError{
+			StatusCode: resp.StatusCode,
+			Body:       strings.TrimSpace(string(respBody)),
+		}
 	}
 
 	var out resourceResponse
@@ -378,15 +403,17 @@ func (p *TeamsPlatform) sendActivity(ctx context.Context, method, endpoint strin
 	return out, nil
 }
 
-type resourceResponse struct {
-	ID string `json:"id"`
+type teamsHTTPError struct {
+	StatusCode int
+	Body       string
 }
 
-type streamState struct {
-	ConversationID string
-	Text           string
-	NextSequence   int
-	LastSentAt     time.Time
+func (e *teamsHTTPError) Error() string {
+	return fmt.Sprintf("send Teams activity: status %d: %s", e.StatusCode, e.Body)
+}
+
+type resourceResponse struct {
+	ID string `json:"id"`
 }
 
 type streamingActivityInput struct {

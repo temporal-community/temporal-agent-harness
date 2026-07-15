@@ -83,6 +83,17 @@ func (s *webhookServer) handleMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *webhookServer) signalIncomingMessage(ctx context.Context, act msgiface.TeamMessageActivity) {
+	wfID, input := messageWorkflowInput(act)
+	if _, err := s.tc.ExecuteWorkflow(ctx,
+		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
+		connector.WorkflowName,
+		input,
+	); err != nil {
+		log.Printf("Failed to start connector workflow: %v", err)
+	}
+}
+
+func messageWorkflowInput(act msgiface.TeamMessageActivity) (string, agentiface.ConnectorWorkflowInput) {
 	sessionID := fmt.Sprintf("teams:%s", conversationID(act))
 	interactionID := act.ID
 	if interactionID == "" {
@@ -95,22 +106,17 @@ func (s *webhookServer) signalIncomingMessage(ctx context.Context, act msgiface.
 	}
 
 	msg := agentiface.IncomingMessage{
-		MessageID: act.ID,
-		Sender:    senderID(act),
-		Text:      act.Text,
-		Timestamp: timestamp,
+		MessageID:        act.ID,
+		Sender:           senderID(act),
+		Text:             act.Text,
+		Timestamp:        timestamp,
+		ConversationType: act.Conversation.ConversationType,
 	}
 	wfID := agentiface.ConnectorWorkflowID(defaultIdentity, sessionID, interactionID)
-	if _, err := s.tc.ExecuteWorkflow(ctx,
-		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
-		connector.WorkflowName,
-		agentiface.ConnectorWorkflowInput{
-			Identity:  defaultIdentity,
-			SessionID: sessionID,
-			Message:   &msg,
-		},
-	); err != nil {
-		log.Printf("Failed to start connector workflow: %v", err)
+	return wfID, agentiface.ConnectorWorkflowInput{
+		Identity:  defaultIdentity,
+		SessionID: sessionID,
+		Message:   &msg,
 	}
 }
 

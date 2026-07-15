@@ -10,8 +10,9 @@ import (
 // consumed by RespondToPlatform. It identifies the agent turn and the stream
 // position from which the response should be consumed.
 type TurnHandle struct {
-	TurnNumber       int64 `json:"turnNumber"`
-	StreamHeadOffset int64 `json:"streamHeadOffset"`
+	TurnID           string `json:"turnId"`
+	TurnNumber       int64  `json:"turnNumber"`
+	StreamHeadOffset int64  `json:"streamHeadOffset"`
 }
 
 // MessageHandler is implemented by anything that can handle a single platform turn.
@@ -24,10 +25,11 @@ type MessageHandler interface {
 
 // IncomingMessage carries the raw message delivered from the platform.
 type IncomingMessage struct {
-	MessageID string
-	Sender    string
-	Text      string
-	Timestamp string
+	MessageID        string
+	Sender           string
+	Text             string
+	Timestamp        string
+	ConversationType string
 }
 
 // SlashCommand carries a slash command invocation from the platform.

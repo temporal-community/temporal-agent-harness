@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/assert"
@@ -120,13 +122,41 @@ func fakeAgentService(t *testing.T, items []agentgen.ItemElement) *nexus.Service
 // driver. Required by the test environment before OnActivity mocks can be set.
 func registerStubActivities(env *testsuite.TestWorkflowEnvironment) {
 	env.RegisterActivityWithOptions(
-		func(ctx context.Context, input ncmsg.StreamInput) (string, error) { return "stream-1", nil },
-		activity.RegisterOptions{Name: ncmsg.StreamActivity},
+		func(ctx context.Context, input ncmsg.BeginStreamInput) (ncmsg.StreamHandle, error) {
+			return testStreamHandle(input.SessionID), nil
+		},
+		activity.RegisterOptions{Name: ncmsg.BeginStreamActivity},
+	)
+	env.RegisterActivityWithOptions(
+		func(ctx context.Context, input ncmsg.UpdateStreamInput) error { return nil },
+		activity.RegisterOptions{Name: ncmsg.UpdateStreamActivity},
+	)
+	env.RegisterActivityWithOptions(
+		func(ctx context.Context, input ncmsg.FinishStreamInput) error { return nil },
+		activity.RegisterOptions{Name: ncmsg.FinishStreamActivity},
 	)
 	env.RegisterActivityWithOptions(
 		func(ctx context.Context, input ncmsg.TextMetadata) error { return nil },
 		activity.RegisterOptions{Name: ncmsg.PostMessageActivity},
 	)
+	env.RegisterActivityWithOptions(
+		func(ctx context.Context, input ncmsg.ApprovalPromptInput) error { return nil },
+		activity.RegisterOptions{Name: ncmsg.PostApprovalPromptActivity},
+	)
+}
+
+func testStreamHandle(sessionID string) ncmsg.StreamHandle {
+	handle := ncmsg.StreamHandle{
+		ID:           "stream-1",
+		SessionID:    sessionID,
+		WireTextMode: ncmsg.StreamWireTextDelta,
+	}
+	if strings.HasPrefix(sessionID, "teams:") {
+		handle.WireTextMode = ncmsg.StreamWireTextFullText
+		handle.CloseBeforeApproval = true
+		handle.NextSequence = 2
+	}
+	return handle
 }
 
 func newTestEnv(t *testing.T, svc *nexus.Service) *testsuite.TestWorkflowEnvironment {
@@ -181,13 +211,11 @@ func TestDriverWorkflow_StartsPollingFromStreamHeadOffset(t *testing.T) {
 	env := newTestEnv(t, svc)
 	registerStubActivities(env)
 	var appendedTexts []string
-	env.OnActivity(ncmsg.StreamActivity, mock.Anything, mock.Anything).
+	env.OnActivity(ncmsg.UpdateStreamActivity, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
-			in := args.Get(1).(ncmsg.StreamInput)
-			if in.DeltaType == ncmsg.DeltaTypeAppend {
-				appendedTexts = append(appendedTexts, in.Text)
-			}
-		}).Return("stream-1", nil)
+			in := args.Get(1).(ncmsg.UpdateStreamInput)
+			appendedTexts = append(appendedTexts, in.Delta)
+		}).Return(nil)
 	env.OnActivity(ncmsg.PostMessageActivity, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	env.ExecuteWorkflow(runDriverWorkflow, defaultInput())
@@ -232,13 +260,11 @@ func TestDriverWorkflow_SkipsStaleEventsByTurnNumber(t *testing.T) {
 	env := newTestEnv(t, svc)
 	registerStubActivities(env)
 	var appendedTexts []string
-	env.OnActivity(ncmsg.StreamActivity, mock.Anything, mock.Anything).
+	env.OnActivity(ncmsg.UpdateStreamActivity, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
-			in := args.Get(1).(ncmsg.StreamInput)
-			if in.DeltaType == ncmsg.DeltaTypeAppend {
-				appendedTexts = append(appendedTexts, in.Text)
-			}
-		}).Return("stream-1", nil)
+			in := args.Get(1).(ncmsg.UpdateStreamInput)
+			appendedTexts = append(appendedTexts, in.Delta)
+		}).Return(nil)
 	env.OnActivity(ncmsg.PostMessageActivity, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	env.ExecuteWorkflow(runDriverWorkflow, defaultInput())
@@ -259,19 +285,15 @@ func TestDriverWorkflow_ActivitySequence(t *testing.T) {
 	env := newTestEnv(t, fakeAgentService(t, items))
 	registerStubActivities(env)
 	var calls []string
-	env.OnActivity(ncmsg.StreamActivity, mock.Anything, mock.Anything).
-		Run(func(args mock.Arguments) {
-			in := args.Get(1).(ncmsg.StreamInput)
-			switch in.DeltaType {
-			case ncmsg.DeltaTypeStart:
-				calls = append(calls, "Start")
-			case ncmsg.DeltaTypeEnd:
-				calls = append(calls, "Stop")
-			default:
-				calls = append(calls, "Append")
-			}
-		}).
-		Return("stream-1", nil)
+	env.OnActivity(ncmsg.BeginStreamActivity, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { calls = append(calls, "Start") }).
+		Return(testStreamHandle(defaultInput().SessionID), nil)
+	env.OnActivity(ncmsg.UpdateStreamActivity, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { calls = append(calls, "Append") }).
+		Return(nil)
+	env.OnActivity(ncmsg.FinishStreamActivity, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { calls = append(calls, "Stop") }).
+		Return(nil)
 	env.OnActivity(ncmsg.PostMessageActivity, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	env.ExecuteWorkflow(runDriverWorkflow, defaultInput())
@@ -280,7 +302,214 @@ func TestDriverWorkflow_ActivitySequence(t *testing.T) {
 	assert.Equal(t, []string{"Start", "Append", "Append", "Stop"}, calls)
 }
 
-func TestDriverWorkflow_StreamStartFails_FallsBackToPostMessage(t *testing.T) {
+func TestDriverWorkflow_TeamsBuffersDeltasAndFinishesWithFullText(t *testing.T) {
+	items := []agentgen.ItemElement{
+		makeTestStreamItem(t, streamItem{TurnID: "t1", TurnNumber: 1, Timestamp: 1, Event: turnEvent{Type: "reply_delta", Text: "hello "}}, 0, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnID: "t1", TurnNumber: 1, Timestamp: 2, Event: turnEvent{Type: "reply_delta", Text: "world"}}, 1, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnID: "t1", TurnNumber: 1, Timestamp: 3, Event: turnEvent{Type: "reply"}}, 2, turnEventsTopic),
+	}
+
+	env := newTestEnv(t, fakeAgentService(t, items))
+	registerStubActivities(env)
+	handle := testStreamHandle("teams:conversation-1")
+	handle.MinUpdateInterval = time.Hour
+	env.OnActivity(ncmsg.BeginStreamActivity, mock.Anything, mock.Anything).Return(handle, nil)
+	updateCalls := 0
+	env.OnActivity(ncmsg.UpdateStreamActivity, mock.Anything, mock.Anything).
+		Run(func(mock.Arguments) { updateCalls++ }).
+		Return(nil).Maybe()
+	var finished ncmsg.FinishStreamInput
+	env.OnActivity(ncmsg.FinishStreamActivity, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) { finished = args.Get(1).(ncmsg.FinishStreamInput) }).
+		Return(nil)
+	env.OnActivity(ncmsg.PostMessageActivity, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	input := defaultInput()
+	input.SessionID = "teams:conversation-1"
+	input.Message.ConversationType = "personal"
+	env.ExecuteWorkflow(runDriverWorkflow, input)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	assert.Zero(t, updateCalls)
+	assert.Equal(t, "hello world", finished.FullText)
+	assert.Equal(t, handle.ID, finished.Handle.ID)
+	assert.Contains(t, finished.OperationID, "/turn-1/segment/0/finish/")
+}
+
+func TestDriverWorkflow_RetainsPendingDeltaAfterUpdateFailure(t *testing.T) {
+	items := []agentgen.ItemElement{
+		makeTestStreamItem(t, streamItem{TurnID: "t1", TurnNumber: 1, Timestamp: 1, Event: turnEvent{Type: "reply_delta", Text: "hello "}}, 0, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnID: "t1", TurnNumber: 1, Timestamp: 2, Event: turnEvent{Type: "reply_delta", Text: "world"}}, 1, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnID: "t1", TurnNumber: 1, Timestamp: 3, Event: turnEvent{Type: "reply"}}, 2, turnEventsTopic),
+	}
+
+	env := newTestEnv(t, fakeAgentService(t, items))
+	registerStubActivities(env)
+	env.OnActivity(ncmsg.UpdateStreamActivity, mock.Anything, mock.Anything).
+		Return(assert.AnError).Once()
+	var retriedDelta string
+	env.OnActivity(ncmsg.UpdateStreamActivity, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			retriedDelta = args.Get(1).(ncmsg.UpdateStreamInput).Delta
+		}).
+		Return(nil).Maybe()
+	env.OnActivity(ncmsg.PostMessageActivity, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	env.ExecuteWorkflow(runDriverWorkflow, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	assert.Equal(t, "hello world", retriedDelta)
+}
+
+func TestDriverWorkflow_ApprovalBoundaryActivitySequence(t *testing.T) {
+	approval := turnEvent{
+		Type:      "tool_approval_requested",
+		ToolID:    "tool-1",
+		ToolName:  "search",
+		ToolInput: map[string]any{"query": "Temporal"},
+	}
+
+	tests := []struct {
+		name             string
+		sessionID        string
+		conversationType string
+		events           []turnEvent
+		wantCalls        []string
+	}{
+		{
+			name:             "Teams personal chat closes the active stream around approval",
+			sessionID:        "teams:conversation-1",
+			conversationType: "personal",
+			events: []turnEvent{
+				{Type: "reply_delta", Text: "before"},
+				approval,
+				{Type: "reply_delta", Text: "after"},
+				{Type: "reply"},
+			},
+			wantCalls: []string{"Start", "Append", "End", "ApprovalPrompt", "Start", "Append", "End"},
+		},
+		{
+			name:      "Slack keeps one stream across approval",
+			sessionID: "slack:C12345",
+			events: []turnEvent{
+				{Type: "reply_delta", Text: "before"},
+				approval,
+				{Type: "reply_delta", Text: "after"},
+				{Type: "reply"},
+			},
+			wantCalls: []string{"Start", "Append", "ApprovalPrompt", "Append", "End"},
+		},
+		{
+			name:             "Teams personal approval first does not end an empty stream",
+			sessionID:        "teams:conversation-1",
+			conversationType: "personal",
+			events: []turnEvent{
+				approval,
+				{Type: "reply_delta", Text: "after"},
+				{Type: "reply"},
+			},
+			wantCalls: []string{"ApprovalPrompt", "Start", "Append", "End"},
+		},
+		{
+			name:             "Teams channel closes the active message around approval",
+			sessionID:        "teams:conversation-1",
+			conversationType: "channel",
+			events: []turnEvent{
+				{Type: "reply_delta", Text: "before"},
+				approval,
+				{Type: "reply_delta", Text: "after"},
+				{Type: "reply"},
+			},
+			wantCalls: []string{"Start", "Append", "End", "ApprovalPrompt", "Start", "Append", "End"},
+		},
+		{
+			name:             "Teams channel approval first does not end an empty response",
+			sessionID:        "teams:conversation-1",
+			conversationType: "channel",
+			events: []turnEvent{
+				approval,
+				{Type: "reply_delta", Text: "after"},
+				{Type: "reply"},
+			},
+			wantCalls: []string{"ApprovalPrompt", "Start", "Append", "End"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			items := make([]agentgen.ItemElement, 0, len(tc.events))
+			for i, event := range tc.events {
+				items = append(items, makeTestStreamItem(t, streamItem{
+					TurnID:     "t1",
+					TurnNumber: 1,
+					Timestamp:  float64(i + 1),
+					Event:      event,
+				}, int64(i), turnEventsTopic))
+			}
+
+			env := newTestEnv(t, fakeAgentService(t, items))
+			registerStubActivities(env)
+			var calls []string
+			env.OnActivity(ncmsg.BeginStreamActivity, mock.Anything, mock.Anything).
+				Run(func(mock.Arguments) { calls = append(calls, "Start") }).
+				Return(testStreamHandle(tc.sessionID), nil)
+			env.OnActivity(ncmsg.UpdateStreamActivity, mock.Anything, mock.Anything).
+				Run(func(mock.Arguments) { calls = append(calls, "Append") }).
+				Return(nil)
+			env.OnActivity(ncmsg.FinishStreamActivity, mock.Anything, mock.Anything).
+				Run(func(mock.Arguments) { calls = append(calls, "End") }).
+				Return(nil)
+			env.OnActivity(ncmsg.PostApprovalPromptActivity, mock.Anything, mock.Anything).
+				Run(func(mock.Arguments) { calls = append(calls, "ApprovalPrompt") }).
+				Return(nil)
+			env.OnActivity(ncmsg.PostMessageActivity, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			input := defaultInput()
+			input.SessionID = tc.sessionID
+			input.Message.ConversationType = tc.conversationType
+			env.ExecuteWorkflow(runDriverWorkflow, input)
+
+			require.True(t, env.IsWorkflowCompleted())
+			require.NoError(t, env.GetWorkflowError())
+			assert.Equal(t, tc.wantCalls, calls)
+		})
+	}
+}
+
+func TestDriverWorkflow_PropagatesTeamsConversationTypeToStreamStart(t *testing.T) {
+	items := []agentgen.ItemElement{
+		makeTestStreamItem(t, streamItem{TurnID: "t1", TurnNumber: 1, Timestamp: 1, Event: turnEvent{Type: "reply_delta", Text: "answer"}}, 0, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnID: "t1", TurnNumber: 1, Timestamp: 2, Event: turnEvent{Type: "reply"}}, 1, turnEventsTopic),
+	}
+
+	for _, conversationType := range []string{"personal", "channel", "groupChat", ""} {
+		t.Run(conversationType, func(t *testing.T) {
+			env := newTestEnv(t, fakeAgentService(t, items))
+			registerStubActivities(env)
+			var got string
+			env.OnActivity(ncmsg.BeginStreamActivity, mock.Anything, mock.Anything).
+				Run(func(args mock.Arguments) {
+					input := args.Get(1).(ncmsg.BeginStreamInput)
+					got = input.ConversationType
+				}).
+				Return(testStreamHandle("teams:conversation-1"), nil)
+			env.OnActivity(ncmsg.PostMessageActivity, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+			input := defaultInput()
+			input.SessionID = "teams:conversation-1"
+			input.Message.ConversationType = conversationType
+			env.ExecuteWorkflow(runDriverWorkflow, input)
+
+			require.True(t, env.IsWorkflowCompleted())
+			require.NoError(t, env.GetWorkflowError())
+			assert.Equal(t, conversationType, got)
+		})
+	}
+}
+
+func TestDriverWorkflow_SlackStreamStartFails_FallsBackToPostMessage(t *testing.T) {
 	items := []agentgen.ItemElement{
 		makeTestStreamItem(t, streamItem{TurnID: "t1", TurnNumber: 1, Timestamp: 1.0, Event: turnEvent{Type: "reply_delta", Text: "partial"}}, 0, turnEventsTopic),
 	}
@@ -288,7 +517,7 @@ func TestDriverWorkflow_StreamStartFails_FallsBackToPostMessage(t *testing.T) {
 	env := newTestEnv(t, fakeAgentService(t, items))
 	registerStubActivities(env)
 	var postMessageCalled bool
-	env.OnActivity(ncmsg.StreamActivity, mock.Anything, mock.Anything).Return("", assert.AnError)
+	env.OnActivity(ncmsg.BeginStreamActivity, mock.Anything, mock.Anything).Return(ncmsg.StreamHandle{}, assert.AnError)
 	env.OnActivity(ncmsg.PostMessageActivity, mock.Anything, mock.Anything).
 		Run(func(_ mock.Arguments) { postMessageCalled = true }).
 		Return(nil)
