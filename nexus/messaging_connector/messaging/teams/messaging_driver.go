@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -36,6 +37,8 @@ const (
 
 // Compile-time check that TeamsPlatform implements MessagingPlatform.
 var _ msgiface.MessagingPlatform = (*TeamsPlatform)(nil)
+
+var unsafeTeamsPathSegment = regexp.MustCompile(`[/\\?#%\x00-\x20\x7f]`)
 
 // TeamsPlatform implements MessagingPlatform using the Bot Framework REST connector.
 type TeamsPlatform struct {
@@ -330,6 +333,13 @@ func parseConversation(sessionID string) (string, error) {
 }
 
 func (p *TeamsPlatform) activityURL(conversationID, replyToID string) (string, error) {
+	if conversationID == "" || conversationID == "." || conversationID == ".." || unsafeTeamsPathSegment.MatchString(conversationID) {
+		return "", errors.New("invalid Teams conversation ID")
+	}
+	if replyToID != "" && (replyToID == "." || replyToID == ".." || unsafeTeamsPathSegment.MatchString(replyToID)) {
+		return "", errors.New("invalid Teams activity ID")
+	}
+
 	segments := []string{"v3", "conversations", conversationID, "activities"}
 	if replyToID != "" {
 		segments = append(segments, replyToID)
