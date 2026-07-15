@@ -2,7 +2,7 @@
 # send_message / attach present a parent agent and all its (recursive, possibly concurrent)
 # subagents as ONE logical event stream, while each agent keeps its own independent workflow
 # stream (stream isolation is never violated — the merge only READS each stream). See
-# docs/unified-subagent-event-stream.md for the full design; gates.py holds the load-bearing
+# docs/internal/unified-subagent-event-stream.md for the full design; gates.py holds the load-bearing
 # happens-before invariants.
 
 from temporal_agent_harness.harness.stream_merge.gates import (

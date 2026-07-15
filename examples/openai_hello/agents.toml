@@ -1,0 +1,20 @@
+# Registry of agents the OpenAI hello-world example UI can launch.
+#
+# The shared FastAPI server (examples/app.py) reads this file and passes the parsed
+# registry into the packaged SessionManagerWorkflow as its workflow init arg. The
+# manager then serves it back over the `available_agents` query, so the app server
+# can expose it at /api/agents without hardcoding the agent list.
+#
+# To expose a new agent: register its @workflow.defn on a worker, then add a
+# [[agents]] entry here.
+
+[[agents]]
+key = "openai-hello"
+workflow_type = "OpenAIHelloAgent"
+task_queue = "openai-hello"
+label = "OpenAI Hello"
+description = """
+A hello-world OpenAI Agents SDK agent. Chat in plain text; it replies in prose and can
+call one tool (get_weather) for a city's weather. Exists to show the harness streaming
+path for the OpenAI integration end to end — model call → streaming activity → live turn
+stream (reply_delta / tool_requested / tool_start / tool_end / model_interaction_*)."""
