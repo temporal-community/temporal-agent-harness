@@ -1,4 +1,4 @@
-module github.com/temporal-community/temporal-agent-harness/nexus/slack_connector
+module github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector
 
 go 1.25.0
 

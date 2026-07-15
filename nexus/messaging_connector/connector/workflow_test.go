@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	agentiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/agent"
+	agentiface "github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/agent"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )

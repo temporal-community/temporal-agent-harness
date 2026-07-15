@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	agentiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/agent"
-	agentgen "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/agent/generated"
-	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging"
+	agentiface "github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/agent"
+	agentgen "github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/agent/generated"
+	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/messaging"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )

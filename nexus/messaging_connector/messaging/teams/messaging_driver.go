@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging"
+	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/messaging"
 )
 
 const (

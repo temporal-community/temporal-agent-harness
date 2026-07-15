@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging"
+	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/messaging"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
