@@ -33,6 +33,7 @@ def _convert_agent(
     model_params: ModelActivityParameters,
     agent: Agent[Any],
     seen: dict[int, Agent] | None,
+    run_context: Any = None,
 ) -> Agent[Any]:
     if seen is None:
         seen = dict()
@@ -54,7 +55,7 @@ def _convert_agent(
     new_handoffs: list[Agent | Handoff] = []
     for handoff in agent.handoffs:
         if isinstance(handoff, Agent):
-            new_handoffs.append(_convert_agent(model_params, handoff, seen))
+            new_handoffs.append(_convert_agent(model_params, handoff, seen, run_context))
         elif isinstance(handoff, Handoff):
             original_invoke = handoff.on_invoke_handoff
 
@@ -65,9 +66,10 @@ def _convert_agent(
                 invoke_func: Callable[
                     [RunContextWrapper[Any], str], Awaitable[Any]
                 ] = original_invoke,
+                run_context: Any = run_context,
             ) -> Agent:
                 handoff_agent = await invoke_func(context, args)
-                return _convert_agent(model_params, handoff_agent, seen)
+                return _convert_agent(model_params, handoff_agent, seen, run_context)
 
             new_handoffs.append(
                 dataclasses.replace(handoff, on_invoke_handoff=on_invoke)
@@ -79,6 +81,7 @@ def _convert_agent(
         model_name=name,
         model_params=model_params,
         agent=agent,
+        run_context=run_context,
     )
     new_agent.handoffs = new_handoffs
     return new_agent
@@ -147,6 +150,12 @@ class TemporalOpenAIRunner(AgentRunner):
         if isinstance(kwargs.get("session"), SQLiteSession):
             raise ValueError("Temporal workflows don't support SQLite sessions.")
 
+        # The object the caller threaded via ``Runner.run_streamed(..., context=...)``.
+        # Captured here (synchronously, before the framework starts its run task) and
+        # handed to each model stub, which forwards it to ``stream_to_provider`` to
+        # resolve the live stream routing token.
+        run_context = kwargs.get("context")
+
         run_config = kwargs.get("run_config")
         if run_config is None:
             run_config = RunConfig()
@@ -159,7 +168,10 @@ class TemporalOpenAIRunner(AgentRunner):
             run_config = dataclasses.replace(
                 run_config,
                 model=_TemporalModelStub(
-                    run_config.model, model_params=self.model_params, agent=None
+                    run_config.model,
+                    model_params=self.model_params,
+                    agent=None,
+                    run_context=run_context,
                 ),
             )
 
@@ -187,7 +199,7 @@ class TemporalOpenAIRunner(AgentRunner):
                 )
 
         kwargs["run_config"] = run_config
-        return _convert_agent(self.model_params, starting_agent, None)
+        return _convert_agent(self.model_params, starting_agent, None, run_context)
 
     async def run(
         self,

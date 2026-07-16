@@ -86,7 +86,9 @@ class OpenAIHelloAgentWorkflow:
         ]
 
         # run_streamed returns immediately; iterate its events to drive the turn to completion.
-        result = Runner.run_streamed(sdk_agent, input=input_items)
+        # context=self._runner threads the harness runner to the streaming activity so the
+        # plugin can route live events to this turn's stream.
+        result = Runner.run_streamed(sdk_agent, input=input_items, context=self._runner)
         async for _event in result.stream_events():
             pass
 
