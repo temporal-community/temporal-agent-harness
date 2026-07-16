@@ -1,0 +1,19 @@
+# Registry of agents the example UI can launch, which mounts onto the QaAgent.
+#
+# The FastAPI server reads this file and passes the parsed
+# registry into the packaged SessionManagerWorkflow as its workflow init arg. The
+# manager then serves it back over the `available_agents` query, so the app server
+# can expose it at /api/agents without hardcoding the agent list.
+#
+# To expose a new agent: register its @workflow.defn on a worker, then add a
+# [[agents]] entry here.
+
+[[agents]]
+key = "qa"
+workflow_type = "QaAgent"
+task_queue = "qa-agent"
+label = "QaAgent"
+description = """
+Conversational Q&A over the Temporal docs and community forum. Answers
+      natural-language questions with grounded citations; an LLM drives a fixed set of
+      retrieval tools, and slash commands tune the retrieval scope."""
