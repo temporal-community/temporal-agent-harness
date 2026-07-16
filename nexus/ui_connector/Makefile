@@ -1,8 +1,8 @@
 .PHONY: generate build test test-contract lint fmt vet workflowcheck ci install-dev-server start-dev-server
 
 generate:
-	npx nexus-rpc-gen@alpha --lang go --package agent \
-	  --out-file agent/generated/generated.go \
+	npx nexus-rpc-gen@alpha --lang go --package generated \
+	  --out-file outbound/driver/temporal_agent_harness/generated/generated.go \
 	  ../agent_adapter/nexus_worker/agent.nexusrpc.yaml
 
 build:

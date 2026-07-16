@@ -3,14 +3,14 @@ package main
 import (
 	"log"
 	"os"
+	"time"
 
-	agentiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/agent"
-	"github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/connector"
-	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging"
-	"github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging/slack"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound/driver/slack"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/driver/temporal_agent_harness"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 
-	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 )
@@ -64,13 +64,19 @@ func main() {
 		log.Printf("Bot user ID: %s", bot.UserID)
 	}
 
-	driver := slack.NewSlackPlatform(bot.Client, bot.TeamID)
-	c := connector.NewConnectorWorkflow(&agentiface.TemporalNativeHarnessDriver{})
+	// Compose this connector: a Slack inbound driver + the temporal-agent-harness
+	// outbound driver, plugged into the generic RouterWorkflow.
+	platform := slack.NewSlackPlatform(bot.Client, bot.TeamID)
+	inboundDriver := slack.NewDriver(workflow.ActivityOptions{
+		StartToCloseTimeout: 30 * time.Second,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	})
+	outboundDriver := &temporal_agent_harness.Driver{}
+
 	w := worker.New(tc, flags.taskQueue, worker.Options{})
-	w.RegisterWorkflowWithOptions(c.Run, workflow.RegisterOptions{Name: connector.WorkflowName})
-	w.RegisterActivityWithOptions(driver.Stream, activity.RegisterOptions{Name: msgiface.StreamActivity})
-	w.RegisterActivityWithOptions(driver.PostMessage, activity.RegisterOptions{Name: msgiface.PostMessageActivity})
-	w.RegisterActivityWithOptions(driver.PostApprovalPrompt, activity.RegisterOptions{Name: msgiface.PostApprovalPromptActivity})
+	routerWorkflow := router.NewRouterWorkflow(inboundDriver, outboundDriver)
+	w.RegisterWorkflowWithOptions(routerWorkflow.Run, workflow.RegisterOptions{Name: router.WorkflowName})
+	slack.RegisterActivities(w, platform)
 
 	log.Printf("Starting worker on task queue %q", flags.taskQueue)
 	if err := w.Run(worker.InterruptCh()); err != nil {

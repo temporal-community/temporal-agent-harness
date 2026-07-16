@@ -11,9 +11,9 @@ import (
 
 	slackapi "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
-	agentiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/agent"
-	"github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/connector"
-	slackmsg "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging/slack"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
+	slackmsg "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound/driver/slack"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/wire"
 	"go.temporal.io/sdk/client"
 )
 
@@ -88,17 +88,17 @@ func (s *webhookServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *webhookServer) signalIncomingMessage(ctx context.Context, ev *slackevents.MessageEvent) {
 	sessionID := fmt.Sprintf("slack:%s", ev.Channel)
-	msg := agentiface.IncomingMessage{
+	msg := wire.IncomingMessage{
 		MessageID: ev.TimeStamp,
 		Sender:    ev.User,
 		Text:      ev.Text,
 		Timestamp: ev.TimeStamp,
 	}
-	wfID := agentiface.ConnectorWorkflowID(defaultIdentity, sessionID, ev.TimeStamp)
+	wfID := router.RouterWorkflowID(defaultIdentity, sessionID, ev.TimeStamp)
 	if _, err := s.tc.ExecuteWorkflow(ctx,
 		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
-		connector.WorkflowName,
-		agentiface.ConnectorWorkflowInput{
+		router.WorkflowName,
+		wire.Input{
 			Identity:  defaultIdentity,
 			SessionID: sessionID,
 			Message:   &msg,
@@ -128,14 +128,14 @@ func (s *webhookServer) handleSlashCommands(w http.ResponseWriter, r *http.Reque
 
 	sessionID := fmt.Sprintf("slack:%s", channelID)
 
-	wfID := agentiface.ConnectorWorkflowID(defaultIdentity, sessionID, triggerID)
+	wfID := router.RouterWorkflowID(defaultIdentity, sessionID, triggerID)
 	if _, err := s.tc.ExecuteWorkflow(r.Context(),
 		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
-		connector.WorkflowName,
-		agentiface.ConnectorWorkflowInput{
+		router.WorkflowName,
+		wire.Input{
 			Identity:  defaultIdentity,
 			SessionID: sessionID,
-			Slash: &agentiface.SlashCommand{
+			Slash: &wire.SlashCommand{
 				Name:     command,
 				Arg:      arg,
 				ThreadID: threadTS,
@@ -175,14 +175,14 @@ func (s *webhookServer) handleInteractions(w http.ResponseWriter, r *http.Reques
 		}
 
 		// Start a dedicated workflow to call approveToolCall via Nexus.
-		wfID := agentiface.ConnectorWorkflowID(defaultIdentity, val.SessionID, "approval-"+val.ToolID)
+		wfID := router.RouterWorkflowID(defaultIdentity, val.SessionID, "approval-"+val.ToolID)
 		if _, err := s.tc.ExecuteWorkflow(r.Context(),
 			client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
-			connector.WorkflowName,
-			agentiface.ConnectorWorkflowInput{
+			router.WorkflowName,
+			wire.Input{
 				SessionID: val.SessionID,
 				Identity:  defaultIdentity,
-				Approval: &agentiface.ApprovalDecision{
+				Approval: &wire.ApprovalDecision{
 					ToolID:   val.ToolID,
 					ToolName: val.ToolName,
 					Approved: val.Approved,

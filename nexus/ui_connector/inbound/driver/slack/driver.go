@@ -9,8 +9,62 @@ import (
 
 	slackapi "github.com/slack-go/slack"
 
-	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/worker"
+	"go.temporal.io/sdk/workflow"
 )
+
+// Activity name constants under which SlackPlatform's methods must be registered on
+// the worker (see cmd/worker). Private to this package: RouterWorkflow never sees
+// these — it only calls Driver, and a different inbound driver is free to use a
+// completely different activity shape internally, or none at all.
+const (
+	streamActivity             = "SlackStream"
+	postMessageActivity        = "SlackPostMessage"
+	postApprovalPromptActivity = "SlackPostApprovalPrompt"
+)
+
+// Driver implements inbound.Driver for Slack by dispatching to Activities backed by
+// SlackPlatform. It's the bridge between RouterWorkflow (workflow.Context calls) and
+// the real Slack API calls, which must run as Activities since they're non-deterministic
+// I/O.
+type Driver struct {
+	ActivityOptions workflow.ActivityOptions
+}
+
+// NewDriver returns a Driver that calls the Slack activities with the given options.
+func NewDriver(opts workflow.ActivityOptions) Driver {
+	return Driver{ActivityOptions: opts}
+}
+
+func (d Driver) Stream(ctx workflow.Context, input inbound.StreamInput) (string, error) {
+	var streamID string
+	err := workflow.ExecuteActivity(
+		workflow.WithActivityOptions(ctx, d.ActivityOptions), streamActivity, input,
+	).Get(ctx, &streamID)
+	return streamID, err
+}
+
+func (d Driver) PostMessage(ctx workflow.Context, input inbound.TextMetadata) error {
+	return workflow.ExecuteActivity(
+		workflow.WithActivityOptions(ctx, d.ActivityOptions), postMessageActivity, input,
+	).Get(ctx, nil)
+}
+
+func (d Driver) PostApprovalPrompt(ctx workflow.Context, input inbound.ApprovalPromptInput) error {
+	return workflow.ExecuteActivity(
+		workflow.WithActivityOptions(ctx, d.ActivityOptions), postApprovalPromptActivity, input,
+	).Get(ctx, nil)
+}
+
+// RegisterActivities registers platform's methods on w under the activity names Driver
+// dispatches to. Call this from the worker binary alongside NewDriver.
+func RegisterActivities(w worker.Worker, platform *SlackPlatform) {
+	w.RegisterActivityWithOptions(platform.Stream, activity.RegisterOptions{Name: streamActivity})
+	w.RegisterActivityWithOptions(platform.PostMessage, activity.RegisterOptions{Name: postMessageActivity})
+	w.RegisterActivityWithOptions(platform.PostApprovalPrompt, activity.RegisterOptions{Name: postApprovalPromptActivity})
+}
 
 // ApprovalButtonValue is encoded in each Approve/Deny button's value field so the
 // interaction webhook can reconstruct the decision without server-side state.
@@ -31,11 +85,10 @@ func parseChannel(sessionID string) (string, error) {
 	return ch, nil
 }
 
-// Compile-time check that SlackPlatform implements MessagingPlatform.
-var _ msgiface.MessagingPlatform = (*SlackPlatform)(nil)
-
-// SlackPlatform implements MessagingPlatform using the Slack API.
-// It also exposes additional Slack-specific methods not covered by the interface.
+// SlackPlatform is the real Activity implementation backing Driver: its methods make
+// the actual Slack API calls and are registered on the worker under the activity names
+// Driver dispatches to. It also exposes additional Slack-specific methods not covered
+// by inbound.Driver.
 type SlackPlatform struct {
 	client *slackapi.Client
 	teamID string
@@ -49,18 +102,18 @@ func NewSlackPlatform(client *slackapi.Client, teamID string) *SlackPlatform {
 // Stream starts, appends to, or finalises a Slack streaming message.
 // DeltaTypeStart opens a new stream; DeltaTypeAppend appends text; DeltaTypeEnd stops it.
 // StreamID must be empty for Start and non-empty for Append/End.
-func (p *SlackPlatform) Stream(ctx context.Context, input msgiface.StreamInput) (string, error) {
+func (p *SlackPlatform) Stream(ctx context.Context, input inbound.StreamInput) (string, error) {
 	channel, err := parseChannel(input.SessionID)
 	if err != nil {
 		return "", err
 	}
 
-	if input.DeltaType != msgiface.DeltaTypeStart && input.StreamID == "" {
+	if input.DeltaType != inbound.DeltaTypeStart && input.StreamID == "" {
 		return "", errors.New("StreamID is required for Append and End phases")
 	}
 
 	switch input.DeltaType {
-	case msgiface.DeltaTypeStart:
+	case inbound.DeltaTypeStart:
 		opts := []slackapi.MsgOption{slackapi.MsgOptionStartStream()}
 		if input.ThreadID != "" {
 			opts = append(opts, slackapi.MsgOptionTS(input.ThreadID))
@@ -77,7 +130,7 @@ func (p *SlackPlatform) Stream(ctx context.Context, input msgiface.StreamInput) 
 		}
 		return ts, nil
 
-	case msgiface.DeltaTypeEnd:
+	case inbound.DeltaTypeEnd:
 		if _, _, err := p.client.StopStreamContext(ctx, channel, input.StreamID); err != nil {
 			return "", fmt.Errorf("chat.stopStream: %w", err)
 		}
@@ -96,7 +149,7 @@ func (p *SlackPlatform) Stream(ctx context.Context, input msgiface.StreamInput) 
 	}
 }
 
-func (p *SlackPlatform) PostMessage(ctx context.Context, input msgiface.TextMetadata) error {
+func (p *SlackPlatform) PostMessage(ctx context.Context, input inbound.TextMetadata) error {
 	channel, err := parseChannel(input.SessionID)
 	if err != nil {
 		return err
@@ -112,7 +165,7 @@ func (p *SlackPlatform) PostMessage(ctx context.Context, input msgiface.TextMeta
 	return nil
 }
 
-func (p *SlackPlatform) PostApprovalPrompt(ctx context.Context, input msgiface.ApprovalPromptInput) error {
+func (p *SlackPlatform) PostApprovalPrompt(ctx context.Context, input inbound.ApprovalPromptInput) error {
 	channel, err := parseChannel(input.SessionID)
 	if err != nil {
 		return err
@@ -147,7 +200,7 @@ func (p *SlackPlatform) PostApprovalPrompt(ctx context.Context, input msgiface.A
 	return err
 }
 
-// --- Slack-specific methods not covered by MessagingPlatform ---
+// --- Slack-specific methods not covered by inbound.Driver ---
 
 type FetchMessagesOutput struct {
 	Messages []MessageElement
