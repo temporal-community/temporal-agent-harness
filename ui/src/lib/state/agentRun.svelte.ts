@@ -222,6 +222,7 @@ export class AgentRunController {
   connecting = $state(false);
   sending = $state(false);
   creatingSession = $state(false);
+  refreshingSessions = $state(false);
   connectionError = $state<string | null>(null);
   playbackSpeed = $state<PlaybackSpeed>(1);
   agents = $state<AgentDescriptor[]>([]);
@@ -756,6 +757,21 @@ export class AgentRunController {
       }
     } finally {
       if (this.#isCurrentConnection(connectionVersion)) this.connecting = false;
+    }
+  }
+
+  async refreshSessions(): Promise<void> {
+    if (this.refreshingSessions) return;
+    this.refreshingSessions = true;
+    try {
+      const sessions = await this.#api.listSessions();
+      this.sessions = sessions;
+      this.#applySessionExecutionStates(sessions);
+    } catch (error) {
+      this.connectionError =
+        error instanceof Error ? error.message : "Failed to refresh sessions.";
+    } finally {
+      this.refreshingSessions = false;
     }
   }
 

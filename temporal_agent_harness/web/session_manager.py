@@ -64,6 +64,9 @@ class Session:
     label: str
     agent_workflow_type: str
     is_message_queuing_enabled: bool = False
+    is_discovered: bool = False
+    """True if this session wasn't started via ``create_session`` but was found already running
+    in the namespace (see ``_discover_untracked_sessions`` in ``web/app.py``)."""
 
 
 @workflow.defn
