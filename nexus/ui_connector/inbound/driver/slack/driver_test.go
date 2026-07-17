@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/slack_connector/messaging"
+	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

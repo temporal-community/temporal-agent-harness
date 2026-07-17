@@ -1,4 +1,4 @@
-package agent
+package temporal_agent_harness
 
 import (
 	"bytes"

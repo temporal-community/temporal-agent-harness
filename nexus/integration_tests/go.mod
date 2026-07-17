@@ -1,5 +1,5 @@
 // Integration tests for the full nexus agent + connector pipeline.
-// All sibling modules (agent_adapter/nexus_worker, slack_connector) are
+// All sibling modules (agent_adapter/nexus_worker, ui_connector) are
 // resolved via the workspace (go.work) and published at the same repo path,
 // so go mod tidy works as long as the workspace is active.
 module github.com/temporal-community/temporal-agent-harness/nexus/integration_tests
