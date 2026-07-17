@@ -28,6 +28,19 @@ from temporalio.worker import PollerBehaviorSimpleMaximum, Worker
 from temporalio.workflow import ActivityConfig, ActivityHandle
 
 
+class _DurableMCPServerMarker:
+    """Marker mixin for ``MCPServer`` implementations safe to pass as ``Agent.mcp_servers``
+    inside a Temporal workflow.
+
+    A durable MCP server never performs real I/O directly in the workflow — every tool call
+    it makes is routed through ``workflow.execute_activity``, a Nexus operation, or another
+    replay-safe Temporal primitive. ``TemporalOpenAIRunner._prepare_workflow_run`` allowlists
+    ``mcp_servers`` entries by this marker (instead of an enumerated ``isinstance`` tuple), so
+    adding a new durable strategy — like the Nexus-transport server in ``_nexus_mcp.py`` —
+    never requires touching the runner.
+    """
+
+
 @dataclasses.dataclass
 class _StatelessListToolsArguments:
     factory_argument: Any | None
@@ -53,7 +66,7 @@ class _StatelessGetPromptArguments:
     factory_argument: Any | None
 
 
-class _StatelessMCPServerReference(MCPServer):  # type:ignore[reportUnusedClass]
+class _StatelessMCPServerReference(_DurableMCPServerMarker, MCPServer):  # type:ignore[reportUnusedClass]
     def __init__(
         self,
         server: str,
@@ -292,7 +305,7 @@ class _StatefulServerSessionArguments:
     factory_argument: Any | None
 
 
-class _StatefulMCPServerReference(MCPServer, AbstractAsyncContextManager):  # type:ignore[reportUnusedClass]
+class _StatefulMCPServerReference(_DurableMCPServerMarker, MCPServer, AbstractAsyncContextManager):  # type:ignore[reportUnusedClass]
     def __init__(
         self,
         server: str,

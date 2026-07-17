@@ -57,6 +57,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
     RUN_SUBAGENT_TURN_ACTIVITY,
     SEND_AGENT_MESSAGE_UPDATE,
+    SET_ENABLED_MCP_SERVERS_UPDATE,
     TOOL_APPROVAL_UPDATE,
     TURN_EVENTS_TOPIC,
     AcceptedFunction,
@@ -1207,6 +1208,19 @@ class _WorkflowStatus:
 # AgentWorkflowRunner
 # ---------------------------------------------------------------------------
 
+def current_agent_workflow_runner() -> "AgentWorkflowRunner | None":
+    """Return the calling workflow's :class:`AgentWorkflowRunner`, or ``None`` outside a
+    workflow, before ``@workflow.init`` runs, or in a workflow that isn't a harness agent.
+
+    Same lookup :func:`current_stream_context` already uses (harness agents store their
+    runner as ``self._runner`` on the workflow instance) — reused here rather than adding a
+    second, redundant stashing mechanism.
+    """
+    if not workflow.in_workflow():
+        return None
+    runner = getattr(workflow.instance(), "_runner", None)
+    return runner if isinstance(runner, AgentWorkflowRunner) else None
+
 
 class AgentWorkflowRunner:
     """Workflow-side agent runtime: discovers ``@agent.accepts`` handlers and dispatches.
@@ -1231,6 +1245,7 @@ class AgentWorkflowRunner:
         enable_message_queuing_default: bool = False,
         custom_approval_fallback: CustomApprovalFallback | None = None,
         slash_commands: Iterable[SlashCommandDefinition] | None = None,
+        enabled_mcp_servers_default: Iterable[str] | None = None,
     ) -> None:
         """Construct the runner inside the agent's ``@workflow.init``::
 
@@ -1249,7 +1264,10 @@ class AgentWorkflowRunner:
         workflow's update/query/signal handlers. ``slash_commands`` configures the
         human/operator slash command registry used by both first-class operator updates
         and normal ``slash`` turns. If omitted, the packaged harness defaults are enabled;
-        pass an empty iterable to disable packaged slash commands.
+        pass an empty iterable to disable packaged slash commands. ``enabled_mcp_servers_default``
+        is the agent's own opt-in default (harness baseline: none — MCP tools are opt-in, never
+        available just because they're technically reachable); see
+        :attr:`AgentConfig.enabled_mcp_servers` and :meth:`set_enabled_mcp_servers`.
         """
         # The runner is built inside the agent's @workflow.init; enforce here that the
         # enclosing workflow honors the standardized agent-input contract (run/__init__
@@ -1277,6 +1295,13 @@ class AgentWorkflowRunner:
             config.is_message_queuing_enabled
             if config.is_message_queuing_enabled is not None
             else enable_message_queuing_default
+        )
+        # Opt-in only: an unset config AND an unset agent default both mean "nothing enabled",
+        # never "everything reachable" — see AgentConfig.enabled_mcp_servers.
+        self._enabled_mcp_servers: frozenset[str] = frozenset(
+            config.enabled_mcp_servers
+            if config.enabled_mcp_servers is not None
+            else (enabled_mcp_servers_default or [])
         )
         # This agent's short id, stamped on every event it publishes and reported on its status
         # query. A parent assigns it when starting a subagent (pushing down the same short handle
@@ -1347,6 +1372,15 @@ class AgentWorkflowRunner:
         workflow.set_update_handler(
             EXECUTE_OPERATOR_COMMAND_UPDATE,
             self._handle_execute_operator_command,
+        )
+        # Lets a caller turn MCP integrations on/off mid-conversation without starting a new
+        # session — see AgentConfig.enabled_mcp_servers for why this is opt-in, not opt-out.
+        # Discoverable via current_agent_workflow_runner() -- no separate stashing needed,
+        # since self._runner (set by the containing workflow's own __init__, per the
+        # existing convention current_stream_context() already relies on) is what that
+        # lookup reads.
+        workflow.set_update_handler(
+            SET_ENABLED_MCP_SERVERS_UPDATE, self._handle_set_enabled_mcp_servers
         )
         workflow.set_query_handler(AGENT_STATUS_QUERY, self._handle_agent_status)
         workflow.set_query_handler(AGENT_INTERFACE_QUERY, self._handle_agent_interface)
@@ -1579,6 +1613,34 @@ class AgentWorkflowRunner:
     def current_status(self) -> AgentStatus:
         """A current :class:`AgentStatus` snapshot for in-workflow handlers."""
         return self._status.to_agent_status()
+
+    # -- MCP server opt-in ---------------------------------------------------
+
+    @property
+    def enabled_mcp_servers(self) -> frozenset[str]:
+        """The MCP service names this session currently opts into.
+
+        Read live by framework-specific glue (e.g. the OpenAI Agents SDK integration's
+        Nexus-transport MCP server) via :func:`current_agent_workflow_runner` — a service
+        name absent here is neither listed nor callable, regardless of whether it's
+        technically reachable. See :attr:`AgentConfig.enabled_mcp_servers`.
+        """
+        return self._enabled_mcp_servers
+
+    def set_enabled_mcp_servers(self, names: Iterable[str]) -> None:
+        """Replace the set of enabled MCP service names at runtime.
+
+        The public, self-serve entry point for a caller to turn integrations on or off
+        mid-conversation — registered as the ``set_enabled_mcp_servers`` update, so any
+        client with this workflow's handle can call it directly, no new session needed.
+        Replaces the whole set (not incremental add/remove); a caller wanting to add or
+        remove one name reads :attr:`enabled_mcp_servers` first and computes the new set
+        itself.
+        """
+        self._enabled_mcp_servers = frozenset(names)
+
+    def _handle_set_enabled_mcp_servers(self, names: list[str]) -> None:
+        self.set_enabled_mcp_servers(names)
 
     def set_approval_policy(self, policy: ToolApprovalPolicy) -> None:
         """Swap the agent's tool-approval policy at runtime.

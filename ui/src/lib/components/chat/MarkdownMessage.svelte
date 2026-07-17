@@ -825,6 +825,20 @@
     return value.trimEnd() ? `${value.trimEnd()} ${suffix}` : suffix;
   }
 
+  // CommonMark rule this hand-rolled parser otherwise skips: "_"-delimited emphasis/strong
+  // must NOT fire mid-word (unlike "*"), so snake_case identifiers like get_fun_fact aren't
+  // torn apart into get<em>fun</em>fact. "*"/"**" have no such restriction.
+  function hasValidEmphasisBoundary(
+    value: string,
+    matchStart: number,
+    matchLength: number,
+    delimiter: string
+  ): boolean {
+    if (!delimiter.startsWith("_")) return true;
+    const isWordChar = (ch: string | undefined) => !!ch && /\w/.test(ch);
+    return !isWordChar(value[matchStart - 1]) && !isWordChar(value[matchStart + matchLength]);
+  }
+
   function renderInline(value: string, links: CitationLink[]): string {
     let output = "";
     let index = 0;
@@ -865,14 +879,14 @@
       }
 
       const strongMatch = rest.match(/^(\*\*|__)(.+?)\1/);
-      if (strongMatch?.[2]) {
+      if (strongMatch?.[2] && hasValidEmphasisBoundary(value, index, strongMatch[0].length, strongMatch[1])) {
         output += `<strong>${renderInline(strongMatch[2], links)}</strong>`;
         index += strongMatch[0].length;
         continue;
       }
 
       const emphasisMatch = rest.match(/^(\*|_)([^\s*_][^*_]*?)\1/);
-      if (emphasisMatch?.[2]) {
+      if (emphasisMatch?.[2] && hasValidEmphasisBoundary(value, index, emphasisMatch[0].length, emphasisMatch[1])) {
         output += `<em>${renderInline(emphasisMatch[2], links)}</em>`;
         index += emphasisMatch[0].length;
         continue;

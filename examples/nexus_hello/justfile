@@ -1,0 +1,245 @@
+# Scoped justfile for the Nexus-transport hello-world example (examples/nexus_hello).
+# Run from this directory: `just <recipe>`.
+#
+# Three separate Temporal namespaces, each with its own worker, so Nexus is actually brokering
+# real namespace boundaries rather than everything living in one namespace:
+#   default            the agent (this example's worker, session-manager, FastAPI/UI)
+#   gateway             the durable tools gateway (ToolRegistryWorkflow + its worker)
+#   nexus-mcp-server   the demo Nexus-native tool service (nexus_tool_service.py)
+#
+# WorkflowTransport reaches every tool source over Nexus, uniformly, from two places:
+#   - Nexus-native MCP servers (nexus_tool_service.py) register DIRECTLY against a specific,
+#     already-running agent workflow's own NexusMcpServerRegistry (`register-nexus-tool`) — a
+#     plain signal, no gateway involved. WorkflowTransport then calls them straight through
+#     workflow.create_nexus_client(), one Temporal hop.
+#   - Everything else (3rd-party, non-Nexus MCP servers like tool_server.py) registers with the
+#     Durable Tools Gateway instead (`register-tool`, unchanged from before) and is reached
+#     through the gateway's RegistryService.call_tool, which starts ToolCallWorkflow (a plain
+#     workflow wrapping one activity) on the caller's behalf.
+#
+# Self-contained local stack (each in its own terminal, in this order):
+#   just temporal             # 1. local Temporal dev server, with standalone Nexus ops enabled
+#   just setup-nexus          # 2. ONE-SHOT: creates the 3 namespaces + the 2 Nexus endpoints
+#   just registry             # 3. durable tools gateway, on the "gateway" namespace
+#   just tool-server          # 4. the demo 3rd-party (HTTP) MCP tool server
+#   just register-tool        # 5. ONE-SHOT: registers the tool server, via a Nexus op call
+#   just nexus-tool-service   # 6. the demo Nexus-native tool service, on "nexus-mcp-server"
+#   just session-manager      # 7. packaged session-manager worker
+#   just server               # 8. FastAPI API + UI on :8000
+#   just worker                # 9. this example's agent worker, on "default"
+#   (open the UI, start a chat, note the workflow/session id it creates)
+#   just register-gateway <workflow-id>      # 10. registers the gateway AGAINST that specific
+#                                             #     running conversation
+#   just register-nexus-tool <workflow-id>   # 11. registers the Nexus-native service AGAINST
+#                                             #     that specific running conversation
+#
+# Then chat — neither tool works until you've registered it for THIS session (see README):
+# both the gateway (register-gateway) and the Nexus-native service (register-nexus-tool) are
+# self-serve, per-session registrations against the SAME NexusMcpServerRegistry, sent live
+# while the conversation is already running -- that's the point: registration takes effect
+# live, mid-conversation, no restart needed, for either tool source uniformly.
+#
+# register-tool still uses `temporal nexus operation execute` to call
+# RegistryService.register_external AS a genuine Nexus operation (via the "gateway"
+# namespace's mcp-registry-endpoint) — that path is unchanged, and still needs BOTH a server
+# with `nexusoperation.enableStandalone=true` (which `just temporal` sets) and a CLI build
+# with the `nexus operation` command family (see temporal_cli below — not yet in the stable
+# public CLI). register-nexus-tool needs neither: it's a plain `temporal workflow signal`
+# against the agent's OWN namespace, using the stable public CLI.
+#
+# Requires the `nexus-mcp` extra (Python >=3.13): `uv sync --extra nexus-mcp` (or a plain
+# `uv sync` picks it up too, since the repo's `dev` group includes it on 3.13+).
+# First-time setup: `cp .env.example .env.local` from the repo root and fill in OPENAI_API_KEY.
+
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+ui := root / "ui"
+
+# TEMPORAL_CONFIG_FILE=temporal.local.toml (from the repo-root .env.local) is a path resolved
+# relative to the repo root — but `just` recipes run from the justfile's own directory
+# (examples/nexus_hello/) by default, not the repo root. Recipes that shell into `uv run ...`
+# mask this by `cd`-ing to {{root}} first; the `temporal_cli` recipes below (setup-nexus,
+# register-tool, register-nexus-tool) don't, so without this they fail with "unable to find
+# profile default in config data" — the CLI silently falls back to some other config source
+# instead of the repo's temporal.local.toml. Setting this once here fixes it for every recipe.
+set working-directory := "../.."
+
+# Only a from-source build has `temporal nexus operation ...` (start/execute/list/...) — the
+# stable public CLI (as of 1.7.1) only manages Nexus Endpoint *resources*
+# (`temporal operator nexus endpoint ...`), not invoking operations. `cli-build` below clones
+# and builds it automatically (mirrors nexus/ui_connector/Makefile's install-dev-server, same
+# pattern for the server itself); installed into `go env GOPATH`/bin like any other Go tool.
+temporal_cli_repo := "https://github.com/temporalio/cli.git"
+temporal_cli_ref := "main"
+temporal_cli_src := root / ".build" / "temporal-cli-src"
+temporal_cli := `go env GOPATH` + "/bin/temporal"
+
+default_namespace := "default"
+gateway_namespace := "gateway"
+nexus_mcp_server_namespace := "nexus-mcp-server"
+registry_endpoint := "mcp-registry-endpoint"
+demo_nexus_endpoint := "nexus-hello-demo-endpoint"
+# Must match durable_tools_gateway.REGISTRY_SERVICE_NAME — the gateway's own real Nexus
+# service name, the key NexusMcpServerRegistry stores this endpoint under.
+gateway_service_name := "RegistryService"
+# Must match nexus_tool_service.py's SERVICE_NAME — the key NexusMcpServerRegistry stores this
+# endpoint under, and the tool-name prefix ("demo-nexus_get_lucky_number").
+demo_nexus_service_name := "demo-nexus"
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Show the Temporal connection these recipes will use (read from the repo-root .env.local).
+config:
+    @echo "TEMPORAL_CONFIG_FILE = ${TEMPORAL_CONFIG_FILE:-<unset — set it in the repo-root .env.local>}"
+    @echo "TEMPORAL_PROFILE     = ${TEMPORAL_PROFILE:-default}"
+
+# ONE-SHOT (idempotent): clone and build the temporal CLI from source into {{temporal_cli}} --
+# see temporal_cli's own comment above for why a from-source build is needed at all. Skips
+# clone/build if the binary already exists; delete {{temporal_cli_src}} (or the binary itself)
+# to force a rebuild, e.g. to pick up upstream changes.
+cli-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -x "{{temporal_cli}}" ]; then
+        exit 0
+    fi
+    if [ ! -d "{{temporal_cli_src}}" ]; then
+        echo "Cloning {{temporal_cli_repo}}@{{temporal_cli_ref}}..."
+        mkdir -p "$(dirname "{{temporal_cli_src}}")"
+        git clone --depth=1 -b {{temporal_cli_ref}} {{temporal_cli_repo}} "{{temporal_cli_src}}"
+    fi
+    echo "Building temporal CLI..."
+    cd "{{temporal_cli_src}}" && GOWORK=off GOFLAGS= go build -o "{{temporal_cli}}" ./cmd/temporal
+    echo "Installed temporal CLI to {{temporal_cli}}"
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233). Needs
+# nexusoperation.enableStandalone=true for `temporal nexus operation execute` (used by
+# register-tool below) -- a standalone NEXUS OPERATION call, invoked directly from the CLI
+# rather than from a workflow; still needs a from-source CLI build (see cli-build), since that
+# command family isn't in the stable public release yet either. RegistryServiceHandler.call_tool
+# itself no longer needs any of this -- it dispatches mcp_proxy_activity via a plain
+# ToolCallWorkflow now, not a standalone activity (Client.execute_activity), which needed this
+# same flag AND an even newer server feature (StartActivityExecution) that was observed to
+# deadlock the calling workflow in real usage.
+temporal: cli-build
+    {{temporal_cli}} server start-dev \
+        --dynamic-config-value 'limit.maxIDLength=255' \
+        --dynamic-config-value 'system.maxCallbacksPerWorkflow=500' \
+        --dynamic-config-value 'component.nexusoperations.callback.endpoint.template="http://localhost:7243/namespaces/{{{{.NamespaceName}}/nexus/callback"' \
+        --dynamic-config-value 'callback.allowedAddresses=[{"Pattern":"*","AllowInsecure":true}]' \
+        --dynamic-config-value 'history.enableUpdateCallbacks=true' \
+        --dynamic-config-value 'history.enableTransitionHistory=true' \
+        --dynamic-config-value 'history.enableChasm=true' \
+        --dynamic-config-value 'history.enableCHASMCallbacks=true' \
+        --dynamic-config-value 'nexusoperation.enableStandalone=true' \
+        --dynamic-config-value 'activity.enableStandalone=true'
+
+# ONE-SHOT: create the "gateway" and "nexus-mcp-server" namespaces (the agent's own "default"
+# namespace already exists on a fresh dev server) and the two Nexus endpoints that let the
+# agent (default) and an operator (this justfile) reach across namespace boundaries:
+#   mcp-registry-endpoint     -> gateway           (registering/looking up tools)
+#   nexus-hello-demo-endpoint -> nexus-mcp-server   (calling the demo Nexus tool)
+# Safe to re-run — failures from things already existing are printed and ignored.
+setup-nexus: cli-build
+    {{temporal_cli}} operator namespace create --namespace {{default_namespace}} \
+        || echo "(namespace create failed — probably already exists; continuing)"
+    {{temporal_cli}} operator namespace create --namespace {{gateway_namespace}} \
+        || echo "(namespace create failed — probably already exists; continuing)"
+    {{temporal_cli}} operator namespace create --namespace {{nexus_mcp_server_namespace}} \
+        || echo "(namespace create failed — probably already exists; continuing)"
+    {{temporal_cli}} operator nexus endpoint create \
+        --name {{registry_endpoint}} \
+        --target-namespace {{gateway_namespace}} \
+        --target-task-queue mcp-registry \
+        || echo "(endpoint create failed — probably already exists; continuing)"
+    {{temporal_cli}} operator nexus endpoint create \
+        --name {{demo_nexus_endpoint}} \
+        --target-namespace {{nexus_mcp_server_namespace}} \
+        --target-task-queue nexus-hello-nexus-tools \
+        || echo "(endpoint create failed — probably already exists; continuing)"
+
+# The durable tool call gateway, on its own "gateway" namespace: starts ToolRegistryWorkflow +
+# its registry worker (also serves an inbound MCP HTTP endpoint on :8001, unused by this
+# example — that's for external MCP clients like Gemini/Claude Desktop reaching this gateway
+# directly).
+registry:
+    cd "{{root}}" && TEMPORAL_NAMESPACE={{gateway_namespace}} uv run --extra nexus-mcp --group examples python -m durable_tools_gateway.server
+
+# The demo 3rd-party MCP tool server this example's agent calls through the gateway.
+tool-server:
+    cd "{{root}}" && uv run --extra nexus-mcp python -m examples.nexus_hello.tool_server
+
+# ONE-SHOT: register the tool server with the gateway — a genuine Nexus operation call
+# (RegistryService.register_external) through mcp-registry-endpoint into the "gateway"
+# namespace, not a raw signal. Run once after `setup-nexus`, `registry`, and `tool-server` are
+# all up; the registry is in-memory, so re-run this if you restart it.
+register-tool: cli-build
+    {{temporal_cli}} nexus operation execute \
+        --endpoint {{registry_endpoint}} \
+        --service RegistryService \
+        --operation register_external \
+        --operation-id "nexus-hello-register-demo-$(date +%s)" \
+        --input '{"name": "demo", "url": "http://127.0.0.1:8765/mcp"}'
+
+# The demo Nexus-native tool service, on its own "nexus-mcp-server" namespace. Calls to its
+# tool are dispatched via workflow.create_nexus_client() from the agent's "default" namespace
+# — a real cross-namespace Nexus call, no activity hop.
+nexus-tool-service:
+    cd "{{root}}" && TEMPORAL_NAMESPACE={{nexus_mcp_server_namespace}} uv run --extra nexus-mcp python -m examples.nexus_hello.nexus_tool_service
+
+# ONE-SHOT: register the gateway directly against ONE running agent workflow's own
+# NexusMcpServerRegistry — the exact same signal register-nexus-tool below uses, just with the
+# gateway's own name/endpoint instead. Find <workflow-id> with `temporal workflow list
+# --namespace default`, or note it when you start a chat in the UI. NOT auto-registered at
+# startup (unlike an earlier version of this example) -- per-session by design, so a session
+# can be used to exercise what happens both before and after the gateway is reachable. Needs
+# `just registry` already running (the signal only records the registration; nothing calls
+# the gateway until a tool call actually needs to).
+register-gateway workflow_id:
+    temporal workflow signal \
+        --workflow-id {{workflow_id}} \
+        --name register_mcp_server \
+        --input '"{{gateway_service_name}}"' \
+        --input '"{{registry_endpoint}}"'
+
+# ONE-SHOT: register the Nexus tool service directly against ONE running agent workflow's own
+# NexusMcpServerRegistry — a plain signal against the "default" namespace (the stable public
+# CLI is enough; no Nexus operation, no custom CLI build). Find <workflow-id> with
+# `temporal workflow list --namespace default`, or note it when you start a chat in the UI.
+# Per-session by design (see README): re-run this for every new conversation you want the
+# Nexus-native tool available in. Takes effect immediately, mid-conversation, no restart.
+register-nexus-tool workflow_id:
+    temporal workflow signal \
+        --workflow-id {{workflow_id}} \
+        --name register_mcp_server \
+        --input '"{{demo_nexus_service_name}}"' \
+        --input '"{{demo_nexus_endpoint}}"'
+
+# Run the shared session-manager worker (examples/session_manager_worker.py).
+session-manager:
+    cd "{{root}}" && uv run --group examples python -m examples.session_manager_worker
+
+# Serve the packaged FastAPI API + UI on http://localhost:8000, pointed at this example's
+# registry. Builds the Svelte UI first (app-build).
+server: app-build
+    cd "{{root}}" && uv run --group examples python -m examples.app "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Build the shared Svelte UI into temporal_agent_harness/ui/dist for the server to serve.
+app-build:
+    cd "{{ui}}" && pnpm run build
+
+# Install the shared Svelte UI dependencies (run once if the build complains about missing modules).
+app-install:
+    cd "{{ui}}" && pnpm install
+
+# Run the shared Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
+ui-dev:
+    cd "{{ui}}" && pnpm run dev
+
+# Run the NexusHelloAgent worker, on the "default" namespace.
+worker:
+    cd "{{root}}" && uv run --extra nexus-mcp --group examples python -m examples.nexus_hello.worker

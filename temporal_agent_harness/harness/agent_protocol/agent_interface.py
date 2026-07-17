@@ -20,6 +20,7 @@ SEND_AGENT_MESSAGE_UPDATE = "send_agent_message"
 TOOL_APPROVAL_UPDATE = "tool_approval"
 PROVIDE_CALLBACK_RESULT_UPDATE = "provide_callback_result"
 EXECUTE_OPERATOR_COMMAND_UPDATE = "execute_operator_command"
+SET_ENABLED_MCP_SERVERS_UPDATE = "set_enabled_mcp_servers"
 AGENT_STATUS_QUERY = "agent_status"
 AGENT_INTERFACE_QUERY = "agent_interface"
 OPERATOR_INTERFACE_QUERY = "operator_interface"
@@ -203,11 +204,23 @@ class AgentConfig(BaseModel):
     id the parent (and a UI merging the streams) already knows it by. ``None`` → a top-level agent
     generates its own single-segment id. This is the one ``AgentConfig`` field a parent populates
     per-child rather than passing through unchanged.
+
+    ``enabled_mcp_servers`` — the MCP service names (e.g. ``"weather-tools"``, matching an
+    MCP-over-Nexus service's own name — see ``authoring``) this session opts into. Tools
+    from any *other* service — whether a Nexus-native server that has registered itself as
+    reachable, or a 3rd-party server known to the Durable Tools Gateway — are neither listed
+    nor callable, even though they exist and are technically reachable. This is deliberately
+    opt-IN, not opt-out: being reachable does not make a service available to any given
+    session. ``None`` → defer to the agent's default (harness baseline: none enabled — an
+    agent that never sets ``enabled_mcp_servers_default`` gets no MCP tools at all). Mutable
+    at runtime via ``AgentWorkflowRunner.set_enabled_mcp_servers`` — a caller can turn
+    integrations on or off mid-conversation without starting a new session.
     """
 
     is_message_queuing_enabled: bool | None = None
     approval_policy: ToolApprovalPolicy | None = None
     agent_id: AgentId | None = None
+    enabled_mcp_servers: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,23 @@
+# Registry of agents the Nexus-transport hello-world example UI can launch.
+#
+# The shared FastAPI server (examples/app.py) reads this file and passes the parsed registry
+# into the packaged SessionManagerWorkflow as its workflow init arg. The manager then serves
+# it back over the `available_agents` query, so the app server can expose it at /api/agents
+# without hardcoding the agent list.
+
+[[agents]]
+key = "nexus-hello"
+workflow_type = "NexusHelloAgent"
+task_queue = "nexus-hello"
+label = "Nexus Hello"
+description = """
+A hello-world OpenAI Agents SDK agent with two tools, both reached through the
+Nexus-transport MCP server (nexus_transport_mcp_server) rather than a harness-native tool:
+demo_get_fun_fact (a 3rd-party MCP server, registered with the durable tools gateway and
+reached via its call_tool Nexus op, which starts a plain workflow wrapping one activity) and
+demo-nexus_get_lucky_number (a Nexus-native MCP server, registered directly against this
+running conversation's NexusMcpServerRegistry, reached via workflow.create_nexus_client --
+no gateway, no activity). The agent, the durable tools gateway, and the Nexus tool service
+each run in their own Temporal namespace (default / gateway / nexus-mcp-server) — Nexus
+genuinely brokers those boundaries. Needs `just setup-nexus`, the gateway, both tool
+services/servers, and registration running first — see examples/nexus_hello/README.md."""
