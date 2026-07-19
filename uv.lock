@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -2976,6 +2976,7 @@ dev = [
     { name = "fastapi", extra = ["standard"] },
     { name = "google-auth" },
     { name = "google-genai" },
+    { name = "httpx" },
     { name = "mcp" },
     { name = "moto", extra = ["server"] },
     { name = "openai-agents" },
@@ -2990,6 +2991,7 @@ examples = [
     { name = "fastapi", extra = ["standard"] },
     { name = "google-auth" },
     { name = "google-genai" },
+    { name = "httpx" },
     { name = "openai-agents" },
     { name = "pydantic-ai-slim", extra = ["temporal"] },
     { name = "pydantic-monty" },
@@ -3016,6 +3018,7 @@ dev = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
     { name = "google-auth", specifier = ">=2.53.0" },
     { name = "google-genai", specifier = ">=2.0.0" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", specifier = ">=1.9.4,<2" },
     { name = "moto", extras = ["server"], specifier = ">=5.2.1" },
     { name = "openai-agents", specifier = ">=0.17.5" },
@@ -3031,6 +3034,7 @@ examples = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
     { name = "google-auth", specifier = ">=2.53.0" },
     { name = "google-genai", specifier = ">=2.0.0" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "openai-agents", specifier = ">=0.17.5" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
     { name = "pydantic-monty", specifier = ">=0.0.18" },
