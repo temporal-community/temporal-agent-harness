@@ -15,10 +15,12 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"strings"
 	"time"
 
@@ -532,42 +534,23 @@ func (o *pollMessagesOperation) Start(
 	if err != nil {
 		return nil, fmt.Errorf("encode streamPollInput failed with: %w", err)
 	}
-	// Wait for the update to COMPLETE (not merely be accepted) and return its
-	// result synchronously. The stream-poll update blocks in-workflow until the
-	// next item is available (or the workflow closes), so this call blocks for up
-	// to timeoutSeconds.
-	//
-	// We deliberately do NOT return an async result backed by a completion
-	// callback attached to the update. Temporal Cloud does not deliver Nexus
-	// completion callbacks registered on a workflow *update* (only on workflow
-	// start), so an async result silently hangs until the caller's
-	// schedule-to-close timeout — which is exactly the bug this replaces. Keeping
-	// every poll synchronous and letting the connector re-poll sidesteps that.
-	callCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
-	defer cancel()
-	resp, err := c.WorkflowService().UpdateWorkflowExecution(callCtx, &workflowservice.UpdateWorkflowExecutionRequest{
+	resp, err := c.WorkflowService().UpdateWorkflowExecution(ctx, &workflowservice.UpdateWorkflowExecutionRequest{
 		Namespace:         info.Namespace,
 		WorkflowExecution: &commonpb.WorkflowExecution{WorkflowId: workflowID},
 		WaitPolicy: &updatepb.WaitPolicy{
-			LifecycleStage: enumspb.UPDATE_WORKFLOW_EXECUTION_LIFECYCLE_STAGE_COMPLETED,
+			LifecycleStage: enumspb.UPDATE_WORKFLOW_EXECUTION_LIFECYCLE_STAGE_ACCEPTED,
 		},
 		Request: &updatepb.Request{
-			Meta:      &updatepb.Meta{UpdateId: updateID, Identity: info.TaskQueue},
-			Input:     &updatepb.Input{Name: WorkflowStreamPollUpdate, Args: &commonpb.Payloads{Payloads: []*commonpb.Payload{payload}}},
-			RequestId: opts.RequestID,
+			Meta:                &updatepb.Meta{UpdateId: updateID, Identity: info.TaskQueue},
+			Input:               &updatepb.Input{Name: WorkflowStreamPollUpdate, Args: &commonpb.Payloads{Payloads: []*commonpb.Payload{payload}}},
+			RequestId:           opts.RequestID,
+			CompletionCallbacks: buildCompletionCallbacks(opts),
 		},
 	})
 	if err != nil {
 		if isWorkflowCompleted(err) {
 			return &nexus.HandlerStartOperationResultSync[PollMessagesOutput]{
 				Value: PollMessagesOutput{Closed: true, NextOffset: input.Cursor},
-			}, nil
-		}
-		// Our bounded wait elapsed before any new stream item arrived. Return an
-		// empty batch synchronously; the connector re-polls from the same cursor.
-		if callCtx.Err() != nil {
-			return &nexus.HandlerStartOperationResultSync[PollMessagesOutput]{
-				Value: PollMessagesOutput{NextOffset: input.Cursor},
 			}, nil
 		}
 		return nil, fmt.Errorf("UpdateWorkflowExecution: %w", err)
@@ -587,16 +570,41 @@ func (o *pollMessagesOperation) Start(
 		return &nexus.HandlerStartOperationResultSync[PollMessagesOutput]{Value: out}, nil
 	}
 
-	// Accepted but not completed within the wait window (server returned early
-	// with no outcome). No new item yet — return empty synchronously so the
-	// connector re-polls.
-	return &nexus.HandlerStartOperationResultSync[PollMessagesOutput]{
-		Value: PollMessagesOutput{NextOffset: input.Cursor},
-	}, nil
+	token, err := encodePollToken(workflowID, updateID)
+	if err != nil {
+		return nil, err
+	}
+	return &nexus.HandlerStartOperationResultAsync{OperationToken: token}, nil
 }
 
 func (o *pollMessagesOperation) Cancel(_ context.Context, _ string, _ nexus.CancelOperationOptions) error {
 	return nil
+}
+
+func buildCompletionCallbacks(opts nexus.StartOperationOptions) []*commonpb.Callback {
+	if opts.CallbackURL == "" {
+		return nil
+	}
+	header := make(map[string]string)
+	maps.Copy(header, opts.CallbackHeader)
+	return []*commonpb.Callback{{
+		Variant: &commonpb.Callback_Nexus_{
+			Nexus: &commonpb.Callback_Nexus{Url: opts.CallbackURL, Header: header},
+		},
+	}}
+}
+
+type pollToken struct {
+	WorkflowID string `json:"wid"`
+	UpdateID   string `json:"uid"`
+}
+
+func encodePollToken(workflowID, updateID string) (string, error) {
+	data, err := json.Marshal(pollToken{WorkflowID: workflowID, UpdateID: updateID})
+	if err != nil {
+		return "", fmt.Errorf("marshal poll token: %w", err)
+	}
+	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(data), nil
 }
 
 func isWorkflowCompleted(err error) bool {
