@@ -13,23 +13,35 @@ const (
 	FinishStreamActivity       = "FinishStream"
 	PostMessageActivity        = "PostMessage"
 	PostApprovalPromptActivity = "PostApprovalPrompt"
+	UpdateActivityActivity     = "UpdateActivity"
 )
 
 // ApprovalPromptInput carries the information needed to render a tool-approval
 // prompt (approve/deny buttons) on the messaging platform.
 type ApprovalPromptInput struct {
-	SessionID string
-	ThreadID  string // empty = post in channel root; non-empty = post in thread
-	ToolID    string
-	ToolName  string
-	ToolInput string // JSON-encoded model-facing input (for display)
+	SessionID  string
+	ThreadID   string // empty = post in channel root; non-empty = post in thread
+	ServiceURL string
+	ChannelID  string
+	ToolID     string
+	ToolName   string
+	ToolInput  string // JSON-encoded model-facing input (for display)
 }
 
 type TextMetadata struct {
-	SenderID  string
-	SessionID string
-	ThreadID  string
-	Text      string
+	SenderID   string
+	SessionID  string
+	ThreadID   string
+	Text       string
+	ServiceURL string
+	ChannelID  string
+}
+
+// UpdateActivityInput replaces an existing platform activity. Teams uses it
+// to remove approval buttons after a decision has been recorded.
+type UpdateActivityInput struct {
+	TextMetadata
+	ActivityID string
 }
 
 // StreamWireTextMode tells the workflow which text representation a platform

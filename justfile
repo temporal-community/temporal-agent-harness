@@ -109,10 +109,18 @@ slack-connector:
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-slack}" \
     go run ./cmd/slack/worker/
 
-# Run the Teams connector worker. Safe to run multiple instances.
-# Requires: MICROSOFT_TENANT_ID, MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD
+# Run the Teams Connector workflow worker. Safe to run multiple instances.
 teams-connector:
     cd "{{nexus_dir}}/messaging_connector" && \
+    TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
+    CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
+    CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \
+    go run ./cmd/teams/worker/
+
+# Run the Python Teams SDK activity worker. Safe to run multiple instances.
+# Requires: MICROSOFT_TENANT_ID, MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD
+teams-py-worker:
+    cd "{{nexus_dir}}/messaging_connector/teams_activity_worker" && \
     MICROSOFT_TENANT_ID="${MICROSOFT_TENANT_ID}" \
     MICROSOFT_APP_ID="${MICROSOFT_APP_ID}" \
     MICROSOFT_APP_PASSWORD="${MICROSOFT_APP_PASSWORD}" \
@@ -120,7 +128,7 @@ teams-connector:
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \
-    go run ./cmd/teams/worker/
+    uv run python -m teams_activity_worker
 
 # Run the Slack webhook server.
 # Requires: SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET
@@ -134,13 +142,8 @@ slack-webhook:
     go run ./cmd/slack/webhook/
 
 # Run the Teams webhook server.
-# Requires: MICROSOFT_TENANT_ID, MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD
 teams-webhook:
     cd "{{nexus_dir}}/messaging_connector" && \
-    MICROSOFT_TENANT_ID="${MICROSOFT_TENANT_ID}" \
-    MICROSOFT_APP_ID="${MICROSOFT_APP_ID}" \
-    MICROSOFT_APP_PASSWORD="${MICROSOFT_APP_PASSWORD}" \
-    TEAMS_SERVICE_URL="${TEAMS_SERVICE_URL:-}" \
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \

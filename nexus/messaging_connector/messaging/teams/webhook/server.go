@@ -10,7 +10,6 @@ import (
 
 	agentiface "github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/agent"
 	"github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/connector"
-	"github.com/temporal-community/temporal-agent-harness/nexus/messaging_connector/messaging/teams"
 	"go.temporal.io/sdk/client"
 )
 
@@ -22,15 +21,13 @@ const (
 type webhookServer struct {
 	tc        client.Client
 	taskQueue string
-	platform  *teams.TeamsPlatform
 	mux       *http.ServeMux
 }
 
-func NewServer(tc client.Client, taskQueue string, platform *teams.TeamsPlatform) *webhookServer {
+func NewServer(tc client.Client, taskQueue string) *webhookServer {
 	s := &webhookServer{
 		tc:        tc,
 		taskQueue: taskQueue,
-		platform:  platform,
 		mux:       http.NewServeMux(),
 	}
 	s.mux.HandleFunc(routeMessages, s.handleMessages)
@@ -48,7 +45,7 @@ func (s *webhookServer) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var act teams.TeamMessageActivity
+	var act teamMessageActivity
 	if err := json.NewDecoder(r.Body).Decode(&act); err != nil {
 		http.Error(w, "failed to parse activity", http.StatusBadRequest)
 		return
@@ -81,7 +78,7 @@ func (s *webhookServer) handleMessages(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *webhookServer) signalIncomingMessage(ctx context.Context, act teams.TeamMessageActivity) {
+func (s *webhookServer) signalIncomingMessage(ctx context.Context, act teamMessageActivity) {
 	wfID, input := messageWorkflowInput(act)
 	if _, err := s.tc.ExecuteWorkflow(ctx,
 		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
@@ -92,7 +89,7 @@ func (s *webhookServer) signalIncomingMessage(ctx context.Context, act teams.Tea
 	}
 }
 
-func messageWorkflowInput(act teams.TeamMessageActivity) (string, agentiface.ConnectorWorkflowInput) {
+func messageWorkflowInput(act teamMessageActivity) (string, agentiface.ConnectorWorkflowInput) {
 	sessionID := fmt.Sprintf("teams:%s", conversationID(act))
 	interactionID := act.ID
 	if interactionID == "" {
@@ -110,6 +107,8 @@ func messageWorkflowInput(act teams.TeamMessageActivity) (string, agentiface.Con
 		Text:             act.Text,
 		Timestamp:        timestamp,
 		ConversationType: act.Conversation.ConversationType,
+		ServiceURL:       act.ServiceURL,
+		ChannelID:        act.ChannelID,
 	}
 	wfID := agentiface.ConnectorWorkflowID(defaultIdentity, sessionID, interactionID)
 	return wfID, agentiface.ConnectorWorkflowInput{
@@ -121,8 +120,8 @@ func messageWorkflowInput(act teams.TeamMessageActivity) (string, agentiface.Con
 
 // decodeApprovalValue reports whether an activity's value field carries a
 // tool-approval button payload.
-func decodeApprovalValue(raw json.RawMessage) (teams.ApprovalButtonValue, bool) {
-	var val teams.ApprovalButtonValue
+func decodeApprovalValue(raw json.RawMessage) (approvalButtonValue, bool) {
+	var val approvalButtonValue
 	if len(raw) == 0 {
 		return val, false
 	}
@@ -136,49 +135,43 @@ func decodeApprovalValue(raw json.RawMessage) (teams.ApprovalButtonValue, bool) 
 }
 
 // handleApprovalSubmit routes an approval button click to the connector
-// workflow, then replaces the card so the buttons can't be clicked again.
-// The workflow ID dedupes repeat clicks for the same tool ID.
-func (s *webhookServer) handleApprovalSubmit(ctx context.Context, act teams.TeamMessageActivity, val teams.ApprovalButtonValue) {
-	wfID := agentiface.ConnectorWorkflowID(defaultIdentity, val.SessionID, "approval-"+val.ToolID)
+// workflow. The Python activity worker replaces the card after the decision;
+// the workflow ID dedupes repeat clicks for the same tool ID.
+func (s *webhookServer) handleApprovalSubmit(ctx context.Context, act teamMessageActivity, val approvalButtonValue) {
+	wfID, input := approvalWorkflowInput(act, val)
 	if _, err := s.tc.ExecuteWorkflow(ctx,
 		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
 		connector.WorkflowName,
-		agentiface.ConnectorWorkflowInput{
-			Identity:  defaultIdentity,
-			SessionID: val.SessionID,
-			Approval: &agentiface.ApprovalDecision{
-				ToolID:   val.ToolID,
-				ToolName: val.ToolName,
-				Approved: val.Approved,
-			},
-		},
+		input,
 	); err != nil {
 		log.Printf("Failed to start connector workflow for approval: %v", err)
 	}
+}
 
-	// Replace the approval card with its outcome. act.ReplyToID is the card's
-	// activity ID. Best-effort: the decision is already recorded above.
-	if s.platform == nil || act.ReplyToID == "" {
-		return
-	}
-	decision := "✅ Approved"
-	if !val.Approved {
-		decision = "❌ Denied"
-	}
-	text := fmt.Sprintf("🔐 Tool `%s`: %s", val.ToolName, decision)
-	if err := s.platform.UpdateActivity(ctx, val.SessionID, act.ReplyToID, text); err != nil {
-		log.Printf("Failed to update Teams approval card: %v", err)
+func approvalWorkflowInput(act teamMessageActivity, val approvalButtonValue) (string, agentiface.ConnectorWorkflowInput) {
+	wfID := agentiface.ConnectorWorkflowID(defaultIdentity, val.SessionID, "approval-"+val.ToolID)
+	return wfID, agentiface.ConnectorWorkflowInput{
+		Identity:  defaultIdentity,
+		SessionID: val.SessionID,
+		Approval: &agentiface.ApprovalDecision{
+			ToolID:     val.ToolID,
+			ToolName:   val.ToolName,
+			Approved:   val.Approved,
+			ActivityID: act.ReplyToID,
+			ServiceURL: act.ServiceURL,
+			ChannelID:  act.ChannelID,
+		},
 	}
 }
 
-func conversationID(act teams.TeamMessageActivity) string {
+func conversationID(act teamMessageActivity) string {
 	if act.Conversation == nil {
 		return ""
 	}
 	return act.Conversation.ID
 }
 
-func senderID(act teams.TeamMessageActivity) string {
+func senderID(act teamMessageActivity) string {
 	if act.From == nil {
 		return ""
 	}

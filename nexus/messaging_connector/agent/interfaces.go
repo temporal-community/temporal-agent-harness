@@ -30,6 +30,8 @@ type IncomingMessage struct {
 	Text             string
 	Timestamp        string
 	ConversationType string
+	ServiceURL       string
+	ChannelID        string
 }
 
 // SlashCommand carries a slash command invocation from the platform.
@@ -42,9 +44,12 @@ type SlashCommand struct {
 
 // ApprovalDecision carries a tool-approval decision from an interactive prompt.
 type ApprovalDecision struct {
-	ToolID   string `json:"toolId"`
-	ToolName string `json:"toolName"` // for display in the interaction response
-	Approved bool   `json:"approved"`
+	ToolID     string `json:"toolId"`
+	ToolName   string `json:"toolName"` // for display in the interaction response
+	Approved   bool   `json:"approved"`
+	ActivityID string `json:"activityId"`
+	ServiceURL string `json:"serviceUrl"`
+	ChannelID  string `json:"channelId"`
 }
 
 // ConnectorWorkflowInput is the single input type for ConnectorWorkflow.
@@ -78,6 +83,23 @@ func (i ConnectorWorkflowInput) SenderID() string {
 	}
 	if i.Slash != nil {
 		return i.Slash.SenderID
+	}
+	return ""
+}
+
+// ServiceURL returns the Bot Framework endpoint from an incoming Teams
+// activity. It is empty for platforms that do not use Bot Framework routing.
+func (i ConnectorWorkflowInput) ServiceURL() string {
+	if i.Message != nil {
+		return i.Message.ServiceURL
+	}
+	return ""
+}
+
+// ChannelID returns the incoming Bot Framework channel identifier.
+func (i ConnectorWorkflowInput) ChannelID() string {
+	if i.Message != nil {
+		return i.Message.ChannelID
 	}
 	return ""
 }

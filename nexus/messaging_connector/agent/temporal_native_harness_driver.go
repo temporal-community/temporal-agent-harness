@@ -153,6 +153,16 @@ func (d *TemporalNativeHarnessDriver) RespondToPlatform(ctx workflow.Context, ha
 	}
 	workflowID := workflow.GetInfo(ctx).WorkflowExecution.ID
 	state := deliveryState{}
+	textMetadata := func(text string) msgiface.TextMetadata {
+		return msgiface.TextMetadata{
+			SessionID:  input.SessionID,
+			ThreadID:   input.ThreadID(),
+			SenderID:   input.SenderID(),
+			Text:       text,
+			ServiceURL: input.ServiceURL(),
+			ChannelID:  input.ChannelID(),
+		}
+	}
 
 	operationID := func(phase string, sequence int) string {
 		return fmt.Sprintf("%s/%s/segment/%d/%s/%d", workflowID, turnID, state.Segment, phase, sequence)
@@ -164,11 +174,7 @@ func (d *TemporalNativeHarnessDriver) RespondToPlatform(ctx workflow.Context, ha
 		}
 		var streamHandle msgiface.StreamHandle
 		if err := workflow.ExecuteActivity(actCtx, msgiface.BeginStreamActivity, msgiface.BeginStreamInput{
-			TextMetadata: msgiface.TextMetadata{
-				SessionID: input.SessionID,
-				ThreadID:  input.ThreadID(),
-				SenderID:  input.SenderID(),
-			},
+			TextMetadata:     textMetadata(""),
 			ConversationType: conversationType,
 			OperationID:      operationID("begin", 0),
 		}).Get(ctx, &streamHandle); err != nil {
@@ -189,7 +195,7 @@ func (d *TemporalNativeHarnessDriver) RespondToPlatform(ctx workflow.Context, ha
 		}
 		sequence := state.Handle.NextSequence
 		if err := workflow.ExecuteActivity(actCtx, msgiface.UpdateStreamActivity, msgiface.UpdateStreamInput{
-			TextMetadata: msgiface.TextMetadata{SessionID: input.SessionID},
+			TextMetadata: textMetadata(""),
 			Handle:       *state.Handle,
 			Delta:        state.PendingDelta,
 			FullText:     state.FullText,
@@ -217,7 +223,7 @@ func (d *TemporalNativeHarnessDriver) RespondToPlatform(ctx workflow.Context, ha
 			_ = flushUpdate(true)
 		}
 		if err := workflow.ExecuteActivity(actCtx, msgiface.FinishStreamActivity, msgiface.FinishStreamInput{
-			TextMetadata: msgiface.TextMetadata{SessionID: input.SessionID},
+			TextMetadata: textMetadata(""),
 			Handle:       *state.Handle,
 			FullText:     state.FullText,
 			OperationID:  operationID("finish", state.Handle.NextSequence),
@@ -278,11 +284,13 @@ func (d *TemporalNativeHarnessDriver) RespondToPlatform(ctx workflow.Context, ha
 				inputJSON, _ := json.Marshal(event.ToolInput)
 				_ = workflow.ExecuteActivity(actCtx, msgiface.PostApprovalPromptActivity,
 					msgiface.ApprovalPromptInput{
-						SessionID: input.SessionID,
-						ThreadID:  input.ThreadID(),
-						ToolID:    event.ToolID,
-						ToolName:  event.ToolName,
-						ToolInput: string(inputJSON),
+						SessionID:  input.SessionID,
+						ThreadID:   input.ThreadID(),
+						ServiceURL: input.ServiceURL(),
+						ChannelID:  input.ChannelID(),
+						ToolID:     event.ToolID,
+						ToolName:   event.ToolName,
+						ToolInput:  string(inputJSON),
 					}).Get(ctx, nil)
 				continue
 			}
@@ -297,11 +305,7 @@ func (d *TemporalNativeHarnessDriver) RespondToPlatform(ctx workflow.Context, ha
 				state.PendingDelta += delta.Text
 				if err := beginStream(); err != nil {
 					workflow.GetLogger(ctx).Warn("RespondToPlatform: stream begin failed, falling back to postMessage", "error", err)
-					_ = workflow.ExecuteActivity(actCtx, msgiface.PostMessageActivity, msgiface.TextMetadata{
-						SessionID: input.SessionID,
-						ThreadID:  input.ThreadID(),
-						Text:      state.FullText,
-					}).Get(ctx, nil)
+					_ = workflow.ExecuteActivity(actCtx, msgiface.PostMessageActivity, textMetadata(state.FullText)).Get(ctx, nil)
 					return nil
 				}
 				_ = flushUpdate(false)

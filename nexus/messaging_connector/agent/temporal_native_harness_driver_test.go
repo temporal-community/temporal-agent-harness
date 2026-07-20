@@ -488,11 +488,10 @@ func TestDriverWorkflow_PropagatesTeamsConversationTypeToStreamStart(t *testing.
 		t.Run(conversationType, func(t *testing.T) {
 			env := newTestEnv(t, fakeAgentService(t, items))
 			registerStubActivities(env)
-			var got string
+			var got ncmsg.BeginStreamInput
 			env.OnActivity(ncmsg.BeginStreamActivity, mock.Anything, mock.Anything).
 				Run(func(args mock.Arguments) {
-					input := args.Get(1).(ncmsg.BeginStreamInput)
-					got = input.ConversationType
+					got = args.Get(1).(ncmsg.BeginStreamInput)
 				}).
 				Return(testStreamHandle("teams:conversation-1"), nil)
 			env.OnActivity(ncmsg.PostMessageActivity, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -500,11 +499,15 @@ func TestDriverWorkflow_PropagatesTeamsConversationTypeToStreamStart(t *testing.
 			input := defaultInput()
 			input.SessionID = "teams:conversation-1"
 			input.Message.ConversationType = conversationType
+			input.Message.ServiceURL = "https://example.test/teams/"
+			input.Message.ChannelID = "msteams"
 			env.ExecuteWorkflow(runDriverWorkflow, input)
 
 			require.True(t, env.IsWorkflowCompleted())
 			require.NoError(t, env.GetWorkflowError())
-			assert.Equal(t, conversationType, got)
+			assert.Equal(t, conversationType, got.ConversationType)
+			assert.Equal(t, "https://example.test/teams/", got.ServiceURL)
+			assert.Equal(t, "msteams", got.ChannelID)
 		})
 	}
 }

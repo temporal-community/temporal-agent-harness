@@ -126,5 +126,30 @@ func (c *ConnectorWorkflow) handleApproval(ctx workflow.Context, input agentifac
 		workflow.GetLogger(ctx).Warn("handleApproval: approveToolCall failed",
 			"toolId", a.ToolID, "approved", a.Approved, "error", err)
 	}
+
+	// New approval workflow inputs carry the card ID and Bot Framework routing
+	// metadata. Older histories deserialize these fields as empty, so they do
+	// not schedule this newly introduced activity during replay.
+	if a.ActivityID != "" {
+		decision := "✅ Approved"
+		if !a.Approved {
+			decision = "❌ Denied"
+		}
+		actCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
+			StartToCloseTimeout: 5 * time.Minute,
+			RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+		})
+		if err := workflow.ExecuteActivity(actCtx, msgiface.UpdateActivityActivity, msgiface.UpdateActivityInput{
+			TextMetadata: msgiface.TextMetadata{
+				SessionID:  input.SessionID,
+				Text:       fmt.Sprintf("🔐 Tool `%s`: %s", a.ToolName, decision),
+				ServiceURL: a.ServiceURL,
+				ChannelID:  a.ChannelID,
+			},
+			ActivityID: a.ActivityID,
+		}).Get(ctx, nil); err != nil {
+			workflow.GetLogger(ctx).Warn("handleApproval: update approval card failed", "error", err)
+		}
+	}
 	return nil
 }
