@@ -1,6 +1,6 @@
 .PHONY: test test-integration test-all
 
-MODULES := agent_adapter/nexus_worker messaging_connector integration_tests
+MODULES := agent_adapter/nexus_worker ui_connector integration_tests
 
 # Run every workspace module's default suite (race, no build tags). Anchored
 # per-module because `nexus/` itself isn't a `use`d module in go.work, so a
@@ -10,7 +10,7 @@ test:
 		echo "== $$m =="; \
 		(cd $$m && go test -race -count=1 ./...) || exit 1; \
 	done
-	cd messaging_connector/teams_activity_worker && uv run pytest
+	cd ui_connector/teams_activity_worker && uv run python -m pytest
 
 # Run only the tagged durability integration suite (embedded dev server).
 test-integration:
