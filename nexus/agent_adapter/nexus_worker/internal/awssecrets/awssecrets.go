@@ -1,7 +1,7 @@
 // Package awssecrets fetches plain-string secrets from AWS Secrets Manager.
 // It is used by cmd/worker-lambda to source the Temporal Cloud API key at cold
-// start. Kept local to this module (mirrors the slack_connector helper, which is
-// in a separate module and thus not importable across the internal/ boundary).
+// start. Kept local to this module (mirrors the ui_connector connector's helper,
+// which is in a separate module and thus not importable across the internal/ boundary).
 package awssecrets
 
 import (

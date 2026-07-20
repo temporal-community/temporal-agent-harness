@@ -1,6 +1,6 @@
 .PHONY: test test-integration test-all
 
-MODULES := agent_adapter/nexus_worker slack_connector integration_tests
+MODULES := agent_adapter/nexus_worker ui_connector integration_tests
 
 # Run every workspace module's default suite (race, no build tags). Anchored
 # per-module because `nexus/` itself isn't a `use`d module in go.work, so a

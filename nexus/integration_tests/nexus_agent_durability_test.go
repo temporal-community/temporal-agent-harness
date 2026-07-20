@@ -19,7 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	h "github.com/temporalio/temporal-agent-harness/nexus/agent_adapter/nexus_worker/handler"
+	h "github.com/temporal-community/temporal-agent-harness/nexus/agent_adapter/nexus_worker/handler"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
 	sdkworker "go.temporal.io/sdk/worker"

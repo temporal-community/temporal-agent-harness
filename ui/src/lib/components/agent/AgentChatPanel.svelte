@@ -142,6 +142,9 @@
     onApproveTool
   }: Props = $props();
   let draft = $state("");
+  let composerInput = $state<HTMLInputElement | null>(null);
+  let historyIndex = $state(-1);
+  let historyStash = $state("");
   let localMessages = $state<ChatMessage[]>([]);
   let observedSessionId = $state<string | null>(null);
   let sessionDrawerOpen = $state(false);
@@ -161,6 +164,11 @@
 
   const transcriptMessages = $derived(seedMessages(items));
   const messages = $derived([...transcriptMessages, ...localMessages]);
+  const sentUserMessages = $derived(
+    messages
+      .filter((message) => message.role === "user" || message.role === "operator-user")
+      .map((message) => message.text)
+  );
   const logsByTurn = $derived(groupLogsByTurn(logs));
   const resolvedApprovalKeys = $derived(resolvedApprovalIds(logs));
   const pendingApprovalRows = $derived(logs.filter((row) => isApprovalPending(row)));
@@ -328,6 +336,8 @@
     if (observedSessionId !== sessionId) {
       observedSessionId = sessionId;
       draft = "";
+      historyIndex = -1;
+      historyStash = "";
       localMessages = [];
       observedActivitySessionId = null;
       observedActivityOrdinals = {};
@@ -1198,6 +1208,7 @@
     }
 
     draft = "";
+    historyIndex = -1;
     if (operatorCommand != null) {
       const commandTarget = slashTarget;
       if (onOperatorCommand) {
@@ -1365,18 +1376,73 @@
     return true;
   }
 
+  function resetHistoryRecall(): void {
+    historyIndex = -1;
+  }
+
+  // Shell-style recall of the messages already sent this session.
+  // step -1 moves toward older messages (ArrowUp), +1 toward newer (ArrowDown).
+  function recallHistory(step: number): boolean {
+    const history = sentUserMessages;
+    if (history.length === 0) return false;
+
+    if (historyIndex === -1) {
+      if (step > 0) return false; // ArrowDown with no active recall: leave draft alone
+      historyStash = draft;
+      historyIndex = history.length - 1;
+      draft = history[historyIndex] ?? "";
+      return true;
+    }
+
+    const next = historyIndex + step;
+    if (next < 0) return true; // already at oldest; consume the key but stay put
+    if (next >= history.length) {
+      // moved past the newest entry: restore the in-progress draft
+      historyIndex = -1;
+      draft = historyStash;
+      return true;
+    }
+    historyIndex = next;
+    draft = history[historyIndex] ?? "";
+    return true;
+  }
+
+  async function moveCaretToEnd(): Promise<void> {
+    await tick();
+    const element = composerInput;
+    if (!element) return;
+    const end = element.value.length;
+    element.setSelectionRange(end, end);
+  }
+
   function handleComposerKeydown(event: KeyboardEvent): void {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
 
-    if ((event.key === "ArrowDown" || event.key === "ArrowRight") && moveSlashSelection(1)) {
-      event.preventDefault();
-      event.stopPropagation();
+    if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+      if (moveSlashSelection(1)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.key === "ArrowDown" && recallHistory(1)) {
+        event.preventDefault();
+        event.stopPropagation();
+        void moveCaretToEnd();
+      }
       return;
     }
 
-    if ((event.key === "ArrowUp" || event.key === "ArrowLeft") && moveSlashSelection(-1)) {
-      event.preventDefault();
-      event.stopPropagation();
+    if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+      if (moveSlashSelection(-1)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.key === "ArrowUp" && recallHistory(-1)) {
+        event.preventDefault();
+        event.stopPropagation();
+        void moveCaretToEnd();
+      }
       return;
     }
 
@@ -1384,7 +1450,12 @@
       if (!acceptSlashSelection()) return;
       event.preventDefault();
       event.stopPropagation();
+      return;
     }
+
+    // Any other key (typing, backspace, escape, …) ends history recall so the
+    // next ArrowUp re-stashes the edited draft instead of overwriting it.
+    resetHistoryRecall();
   }
 
   function handleSubmit(event: SubmitEvent): void {
@@ -1939,6 +2010,7 @@
       <form class="composer" class:closed={closed} onsubmit={handleSubmit}>
         <Search size={17} />
         <input
+          bind:this={composerInput}
           bind:value={draft}
           placeholder={composerPlaceholder}
           aria-label={`Message ${agentLabel}`}

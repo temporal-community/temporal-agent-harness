@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/temporalio/temporal-agent-harness/nexus/agent_adapter/nexus_worker/internal/awssecrets"
+	"github.com/temporal-community/temporal-agent-harness/nexus/agent_adapter/nexus_worker/internal/awssecrets"
 
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/contrib/aws/lambdaworker"

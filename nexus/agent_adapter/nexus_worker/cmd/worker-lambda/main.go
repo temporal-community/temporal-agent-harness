@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/temporalio/temporal-agent-harness/nexus/agent_adapter/nexus_worker/handler"
+	"github.com/temporal-community/temporal-agent-harness/nexus/agent_adapter/nexus_worker/handler"
 
 	"go.temporal.io/sdk/contrib/aws/lambdaworker"
 	"go.temporal.io/sdk/worker"

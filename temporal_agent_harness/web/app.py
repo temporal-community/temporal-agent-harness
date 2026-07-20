@@ -30,6 +30,7 @@ from temporal_agent_harness.harness.agent_client import (
     AgentStreamOutput,
     AgentTurnError,
     AgentTurnTimeout,
+    CallbackResultError,
     StaleTurnError,
     ToolApprovalError,
 )
@@ -88,6 +89,18 @@ class OperatorCommandRequestBody(BaseModel):
     session_id: str
     name: str
     arg: str | None = None
+
+
+class CallbackResultRequestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str
+    tool_id: str
+    # Exactly one of result / error is meaningful: ``result`` is the JSON-native value the client
+    # produced (validated server-side against the callback tool's declared output type); ``error``
+    # reports that the client could not fulfill the call.
+    result: Any = None
+    error: str | None = None
 
 
 def create_agent_harness_app(
@@ -190,6 +203,15 @@ def create_agent_harness_app(
         content = TypeAdapter(AgentStatus).dump_python(status, mode="json")
         return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
+    @app.post("/api/sessions/{session_id}/close")
+    async def close_session(session_id: str):
+        """Gracefully stop the agent workflow via the harness ``close`` signal: it winds down its
+        turn loop and auto-denies any pending approvals/callbacks. Lets a client implement abort
+        (stop the durable agent), rather than only dropping its own stream."""
+        handle = app.state.temporal.get_workflow_handle(session_id)
+        await handle.signal("close")
+        return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
+
     @app.get("/api/agent-interface/{session_id}")
     async def agent_interface(session_id: str):
         client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
@@ -220,6 +242,18 @@ def create_agent_harness_app(
             approved=req.approved,
             reason=req.reason,
             remember=req.remember,
+        )
+        return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/callback-result")
+    async def provide_callback_result(req: CallbackResultRequestBody):
+        """Fulfill a pending callback tool call: a client that executed the tool on its own
+        machine submits the result (or an error), keyed by the ``tool_id`` from the
+        ``callback_requested`` event. Forwards to the workflow's ``provide_callback_result``
+        update; the result is validated against the tool's declared output type there."""
+        client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
+        result = await client.provide_callback_result(
+            req.tool_id, result=req.result, error=req.error
         )
         return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
 
@@ -297,6 +331,16 @@ def create_agent_harness_app(
             status_code=409,
             content={
                 "error": exc.error_type or "tool_approval_error",
+                "message": str(exc),
+            },
+        )
+
+    @app.exception_handler(CallbackResultError)
+    async def callback_result_handler(request, exc):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": exc.error_type or "callback_result_error",
                 "message": str(exc),
             },
         )

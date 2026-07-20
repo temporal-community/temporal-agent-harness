@@ -14,8 +14,10 @@
 
 from __future__ import annotations
 
+import ast
 import contextvars
 import inspect
+import textwrap
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
@@ -33,7 +35,7 @@ from typing import (
     overload,
 )
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from temporalio import activity, workflow
 from temporalio.contrib.workflow_streams import (
     TopicHandle,
@@ -50,6 +52,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AGENT_STATUS_QUERY,
     EXECUTE_OPERATOR_COMMAND_UPDATE,
     OPERATOR_INTERFACE_QUERY,
+    PROVIDE_CALLBACK_RESULT_UPDATE,
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
     DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
     RUN_SUBAGENT_TURN_ACTIVITY,
@@ -64,6 +67,10 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentReply,
     AgentStatus,
     AgentStreamItem,
+    CallbackRequested,
+    CallbackResolved,
+    CallbackResult,
+    CallbackResultAck,
     MessageQueued,
     OperatorCommand,
     OperatorCommandCompleted,
@@ -72,6 +79,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     OperatorCommandResult,
     OperatorCommandStarted,
     PendingApproval,
+    PendingCallback,
     PendingTurn,
     RunSubagentTurnInput,
     SlashCommand,
@@ -164,6 +172,23 @@ class ToolApprovalDenied(Exception):
         self.reason = reason
         detail = f": {reason}" if reason else ""
         super().__init__(f"tool {tool_name!r} was not approved{detail}")
+
+
+class CallbackToolError(Exception):
+    """Raised in-workflow when a callback tool call cannot produce a result — the fulfilling
+    client reported an error, the wait timed out, or the agent closed while it was pending.
+
+    Raised from :meth:`AgentWorkflowRunner.await_callback_result` (the generic callback body),
+    so it propagates out through the tool's :func:`tool_defn` wrapper, which publishes a
+    ``tool_error`` and surfaces it to the model as an ``is_error`` function result — so a failed
+    callback does not run and does not crash the turn.
+    """
+
+    def __init__(self, tool_name: str, reason: str | None) -> None:
+        self.tool_name = tool_name
+        self.reason = reason
+        detail = f": {reason}" if reason else ""
+        super().__init__(f"callback tool {tool_name!r} failed{detail}")
 
 
 def _injected_param_names(fn: Callable[..., Any]) -> tuple[str, ...]:
@@ -404,6 +429,29 @@ def _enclosing_workflow_class() -> type | None:
             return type(candidate)
         frame = frame.f_back
     return None
+
+
+def current_stream_context() -> TurnStreamContext | None:
+    """Resolve the in-flight turn's stream context for the running harness agent.
+
+    Ambient lookup, no threading required: gets the currently-executing workflow
+    instance (:func:`temporalio.workflow.instance`) and reads the
+    :class:`AgentWorkflowRunner` it holds — harness agents store it as ``self._runner``.
+    Returns the runner's :attr:`~AgentWorkflowRunner.current_stream_context` (which is
+    ``None`` between turns), or ``None`` when we're not in a workflow at all, or the
+    running workflow is not a harness agent (no ``_runner``).
+
+    This lets an AI-SDK client/model-stub obtain the routing context for its streamed
+    activity without being handed the runner explicitly. It is concurrency- and
+    replay-safe: ``workflow.instance()`` resolves per running workflow execution, so it
+    always returns the right agent's context even with many workflows on one worker.
+    """
+    if not workflow.in_workflow():
+        return None
+    runner = getattr(workflow.instance(), "_runner", None)
+    if not isinstance(runner, AgentWorkflowRunner):
+        return None
+    return runner.current_stream_context
 
 
 def _assert_standardized_agent_signature() -> None:
@@ -732,6 +780,54 @@ class _ApprovalOutcome:
     remember: bool = False
 
 
+class _CallbackStatus(StrEnum):
+    """Lifecycle of one callback tool call's external-result fulfillment."""
+
+    PENDING = "pending"
+    RESOLVED = "resolved"
+
+
+@dataclass
+class _CallbackEntry:
+    """One pending callback tool call, keyed by its per-call tool id.
+
+    A callback tool has no worker-side body: it pauses in-workflow while an attached client
+    executes it and returns a result via the ``provide_callback_result`` update. Created PENDING
+    when the tool body registers the wait; flipped to RESOLVED by that update (or finalized as a
+    timeout / close by the gate itself). Resolved entries are RETAINED (status flips, the entry is
+    not removed) so the update validator can tell "unknown id" from "already resolved".
+
+    ``output_adapter`` is a runtime pydantic :class:`TypeAdapter` for the tool's declared output
+    type — used to validate the client's payload. It lives only in workflow memory (rebuilt on
+    replay when the tool body re-runs) and is never serialized.
+    """
+
+    tool_id: str
+    tool_name: str
+    tool_input: dict[str, Any]
+    output_schema: dict[str, Any]
+    turn_number: int
+    # The turn this call belongs to — retained so the resolution can be published against the
+    # owning turn even from an update handler that isn't itself "in" that turn.
+    turn_id: str
+    output_adapter: TypeAdapter[Any]
+    status: _CallbackStatus = _CallbackStatus.PENDING
+    outcome: Literal["ok", "error", "timeout"] = "ok"
+    # The validated output object on ``ok`` (the tool's return value); None otherwise.
+    result: Any = None
+    # The client-reported failure ('error'), or the timeout/close note ('timeout'); None on 'ok'.
+    error: str | None = None
+
+
+@dataclass
+class _CallbackOutcome:
+    """The terminal result of a callback wait — what the gate acts on."""
+
+    outcome: Literal["ok", "error", "timeout"]
+    result: Any = None
+    error: str | None = None
+
+
 @dataclass
 class _SubagentInstance:
     """One running subagent this agent drives, keyed by its short model-facing ``handle``.
@@ -820,6 +916,9 @@ class _WorkflowStatus:
         # Gated tool calls awaiting a human decision, keyed by per-call tool id.
         # Entries are retained after resolution (status flips) for idempotency.
         self._approvals: dict[str, _ApprovalEntry] = {}
+        # Callback tool calls awaiting a client-supplied result, keyed by per-call tool id.
+        # Entries are retained after resolution (status flips) for idempotency.
+        self._callbacks: dict[str, _CallbackEntry] = {}
         # Subagents this agent is driving, keyed by child ``subagent_id``.
         self._subagents: dict[str, _SubagentInstance] = {}
 
@@ -969,6 +1068,91 @@ class _WorkflowStatus:
         against it — see :meth:`AgentWorkflowRunner._apply_policy_update`."""
         self._approval_policy = policy
 
+    # -- Callback-tool registry ---------------------------------------------
+
+    def register_pending_callback(
+        self,
+        tool_id: str,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        output_schema: dict[str, Any],
+        turn_number: int,
+        turn_id: str,
+        output_adapter: TypeAdapter[Any],
+    ) -> None:
+        """Record a callback tool call as PENDING a client-supplied result. Called by the
+        callback tool's body when it parks to await external fulfillment."""
+        self._callbacks[tool_id] = _CallbackEntry(
+            tool_id=tool_id,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            output_schema=output_schema,
+            turn_number=turn_number,
+            turn_id=turn_id,
+            output_adapter=output_adapter,
+        )
+
+    def callback_entry(self, tool_id: str) -> _CallbackEntry | None:
+        """The callback record for ``tool_id`` (any status), or ``None`` if unknown."""
+        return self._callbacks.get(tool_id)
+
+    def is_callback_resolved(self, tool_id: str) -> bool:
+        """True once ``tool_id``'s callback is no longer PENDING. The gate's wait condition
+        reads this; an unknown id counts as unresolved."""
+        entry = self._callbacks.get(tool_id)
+        return entry is not None and entry.status is not _CallbackStatus.PENDING
+
+    def resolve_callback(
+        self,
+        tool_id: str,
+        *,
+        outcome: Literal["ok", "error", "timeout"],
+        result: Any,
+        error: str | None,
+    ) -> None:
+        """Apply an external result to a PENDING callback. The update validator has already
+        rejected unknown / already-resolved ids and (on ``ok``) checked the payload against
+        the output type, so this just flips status and records the outcome."""
+        entry = self._callbacks[tool_id]
+        entry.status = _CallbackStatus.RESOLVED
+        entry.outcome = outcome
+        entry.result = result
+        entry.error = error
+
+    def finalize_callback(
+        self, tool_id: str, *, closed: bool, timed_out: bool = False
+    ) -> _CallbackOutcome:
+        """Resolve the gate's wait into an outcome. If the entry is still PENDING the wait must
+        have woken on timeout or agent close — record it as a failure so the tool can raise."""
+        entry = self._callbacks[tool_id]
+        if entry.status is _CallbackStatus.PENDING:
+            if timed_out:
+                reason = "callback timed out before a result arrived"
+            elif closed:
+                reason = "agent closed before the callback result arrived"
+            else:
+                reason = "callback unresolved"
+            entry.status = _CallbackStatus.RESOLVED
+            entry.outcome = "timeout"
+            entry.error = reason
+        return _CallbackOutcome(
+            outcome=entry.outcome, result=entry.result, error=entry.error
+        )
+
+    def pending_callbacks(self) -> list[PendingCallback]:
+        """All callback tool calls still awaiting a client result (for the status query)."""
+        return [
+            PendingCallback(
+                tool_id=e.tool_id,
+                tool_name=e.tool_name,
+                tool_input=e.tool_input,
+                output_schema=e.output_schema,
+                turn_number=e.turn_number,
+            )
+            for e in self._callbacks.values()
+            if e.status is _CallbackStatus.PENDING
+        ]
+
     # -- Subagent registry --------------------------------------------------
 
     def has_subagent(self, handle: str) -> bool:
@@ -1035,6 +1219,7 @@ class _WorkflowStatus:
             ],
             is_message_queuing_enabled=self._is_message_queuing_enabled,
             pending_approvals=self.pending_approvals(),
+            pending_callbacks=self.pending_callbacks(),
             subagents=self.active_subagents(),
             approval_policy=self._approval_policy,
             has_custom_approval_fallback=self._has_custom_approval_fallback,
@@ -1166,6 +1351,21 @@ class AgentWorkflowRunner:
             TOOL_APPROVAL_UPDATE,
             self._handle_tool_approval,
             validator=self._validate_tool_approval,
+        )
+        # ``provide_callback_result`` is a SEPARATE update from ``tool_approval`` on purpose,
+        # even though both resolve a pending gate keyed by ``tool_id``. A callback tool call
+        # passes through BOTH gates in sequence on the same id — first the approval gate in the
+        # dispatch prologue, then the callback gate in the tool body — so one shared "resolve"
+        # handler would be ambiguous about which gate a submission targets. Two focused handlers
+        # (each with its own typed payload and registry) keep the two sequential gates clean.
+        # Like ``tool_approval``, this is harness-owned and NOT advertised via ``agent_interface``
+        # (see ``_handle_agent_interface``): a callback result comes from the attached client
+        # fulfilling the tool on its own machine, an out-of-band control-plane surface — not the
+        # agent-to-agent front door a parent agent drives.
+        workflow.set_update_handler(
+            PROVIDE_CALLBACK_RESULT_UPDATE,
+            self._handle_provide_callback_result,
+            validator=self._validate_provide_callback_result,
         )
         workflow.set_update_handler(
             EXECUTE_OPERATOR_COMMAND_UPDATE,
@@ -1498,6 +1698,175 @@ class AgentWorkflowRunner:
                 remember=entry.remember,
             ),
         )
+
+    # -- Callback tools -----------------------------------------------------
+
+    def _validate_provide_callback_result(self, result: CallbackResult) -> None:
+        """Reject a callback result for an unknown tool id, one already resolved, or (when a
+        result rather than an error is supplied) a payload that fails the tool's output type.
+
+        The unknown/already-resolved checks are the idempotency guard (a double-submit fails
+        rather than overwriting a settled result). The type check runs HERE, at the update
+        boundary, so a malformed payload is rejected synchronously WITHOUT consuming the
+        one-shot gate — the client learns immediately and can resubmit a corrected result.
+        Runs before :meth:`_handle_provide_callback_result`."""
+        entry = self._status.callback_entry(result.tool_id)
+        if entry is None:
+            raise ApplicationError(
+                f"no pending callback for tool_id={result.tool_id!r}",
+                type="UnknownCallback",
+                non_retryable=True,
+            )
+        if entry.status is not _CallbackStatus.PENDING:
+            raise ApplicationError(
+                f"callback for tool_id={result.tool_id!r} is already "
+                f"{entry.status.value}",
+                type="CallbackAlreadyResolved",
+                non_retryable=True,
+            )
+        # A client-reported error is a valid resolution regardless of the output type; only a
+        # positive result must match the declared output.
+        if result.error is None:
+            try:
+                entry.output_adapter.validate_python(result.result)
+            except ValidationError as e:
+                raise ApplicationError(
+                    f"callback result for tool_id={result.tool_id!r} does not match the "
+                    f"tool's declared output type. Validation error: {e}",
+                    {"tool_id": result.tool_id, "error": str(e)},
+                    type="MalformedCallbackResult",
+                    non_retryable=True,
+                )
+
+    async def _handle_provide_callback_result(
+        self, result: CallbackResult
+    ) -> CallbackResultAck:
+        """Record an external client's result for a pending callback tool call; the tool's
+        in-workflow wait observes it on the next workflow task and unblocks (result → return
+        the validated value, error → raise to the model).
+
+        DESIGN INVARIANT — like :meth:`_handle_tool_approval`, this is internal harness
+        machinery kept OFF the ``agent_interface`` surface. A callback result is supplied by
+        the attached client that opted into implementing the tool on its own machine, an
+        out-of-band control-plane action — never by the agent-to-agent front door. Excluding it
+        from the discovered interface means a parent agent driving this one cannot fabricate a
+        callback result on its child's behalf.
+
+        The resolution event is published HERE (the resolution site), mirroring
+        :meth:`_resolve_and_publish` — so the ``ok``/``error`` :class:`CallbackResolved` is
+        emitted in the order results actually arrive. The timeout/close case, which no update
+        resolves, is published by the gate itself (:meth:`await_callback_result`)."""
+        entry = self._status.callback_entry(result.tool_id)
+        assert entry is not None  # guaranteed by the validator
+        if result.error is not None:
+            self._status.resolve_callback(
+                result.tool_id, outcome="error", result=None, error=result.error
+            )
+        else:
+            # Re-validate to obtain the coerced output object; the validator already confirmed
+            # it matches, so this cannot raise here.
+            validated = entry.output_adapter.validate_python(result.result)
+            self._status.resolve_callback(
+                result.tool_id, outcome="ok", result=validated, error=None
+            )
+        self._publish_callback_resolved(result.tool_id)
+        return CallbackResultAck(tool_id=result.tool_id, accepted=True)
+
+    def _publish_callback_resolved(self, tool_id: str) -> None:
+        """Publish the :class:`CallbackResolved` for an already-resolved entry, against the turn
+        that owns the call (not the workflow's notion of the "current" turn — an update handler
+        resolving a callback isn't bound to any one turn)."""
+        entry = self._status.callback_entry(tool_id)
+        if entry is None:
+            return
+        self._pub(
+            entry.turn_id,
+            entry.turn_number,
+            CallbackResolved(
+                tool_id=entry.tool_id,
+                tool_name=entry.tool_name,
+                outcome=entry.outcome,
+                error=entry.error,
+            ),
+        )
+
+    async def await_callback_result(
+        self,
+        *,
+        tool_id: str,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        output_adapter: TypeAdapter[Any],
+        output_schema: dict[str, Any],
+        timeout: timedelta | None,
+    ) -> Any:
+        """Park the current (callback) tool call until an external client supplies its result.
+
+        The generic body of every ``@agent.callback_tool_defn`` tool. Runs IN-WORKFLOW inside
+        the tool's :func:`tool_defn` wrapper — so it sits AFTER the approval gate and the
+        ``tool_start`` publish — and:
+
+          * registers the call as PENDING (also exposed via ``agent_status.pending_callbacks``);
+          * publishes :class:`CallbackRequested` (args + the expected ``output_schema``) so a
+            client can fulfill it on its own machine;
+          * waits — on a ``wait_condition`` so no activity timeout is consumed — for a
+            ``provide_callback_result`` update, an optional ``timeout``, or agent close.
+
+        On an ``ok`` result it returns the client's value (already validated + coerced to the
+        declared output type by the update handler). On a client-reported error, a timeout, or
+        close-while-pending it raises :class:`CallbackToolError`, which the surrounding
+        :func:`tool_defn` wrapper turns into a ``tool_error`` and surfaces to the model as an
+        error result — so a failed callback does not crash the turn.
+        """
+        ctx = self.current_stream_context
+        if ctx is None:
+            raise RuntimeError(
+                f"callback tool {tool_name!r} has no active turn to await a result against"
+            )
+        self._status.register_pending_callback(
+            tool_id,
+            tool_name,
+            tool_input,
+            output_schema,
+            ctx.turn_number,
+            ctx.turn_id,
+            output_adapter,
+        )
+        self._pub(
+            ctx.turn_id,
+            ctx.turn_number,
+            CallbackRequested(
+                tool_id=tool_id,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                output_schema=output_schema,
+            ),
+        )
+        timed_out = False
+        try:
+            await workflow.wait_condition(
+                lambda: self._status.is_callback_resolved(tool_id) or self._closed,
+                timeout=timeout,
+            )
+        except TimeoutError:
+            # ``workflow.wait_condition(timeout=...)`` raises asyncio.TimeoutError (== builtin
+            # TimeoutError on 3.11+) when the deadline elapses with the condition still false.
+            timed_out = True
+
+        # CAUSAL ORDERING (mirrors the approval gate): the ok/error CallbackResolved is published
+        # at the resolution site (the update handler), in the order results arrive. The gate
+        # publishes ONLY the timeout/close case — the one no update resolved.
+        if not self._status.is_callback_resolved(tool_id):
+            outcome = self._status.finalize_callback(
+                tool_id, closed=self._closed, timed_out=timed_out
+            )
+            self._publish_callback_resolved(tool_id)
+        else:
+            outcome = self._status.finalize_callback(tool_id, closed=self._closed)
+
+        if outcome.outcome == "ok":
+            return outcome.result
+        raise CallbackToolError(tool_name, outcome.error)
 
     def _handle_agent_status(self) -> AgentStatus:
         return self._status.to_agent_status()
@@ -2397,5 +2766,148 @@ def tool_defn(
         _apply_model_facing_views(wrapper, user_fn, sig, tool_name)
         wrapper.__agent_tool__ = True  # type: ignore[attr-defined]
         return cast("Callable[_P, Awaitable[_R]]", wrapper)
+
+    return decorator
+
+
+def _assert_callback_stub(stub_fn: Callable[..., Any]) -> None:
+    """Enforce that a ``@callback_tool_defn`` target is an ``async def`` whose body is exactly
+    ``...``.
+
+    A callback tool declares only a *contract* — the harness supplies the body and an attached
+    client fulfills the call — so a real body would be dead code that never runs and would
+    mislead the author into thinking it executes. This parses the decorated function's source
+    and rejects anything but a lone ``...`` (an optional leading docstring is allowed). If the
+    source can't be read (e.g. a dynamically built function), the check is skipped rather than
+    failing — best-effort enforcement of the intended shape.
+    """
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(stub_fn)))
+    except (OSError, TypeError, SyntaxError):
+        return  # source unavailable — can't verify the stub shape; skip.
+    node = next(
+        (n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))),
+        None,
+    )
+    if node is None:
+        return
+    name = stub_fn.__name__
+    if not isinstance(node, ast.AsyncFunctionDef):
+        raise TypeError(
+            f"@agent.callback_tool_defn {name!r} must be declared `async def` — a callback "
+            f"tool is awaited like every other tool."
+        )
+    body = list(node.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]  # a leading docstring is allowed (it's the tool description)
+    is_ellipsis = (
+        len(body) == 1
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and body[0].value.value is Ellipsis
+    )
+    if not is_ellipsis:
+        raise TypeError(
+            f"@agent.callback_tool_defn {name!r} must have a body of exactly `...` — the "
+            f"harness supplies the implementation and an attached client fulfills the call. "
+            f"Declare only the signature (parameters + return type) and a docstring."
+        )
+
+
+def callback_tool_defn(
+    *,
+    inherently_safe: bool = False,
+    name: str | None = None,
+    timeout: timedelta | None = None,
+) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
+    r"""Define a CALLBACK tool — one whose work runs on an EXTERNAL CLIENT, not the worker.
+
+    Use it when a tool needs state or an environment the agent's worker does not have — e.g. a
+    cloud-hosted coding agent reading a file on the *user's laptop*, or an agent asking the
+    user's phone to capture and upload a photo. The author declares only the tool's contract; the
+    body must be exactly ``...`` (enforced at import) — the harness provides a single generic
+    implementation and an attached client fulfills each call on its own machine::
+
+        class FileContents(BaseModel):
+            path: str
+            text: str
+
+        @agent.callback_tool_defn()
+        async def read_file(path: str) -> FileContents:
+            \"\"\"Read a file from the user's local machine.\"\"\"
+            ...   # never runs; the attached client executes it and returns the result
+
+    The returned object is a normal inline tool: it is invoked via ``run_tool`` within an active
+    turn and goes through the EXACT SAME path as every other tool — the agent's
+    :class:`ToolApprovalPolicy` gates it identically (a callback tool is not auto-anything; the
+    policy decides), and it publishes ``tool_start`` / ``tool_end`` / ``tool_error``. The only
+    difference is what happens between start and end: instead of running a body, it publishes a
+    :class:`CallbackRequested` event (the args + the JSON schema of the declared return type) and
+    parks on an in-workflow wait condition until a client submits the result via the
+    ``provide_callback_result`` update (see :class:`CallbackResult`). The client's payload is
+    validated against the return type before it becomes the tool's value; a client-reported error
+    or a timeout surfaces to the model as a tool error rather than crashing the turn.
+
+    ``name`` overrides the tool name (default: the function's ``__name__``). ``timeout`` bounds
+    the wait for a result (``None`` = wait indefinitely, durably — no activity timeout is
+    consumed). ``inherently_safe`` is the same static safety hint as on the other tool decorators
+    (the policy, not the tool, decides enforcement).
+
+    Because it is an ordinary harness tool, a callback tool composes with Code Mode and subagent
+    toolsets for free.
+    """
+
+    def decorator(stub_fn: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+        _assert_callback_stub(stub_fn)
+        tool_name = name or stub_fn.__name__
+        sig = _tool_signatures(stub_fn)
+        if sig.return_type is None:
+            raise TypeError(
+                f"@agent.callback_tool_defn {tool_name!r} must declare a concrete return type "
+                f"(the client's result is validated against it); got no return annotation."
+            )
+        output_adapter: TypeAdapter[Any] = TypeAdapter(sig.return_type)
+        output_schema = output_adapter.json_schema()
+
+        async def _impl(*args: Any, **kwargs: Any) -> Any:
+            # Reconstruct the model-facing args to hand to the fulfilling client: bind against the
+            # full user signature (so injected params don't break the bind), then drop the hidden
+            # ones — the same tool_input the surrounding tool_start carries.
+            full_input = _tool_input(sig.user_sig, args, kwargs)
+            tool_input = {
+                k: v
+                for k, v in full_input.items()
+                if k not in sig.inject_names and k != "self"
+            }
+            return await _current_runner().await_callback_result(
+                tool_id=_current_tool_id(),
+                tool_name=tool_name,
+                tool_input=tool_input,
+                output_adapter=output_adapter,
+                output_schema=output_schema,
+                timeout=timeout,
+            )
+
+        # Carry the author's contract onto the generated impl so tool_defn's introspection
+        # (signature → model schema, docstring → description, return type) reads the stub, not
+        # this generic *args/**kwargs shim.
+        _impl.__name__ = tool_name
+        _impl.__qualname__ = tool_name
+        _impl.__doc__ = stub_fn.__doc__
+        _impl.__module__ = stub_fn.__module__
+        _impl.__signature__ = sig.user_sig  # type: ignore[attr-defined]
+        _impl.__annotations__ = dict(getattr(stub_fn, "__annotations__", {}))
+
+        # Route through the standard inline-tool path so the callback tool gets the SAME
+        # approval gate and tool_start/tool_end/tool_error publishing as any other tool. The
+        # policy engine cannot tell — and does not need to tell — a callback tool apart.
+        return tool_defn(inherently_safe=inherently_safe)(
+            cast("Callable[_P, Awaitable[_R]]", _impl)
+        )
 
     return decorator

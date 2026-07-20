@@ -18,7 +18,7 @@ handle), ``monty_run_script`` (send a script to that instance and get its reply)
 agent's ``run_travel_code`` tool — same capability, now across a real parent→subagent boundary.
 
 Why this exists: it's the first real end-to-end exercise of the subagent toolset
-(``docs/agents-as-subagents.md``). It validates the handle indirection, multiple turns per
+(``docs/internal/agents-as-subagents.md``). It validates the handle indirection, multiple turns per
 subagent (the per-subagent FIFO gate + turn counter + stream-offset resume), and the
 ``run_subagent_turn`` activity against a live child workflow.
 

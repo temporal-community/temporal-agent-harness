@@ -1,0 +1,7 @@
+# Stray local build binaries. The Makefile builds Lambda artifacts into build/
+# (covered by the root .gitignore); these anchored entries catch a manual
+# `go build -o webhook-lambda ./slack_to_temporal_agent_harness_connector/cmd/webhook-lambda`
+# at the module root without ignoring the cmd/webhook-lambda and cmd/worker-lambda
+# source directories.
+/webhook-lambda
+/worker-lambda

@@ -84,7 +84,7 @@ export FUNCTION_ARN=$(aws cloudformation describe-stacks \
 Temporal Cloud assumes an IAM role in your account to invoke the Lambda. You can **reuse the
 same invocation role** as the connector worker (recommended) — just add this function's ARN to
 its policy `Resource` list — or deploy a dedicated one from
-[`../../../slack_connector/deploy/temporal-cloud-serverless-worker-role.yaml`](../../../slack_connector/deploy/temporal-cloud-serverless-worker-role.yaml).
+[`../../../ui_connector/slack_to_temporal_agent_harness_connector/deploy/temporal-cloud-serverless-worker-role.yaml`](../../../ui_connector/slack_to_temporal_agent_harness_connector/deploy/temporal-cloud-serverless-worker-role.yaml).
 
 ```bash
 export ROLE_ARN=<existing invoke role ARN>
@@ -132,7 +132,7 @@ temporal worker deployment set-current-version \
 ## 5. Register the Nexus endpoint
 
 The connector calls `AgentNexusEndpoint = "support-agent-nexus"` (see
-`slack_connector/agent/temporal_native_harness_driver.go`). Register it to target this worker's
+`ui_connector/outbound/driver/temporal_agent_harness/driver.go`). Register it to target this worker's
 namespace + task queue. **Endpoint names are account-global**, so this must be unique across your
 account.
 

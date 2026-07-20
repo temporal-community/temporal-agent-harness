@@ -24,7 +24,7 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/worker"
 
-	"github.com/temporalio/temporal-agent-harness/nexus/agent_adapter/nexus_worker/handler"
+	"github.com/temporal-community/temporal-agent-harness/nexus/agent_adapter/nexus_worker/handler"
 )
 
 func envOrDefault(key, def string) string {

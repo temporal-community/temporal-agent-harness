@@ -19,6 +19,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AGENT_STATUS_QUERY,
     EXECUTE_OPERATOR_COMMAND_UPDATE,
     OPERATOR_INTERFACE_QUERY,
+    PROVIDE_CALLBACK_RESULT_UPDATE,
     SEND_AGENT_MESSAGE_UPDATE,
     TOOL_APPROVAL_UPDATE,
     AcceptedFunction,
@@ -26,10 +27,13 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEventType,
     AgentMessage,
     AgentStatus,
+    CallbackResult,
+    CallbackResultAck,
     OperatorCommand,
     OperatorCommandRequest,
     OperatorCommandResult,
     PendingApproval,
+    PendingCallback,
     ToolApprovalDecision,
     ToolApprovalResult,
     AgentMessageReply,
@@ -79,6 +83,21 @@ class ToolApprovalError(Exception):
     rejects the decision — the ``tool_id`` is unknown, or the approval was already
     resolved (a double-submit). ``error_type`` carries the workflow-side type
     (``UnknownToolApproval`` / ``ToolApprovalAlreadyResolved``).
+    """
+
+    def __init__(self, message: str, *, error_type: str | None = None) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+
+
+class CallbackResultError(Exception):
+    """A callback tool result was rejected by the workflow.
+
+    Raised by :meth:`AgentClient.provide_callback_result` when the workflow's update validator
+    rejects the submission — the ``tool_id`` is unknown, the callback was already resolved (a
+    double-submit), or the result payload does not match the tool's declared output type.
+    ``error_type`` carries the workflow-side type (``UnknownCallback`` /
+    ``CallbackAlreadyResolved`` / ``MalformedCallbackResult``).
     """
 
     def __init__(self, message: str, *, error_type: str | None = None) -> None:
@@ -177,6 +196,59 @@ class AgentClient:
             error_type = getattr(cause, "type", None) if cause else None
             if error_type in ("UnknownToolApproval", "ToolApprovalAlreadyResolved"):
                 raise ToolApprovalError(str(cause), error_type=error_type) from e
+            raise
+
+    async def get_pending_callbacks(self) -> list[PendingCallback]:
+        """The callback tool calls currently awaiting a client-supplied result.
+
+        A convenience over :meth:`get_status` — lets a client that attached after the
+        ``callback_requested`` event was published still discover and fulfill outstanding
+        callback calls (each carries the ``output_schema`` the result must match).
+        """
+        status = await self.get_status()
+        return status.pending_callbacks
+
+    async def provide_callback_result(
+        self,
+        tool_id: str,
+        *,
+        result: Any = None,
+        error: str | None = None,
+    ) -> CallbackResultAck:
+        """Fulfill a pending callback tool call (see :class:`CallbackRequested`).
+
+        A callback tool has no worker-side body — the agent paused in-workflow while THIS client
+        executed the tool on its own machine (e.g. read a local file, captured a photo). Submit
+        the outcome here, keyed by the ``tool_id`` from the ``callback_requested`` event (also
+        listed under :attr:`AgentStatus.pending_callbacks`):
+
+          * ``result`` — the value produced, as JSON-native data (a dict for a pydantic-model
+            output, or a scalar/list). It is validated against the tool's declared output type
+            and becomes the tool's return value.
+          * ``error`` — set instead when the tool could not be fulfilled; the model receives it
+            as the tool's error result rather than the turn crashing.
+
+        Resolving an unknown id, one already resolved, or a result that fails output-type
+        validation raises :class:`CallbackResultError` (idempotent — a double-submit fails
+        rather than overwriting a settled result; a malformed result can be corrected and
+        resubmitted, since it does not consume the pending gate).
+        """
+        handle = self._temporal.get_workflow_handle(self._workflow_id)
+        try:
+            return await handle.execute_update(
+                PROVIDE_CALLBACK_RESULT_UPDATE,
+                CallbackResult(tool_id=tool_id, result=result, error=error),
+                result_type=CallbackResultAck,
+            )
+        except WorkflowUpdateFailedError as e:
+            cause = e.cause
+            error_type = getattr(cause, "type", None) if cause else None
+            if error_type in (
+                "UnknownCallback",
+                "CallbackAlreadyResolved",
+                "MalformedCallbackResult",
+            ):
+                raise CallbackResultError(str(cause), error_type=error_type) from e
             raise
 
     async def get_agent_interface(self) -> list[AcceptedFunction]:

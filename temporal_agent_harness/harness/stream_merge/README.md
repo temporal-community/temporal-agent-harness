@@ -6,7 +6,7 @@ into **one logical stream** — while each agent keeps its own independent Tempo
 `AgentClient.send_message` / `attach` show a UI a parent + all its subagents as a single ordered
 stream without the caller knowing subagents exist.
 
-Full design + rationale: [`docs/unified-subagent-event-stream.md`](../../../docs/unified-subagent-event-stream.md).
+Full design + rationale: [`docs/internal/unified-subagent-event-stream.md`](../../../docs/internal/unified-subagent-event-stream.md).
 
 ## The one invariant
 

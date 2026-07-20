@@ -1,0 +1,50 @@
+# Scoped justfile for the wiki callback-tools example.
+# Run from this directory: `just <recipe>`.
+#
+# Self-contained local stack (each in its own terminal):
+#   just temporal          # 1. local Temporal dev server (or bring your own)
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API on :8000 (serves this example's registry)
+#   just worker            # 4. the WikiAgent worker
+#   just client            # 5. the thin terminal client that fulfills the callback tools
+#
+# First-time setup: create the shared repo-root .env.local (`cp .env.example .env.local` from the
+# repo root) and set GEMINI_API_KEY. See README.md.
+
+# Read the single shared env file at the repo root (resolved relative to this justfile).
+set dotenv-path := "../../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".." / ".."
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Show the Temporal connection these recipes will use (read from the repo-root .env.local).
+config:
+    @echo "TEMPORAL_CONFIG_FILE = ${TEMPORAL_CONFIG_FILE:-<unset — set it in the repo-root .env.local>}"
+    @echo "TEMPORAL_PROFILE     = ${TEMPORAL_PROFILE:-default}"
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Run the shared session-manager worker (examples/session_manager_worker.py).
+session-manager:
+    cd "{{root}}" && uv run --group examples python -m examples.session_manager_worker
+
+# Serve the packaged FastAPI API + UI on http://localhost:8000, pointed at this example's registry
+# via the shared examples app entrypoint.
+server:
+    cd "{{root}}" && uv run --group examples python -m examples.app "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Run the WikiAgent worker.
+worker:
+    cd "{{root}}" && uv run --group examples python -m examples.callback_tools.wiki_agent.worker
+
+# Run the thin terminal client from this example's dir (client.py is a standalone script — no
+# package imports — so it needs no repo-root module path). Override the wiki location with:
+#   just client --wiki-dir ~/notes
+client *ARGS:
+    uv run --group examples python client.py {{ARGS}}
