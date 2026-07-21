@@ -27,8 +27,7 @@ type Driver interface {
 	// through this interface.
 	PostApprovalPrompt(ctx workflow.Context, input ApprovalPromptInput) error
 
-	// UpdateActivity replaces an existing platform activity. Teams uses it to
-	// remove approval buttons after a decision has been recorded.
+	// UpdateActivity replaces an existing platform activity, identified by the `ActivityID`.
 	UpdateActivity(ctx workflow.Context, input UpdateActivityInput) error
 }
 
