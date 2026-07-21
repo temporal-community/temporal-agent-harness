@@ -152,13 +152,16 @@ class ApprovalPrompt:
 
 
 @dataclass(frozen=True, slots=True)
-class UpdateActivity:
+class UpdateMessage:
     metadata: TextMetadata
-    activity_id: str
+    message_id: str
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> UpdateActivity:
+    def from_payload(cls, payload: dict[str, Any]) -> UpdateMessage:
+        message_id = _string(payload, "MessageID")
+        if not message_id:
+            message_id = _string(payload, "ActivityID", required=True)
         return cls(
             metadata=TextMetadata.from_payload(payload),
-            activity_id=_string(payload, "ActivityID", required=True),
+            message_id=message_id,
         )

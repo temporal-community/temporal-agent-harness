@@ -56,30 +56,27 @@ func (s *webhookServer) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Adaptive Card Action.Submit clicks arrive as message activities with
-	// empty text and the clicked button's data object in value. Check this
-	// before the text validation below.
+	var wfID string
+	var input wire.Input
 	if val, ok := decodeApprovalValue(act.Value); ok {
-		s.handleApprovalSubmit(r.Context(), act, val)
-		w.WriteHeader(http.StatusOK)
-		return
+		wfID, input = approvalWorkflowInput(act, val)
+	} else {
+		if conversationID(act) == "" || senderID(act) == "" || strings.TrimSpace(act.Text) == "" {
+			http.Error(w, "missing required fields", http.StatusBadRequest)
+			return
+		}
+		if act.ID == "" && act.Timestamp == "" {
+			http.Error(w, "missing activity id or timestamp", http.StatusBadRequest)
+			return
+		}
+		wfID, input = messageWorkflowInput(act)
 	}
 
-	if conversationID(act) == "" || senderID(act) == "" || strings.TrimSpace(act.Text) == "" {
-		http.Error(w, "missing required fields", http.StatusBadRequest)
-		return
-	}
-	if act.ID == "" && act.Timestamp == "" {
-		http.Error(w, "missing activity id or timestamp", http.StatusBadRequest)
-		return
-	}
-
-	s.signalIncomingMessage(r.Context(), act)
+	s.startConnectorWorkflow(r.Context(), wfID, input)
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *webhookServer) signalIncomingMessage(ctx context.Context, act teamMessageActivity) {
-	wfID, input := messageWorkflowInput(act)
+func (s *webhookServer) startConnectorWorkflow(ctx context.Context, wfID string, input wire.Input) {
 	if _, err := s.tc.ExecuteWorkflow(ctx,
 		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
 		router.WorkflowName,
@@ -132,20 +129,6 @@ func decodeApprovalValue(raw json.RawMessage) (approvalButtonValue, bool) {
 		return val, false
 	}
 	return val, true
-}
-
-// handleApprovalSubmit routes an approval button click to the connector
-// workflow. The Python activity worker replaces the card after the decision;
-// the workflow ID dedupes repeat clicks for the same tool ID.
-func (s *webhookServer) handleApprovalSubmit(ctx context.Context, act teamMessageActivity, val approvalButtonValue) {
-	wfID, input := approvalWorkflowInput(act, val)
-	if _, err := s.tc.ExecuteWorkflow(ctx,
-		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
-		router.WorkflowName,
-		input,
-	); err != nil {
-		log.Printf("Failed to start connector workflow for approval: %v", err)
-	}
 }
 
 func approvalWorkflowInput(act teamMessageActivity, val approvalButtonValue) (string, wire.Input) {

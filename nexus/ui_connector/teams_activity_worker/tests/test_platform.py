@@ -10,7 +10,7 @@ from teams_activity_worker.contracts import (
     FinishStream,
     StreamHandle,
     TextMetadata,
-    UpdateActivity,
+    UpdateMessage,
     UpdateStream,
 )
 from teams_activity_worker.platform import (
@@ -170,10 +170,10 @@ async def test_approval_prompt_uses_sdk_adaptive_card(fixture) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_activity_replaces_approval_card(fixture) -> None:
+async def test_update_message_replaces_approval_card(fixture) -> None:
     platform, conversations = fixture
 
-    await platform.update_activity(UpdateActivity(metadata(text="resolved"), "card-1"))
+    await platform.update_message(UpdateMessage(metadata(text="resolved"), "card-1"))
 
     assert conversations.calls[0][0:3] == ("update", "conversation-1", "card-1")
     payload = conversations.calls[0][3].model_dump(by_alias=True, exclude_none=True)

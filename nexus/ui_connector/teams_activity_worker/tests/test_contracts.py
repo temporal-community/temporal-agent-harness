@@ -1,6 +1,6 @@
 import pytest
 
-from teams_activity_worker.contracts import BeginStream, ContractError, UpdateStream, parse_conversation
+from teams_activity_worker.contracts import BeginStream, ContractError, UpdateMessage, UpdateStream, parse_conversation
 
 
 def test_begin_stream_parses_go_json_field_names() -> None:
@@ -39,8 +39,20 @@ def test_update_stream_rejects_handle_for_another_session() -> None:
         )
 
 
+@pytest.mark.parametrize("id_field", ["MessageID", "ActivityID"])
+def test_update_message_accepts_current_and_legacy_id_fields(id_field: str) -> None:
+    request = UpdateMessage.from_payload(
+        {
+            "SessionID": "teams:conversation-1",
+            "Text": "resolved",
+            id_field: "card-1",
+        }
+    )
+
+    assert request.message_id == "card-1"
+
+
 @pytest.mark.parametrize("session_id", ["", "slack:C1", "teams:", "conversation-1"])
 def test_parse_conversation_rejects_invalid_session_id(session_id: str) -> None:
     with pytest.raises(ContractError, match="expected"):
         parse_conversation(session_id)
-

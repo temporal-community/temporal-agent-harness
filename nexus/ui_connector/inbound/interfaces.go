@@ -28,9 +28,8 @@ type Driver interface {
 	// through this interface.
 	PostApprovalPrompt(ctx workflow.Context, input ApprovalPromptInput) error
 
-	// UpdateActivity replaces an existing platform activity. Teams uses it to
-	// remove approval buttons after a decision has been recorded.
-	UpdateActivity(ctx workflow.Context, input UpdateActivityInput) error
+	// UpdateMessage replaces an existing platform message.
+	UpdateMessage(ctx workflow.Context, input UpdateMessageInput) error
 }
 
 // ApprovalPromptInput carries the information needed to render a tool-approval
@@ -51,10 +50,10 @@ type TextMetadata struct {
 	ChannelID  string
 }
 
-// UpdateActivityInput replaces an existing platform activity.
-type UpdateActivityInput struct {
+// UpdateMessageInput replaces an existing platform message.
+type UpdateMessageInput struct {
 	TextMetadata
-	ActivityID string
+	MessageID string
 }
 
 // StreamWireTextMode tells the router which text representation a platform

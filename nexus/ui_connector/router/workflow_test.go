@@ -43,7 +43,7 @@ type fakeInbound struct {
 	beginInputs    []inbound.BeginStreamInput
 	updateInputs   []inbound.UpdateStreamInput
 	finishInputs   []inbound.FinishStreamInput
-	activityInputs []inbound.UpdateActivityInput
+	messageInputs  []inbound.UpdateMessageInput
 }
 
 func (f *fakeInbound) BeginStream(ctx workflow.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error) {
@@ -86,9 +86,9 @@ func (f *fakeInbound) PostApprovalPrompt(ctx workflow.Context, input inbound.App
 	return nil
 }
 
-func (f *fakeInbound) UpdateActivity(ctx workflow.Context, input inbound.UpdateActivityInput) error {
-	f.calls = append(f.calls, "UpdateActivity:"+input.Text)
-	f.activityInputs = append(f.activityInputs, input)
+func (f *fakeInbound) UpdateMessage(ctx workflow.Context, input inbound.UpdateMessageInput) error {
+	f.calls = append(f.calls, "UpdateMessage:"+input.Text)
+	f.messageInputs = append(f.messageInputs, input)
 	return nil
 }
 
@@ -180,10 +180,11 @@ func TestRouterWorkflow_TeamsApprovalUpdatesCard(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	assert.Equal(t, []string{"UpdateActivity:🔐 Tool `deploy`: ✅ Approved"}, in.calls)
-	require.Len(t, in.activityInputs, 1)
-	assert.Equal(t, "https://example.test/teams/", in.activityInputs[0].ServiceURL)
-	assert.Equal(t, "msteams", in.activityInputs[0].ChannelID)
+	assert.Equal(t, []string{"UpdateMessage:🔐 Tool `deploy`: ✅ Approved"}, in.calls)
+	require.Len(t, in.messageInputs, 1)
+	assert.Equal(t, "card-1", in.messageInputs[0].MessageID)
+	assert.Equal(t, "https://example.test/teams/", in.messageInputs[0].ServiceURL)
+	assert.Equal(t, "msteams", in.messageInputs[0].ChannelID)
 }
 
 func TestRouterWorkflow_ApprovalRequestedDelta_PostsPrompt(t *testing.T) {

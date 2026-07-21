@@ -45,11 +45,11 @@ func (w *RouterWorkflow) Run(ctx workflow.Context, input wire.Input) error {
 		if input.Approval.Approved {
 			decision = "✅ Approved"
 		}
-		if err := w.inbound.UpdateActivity(ctx, inbound.UpdateActivityInput{
+		if err := w.inbound.UpdateMessage(ctx, inbound.UpdateMessageInput{
 			TextMetadata: textMetadata(input, fmt.Sprintf("🔐 Tool `%s`: %s", input.Approval.ToolName, decision)),
-			ActivityID:   input.Approval.ActivityID,
+			MessageID:    input.Approval.ActivityID,
 		}); err != nil {
-			workflow.GetLogger(ctx).Warn("RouterWorkflow: UpdateActivity failed", "error", err)
+			workflow.GetLogger(ctx).Warn("RouterWorkflow: UpdateMessage failed", "error", err)
 		}
 		return nil
 	}

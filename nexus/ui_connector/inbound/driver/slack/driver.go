@@ -35,6 +35,8 @@ type Driver struct {
 	ActivityOptions workflow.ActivityOptions
 }
 
+var _ inbound.Driver = (*Driver)(nil)
+
 // NewDriver returns a Driver that calls the Slack activities with the given options.
 func NewDriver(opts workflow.ActivityOptions) Driver {
 	return Driver{ActivityOptions: opts}
@@ -72,7 +74,7 @@ func (d Driver) PostApprovalPrompt(ctx workflow.Context, input inbound.ApprovalP
 	).Get(ctx, nil)
 }
 
-func (d Driver) UpdateActivity(workflow.Context, inbound.UpdateActivityInput) error {
+func (d Driver) UpdateMessage(workflow.Context, inbound.UpdateMessageInput) error {
 	return nil
 }
 

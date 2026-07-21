@@ -13,7 +13,7 @@ const (
 	finishStreamActivity       = "FinishStream"
 	postMessageActivity        = "PostMessage"
 	postApprovalPromptActivity = "PostApprovalPrompt"
-	updateActivityActivity     = "UpdateActivity"
+	updateMessageActivity      = "UpdateActivity" // Keep the registered activity name stable for compatibility.
 )
 
 // Driver dispatches durable inbound operations to the Python Teams activity
@@ -21,6 +21,8 @@ const (
 type Driver struct {
 	ActivityOptions workflow.ActivityOptions
 }
+
+var _ inbound.Driver = (*Driver)(nil)
 
 func NewDriver(opts workflow.ActivityOptions) Driver {
 	return Driver{ActivityOptions: opts}
@@ -52,8 +54,6 @@ func (d Driver) PostApprovalPrompt(ctx workflow.Context, input inbound.ApprovalP
 	return workflow.ExecuteActivity(d.activityContext(ctx), postApprovalPromptActivity, input).Get(ctx, nil)
 }
 
-func (d Driver) UpdateActivity(ctx workflow.Context, input inbound.UpdateActivityInput) error {
-	return workflow.ExecuteActivity(d.activityContext(ctx), updateActivityActivity, input).Get(ctx, nil)
+func (d Driver) UpdateMessage(ctx workflow.Context, input inbound.UpdateMessageInput) error {
+	return workflow.ExecuteActivity(d.activityContext(ctx), updateMessageActivity, input).Get(ctx, nil)
 }
-
-var _ inbound.Driver = Driver{}

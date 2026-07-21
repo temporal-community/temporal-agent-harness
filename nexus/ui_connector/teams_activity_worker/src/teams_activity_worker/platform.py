@@ -31,7 +31,7 @@ from .contracts import (
     ContractError,
     FinishStream,
     TextMetadata,
-    UpdateActivity,
+    UpdateMessage,
     UpdateStream,
 )
 
@@ -275,8 +275,8 @@ class TeamsPlatform:
         )
         await self._create_or_reply(prompt.metadata, activity)
 
-    async def update_activity(self, request: UpdateActivity) -> None:
-        await self._update_message(request.metadata, request.activity_id, request.metadata.text)
+    async def update_message(self, request: UpdateMessage) -> None:
+        await self._update_message(request.metadata, request.message_id, request.metadata.text)
 
     async def _update_message(self, metadata: TextMetadata, activity_id: str, text: str) -> None:
         activity = self._base_activity(metadata, MessageActivityInput(text=text).with_text_format("markdown"))
@@ -315,8 +315,8 @@ class TeamsActivities:
         await self.platform.post_approval_prompt(_parse(ApprovalPrompt.from_payload, payload))
 
     @activity.defn(name="UpdateActivity")
-    async def update_activity(self, payload: dict[str, Any]) -> None:
-        await self.platform.update_activity(_parse(UpdateActivity.from_payload, payload))
+    async def update_message(self, payload: dict[str, Any]) -> None:
+        await self.platform.update_message(_parse(UpdateMessage.from_payload, payload))
 
 
 async def run() -> None:
@@ -336,7 +336,7 @@ async def run() -> None:
             activities.finish_stream,
             activities.post_message,
             activities.post_approval_prompt,
-            activities.update_activity,
+            activities.update_message,
         ],
     )
     logging.info("Starting Teams activity worker on task queue %r", settings.task_queue)

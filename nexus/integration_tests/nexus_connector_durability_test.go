@@ -299,7 +299,7 @@ func (d testInboundDriver) PostApprovalPrompt(ctx workflow.Context, input inboun
 	return workflow.ExecuteActivity(d.activityOptions(ctx), testPostApprovalPromptActivity, input).Get(ctx, nil)
 }
 
-func (testInboundDriver) UpdateActivity(workflow.Context, inbound.UpdateActivityInput) error {
+func (testInboundDriver) UpdateMessage(workflow.Context, inbound.UpdateMessageInput) error {
 	return nil
 }
 
