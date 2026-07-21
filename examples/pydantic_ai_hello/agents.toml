@@ -1,0 +1,20 @@
+# Registry of agents the Pydantic AI hello-world example UI can launch.
+#
+# The shared FastAPI server (examples/app.py) reads this file and passes the parsed
+# registry into the packaged SessionManagerWorkflow as its workflow init arg. The
+# manager then serves it back over the `available_agents` query, so the app server
+# can expose it at /api/agents without hardcoding the agent list.
+#
+# To expose a new agent: register its @workflow.defn on a worker, then add a
+# [[agents]] entry here.
+
+[[agents]]
+key = "pydantic-ai-hello"
+workflow_type = "PydanticAIHelloAgent"
+task_queue = "pydantic-ai-hello"
+label = "Pydantic AI Hello"
+description = """
+A hello-world Pydantic AI agent. Chat in plain text; it replies in prose and can call one
+tool (get_weather) for a city's weather. Exists to show the harness streaming path for the
+Pydantic AI integration end to end — model call → event_stream_handler in the model activity →
+live turn stream (reply_delta / tool_requested / tool_start / tool_end / model_interaction_*)."""

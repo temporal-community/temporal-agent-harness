@@ -1,0 +1,63 @@
+# Scoped justfile for the hello-world Pydantic AI example (examples/pydantic_ai_hello).
+# Run from this directory: `just <recipe>`.
+#
+# Self-contained local stack (each in its own terminal):
+#   just temporal          # 1. local Temporal dev server (or bring your own)
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API + UI on :8000
+#   just worker            # 4. this example's agent worker
+#
+# Then open http://localhost:8000, pick "Pydantic AI Hello", and chat (e.g. "What's the weather in
+# Paris?"). The reply streams token by token and the get_weather tool call shows up live.
+# `just server` builds the Svelte UI first (needs `pnpm`); `just ui-dev` runs it on Vite instead.
+#
+# uv installs the project's `examples` dependency group (incl. Pydantic AI) on demand, so there's no
+# separate install step. First-time setup: `cp .env.example .env.local` from the repo root and fill
+# it in (Temporal connection + OPENAI_API_KEY). See README.md.
+
+# Read the single shared env file at the repo root (resolved relative to this justfile).
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+ui := root / "ui"
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Show the Temporal connection these recipes will use (read from the repo-root .env.local).
+config:
+    @echo "TEMPORAL_CONFIG_FILE = ${TEMPORAL_CONFIG_FILE:-<unset — set it in the repo-root .env.local>}"
+    @echo "TEMPORAL_PROFILE     = ${TEMPORAL_PROFILE:-default}"
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Run the shared session-manager worker (examples/session_manager_worker.py).
+session-manager:
+    cd "{{root}}" && uv run --group examples python -m examples.session_manager_worker
+
+# Serve the packaged FastAPI API + UI on http://localhost:8000, pointed at this example's registry
+# via the shared examples app entrypoint. Builds the Svelte UI first (app-build).
+server: app-build
+    cd "{{root}}" && uv run --group examples python -m examples.app "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Build the shared Svelte UI into temporal_agent_harness/ui/dist for the server to serve.
+# Runs FROM the ui dir (not `pnpm --dir`) so corepack reads ui/package.json's pinned pnpm
+# version instead of the repo root's (which has none) — avoids a corepack version mismatch.
+app-build:
+    cd "{{ui}}" && pnpm run build
+
+# Install the shared Svelte UI dependencies (run once if the build complains about missing modules).
+app-install:
+    cd "{{ui}}" && pnpm install
+
+# Run the shared Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
+ui-dev:
+    cd "{{ui}}" && pnpm run dev
+
+# Run the PydanticAIHelloAgent worker.
+worker:
+    cd "{{root}}" && uv run --group examples python -m examples.pydantic_ai_hello.worker

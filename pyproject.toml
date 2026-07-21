@@ -34,6 +34,13 @@ openai-agents = [
     "mcp>=1.9.4,<2",
     "temporalio[opentelemetry]>=1.30.0",
 ]
+# The Pydantic AI integration: temporal_agent_harness.ai_sdks.pydantic_ai_harness. Unlike the
+# openai-agents/genai integrations, the upstream plugin (pydantic_ai.durable_exec.temporal, shipped
+# in pydantic-ai-slim[temporal]) is used UNMODIFIED — its first-class `event_stream_handler` hook is
+# the streaming seam the harness needs, so there is nothing to vendor and only a thin glue module.
+pydantic-ai = [
+    "pydantic-ai-slim[temporal]>=2.13",
+]
 # Packaged FastAPI server and browser UI assets.
 ui = [
     "fastapi[standard]>=0.136.3",
@@ -54,6 +61,7 @@ examples = [
     "pydantic-monty>=0.0.18",  # the Monty sandbox the monty example runs scripts in
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
     "openai-agents>=0.17.5",  # the OpenAI Agents SDK example (examples/openai_hello)
+    "pydantic-ai-slim[temporal]>=2.13",  # the Pydantic AI example (examples/pydantic_ai_hello)
 ]
 # Test + lint tooling. The full tests/ suite imports both the Gemini SDK (the ai_sdks plugin
 # tests) and pydantic-monty (the monty example tests), which live in the `examples` group —
@@ -70,6 +78,8 @@ dev = [
     "openai-agents>=0.17.5",
     "mcp>=1.9.4,<2",
     "temporalio[opentelemetry]>=1.30.0",
+    # Pydantic AI integration (the ai_sdks glue + its tests) — mirrors the `pydantic-ai` extra.
+    "pydantic-ai-slim[temporal]>=2.13",
     { include-group = "examples" },
 ]
 
