@@ -152,6 +152,7 @@ func (p *SlackPlatform) BeginStream(ctx context.Context, input inbound.BeginStre
 }
 
 // UpdateStream appends the pending agent delta to a native Slack stream.
+// An ID that identifies the stream is required.
 func (p *SlackPlatform) UpdateStream(ctx context.Context, input inbound.UpdateStreamInput) error {
 	channel, err := parseChannel(input.SessionID)
 	if err != nil {
