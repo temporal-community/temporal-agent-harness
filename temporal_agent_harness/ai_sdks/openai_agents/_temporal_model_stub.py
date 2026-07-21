@@ -58,10 +58,17 @@ class _TemporalModelStub(Model):  # type:ignore[reportUnusedClass]
         *,
         model_params: ModelActivityParameters,
         agent: Agent[Any] | None,
+        run_context: Any = None,
     ) -> None:
         self.model_name = model_name
         self.model_params = model_params
         self.agent = agent
+        # The object the caller passed as ``Runner.run_streamed(..., context=...)``,
+        # threaded in workflow-side by the runner. Opaque here; handed to
+        # ``stream_to_provider`` so an embedding runtime can turn its own handle
+        # (e.g. a per-workflow runner) into a routing token. Unused by non-streaming
+        # calls.
+        self._run_context = run_context
 
     def _build_activity_input(
         self,
@@ -259,9 +266,12 @@ class _TemporalModelStub(Model):  # type:ignore[reportUnusedClass]
         # observer factory; it never inspects the token itself.
         stream_to: Any = None
         if self.model_params.stream_to_provider is not None:
-            # Pass the requested model id so the provider can build a token that lets the
-            # observer name the model when it brackets the call at dispatch.
-            stream_to = self.model_params.stream_to_provider(self.model_name)
+            # Pass the requested model id and the caller's run context, so the
+            # provider can turn its threaded handle into a routing token (and let
+            # the observer name the model when it brackets the call at dispatch).
+            stream_to = self.model_params.stream_to_provider(
+                self.model_name, self._run_context
+            )
         if stream_to is None:
             stream_to = self.model_params.streaming_topic
         if stream_to is None:

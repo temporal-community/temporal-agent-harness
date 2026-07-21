@@ -96,19 +96,24 @@ class ModelActivityParameters:
         Streaming support is experimental and may change in future
         versions."""
 
-    stream_to_provider: Callable[[str | None], Any] | None = None
+    stream_to_provider: Callable[[str | None, Any], Any] | None = None
     """Optional per-call provider of an opaque routing token for streamed
     requests. Called once (in workflow context) at the start of each
-    ``Runner.run_streamed`` model call, with the requested model id; its return
-    value is handed, opaquely, to the streaming activity's observer factory to
-    resolve where live stream events go (and to carry any per-call metadata the
-    observer needs, such as the model). Returning ``None`` falls back to
-    :attr:`streaming_topic`.
+    ``Runner.run_streamed`` model call, with ``(requested_model_id, run_context)``
+    where ``run_context`` is exactly the object the caller passed as
+    ``Runner.run_streamed(..., context=...)``. Its return value is handed,
+    opaquely, to the streaming activity's observer factory to resolve where live
+    stream events go (and to carry per-call metadata the observer needs, such as
+    the model). Returning ``None`` falls back to :attr:`streaming_topic`.
 
-    This is the seam that lets an embedding runtime (e.g. the agent harness)
-    target a per-turn stream instead of a static worker-level topic, without
-    the plugin knowing anything about the token's concrete type. When left
-    ``None``, streaming uses :attr:`streaming_topic` exactly as before.
+    The ``run_context`` parameter exists because this is the point where an
+    embedding runtime turns a handle it threaded through the SDK into a
+    serializable routing token — the plugin can't interpret that handle itself,
+    so the runtime is handed it here. It lets the runtime (e.g. the agent
+    harness, passing its per-workflow runner) target a per-turn stream instead of
+    a static worker-level topic without the plugin knowing anything about the
+    handle's or token's concrete type. When left ``None``, streaming uses
+    :attr:`streaming_topic` exactly as before.
 
     .. warning::
         Streaming support is experimental and may change in future

@@ -71,7 +71,6 @@ from temporal_agent_harness.harness.agent_protocol import (
 from temporal_agent_harness.harness.agent_workflow import (
     AgentWorkflowRunner,
     TurnEventPublisher,
-    current_stream_context,
 )
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
@@ -288,16 +287,18 @@ class _HarnessStreamToken(BaseModel):
     model: str | None = None
 
 
-def stream_to_provider(model: str | None) -> _HarnessStreamToken | None:
+def stream_to_provider(model: str | None, run_context: Any) -> _HarnessStreamToken | None:
     """Per-call routing-token provider (wired as ``model_params.stream_to_provider``).
 
-    Called once per streamed request, in workflow context, with the requested model id.
-    Resolves the in-flight turn's stream context ambiently off the running workflow
-    instance (no explicit runner threading) and bundles it with the model. Returns
-    ``None`` outside a harness turn, so the vendored stub falls back to
-    ``streaming_topic``.
+    Called once per streamed request, in workflow context, with the requested model id
+    and the object the agent passed as ``Runner.run_streamed(..., context=self._runner)``.
+    Reads the in-flight turn's stream context off that runner and bundles it with the
+    model. Returns ``None`` when the run context is not a harness runner or there is no
+    active turn, so the vendored stub falls back to ``streaming_topic``.
     """
-    context = current_stream_context()
+    if not isinstance(run_context, AgentWorkflowRunner):
+        return None
+    context = run_context.current_stream_context
     if context is None:
         return None
     return _HarnessStreamToken(context=context, model=model)
