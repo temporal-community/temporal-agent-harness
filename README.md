@@ -148,8 +148,8 @@ Support is growing across the Python AI SDKs and agent frameworks Temporal integ
 
 | AI SDK | Status | Notes |
 | --- | --- | --- |
-| [Google Gemini](temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fullys-supported non-harness integration. |
-| [OpenAI Agents SDK](temporal_agent_harness/ai_sdks/openai_agents) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fullys-supported non-harness integration. |
+| [Google Gemini](temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
+| [OpenAI Agents SDK](temporal_agent_harness/ai_sdks/openai_agents) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
 | [Pydantic AI](temporal_agent_harness/ai_sdks/pydantic_ai_harness.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
 | [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | - |
 | [Strands Agents](https://docs.temporal.io/develop/python/integrations/strands-agents) | 🟡 Planned | - |
