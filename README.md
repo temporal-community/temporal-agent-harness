@@ -148,12 +148,12 @@ Support is growing across the Python AI SDKs and agent frameworks Temporal integ
 
 | AI SDK | Status | Notes |
 | --- | --- | --- |
-| [Google Gemini](temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** — not an officially supported integration in the Temporal Python SDK. |
-| [OpenAI Agents SDK](https://github.com/temporalio/sdk-python/blob/main/temporalio/contrib/openai_agents/README.md) | 🟡 Planned | Vendor [implementation](https://github.com/temporalio/sdk-python/tree/main/temporalio/contrib/openai_agents) to add harness support. |
-| [Pydantic AI](https://ai.pydantic.dev/durable_execution/temporal/) | 🟡 Planned | Vendor [implementation](https://ai.pydantic.dev/durable_execution/temporal/) to add harness support. |
-| [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | Vendor [implementation](https://github.com/temporalio/sdk-python/tree/main/temporalio/contrib/google_adk_agents) to add harness support. |
-| [Strands Agents](https://docs.temporal.io/develop/python/integrations/strands-agents) | 🟡 Planned | Vendor [implementation](https://github.com/temporalio/sdk-python/tree/main/temporalio/contrib/strands) to add harness support. |
-| [LangGraph](https://docs.temporal.io/develop/python/integrations/langgraph) | 🟡 Planned | Vendor [implementation](https://github.com/temporalio/sdk-python/tree/main/temporalio/contrib/langgraph) to add harness support. |
+| [Google Gemini](temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
+| [OpenAI Agents SDK](temporal_agent_harness/ai_sdks/openai_agents) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
+| [Pydantic AI](temporal_agent_harness/ai_sdks/pydantic_ai_harness.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
+| [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | - |
+| [Strands Agents](https://docs.temporal.io/develop/python/integrations/strands-agents) | 🟡 Planned | - |
+| [LangGraph](https://docs.temporal.io/develop/python/integrations/langgraph) | 🟡 Planned | - |
 
 ### 📡 Durable and inline tools
 Tools come in two on-worker flavors — durable, activity-backed tools (`@agent.activity_tool_defn`)
