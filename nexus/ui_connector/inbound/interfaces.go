@@ -12,8 +12,9 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// Driver is implemented by a concrete platform driver and called directly by
-// RouterWorkflow.
+// Driver is implemented by a platform-specific workflow-side adapter and called
+// directly by RouterWorkflow. Concrete drivers durably dispatch platform I/O to
+// activity implementations (for example, SlackPlatform or the Python Teams worker).
 type Driver interface {
 	BeginStream(ctx workflow.Context, input BeginStreamInput) (StreamHandle, error)
 	UpdateStream(ctx workflow.Context, input UpdateStreamInput) error

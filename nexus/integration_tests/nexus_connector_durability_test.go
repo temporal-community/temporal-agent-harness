@@ -247,9 +247,11 @@ func startMockAgentWorker(t *testing.T, tc client.Client, agentTaskQueue string,
 // activity implementations this test registers on the connector worker — the test
 // double standing in for a real platform driver's activities (cf. SlackPlatform).
 type testInboundActivities interface {
+	// Streaming APIs are intended to be used together to start/update/end a streamed response.
 	BeginStream(ctx context.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error)
 	UpdateStream(ctx context.Context, input inbound.UpdateStreamInput) error
 	FinishStream(ctx context.Context, input inbound.FinishStreamInput) error
+
 	PostMessage(ctx context.Context, input inbound.TextMetadata) error
 	PostApprovalPrompt(ctx context.Context, input inbound.ApprovalPromptInput) error
 }

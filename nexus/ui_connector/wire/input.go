@@ -67,33 +67,3 @@ type ApprovalDecision struct {
 	ServiceURL string `json:"serviceUrl"`
 	ChannelID  string `json:"channelId"`
 }
-
-// ServiceURL returns the Bot Framework endpoint carried by a Teams activity.
-func (i Input) ServiceURL() string {
-	if i.Message != nil {
-		return i.Message.ServiceURL
-	}
-	if i.Approval != nil {
-		return i.Approval.ServiceURL
-	}
-	return ""
-}
-
-// ChannelID returns the Bot Framework channel identifier carried by Teams.
-func (i Input) ChannelID() string {
-	if i.Message != nil {
-		return i.Message.ChannelID
-	}
-	if i.Approval != nil {
-		return i.Approval.ChannelID
-	}
-	return ""
-}
-
-// ConversationType returns the Teams conversation type for stream selection.
-func (i Input) ConversationType() string {
-	if i.Message != nil {
-		return i.Message.ConversationType
-	}
-	return ""
-}

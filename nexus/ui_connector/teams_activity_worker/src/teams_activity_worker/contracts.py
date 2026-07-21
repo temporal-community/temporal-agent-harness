@@ -1,4 +1,8 @@
-"""Python views of the Go activity payloads on the shared Temporal task queue."""
+"""Python representations of activity payloads scheduled by the Go Teams driver.
+
+The Go workflow worker orchestrates durable delivery, while the Python activity
+worker uses the Microsoft Teams SDK for Bot Framework I/O.
+"""
 
 from __future__ import annotations
 
@@ -158,4 +162,3 @@ class UpdateActivity:
             metadata=TextMetadata.from_payload(payload),
             activity_id=_string(payload, "ActivityID", required=True),
         )
-

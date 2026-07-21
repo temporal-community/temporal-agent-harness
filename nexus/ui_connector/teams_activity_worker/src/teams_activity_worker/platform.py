@@ -1,8 +1,12 @@
-"""Microsoft Teams SDK adapter used by Temporal activities."""
+"""Microsoft Teams SDK adapter and Temporal activity worker."""
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, TypeVar
 
 import httpx
@@ -15,11 +19,23 @@ from microsoft_teams.api import (
     TypingActivityInput,
 )
 from microsoft_teams.apps import App
+from microsoft_teams.cards import AdaptiveCard
+from temporalio import activity
+from temporalio.client import Client
+from temporalio.exceptions import ApplicationError
+from temporalio.worker import Worker
 
-from .cards import approval_card
-from .config import Settings
-from .contracts import ApprovalPrompt, BeginStream, FinishStream, TextMetadata, UpdateActivity, UpdateStream
+from .contracts import (
+    ApprovalPrompt,
+    BeginStream,
+    ContractError,
+    FinishStream,
+    TextMetadata,
+    UpdateActivity,
+    UpdateStream,
+)
 
+DEFAULT_SERVICE_URL = "https://smba.trafficmanager.net/teams/"
 INITIAL_STREAMING_TEXT = "Thinking..."
 INITIAL_STREAM_SEQUENCE = 1
 MIN_STREAM_UPDATE_NANOSECONDS = 1_500_000_000
@@ -28,6 +44,80 @@ STREAM_MODE_MESSAGE_UPDATE = "message-update"
 
 
 ActivityInputT = TypeVar("ActivityInputT", MessageActivityInput, TypingActivityInput)
+
+
+def _required(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise ValueError(f"{name} is required")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class Settings:
+    microsoft_tenant_id: str
+    microsoft_app_id: str
+    microsoft_app_password: str
+    teams_service_url: str = DEFAULT_SERVICE_URL
+    temporal_address: str = "localhost:7233"
+    connector_namespace: str = "connector"
+    task_queue: str = "nexus-connector-teams"
+
+    @classmethod
+    def from_env(cls) -> Settings:
+        return cls(
+            microsoft_tenant_id=_required("MICROSOFT_TENANT_ID"),
+            microsoft_app_id=_required("MICROSOFT_APP_ID"),
+            microsoft_app_password=_required("MICROSOFT_APP_PASSWORD"),
+            teams_service_url=os.getenv("TEAMS_SERVICE_URL", DEFAULT_SERVICE_URL).strip() or DEFAULT_SERVICE_URL,
+            temporal_address=os.getenv("TEMPORAL_ADDRESS", "localhost:7233").strip() or "localhost:7233",
+            connector_namespace=os.getenv("CONNECTOR_NAMESPACE", "connector").strip() or "connector",
+            task_queue=os.getenv("CONNECTOR_TASK_QUEUE", "nexus-connector-teams").strip()
+            or "nexus-connector-teams",
+        )
+
+
+def approval_card(prompt: ApprovalPrompt) -> AdaptiveCard:
+    body: list[dict[str, object]] = [
+        {
+            "type": "TextBlock",
+            "text": "🔐 Tool approval required",
+            "weight": "Bolder",
+            "wrap": True,
+        },
+        {
+            "type": "FactSet",
+            "facts": [{"title": "Tool", "value": prompt.tool_name}],
+        },
+    ]
+    if prompt.tool_input:
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": prompt.tool_input,
+                "wrap": True,
+                "fontType": "Monospace",
+                "isSubtle": True,
+            }
+        )
+
+    decision = {
+        "s": prompt.metadata.session_id,
+        "t": prompt.tool_id,
+        "n": prompt.tool_name,
+    }
+    return AdaptiveCard.model_validate(
+        {
+            "type": "AdaptiveCard",
+            "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+            "version": "1.4",
+            "body": body,
+            "actions": [
+                {"type": "Action.Submit", "title": "✅ Approve", "data": {**decision, "a": True}},
+                {"type": "Action.Submit", "title": "❌ Deny", "data": {**decision, "a": False}},
+            ],
+        }
+    )
 
 
 def _sent_id(sent: object) -> str:
@@ -191,3 +281,72 @@ class TeamsPlatform:
     async def _update_message(self, metadata: TextMetadata, activity_id: str, text: str) -> None:
         activity = self._base_activity(metadata, MessageActivityInput(text=text).with_text_format("markdown"))
         await self._activities(metadata).update(activity_id, activity)
+
+
+def _parse(parser, payload: dict[str, Any]):
+    try:
+        return parser(payload)
+    except (ContractError, TypeError, ValueError) as error:
+        raise ApplicationError(str(error), type="InvalidTeamsActivityInput", non_retryable=True) from error
+
+
+class TeamsActivities:
+    def __init__(self, platform: TeamsPlatform) -> None:
+        self.platform = platform
+
+    @activity.defn(name="BeginStream")
+    async def begin_stream(self, payload: dict[str, Any]) -> dict[str, object]:
+        return await self.platform.begin_stream(_parse(BeginStream.from_payload, payload))
+
+    @activity.defn(name="UpdateStream")
+    async def update_stream(self, payload: dict[str, Any]) -> None:
+        await self.platform.update_stream(_parse(UpdateStream.from_payload, payload))
+
+    @activity.defn(name="FinishStream")
+    async def finish_stream(self, payload: dict[str, Any]) -> None:
+        await self.platform.finish_stream(_parse(FinishStream.from_payload, payload))
+
+    @activity.defn(name="PostMessage")
+    async def post_message(self, payload: dict[str, Any]) -> None:
+        await self.platform.post_message(_parse(TextMetadata.from_payload, payload))
+
+    @activity.defn(name="PostApprovalPrompt")
+    async def post_approval_prompt(self, payload: dict[str, Any]) -> None:
+        await self.platform.post_approval_prompt(_parse(ApprovalPrompt.from_payload, payload))
+
+    @activity.defn(name="UpdateActivity")
+    async def update_activity(self, payload: dict[str, Any]) -> None:
+        await self.platform.update_activity(_parse(UpdateActivity.from_payload, payload))
+
+
+async def run() -> None:
+    settings = Settings.from_env()
+    platform = TeamsPlatform.from_settings(settings)
+    if platform.app is not None:
+        await platform.app.initialize()
+
+    temporal = await Client.connect(settings.temporal_address, namespace=settings.connector_namespace)
+    activities = TeamsActivities(platform)
+    worker = Worker(
+        temporal,
+        task_queue=settings.task_queue,
+        activities=[
+            activities.begin_stream,
+            activities.update_stream,
+            activities.finish_stream,
+            activities.post_message,
+            activities.post_approval_prompt,
+            activities.update_activity,
+        ],
+    )
+    logging.info("Starting Teams activity worker on task queue %r", settings.task_queue)
+    try:
+        await worker.run()
+    finally:
+        if platform.app is not None:
+            await platform.app.stop()
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    asyncio.run(run())

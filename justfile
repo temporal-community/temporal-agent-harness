@@ -109,6 +109,17 @@ slack-connector:
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-slack}" \
     go run ./slack_to_temporal_agent_harness_connector/cmd/worker/
 
+# Run the Slack webhook server.
+# Requires: SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET
+slack-webhook:
+    cd "{{nexus_dir}}/ui_connector" && \
+    SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN}" \
+    SLACK_SIGNING_SECRET="${SLACK_SIGNING_SECRET}" \
+    TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
+    CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
+    CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-slack}" \
+    go run ./slack_to_temporal_agent_harness_connector/cmd/webhook/
+
 # Run the Teams Connector workflow worker. Safe to run multiple instances.
 teams-connector:
     cd "{{nexus_dir}}/ui_connector" && \
@@ -128,18 +139,7 @@ teams-py-worker:
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \
-    uv run python -m teams_activity_worker
-
-# Run the Slack webhook server.
-# Requires: SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET
-slack-webhook:
-    cd "{{nexus_dir}}/ui_connector" && \
-    SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN}" \
-    SLACK_SIGNING_SECRET="${SLACK_SIGNING_SECRET}" \
-    TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
-    CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
-    CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-slack}" \
-    go run ./slack_to_temporal_agent_harness_connector/cmd/webhook/
+    uv run teams-activity-worker
 
 # Run the Teams webhook server.
 teams-webhook:

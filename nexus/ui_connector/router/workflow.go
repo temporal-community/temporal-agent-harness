@@ -78,14 +78,20 @@ type deliveryState struct {
 }
 
 func textMetadata(input wire.Input, text string) inbound.TextMetadata {
-	return inbound.TextMetadata{
-		SessionID:  input.SessionID,
-		ThreadID:   input.ThreadID(),
-		SenderID:   input.SenderID(),
-		Text:       text,
-		ServiceURL: input.ServiceURL(),
-		ChannelID:  input.ChannelID(),
+	metadata := inbound.TextMetadata{
+		SessionID: input.SessionID,
+		ThreadID:  input.ThreadID(),
+		SenderID:  input.SenderID(),
+		Text:      text,
 	}
+	if input.Message != nil {
+		metadata.ServiceURL = input.Message.ServiceURL
+		metadata.ChannelID = input.Message.ChannelID
+	} else if input.Approval != nil {
+		metadata.ServiceURL = input.Approval.ServiceURL
+		metadata.ChannelID = input.Approval.ChannelID
+	}
+	return metadata
 }
 
 // streamResp polls the outbound driver for a started turn and streams each delta back
@@ -108,9 +114,13 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHa
 		if state.Handle != nil {
 			return nil
 		}
+		conversationType := ""
+		if input.Message != nil {
+			conversationType = input.Message.ConversationType
+		}
 		streamHandle, err := w.inbound.BeginStream(ctx, inbound.BeginStreamInput{
 			TextMetadata:     textMetadata(input, ""),
-			ConversationType: input.ConversationType(),
+			ConversationType: conversationType,
 			OperationID:      operationID("begin", 0),
 		})
 		if err != nil {

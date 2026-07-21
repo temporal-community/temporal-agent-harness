@@ -119,9 +119,8 @@ func NewSlackPlatform(client *slackapi.Client, teamID string) *SlackPlatform {
 	return &SlackPlatform{client: client, teamID: teamID}
 }
 
-// BeginStream opens a native Slack stream. Slack consumes incremental deltas,
-// does not require workflow-side throttling, and can remain open across an
-// approval prompt.
+// BeginStream opens a native Slack stream and returns the stream's ID as part of
+// inbound.StreamHandle so we can later use append to the stream via UpdateStream(...).
 func (p *SlackPlatform) BeginStream(ctx context.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error) {
 	channel, err := parseChannel(input.SessionID)
 	if err != nil {
@@ -152,6 +151,7 @@ func (p *SlackPlatform) BeginStream(ctx context.Context, input inbound.BeginStre
 }
 
 // UpdateStream appends the pending agent delta to a native Slack stream.
+// An ID that identifies the stream is required.
 func (p *SlackPlatform) UpdateStream(ctx context.Context, input inbound.UpdateStreamInput) error {
 	channel, err := parseChannel(input.SessionID)
 	if err != nil {
@@ -175,6 +175,7 @@ func (p *SlackPlatform) UpdateStream(ctx context.Context, input inbound.UpdateSt
 }
 
 // FinishStream stops and finalises a native Slack stream.
+// An ID that identifies the stream is required.
 func (p *SlackPlatform) FinishStream(ctx context.Context, input inbound.FinishStreamInput) error {
 	channel, err := parseChannel(input.SessionID)
 	if err != nil {

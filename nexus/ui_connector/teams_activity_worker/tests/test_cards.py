@@ -1,5 +1,5 @@
-from teams_activity_worker.cards import approval_card
 from teams_activity_worker.contracts import ApprovalPrompt, TextMetadata
+from teams_activity_worker.platform import approval_card
 
 
 def test_approval_card_contains_compact_webhook_payloads() -> None:
@@ -21,4 +21,3 @@ def test_approval_card_contains_compact_webhook_payloads() -> None:
         "a": True,
     }
     assert card["actions"][1]["data"]["a"] is False
-

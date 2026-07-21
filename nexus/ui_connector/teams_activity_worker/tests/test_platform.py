@@ -1,9 +1,9 @@
 from dataclasses import dataclass
+from importlib.metadata import entry_points
 from typing import Any
 
 import pytest
 
-from teams_activity_worker.config import Settings
 from teams_activity_worker.contracts import (
     ApprovalPrompt,
     BeginStream,
@@ -17,7 +17,9 @@ from teams_activity_worker.platform import (
     MIN_STREAM_UPDATE_NANOSECONDS,
     STREAM_MODE_MESSAGE_UPDATE,
     STREAM_MODE_NATIVE,
+    Settings,
     TeamsPlatform,
+    main,
 )
 
 
@@ -77,6 +79,13 @@ def metadata(*, text: str = "", thread_id: str = "", service_url: str = "https:/
         service_url=service_url,
         channel_id="msteams",
     )
+
+
+def test_console_script_runs_platform_main() -> None:
+    entry_point = next(item for item in entry_points(group="console_scripts") if item.name == "teams-activity-worker")
+
+    assert entry_point.value == "teams_activity_worker.platform:main"
+    assert entry_point.load() is main
 
 
 @pytest.mark.asyncio

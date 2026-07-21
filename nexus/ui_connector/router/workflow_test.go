@@ -43,6 +43,7 @@ type fakeInbound struct {
 	beginInputs    []inbound.BeginStreamInput
 	updateInputs   []inbound.UpdateStreamInput
 	finishInputs   []inbound.FinishStreamInput
+	activityInputs []inbound.UpdateActivityInput
 }
 
 func (f *fakeInbound) BeginStream(ctx workflow.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error) {
@@ -87,6 +88,7 @@ func (f *fakeInbound) PostApprovalPrompt(ctx workflow.Context, input inbound.App
 
 func (f *fakeInbound) UpdateActivity(ctx workflow.Context, input inbound.UpdateActivityInput) error {
 	f.calls = append(f.calls, "UpdateActivity:"+input.Text)
+	f.activityInputs = append(f.activityInputs, input)
 	return nil
 }
 
@@ -179,6 +181,9 @@ func TestRouterWorkflow_TeamsApprovalUpdatesCard(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
 	assert.Equal(t, []string{"UpdateActivity:🔐 Tool `deploy`: ✅ Approved"}, in.calls)
+	require.Len(t, in.activityInputs, 1)
+	assert.Equal(t, "https://example.test/teams/", in.activityInputs[0].ServiceURL)
+	assert.Equal(t, "msteams", in.activityInputs[0].ChannelID)
 }
 
 func TestRouterWorkflow_ApprovalRequestedDelta_PostsPrompt(t *testing.T) {

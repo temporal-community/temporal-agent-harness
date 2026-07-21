@@ -9,6 +9,9 @@ dependencies = [
     "temporalio>=1.15.0,<2",
 ]
 
+[project.scripts]
+teams-activity-worker = "teams_activity_worker.platform:main"
+
 [dependency-groups]
 dev = [
     "pyright>=1.1.400",
@@ -40,4 +43,3 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 pythonVersion = "3.13"
 typeCheckingMode = "standard"
 include = ["src", "tests"]
-

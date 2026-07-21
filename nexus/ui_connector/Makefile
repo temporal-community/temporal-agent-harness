@@ -38,7 +38,7 @@ lint-python:
 	cd teams_activity_worker && uv run python -m ruff check . && uv run python -m pyright --pythonpath .venv/bin/python
 
 run-teams-activity-worker:
-	cd teams_activity_worker && uv run python -m teams_activity_worker
+	cd teams_activity_worker && uv run teams-activity-worker
 
 ci: vet workflowcheck lint lint-python test
 
