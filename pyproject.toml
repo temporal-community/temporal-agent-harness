@@ -70,7 +70,7 @@ examples = [
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
-    "setuptools>=68",  # package artifact tests call the build backend directly
+    "setuptools>=83.0.0",  # package artifact tests call the build backend directly
     "moto[server]>=5.2.1",  # threaded S3 mock for the utils/large_payload S3-driver test
     "temporalio[aioboto3]>=1.30.0",  # S3 storage driver under test (mirrors the `s3` extra)
     # OpenAI Agents integration + its opentelemetry/mcp deps, so the vendored plugin and its
@@ -84,7 +84,7 @@ dev = [
 ]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
