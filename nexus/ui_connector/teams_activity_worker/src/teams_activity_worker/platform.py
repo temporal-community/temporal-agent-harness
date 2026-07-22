@@ -5,20 +5,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any
+from uuid import uuid4
 
-import httpx
 from microsoft_teams.api import (
     Account,
     ApiClient,
-    ChannelData,
     ConversationAccount,
+    ConversationReference,
     MessageActivityInput,
-    TypingActivityInput,
 )
-from microsoft_teams.apps import App
+from microsoft_teams.apps import App, HttpStream
 from microsoft_teams.cards import AdaptiveCard
 from temporalio import activity
 from temporalio.client import Client
@@ -37,13 +37,10 @@ from .contracts import (
 
 DEFAULT_SERVICE_URL = "https://smba.trafficmanager.net/teams/"
 INITIAL_STREAMING_TEXT = "Thinking..."
-INITIAL_STREAM_SEQUENCE = 1
-MIN_STREAM_UPDATE_NANOSECONDS = 1_500_000_000
+MESSAGE_UPDATE_INTERVAL_SECONDS = 1.5
+STREAM_START_TIMEOUT_SECONDS = 30.0
 STREAM_MODE_NATIVE = "native"
 STREAM_MODE_MESSAGE_UPDATE = "message-update"
-
-
-ActivityInputT = TypeVar("ActivityInputT", MessageActivityInput, TypingActivityInput)
 
 
 def _required(name: str) -> str:
@@ -72,8 +69,7 @@ class Settings:
             teams_service_url=os.getenv("TEAMS_SERVICE_URL", DEFAULT_SERVICE_URL).strip() or DEFAULT_SERVICE_URL,
             temporal_address=os.getenv("TEMPORAL_ADDRESS", "localhost:7233").strip() or "localhost:7233",
             connector_namespace=os.getenv("CONNECTOR_NAMESPACE", "connector").strip() or "connector",
-            task_queue=os.getenv("CONNECTOR_TASK_QUEUE", "nexus-connector-teams").strip()
-            or "nexus-connector-teams",
+            task_queue=os.getenv("CONNECTOR_TASK_QUEUE", "nexus-connector-teams").strip() or "nexus-connector-teams",
         )
 
 
@@ -128,14 +124,94 @@ def _sent_id(sent: object) -> str:
 
 
 def _streaming_allowed(conversation_type: str) -> bool:
+    """Teams SDK native streaming is supported only in 1:1 conversations."""
     return conversation_type.strip().lower() not in {"channel", "groupchat"}
 
 
-def _non_personal_streaming_error(error: Exception) -> bool:
-    if not isinstance(error, httpx.HTTPStatusError) or error.response.status_code != 405:
-        return False
-    body = error.response.text.lower()
-    return "streaming" in body and "non personal" in body
+class BufferedMessageStream:
+    """Simulate streaming where the Teams SDK cannot use native streaming.
+
+    Channels and group chats require normal message replacements, so this class
+    coalesces full-text updates to reduce API calls and avoid Teams rate limits.
+    """
+
+    def __init__(self, update: Callable[[str], Awaitable[None]], initial_text: str) -> None:
+        self._update = update
+        self._latest_text = initial_text
+        self._sent_text = initial_text
+        self._task: asyncio.Task[None] | None = None
+        self._lock = asyncio.Lock()
+        self._closed = False
+
+    def emit(self, full_text: str) -> None:
+        if self._closed:
+            raise RuntimeError("message stream is closed")
+        self._latest_text = full_text
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._flush_after_delay())
+
+    async def _flush_after_delay(self) -> None:
+        failed = False
+        try:
+            await asyncio.sleep(MESSAGE_UPDATE_INTERVAL_SECONDS)
+            await self._flush()
+        except Exception:
+            failed = True
+            logging.exception("Teams message update failed; the final Activity will retry it")
+        finally:
+            self._task = None
+            if not self._closed and not failed and self._latest_text != self._sent_text:
+                self._task = asyncio.create_task(self._flush_after_delay())
+
+    async def _flush(self) -> None:
+        async with self._lock:
+            text = self._latest_text
+            if text == self._sent_text:
+                return
+            await self._update(text)
+            self._sent_text = text
+
+    async def close(self, full_text: str) -> None:
+        self._closed = True
+        self._latest_text = full_text
+        task = self._task
+        if task is not None and not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+        self._task = None
+        await self._flush()
+
+
+@dataclass(slots=True)
+class ActiveStream:
+    """Wrap a native 1:1 stream or buffered channel/group-chat message updates."""
+
+    transport_mode: str
+    native: Any | None = None
+    message_updates: BufferedMessageStream | None = None
+
+    def emit(self, *, delta: str, full_text: str) -> None:
+        if self.native is not None:
+            self.native.emit(delta)
+            return
+        if self.message_updates is None:
+            raise RuntimeError("stream transport is not initialized")
+        self.message_updates.emit(full_text)
+
+    async def close(self, full_text: str) -> None:
+        if self.native is not None:
+            if self.native.canceled:
+                return
+            self.native.clear_text()
+            self.native.emit(MessageActivityInput(text=full_text).with_text_format("markdown"))
+            result = await self.native.close()
+            if result is None and not self.native.canceled:
+                raise RuntimeError("Teams SDK stream did not produce a final activity")
+            return
+        if self.message_updates is None:
+            raise RuntimeError("stream transport is not initialized")
+        await self.message_updates.close(full_text)
 
 
 class TeamsPlatform:
@@ -145,15 +221,20 @@ class TeamsPlatform:
         app_id: str,
         default_service_url: str,
         api_factory: Callable[[str], Any],
+        worker_task_queue: str,
+        stream_factory: Callable[[Any, ConversationReference], Any] = HttpStream,
         app: App | None = None,
     ) -> None:
         self.app_id = app_id
         self.default_service_url = default_service_url
         self.api_factory = api_factory
+        self.worker_task_queue = worker_task_queue
+        self.stream_factory = stream_factory
         self.app = app
+        self.streams: dict[str, ActiveStream] = {}
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> TeamsPlatform:
+    def from_settings(cls, settings: Settings, worker_task_queue: str) -> TeamsPlatform:
         app = App(
             client_id=settings.microsoft_app_id,
             client_secret=settings.microsoft_app_password,
@@ -168,6 +249,7 @@ class TeamsPlatform:
             app_id=settings.microsoft_app_id,
             default_service_url=settings.teams_service_url,
             api_factory=api_factory,
+            worker_task_queue=worker_task_queue,
             app=app,
         )
 
@@ -178,12 +260,22 @@ class TeamsPlatform:
         """Return the conversation-bound activity operations in Teams SDK 2.0.x."""
         return self._api(metadata).conversations.activities(metadata.conversation_id)
 
-    def _base_activity(self, metadata: TextMetadata, activity: ActivityInputT) -> ActivityInputT:
+    def _base_activity(self, metadata: TextMetadata, activity: MessageActivityInput) -> MessageActivityInput:
         activity.with_service_url(metadata.service_url.strip() or self.default_service_url)
         activity.with_channel_id(metadata.channel_id or "msteams")
         activity.with_from(Account(id=self.app_id))
         activity.with_conversation(ConversationAccount(id=metadata.conversation_id))
         return activity
+
+    def _conversation_reference(self, metadata: TextMetadata) -> ConversationReference:
+        return ConversationReference(
+            activity_id=metadata.thread_id or None,
+            user=Account(id=metadata.sender_id) if metadata.sender_id else None,
+            bot=Account(id=self.app_id),
+            conversation=ConversationAccount(id=metadata.conversation_id),
+            channel_id=metadata.channel_id or "msteams",
+            service_url=metadata.service_url.strip() or self.default_service_url,
+        )
 
     async def _create_or_reply(self, metadata: TextMetadata, activity: MessageActivityInput) -> str:
         activities = self._activities(metadata)
@@ -195,16 +287,16 @@ class TeamsPlatform:
 
     async def begin_stream(self, request: BeginStream) -> dict[str, object]:
         metadata = request.metadata
-        mode = STREAM_MODE_NATIVE
+        # Teams SDK streaming is 1:1-only; shared conversations use message updates.
         if not _streaming_allowed(request.conversation_type):
             mode = STREAM_MODE_MESSAGE_UPDATE
             stream_id = await self._begin_message_updates(metadata)
         else:
+            mode = STREAM_MODE_NATIVE
             try:
                 stream_id = await self._begin_native_stream(metadata)
             except Exception as error:
-                if request.conversation_type.strip() or not _non_personal_streaming_error(error):
-                    raise
+                logging.warning("Teams native stream could not start; using message updates: %s", error)
                 mode = STREAM_MODE_MESSAGE_UPDATE
                 stream_id = await self._begin_message_updates(metadata)
 
@@ -212,55 +304,62 @@ class TeamsPlatform:
             "ID": stream_id,
             "SessionID": metadata.session_id,
             "TransportMode": mode,
-            "WireTextMode": "full_text",
-            "MinUpdateInterval": MIN_STREAM_UPDATE_NANOSECONDS,
+            "TaskQueue": self.worker_task_queue,
             "CloseBeforeApproval": True,
-            "NextSequence": 2 if mode == STREAM_MODE_NATIVE else 0,
         }
 
     async def _begin_native_stream(self, metadata: TextMetadata) -> str:
+        """Start the Teams SDK stream used for supported 1:1 conversations."""
         text = metadata.text if metadata.text.strip() else INITIAL_STREAMING_TEXT
-        activity = self._base_activity(
-            metadata,
-            TypingActivityInput(text=text).with_channel_data(ChannelData(stream_type="informative")),
-        ).add_stream_update(INITIAL_STREAM_SEQUENCE)
-        sent = await self._activities(metadata).create(activity)
-        return _sent_id(sent)
+        stream = self.stream_factory(self._api(metadata), self._conversation_reference(metadata))
+        first_chunk: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+
+        async def capture_first_chunk(sent: object) -> None:
+            if not first_chunk.done():
+                first_chunk.set_result(sent)
+
+        stream.on_chunk(capture_first_chunk)
+        stream.update(text)
+        sent = await asyncio.wait_for(first_chunk, timeout=STREAM_START_TIMEOUT_SECONDS)
+        stream_id = _sent_id(sent)
+        self.streams[stream_id] = ActiveStream(transport_mode=STREAM_MODE_NATIVE, native=stream)
+        return stream_id
 
     async def _begin_message_updates(self, metadata: TextMetadata) -> str:
+        """Start buffered message replacements for channels and group chats."""
         text = metadata.text if metadata.text.strip() else INITIAL_STREAMING_TEXT
         activity = self._base_activity(metadata, MessageActivityInput(text=text).with_text_format("markdown"))
-        return await self._create_or_reply(metadata, activity)
+        stream_id = await self._create_or_reply(metadata, activity)
+        updates = BufferedMessageStream(
+            lambda full_text: self._update_message(metadata, stream_id, full_text),
+            initial_text=text,
+        )
+        self.streams[stream_id] = ActiveStream(
+            transport_mode=STREAM_MODE_MESSAGE_UPDATE,
+            message_updates=updates,
+        )
+        return stream_id
 
     async def update_stream(self, request: UpdateStream) -> None:
-        if not request.full_text:
+        if not request.delta:
             return
-        if request.handle.transport_mode == STREAM_MODE_MESSAGE_UPDATE:
-            await self._update_message(request.metadata, request.handle.id, request.full_text)
-            return
-        if request.handle.transport_mode != STREAM_MODE_NATIVE:
-            raise ValueError(f"unknown Teams stream transport mode {request.handle.transport_mode!r}")
-        if request.sequence <= INITIAL_STREAM_SEQUENCE:
-            raise ValueError(f"Teams stream update sequence must be greater than {INITIAL_STREAM_SEQUENCE}")
-
-        activity = self._base_activity(
-            request.metadata,
-            TypingActivityInput(text=request.full_text).with_id(request.handle.id),
-        ).add_stream_update(request.sequence)
-        await self._activities(request.metadata).create(activity)
+        stream = self.streams.get(request.handle.id)
+        if stream is None:
+            raise ValueError(f"Teams stream {request.handle.id!r} is not active on this worker")
+        if stream.transport_mode != request.handle.transport_mode:
+            raise ValueError("Teams stream transport mode does not match handle")
+        stream.emit(delta=request.delta, full_text=request.full_text)
 
     async def finish_stream(self, request: FinishStream) -> None:
-        if request.handle.transport_mode == STREAM_MODE_MESSAGE_UPDATE:
-            await self._update_message(request.metadata, request.handle.id, request.full_text)
-            return
-        if request.handle.transport_mode != STREAM_MODE_NATIVE:
-            raise ValueError(f"unknown Teams stream transport mode {request.handle.transport_mode!r}")
-
-        activity = self._base_activity(
-            request.metadata,
-            MessageActivityInput(text=request.full_text).with_text_format("markdown").with_id(request.handle.id),
-        ).add_stream_final()
-        await self._activities(request.metadata).create(activity)
+        stream = self.streams.get(request.handle.id)
+        if stream is None:
+            raise ValueError(f"Teams stream {request.handle.id!r} is not active on this worker")
+        if stream.transport_mode != request.handle.transport_mode:
+            raise ValueError("Teams stream transport mode does not match handle")
+        try:
+            await stream.close(request.full_text)
+        finally:
+            self.streams.pop(request.handle.id, None)
 
     async def post_message(self, metadata: TextMetadata) -> None:
         if not metadata.text.strip():
@@ -319,29 +418,46 @@ class TeamsActivities:
         await self.platform.update_message(_parse(UpdateMessage.from_payload, payload))
 
 
+def _worker_task_queue(shared_task_queue: str) -> str:
+    return f"{shared_task_queue}-stream-{uuid4().hex}"
+
+
 async def run() -> None:
     settings = Settings.from_env()
-    platform = TeamsPlatform.from_settings(settings)
+    worker_task_queue = _worker_task_queue(settings.task_queue)
+    platform = TeamsPlatform.from_settings(settings, worker_task_queue)
     if platform.app is not None:
         await platform.app.initialize()
 
     temporal = await Client.connect(settings.temporal_address, namespace=settings.connector_namespace)
     activities = TeamsActivities(platform)
-    worker = Worker(
+    shared_worker = Worker(
         temporal,
         task_queue=settings.task_queue,
         activities=[
             activities.begin_stream,
-            activities.update_stream,
-            activities.finish_stream,
             activities.post_message,
             activities.post_approval_prompt,
             activities.update_message,
         ],
     )
-    logging.info("Starting Teams activity worker on task queue %r", settings.task_queue)
+    stream_worker = Worker(
+        temporal,
+        task_queue=worker_task_queue,
+        activities=[
+            activities.update_stream,
+            activities.finish_stream,
+        ],
+    )
+    logging.info(
+        "Starting Teams activity worker on shared queue %r and private stream queue %r",
+        settings.task_queue,
+        worker_task_queue,
+    )
     try:
-        await worker.run()
+        async with asyncio.TaskGroup() as task_group:
+            task_group.create_task(shared_worker.run())
+            task_group.create_task(stream_worker.run())
     finally:
         if platform.app is not None:
             await platform.app.stop()

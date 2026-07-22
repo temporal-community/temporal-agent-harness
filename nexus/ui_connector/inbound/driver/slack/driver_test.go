@@ -124,8 +124,6 @@ func TestSlackPlatform_StatelessStreamLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "1721609600.123456", handle.ID)
 	assert.Equal(t, "slack:C12345", handle.SessionID)
-	assert.Equal(t, msgiface.StreamWireTextDelta, handle.WireTextMode)
-	assert.Zero(t, handle.MinUpdateInterval)
 	assert.False(t, handle.CloseBeforeApproval)
 
 	err = newPlatform().UpdateStream(context.Background(), msgiface.UpdateStreamInput{

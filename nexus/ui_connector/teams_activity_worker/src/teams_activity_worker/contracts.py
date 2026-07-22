@@ -25,13 +25,6 @@ def _string(payload: dict[str, Any], key: str, *, required: bool = False) -> str
     return value
 
 
-def _integer(payload: dict[str, Any], key: str, *, default: int = 0) -> int:
-    value = payload.get(key, default)
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ContractError(f"{key} must be an integer")
-    return value
-
-
 def parse_conversation(session_id: str) -> str:
     provider, separator, conversation_id = session_id.partition(":")
     if separator != ":" or provider != "teams" or not conversation_id:
@@ -69,7 +62,7 @@ class StreamHandle:
     id: str
     session_id: str
     transport_mode: str
-    next_sequence: int
+    task_queue: str
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> StreamHandle:
@@ -79,7 +72,7 @@ class StreamHandle:
             id=_string(payload, "ID", required=True),
             session_id=_string(payload, "SessionID", required=True),
             transport_mode=_string(payload, "TransportMode", required=True),
-            next_sequence=_integer(payload, "NextSequence"),
+            task_queue=_string(payload, "TaskQueue", required=True),
         )
 
     def validate_for(self, session_id: str) -> None:
@@ -104,8 +97,8 @@ class BeginStream:
 class UpdateStream:
     metadata: TextMetadata
     handle: StreamHandle
+    delta: str
     full_text: str
-    sequence: int
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> UpdateStream:
@@ -115,8 +108,8 @@ class UpdateStream:
         return cls(
             metadata=metadata,
             handle=handle,
+            delta=_string(payload, "Delta"),
             full_text=_string(payload, "FullText"),
-            sequence=_integer(payload, "Sequence"),
         )
 
 

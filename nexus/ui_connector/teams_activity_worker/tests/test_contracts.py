@@ -13,7 +13,6 @@ def test_begin_stream_parses_go_json_field_names() -> None:
             "ServiceURL": "https://example.test/teams/",
             "ChannelID": "msteams",
             "ConversationType": "personal",
-            "OperationID": "workflow/turn/begin/0",
         }
     )
 
@@ -31,10 +30,10 @@ def test_update_stream_rejects_handle_for_another_session() -> None:
                     "ID": "stream-1",
                     "SessionID": "teams:conversation-2",
                     "TransportMode": "native",
-                    "NextSequence": 2,
+                    "TaskQueue": "teams-worker-1",
                 },
+                "Delta": "hello",
                 "FullText": "hello",
-                "Sequence": 2,
             }
         )
 

@@ -147,7 +147,6 @@ func (p *SlackPlatform) BeginStream(ctx context.Context, input inbound.BeginStre
 		ID:                  ts,
 		SessionID:           input.SessionID,
 		TransportMode:       "native",
-		WireTextMode:        inbound.StreamWireTextDelta,
 		CloseBeforeApproval: false,
 	}, nil
 }

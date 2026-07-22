@@ -6,11 +6,7 @@
 // defined by this inbound.Driver interface to deliver the response back to the inbound side durably.
 package inbound
 
-import (
-	"time"
-
-	"go.temporal.io/sdk/workflow"
-)
+import "go.temporal.io/sdk/workflow"
 
 // Driver is implemented by a platform-specific workflow-side adapter and called
 // directly by RouterWorkflow. Concrete drivers durably dispatch platform I/O to
@@ -56,47 +52,30 @@ type UpdateMessageInput struct {
 	MessageID string
 }
 
-// StreamWireTextMode tells the router which text representation a platform
-// expects on update calls. Agent output is delta-driven for every platform;
-// Slack sends the pending delta while Teams sends accumulated full text.
-type StreamWireTextMode string
-
-const (
-	StreamWireTextDelta    StreamWireTextMode = "delta"
-	StreamWireTextFullText StreamWireTextMode = "full_text"
-)
-
-// StreamHandle is durable provider state returned by BeginStream and passed to
-// later stream calls. The router persists it in workflow state, so activities
-// never rely on process-local maps.
+// StreamHandle is durable provider and routing state returned by BeginStream
+// and passed to later stream calls.
 type StreamHandle struct {
 	ID                  string
 	SessionID           string
 	TransportMode       string
-	WireTextMode        StreamWireTextMode
-	MinUpdateInterval   time.Duration
+	TaskQueue           string
 	CloseBeforeApproval bool
-	NextSequence        int
 }
 
 type BeginStreamInput struct {
 	TextMetadata
 	ConversationType string
-	OperationID      string
 }
 
 type UpdateStreamInput struct {
 	TextMetadata
-	Handle      StreamHandle
-	Delta       string
-	FullText    string
-	Sequence    int
-	OperationID string
+	Handle   StreamHandle
+	Delta    string
+	FullText string
 }
 
 type FinishStreamInput struct {
 	TextMetadata
-	Handle      StreamHandle
-	FullText    string
-	OperationID string
+	Handle   StreamHandle
+	FullText string
 }

@@ -2,7 +2,6 @@ package router
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound"
@@ -69,12 +68,15 @@ func (w *RouterWorkflow) Run(ctx workflow.Context, input wire.Input) error {
 	}
 }
 
+// deliveryState tracks a response segment: Handle routes its active platform
+// stream, while FullText supports finalization or recovery.
 type deliveryState struct {
-	Handle       *inbound.StreamHandle
-	FullText     string
-	PendingDelta string
-	LastFlush    time.Time
-	Segment      int
+	Handle   *inbound.StreamHandle
+	FullText string
+}
+
+func (s *deliveryState) reset() {
+	*s = deliveryState{}
 }
 
 func textMetadata(input wire.Input, text string) inbound.TextMetadata {
@@ -99,98 +101,19 @@ func textMetadata(input wire.Input, text string) inbound.TextMetadata {
 // outbound/inbound pairing: it only deals in outbound.Delta and inbound.Driver calls.
 func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHandle, input wire.Input) error {
 	cursor := handle.StreamHeadOffset
-	turnID := handle.TurnID
-	if turnID == "" {
-		turnID = fmt.Sprintf("turn-%d", handle.TurnNumber)
-	}
-	workflowID := workflow.GetInfo(ctx).WorkflowExecution.ID
 	state := deliveryState{}
-
-	operationID := func(phase string, sequence int) string {
-		return fmt.Sprintf("%s/%s/segment/%d/%s/%d", workflowID, turnID, state.Segment, phase, sequence)
-	}
-
-	beginStream := func() error {
-		if state.Handle != nil {
-			return nil
-		}
-		conversationType := ""
-		if input.Message != nil {
-			conversationType = input.Message.ConversationType
-		}
-		streamHandle, err := w.inbound.BeginStream(ctx, inbound.BeginStreamInput{
-			TextMetadata:     textMetadata(input, ""),
-			ConversationType: conversationType,
-			OperationID:      operationID("begin", 0),
-		})
-		if err != nil {
-			return err
-		}
-		state.Handle = &streamHandle
-		state.LastFlush = workflow.Now(ctx)
-		return nil
-	}
-
-	flushUpdate := func(force bool) error {
-		if state.Handle == nil || state.PendingDelta == "" {
-			return nil
-		}
-		now := workflow.Now(ctx)
-		if !force && state.Handle.MinUpdateInterval > 0 && now.Sub(state.LastFlush) < state.Handle.MinUpdateInterval {
-			return nil
-		}
-		sequence := state.Handle.NextSequence
-		if err := w.inbound.UpdateStream(ctx, inbound.UpdateStreamInput{
-			TextMetadata: textMetadata(input, ""),
-			Handle:       *state.Handle,
-			Delta:        state.PendingDelta,
-			FullText:     state.FullText,
-			Sequence:     sequence,
-			OperationID:  operationID("update", sequence),
-		}); err != nil {
-			workflow.GetLogger(ctx).Warn("streamResp: stream update failed", "error", err)
-			return err
-		}
-		state.PendingDelta = ""
-		if state.Handle.NextSequence > 0 {
-			state.Handle.NextSequence++
-		}
-		state.LastFlush = workflow.Now(ctx)
-		return nil
-	}
-
-	finishStream := func() {
-		if state.Handle == nil {
-			return
-		}
-		if state.Handle.WireTextMode == inbound.StreamWireTextDelta {
-			_ = flushUpdate(true)
-		}
-		if err := w.inbound.FinishStream(ctx, inbound.FinishStreamInput{
-			TextMetadata: textMetadata(input, ""),
-			Handle:       *state.Handle,
-			FullText:     state.FullText,
-			OperationID:  operationID("finish", state.Handle.NextSequence),
-		}); err != nil {
-			workflow.GetLogger(ctx).Warn("streamResp: stream finish failed", "error", err)
-		}
-	}
-
-	resetForNextSegment := func() {
-		state = deliveryState{Segment: state.Segment + 1}
-	}
 
 	for {
 		res, err := w.outbound.PollTurn(ctx, handle, cursor)
 		if err != nil {
 			workflow.GetLogger(ctx).Warn("streamResp: PollTurn failed", "error", err)
-			finishStream()
+			w.endStream(ctx, input, &state)
 			return nil
 		}
 		cursor = res.NextCursor
 
 		if res.Closed {
-			finishStream()
+			w.endStream(ctx, input, &state)
 			return nil
 		}
 
@@ -198,8 +121,8 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHa
 			if delta.ApprovalRequested != nil {
 				req := delta.ApprovalRequested
 				if state.Handle != nil && state.Handle.CloseBeforeApproval {
-					finishStream()
-					resetForNextSegment()
+					w.endStream(ctx, input, &state)
+					state.reset()
 				}
 				if err := w.inbound.PostApprovalPrompt(ctx, inbound.ApprovalPromptInput{
 					TextMetadata: textMetadata(input, ""),
@@ -214,19 +137,69 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHa
 
 			if delta.Text != "" {
 				state.FullText += delta.Text
-				state.PendingDelta += delta.Text
-				if err := beginStream(); err != nil {
+				if err := w.beginStream(ctx, input, &state); err != nil {
 					workflow.GetLogger(ctx).Warn("streamResp: stream begin failed, falling back to postMessage", "error", err)
 					_ = w.inbound.PostMessage(ctx, textMetadata(input, state.FullText))
 					return nil
 				}
-				_ = flushUpdate(false)
+				w.updateStream(ctx, input, &state, delta.Text)
 			}
 
 			if delta.IsFinal {
-				finishStream()
+				w.endStream(ctx, input, &state)
 				return nil
 			}
 		}
+	}
+}
+
+func (w *RouterWorkflow) beginStream(ctx workflow.Context, input wire.Input, state *deliveryState) error {
+	if state.Handle != nil {
+		return nil
+	}
+	conversationType := ""
+	if input.Message != nil {
+		conversationType = input.Message.ConversationType
+	}
+	streamHandle, err := w.inbound.BeginStream(ctx, inbound.BeginStreamInput{
+		TextMetadata:     textMetadata(input, ""),
+		ConversationType: conversationType,
+	})
+	if err != nil {
+		return err
+	}
+	state.Handle = &streamHandle
+	return nil
+}
+
+func (w *RouterWorkflow) updateStream(
+	ctx workflow.Context,
+	input wire.Input,
+	state *deliveryState,
+	delta string,
+) {
+	if state.Handle == nil {
+		return
+	}
+	if err := w.inbound.UpdateStream(ctx, inbound.UpdateStreamInput{
+		TextMetadata: textMetadata(input, ""),
+		Handle:       *state.Handle,
+		Delta:        delta,
+		FullText:     state.FullText,
+	}); err != nil {
+		workflow.GetLogger(ctx).Warn("streamResp: stream update failed", "error", err)
+	}
+}
+
+func (w *RouterWorkflow) endStream(ctx workflow.Context, input wire.Input, state *deliveryState) {
+	if state.Handle == nil {
+		return
+	}
+	if err := w.inbound.FinishStream(ctx, inbound.FinishStreamInput{
+		TextMetadata: textMetadata(input, ""),
+		Handle:       *state.Handle,
+		FullText:     state.FullText,
+	}); err != nil {
+		workflow.GetLogger(ctx).Warn("streamResp: stream finish failed", "error", err)
 	}
 }

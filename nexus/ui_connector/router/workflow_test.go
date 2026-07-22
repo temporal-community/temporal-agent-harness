@@ -2,7 +2,6 @@ package router
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,13 +36,14 @@ func (f *fakeOutbound) PollTurn(ctx workflow.Context, handle outbound.TurnHandle
 
 // fakeInbound is a minimal inbound.Driver test double that records calls in order.
 type fakeInbound struct {
-	calls          []string
-	streamStartErr error
-	streamHandle   *inbound.StreamHandle
-	beginInputs    []inbound.BeginStreamInput
-	updateInputs   []inbound.UpdateStreamInput
-	finishInputs   []inbound.FinishStreamInput
-	messageInputs  []inbound.UpdateMessageInput
+	calls           []string
+	streamStartErr  error
+	streamUpdateErr error
+	streamHandle    *inbound.StreamHandle
+	beginInputs     []inbound.BeginStreamInput
+	updateInputs    []inbound.UpdateStreamInput
+	finishInputs    []inbound.FinishStreamInput
+	messageInputs   []inbound.UpdateMessageInput
 }
 
 func (f *fakeInbound) BeginStream(ctx workflow.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error) {
@@ -58,16 +58,15 @@ func (f *fakeInbound) BeginStream(ctx workflow.Context, input inbound.BeginStrea
 		return handle, nil
 	}
 	return inbound.StreamHandle{
-		ID:           "stream-1",
-		SessionID:    input.SessionID,
-		WireTextMode: inbound.StreamWireTextDelta,
+		ID:        "stream-1",
+		SessionID: input.SessionID,
 	}, nil
 }
 
 func (f *fakeInbound) UpdateStream(ctx workflow.Context, input inbound.UpdateStreamInput) error {
 	f.calls = append(f.calls, "Append:"+input.Delta)
 	f.updateInputs = append(f.updateInputs, input)
-	return nil
+	return f.streamUpdateErr
 }
 
 func (f *fakeInbound) FinishStream(ctx workflow.Context, input inbound.FinishStreamInput) error {
@@ -228,7 +227,7 @@ func TestRouterWorkflow_StreamStartFails_FallsBackToPostMessage(t *testing.T) {
 	assert.Equal(t, []string{"Start", "PostMessage:partial"}, in.calls)
 }
 
-func TestRouterWorkflow_TeamsBuffersDeltasAndFinishesWithFullText(t *testing.T) {
+func TestRouterWorkflow_TeamsStreamsDeltasAndFinishesWithFullText(t *testing.T) {
 	handle := outbound.TurnHandle{TurnID: "turn-1", TurnNumber: 1}
 	out := &fakeOutbound{
 		startResult: outbound.StartResult{Handle: &handle},
@@ -238,10 +237,8 @@ func TestRouterWorkflow_TeamsBuffersDeltasAndFinishesWithFullText(t *testing.T) 
 		}}},
 	}
 	in := &fakeInbound{streamHandle: &inbound.StreamHandle{
-		ID:                "teams-stream-1",
-		WireTextMode:      inbound.StreamWireTextFullText,
-		MinUpdateInterval: time.Hour,
-		NextSequence:      2,
+		ID:        "teams-stream-1",
+		TaskQueue: "teams-worker-1",
 	}}
 
 	w := NewRouterWorkflow(in, out)
@@ -263,9 +260,37 @@ func TestRouterWorkflow_TeamsBuffersDeltasAndFinishesWithFullText(t *testing.T) 
 	require.Len(t, in.beginInputs, 1)
 	assert.Equal(t, "personal", in.beginInputs[0].ConversationType)
 	assert.Equal(t, "https://example.test/teams/", in.beginInputs[0].ServiceURL)
-	assert.Empty(t, in.updateInputs, "throttled Teams deltas should be finalized as accumulated full text")
+	require.Len(t, in.updateInputs, 2)
+	assert.Equal(t, "hello ", in.updateInputs[0].Delta)
+	assert.Equal(t, "hello ", in.updateInputs[0].FullText)
+	assert.Equal(t, "world", in.updateInputs[1].Delta)
+	assert.Equal(t, "hello world", in.updateInputs[1].FullText)
 	require.Len(t, in.finishInputs, 1)
 	assert.Equal(t, "hello world", in.finishInputs[0].FullText)
+}
+
+func TestRouterWorkflow_ContinuesLiveUpdatesAfterFailureAndFinishesWithFullText(t *testing.T) {
+	handle := outbound.TurnHandle{TurnID: "turn-1"}
+	out := &fakeOutbound{
+		startResult: outbound.StartResult{Handle: &handle},
+		pollResults: []outbound.PollResult{{Deltas: []outbound.Delta{
+			{Text: "first "},
+			{Text: "second "},
+			{Text: "third", IsFinal: true},
+		}}},
+	}
+	in := &fakeInbound{streamUpdateErr: assert.AnError}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	assert.Equal(t, []string{"Start", "Append:first ", "Append:second ", "Append:third", "End"}, in.calls)
+	require.Len(t, in.updateInputs, 3)
+	require.Len(t, in.finishInputs, 1)
+	assert.Equal(t, "first second third", in.finishInputs[0].FullText)
 }
 
 func TestRouterWorkflow_TeamsClosesStreamAtApprovalBoundary(t *testing.T) {
@@ -280,7 +305,6 @@ func TestRouterWorkflow_TeamsClosesStreamAtApprovalBoundary(t *testing.T) {
 	}
 	in := &fakeInbound{streamHandle: &inbound.StreamHandle{
 		ID:                  "teams-stream-1",
-		WireTextMode:        inbound.StreamWireTextFullText,
 		CloseBeforeApproval: true,
 	}}
 
