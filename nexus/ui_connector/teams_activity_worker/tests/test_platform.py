@@ -1,4 +1,5 @@
 import asyncio
+import runpy
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from typing import Any
@@ -116,6 +117,20 @@ def test_console_script_runs_platform_main() -> None:
 
     assert entry_point.value == "teams_activity_worker.platform:main"
     assert entry_point.load() is main
+
+
+def test_module_execution_runs_platform_main(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[Any] = []
+
+    def fake_run(coroutine: Any) -> None:
+        calls.append(coroutine)
+        coroutine.close()
+
+    monkeypatch.setattr(asyncio, "run", fake_run)
+    with pytest.warns(RuntimeWarning, match="found in sys.modules"):
+        runpy.run_module("teams_activity_worker.platform", run_name="__main__")
+
+    assert len(calls) == 1
 
 
 @pytest.mark.asyncio
