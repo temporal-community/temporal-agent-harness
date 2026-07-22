@@ -9,9 +9,9 @@ durable, approval-gated activity, and the script can combine many with real cont
 ``asyncio.gather`` concurrency).
 
 The conversational front end is a Gemini Interactions tool-calling loop exposing that one Code
-Mode tool. It uses only a custom *function* tool, which chains cleanly across turns via 
-``previous_interaction_id`` — so multi-turn conversation works. The Code Mode tool advertises the 
-exact host-function signatures + result shapes in its own (generated) description, so the system 
+Mode tool. It uses only a custom *function* tool, which chains cleanly across turns via
+``previous_interaction_id`` — so multi-turn conversation works. The Code Mode tool advertises the
+exact host-function signatures + result shapes in its own (generated) description, so the system
 prompt only needs to set the persona and point the model at the tool.
 """
 
@@ -47,7 +47,10 @@ with workflow.unsafe.imports_passed_through():
         DeltaText,
     )
     from google.genai.client import AsyncClient
-    from temporal_agent_harness.ai_sdks.google_genai_plugin import function_param, google_genai_client
+    from temporal_agent_harness.ai_sdks.google_genai_plugin import (
+        function_param,
+        google_genai_client,
+    )
     from temporal_agent_harness.harness import agent, slash_commands
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
@@ -62,7 +65,7 @@ with workflow.unsafe.imports_passed_through():
 
 
 TASK_QUEUE = "monty-dynamic-agent"
-SUPPORTED_MODELS = ("gemini-3.5-flash", "gemini-3.1-flash-lite")
+SUPPORTED_MODELS = ("gemini-3.6-flash", "gemini-3.5-flash-lite")
 DEFAULT_MODEL = SUPPORTED_MODELS[0]
 
 
@@ -190,9 +193,7 @@ class MontyChatAgentWorkflow:
             if not pending_calls:
                 return reply_text
 
-            next_input = await asyncio.gather(
-                *(self._run_one_tool(fc) for fc in pending_calls)
-            )
+            next_input = await asyncio.gather(*(self._run_one_tool(fc) for fc in pending_calls))
 
     async def _run_one_tool(self, call: FunctionCallStep) -> FunctionResultStepParam:
         """Execute one ``run_travel_code`` call via ``run_tool`` and return its result.
@@ -202,9 +203,7 @@ class MontyChatAgentWorkflow:
         try:
             if call.name != self._code_tool.__name__:
                 raise ValueError(f"unknown tool: {call.name!r}")
-            result = await self._runner.run_tool(
-                call.id, self._code_tool, **call.arguments
-            )
+            result = await self._runner.run_tool(call.id, self._code_tool, **call.arguments)
             response: FunctionResultStepParam = {
                 "type": "function_result",
                 "call_id": call.id,
@@ -253,9 +252,7 @@ class MontyChatAgentWorkflow:
             stream=True,
         )
         if previous_interaction_id:
-            stream = await interactions_create_fn(
-                previous_interaction_id=previous_interaction_id
-            )
+            stream = await interactions_create_fn(previous_interaction_id=previous_interaction_id)
         else:
             stream = await interactions_create_fn()
 
@@ -266,16 +263,12 @@ class MontyChatAgentWorkflow:
         async for event in stream:
             match event:
                 case ErrorEvent(error=Error(message=msg, code=code)):
-                    raise ApplicationError(
-                        msg or "stream error", type=code or "stream_error"
-                    )
+                    raise ApplicationError(msg or "stream error", type=code or "stream_error")
                 case ErrorEvent():
                     raise ApplicationError("unknown stream error", type="stream_error")
                 case StepStart(index=idx, step=FunctionCallStep() as call):
                     calls_by_index[idx] = call
-                case StepDelta(
-                    index=idx, delta=DeltaArgumentsDelta(arguments=args)
-                ) if args:
+                case StepDelta(index=idx, delta=DeltaArgumentsDelta(arguments=args)) if args:
                     arg_buffers[idx] = arg_buffers.get(idx, "") + args
                 case StepDelta(delta=DeltaText(text=text)) if text:
                     text_parts.append(text)
@@ -289,9 +282,7 @@ class MontyChatAgentWorkflow:
             )
 
         function_calls = [
-            calls_by_index[idx].model_copy(
-                update={"arguments": json.loads(arg_buffers[idx])}
-            )
+            calls_by_index[idx].model_copy(update={"arguments": json.loads(arg_buffers[idx])})
             if arg_buffers.get(idx)
             else calls_by_index[idx]
             for idx in sorted(calls_by_index)

@@ -360,7 +360,7 @@ one implementation across the first-class operator update path and the normal
 `slash` turn path:
 
 ```python
-SUPPORTED_MODELS = ("gemini-3.5-flash", "gemini-3.1-flash-lite")
+SUPPORTED_MODELS = ("gemini-3.6-flash", "gemini-3.5-flash-lite")
 
 self._runner = AgentWorkflowRunner(
     config,

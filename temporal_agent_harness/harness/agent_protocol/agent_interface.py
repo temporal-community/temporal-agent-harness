@@ -225,7 +225,7 @@ class AgentMessage(BaseModel):
     rejecting a bad shape) before dispatching::
 
         AgentMessage(type="slash",
-                     payload={"name": "set-model", "arg": "gemini-3.1-flash-lite"},
+                     payload={"name": "set-model", "arg": "gemini-3.5-flash-lite"},
                      expected_turn=1)
 
     Routing is **by name**, not by a discriminator on the payload type — so two handlers

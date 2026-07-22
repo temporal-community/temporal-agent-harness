@@ -64,7 +64,7 @@ with workflow.unsafe.imports_passed_through():
 
 
 TASK_QUEUE = "wiki-agent"
-DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_MODEL = "gemini-3.6-flash"
 
 
 SYSTEM_INSTRUCTION = """\

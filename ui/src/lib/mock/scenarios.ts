@@ -125,7 +125,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(1, 3),
-    model: "gemini-3.5-flash"
+    model: "gemini-3.6-flash"
   }),
   frame("reply_delta", {
     type: "reply_delta",
@@ -150,7 +150,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(1, 7),
-    model: "gemini-3.5-flash",
+    model: "gemini-3.6-flash",
     usage: usage(4020, 210, 310, 940)
   }),
   frame("tool_requested", {
@@ -185,7 +185,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(1, 13),
-    model: "gemini-3.5-flash"
+    model: "gemini-3.6-flash"
   }),
   frame("thought_summary", {
     type: "thought_summary",
@@ -206,7 +206,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(1, 17),
-    model: "gemini-3.5-flash",
+    model: "gemini-3.6-flash",
     usage: usage(2100, 360, 140, 620)
   }),
   frame("reply", {
@@ -245,7 +245,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(3, 40),
-    model: "gemini-3.5-flash"
+    model: "gemini-3.6-flash"
   }),
   frame("message_queued", {
     type: "message_queued",
@@ -275,7 +275,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(3, 44),
-    model: "gemini-3.5-flash",
+    model: "gemini-3.6-flash",
     usage: usage(3450, 180, 260, 1120, 40)
   }),
   frame("tool_start", {
@@ -331,7 +331,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(3, 50),
-    model: "gemini-3.5-flash"
+    model: "gemini-3.6-flash"
   }),
   frame("reply_delta", {
     type: "reply_delta",
@@ -363,7 +363,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(3, 55),
-    model: "gemini-3.5-flash",
+    model: "gemini-3.6-flash",
     usage: usage(2280, 430, 120, 760)
   }),
   frame("reply", {
@@ -401,7 +401,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(5, 76),
-    model: "gemini-3.5-flash"
+    model: "gemini-3.6-flash"
   }),
   frame("tool_requested", {
     type: "tool_requested",
@@ -492,13 +492,13 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(5, 96),
-    model: "gemini-3.5-flash",
+    model: "gemini-3.6-flash",
     usage: usage(5120, 260, 420, 1480, 80)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(5, 97),
-    model: "gemini-3.5-flash"
+    model: "gemini-3.6-flash"
   }),
   frame("thought_summary", {
     type: "thought_summary",
@@ -541,7 +541,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(5, 104),
-    model: "gemini-3.5-flash",
+    model: "gemini-3.6-flash",
     usage: usage(3100, 610, 190, 920)
   }),
   frame("reply", {
@@ -559,12 +559,12 @@ const frames: AgentSseFrame[] = [
     type: "turn_started",
     ...meta(6, 118),
     user_message:
-      '{"type":"slash","payload":{"name":"set-model","arg":"gemini-3.1-flash-lite"}}'
+      '{"type":"slash","payload":{"name":"set-model","arg":"gemini-3.5-flash-lite"}}'
   }),
   frame("reply", {
     type: "reply",
     ...meta(6, 119),
-    text: "Model set to **gemini-3.1-flash-lite** for faster iteration."
+    text: "Model set to **gemini-3.5-flash-lite** for faster iteration."
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -580,7 +580,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(7, 133),
-    model: "gemini-3.1-flash-lite"
+    model: "gemini-3.5-flash-lite"
   }),
   frame("tool_requested", {
     type: "tool_requested",
@@ -589,7 +589,7 @@ const frames: AgentSseFrame[] = [
     tool_name: "estimate_usage_budget",
     tool_input: {
       turns: 15,
-      model: "gemini-3.1-flash-lite",
+      model: "gemini-3.5-flash-lite",
       include_tools: true
     }
   }),
@@ -600,7 +600,7 @@ const frames: AgentSseFrame[] = [
     tool_name: "estimate_usage_budget",
     tool_input: {
       turns: 15,
-      model: "gemini-3.1-flash-lite",
+      model: "gemini-3.5-flash-lite",
       include_tools: true
     }
   }),
@@ -694,13 +694,13 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(7, 139),
-    model: "gemini-3.1-flash-lite",
+    model: "gemini-3.5-flash-lite",
     usage: usage(2400, 120, 95, 540, 50)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(7, 140),
-    model: "gemini-3.1-flash-lite"
+    model: "gemini-3.5-flash-lite"
   }),
   frame("reply_delta", {
     type: "reply_delta",
@@ -711,7 +711,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(7, 143),
-    model: "gemini-3.1-flash-lite",
+    model: "gemini-3.5-flash-lite",
     usage: usage(1650, 250, 70, 410)
   }),
   frame("reply", {
@@ -734,7 +734,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(8, 161),
-    model: "gemini-3.1-flash-lite"
+    model: "gemini-3.5-flash-lite"
   }),
   frame("tool_requested", {
     type: "tool_requested",
@@ -768,13 +768,13 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(8, 169),
-    model: "gemini-3.1-flash-lite",
+    model: "gemini-3.5-flash-lite",
     usage: usage(1980, 90, 60, 520)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(8, 170),
-    model: "gemini-3.1-flash-lite"
+    model: "gemini-3.5-flash-lite"
   }),
   frame("reply_delta", {
     type: "reply_delta",
@@ -785,7 +785,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(8, 172),
-    model: "gemini-3.1-flash-lite",
+    model: "gemini-3.5-flash-lite",
     usage: usage(1240, 150, 40, 330)
   }),
   frame("reply", {
@@ -808,7 +808,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(9, 189),
-    model: "gemini-3.1-flash-lite"
+    model: "gemini-3.5-flash-lite"
   }),
   frame("tool_requested", {
     type: "tool_requested",
@@ -834,13 +834,13 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(9, 194),
-    model: "gemini-3.1-flash-lite",
+    model: "gemini-3.5-flash-lite",
     usage: usage(1820, 70, 70, 460, 30)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(9, 195),
-    model: "gemini-3.1-flash-lite"
+    model: "gemini-3.5-flash-lite"
   }),
   frame("tool_requested", {
     type: "tool_requested",
@@ -867,7 +867,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(9, 200),
-    model: "gemini-3.1-flash-lite",
+    model: "gemini-3.5-flash-lite",
     usage: usage(1640, 110, 50, 390, 20)
   }),
   frame("reply", {
@@ -890,7 +890,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(10, 217),
-    model: "gemini-3.1-flash-lite"
+    model: "gemini-3.5-flash-lite"
   }),
   frame("thought_summary", {
     type: "thought_summary",
@@ -932,7 +932,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(10, 223),
-    model: "gemini-3.1-flash-lite",
+    model: "gemini-3.5-flash-lite",
     usage: usage(2100, 340, 95, 580)
   }),
   frame("reply", {
@@ -955,7 +955,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(11, 241),
-    model: "gemini-3.1-flash-lite"
+    model: "gemini-3.5-flash-lite"
   }),
   frame("error", {
     type: "error",
@@ -968,7 +968,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(11, 246),
-    model: "gemini-3.1-flash-lite"
+    model: "gemini-3.5-flash-lite"
   }),
   frame("thought_summary", {
     type: "thought_summary",
@@ -983,7 +983,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(11, 249),
-    model: "gemini-3.1-flash-lite",
+    model: "gemini-3.5-flash-lite",
     usage: usage(1520, 180, 80, 360)
   }),
   frame("reply", {
@@ -1006,7 +1006,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(12, 269),
-    model: "gemini-3.1-flash-lite"
+    model: "gemini-3.5-flash-lite"
   }),
   frame("tool_requested", {
     type: "tool_requested",
@@ -1065,7 +1065,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(12, 282),
-    model: "gemini-3.1-flash-lite",
+    model: "gemini-3.5-flash-lite",
     usage: usage(1980, 130, 70, 420, 35)
   }),
   frame("reply", {
@@ -1088,7 +1088,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(13, 301),
-    model: "gemini-3.1-flash-lite"
+    model: "gemini-3.5-flash-lite"
   }),
   frame("reply_delta", {
     type: "reply_delta",
@@ -1105,7 +1105,7 @@ const frames: AgentSseFrame[] = [
   frame("model_interaction_ended", {
     type: "model_interaction_ended",
     ...meta(13, 305),
-    model: "gemini-3.1-flash-lite",
+    model: "gemini-3.5-flash-lite",
     usage: usage(1760, 280, 65, 500)
   }),
   frame("reply", {
