@@ -15,10 +15,9 @@ from teams_activity_worker.contracts import (
     UpdateStream,
 )
 from teams_activity_worker.platform import (
-    INITIAL_STREAMING_TEXT,
+    MESSAGE_UPDATE_INTERVAL_SECONDS,
     STREAM_MODE_MESSAGE_UPDATE,
     STREAM_MODE_NATIVE,
-    BufferedMessageStream,
     Settings,
     TeamsPlatform,
     _worker_task_queue,
@@ -152,6 +151,37 @@ async def test_begin_non_personal_chat_replies_with_updatable_message(fixture, c
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("conversation_type", ["channel", "groupChat"])
+async def test_non_personal_chat_updates_original_message_sequentially(
+    fixture, monkeypatch: pytest.MonkeyPatch, conversation_type: str
+) -> None:
+    platform, conversations, _ = fixture
+    stream_metadata = metadata(text="first", thread_id="root-1")
+    result = await platform.begin_stream(BeginStream(metadata=stream_metadata, conversation_type=conversation_type))
+    handle = StreamHandle(
+        result["ID"],
+        result["SessionID"],
+        result["TransportMode"],
+        result["TaskQueue"],
+    )
+    sleeps: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        update = conversations.calls[-1]
+        assert update[0:3] == ("update", "conversation-1", "reply-1")
+        payload = update[3].model_dump(by_alias=True, exclude_none=True)
+        assert payload["text"] == "hello world"
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+
+    await platform.update_stream(UpdateStream(stream_metadata, handle, " world", "hello world"))
+
+    assert sleeps == [MESSAGE_UPDATE_INTERVAL_SECONDS]
+    assert MESSAGE_UPDATE_INTERVAL_SECONDS == 0.3
+
+
+@pytest.mark.asyncio
 async def test_non_personal_chat_flushes_final_text_to_original_message(fixture) -> None:
     platform, conversations, _ = fixture
     stream_metadata = metadata(text="first", thread_id="root-1")
@@ -163,7 +193,6 @@ async def test_non_personal_chat_flushes_final_text_to_original_message(fixture)
         result["TaskQueue"],
     )
 
-    await platform.update_stream(UpdateStream(stream_metadata, handle, "hello", "hello"))
     await platform.finish_stream(FinishStream(stream_metadata, handle, "hello world"))
 
     update = conversations.calls[-1]
@@ -174,14 +203,21 @@ async def test_non_personal_chat_flushes_final_text_to_original_message(fixture)
 
 
 @pytest.mark.asyncio
-async def test_native_update_posts_stream_entity(fixture) -> None:
+async def test_native_update_posts_stream_entity_without_sleep(fixture, monkeypatch: pytest.MonkeyPatch) -> None:
     platform, _, stream = fixture
     await platform.begin_stream(BeginStream(metadata=metadata(), conversation_type="personal"))
     handle = StreamHandle("stream-1", "teams:conversation-1", STREAM_MODE_NATIVE, "teams-worker-1")
+    sleeps: list[float] = []
+
+    async def record_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
 
     await platform.update_stream(UpdateStream(metadata(), handle, "hello", "hello"))
 
     assert stream.calls[-1] == ("emit", "hello")
+    assert not sleeps
 
 
 @pytest.mark.asyncio
@@ -243,22 +279,6 @@ async def test_sdk_app_initializes_for_proactive_messaging() -> None:
     assert callable(activity_operations.reply)
     assert callable(activity_operations.update)
     await platform.app.stop()
-
-
-@pytest.mark.asyncio
-async def test_message_updates_are_coalesced_and_flushed_on_close() -> None:
-    updates: list[str] = []
-
-    async def update(text: str) -> None:
-        updates.append(text)
-
-    stream = BufferedMessageStream(update, INITIAL_STREAMING_TEXT)
-    stream.emit("hello")
-    stream.emit("hello world")
-
-    await stream.close("hello world")
-
-    assert updates == ["hello world"]
 
 
 @pytest.mark.asyncio

@@ -5,8 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -37,7 +36,7 @@ from .contracts import (
 
 DEFAULT_SERVICE_URL = "https://smba.trafficmanager.net/teams/"
 INITIAL_STREAMING_TEXT = "Thinking..."
-MESSAGE_UPDATE_INTERVAL_SECONDS = 1.5
+MESSAGE_UPDATE_INTERVAL_SECONDS = 0.3
 STREAM_START_TIMEOUT_SECONDS = 30.0
 STREAM_MODE_NATIVE = "native"
 STREAM_MODE_MESSAGE_UPDATE = "message-update"
@@ -128,90 +127,12 @@ def _streaming_allowed(conversation_type: str) -> bool:
     return conversation_type.strip().lower() not in {"channel", "groupchat"}
 
 
-class BufferedMessageStream:
-    """Simulate streaming where the Teams SDK cannot use native streaming.
-
-    Channels and group chats require normal message replacements, so this class
-    coalesces full-text updates to reduce API calls and avoid Teams rate limits.
-    """
-
-    def __init__(self, update: Callable[[str], Awaitable[None]], initial_text: str) -> None:
-        self._update = update
-        self._latest_text = initial_text
-        self._sent_text = initial_text
-        self._task: asyncio.Task[None] | None = None
-        self._lock = asyncio.Lock()
-        self._closed = False
-
-    def emit(self, full_text: str) -> None:
-        if self._closed:
-            raise RuntimeError("message stream is closed")
-        self._latest_text = full_text
-        if self._task is None or self._task.done():
-            self._task = asyncio.create_task(self._flush_after_delay())
-
-    async def _flush_after_delay(self) -> None:
-        failed = False
-        try:
-            await asyncio.sleep(MESSAGE_UPDATE_INTERVAL_SECONDS)
-            await self._flush()
-        except Exception:
-            failed = True
-            logging.exception("Teams message update failed; the final Activity will retry it")
-        finally:
-            self._task = None
-            if not self._closed and not failed and self._latest_text != self._sent_text:
-                self._task = asyncio.create_task(self._flush_after_delay())
-
-    async def _flush(self) -> None:
-        async with self._lock:
-            text = self._latest_text
-            if text == self._sent_text:
-                return
-            await self._update(text)
-            self._sent_text = text
-
-    async def close(self, full_text: str) -> None:
-        self._closed = True
-        self._latest_text = full_text
-        task = self._task
-        if task is not None and not task.done():
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-        self._task = None
-        await self._flush()
-
-
 @dataclass(slots=True)
 class ActiveStream:
-    """Wrap a native 1:1 stream or buffered channel/group-chat message updates."""
+    """Track the transport mode and optional native Teams stream."""
 
     transport_mode: str
-    native: Any | None = None
-    message_updates: BufferedMessageStream | None = None
-
-    def emit(self, *, delta: str, full_text: str) -> None:
-        if self.native is not None:
-            self.native.emit(delta)
-            return
-        if self.message_updates is None:
-            raise RuntimeError("stream transport is not initialized")
-        self.message_updates.emit(full_text)
-
-    async def close(self, full_text: str) -> None:
-        if self.native is not None:
-            if self.native.canceled:
-                return
-            self.native.clear_text()
-            self.native.emit(MessageActivityInput(text=full_text).with_text_format("markdown"))
-            result = await self.native.close()
-            if result is None and not self.native.canceled:
-                raise RuntimeError("Teams SDK stream did not produce a final activity")
-            return
-        if self.message_updates is None:
-            raise RuntimeError("stream transport is not initialized")
-        await self.message_updates.close(full_text)
+    native_stream: Any | None = None
 
 
 class TeamsPlatform:
@@ -322,22 +243,15 @@ class TeamsPlatform:
         stream.update(text)
         sent = await asyncio.wait_for(first_chunk, timeout=STREAM_START_TIMEOUT_SECONDS)
         stream_id = _sent_id(sent)
-        self.streams[stream_id] = ActiveStream(transport_mode=STREAM_MODE_NATIVE, native=stream)
+        self.streams[stream_id] = ActiveStream(transport_mode=STREAM_MODE_NATIVE, native_stream=stream)
         return stream_id
 
     async def _begin_message_updates(self, metadata: TextMetadata) -> str:
-        """Start buffered message replacements for channels and group chats."""
+        """Start message replacements for channels and group chats."""
         text = metadata.text if metadata.text.strip() else INITIAL_STREAMING_TEXT
         activity = self._base_activity(metadata, MessageActivityInput(text=text).with_text_format("markdown"))
         stream_id = await self._create_or_reply(metadata, activity)
-        updates = BufferedMessageStream(
-            lambda full_text: self._update_message(metadata, stream_id, full_text),
-            initial_text=text,
-        )
-        self.streams[stream_id] = ActiveStream(
-            transport_mode=STREAM_MODE_MESSAGE_UPDATE,
-            message_updates=updates,
-        )
+        self.streams[stream_id] = ActiveStream(transport_mode=STREAM_MODE_MESSAGE_UPDATE)
         return stream_id
 
     async def update_stream(self, request: UpdateStream) -> None:
@@ -348,7 +262,12 @@ class TeamsPlatform:
             raise ValueError(f"Teams stream {request.handle.id!r} is not active on this worker")
         if stream.transport_mode != request.handle.transport_mode:
             raise ValueError("Teams stream transport mode does not match handle")
-        stream.emit(delta=request.delta, full_text=request.full_text)
+        if stream.native_stream is not None:
+            stream.native_stream.emit(request.delta)
+            return
+        await self._update_message(request.metadata, request.handle.id, request.full_text)
+        # Space message updates to avoid Teams rate limits.
+        await asyncio.sleep(MESSAGE_UPDATE_INTERVAL_SECONDS)
 
     async def finish_stream(self, request: FinishStream) -> None:
         stream = self.streams.get(request.handle.id)
@@ -357,7 +276,16 @@ class TeamsPlatform:
         if stream.transport_mode != request.handle.transport_mode:
             raise ValueError("Teams stream transport mode does not match handle")
         try:
-            await stream.close(request.full_text)
+            if stream.native_stream is None:
+                await self._update_message(request.metadata, request.handle.id, request.full_text)
+                return
+            if stream.native_stream.canceled:
+                return
+            stream.native_stream.clear_text()
+            stream.native_stream.emit(MessageActivityInput(text=request.full_text).with_text_format("markdown"))
+            result = await stream.native_stream.close()
+            if result is None and not stream.native_stream.canceled:
+                raise RuntimeError("Teams SDK stream did not produce a final activity")
         finally:
             self.streams.pop(request.handle.id, None)
 
