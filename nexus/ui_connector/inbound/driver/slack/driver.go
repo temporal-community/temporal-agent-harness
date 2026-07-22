@@ -74,7 +74,9 @@ func (d Driver) PostApprovalPrompt(ctx workflow.Context, input inbound.ApprovalP
 	).Get(ctx, nil)
 }
 
-func (d Driver) UpdateMessage(workflow.Context, inbound.UpdateMessageInput) error {
+// AcknowledgeApproval is a no-op because the Slack interaction webhook replaces
+// the original prompt through its response URL while handling the button click.
+func (d Driver) AcknowledgeApproval(workflow.Context, inbound.ApprovalAcknowledgementInput) error {
 	return nil
 }
 

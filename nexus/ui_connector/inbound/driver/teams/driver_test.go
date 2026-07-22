@@ -88,3 +88,70 @@ func TestFinishStreamFallsBackToSharedQueueUpdate(t *testing.T) {
 	assert.Equal(t, "complete answer", recovery.Text)
 	assert.Equal(t, "https://example.test/teams/", recovery.ServiceURL)
 }
+
+func TestAcknowledgeApprovalUpdatesPrompt(t *testing.T) {
+	tests := []struct {
+		name     string
+		approved bool
+		text     string
+	}{
+		{name: "approved", approved: true, text: "🔐 Tool `deploy`: ✅ Approved"},
+		{name: "denied", approved: false, text: "🔐 Tool `deploy`: ❌ Denied"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			driver := NewDriver(workflow.ActivityOptions{StartToCloseTimeout: time.Minute})
+			var update inbound.UpdateMessageInput
+			suite := testsuite.WorkflowTestSuite{}
+			env := suite.NewTestWorkflowEnvironment()
+			env.RegisterActivityWithOptions(
+				func(_ context.Context, input inbound.UpdateMessageInput) error {
+					update = input
+					return nil
+				},
+				activity.RegisterOptions{Name: updateMessageActivity},
+			)
+			workflowFn := func(ctx workflow.Context) error {
+				return driver.AcknowledgeApproval(ctx, inbound.ApprovalAcknowledgementInput{
+					TextMetadata: inbound.TextMetadata{
+						SessionID:  "teams:conversation-1",
+						ServiceURL: "https://example.test/teams/",
+						ChannelID:  "msteams",
+					},
+					PromptID: "card-1",
+					ToolName: "deploy",
+					Approved: test.approved,
+				})
+			}
+			env.RegisterWorkflow(workflowFn)
+
+			env.ExecuteWorkflow(workflowFn)
+
+			require.True(t, env.IsWorkflowCompleted())
+			require.NoError(t, env.GetWorkflowError())
+			assert.Equal(t, "card-1", update.MessageID)
+			assert.Equal(t, test.text, update.Text)
+			assert.Equal(t, "https://example.test/teams/", update.ServiceURL)
+			assert.Equal(t, "msteams", update.ChannelID)
+		})
+	}
+}
+
+func TestAcknowledgeApprovalWithoutPromptDoesNothing(t *testing.T) {
+	driver := NewDriver(workflow.ActivityOptions{StartToCloseTimeout: time.Minute})
+	suite := testsuite.WorkflowTestSuite{}
+	env := suite.NewTestWorkflowEnvironment()
+	workflowFn := func(ctx workflow.Context) error {
+		return driver.AcknowledgeApproval(ctx, inbound.ApprovalAcknowledgementInput{
+			ToolName: "deploy",
+			Approved: true,
+		})
+	}
+	env.RegisterWorkflow(workflowFn)
+
+	env.ExecuteWorkflow(workflowFn)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+}

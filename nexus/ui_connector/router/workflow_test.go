@@ -43,7 +43,7 @@ type fakeInbound struct {
 	beginInputs     []inbound.BeginStreamInput
 	updateInputs    []inbound.UpdateStreamInput
 	finishInputs    []inbound.FinishStreamInput
-	messageInputs   []inbound.UpdateMessageInput
+	approvalInputs  []inbound.ApprovalAcknowledgementInput
 }
 
 func (f *fakeInbound) BeginStream(ctx workflow.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error) {
@@ -85,9 +85,9 @@ func (f *fakeInbound) PostApprovalPrompt(ctx workflow.Context, input inbound.App
 	return nil
 }
 
-func (f *fakeInbound) UpdateMessage(ctx workflow.Context, input inbound.UpdateMessageInput) error {
-	f.calls = append(f.calls, "UpdateMessage:"+input.Text)
-	f.messageInputs = append(f.messageInputs, input)
+func (f *fakeInbound) AcknowledgeApproval(ctx workflow.Context, input inbound.ApprovalAcknowledgementInput) error {
+	f.calls = append(f.calls, "AcknowledgeApproval:"+input.ToolName)
+	f.approvalInputs = append(f.approvalInputs, input)
 	return nil
 }
 
@@ -149,7 +149,7 @@ func TestRouterWorkflow_FireAndForget_DoesNothingFurther(t *testing.T) {
 	env.ExecuteWorkflow(w.Run, wire.Input{
 		Identity:  "default",
 		SessionID: "slack:C12345",
-		Approval:  &wire.ApprovalDecision{ToolID: "t1", Approved: true},
+		Slash:     &wire.SlashCommand{Name: "noop"},
 	})
 
 	require.True(t, env.IsWorkflowCompleted())
@@ -158,7 +158,7 @@ func TestRouterWorkflow_FireAndForget_DoesNothingFurther(t *testing.T) {
 	assert.Equal(t, 0, out.pollCalls)
 }
 
-func TestRouterWorkflow_TeamsApprovalUpdatesCard(t *testing.T) {
+func TestRouterWorkflow_ApprovalAcknowledgesInboundDriver(t *testing.T) {
 	out := &fakeOutbound{startResult: outbound.StartResult{}}
 	in := &fakeInbound{}
 
@@ -179,11 +179,13 @@ func TestRouterWorkflow_TeamsApprovalUpdatesCard(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	assert.Equal(t, []string{"UpdateMessage:🔐 Tool `deploy`: ✅ Approved"}, in.calls)
-	require.Len(t, in.messageInputs, 1)
-	assert.Equal(t, "card-1", in.messageInputs[0].MessageID)
-	assert.Equal(t, "https://example.test/teams/", in.messageInputs[0].ServiceURL)
-	assert.Equal(t, "msteams", in.messageInputs[0].ChannelID)
+	assert.Equal(t, []string{"AcknowledgeApproval:deploy"}, in.calls)
+	require.Len(t, in.approvalInputs, 1)
+	assert.Equal(t, "card-1", in.approvalInputs[0].PromptID)
+	assert.Equal(t, "deploy", in.approvalInputs[0].ToolName)
+	assert.True(t, in.approvalInputs[0].Approved)
+	assert.Equal(t, "https://example.test/teams/", in.approvalInputs[0].ServiceURL)
+	assert.Equal(t, "msteams", in.approvalInputs[0].ChannelID)
 }
 
 func TestRouterWorkflow_ApprovalRequestedDelta_PostsPrompt(t *testing.T) {

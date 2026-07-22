@@ -39,16 +39,14 @@ func (w *RouterWorkflow) Run(ctx workflow.Context, input wire.Input) error {
 		return nil
 	}
 
-	if input.Approval != nil && input.Approval.ActivityID != "" {
-		decision := "❌ Denied"
-		if input.Approval.Approved {
-			decision = "✅ Approved"
-		}
-		if err := w.inbound.UpdateMessage(ctx, inbound.UpdateMessageInput{
-			TextMetadata: textMetadata(input, fmt.Sprintf("🔐 Tool `%s`: %s", input.Approval.ToolName, decision)),
-			MessageID:    input.Approval.ActivityID,
+	if approval := input.Approval; approval != nil {
+		if err := w.inbound.AcknowledgeApproval(ctx, inbound.ApprovalAcknowledgementInput{
+			TextMetadata: textMetadata(input, ""),
+			PromptID:     approval.ActivityID,
+			ToolName:     approval.ToolName,
+			Approved:     approval.Approved,
 		}); err != nil {
-			workflow.GetLogger(ctx).Warn("RouterWorkflow: UpdateMessage failed", "error", err)
+			workflow.GetLogger(ctx).Warn("RouterWorkflow: AcknowledgeApproval failed", "error", err)
 		}
 		return nil
 	}

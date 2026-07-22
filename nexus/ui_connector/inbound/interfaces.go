@@ -24,8 +24,8 @@ type Driver interface {
 	// through this interface.
 	PostApprovalPrompt(ctx workflow.Context, input ApprovalPromptInput) error
 
-	// UpdateMessage replaces an existing platform message.
-	UpdateMessage(ctx workflow.Context, input UpdateMessageInput) error
+	// AcknowledgeApproval updates the inbound interaction after its decision is resolved.
+	AcknowledgeApproval(ctx workflow.Context, input ApprovalAcknowledgementInput) error
 }
 
 // ApprovalPromptInput carries the information needed to render a tool-approval
@@ -35,6 +35,15 @@ type ApprovalPromptInput struct {
 	ToolID    string
 	ToolName  string
 	ToolInput string // JSON-encoded model-facing input (for display)
+}
+
+// ApprovalAcknowledgementInput carries a resolved approval decision back to the
+// inbound platform. Each driver decides whether and how to update its prompt.
+type ApprovalAcknowledgementInput struct {
+	TextMetadata
+	PromptID string
+	ToolName string
+	Approved bool
 }
 
 type TextMetadata struct {

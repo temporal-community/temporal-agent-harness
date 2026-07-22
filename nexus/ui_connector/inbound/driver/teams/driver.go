@@ -3,6 +3,7 @@
 package teams
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
@@ -80,6 +81,17 @@ func (d Driver) PostApprovalPrompt(ctx workflow.Context, input inbound.ApprovalP
 	return workflow.ExecuteActivity(d.activityContext(ctx), postApprovalPromptActivity, input).Get(ctx, nil)
 }
 
-func (d Driver) UpdateMessage(ctx workflow.Context, input inbound.UpdateMessageInput) error {
-	return workflow.ExecuteActivity(d.activityContext(ctx), updateMessageActivity, input).Get(ctx, nil)
+func (d Driver) AcknowledgeApproval(ctx workflow.Context, input inbound.ApprovalAcknowledgementInput) error {
+	if input.PromptID == "" {
+		return nil
+	}
+	decision := "❌ Denied"
+	if input.Approved {
+		decision = "✅ Approved"
+	}
+	input.Text = fmt.Sprintf("🔐 Tool `%s`: %s", input.ToolName, decision)
+	return workflow.ExecuteActivity(d.activityContext(ctx), updateMessageActivity, inbound.UpdateMessageInput{
+		TextMetadata: input.TextMetadata,
+		MessageID:    input.PromptID,
+	}).Get(ctx, nil)
 }
