@@ -101,26 +101,45 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHa
 	cursor := handle.StreamHeadOffset
 	state := deliveryState{}
 
+	// Start the initial inbound stream before polling. If it cannot be opened,
+	// keep polling and buffer the response for one complete PostMessage.
+	fallbackToPostMessage := false
+	if err := w.beginStream(ctx, input, &state); err != nil {
+		workflow.GetLogger(ctx).Warn("streamResp: stream begin failed, falling back to postMessage", "error", err)
+		fallbackToPostMessage = true
+	}
+
 	for {
 		res, err := w.outbound.PollTurn(ctx, handle, cursor)
 		if err != nil {
 			workflow.GetLogger(ctx).Warn("streamResp: PollTurn failed", "error", err)
+			// The response is incomplete, so do not post the buffered fallback text.
 			w.endStream(ctx, input, &state)
 			return nil
 		}
 		cursor = res.NextCursor
 
+		// A turn may close without an explicit final delta. Complete whichever
+		// delivery mode was selected when the stream began.
 		if res.Closed {
-			w.endStream(ctx, input, &state)
+			if fallbackToPostMessage && state.FullText != "" {
+				_ = w.inbound.PostMessage(ctx, textMetadata(input, state.FullText))
+			} else {
+				w.endStream(ctx, input, &state)
+			}
 			return nil
 		}
 
 		for _, delta := range res.Deltas {
 			if delta.ApprovalRequested != nil {
 				req := delta.ApprovalRequested
+				// Teams must finish the current stream before posting an approval card
+				// so the messages appear in order. Resetting state makes the next text
+				// delta start a new stream; Slack leaves this flag false.
 				if state.Handle != nil && state.Handle.CloseBeforeApproval {
 					w.endStream(ctx, input, &state)
 					state.reset()
+					fallbackToPostMessage = false
 				}
 				if err := w.inbound.PostApprovalPrompt(ctx, inbound.ApprovalPromptInput{
 					TextMetadata: textMetadata(input, ""),
@@ -134,17 +153,31 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHa
 			}
 
 			if delta.Text != "" {
-				state.FullText += delta.Text
-				if err := w.beginStream(ctx, input, &state); err != nil {
-					workflow.GetLogger(ctx).Warn("streamResp: stream begin failed, falling back to postMessage", "error", err)
-					_ = w.inbound.PostMessage(ctx, textMetadata(input, state.FullText))
-					return nil
+				// A Teams approval may have closed the previous stream. Reopen it when
+				// response text resumes. An initial begin failure stays in fallback mode
+				// instead of retrying BeginStream on every text delta.
+				if !fallbackToPostMessage && state.Handle == nil {
+					if err := w.beginStream(ctx, input, &state); err != nil {
+						workflow.GetLogger(ctx).Warn("streamResp: stream begin failed, falling back to postMessage", "error", err)
+						fallbackToPostMessage = true
+					}
 				}
-				w.updateStream(ctx, input, &state, delta.Text)
+
+				// Always build the complete segment. In fallback mode, skip streaming
+				// updates and post FullText once the segment is complete.
+				state.FullText += delta.Text
+				if !fallbackToPostMessage {
+					w.updateStream(ctx, input, &state, delta.Text)
+				}
 			}
 
+			// IsFinal means FullText is complete and safe to deliver as a fallback.
 			if delta.IsFinal {
-				w.endStream(ctx, input, &state)
+				if fallbackToPostMessage && state.FullText != "" {
+					_ = w.inbound.PostMessage(ctx, textMetadata(input, state.FullText))
+				} else {
+					w.endStream(ctx, input, &state)
+				}
 				return nil
 			}
 		}

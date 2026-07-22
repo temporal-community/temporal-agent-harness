@@ -207,15 +207,16 @@ func TestRouterWorkflow_ApprovalRequestedDelta_PostsPrompt(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	assert.Equal(t, []string{"PostApprovalPrompt:search", "Start", "Append:done", "End"}, in.calls)
+	assert.Equal(t, []string{"Start", "PostApprovalPrompt:search", "Append:done", "End"}, in.calls)
 }
 
-func TestRouterWorkflow_StreamStartFails_FallsBackToPostMessage(t *testing.T) {
+func TestRouterWorkflow_StreamStartFails_PostsCompleteResponse(t *testing.T) {
 	handle := outbound.TurnHandle{}
 	out := &fakeOutbound{
 		startResult: outbound.StartResult{Handle: &handle},
 		pollResults: []outbound.PollResult{
-			{Deltas: []outbound.Delta{{Text: "partial"}}},
+			{Deltas: []outbound.Delta{{Text: "partial "}}},
+			{Deltas: []outbound.Delta{{Text: "answer", IsFinal: true}}},
 		},
 	}
 	in := &fakeInbound{streamStartErr: assert.AnError}
@@ -226,7 +227,49 @@ func TestRouterWorkflow_StreamStartFails_FallsBackToPostMessage(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	assert.Equal(t, []string{"Start", "PostMessage:partial"}, in.calls)
+	assert.Equal(t, []string{"Start", "PostMessage:partial answer"}, in.calls)
+	assert.Equal(t, 2, out.pollCalls)
+	assert.Empty(t, in.updateInputs)
+	assert.Empty(t, in.finishInputs)
+}
+
+func TestRouterWorkflow_FinalOnlyDelta_DoesNotSendEmptyUpdate(t *testing.T) {
+	handle := outbound.TurnHandle{}
+	out := &fakeOutbound{
+		startResult: outbound.StartResult{Handle: &handle},
+		pollResults: []outbound.PollResult{
+			{Deltas: []outbound.Delta{{IsFinal: true}}},
+		},
+	}
+	in := &fakeInbound{}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	assert.Equal(t, []string{"Start", "End"}, in.calls)
+	assert.Empty(t, in.updateInputs)
+}
+
+func TestRouterWorkflow_ClosedTurn_FinishesEagerlyStartedStream(t *testing.T) {
+	handle := outbound.TurnHandle{}
+	out := &fakeOutbound{
+		startResult: outbound.StartResult{Handle: &handle},
+		pollResults: []outbound.PollResult{{Closed: true}},
+	}
+	in := &fakeInbound{}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	assert.Equal(t, []string{"Start", "End"}, in.calls)
+	require.Len(t, in.finishInputs, 1)
+	assert.Empty(t, in.finishInputs[0].FullText)
 }
 
 func TestRouterWorkflow_TeamsStreamsDeltasAndFinishesWithFullText(t *testing.T) {
