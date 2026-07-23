@@ -1,6 +1,13 @@
 import pytest
 
-from teams_activity_worker.contracts import BeginStream, ContractError, UpdateMessage, UpdateStream, parse_conversation
+from teams_activity_worker.contracts import (
+    BeginStream,
+    ContractError,
+    FinishStream,
+    UpdateMessage,
+    UpdateStream,
+    parse_conversation,
+)
 
 
 def test_begin_stream_parses_go_json_field_names() -> None:
@@ -33,9 +40,24 @@ def test_update_stream_rejects_handle_for_another_session() -> None:
                     "TaskQueue": "teams-worker-1",
                 },
                 "Delta": "hello",
-                "FullText": "hello",
             }
         )
+
+
+def test_finish_stream_parses_delta_only_payload() -> None:
+    request = FinishStream.from_payload(
+        {
+            "SessionID": "teams:conversation-1",
+            "Handle": {
+                "ID": "stream-1",
+                "SessionID": "teams:conversation-1",
+                "TransportMode": "native",
+                "TaskQueue": "teams-worker-1",
+            },
+        }
+    )
+
+    assert request.handle.id == "stream-1"
 
 
 @pytest.mark.parametrize("id_field", ["MessageID", "ActivityID"])

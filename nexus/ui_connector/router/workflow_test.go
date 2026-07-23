@@ -18,6 +18,7 @@ type fakeOutbound struct {
 	startResult outbound.StartResult
 	startErr    error
 	pollResults []outbound.PollResult
+	pollErr     error
 	pollCalls   int
 }
 
@@ -27,6 +28,9 @@ func (f *fakeOutbound) StartTurn(ctx workflow.Context, input wire.Input) (outbou
 
 func (f *fakeOutbound) PollTurn(ctx workflow.Context, handle outbound.TurnHandle, cursor int64) (outbound.PollResult, error) {
 	if f.pollCalls >= len(f.pollResults) {
+		if f.pollErr != nil {
+			return outbound.PollResult{}, f.pollErr
+		}
 		return outbound.PollResult{Closed: true}, nil
 	}
 	res := f.pollResults[f.pollCalls]
@@ -99,6 +103,20 @@ func defaultInput() wire.Input {
 	}
 }
 
+func teamsMessageInput(conversationType string) wire.Input {
+	return wire.Input{
+		Identity:  "default",
+		SessionID: "teams:conversation-1",
+		Message: &wire.IncomingMessage{
+			MessageID:        "message-1",
+			Text:             "question",
+			ConversationType: conversationType,
+			ServiceURL:       "https://example.test/teams/",
+			ChannelID:        "msteams",
+		},
+	}
+}
+
 func newTestEnv(t *testing.T, w *RouterWorkflow) *testsuite.TestWorkflowEnvironment {
 	t.Helper()
 	s := testsuite.WorkflowTestSuite{}
@@ -124,6 +142,138 @@ func TestRouterWorkflow_MessageTurn_StreamsDeltas(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
 	assert.Equal(t, []string{"Start", "Append:hello ", "Append:world", "End"}, in.calls)
+}
+
+func TestRouterWorkflow_TeamsSharedConversationPostsCompleteResponse(t *testing.T) {
+	for _, conversationType := range []string{"channel", "groupChat"} {
+		t.Run(conversationType, func(t *testing.T) {
+			handle := outbound.TurnHandle{}
+			out := &fakeOutbound{
+				startResult: outbound.StartResult{Handle: &handle},
+				pollResults: []outbound.PollResult{
+					{Deltas: []outbound.Delta{{Text: "partial "}}},
+					{Deltas: []outbound.Delta{{Text: "answer", IsFinal: true}}},
+				},
+			}
+			in := &fakeInbound{}
+
+			w := NewRouterWorkflow(in, out)
+			env := newTestEnv(t, w)
+			env.ExecuteWorkflow(w.Run, teamsMessageInput(conversationType))
+
+			require.True(t, env.IsWorkflowCompleted())
+			require.NoError(t, env.GetWorkflowError())
+			assert.Equal(t, []string{"PostMessage:partial answer"}, in.calls)
+			assert.Equal(t, 2, out.pollCalls)
+			assert.Empty(t, in.beginInputs)
+			assert.Empty(t, in.updateInputs)
+			assert.Empty(t, in.finishInputs)
+		})
+	}
+}
+
+func TestRouterWorkflow_TeamsSharedConversationPostsApprovalBeforeCompleteResponse(t *testing.T) {
+	handle := outbound.TurnHandle{}
+	out := &fakeOutbound{
+		startResult: outbound.StartResult{Handle: &handle},
+		pollResults: []outbound.PollResult{
+			{Deltas: []outbound.Delta{
+				{Text: "before"},
+				{ApprovalRequested: &outbound.ApprovalRequest{ToolID: "tool-1", ToolName: "deploy"}},
+			}},
+			{Deltas: []outbound.Delta{{Text: "after", IsFinal: true}}},
+		},
+	}
+	in := &fakeInbound{}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, teamsMessageInput("channel"))
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	assert.Equal(t, []string{"PostApprovalPrompt:deploy", "PostMessage:beforeafter"}, in.calls)
+	assert.Empty(t, in.beginInputs)
+}
+
+func TestRouterWorkflow_TeamsSharedConversationClosedPostsCollectedResponse(t *testing.T) {
+	handle := outbound.TurnHandle{}
+	out := &fakeOutbound{
+		startResult: outbound.StartResult{Handle: &handle},
+		pollResults: []outbound.PollResult{
+			{Deltas: []outbound.Delta{{Text: "complete"}}},
+			{Closed: true},
+		},
+	}
+	in := &fakeInbound{}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, teamsMessageInput("groupChat"))
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	assert.Equal(t, []string{"PostMessage:complete"}, in.calls)
+}
+
+func TestRouterWorkflow_TeamsSharedConversationDoesNotPostEmptyResponse(t *testing.T) {
+	handle := outbound.TurnHandle{}
+	out := &fakeOutbound{
+		startResult: outbound.StartResult{Handle: &handle},
+		pollResults: []outbound.PollResult{
+			{Deltas: []outbound.Delta{{IsFinal: true}}},
+		},
+	}
+	in := &fakeInbound{}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, teamsMessageInput("channel"))
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	assert.Empty(t, in.calls)
+}
+
+func TestRouterWorkflow_TeamsSharedConversationDoesNotPostPartialResponseAfterPollFailure(t *testing.T) {
+	handle := outbound.TurnHandle{}
+	out := &fakeOutbound{
+		startResult: outbound.StartResult{Handle: &handle},
+		pollResults: []outbound.PollResult{
+			{Deltas: []outbound.Delta{{Text: "partial"}}},
+		},
+		pollErr: assert.AnError,
+	}
+	in := &fakeInbound{}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, teamsMessageInput("groupChat"))
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	assert.Empty(t, in.calls)
+}
+
+func TestRouterWorkflow_NonTeamsChannelStillStreams(t *testing.T) {
+	handle := outbound.TurnHandle{}
+	out := &fakeOutbound{
+		startResult: outbound.StartResult{Handle: &handle},
+		pollResults: []outbound.PollResult{
+			{Deltas: []outbound.Delta{{Text: "answer", IsFinal: true}}},
+		},
+	}
+	in := &fakeInbound{}
+	input := defaultInput()
+	input.Message.ConversationType = "channel"
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, input)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	assert.Equal(t, []string{"Start", "Append:answer", "End"}, in.calls)
 }
 
 func TestRouterWorkflow_SynchronousReply_PostsMessageWithoutPolling(t *testing.T) {
@@ -210,7 +360,7 @@ func TestRouterWorkflow_ApprovalRequestedDelta_PostsPrompt(t *testing.T) {
 	assert.Equal(t, []string{"Start", "PostApprovalPrompt:search", "Append:done", "End"}, in.calls)
 }
 
-func TestRouterWorkflow_StreamStartFails_PostsCompleteResponse(t *testing.T) {
+func TestRouterWorkflow_StreamStartFails_StopsWithoutPolling(t *testing.T) {
 	handle := outbound.TurnHandle{}
 	out := &fakeOutbound{
 		startResult: outbound.StartResult{Handle: &handle},
@@ -227,8 +377,8 @@ func TestRouterWorkflow_StreamStartFails_PostsCompleteResponse(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	assert.Equal(t, []string{"Start", "PostMessage:partial answer"}, in.calls)
-	assert.Equal(t, 2, out.pollCalls)
+	assert.Equal(t, []string{"Start"}, in.calls)
+	assert.Equal(t, 0, out.pollCalls)
 	assert.Empty(t, in.updateInputs)
 	assert.Empty(t, in.finishInputs)
 }
@@ -269,10 +419,9 @@ func TestRouterWorkflow_ClosedTurn_FinishesEagerlyStartedStream(t *testing.T) {
 	require.NoError(t, env.GetWorkflowError())
 	assert.Equal(t, []string{"Start", "End"}, in.calls)
 	require.Len(t, in.finishInputs, 1)
-	assert.Empty(t, in.finishInputs[0].FullText)
 }
 
-func TestRouterWorkflow_TeamsStreamsDeltasAndFinishesWithFullText(t *testing.T) {
+func TestRouterWorkflow_TeamsPersonalStreamsDeltas(t *testing.T) {
 	handle := outbound.TurnHandle{TurnID: "turn-1", TurnNumber: 1}
 	out := &fakeOutbound{
 		startResult: outbound.StartResult{Handle: &handle},
@@ -288,17 +437,7 @@ func TestRouterWorkflow_TeamsStreamsDeltasAndFinishesWithFullText(t *testing.T) 
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
-	env.ExecuteWorkflow(w.Run, wire.Input{
-		Identity:  "default",
-		SessionID: "teams:conversation-1",
-		Message: &wire.IncomingMessage{
-			MessageID:        "message-1",
-			Text:             "question",
-			ConversationType: "personal",
-			ServiceURL:       "https://example.test/teams/",
-			ChannelID:        "msteams",
-		},
-	})
+	env.ExecuteWorkflow(w.Run, teamsMessageInput("personal"))
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
@@ -307,14 +446,11 @@ func TestRouterWorkflow_TeamsStreamsDeltasAndFinishesWithFullText(t *testing.T) 
 	assert.Equal(t, "https://example.test/teams/", in.beginInputs[0].ServiceURL)
 	require.Len(t, in.updateInputs, 2)
 	assert.Equal(t, "hello ", in.updateInputs[0].Delta)
-	assert.Equal(t, "hello ", in.updateInputs[0].FullText)
 	assert.Equal(t, "world", in.updateInputs[1].Delta)
-	assert.Equal(t, "hello world", in.updateInputs[1].FullText)
 	require.Len(t, in.finishInputs, 1)
-	assert.Equal(t, "hello world", in.finishInputs[0].FullText)
 }
 
-func TestRouterWorkflow_ContinuesLiveUpdatesAfterFailureAndFinishesWithFullText(t *testing.T) {
+func TestRouterWorkflow_ContinuesLiveUpdatesAfterFailureAndFinishes(t *testing.T) {
 	handle := outbound.TurnHandle{TurnID: "turn-1"}
 	out := &fakeOutbound{
 		startResult: outbound.StartResult{Handle: &handle},
@@ -335,7 +471,6 @@ func TestRouterWorkflow_ContinuesLiveUpdatesAfterFailureAndFinishesWithFullText(
 	assert.Equal(t, []string{"Start", "Append:first ", "Append:second ", "Append:third", "End"}, in.calls)
 	require.Len(t, in.updateInputs, 3)
 	require.Len(t, in.finishInputs, 1)
-	assert.Equal(t, "first second third", in.finishInputs[0].FullText)
 }
 
 func TestRouterWorkflow_TeamsClosesStreamAtApprovalBoundary(t *testing.T) {
@@ -368,6 +503,4 @@ func TestRouterWorkflow_TeamsClosesStreamAtApprovalBoundary(t *testing.T) {
 		"Start", "Append:after", "End",
 	}, in.calls)
 	require.Len(t, in.finishInputs, 2)
-	assert.Equal(t, "before", in.finishInputs[0].FullText)
-	assert.Equal(t, "after", in.finishInputs[1].FullText)
 }

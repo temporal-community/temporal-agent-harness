@@ -130,14 +130,12 @@ func TestSlackPlatform_StatelessStreamLifecycle(t *testing.T) {
 		TextMetadata: msgiface.TextMetadata{SessionID: "slack:C12345"},
 		Handle:       handle,
 		Delta:        "hello",
-		FullText:     "full text is intentionally ignored by Slack",
 	})
 	require.NoError(t, err)
 
 	err = newPlatform().FinishStream(context.Background(), msgiface.FinishStreamInput{
 		TextMetadata: msgiface.TextMetadata{SessionID: "slack:C12345"},
 		Handle:       handle,
-		FullText:     "hello",
 	})
 	require.NoError(t, err)
 

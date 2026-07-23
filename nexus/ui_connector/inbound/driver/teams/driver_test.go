@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
@@ -44,9 +45,11 @@ func TestStreamActivityContextRoutesToPinnedWorker(t *testing.T) {
 	assert.Equal(t, pinnedActivityScheduleToStartTimeout, got.ScheduleToStartTimeout)
 }
 
-func TestFinishStreamFallsBackToSharedQueueUpdate(t *testing.T) {
-	driver := NewDriver(workflow.ActivityOptions{StartToCloseTimeout: time.Minute})
-	var recovery inbound.UpdateMessageInput
+func TestFinishStreamReturnsPinnedWorkerError(t *testing.T) {
+	driver := NewDriver(workflow.ActivityOptions{
+		StartToCloseTimeout: time.Minute,
+		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
+	})
 
 	suite := testsuite.WorkflowTestSuite{}
 	env := suite.NewTestWorkflowEnvironment()
@@ -55,13 +58,6 @@ func TestFinishStreamFallsBackToSharedQueueUpdate(t *testing.T) {
 			return errors.New("pinned worker unavailable")
 		},
 		activity.RegisterOptions{Name: finishStreamActivity},
-	)
-	env.RegisterActivityWithOptions(
-		func(_ context.Context, input inbound.UpdateMessageInput) error {
-			recovery = input
-			return nil
-		},
-		activity.RegisterOptions{Name: updateMessageActivity},
 	)
 	workflowFn := func(ctx workflow.Context) error {
 		return driver.FinishStream(ctx, inbound.FinishStreamInput{
@@ -75,7 +71,6 @@ func TestFinishStreamFallsBackToSharedQueueUpdate(t *testing.T) {
 				SessionID: "teams:conversation-1",
 				TaskQueue: "teams-worker-1",
 			},
-			FullText: "complete answer",
 		})
 	}
 	env.RegisterWorkflow(workflowFn)
@@ -83,10 +78,8 @@ func TestFinishStreamFallsBackToSharedQueueUpdate(t *testing.T) {
 	env.ExecuteWorkflow(workflowFn)
 
 	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError())
-	assert.Equal(t, "activity-1", recovery.MessageID)
-	assert.Equal(t, "complete answer", recovery.Text)
-	assert.Equal(t, "https://example.test/teams/", recovery.ServiceURL)
+	require.Error(t, env.GetWorkflowError())
+	assert.ErrorContains(t, env.GetWorkflowError(), "pinned worker unavailable")
 }
 
 func TestAcknowledgeApprovalUpdatesPrompt(t *testing.T) {

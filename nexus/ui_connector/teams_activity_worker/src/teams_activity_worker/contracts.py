@@ -98,7 +98,6 @@ class UpdateStream:
     metadata: TextMetadata
     handle: StreamHandle
     delta: str
-    full_text: str
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> UpdateStream:
@@ -109,7 +108,6 @@ class UpdateStream:
             metadata=metadata,
             handle=handle,
             delta=_string(payload, "Delta"),
-            full_text=_string(payload, "FullText"),
         )
 
 
@@ -117,14 +115,13 @@ class UpdateStream:
 class FinishStream:
     metadata: TextMetadata
     handle: StreamHandle
-    full_text: str
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> FinishStream:
         handle = StreamHandle.from_payload(payload.get("Handle", {}))
         metadata = TextMetadata.from_payload(payload)
         handle.validate_for(metadata.session_id)
-        return cls(metadata=metadata, handle=handle, full_text=_string(payload, "FullText"))
+        return cls(metadata=metadata, handle=handle)
 
 
 @dataclass(frozen=True, slots=True)

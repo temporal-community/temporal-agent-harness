@@ -14,8 +14,6 @@ from teams_activity_worker.contracts import (
     UpdateStream,
 )
 from teams_activity_worker.platform import (
-    MESSAGE_UPDATE_INTERVAL_SECONDS,
-    STREAM_MODE_MESSAGE_UPDATE,
     STREAM_MODE_NATIVE,
     TeamsPlatform,
 )
@@ -74,9 +72,6 @@ class FakeStream:
     def emit(self, activity: object) -> None:
         self.calls.append(("emit", activity))
 
-    def clear_text(self) -> None:
-        self.calls.append(("clear_text",))
-
     async def close(self) -> Sent:
         self.calls.append(("close",))
         return Sent("stream-1")
@@ -126,87 +121,51 @@ async def test_begin_personal_chat_uses_native_streaming(fixture) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("conversation_type", ["channel", "groupChat"])
-async def test_begin_non_personal_chat_replies_with_updatable_message(fixture, conversation_type: str) -> None:
-    platform, conversations, _ = fixture
+async def test_begin_personal_chat_propagates_native_stream_failure() -> None:
+    conversations = FakeConversations()
 
-    handle = await platform.begin_stream(
-        BeginStream(metadata=metadata(text="first", thread_id="root-1"), conversation_type=conversation_type)
+    def failed_stream(_api, _reference):
+        raise RuntimeError("native stream failed")
+
+    platform = TeamsPlatform(
+        app_id="bot-1",
+        default_service_url="https://default.test/teams/",
+        api_factory=lambda _service_url: FakeApi(conversations),
+        worker_task_queue="teams-worker-1",
+        stream_factory=failed_stream,
     )
 
-    assert handle["TransportMode"] == STREAM_MODE_MESSAGE_UPDATE
-    assert handle["ID"] == "reply-1"
-    assert conversations.calls[0][0:3] == ("reply", "conversation-1", "root-1")
+    with pytest.raises(RuntimeError, match="native stream failed"):
+        await platform.begin_stream(BeginStream(metadata=metadata(), conversation_type="personal"))
+
+    assert not conversations.calls
+    assert not platform.streams
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("conversation_type", ["channel", "groupChat"])
-async def test_non_personal_chat_updates_original_message_sequentially(
-    fixture, monkeypatch: pytest.MonkeyPatch, conversation_type: str
-) -> None:
+async def test_begin_non_personal_chat_rejects_native_streaming(fixture, conversation_type: str) -> None:
     platform, conversations, _ = fixture
-    stream_metadata = metadata(text="first", thread_id="root-1")
-    result = await platform.begin_stream(BeginStream(metadata=stream_metadata, conversation_type=conversation_type))
-    handle = StreamHandle(
-        result["ID"],
-        result["SessionID"],
-        result["TransportMode"],
-        result["TaskQueue"],
-    )
-    sleeps: list[float] = []
 
-    async def record_sleep(delay: float) -> None:
-        update = conversations.calls[-1]
-        assert update[0:3] == ("update", "conversation-1", "reply-1")
-        payload = update[3].model_dump(by_alias=True, exclude_none=True)
-        assert payload["text"] == "hello world"
-        sleeps.append(delay)
-
-    monkeypatch.setattr(asyncio, "sleep", record_sleep)
-
-    await platform.update_stream(UpdateStream(stream_metadata, handle, " world", "hello world"))
-
-    assert sleeps == [MESSAGE_UPDATE_INTERVAL_SECONDS]
-    assert MESSAGE_UPDATE_INTERVAL_SECONDS == 0.3
+    with pytest.raises(ValueError, match="only in personal conversations"):
+        await platform.begin_stream(
+            BeginStream(metadata=metadata(text="first", thread_id="root-1"), conversation_type=conversation_type)
+        )
+    assert not conversations.calls
 
 
 @pytest.mark.asyncio
-async def test_non_personal_chat_flushes_final_text_to_original_message(fixture) -> None:
-    platform, conversations, _ = fixture
-    stream_metadata = metadata(text="first", thread_id="root-1")
-    result = await platform.begin_stream(BeginStream(metadata=stream_metadata, conversation_type="channel"))
-    handle = StreamHandle(
-        result["ID"],
-        result["SessionID"],
-        result["TransportMode"],
-        result["TaskQueue"],
-    )
-
-    await platform.finish_stream(FinishStream(stream_metadata, handle, "hello world"))
-
-    update = conversations.calls[-1]
-    assert update[0:3] == ("update", "conversation-1", "reply-1")
-    payload = update[3].model_dump(by_alias=True, exclude_none=True)
-    assert payload["text"] == "hello world"
-    assert "reply-1" not in platform.streams
-
-
-@pytest.mark.asyncio
-async def test_native_update_posts_stream_entity_without_sleep(fixture, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_native_update_posts_stream_entity(fixture) -> None:
     platform, _, stream = fixture
     await platform.begin_stream(BeginStream(metadata=metadata(), conversation_type="personal"))
     handle = StreamHandle("stream-1", "teams:conversation-1", STREAM_MODE_NATIVE, "teams-worker-1")
-    sleeps: list[float] = []
 
-    async def record_sleep(delay: float) -> None:
-        sleeps.append(delay)
+    await platform.update_stream(UpdateStream(metadata(), handle, "hello"))
 
-    monkeypatch.setattr(asyncio, "sleep", record_sleep)
-
-    await platform.update_stream(UpdateStream(metadata(), handle, "hello", "hello"))
-
-    assert stream.calls[-1] == ("emit", "hello")
-    assert not sleeps
+    assert stream.calls[-1][0] == "emit"
+    emitted = stream.calls[-1][1]
+    assert emitted.text == "hello"
+    assert emitted.text_format == "markdown"
 
 
 @pytest.mark.asyncio
@@ -215,13 +174,12 @@ async def test_native_finish_posts_final_stream_message(fixture) -> None:
     await platform.begin_stream(BeginStream(metadata=metadata(), conversation_type="personal"))
     handle = StreamHandle("stream-1", "teams:conversation-1", STREAM_MODE_NATIVE, "teams-worker-1")
 
-    await platform.finish_stream(FinishStream(metadata(), handle, "complete"))
+    await platform.update_stream(UpdateStream(metadata(), handle, "complete"))
+    await platform.finish_stream(FinishStream(metadata(), handle))
 
-    assert stream.calls[-3][0] == "clear_text"
     assert stream.calls[-2][0] == "emit"
-    final_activity = stream.calls[-2][1]
-    assert final_activity.text == "complete"
-    assert stream.calls[-1][0] == "close"
+    assert stream.calls[-2][1].text == "complete"
+    assert stream.calls[-1] == ("close",)
     assert "stream-1" not in platform.streams
 
 
@@ -256,4 +214,4 @@ async def test_update_rejects_stream_owned_by_another_worker(fixture) -> None:
     handle = StreamHandle("missing", "teams:conversation-1", STREAM_MODE_NATIVE, "another-worker")
 
     with pytest.raises(ValueError, match="not active"):
-        await platform.update_stream(UpdateStream(metadata(), handle, "hello", "hello"))
+        await platform.update_stream(UpdateStream(metadata(), handle, "hello"))

@@ -17,13 +17,11 @@ type Driver interface {
 	// finalization. Drivers may emulate streaming by updating a single message.
 	BeginStream(ctx workflow.Context, input BeginStreamInput) (StreamHandle, error)
 
-	// UpdateStream delivers one text delta to the open stream. FullText contains
-	// the complete response accumulated through this delta for drivers that need
-	// to replace the entire message instead of appending Delta.
+	// UpdateStream delivers one text delta to the open stream.
 	UpdateStream(ctx workflow.Context, input UpdateStreamInput) error
 
-	// FinishStream closes the open stream and ensures its final visible content
-	// is FullText. The router will not send more updates for this handle afterward.
+	// FinishStream closes the open stream. The router will not send more updates
+	// for this handle afterward.
 	FinishStream(ctx workflow.Context, input FinishStreamInput) error
 
 	// PostMessage sends a single, non-streamed message.
@@ -88,13 +86,11 @@ type BeginStreamInput struct {
 
 type UpdateStreamInput struct {
 	TextMetadata
-	Handle   StreamHandle
-	Delta    string
-	FullText string
+	Handle StreamHandle
+	Delta  string
 }
 
 type FinishStreamInput struct {
 	TextMetadata
-	Handle   StreamHandle
-	FullText string
+	Handle StreamHandle
 }

@@ -130,7 +130,7 @@ teams-connector:
 
 # Run the Python Teams SDK activity worker. Safe to run multiple instances.
 # Requires: MICROSOFT_TENANT_ID, MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD
-teams-py-worker:
+teams-activities-worker:
     cd "{{nexus_dir}}/ui_connector/teams_activity_worker" && \
     MICROSOFT_TENANT_ID="${MICROSOFT_TENANT_ID}" \
     MICROSOFT_APP_ID="${MICROSOFT_APP_ID}" \
@@ -139,7 +139,7 @@ teams-py-worker:
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \
-    uv run python -m teams_activity_worker.platform
+    uv run teams-activity-worker
 
 # Run the Teams webhook server.
 teams-webhook:

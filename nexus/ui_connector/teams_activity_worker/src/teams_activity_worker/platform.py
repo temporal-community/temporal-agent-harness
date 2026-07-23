@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -27,10 +26,8 @@ from .contracts import (
 )
 
 INITIAL_STREAMING_TEXT = "Thinking..."
-MESSAGE_UPDATE_INTERVAL_SECONDS = 0.3
 STREAM_START_TIMEOUT_SECONDS = 30.0
 STREAM_MODE_NATIVE = "native"
-STREAM_MODE_MESSAGE_UPDATE = "message-update"
 
 
 def approval_card(prompt: ApprovalPrompt) -> AdaptiveCard:
@@ -90,10 +87,10 @@ def _streaming_allowed(conversation_type: str) -> bool:
 
 @dataclass(slots=True)
 class ActiveStream:
-    """Track the transport mode and optional native Teams stream."""
+    """Track an active native Teams stream."""
 
     transport_mode: str
-    native_stream: Any | None = None
+    native_stream: Any
 
 
 class TeamsPlatform:
@@ -149,23 +146,14 @@ class TeamsPlatform:
 
     async def begin_stream(self, request: BeginStream) -> dict[str, object]:
         metadata = request.metadata
-        # Teams SDK streaming is 1:1-only; shared conversations use message updates.
         if not _streaming_allowed(request.conversation_type):
-            mode = STREAM_MODE_MESSAGE_UPDATE
-            stream_id = await self._begin_message_updates(metadata)
-        else:
-            mode = STREAM_MODE_NATIVE
-            try:
-                stream_id = await self._begin_native_stream(metadata)
-            except Exception as error:
-                logging.warning("Teams native stream could not start; using message updates: %s", error)
-                mode = STREAM_MODE_MESSAGE_UPDATE
-                stream_id = await self._begin_message_updates(metadata)
+            raise ValueError("Teams native streaming is supported only in personal conversations")
+        stream_id = await self._begin_native_stream(metadata)
 
         return {
             "ID": stream_id,
             "SessionID": metadata.session_id,
-            "TransportMode": mode,
+            "TransportMode": STREAM_MODE_NATIVE,
             "TaskQueue": self.worker_task_queue,
             "CloseBeforeApproval": True,
         }
@@ -187,14 +175,6 @@ class TeamsPlatform:
         self.streams[stream_id] = ActiveStream(transport_mode=STREAM_MODE_NATIVE, native_stream=stream)
         return stream_id
 
-    async def _begin_message_updates(self, metadata: TextMetadata) -> str:
-        """Start message replacements for channels and group chats."""
-        text = metadata.text if metadata.text.strip() else INITIAL_STREAMING_TEXT
-        activity = self._base_activity(metadata, MessageActivityInput(text=text).with_text_format("markdown"))
-        stream_id = await self._create_or_reply(metadata, activity)
-        self.streams[stream_id] = ActiveStream(transport_mode=STREAM_MODE_MESSAGE_UPDATE)
-        return stream_id
-
     async def update_stream(self, request: UpdateStream) -> None:
         if not request.delta:
             return
@@ -203,12 +183,7 @@ class TeamsPlatform:
             raise ValueError(f"Teams stream {request.handle.id!r} is not active on this worker")
         if stream.transport_mode != request.handle.transport_mode:
             raise ValueError("Teams stream transport mode does not match handle")
-        if stream.native_stream is not None:
-            stream.native_stream.emit(request.delta)
-            return
-        await self._update_message(request.metadata, request.handle.id, request.full_text)
-        # Space message updates to avoid Teams rate limits.
-        await asyncio.sleep(MESSAGE_UPDATE_INTERVAL_SECONDS)
+        stream.native_stream.emit(MessageActivityInput(text=request.delta).with_text_format("markdown"))
 
     async def finish_stream(self, request: FinishStream) -> None:
         stream = self.streams.get(request.handle.id)
@@ -217,13 +192,8 @@ class TeamsPlatform:
         if stream.transport_mode != request.handle.transport_mode:
             raise ValueError("Teams stream transport mode does not match handle")
         try:
-            if stream.native_stream is None:
-                await self._update_message(request.metadata, request.handle.id, request.full_text)
-                return
             if stream.native_stream.canceled:
                 return
-            stream.native_stream.clear_text()
-            stream.native_stream.emit(MessageActivityInput(text=request.full_text).with_text_format("markdown"))
             result = await stream.native_stream.close()
             if result is None and not stream.native_stream.canceled:
                 raise RuntimeError("Teams SDK stream did not produce a final activity")

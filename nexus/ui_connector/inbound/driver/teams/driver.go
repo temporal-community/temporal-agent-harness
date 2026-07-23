@@ -59,19 +59,7 @@ func (d Driver) UpdateStream(ctx workflow.Context, input inbound.UpdateStreamInp
 }
 
 func (d Driver) FinishStream(ctx workflow.Context, input inbound.FinishStreamInput) error {
-	// Finish on the worker that owns the in-memory Teams stream.
-	err := workflow.ExecuteActivity(d.streamActivityContext(ctx, input.Handle), finishStreamActivity, input).Get(ctx, nil)
-	if err == nil {
-		return nil
-	}
-	// If that worker is unavailable, update the same activity through the shared queue.
-	workflow.GetLogger(ctx).Warn("Teams FinishStream failed on pinned worker; finalizing through shared queue", "error", err)
-	recovery := inbound.UpdateMessageInput{
-		TextMetadata: input.TextMetadata,
-		MessageID:    input.Handle.ID,
-	}
-	recovery.Text = input.FullText
-	return workflow.ExecuteActivity(d.activityContext(ctx), updateMessageActivity, recovery).Get(ctx, nil)
+	return workflow.ExecuteActivity(d.streamActivityContext(ctx, input.Handle), finishStreamActivity, input).Get(ctx, nil)
 }
 
 func (d Driver) PostMessage(ctx workflow.Context, input inbound.TextMetadata) error {

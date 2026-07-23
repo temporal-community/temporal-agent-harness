@@ -2,6 +2,7 @@ package router
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound"
@@ -56,6 +57,11 @@ func (w *RouterWorkflow) Run(ctx workflow.Context, input wire.Input) error {
 		// An immediate, synchronous answer - no turn was created, nothing to poll.
 		return w.inbound.PostMessage(ctx, textMetadata(input, result.Reply))
 
+	case result.Handle != nil && !supportsStreaming(input):
+		// Teams channels and group chats do not support native streaming. Collect
+		// the complete response and post it as a single message.
+		return w.postResp(ctx, *result.Handle, input)
+
 	case result.Handle != nil:
 		// A turn was created; consume its response stream and deliver it inbound.
 		return w.streamResp(ctx, *result.Handle, input)
@@ -64,17 +70,6 @@ func (w *RouterWorkflow) Run(ctx workflow.Context, input wire.Input) error {
 		// Fire-and-forget (e.g. an approval decision was resolved) - nothing further.
 		return nil
 	}
-}
-
-// deliveryState tracks a response segment: Handle routes its active platform
-// stream, while FullText supports finalization or recovery.
-type deliveryState struct {
-	Handle   *inbound.StreamHandle
-	FullText string
-}
-
-func (s *deliveryState) reset() {
-	*s = deliveryState{}
 }
 
 func textMetadata(input wire.Input, text string) inbound.TextMetadata {
@@ -94,39 +89,95 @@ func textMetadata(input wire.Input, text string) inbound.TextMetadata {
 	return metadata
 }
 
+// supportsStreaming reports whether the inbound conversation can receive
+// incremental response updates.
+func supportsStreaming(input wire.Input) bool {
+	if input.Message == nil {
+		return true
+	}
+	provider, _, found := strings.Cut(input.SessionID, ":")
+	if !found || !strings.EqualFold(provider, "teams") {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(input.Message.ConversationType)) {
+	case "channel", "groupchat":
+		return false
+	default:
+		return true
+	}
+}
+
+// postResp polls a turn to completion and posts all text as one message. Teams
+// channels and group chats use this path because they do not support native streams.
+func (w *RouterWorkflow) postResp(ctx workflow.Context, handle outbound.TurnHandle, input wire.Input) error {
+	cursor := handle.StreamHeadOffset
+	fullText := ""
+
+	for {
+		res, err := w.outbound.PollTurn(ctx, handle, cursor)
+		if err != nil {
+			workflow.GetLogger(ctx).Warn("postResp: PollTurn failed", "error", err)
+			return nil
+		}
+		cursor = res.NextCursor
+
+		if res.Closed {
+			if fullText == "" {
+				return nil
+			}
+			return w.inbound.PostMessage(ctx, textMetadata(input, fullText))
+		}
+
+		for _, delta := range res.Deltas {
+			if delta.ApprovalRequested != nil {
+				req := delta.ApprovalRequested
+				if err := w.inbound.PostApprovalPrompt(ctx, inbound.ApprovalPromptInput{
+					TextMetadata: textMetadata(input, ""),
+					ToolID:       req.ToolID,
+					ToolName:     req.ToolName,
+					ToolInput:    req.ToolInputJSON,
+				}); err != nil {
+					workflow.GetLogger(ctx).Warn("postResp: PostApprovalPrompt failed", "error", err)
+				}
+				continue
+			}
+
+			fullText += delta.Text
+			if delta.IsFinal {
+				if fullText == "" {
+					return nil
+				}
+				return w.inbound.PostMessage(ctx, textMetadata(input, fullText))
+			}
+		}
+	}
+}
+
 // streamResp polls the outbound driver for a started turn and streams each delta back
 // through the inbound driver, until the turn closes. This loop is generic over any
 // outbound/inbound pairing: it only deals in outbound.Delta and inbound.Driver calls.
 func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHandle, input wire.Input) error {
 	cursor := handle.StreamHeadOffset
-	state := deliveryState{}
 
-	// Start the initial inbound stream before polling. If it cannot be opened,
-	// keep polling and buffer the response for one complete PostMessage.
-	fallbackToPostMessage := false
-	if err := w.beginStream(ctx, input, &state); err != nil {
-		workflow.GetLogger(ctx).Warn("streamResp: stream begin failed, falling back to postMessage", "error", err)
-		fallbackToPostMessage = true
+	// Start the initial inbound stream before polling.
+	streamHandle, err := w.beginStream(ctx, input)
+	if err != nil {
+		workflow.GetLogger(ctx).Error("streamResp: stream begin failed", "error", err)
+		return nil
 	}
 
 	for {
 		res, err := w.outbound.PollTurn(ctx, handle, cursor)
 		if err != nil {
 			workflow.GetLogger(ctx).Warn("streamResp: PollTurn failed", "error", err)
-			// The response is incomplete, so do not post the buffered fallback text.
-			w.endStream(ctx, input, &state)
+			w.endStream(ctx, input, streamHandle)
 			return nil
 		}
 		cursor = res.NextCursor
 
-		// A turn may close without an explicit final delta. Complete whichever
-		// delivery mode was selected when the stream began.
+		// A turn may close without an explicit final delta.
 		if res.Closed {
-			if fallbackToPostMessage && state.FullText != "" {
-				_ = w.inbound.PostMessage(ctx, textMetadata(input, state.FullText))
-			} else {
-				w.endStream(ctx, input, &state)
-			}
+			w.endStream(ctx, input, streamHandle)
 			return nil
 		}
 
@@ -134,12 +185,11 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHa
 			if delta.ApprovalRequested != nil {
 				req := delta.ApprovalRequested
 				// Teams must finish the current stream before posting an approval card
-				// so the messages appear in order. Resetting state makes the next text
+				// so the messages appear in order. Clearing the handle makes the next text
 				// delta start a new stream; Slack leaves this flag false.
-				if state.Handle != nil && state.Handle.CloseBeforeApproval {
-					w.endStream(ctx, input, &state)
-					state.reset()
-					fallbackToPostMessage = false
+				if streamHandle != nil && streamHandle.CloseBeforeApproval {
+					w.endStream(ctx, input, streamHandle)
+					streamHandle = nil
 				}
 				if err := w.inbound.PostApprovalPrompt(ctx, inbound.ApprovalPromptInput{
 					TextMetadata: textMetadata(input, ""),
@@ -154,40 +204,26 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHa
 
 			if delta.Text != "" {
 				// A Teams approval may have closed the previous stream. Reopen it when
-				// response text resumes. An initial begin failure stays in fallback mode
-				// instead of retrying BeginStream on every text delta.
-				if !fallbackToPostMessage && state.Handle == nil {
-					if err := w.beginStream(ctx, input, &state); err != nil {
-						workflow.GetLogger(ctx).Warn("streamResp: stream begin failed, falling back to postMessage", "error", err)
-						fallbackToPostMessage = true
+				// response text resumes.
+				if streamHandle == nil {
+					streamHandle, err = w.beginStream(ctx, input)
+					if err != nil {
+						workflow.GetLogger(ctx).Warn("streamResp: stream begin failed", "error", err)
+						return nil
 					}
 				}
-
-				// Always build the complete segment. In fallback mode, skip streaming
-				// updates and post FullText once the segment is complete.
-				state.FullText += delta.Text
-				if !fallbackToPostMessage {
-					w.updateStream(ctx, input, &state, delta.Text)
-				}
+				w.updateStream(ctx, input, streamHandle, delta.Text)
 			}
 
-			// IsFinal means FullText is complete and safe to deliver as a fallback.
 			if delta.IsFinal {
-				if fallbackToPostMessage && state.FullText != "" {
-					_ = w.inbound.PostMessage(ctx, textMetadata(input, state.FullText))
-				} else {
-					w.endStream(ctx, input, &state)
-				}
+				w.endStream(ctx, input, streamHandle)
 				return nil
 			}
 		}
 	}
 }
 
-func (w *RouterWorkflow) beginStream(ctx workflow.Context, input wire.Input, state *deliveryState) error {
-	if state.Handle != nil {
-		return nil
-	}
+func (w *RouterWorkflow) beginStream(ctx workflow.Context, input wire.Input) (*inbound.StreamHandle, error) {
 	conversationType := ""
 	if input.Message != nil {
 		conversationType = input.Message.ConversationType
@@ -197,39 +233,36 @@ func (w *RouterWorkflow) beginStream(ctx workflow.Context, input wire.Input, sta
 		ConversationType: conversationType,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	state.Handle = &streamHandle
-	return nil
+	return &streamHandle, nil
 }
 
 func (w *RouterWorkflow) updateStream(
 	ctx workflow.Context,
 	input wire.Input,
-	state *deliveryState,
+	handle *inbound.StreamHandle,
 	delta string,
 ) {
-	if state.Handle == nil {
+	if handle == nil {
 		return
 	}
 	if err := w.inbound.UpdateStream(ctx, inbound.UpdateStreamInput{
 		TextMetadata: textMetadata(input, ""),
-		Handle:       *state.Handle,
+		Handle:       *handle,
 		Delta:        delta,
-		FullText:     state.FullText,
 	}); err != nil {
 		workflow.GetLogger(ctx).Warn("streamResp: stream update failed", "error", err)
 	}
 }
 
-func (w *RouterWorkflow) endStream(ctx workflow.Context, input wire.Input, state *deliveryState) {
-	if state.Handle == nil {
+func (w *RouterWorkflow) endStream(ctx workflow.Context, input wire.Input, handle *inbound.StreamHandle) {
+	if handle == nil {
 		return
 	}
 	if err := w.inbound.FinishStream(ctx, inbound.FinishStreamInput{
 		TextMetadata: textMetadata(input, ""),
-		Handle:       *state.Handle,
-		FullText:     state.FullText,
+		Handle:       *handle,
 	}); err != nil {
 		workflow.GetLogger(ctx).Warn("streamResp: stream finish failed", "error", err)
 	}
