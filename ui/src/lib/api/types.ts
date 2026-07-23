@@ -32,6 +32,7 @@ export interface Session {
   label: string;
   agent_workflow_type: AgentWorkflowType;
   is_message_queuing_enabled: boolean;
+  is_discovered?: boolean;
   initial_user_message?: string | null;
   execution_status?: string | null;
   closed?: boolean;

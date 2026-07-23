@@ -1,0 +1,64 @@
+# Scoped justfile for the QaAgent example (not in this repo).
+# Run from this directory: `just <recipe>`.
+#
+# Self-contained local stack:
+#   just temporal          # 1. local Temporal dev server (or bring your own)
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API + UI on :8000
+#   just worker            # 4. this example's agent worker
+# Optional: `just ui-dev` runs the Svelte Vite dev server on :5173 with /api proxied to :8000.
+#
+# uv installs the project's `examples` dependency group (the Gemini SDK) on
+# demand, so there's no separate install step. First-time setup: `cp .env.example .env.local`
+# and fill it in (Temporal connection + GEMINI_API_KEY). See README.md.
+
+# Read the single shared env file at the repo root (resolved relative to this justfile).
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+ui := root / "ui"
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Show the Temporal connection these recipes will use (read from .env.local).
+config:
+    @echo "TEMPORAL_CONFIG_FILE = ${TEMPORAL_CONFIG_FILE:-<unset — set it in .env.local; see .env.example>}"
+    @echo "TEMPORAL_PROFILE     = ${TEMPORAL_PROFILE:-default}"
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Run the shared session-manager worker (examples/session_manager_worker.py).
+session-manager:
+    cd "{{root}}" && uv run --group examples python -m examples.session_manager_worker
+
+# Build and serve the Svelte UI + FastAPI API on http://localhost:8000. The shared examples app
+# entrypoint is pointed at this example's registry.
+server: app-build
+    cd "{{root}}" && uv run --group examples python -m examples.app "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Install the shared Svelte UI dependencies.
+app-install:
+    pnpm --dir "{{ui}}" install
+
+# Type-check the shared Svelte UI and run the local Svelte 5 syntax guard.
+app-check:
+    pnpm --dir "{{ui}}" run check
+    pnpm --dir "{{ui}}" run check:svelte5
+
+# Build the shared Svelte UI into temporal_agent_harness/ui/dist for packaging/server use.
+app-build:
+    pnpm --dir "{{ui}}" run build
+
+# Build, test, and create the wheel/sdist in dist/.
+package: app-build app-check
+    cd "{{root}}" && uv run pytest
+    cd "{{root}}" && uv build
+
+# Run the shared Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
+ui-dev:
+    pnpm --dir "{{ui}}" run dev

@@ -159,12 +159,14 @@
         connecting={run.connecting}
         sending={run.sending}
         creatingSession={run.creatingSession}
+        refreshingSessions={run.refreshingSessions}
         closed={run.sessionClosed}
         closedWorkflowIds={run.closedWorkflowIds}
         error={run.connectionError}
         {pendingApprovalCount}
         onNewSession={(workflowType) => run.startNewSession(workflowType)}
         onSelectSession={(sessionId) => run.selectSession(sessionId)}
+        onRefreshSessions={() => run.refreshSessions()}
       />
     </div>
 

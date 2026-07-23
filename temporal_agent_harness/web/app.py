@@ -171,11 +171,21 @@ def create_agent_harness_app(
 
     @app.get("/api/sessions")
     async def list_sessions():
+        registry_result: AgentRegistry = await app.state.manager_handle.query(
+            SessionManagerWorkflow.available_agents,
+            result_type=AgentRegistry,
+        )
         sessions: list[Session] = await app.state.manager_handle.query(
             SessionManagerWorkflow.list_sessions,
             result_type=list[Session],
         )
-        return await _sessions_with_execution_state(app.state.temporal, sessions)
+        known_workflow_ids = {session.workflow_id for session in sessions}
+        discovered = await _discover_untracked_sessions(
+            app.state.temporal, registry_result, known_workflow_ids
+        )
+        return await _sessions_with_execution_state(
+            app.state.temporal, sessions + discovered
+        )
 
     @app.post("/api/sessions")
     async def create_session(req: CreateSessionRequestBody):
@@ -398,6 +408,45 @@ async def _session_with_execution_state(
     if initial_user_message is not None:
         content["initial_user_message"] = initial_user_message
     return content
+
+
+_DISCOVERY_LIMIT = 200
+
+
+async def _discover_untracked_sessions(
+    temporal: Client,
+    registry: AgentRegistry,
+    known_workflow_ids: set[str],
+) -> list[Session]:
+    """Find agent workflows already running in the namespace that this session manager didn't
+    start itself (e.g. launched directly against a worker, or by another session manager),
+    so the UI can list and attach to them instead of only ones it created via ``create_session``.
+    """
+
+    if not registry.agents:
+        return []
+
+    escaped_types = [agent.workflow_type.replace("'", "''") for agent in registry.agents]
+    types_filter = " OR ".join(f"WorkflowType='{workflow_type}'" for workflow_type in escaped_types)
+    query = f"ExecutionStatus='Running' AND ({types_filter})"
+
+    discovered: list[Session] = []
+    async for execution in temporal.list_workflows(query=query, limit=_DISCOVERY_LIMIT):
+        if execution.id in known_workflow_ids:
+            continue
+        descriptor = registry.by_workflow_type(execution.workflow_type)
+        if descriptor is None:
+            continue
+        discovered.append(
+            Session(
+                workflow_id=execution.id,
+                created_at=execution.start_time.timestamp(),
+                label=descriptor.label,
+                agent_workflow_type=execution.workflow_type,
+                is_discovered=True,
+            )
+        )
+    return discovered
 
 
 async def _sessions_with_execution_state(
