@@ -1,0 +1,18 @@
+# Registry of agents the sandboxed-tool demo UI can launch.
+#
+# The shared FastAPI server (examples/app.py) reads this file and passes the parsed registry
+# into the packaged SessionManagerWorkflow as its workflow init arg. The manager then serves it
+# back over the `available_agents` query, so the app server can expose it at /api/agents without
+# hardcoding the agent list.
+
+[[agents]]
+key = "sandboxed-tool-demo"
+workflow_type = "SandboxedToolDemoAgent"
+task_queue = "sandboxed-tool-demo"
+label = "Sandboxed Tool Demo"
+description = """
+A real Gemini-backed chat agent with exactly one tool, run_bash — an arbitrary bash command,
+sandboxed on a real Daytona cloud sandbox (@agent.activity_tool_defn(sandboxed=True)), NEVER
+auto-approved: every single call pauses for your explicit approval first
+(ToolApprovalPolicy.always_require_approvals()). Needs GEMINI_API_KEY, DAYTONA_API_KEY, and a
+prebuilt sandbox image (`just build-sandbox`)."""

@@ -1,0 +1,54 @@
+# Sandbox image for examples/sandboxed_tool_demo's Daytona backend (see that example's tools.py).
+#
+# Lives at the REPO ROOT, not inside examples/sandboxed_tool_demo/ — not a style choice.
+# remote-box calls daytona_sdk.Image.from_dockerfile(path), which resolves every COPY source
+# relative to THIS FILE'S OWN DIRECTORY (confirmed by reading daytona_sdk.Image.from_dockerfile's
+# source: it parses the Dockerfile's COPY lines and joins each source against the dockerfile's
+# containing directory — `local_project_root` plays no part in that resolution, only in naming/
+# hashing the resulting snapshot). So `COPY pyproject.toml uv.lock ./` / `COPY . .` only find the
+# right files if this Dockerfile's directory IS the project root — placing it inside the example's
+# own subdirectory (the first attempt) fails with "Path does not exist:
+# .../examples/sandboxed_tool_demo/pyproject.toml", since Daytona looked for pyproject.toml
+# relative to the Dockerfile, not relative to SandboxConfig.local_project_root.
+#
+# Unlike remote-box's own trivial examples (which only need `remote-box` itself importable), this
+# project's sandboxed tools live in examples/sandboxed_tool_demo/tools.py, which imports
+# `temporal_agent_harness.harness.sandbox` at module scope (to build its own SandboxConfig) — so
+# the whole project, with its `sandbox` extra, needs to be installed here, not just remote-box.
+#
+# remote-box's Daytona backend also hardcodes the interpreter path to /app/.venv/bin/python (see
+# remote/backends/daytona/__init__.py's PYTHON_CMD), so WORKDIR /app and a venv at /app/.venv
+# aren't just convention — they're required.
+#
+# Built via the offline/CI step (never implicitly at runtime — SandboxConfig.require_prebuilt):
+#   from temporal_agent_harness.harness.sandbox import build_sandbox
+#   from examples.sandboxed_tool_demo.tools import SANDBOX
+#   build_sandbox(SANDBOX)
+# (needs DAYTONA_API_KEY set — see .env.local), or `just build-sandbox` from that example's dir.
+#
+# IMPORTANT — no `COPY . .`: daytona_sdk.Image.from_dockerfile() builds its own file list by
+# parsing this Dockerfile's COPY lines itself (see remote-box's DaytonaBackend.ensure_built) —
+# it does NOT invoke a real `docker build`, so `.dockerignore` is never consulted, at all. A bare
+# `COPY . .` would walk the ENTIRE repo root byte for byte, including `.venv` (huge, full of
+# machine-specific absolute-path symlinks — would bloat or outright break the snapshot upload),
+# `.git`, `ui/node_modules`, `tests/`, and — critically — `.env.local`, which holds real API keys
+# and must never end up baked into an image. Every source below is listed explicitly instead;
+# add a new one here (never widen this to a directory-wildcard/`.`) if the sandboxed tool set
+# ever needs to import from somewhere else in the repo.
+
+FROM ghcr.io/astral-sh/uv:python3.12-trixie-slim
+
+WORKDIR /app
+
+# Install dependencies first (cached across rebuilds unless pyproject.toml/uv.lock change).
+# README.md is required too: pyproject.toml's `readme = "README.md"` makes setuptools read it
+# during the project's own install below, even though nothing here otherwise needs it.
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --extra sandbox --frozen --no-install-project
+
+# Then exactly the source the sandbox needs: the installable package itself, plus examples/ (not
+# part of the wheel — see pyproject.toml's packages.find — but where the sandboxed tool actually
+# lives, re-imported by its full dotted path `examples.sandboxed_tool_demo.tools`).
+COPY temporal_agent_harness/ ./temporal_agent_harness/
+COPY examples/ ./examples/
+RUN uv sync --extra sandbox --frozen

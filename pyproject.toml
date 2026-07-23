@@ -51,6 +51,11 @@ ui = [
 code-mode = [
     "pydantic-monty>=0.0.18",
 ]
+# Exploratory: remote-box, for sandboxed tool execution support. remote-box requires
+# Python>=3.12, stricter than this project's >=3.11 floor, hence the marker below.
+sandbox = [
+    "remote-box>=0.6.0; python_version >= '3.12'",
+]
 
 [dependency-groups]
 # Everything needed to RUN the bundled Monty example from a checkout. Not part of the

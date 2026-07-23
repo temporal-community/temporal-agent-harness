@@ -17,6 +17,7 @@ from __future__ import annotations
 import ast
 import contextvars
 import inspect
+import os
 import textwrap
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
@@ -25,6 +26,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Any,
     Literal,
@@ -112,6 +114,17 @@ from temporal_agent_harness.harness.slash_commands import (
 # lives in its own leaf module so the sandbox-safe activity contracts in agent_protocol can embed
 # it without a circular import back through this module.
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
+
+# SandboxRef/SandboxToolContext (the serializable carriers for a live sandboxed-tool sandbox)
+# live in their own leaf module for the same reason — they cross into AgentToolContext without
+# requiring the optional `sandbox` extra (remote-box). `SandboxConfig` itself DOES require
+# remote-box (it wraps remote-box's own backend config types), so it's imported only under
+# TYPE_CHECKING here — this core module accepts a `sandbox=` argument by duck typing (constructor
+# arg, attribute access), never by importing `harness.sandbox` at runtime. See `harness/sandbox/`.
+from temporal_agent_harness.harness.sandbox_ref import SandboxRef, SandboxToolContext
+
+if TYPE_CHECKING:
+    from temporal_agent_harness.harness.sandbox.config import SandboxConfig
 
 # ParamSpec/return-type vars for the tool decorators. They let each be typed as an
 # identity over the wrapped callable (``Callable[P, Awaitable[R]] -> Callable[P,
@@ -644,14 +657,22 @@ class AgentToolContext(BaseModel):
 
     stream_context: TurnStreamContext
     tool_id: str
+    sandbox: SandboxToolContext | None = None
+    """Set only for a ``sandboxed=True`` tool, carrying the agent's current live sandbox ref plus
+    its backend config — the activity body reads this back to run the tool's body inside that
+    sandbox instead of directly in the worker process. ``None`` for every unsandboxed tool."""
 
     @classmethod
-    def for_current_tool_id(cls) -> AgentToolContext:
+    def for_current_tool_id(
+        cls, *, sandbox: SandboxToolContext | None = None
+    ) -> AgentToolContext:
         """Build the context for the in-flight tool call — both fields resolved implicitly.
 
         The tool id (the model's per-call id) and the turn (stream context) are both
         read from the ambient state ``run_tool`` parked for this invocation, so the
         caller threads nothing. Raises if there is no current tool call or active turn.
+        ``sandbox`` is threaded explicitly by the caller (the :func:`activity_tool_defn`
+        dispatcher), since only it knows whether the tool being dispatched is sandboxed.
         """
         tool_id = _current_tool_id()
         runner = _CURRENT_RUNNER.get()
@@ -661,7 +682,7 @@ class AgentToolContext(BaseModel):
                 "no active agent turn — AgentToolContext.for_current_tool_id() must "
                 "be called while a turn is in flight"
             )
-        return cls(stream_context=stream_context, tool_id=tool_id)
+        return cls(stream_context=stream_context, tool_id=tool_id, sandbox=sandbox)
 
 
 # ---------------------------------------------------------------------------
@@ -1231,6 +1252,7 @@ class AgentWorkflowRunner:
         enable_message_queuing_default: bool = False,
         custom_approval_fallback: CustomApprovalFallback | None = None,
         slash_commands: Iterable[SlashCommandDefinition] | None = None,
+        sandbox: SandboxConfig | None = None,
     ) -> None:
         """Construct the runner inside the agent's ``@workflow.init``::
 
@@ -1250,6 +1272,14 @@ class AgentWorkflowRunner:
         human/operator slash command registry used by both first-class operator updates
         and normal ``slash`` turns. If omitted, the packaged harness defaults are enabled;
         pass an empty iterable to disable packaged slash commands.
+
+        ``sandbox`` chooses the backend this agent's ``sandboxed=True`` tools run in — see
+        ``harness/sandbox/``. It is the single place backend choice is made for a given agent
+        (never the tool itself). Left unset (the default), any ``sandboxed=True`` tool this
+        agent uses raises ``SandboxNotConfigured`` the moment it's dispatched. When set, the
+        sandbox is auto-activated at the start of every turn, auto-paused between turns while
+        idly waiting for the next message, and unconditionally torn down on every termination
+        path this runner's own code can still run on (see :meth:`run`).
         """
         # The runner is built inside the agent's @workflow.init; enforce here that the
         # enclosing workflow honors the standardized agent-input contract (run/__init__
@@ -1299,6 +1329,14 @@ class AgentWorkflowRunner:
             has_custom_approval_fallback=custom_approval_fallback is not None,
         )
         self._closed = False
+
+        # `sandbox` is opaque here by design (only imported under TYPE_CHECKING) — this core
+        # module never needs the optional `sandbox` extra (remote-box) installed just to accept
+        # and hold a SandboxConfig instance a caller already constructed. `sandbox_ref` is the
+        # durable, serializable pointer to the live sandbox (persisted across turns, reattachable
+        # from any worker process on a cache miss) — see `harness/sandbox/`.
+        self._sandbox_config: SandboxConfig | None = sandbox
+        self.sandbox_ref: SandboxRef | None = None
 
         # Register protocol handlers dynamically so the containing workflow doesn't need to.
         workflow.set_update_handler(
@@ -1930,33 +1968,154 @@ class AgentWorkflowRunner:
         — the single reliable end-of-turn signal — before looping. A handler that raises
         does NOT end the session: its error surfaces as an :class:`AgentError` and the loop
         continues with the next message.
+
+        If ``sandbox=`` was configured, this also drives the sandbox lifecycle: activated
+        (created, or resumed if paused) at the start of every turn; paused between turns, but
+        only when the loop is actually about to idle-wait for the next message (a message
+        already queued skips the pause — no point pausing and immediately resuming); and
+        unconditionally torn down in this method's own outer ``finally``, which runs on graceful
+        close, normal completion, an uncaught exception, and workflow cancellation (Python's
+        ``finally`` semantics run on ``CancelledError`` same as any other exception — the standard
+        Temporal graceful-cancellation cleanup idiom). It does NOT run on a hard
+        ``ParentClosePolicy.TERMINATE``/external ``handle.terminate()`` — a server-side kill with
+        zero in-workflow code execution, the same inherent gap already documented for subagent
+        cleanup (see ``start_subagent``). Mitigate that gap with a backend-side TTL (e.g.
+        ``E2B(sandbox_ttl_seconds=...)``) so an orphaned-by-TERMINATE sandbox still self-expires.
         """
-        while not self._closed:
-            await workflow.wait_condition(
-                lambda: self._status.has_pending_turns or self._closed
-            )
-            if self._closed:
-                break
-            envelope, turn_id = self._status.start_next_turn()
-            turn_number = self._status.current_turn
-            self._pub(
-                turn_id, turn_number, TurnStarted(user_message=_render_message(envelope))
-            )
-            try:
-                result = await self._dispatch_turn(agent, envelope)
-                self._pub(
-                    turn_id,
-                    turn_number,
-                    AgentReply(output=result.model_dump(mode="json")),
+        try:
+            while not self._closed:
+                await workflow.wait_condition(
+                    lambda: self._status.has_pending_turns or self._closed
                 )
-            except Exception as e:  # noqa: BLE001 — surface ANY turn failure, keep the loop alive
-                self._pub(turn_id, turn_number, AgentError(message=str(e)))
-            finally:
-                # The turn is over and the agent is idle again — whether the handler
-                # returned or raised. Mark idle, then announce turn_end (the definitive
-                # end-of-turn signal) before looping back to wait for the next message.
-                self._status.complete_turn()
-                self._pub(turn_id, turn_number, TurnEnded())
+                if self._closed:
+                    break
+                envelope, turn_id = self._status.start_next_turn()
+                turn_number = self._status.current_turn
+                if self._sandbox_config is not None:
+                    await self._activate_sandbox()
+                self._pub(
+                    turn_id, turn_number, TurnStarted(user_message=_render_message(envelope))
+                )
+                try:
+                    result = await self._dispatch_turn(agent, envelope)
+                    self._pub(
+                        turn_id,
+                        turn_number,
+                        AgentReply(output=result.model_dump(mode="json")),
+                    )
+                except Exception as e:  # noqa: BLE001 — surface ANY turn failure, keep the loop alive
+                    self._pub(turn_id, turn_number, AgentError(message=str(e)))
+                finally:
+                    # The turn is over and the agent is idle again — whether the handler
+                    # returned or raised. Mark idle, then announce turn_end (the definitive
+                    # end-of-turn signal) before looping back to wait for the next message.
+                    self._status.complete_turn()
+                    self._pub(turn_id, turn_number, TurnEnded())
+                    if (
+                        self._sandbox_config is not None
+                        and not self._status.has_pending_turns
+                        and not self._closed
+                    ):
+                        await self._pause_sandbox()
+        finally:
+            if self._sandbox_config is not None:
+                await self._terminate_sandbox()
+
+    async def _activate_sandbox(self) -> None:
+        """Create-or-resume this run's sandbox — called at the start of every turn.
+
+        Dispatches by activity NAME (never imports ``harness.sandbox.activities`` — which hard-
+        imports remote-box, and the Daytona/E2B SDKs it depends on — from workflow code), so
+        ``result_type`` is passed explicitly. The ``.models`` module these request/result types
+        and name constants come from is dependency-free by design; see its module docstring.
+        """
+        config = self._sandbox_config
+        assert config is not None
+        with workflow.unsafe.imports_passed_through():
+            from temporal_agent_harness.harness.sandbox.models import (
+                SANDBOX_ACTIVATE_ACTIVITY,
+                SandboxActivateInput,
+                SandboxRefResult,
+            )
+
+        result = await workflow.execute_activity(
+            SANDBOX_ACTIVATE_ACTIVITY,
+            SandboxActivateInput(
+                ref=self.sandbox_ref,
+                backend=config.backend.model_dump(mode="json"),
+                local_project_root=str(config.local_project_root),
+                require_prebuilt=config.require_prebuilt,
+            ),
+            result_type=SandboxRefResult,
+            **self._sandbox_activity_config(),
+        )
+        self.sandbox_ref = result.ref
+
+    async def _pause_sandbox(self) -> None:
+        """Pause this run's sandbox — called between turns, only when actually about to
+        idle-wait for the next message."""
+        config = self._sandbox_config
+        assert config is not None
+        if self.sandbox_ref is None:
+            # Never activated this run (e.g. a run that queued and closed with no turns ever
+            # actually dispatched) — nothing to pause.
+            return
+        with workflow.unsafe.imports_passed_through():
+            from temporal_agent_harness.harness.sandbox.models import (
+                SANDBOX_PAUSE_ACTIVITY,
+                SandboxPauseInput,
+                SandboxRefResult,
+            )
+
+        result = await workflow.execute_activity(
+            SANDBOX_PAUSE_ACTIVITY,
+            SandboxPauseInput(
+                ref=self.sandbox_ref,
+                backend=config.backend.model_dump(mode="json"),
+                local_project_root=str(config.local_project_root),
+            ),
+            result_type=SandboxRefResult,
+            **self._sandbox_activity_config(),
+        )
+        self.sandbox_ref = result.ref
+
+    async def _terminate_sandbox(self) -> None:
+        """Unconditionally tear down this run's sandbox — called from :meth:`run`'s outer
+        ``finally``, on every termination path that still executes workflow code."""
+        config = self._sandbox_config
+        assert config is not None
+        if self.sandbox_ref is None:
+            return
+        with workflow.unsafe.imports_passed_through():
+            from temporal_agent_harness.harness.sandbox.models import (
+                SANDBOX_TERMINATE_ACTIVITY,
+                SandboxTerminateInput,
+            )
+
+        await workflow.execute_activity(
+            SANDBOX_TERMINATE_ACTIVITY,
+            SandboxTerminateInput(
+                ref=self.sandbox_ref,
+                backend=config.backend.model_dump(mode="json"),
+                local_project_root=str(config.local_project_root),
+            ),
+            **self._sandbox_activity_config(),
+        )
+        self.sandbox_ref = None
+
+    def _sandbox_activity_config(self) -> ActivityConfig:
+        config = self._sandbox_config
+        assert config is not None
+        activity_config: ActivityConfig = {
+            **(
+                ActivityConfig(start_to_close_timeout=timedelta(seconds=30))
+                if config.activity_config is None
+                else config.activity_config
+            )
+        }
+        if "summary" not in activity_config:
+            activity_config["summary"] = "sandbox_lifecycle"
+        return activity_config
 
     async def _dispatch_turn(self, agent: object, envelope: AgentMessage) -> BaseModel:
         """Dispatch one already-validated turn envelope and return its reply model."""
@@ -2490,11 +2649,117 @@ def _apply_model_facing_views(wrapper: Any, user_fn: Callable[..., Any], sig: _T
     wrapper.__annotations__ = sig.model_annotations
 
 
+# remote-box sets this exact env var (REMOTE_EXECUTION_MODE_ENV_VAR in its own `remote.runtime`)
+# inside the sandbox process it spawns for a `@remote`-decorated call. Duplicated here as a
+# literal — rather than importing `remote.runtime` — so a sandboxed tool's freshly-reimported
+# `dispatch` closure (running inside the sandbox itself) never needs remote-box importable in the
+# sandbox's own environment, only in the orchestrating worker process. See `remote.in_remote_execution`'s
+# own docstring for the composable-decorator pattern this mirrors.
+_REMOTE_EXECUTION_MODE_ENV_VAR = "REMOTE_EXECUTION_MODE"
+
+
+def _in_remote_execution() -> bool:
+    return os.environ.get(_REMOTE_EXECUTION_MODE_ENV_VAR) == "1"
+
+
+def _validate_sandboxable(user_fn: Callable[..., Any], sig: _ToolSig, tool_name: str) -> None:
+    """Enforce the shape a ``sandboxed=True`` tool must have for remote-box's own ``remote()``
+    decorator to run it correctly.
+
+    remote-box's execution model re-imports the tool fresh inside the sandbox by module path and
+    calls it with exactly the arguments it was given — there is no adapter step, so the tool's
+    real Python call signature must already match remote-box's own single-BaseModel-in,
+    single-BaseModel-out contract: no ``self`` (an unbound instance method can't be reconstructed
+    from a fresh module import), no ``Injected[...]`` params (host-only ambient values with no
+    sound story for crossing into a fresh sandbox process), exactly one parameter, and both that
+    parameter's type and the return type must be ``pydantic.BaseModel`` subclasses (remote-box
+    serializes/reconstructs both via ``model_dump_json``/``model_validate_json``).
+    """
+    if sig.has_self:
+        raise ValueError(
+            f"tool {tool_name!r} cannot be sandboxed: sandboxed tools must be plain module-level "
+            "functions, not instance methods (remote-box re-imports the tool by module path "
+            "inside the sandbox, which can't reconstruct a bound `self`)"
+        )
+    if sig.inject_names:
+        raise ValueError(
+            f"tool {tool_name!r} cannot be sandboxed: Injected[...] parameters "
+            f"({', '.join(sig.inject_names)}) are host-only ambient values with no sound way to "
+            "cross into a fresh sandbox process"
+        )
+    if len(sig.user_params) != 1:
+        raise ValueError(
+            f"tool {tool_name!r} cannot be sandboxed: it must take exactly one parameter (got "
+            f"{len(sig.user_params)}) — remote-box's execution model requires a single "
+            "pydantic.BaseModel input, matching its own @remote() decorator's contract"
+        )
+    (param,) = sig.user_params
+    # get_type_hints (not sig.model_annotations / param.annotation directly) — those can still be
+    # unresolved strings when the tool's own module uses `from __future__ import annotations`.
+    hints = get_type_hints(user_fn)
+    param_type = hints.get(param.name, param.annotation)
+    if not (isinstance(param_type, type) and issubclass(param_type, BaseModel)):
+        raise ValueError(
+            f"tool {tool_name!r} cannot be sandboxed: its one parameter ({param.name!r}) must be "
+            f"a pydantic.BaseModel subclass (got {param_type!r})"
+        )
+    if not (isinstance(sig.return_type, type) and issubclass(sig.return_type, BaseModel)):
+        raise ValueError(
+            f"tool {tool_name!r} cannot be sandboxed: its return type must be a pydantic.BaseModel "
+            f"subclass (got {sig.return_type!r})"
+        )
+
+
+async def _dispatch_in_sandbox(
+    user_fn: Callable[..., Any],
+    tool_ctx: AgentToolContext,
+    user_args: list[Any],
+    kwargs: dict[str, Any],
+) -> Any:
+    """Run a ``sandboxed=True`` tool's raw body inside its agent's live sandbox.
+
+    Called from the activity worker process (never from workflow code) once
+    :func:`_validate_sandboxable` has already confirmed ``user_fn`` fits remote-box's
+    single-BaseModel-in/out contract. Enters the live session (``async with session:`` — creates
+    fresh, or resumes-if-paused/no-ops if already active, per ``RemoteSession``'s own public
+    ownership semantics) so remote-box's ambient-session lookup picks it up instead of spinning up
+    an unrelated one-shot sandbox.
+    """
+    if tool_ctx.sandbox is None:
+        # Should be unreachable: the in-workflow dispatch() gate (SandboxNotConfigured) already
+        # refuses to schedule this activity at all when the agent has no sandbox configured.
+        raise ApplicationError(
+            "sandboxed tool activity ran without a sandbox context (internal harness error — "
+            "dispatch()'s SandboxNotConfigured gate should have caught this before the activity "
+            "was ever scheduled)",
+            type="SandboxUnavailable",
+            non_retryable=True,
+        )
+    # Deferred: `sandbox.activities` hard-imports remote-box, and this function only ever runs
+    # when `sandboxed=True` was actually used — which requires the optional `sandbox` extra to
+    # already be installed (its own module-level guard raises a clear RuntimeError otherwise).
+    from pathlib import Path
+
+    from temporal_agent_harness.harness.sandbox.activities import (
+        backend_from_dict,
+        get_or_resume_session,
+        run_tool_in_sandbox,
+    )
+
+    backend = backend_from_dict(tool_ctx.sandbox.backend)
+    local_project_root = Path(tool_ctx.sandbox.local_project_root)
+    session = await get_or_resume_session(tool_ctx.sandbox.ref, backend, local_project_root)
+    remote_fn = run_tool_in_sandbox(user_fn, local_project_root, backend)
+    async with session:
+        return await remote_fn(*user_args, **kwargs)
+
+
 def activity_tool_defn(
     *,
     inherently_safe: bool = False,
     activity_config: ActivityConfig | None = None,
     name: str | None = None,
+    sandboxed: bool = False,
 ) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
     """Define a durable, activity-backed agent tool::
 
@@ -2523,11 +2788,23 @@ def activity_tool_defn(
     only a policy that opts into ``auto_approve_inherently_safe`` lets a safe tool through).
     Mark a tool safe ONLY if it is *always* safe; if it is even sometimes unsafe, leave it
     ``False`` (the default).
+
+    ``sandboxed=True`` opts this tool into running inside a sandbox (via the optional ``sandbox``
+    extra / remote-box) instead of directly in the activity worker process — but the tool itself
+    never chooses *which* backend. That is decided once, per agent, by whoever constructs
+    ``AgentWorkflowRunner(..., sandbox=SandboxConfig(...))`` — so the same sandboxed tool is
+    reusable, unsandboxed or under any backend, across agents with zero code changes. An agent
+    that uses a ``sandboxed=True`` tool but never configures ``sandbox=`` raises a
+    ``SandboxNotConfigured`` error the moment the tool is dispatched — see :func:`dispatch`
+    (nested below) and ``harness/sandbox/``'s module docs for the full lifecycle (auto-activate at
+    turn start, auto-pause between turns, unconditional terminate on shutdown).
     """
 
     def decorator(user_fn: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
         sig = _tool_signatures(user_fn)
         tool_name = name or user_fn.__name__
+        if sandboxed:
+            _validate_sandboxable(user_fn, sig, tool_name)
 
         # ---- activity body: runs in the worker, publishes lifecycle from within ----
         async def activity_body(*args: Any, **kwargs: Any) -> Any:
@@ -2554,7 +2831,10 @@ def activity_tool_defn(
                     )
                 )
                 try:
-                    result = await user_fn(*user_args, **kwargs)
+                    if sandboxed:
+                        result = await _dispatch_in_sandbox(user_fn, tool_ctx, user_args, kwargs)
+                    else:
+                        result = await user_fn(*user_args, **kwargs)
                 except Exception as e:
                     pub.publish(
                         ToolErrorEvent(
@@ -2594,12 +2874,48 @@ def activity_tool_defn(
 
         # ---- dispatcher: runs in-workflow (gate + execute_activity) ----
         async def dispatch(*args: Any, **kwargs: Any) -> Any:
+            # Only ever relevant for a sandboxed tool: `dispatch` (host-side, in-workflow) is
+            # never re-invoked inside a remote-box sandbox for an unsandboxed tool — nothing ever
+            # calls remote() on it. Gated on `sandboxed` for a second reason, not just skipping a
+            # pointless check: `_in_remote_execution()` reads `os.environ`, a RESTRICTED operation
+            # under Temporal's real (default) SandboxedWorkflowRunner. Calling it unconditionally
+            # here would break every activity tool call — sandboxed or not — for any agent that
+            # doesn't happen to load this module via `imports_passed_through()`, i.e. every
+            # existing example. Only a sandboxed tool's workflow-side dispatch ever legitimately
+            # needs this check, so only it pays the cost (and only inside its own sandbox, where
+            # `_in_remote_execution()` runs as plain activity-side Python, not workflow code).
+            if sandboxed and _in_remote_execution():
+                # This `dispatch` closure was just rebuilt by a FRESH re-import of user_fn's
+                # module, inside the sandbox remote-box spawned for a sandboxed tool call — not
+                # by anything running host-side. Any host-only prologue below (approval gating,
+                # workflow.execute_activity — neither of which has a workflow context to run
+                # against in here) must be skipped entirely; fall straight through to the real
+                # body, matching remote-box's own recommended composable-decorator pattern (see
+                # `remote.in_remote_execution`'s docstring / examples/tool_framework_pattern.py).
+                return await user_fn(*args, **kwargs)
+
             bound = sig.model_sig.bind(*args, **kwargs)
             bound.apply_defaults()
             model_input = dict(bound.arguments)
             await _apply_approval_policy(
                 tool_name, model_input, inherently_safe=inherently_safe
             )
+
+            sandbox_ctx: SandboxToolContext | None = None
+            if sandboxed:
+                runner = _current_runner()
+                if runner.sandbox_ref is None or runner._sandbox_config is None:
+                    raise ApplicationError(
+                        f"tool {tool_name!r} is sandboxed but this agent has no sandbox backend "
+                        "configured — pass sandbox=SandboxConfig(...) to AgentWorkflowRunner",
+                        type="SandboxNotConfigured",
+                        non_retryable=True,
+                    )
+                sandbox_ctx = SandboxToolContext(
+                    ref=runner.sandbox_ref,
+                    backend=runner._sandbox_config.backend.model_dump(mode="json"),
+                    local_project_root=str(runner._sandbox_config.local_project_root),
+                )
 
             injections = _current_tool_injections() if sig.inject_names else {}
             activity_args: list[Any] = []
@@ -2617,7 +2933,7 @@ def activity_tool_defn(
                     activity_args.append(injections[p.name])
                 else:
                     activity_args.append(bound.arguments[p.name])
-            activity_args.append(AgentToolContext.for_current_tool_id())
+            activity_args.append(AgentToolContext.for_current_tool_id(sandbox=sandbox_ctx))
             # Dispatch by activity NAME, so pass result_type explicitly — otherwise a
             # model/dataclass return comes back as a raw dict (Temporal can't infer the
             # type from a name the way it would from a function reference).
