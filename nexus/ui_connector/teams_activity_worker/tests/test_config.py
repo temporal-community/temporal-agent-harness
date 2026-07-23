@@ -1,6 +1,6 @@
 import pytest
 
-from teams_activity_worker.platform import DEFAULT_SERVICE_URL, Settings
+from teams_activity_worker.worker import DEFAULT_SERVICE_URL, Settings
 
 
 def test_settings_reads_existing_environment_names(monkeypatch: pytest.MonkeyPatch) -> None:

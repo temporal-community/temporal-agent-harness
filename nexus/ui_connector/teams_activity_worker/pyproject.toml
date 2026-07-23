@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-teams-activity-worker = "teams_activity_worker.platform:main"
+teams-activity-worker = "teams_activity_worker.worker:main"
 
 [dependency-groups]
 dev = [

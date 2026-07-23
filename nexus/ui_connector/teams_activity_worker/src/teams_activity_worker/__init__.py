@@ -1,5 +1,5 @@
 """Microsoft Teams Temporal activity worker."""
 
-from .platform import TeamsActivities
+from .worker import TeamsActivities
 
 __all__ = ["TeamsActivities"]

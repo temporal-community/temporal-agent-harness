@@ -12,8 +12,18 @@ import "go.temporal.io/sdk/workflow"
 // directly by RouterWorkflow. Concrete drivers durably dispatch platform I/O to
 // activity implementations (for example, SlackPlatform or the Python Teams worker).
 type Driver interface {
+	// BeginStream opens a response stream before any text deltas are delivered.
+	// It returns the durable handle that must be passed to subsequent updates and
+	// finalization. Drivers may emulate streaming by updating a single message.
 	BeginStream(ctx workflow.Context, input BeginStreamInput) (StreamHandle, error)
+
+	// UpdateStream delivers one text delta to the open stream. FullText contains
+	// the complete response accumulated through this delta for drivers that need
+	// to replace the entire message instead of appending Delta.
 	UpdateStream(ctx workflow.Context, input UpdateStreamInput) error
+
+	// FinishStream closes the open stream and ensures its final visible content
+	// is FullText. The router will not send more updates for this handle afterward.
 	FinishStream(ctx workflow.Context, input FinishStreamInput) error
 
 	// PostMessage sends a single, non-streamed message.

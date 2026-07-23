@@ -1,5 +1,6 @@
 // Package teams implements the workflow-side Microsoft Teams inbound driver.
-// The actual Bot Framework I/O runs in the Python Teams activity worker.
+// The actual Bot Framework I/O runs in the Python Teams activity worker because
+// Microsoft does not provide a Teams SDK for Go.
 package teams
 
 import (
