@@ -194,6 +194,27 @@ class _TemporalModelStub(Model):  # type:ignore[reportUnusedClass]
         conversation_id: str | None,
         prompt: ResponsePromptParam | None,
     ) -> ModelResponse:
+        # Workflow-side model provider: resolve a Model here (in workflow context)
+        # and call it directly with the already-live args — no serialization, no
+        # tool reconstruction, no activity. The resolved model's transport may be
+        # a Nexus call, which only works because we are in workflow context (the
+        # activity path could never reach Nexus). See
+        # ``ModelActivityParameters.workflow_model_provider``.
+        if self.model_params.workflow_model_provider is not None:
+            model = self.model_params.workflow_model_provider(self.model_name)
+            return await model.get_response(
+                system_instructions=system_instructions,
+                input=input,
+                model_settings=model_settings,
+                tools=tools,
+                output_schema=output_schema,
+                handoffs=handoffs,
+                tracing=tracing,
+                previous_response_id=previous_response_id,
+                conversation_id=conversation_id,
+                prompt=prompt,
+            )
+
         activity_input, summary = self._build_activity_input(
             system_instructions=system_instructions,
             input=input,
@@ -258,6 +279,17 @@ class _TemporalModelStub(Model):  # type:ignore[reportUnusedClass]
                 "Streaming is incompatible with use_local_activity "
                 "(local activities do not support heartbeats or the "
                 "workflow stream signal channel)."
+            )
+
+        # workflow_model_provider is a non-streaming seam: get_response resolves
+        # and calls the model in workflow context, but the streaming path runs in
+        # an activity. Fail loudly rather than silently ignoring the configured
+        # provider and streaming via the (possibly unconfigured) activity path.
+        if self.model_params.workflow_model_provider is not None:
+            raise ValueError(
+                "workflow_model_provider is not supported with "
+                "Runner.run_streamed (it is a non-streaming seam). Use "
+                "Runner.run, or drive streaming through the activity path."
             )
 
         # Resolve the opaque per-call routing token: prefer the configured
