@@ -154,9 +154,5 @@ async def run() -> None:
             await platform.app.stop()
 
 
-def main() -> None:
-    asyncio.run(run())
-
-
 if __name__ == "__main__":
-    main()
+    asyncio.run(run())

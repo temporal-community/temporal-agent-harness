@@ -9,9 +9,6 @@ dependencies = [
     "temporalio>=1.15.0,<2",
 ]
 
-[project.scripts]
-teams-activity-worker = "teams_activity_worker.worker:main"
-
 [dependency-groups]
 dev = [
     "pyright>=1.1.400",

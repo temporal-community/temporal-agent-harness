@@ -139,7 +139,7 @@ teams-activities-worker:
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \
-    uv run teams-activity-worker
+    uv run python -m teams_activity_worker.worker
 
 # Run the Teams webhook server.
 teams-webhook:
