@@ -6,16 +6,30 @@
 // defined by this inbound.Driver interface to deliver the response back to the inbound side durably.
 package inbound
 
-import "go.temporal.io/sdk/workflow"
+import (
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/wire"
+	"go.temporal.io/sdk/workflow"
+)
 
-// Driver is implemented by a concrete platform driver and called directly by
-// RouterWorkflow.
+// Driver is implemented by a platform-specific workflow-side adapter and called
+// directly by RouterWorkflow. Concrete drivers durably dispatch platform I/O to
+// activity implementations (for example, SlackPlatform or the Python Teams worker).
 type Driver interface {
-	// Stream starts, appends to, or finalises a streaming bot response.
-	// DeltaTypeStart opens a new stream (StreamID must be empty) and returns its ID.
-	// DeltaTypeAppend and DeltaTypeEnd require a non-empty StreamID; the returned
-	// streamID echoes back the input StreamID.
-	Stream(ctx workflow.Context, input StreamInput) (streamID string, err error)
+	// SupportsStreaming reports whether the inbound conversation can receive
+	// incremental response updates.
+	SupportsStreaming(input wire.Input) bool
+
+	// BeginStream opens a response stream before any text deltas are delivered.
+	// It returns the durable handle that must be passed to subsequent updates and
+	// finalization. Drivers may emulate streaming by updating a single message.
+	BeginStream(ctx workflow.Context, input BeginStreamInput) (StreamHandle, error)
+
+	// UpdateStream delivers one text delta to the open stream.
+	UpdateStream(ctx workflow.Context, input UpdateStreamInput) error
+
+	// FinishStream closes the open stream. The router will not send more updates
+	// for this handle afterward.
+	FinishStream(ctx workflow.Context, input FinishStreamInput) error
 
 	// PostMessage sends a single, non-streamed message.
 	PostMessage(ctx workflow.Context, input TextMetadata) error
@@ -24,39 +38,66 @@ type Driver interface {
 	// The decision comes back via the messaging platform's interaction webhook, not
 	// through this interface.
 	PostApprovalPrompt(ctx workflow.Context, input ApprovalPromptInput) error
+
+	// AcknowledgeApproval updates the inbound interaction after its decision is resolved.
+	AcknowledgeApproval(ctx workflow.Context, input ApprovalAcknowledgementInput) error
 }
 
 // ApprovalPromptInput carries the information needed to render a tool-approval
 // prompt (approve/deny buttons) on the messaging platform.
 type ApprovalPromptInput struct {
-	SessionID string
-	ThreadID  string // empty = post in channel root; non-empty = post in thread
+	TextMetadata
 	ToolID    string
 	ToolName  string
 	ToolInput string // JSON-encoded model-facing input (for display)
 }
 
-type TextMetadata struct {
-	SenderID  string
-	SessionID string
-	ThreadID  string
-	Text      string
+// ApprovalAcknowledgementInput carries a resolved approval decision back to the
+// inbound platform. Each driver decides whether and how to update its prompt.
+type ApprovalAcknowledgementInput struct {
+	TextMetadata
+	PromptID string
+	ToolName string
+	Approved bool
 }
 
-// DeltaType indicates which phase of the streaming lifecycle a Stream call represents.
-type DeltaType int
+type TextMetadata struct {
+	SenderID   string
+	SessionID  string
+	ThreadID   string
+	Text       string
+	ServiceURL string
+	ChannelID  string
+}
 
-const (
-	DeltaTypeStart  DeltaType = iota // begins a new stream; StreamID must be empty
-	DeltaTypeAppend                  // appends text to an existing stream; StreamID required
-	DeltaTypeEnd                     // finalises an existing stream; StreamID required
-)
-
-// StreamInput is passed to Stream for each phase of a streaming response. DeltaType
-// determines the phase; StreamID must be empty for Start and non-empty for
-// Append/End. The platform driver maps these phases to its own lifecycle internally.
-type StreamInput struct {
+// UpdateMessageInput replaces an existing platform message.
+type UpdateMessageInput struct {
 	TextMetadata
-	StreamID  string
-	DeltaType DeltaType
+	MessageID string
+}
+
+// StreamHandle is durable provider and routing state returned by BeginStream
+// and passed to later stream calls.
+type StreamHandle struct {
+	ID                  string
+	SessionID           string
+	TransportMode       string
+	TaskQueue           string
+	CloseBeforeApproval bool
+}
+
+type BeginStreamInput struct {
+	TextMetadata
+	ConversationType string
+}
+
+type UpdateStreamInput struct {
+	TextMetadata
+	Handle StreamHandle
+	Delta  string
+}
+
+type FinishStreamInput struct {
+	TextMetadata
+	Handle StreamHandle
 }

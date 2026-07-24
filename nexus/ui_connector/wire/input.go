@@ -41,10 +41,13 @@ func (i Input) SenderID() string {
 
 // IncomingMessage carries the raw message delivered from the platform.
 type IncomingMessage struct {
-	MessageID string
-	Sender    string
-	Text      string
-	Timestamp string
+	MessageID        string
+	Sender           string
+	Text             string
+	Timestamp        string
+	ConversationType string
+	ServiceURL       string
+	ChannelID        string
 }
 
 // SlashCommand carries a slash command invocation from the platform.
@@ -57,7 +60,10 @@ type SlashCommand struct {
 
 // ApprovalDecision carries a tool-approval decision from an interactive prompt.
 type ApprovalDecision struct {
-	ToolID   string `json:"toolId"`
-	ToolName string `json:"toolName"` // for display in the interaction response
-	Approved bool   `json:"approved"`
+	ToolID     string `json:"toolId"`
+	ToolName   string `json:"toolName"` // for display in the interaction response
+	Approved   bool   `json:"approved"`
+	ActivityID string `json:"activityId"`
+	ServiceURL string `json:"serviceUrl"`
+	ChannelID  string `json:"channelId"`
 }

@@ -10,6 +10,7 @@ test:
 		echo "== $$m =="; \
 		(cd $$m && go test -race -count=1 ./...) || exit 1; \
 	done
+	cd ui_connector/teams_activity_worker && uv run python -m pytest
 
 # Run only the tagged durability integration suite (embedded dev server).
 test-integration:

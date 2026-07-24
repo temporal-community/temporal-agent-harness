@@ -2,8 +2,13 @@ package slack
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"testing"
 
+	slackapi "github.com/slack-go/slack"
 	msgiface "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
 
 	"github.com/stretchr/testify/assert"
@@ -42,53 +47,111 @@ func newTestPlatform() *SlackPlatform {
 	return NewSlackPlatform(nil, "")
 }
 
-func TestSlackPlatform_Stream_Start_InvalidSessionID(t *testing.T) {
-	_, err := newTestPlatform().Stream(context.Background(), msgiface.StreamInput{
+func TestSlackPlatform_BeginStream_InvalidSessionID(t *testing.T) {
+	_, err := newTestPlatform().BeginStream(context.Background(), msgiface.BeginStreamInput{
 		TextMetadata: msgiface.TextMetadata{SessionID: "nocolon"},
-		DeltaType:    msgiface.DeltaTypeStart,
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "provider:id")
 }
 
-func TestSlackPlatform_Stream_Append_InvalidSessionID(t *testing.T) {
-	_, err := newTestPlatform().Stream(context.Background(), msgiface.StreamInput{
+func TestSlackPlatform_UpdateStream_InvalidSessionID(t *testing.T) {
+	err := newTestPlatform().UpdateStream(context.Background(), msgiface.UpdateStreamInput{
 		TextMetadata: msgiface.TextMetadata{SessionID: "nocolon", Text: "hi"},
-		StreamID:     "stream-1",
-		DeltaType:    msgiface.DeltaTypeAppend,
+		Handle:       msgiface.StreamHandle{ID: "stream-1", SessionID: "nocolon"},
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "provider:id")
 }
 
-func TestSlackPlatform_Stream_End_InvalidSessionID(t *testing.T) {
-	_, err := newTestPlatform().Stream(context.Background(), msgiface.StreamInput{
+func TestSlackPlatform_FinishStream_InvalidSessionID(t *testing.T) {
+	err := newTestPlatform().FinishStream(context.Background(), msgiface.FinishStreamInput{
 		TextMetadata: msgiface.TextMetadata{SessionID: "nocolon"},
-		StreamID:     "stream-1",
-		DeltaType:    msgiface.DeltaTypeEnd,
+		Handle:       msgiface.StreamHandle{ID: "stream-1", SessionID: "nocolon"},
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "provider:id")
 }
 
-func TestSlackPlatform_Stream_Append_RequiresStreamID(t *testing.T) {
-	_, err := newTestPlatform().Stream(context.Background(), msgiface.StreamInput{
+func TestSlackPlatform_UpdateStream_RequiresStreamID(t *testing.T) {
+	err := newTestPlatform().UpdateStream(context.Background(), msgiface.UpdateStreamInput{
 		TextMetadata: msgiface.TextMetadata{SessionID: "slack:C12345", Text: "hi"},
-		DeltaType:    msgiface.DeltaTypeAppend,
-		// StreamID intentionally omitted
+		Handle:       msgiface.StreamHandle{SessionID: "slack:C12345"},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "StreamID is required")
+	assert.Contains(t, err.Error(), "stream handle ID is required")
 }
 
-func TestSlackPlatform_Stream_End_RequiresStreamID(t *testing.T) {
-	_, err := newTestPlatform().Stream(context.Background(), msgiface.StreamInput{
+func TestSlackPlatform_FinishStream_RequiresStreamID(t *testing.T) {
+	err := newTestPlatform().FinishStream(context.Background(), msgiface.FinishStreamInput{
 		TextMetadata: msgiface.TextMetadata{SessionID: "slack:C12345"},
-		DeltaType:    msgiface.DeltaTypeEnd,
-		// StreamID intentionally omitted
+		Handle:       msgiface.StreamHandle{SessionID: "slack:C12345"},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "StreamID is required")
+	assert.Contains(t, err.Error(), "stream handle ID is required")
+}
+
+func TestSlackPlatform_StatelessStreamLifecycle(t *testing.T) {
+	type request struct {
+		path string
+		form url.Values
+	}
+	var requests []request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		requests = append(requests, request{path: r.URL.Path, form: r.Form})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":      true,
+			"channel": "C12345",
+			"ts":      "1721609600.123456",
+		})
+	}))
+	defer srv.Close()
+
+	newPlatform := func() *SlackPlatform {
+		client := slackapi.New("test-token", slackapi.OptionAPIURL(srv.URL+"/"))
+		return NewSlackPlatform(client, "T12345")
+	}
+
+	handle, err := newPlatform().BeginStream(context.Background(), msgiface.BeginStreamInput{
+		TextMetadata: msgiface.TextMetadata{
+			SessionID: "slack:C12345",
+			ThreadID:  "1721609500.000001",
+			SenderID:  "U12345",
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "1721609600.123456", handle.ID)
+	assert.Equal(t, "slack:C12345", handle.SessionID)
+	assert.False(t, handle.CloseBeforeApproval)
+
+	err = newPlatform().UpdateStream(context.Background(), msgiface.UpdateStreamInput{
+		TextMetadata: msgiface.TextMetadata{SessionID: "slack:C12345"},
+		Handle:       handle,
+		Delta:        "hello",
+	})
+	require.NoError(t, err)
+
+	err = newPlatform().FinishStream(context.Background(), msgiface.FinishStreamInput{
+		TextMetadata: msgiface.TextMetadata{SessionID: "slack:C12345"},
+		Handle:       handle,
+	})
+	require.NoError(t, err)
+
+	require.Len(t, requests, 3)
+	assert.Equal(t, "/chat.startStream", requests[0].path)
+	assert.Equal(t, "C12345", requests[0].form.Get("channel"))
+	assert.Equal(t, "1721609500.000001", requests[0].form.Get("thread_ts"))
+	assert.Equal(t, "U12345", requests[0].form.Get("recipient_user_id"))
+	assert.Equal(t, "T12345", requests[0].form.Get("recipient_team_id"))
+
+	assert.Equal(t, "/chat.appendStream", requests[1].path)
+	assert.Equal(t, "1721609600.123456", requests[1].form.Get("ts"))
+	assert.Equal(t, "hello", requests[1].form.Get("markdown_text"))
+
+	assert.Equal(t, "/chat.stopStream", requests[2].path)
+	assert.Equal(t, "1721609600.123456", requests[2].form.Get("ts"))
 }
 
 func TestSlackPlatform_PostMessage_InvalidSessionID(t *testing.T) {

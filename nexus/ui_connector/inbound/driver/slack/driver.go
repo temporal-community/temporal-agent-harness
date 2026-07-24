@@ -10,6 +10,7 @@ import (
 	slackapi "github.com/slack-go/slack"
 
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/wire"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -20,7 +21,9 @@ import (
 // these — it only calls Driver, and a different inbound driver is free to use a
 // completely different activity shape internally, or none at all.
 const (
-	streamActivity             = "SlackStream"
+	beginStreamActivity        = "SlackBeginStream"
+	updateStreamActivity       = "SlackUpdateStream"
+	finishStreamActivity       = "SlackFinishStream"
 	postMessageActivity        = "SlackPostMessage"
 	postApprovalPromptActivity = "SlackPostApprovalPrompt"
 )
@@ -33,17 +36,36 @@ type Driver struct {
 	ActivityOptions workflow.ActivityOptions
 }
 
+var _ inbound.Driver = (*Driver)(nil)
+
 // NewDriver returns a Driver that calls the Slack activities with the given options.
 func NewDriver(opts workflow.ActivityOptions) Driver {
 	return Driver{ActivityOptions: opts}
 }
 
-func (d Driver) Stream(ctx workflow.Context, input inbound.StreamInput) (string, error) {
-	var streamID string
+// SupportsStreaming reports that Slack supports incremental response updates.
+func (Driver) SupportsStreaming(wire.Input) bool {
+	return true
+}
+
+func (d Driver) BeginStream(ctx workflow.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error) {
+	var handle inbound.StreamHandle
 	err := workflow.ExecuteActivity(
-		workflow.WithActivityOptions(ctx, d.ActivityOptions), streamActivity, input,
-	).Get(ctx, &streamID)
-	return streamID, err
+		workflow.WithActivityOptions(ctx, d.ActivityOptions), beginStreamActivity, input,
+	).Get(ctx, &handle)
+	return handle, err
+}
+
+func (d Driver) UpdateStream(ctx workflow.Context, input inbound.UpdateStreamInput) error {
+	return workflow.ExecuteActivity(
+		workflow.WithActivityOptions(ctx, d.ActivityOptions), updateStreamActivity, input,
+	).Get(ctx, nil)
+}
+
+func (d Driver) FinishStream(ctx workflow.Context, input inbound.FinishStreamInput) error {
+	return workflow.ExecuteActivity(
+		workflow.WithActivityOptions(ctx, d.ActivityOptions), finishStreamActivity, input,
+	).Get(ctx, nil)
 }
 
 func (d Driver) PostMessage(ctx workflow.Context, input inbound.TextMetadata) error {
@@ -58,10 +80,18 @@ func (d Driver) PostApprovalPrompt(ctx workflow.Context, input inbound.ApprovalP
 	).Get(ctx, nil)
 }
 
+// AcknowledgeApproval is a no-op because the Slack interaction webhook replaces
+// the original prompt through its response URL while handling the button click.
+func (d Driver) AcknowledgeApproval(workflow.Context, inbound.ApprovalAcknowledgementInput) error {
+	return nil
+}
+
 // RegisterActivities registers platform's methods on w under the activity names Driver
 // dispatches to. Call this from the worker binary alongside NewDriver.
 func RegisterActivities(w worker.Worker, platform *SlackPlatform) {
-	w.RegisterActivityWithOptions(platform.Stream, activity.RegisterOptions{Name: streamActivity})
+	w.RegisterActivityWithOptions(platform.BeginStream, activity.RegisterOptions{Name: beginStreamActivity})
+	w.RegisterActivityWithOptions(platform.UpdateStream, activity.RegisterOptions{Name: updateStreamActivity})
+	w.RegisterActivityWithOptions(platform.FinishStream, activity.RegisterOptions{Name: finishStreamActivity})
 	w.RegisterActivityWithOptions(platform.PostMessage, activity.RegisterOptions{Name: postMessageActivity})
 	w.RegisterActivityWithOptions(platform.PostApprovalPrompt, activity.RegisterOptions{Name: postApprovalPromptActivity})
 }
@@ -99,54 +129,77 @@ func NewSlackPlatform(client *slackapi.Client, teamID string) *SlackPlatform {
 	return &SlackPlatform{client: client, teamID: teamID}
 }
 
-// Stream starts, appends to, or finalises a Slack streaming message.
-// DeltaTypeStart opens a new stream; DeltaTypeAppend appends text; DeltaTypeEnd stops it.
-// StreamID must be empty for Start and non-empty for Append/End.
-func (p *SlackPlatform) Stream(ctx context.Context, input inbound.StreamInput) (string, error) {
+// BeginStream opens a native Slack stream and returns the stream's ID as part of
+// inbound.StreamHandle so we can later use append to the stream via UpdateStream(...).
+func (p *SlackPlatform) BeginStream(ctx context.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error) {
 	channel, err := parseChannel(input.SessionID)
 	if err != nil {
-		return "", err
+		return inbound.StreamHandle{}, err
 	}
 
-	if input.DeltaType != inbound.DeltaTypeStart && input.StreamID == "" {
-		return "", errors.New("StreamID is required for Append and End phases")
+	opts := []slackapi.MsgOption{slackapi.MsgOptionStartStream()}
+	if input.ThreadID != "" {
+		opts = append(opts, slackapi.MsgOptionTS(input.ThreadID))
 	}
-
-	switch input.DeltaType {
-	case inbound.DeltaTypeStart:
-		opts := []slackapi.MsgOption{slackapi.MsgOptionStartStream()}
-		if input.ThreadID != "" {
-			opts = append(opts, slackapi.MsgOptionTS(input.ThreadID))
-		}
-		if input.SenderID != "" {
-			opts = append(opts, slackapi.MsgOptionRecipientUserID(input.SenderID))
-		}
-		if p.teamID != "" {
-			opts = append(opts, slackapi.MsgOptionRecipientTeamID(p.teamID))
-		}
-		_, ts, err := p.client.StartStreamContext(ctx, channel, opts...)
-		if err != nil {
-			return "", fmt.Errorf("chat.startStream: %w", err)
-		}
-		return ts, nil
-
-	case inbound.DeltaTypeEnd:
-		if _, _, err := p.client.StopStreamContext(ctx, channel, input.StreamID); err != nil {
-			return "", fmt.Errorf("chat.stopStream: %w", err)
-		}
-		return input.StreamID, nil
-
-	default: // DeltaTypeAppend
-		if input.Text == "" {
-			return input.StreamID, nil
-		}
-		if _, _, err := p.client.AppendStreamContext(ctx, channel, input.StreamID,
-			slackapi.MsgOptionMarkdownText(input.Text),
-		); err != nil {
-			return "", fmt.Errorf("chat.appendStream: %w", err)
-		}
-		return input.StreamID, nil
+	if input.SenderID != "" {
+		opts = append(opts, slackapi.MsgOptionRecipientUserID(input.SenderID))
 	}
+	if p.teamID != "" {
+		opts = append(opts, slackapi.MsgOptionRecipientTeamID(p.teamID))
+	}
+	_, ts, err := p.client.StartStreamContext(ctx, channel, opts...)
+	if err != nil {
+		return inbound.StreamHandle{}, fmt.Errorf("chat.startStream: %w", err)
+	}
+	return inbound.StreamHandle{
+		ID:                  ts,
+		SessionID:           input.SessionID,
+		TransportMode:       "native",
+		CloseBeforeApproval: false,
+	}, nil
+}
+
+// UpdateStream appends the pending agent delta to a native Slack stream.
+// An ID that identifies the stream is required.
+func (p *SlackPlatform) UpdateStream(ctx context.Context, input inbound.UpdateStreamInput) error {
+	channel, err := parseChannel(input.SessionID)
+	if err != nil {
+		return err
+	}
+	if input.Handle.ID == "" {
+		return errors.New("stream handle ID is required")
+	}
+	if input.Handle.SessionID != input.SessionID {
+		return errors.New("stream handle session does not match input session")
+	}
+	if input.Delta == "" {
+		return nil
+	}
+	if _, _, err := p.client.AppendStreamContext(ctx, channel, input.Handle.ID,
+		slackapi.MsgOptionMarkdownText(input.Delta),
+	); err != nil {
+		return fmt.Errorf("chat.appendStream: %w", err)
+	}
+	return nil
+}
+
+// FinishStream stops and finalises a native Slack stream.
+// An ID that identifies the stream is required.
+func (p *SlackPlatform) FinishStream(ctx context.Context, input inbound.FinishStreamInput) error {
+	channel, err := parseChannel(input.SessionID)
+	if err != nil {
+		return err
+	}
+	if input.Handle.ID == "" {
+		return errors.New("stream handle ID is required")
+	}
+	if input.Handle.SessionID != input.SessionID {
+		return errors.New("stream handle session does not match input session")
+	}
+	if _, _, err := p.client.StopStreamContext(ctx, channel, input.Handle.ID); err != nil {
+		return fmt.Errorf("chat.stopStream: %w", err)
+	}
+	return nil
 }
 
 func (p *SlackPlatform) PostMessage(ctx context.Context, input inbound.TextMetadata) error {

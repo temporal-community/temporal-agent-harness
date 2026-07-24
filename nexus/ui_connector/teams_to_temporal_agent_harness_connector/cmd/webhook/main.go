@@ -5,14 +5,11 @@ import (
 	"net/http"
 	"os"
 
-	slackmsg "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound/driver/slack"
-	slackwebhook "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound/driver/slack/webhook"
+	teamswebhook "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound/driver/teams/webhook"
 	"go.temporal.io/sdk/client"
 )
 
 type flags struct {
-	slackBotToken      string
-	slackSigningSecret string
 	temporalAddress    string
 	connectorNamespace string
 	taskQueue          string
@@ -20,15 +17,6 @@ type flags struct {
 }
 
 func ensureFlags() *flags {
-	slackBotToken := os.Getenv("SLACK_BOT_TOKEN")
-	if slackBotToken == "" {
-		log.Fatal("SLACK_BOT_TOKEN is required")
-	}
-	slackSigningSecret := os.Getenv("SLACK_SIGNING_SECRET")
-	if slackSigningSecret == "" {
-		log.Fatal("SLACK_SIGNING_SECRET is required")
-	}
-
 	temporalAddress := os.Getenv("TEMPORAL_ADDRESS")
 	if temporalAddress == "" {
 		temporalAddress = "localhost:7233"
@@ -39,15 +27,13 @@ func ensureFlags() *flags {
 	}
 	taskQueue := os.Getenv("CONNECTOR_TASK_QUEUE")
 	if taskQueue == "" {
-		taskQueue = "nexus-connector-slack"
+		taskQueue = "nexus-connector-teams"
 	}
 	webhookPort := os.Getenv("WEBHOOK_PORT")
 	if webhookPort == "" {
 		webhookPort = "8080"
 	}
 	return &flags{
-		slackBotToken:      slackBotToken,
-		slackSigningSecret: slackSigningSecret,
 		temporalAddress:    temporalAddress,
 		connectorNamespace: connectorNamespace,
 		taskQueue:          taskQueue,
@@ -67,17 +53,9 @@ func main() {
 	}
 	defer tc.Close()
 
-	bot, err := slackmsg.NewSlackBot(flags.slackBotToken)
-	if err != nil {
-		log.Fatalf("Failed to initialise Slack bot: %v", err)
-	}
-	if bot.UserID != "" {
-		log.Printf("Slack bot user ID: %s (forwarding only messages that mention the bot)", bot.UserID)
-	}
-
-	handler := slackwebhook.NewServer(tc, flags.taskQueue, flags.slackSigningSecret, bot.UserID)
+	handler := teamswebhook.NewServer(tc, flags.taskQueue)
 	addr := ":" + flags.webhookPort
-	log.Printf("Slack webhook server listening on %s", addr)
+	log.Printf("Teams webhook server listening on %s", addr)
 	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatalf("Webhook server error: %v", err)
 	}

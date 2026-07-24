@@ -39,6 +39,7 @@ type StartResult struct {
 // this driver's backend keys turns by session.
 type TurnHandle struct {
 	SessionID        string
+	TurnID           string
 	TurnNumber       int64
 	StreamHeadOffset int64
 }

@@ -39,14 +39,27 @@ func (w *RouterWorkflow) Run(ctx workflow.Context, input wire.Input) error {
 		return nil
 	}
 
+	if approval := input.Approval; approval != nil {
+		if err := w.inbound.AcknowledgeApproval(ctx, inbound.ApprovalAcknowledgementInput{
+			TextMetadata: textMetadata(input, ""),
+			PromptID:     approval.ActivityID,
+			ToolName:     approval.ToolName,
+			Approved:     approval.Approved,
+		}); err != nil {
+			workflow.GetLogger(ctx).Warn("RouterWorkflow: AcknowledgeApproval failed", "error", err)
+		}
+		return nil
+	}
+
 	switch {
 	case result.Reply != "":
 		// An immediate, synchronous answer - no turn was created, nothing to poll.
-		return w.inbound.PostMessage(ctx, inbound.TextMetadata{
-			SessionID: input.SessionID,
-			ThreadID:  input.ThreadID(),
-			Text:      result.Reply,
-		})
+		return w.inbound.PostMessage(ctx, textMetadata(input, result.Reply))
+
+	case result.Handle != nil && !w.inbound.SupportsStreaming(input):
+		// Collect the complete response when the inbound conversation does not
+		// support native streaming, then post it as a single message.
+		return w.postResp(ctx, *result.Handle, input)
 
 	case result.Handle != nil:
 		// A turn was created; consume its response stream and deliver it inbound.
@@ -58,36 +71,112 @@ func (w *RouterWorkflow) Run(ctx workflow.Context, input wire.Input) error {
 	}
 }
 
-// streamResp polls the outbound driver for a started turn and streams each delta back
-// through the inbound driver, until the turn closes. This loop is generic over any
-// outbound/inbound pairing: it only deals in outbound.Delta and inbound.Driver calls.
-func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHandle, input wire.Input) error {
+func textMetadata(input wire.Input, text string) inbound.TextMetadata {
+	metadata := inbound.TextMetadata{
+		SessionID: input.SessionID,
+		ThreadID:  input.ThreadID(),
+		SenderID:  input.SenderID(),
+		Text:      text,
+	}
+	if input.Message != nil {
+		metadata.ServiceURL = input.Message.ServiceURL
+		metadata.ChannelID = input.Message.ChannelID
+	} else if input.Approval != nil {
+		metadata.ServiceURL = input.Approval.ServiceURL
+		metadata.ChannelID = input.Approval.ChannelID
+	}
+	return metadata
+}
+
+// postResp polls a turn to completion and posts all text as one message for
+// inbound conversations that do not support native streams.
+func (w *RouterWorkflow) postResp(ctx workflow.Context, handle outbound.TurnHandle, input wire.Input) error {
 	cursor := handle.StreamHeadOffset
-	var streamID string
+	fullText := ""
 
 	for {
 		res, err := w.outbound.PollTurn(ctx, handle, cursor)
 		if err != nil {
-			workflow.GetLogger(ctx).Warn("streamResp: PollTurn failed", "error", err)
-			w.endStream(ctx, input, streamID)
+			workflow.GetLogger(ctx).Warn("postResp: PollTurn failed", "error", err)
 			return nil
 		}
 		cursor = res.NextCursor
 
 		if res.Closed {
-			w.endStream(ctx, input, streamID)
-			return nil
+			if fullText == "" {
+				return nil
+			}
+			return w.inbound.PostMessage(ctx, textMetadata(input, fullText))
 		}
 
 		for _, delta := range res.Deltas {
 			if delta.ApprovalRequested != nil {
 				req := delta.ApprovalRequested
 				if err := w.inbound.PostApprovalPrompt(ctx, inbound.ApprovalPromptInput{
-					SessionID: input.SessionID,
-					ThreadID:  input.ThreadID(),
-					ToolID:    req.ToolID,
-					ToolName:  req.ToolName,
-					ToolInput: req.ToolInputJSON,
+					TextMetadata: textMetadata(input, ""),
+					ToolID:       req.ToolID,
+					ToolName:     req.ToolName,
+					ToolInput:    req.ToolInputJSON,
+				}); err != nil {
+					workflow.GetLogger(ctx).Warn("postResp: PostApprovalPrompt failed", "error", err)
+				}
+				continue
+			}
+
+			fullText += delta.Text
+			if delta.IsFinal {
+				if fullText == "" {
+					return nil
+				}
+				return w.inbound.PostMessage(ctx, textMetadata(input, fullText))
+			}
+		}
+	}
+}
+
+// streamResp polls the outbound driver for a started turn and streams each delta back
+// through the inbound driver, until the turn closes. This loop is generic over any
+// outbound/inbound pairing: it only deals in outbound.Delta and inbound.Driver calls.
+func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHandle, input wire.Input) error {
+	cursor := handle.StreamHeadOffset
+
+	// Start the initial inbound stream before polling.
+	streamHandle, err := w.beginStream(ctx, input)
+	if err != nil {
+		workflow.GetLogger(ctx).Error("streamResp: stream begin failed", "error", err)
+		return nil
+	}
+
+	for {
+		res, err := w.outbound.PollTurn(ctx, handle, cursor)
+		if err != nil {
+			workflow.GetLogger(ctx).Warn("streamResp: PollTurn failed", "error", err)
+			w.endStream(ctx, input, streamHandle)
+			return nil
+		}
+		cursor = res.NextCursor
+
+		// A turn may close without an explicit final delta.
+		if res.Closed {
+			w.endStream(ctx, input, streamHandle)
+			return nil
+		}
+
+		for _, delta := range res.Deltas {
+			if delta.ApprovalRequested != nil {
+				req := delta.ApprovalRequested
+				// Some inbound drivers must finish the current stream before posting an
+				// approval card so the messages appear in order. Clearing the handle makes
+				// the next text delta start a new stream.
+				if streamHandle != nil && streamHandle.CloseBeforeApproval {
+					w.endStream(ctx, input, streamHandle)
+					streamHandle = nil
+				}
+				if err := w.inbound.PostApprovalPrompt(ctx, inbound.ApprovalPromptInput{
+					TextMetadata: textMetadata(input, ""),
+					ToolID:       req.ToolID,
+					ToolName:     req.ToolName,
+					ToolInput:    req.ToolInputJSON,
 				}); err != nil {
 					workflow.GetLogger(ctx).Warn("streamResp: PostApprovalPrompt failed", "error", err)
 				}
@@ -95,56 +184,67 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHa
 			}
 
 			if delta.Text != "" {
-				// streamID == "" iff this is the first delta, so we start the inbound
-				// stream to get the ID for subsequent appends.
-				if streamID == "" {
-					sid, err := w.inbound.Stream(ctx, inbound.StreamInput{
-						TextMetadata: inbound.TextMetadata{
-							SessionID: input.SessionID,
-							ThreadID:  input.ThreadID(),
-							SenderID:  input.SenderID(),
-						},
-						DeltaType: inbound.DeltaTypeStart,
-					})
+				// An approval may have closed the previous stream. Reopen it when response
+				// text resumes.
+				if streamHandle == nil {
+					streamHandle, err = w.beginStream(ctx, input)
 					if err != nil {
-						workflow.GetLogger(ctx).Warn("streamResp: stream start failed, falling back to postMessage", "error", err)
-						_ = w.inbound.PostMessage(ctx, inbound.TextMetadata{
-							SessionID: input.SessionID,
-							ThreadID:  input.ThreadID(),
-							Text:      delta.Text,
-						})
+						workflow.GetLogger(ctx).Warn("streamResp: stream begin failed", "error", err)
 						return nil
 					}
-					streamID = sid
 				}
-
-				if _, err := w.inbound.Stream(ctx, inbound.StreamInput{
-					TextMetadata: inbound.TextMetadata{
-						SessionID: input.SessionID,
-						Text:      delta.Text,
-					},
-					StreamID:  streamID,
-					DeltaType: inbound.DeltaTypeAppend,
-				}); err != nil {
-					workflow.GetLogger(ctx).Warn("streamResp: stream append failed", "error", err)
-				}
+				w.updateStream(ctx, input, streamHandle, delta.Text)
 			}
 
 			if delta.IsFinal {
-				w.endStream(ctx, input, streamID)
+				w.endStream(ctx, input, streamHandle)
 				return nil
 			}
 		}
 	}
 }
 
-func (w *RouterWorkflow) endStream(ctx workflow.Context, input wire.Input, streamID string) {
-	if streamID == "" {
+func (w *RouterWorkflow) beginStream(ctx workflow.Context, input wire.Input) (*inbound.StreamHandle, error) {
+	conversationType := ""
+	if input.Message != nil {
+		conversationType = input.Message.ConversationType
+	}
+	streamHandle, err := w.inbound.BeginStream(ctx, inbound.BeginStreamInput{
+		TextMetadata:     textMetadata(input, ""),
+		ConversationType: conversationType,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &streamHandle, nil
+}
+
+func (w *RouterWorkflow) updateStream(
+	ctx workflow.Context,
+	input wire.Input,
+	handle *inbound.StreamHandle,
+	delta string,
+) {
+	if handle == nil {
 		return
 	}
-	_, _ = w.inbound.Stream(ctx, inbound.StreamInput{
-		TextMetadata: inbound.TextMetadata{SessionID: input.SessionID},
-		StreamID:     streamID,
-		DeltaType:    inbound.DeltaTypeEnd,
-	})
+	if err := w.inbound.UpdateStream(ctx, inbound.UpdateStreamInput{
+		TextMetadata: textMetadata(input, ""),
+		Handle:       *handle,
+		Delta:        delta,
+	}); err != nil {
+		workflow.GetLogger(ctx).Warn("streamResp: stream update failed", "error", err)
+	}
+}
+
+func (w *RouterWorkflow) endStream(ctx workflow.Context, input wire.Input, handle *inbound.StreamHandle) {
+	if handle == nil {
+		return
+	}
+	if err := w.inbound.FinishStream(ctx, inbound.FinishStreamInput{
+		TextMetadata: textMetadata(input, ""),
+		Handle:       *handle,
+	}); err != nil {
+		workflow.GetLogger(ctx).Warn("streamResp: stream finish failed", "error", err)
+	}
 }

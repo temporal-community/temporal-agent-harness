@@ -32,8 +32,8 @@ func TestTurnEventToDelta(t *testing.T) {
 		{"reply_delta", turnEvent{Type: "reply_delta", Text: "hello"}, "hello", false, false},
 		{"reply", turnEvent{Type: "reply", Text: "full text"}, "", true, false},
 		{"tool_start", turnEvent{Type: "tool_start", ToolName: "search"}, "\n_search..._", false, false},
-		{"tool_end", turnEvent{Type: "tool_end"}, " ✅\n", false, false},
-		{"tool_error", turnEvent{Type: "tool_error", Message: "oops"}, " ❌ Error: oops_\n", false, false},
+		{"tool_end", turnEvent{Type: "tool_end"}, " ✅\n\n", false, false},
+		{"tool_error", turnEvent{Type: "tool_error", Message: "oops"}, " ❌ Error: oops\n\n", false, false},
 		{"error", turnEvent{Type: "error", Message: "crash"}, "[error] crash", true, false},
 		{"thought_summary with text", turnEvent{Type: "thought_summary", Delta: map[string]any{"text": "thinking..."}}, "thinking...", false, false},
 		{"thought_summary empty text", turnEvent{Type: "thought_summary", Delta: map[string]any{"text": ""}}, "", false, true},
@@ -52,6 +52,21 @@ func TestTurnEventToDelta(t *testing.T) {
 			assert.Equal(t, tc.wantFinal, d.IsFinal)
 		})
 	}
+}
+
+func TestToolCompletionSeparatesFollowingReply(t *testing.T) {
+	start := turnEventToDelta(turnEvent{Type: "tool_start", ToolName: "file_search"})
+	end := turnEventToDelta(turnEvent{Type: "tool_end"})
+	reply := turnEventToDelta(turnEvent{Type: "reply_delta", Text: "A Local Activity runs in the Workflow process."})
+	require.NotNil(t, start)
+	require.NotNil(t, end)
+	require.NotNil(t, reply)
+
+	text := start.Text + end.Text + reply.Text
+	assert.Equal(t,
+		"\n_file_search..._ ✅\n\nA Local Activity runs in the Workflow process.",
+		text,
+	)
 }
 
 func TestReplyEventDoesNotAppendText(t *testing.T) {

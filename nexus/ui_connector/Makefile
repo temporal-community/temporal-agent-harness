@@ -1,4 +1,4 @@
-.PHONY: generate build test test-contract lint fmt vet workflowcheck ci install-dev-server start-dev-server
+.PHONY: generate build test test-go test-python test-contract lint lint-python fmt vet workflowcheck ci run-teams-activity-worker install-dev-server start-dev-server
 
 generate:
 	npx nexus-rpc-gen@alpha --lang go --package generated \
@@ -8,9 +8,14 @@ generate:
 build:
 	go build ./...
 
-# Run all tests. Contract tests (requiring uv/Python) skip gracefully if unavailable.
-test:
+# Run the Go and Python connector suites.
+test: test-go test-python
+
+test-go:
 	go test -race -count=1 ./...
+
+test-python:
+	cd teams_activity_worker && uv run python -m pytest
 
 # Run only the contract tests; fails loudly if uv is not installed.
 test-contract:
@@ -29,7 +34,13 @@ workflowcheck:
 lint:
 	golangci-lint run --timeout=5m
 
-ci: vet workflowcheck lint test
+lint-python:
+	cd teams_activity_worker && uv run python -m ruff check . && uv run python -m pyright --pythonpath .venv/bin/python
+
+run-teams-activity-worker:
+	cd teams_activity_worker && uv run teams-activity-worker
+
+ci: vet workflowcheck lint lint-python test
 
 TEMPORAL_SERVER_REPO ?= https://github.com/temporalio/temporal.git
 TEMPORAL_SERVER_REF ?= main

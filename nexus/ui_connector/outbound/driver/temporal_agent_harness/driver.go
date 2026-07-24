@@ -76,9 +76,9 @@ func turnEventToDelta(e turnEvent) *outbound.Delta {
 	case "tool_start":
 		return &outbound.Delta{Text: "\n_" + e.ToolName + "..._"}
 	case "tool_end":
-		return &outbound.Delta{Text: " ✅\n"}
+		return &outbound.Delta{Text: " ✅\n\n"}
 	case "tool_error":
-		return &outbound.Delta{Text: " ❌ Error: " + e.Message + "_\n"}
+		return &outbound.Delta{Text: " ❌ Error: " + e.Message + "\n\n"}
 	case "reply":
 		// Text was already fully streamed via reply_delta events; this just signals completion.
 		return &outbound.Delta{IsFinal: true}
@@ -116,6 +116,7 @@ func (d *Driver) StartTurn(ctx workflow.Context, input wire.Input) (outbound.Sta
 		}
 		return outbound.StartResult{Handle: &outbound.TurnHandle{
 			SessionID:        input.SessionID,
+			TurnID:           sendOut.TurnID,
 			TurnNumber:       sendOut.TurnNumber,
 			StreamHeadOffset: sendOut.StreamHeadOffset,
 		}}, nil
@@ -181,6 +182,7 @@ func startSlashTurn(ctx workflow.Context, agentClient workflow.NexusClient, sess
 	}
 	return outbound.StartResult{Handle: &outbound.TurnHandle{
 		SessionID:        sessionID,
+		TurnID:           sendOut.TurnID,
 		TurnNumber:       sendOut.TurnNumber,
 		StreamHeadOffset: sendOut.StreamHeadOffset,
 	}}, nil

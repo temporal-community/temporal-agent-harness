@@ -11,8 +11,8 @@ import (
 
 	slackapi "github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	slackmsg "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound/driver/slack"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/wire"
 	"go.temporal.io/sdk/client"
 )

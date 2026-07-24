@@ -247,7 +247,11 @@ func startMockAgentWorker(t *testing.T, tc client.Client, agentTaskQueue string,
 // activity implementations this test registers on the connector worker — the test
 // double standing in for a real platform driver's activities (cf. SlackPlatform).
 type testInboundActivities interface {
-	Stream(ctx context.Context, input inbound.StreamInput) (string, error)
+	// Streaming APIs are intended to be used together to start/update/end a streamed response.
+	BeginStream(ctx context.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error)
+	UpdateStream(ctx context.Context, input inbound.UpdateStreamInput) error
+	FinishStream(ctx context.Context, input inbound.FinishStreamInput) error
+
 	PostMessage(ctx context.Context, input inbound.TextMetadata) error
 	PostApprovalPrompt(ctx context.Context, input inbound.ApprovalPromptInput) error
 }
@@ -255,7 +259,9 @@ type testInboundActivities interface {
 // Activity name constants for this test's inbound driver, private to this file — a
 // real driver (e.g. slack.Driver) is free to choose its own.
 const (
-	testStreamActivity             = "TestStream"
+	testBeginStreamActivity        = "TestBeginStream"
+	testUpdateStreamActivity       = "TestUpdateStream"
+	testFinishStreamActivity       = "TestFinishStream"
 	testPostMessageActivity        = "TestPostMessage"
 	testPostApprovalPromptActivity = "TestPostApprovalPrompt"
 )
@@ -264,6 +270,10 @@ const (
 // testInboundActivities implementation the test registered on the worker.
 type testInboundDriver struct{}
 
+func (testInboundDriver) SupportsStreaming(wire.Input) bool {
+	return true
+}
+
 func (testInboundDriver) activityOptions(ctx workflow.Context) workflow.Context {
 	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
@@ -271,10 +281,18 @@ func (testInboundDriver) activityOptions(ctx workflow.Context) workflow.Context 
 	})
 }
 
-func (d testInboundDriver) Stream(ctx workflow.Context, input inbound.StreamInput) (string, error) {
-	var streamID string
-	err := workflow.ExecuteActivity(d.activityOptions(ctx), testStreamActivity, input).Get(ctx, &streamID)
-	return streamID, err
+func (d testInboundDriver) BeginStream(ctx workflow.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error) {
+	var handle inbound.StreamHandle
+	err := workflow.ExecuteActivity(d.activityOptions(ctx), testBeginStreamActivity, input).Get(ctx, &handle)
+	return handle, err
+}
+
+func (d testInboundDriver) UpdateStream(ctx workflow.Context, input inbound.UpdateStreamInput) error {
+	return workflow.ExecuteActivity(d.activityOptions(ctx), testUpdateStreamActivity, input).Get(ctx, nil)
+}
+
+func (d testInboundDriver) FinishStream(ctx workflow.Context, input inbound.FinishStreamInput) error {
+	return workflow.ExecuteActivity(d.activityOptions(ctx), testFinishStreamActivity, input).Get(ctx, nil)
 }
 
 func (d testInboundDriver) PostMessage(ctx workflow.Context, input inbound.TextMetadata) error {
@@ -285,12 +303,18 @@ func (d testInboundDriver) PostApprovalPrompt(ctx workflow.Context, input inboun
 	return workflow.ExecuteActivity(d.activityOptions(ctx), testPostApprovalPromptActivity, input).Get(ctx, nil)
 }
 
+func (testInboundDriver) UpdateMessage(workflow.Context, inbound.UpdateMessageInput) error {
+	return nil
+}
+
 func startConnectorWorker(t *testing.T, tc client.Client, connectorTaskQueue string, platform testInboundActivities) sdkworker.Worker {
 	t.Helper()
 	routerWorkflow := router.NewRouterWorkflow(testInboundDriver{}, &temporal_agent_harness.Driver{})
 	w := sdkworker.New(tc, connectorTaskQueue, sdkworker.Options{})
 	w.RegisterWorkflowWithOptions(routerWorkflow.Run, workflow.RegisterOptions{Name: router.WorkflowName})
-	w.RegisterActivityWithOptions(platform.Stream, activity.RegisterOptions{Name: testStreamActivity})
+	w.RegisterActivityWithOptions(platform.BeginStream, activity.RegisterOptions{Name: testBeginStreamActivity})
+	w.RegisterActivityWithOptions(platform.UpdateStream, activity.RegisterOptions{Name: testUpdateStreamActivity})
+	w.RegisterActivityWithOptions(platform.FinishStream, activity.RegisterOptions{Name: testFinishStreamActivity})
 	w.RegisterActivityWithOptions(platform.PostMessage, activity.RegisterOptions{Name: testPostMessageActivity})
 	w.RegisterActivityWithOptions(platform.PostApprovalPrompt, activity.RegisterOptions{Name: testPostApprovalPromptActivity})
 	require.NoError(t, w.Start())
@@ -320,7 +344,7 @@ func connectorTurnItems(t *testing.T, n int) []harnessgen.ItemElement {
 
 // -- mockMsgPlatform ---------------------------------------------------------
 // Mock inbound activity implementation — tracks start/append/stop/post counts via the
-// unified Stream interface.
+// durable stream lifecycle.
 
 type mockMsgPlatform struct {
 	mu          sync.Mutex
@@ -335,21 +359,30 @@ func newmockMsgPlatform() *mockMsgPlatform {
 	return &mockMsgPlatform{completions: make(chan struct{}, 64)}
 }
 
-func (p *mockMsgPlatform) Stream(_ context.Context, in inbound.StreamInput) (string, error) {
+func (p *mockMsgPlatform) BeginStream(_ context.Context, in inbound.BeginStreamInput) (inbound.StreamHandle, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	switch in.DeltaType {
-	case inbound.DeltaTypeStart:
-		p.starts++
-		return "stream-1", nil
-	case inbound.DeltaTypeEnd:
-		p.stops++
-		p.completions <- struct{}{}
-		return in.StreamID, nil
-	default: // DeltaTypeAppend
-		p.appends++
-		return in.StreamID, nil
-	}
+	p.starts++
+	return inbound.StreamHandle{
+		ID:           "stream-1",
+		SessionID:    in.SessionID,
+		WireTextMode: inbound.StreamWireTextDelta,
+	}, nil
+}
+
+func (p *mockMsgPlatform) UpdateStream(_ context.Context, _ inbound.UpdateStreamInput) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.appends++
+	return nil
+}
+
+func (p *mockMsgPlatform) FinishStream(_ context.Context, _ inbound.FinishStreamInput) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stops++
+	p.completions <- struct{}{}
+	return nil
 }
 
 func (p *mockMsgPlatform) PostMessage(_ context.Context, _ inbound.TextMetadata) error {
@@ -393,14 +426,19 @@ type blockOnStart struct {
 	once      sync.Once
 }
 
-func (b *blockOnStart) Stream(ctx context.Context, in inbound.StreamInput) (string, error) {
-	if in.DeltaType == inbound.DeltaTypeStart {
-		// Block the start call until the context is cancelled (simulates worker crash).
-		b.once.Do(func() { close(b.started) })
-		<-ctx.Done()
-		return "", ctx.Err()
-	}
-	return b.recording.Stream(ctx, in)
+func (b *blockOnStart) BeginStream(ctx context.Context, in inbound.BeginStreamInput) (inbound.StreamHandle, error) {
+	// Block the start call until the context is cancelled (simulates worker crash).
+	b.once.Do(func() { close(b.started) })
+	<-ctx.Done()
+	return inbound.StreamHandle{}, ctx.Err()
+}
+
+func (b *blockOnStart) UpdateStream(ctx context.Context, in inbound.UpdateStreamInput) error {
+	return b.recording.UpdateStream(ctx, in)
+}
+
+func (b *blockOnStart) FinishStream(ctx context.Context, in inbound.FinishStreamInput) error {
+	return b.recording.FinishStream(ctx, in)
 }
 
 func (b *blockOnStart) PostMessage(ctx context.Context, in inbound.TextMetadata) error {
