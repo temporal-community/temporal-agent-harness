@@ -4,8 +4,10 @@ A conversational agent in the ReAct pattern — it reasons, then acts by calling
 on the result until it can answer in plain text. It finds the weather for a named city
 (``get_coordinates`` -> ``get_weather``) or for the user's current location (``get_ip_address``
 -> ``get_location_info`` -> ``get_weather``), and pulls Formula 1 data through an MCP server. The
-turn runs the model with ``Runner.run_streamed(...)`` so model calls route through the streaming
-activity and the harness observer translates raw OpenAI events into the live turn stream. The
+turn runs the model with ``Runner.run_streamed(..., context=self._runner)`` — passing the harness
+runner as the SDK run context is what lets the streaming seam resolve the in-flight turn — so model
+calls route through the streaming activity and the harness observer translates raw OpenAI events
+into the live turn stream. The
 local tools are durable harness activity tools adapted onto the SDK with ``as_openai_agent_tools``
 (so the harness owns the approval policy and each tool's ``tool_start`` / ``tool_end`` /
 ``tool_error`` events); the F1 tools come from a durable, activity-backed MCP server registered on
@@ -97,7 +99,9 @@ class ReactAgentWorkflow:
         ]
 
         # run_streamed returns immediately; iterate its events to drive the turn to completion.
-        result = Runner.run_streamed(sdk_agent, input=input_items)
+        # context=self._runner hands the harness runner to the streaming seam (stream_to_provider
+        # reads the in-flight turn off it); without it the streamed model call raises.
+        result = Runner.run_streamed(sdk_agent, input=input_items, context=self._runner)
         async for _event in result.stream_events():
             pass
 

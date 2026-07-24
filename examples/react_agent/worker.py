@@ -10,11 +10,14 @@ get_location_info, get_coordinates, get_weather). Each tool is a harness activit
 model activities (including the streaming one) itself.
 
 The plugin is wired for the HARNESS STREAMING PATH:
-  * ``model_params.stream_to_provider=stream_to_provider`` — resolves each streamed model
-    call's per-turn stream context ambiently off the running workflow, and
+  * ``model_params.stream_to_provider=stream_to_provider`` — reads each streamed model call's
+    per-turn stream context off the run context the workflow threads in (the workflow calls
+    ``Runner.run_streamed(..., context=self._runner)``), and
   * ``observer_factory=harness_observer_factory`` — turns that context into the observer that
     translates raw OpenAI events into the harness turn-stream vocabulary live.
-Drop either one and streaming falls back to the plugin's plain raw-topic behavior.
+Drop either hook, or omit the ``context=self._runner`` on ``run_streamed``, and there is no
+stream target — the streamed call raises unless you also set ``model_params.streaming_topic``
+(the plugin's plain raw-topic fallback, not wired here).
 
 Env vars (set in the repo-root .env.local — see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile
@@ -65,11 +68,6 @@ async def main() -> None:
 
     if not os.environ.get("OPENAI_API_KEY"):
         sys.exit("error: OPENAI_API_KEY env var not set")
-
-    F1_MCP_SERVER_HOME = os.environ.get(
-        "F1_MCP_SERVER_HOME",
-        os.path.expanduser("~/Projects/Temporal/AI/MCP/f1-mcp-server"),
-    )
 
     def _f1_server_factory() -> MCPServerStdio:
         # The F1 server is Node.js but shells out to python3 for FastF1. Activating
