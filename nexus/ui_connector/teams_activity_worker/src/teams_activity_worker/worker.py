@@ -96,7 +96,7 @@ class TeamsActivities:
         await self.platform.update_message(_parse(UpdateMessage.from_payload, payload))
 
 
-async def run() -> None:
+async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = Settings.from_env()
     worker_task_queue = f"{settings.task_queue}-stream-{uuid4().hex}"
@@ -155,4 +155,4 @@ async def run() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    asyncio.run(main())
