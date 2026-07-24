@@ -1,6 +1,6 @@
 import dataclasses
 from collections.abc import AsyncIterator, Awaitable
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from agents import (
     Agent,
@@ -15,6 +15,7 @@ from agents import (
     TContext,
     TResponseInputItem,
 )
+from agents.mcp import MCPServer
 from agents.run import DEFAULT_AGENT_RUNNER, AgentRunner, RunOptions
 from agents.sandbox import SandboxAgent
 from typing_extensions import Unpack
@@ -27,6 +28,42 @@ from temporal_agent_harness.ai_sdks.openai_agents.sandbox._temporal_sandbox_clie
 )
 from temporal_agent_harness.ai_sdks.openai_agents.workflow import AgentsWorkflowError
 
+# One fresh transport per Runner.run()/run_streamed() call (one per "turn"), NOT shared
+# across the whole workflow execution — cleaned up (see run()/run_streamed() below) once
+# that call finishes. This mirrors exactly the lifecycle of the original, manual
+# `async with nexus_transport_mcp_server(...) as mcp_server:` pattern, just performed
+# automatically by the runner instead of by hand at the call site.
+#
+# Historical note, no longer applicable to the CURRENT _NexusTransportMCPServer (see
+# _nexus_mcp.py's module docstring): an early version shared one instance for the whole
+# workflow, backed by a real (if in-process/fake) MCP ClientSession with its own background
+# router task. Never disconnecting that broke workflow eviction (the router task never got
+# cancelled, so Temporal's SDK couldn't cleanly tear down the workflow's event loop, hanging
+# "eviction" for minutes at a time). _NexusTransportMCPServer no longer has a session or
+# router task at all — connect()/cleanup() are no-ops — so that specific failure mode is
+# gone; fresh-per-call construction is kept anyway since it costs nothing (no session to
+# reconnect) and keeps this runner's contract simple: whatever it injects, it also cleans up.
+def _create_nexus_transport_mcp_server() -> MCPServer:
+    from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+        nexus_transport_mcp_server,
+    )
+
+    # nexus_transport_mcp_server()'s return type is AbstractAsyncContextManager[MCPServer]
+    # for its own `async with nexus_transport_mcp_server() as mcp_server:` usage pattern --
+    # but the concrete object is an MCPServer directly too (its __aenter__ just returns
+    # self), and this call site deliberately doesn't use `async with`: this runner manages
+    # the lifecycle itself (see run()/run_streamed()'s own cleanup calls below).
+    return cast(MCPServer, nexus_transport_mcp_server(name="nexus-transport"))
+
+
+async def _cleanup_nexus_transport_mcp_server(server: MCPServer) -> None:
+    try:
+        await server.cleanup()
+    except Exception:
+        workflow.logger.warning(
+            "[nexus-transport] cleanup failed for the auto-injected MCP server", exc_info=True
+        )
+
 
 # Recursively replace models in all agents
 def _convert_agent(
@@ -34,6 +71,7 @@ def _convert_agent(
     agent: Agent[Any],
     seen: dict[int, Agent] | None,
     run_context: Any = None,
+    nexus_transport_mcp_server: MCPServer | None = None,
 ) -> Agent[Any]:
     if seen is None:
         seen = dict()
@@ -55,7 +93,11 @@ def _convert_agent(
     new_handoffs: list[Agent | Handoff] = []
     for handoff in agent.handoffs:
         if isinstance(handoff, Agent):
-            new_handoffs.append(_convert_agent(model_params, handoff, seen, run_context))
+            new_handoffs.append(
+                _convert_agent(
+                    model_params, handoff, seen, run_context, nexus_transport_mcp_server
+                )
+            )
         elif isinstance(handoff, Handoff):
             original_invoke = handoff.on_invoke_handoff
 
@@ -69,7 +111,13 @@ def _convert_agent(
                 run_context: Any = run_context,
             ) -> Agent:
                 handoff_agent = await invoke_func(context, args)
-                return _convert_agent(model_params, handoff_agent, seen, run_context)
+                return _convert_agent(
+                    model_params,
+                    handoff_agent,
+                    seen,
+                    run_context,
+                    nexus_transport_mcp_server,
+                )
 
             new_handoffs.append(
                 dataclasses.replace(handoff, on_invoke_handoff=on_invoke)
@@ -84,6 +132,17 @@ def _convert_agent(
         run_context=run_context,
     )
     new_agent.handoffs = new_handoffs
+
+    if nexus_transport_mcp_server is not None:
+        from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
+            _NexusTransportMCPServer,
+        )
+
+        if not any(
+            isinstance(s, _NexusTransportMCPServer) for s in new_agent.mcp_servers
+        ):
+            new_agent.mcp_servers = [*new_agent.mcp_servers, nexus_transport_mcp_server]
+
     return new_agent
 
 
@@ -112,17 +171,45 @@ class TemporalOpenAIRunner(AgentRunner):
     def __init__(
         self,
         model_params: ModelActivityParameters,
+        nexus_transport: bool = False,
     ) -> None:
-        """Initialize the Temporal OpenAI Runner."""
+        """Initialize the Temporal OpenAI Runner.
+
+        Args:
+            model_params: Configuration for the model-call activity.
+            nexus_transport: If true, every ``Agent`` run in a workflow automatically gets a
+                Nexus-transport MCP server (``workflow.nexus_transport_mcp_server``) appended
+                to its ``mcp_servers`` — no explicit ``mcp_servers=[...]`` wiring needed at
+                any call site. Skipped for an agent that already has one (e.g. a
+                hand-constructed instance with custom options). What that transport can
+                actually reach is entirely a function of what's registered live against the
+                calling workflow's own registry (see ``NexusMcpServerRegistry``) — a plain
+                URL-based MCP server a caller configures directly on an ``Agent`` is
+                untouched either way, since injection is additive. A fresh transport is
+                constructed for each ``run()``/``run_streamed()`` call (one per conversation
+                turn) and cleaned up once that call completes — both are cheap, in-memory-only
+                no-ops (``_NexusTransportMCPServer`` calls straight through to
+                ``WorkflowTransport`` on every ``list_tools``/``call_tool``, no session or
+                connection of any kind to open or hold — see ``_nexus_mcp.py``'s module
+                docstring), so this does not add a real per-turn cost. See
+                ``OpenAIAgentsPlugin.__init__``'s matching parameter.
+        """
         self._runner = DEFAULT_AGENT_RUNNER or AgentRunner()
         self.model_params = model_params
+        self._nexus_transport = nexus_transport
 
     def _prepare_workflow_run(
         self,
         starting_agent: Agent[TContext],
         kwargs: RunOptions[TContext],
-    ) -> Agent[Any]:
-        """Workflow-only validation and ``kwargs`` rewrite shared by ``run()`` and ``run_streamed()``."""
+    ) -> tuple[Agent[Any], MCPServer | None]:
+        """Workflow-only validation and ``kwargs`` rewrite shared by ``run()`` and
+        ``run_streamed()``.
+
+        Returns the converted agent plus the auto-injected Nexus-transport MCP server (if
+        ``nexus_transport`` is enabled), so the caller can clean it up once its run
+        completes — see ``_cleanup_nexus_transport_mcp_server``.
+        """
         for t in starting_agent.tools:
             if callable(t):
                 raise ValueError(
@@ -131,21 +218,18 @@ class TemporalOpenAIRunner(AgentRunner):
 
         if starting_agent.mcp_servers:
             from temporal_agent_harness.ai_sdks.openai_agents._mcp import (
-                _StatefulMCPServerReference,
-                _StatelessMCPServerReference,
+                _DurableMCPServerMarker,
             )
 
             for s in starting_agent.mcp_servers:
-                if not isinstance(
-                    s,
-                    (
-                        _StatelessMCPServerReference,
-                        _StatefulMCPServerReference,
-                    ),
-                ):
+                if not isinstance(s, _DurableMCPServerMarker):
                     raise ValueError(
                         f"Unknown mcp_server type {type(s)} may not work durably."
                     )
+
+        nexus_transport_mcp_server = None
+        if self._nexus_transport:
+            nexus_transport_mcp_server = _create_nexus_transport_mcp_server()
 
         if isinstance(kwargs.get("session"), SQLiteSession):
             raise ValueError("Temporal workflows don't support SQLite sessions.")
@@ -199,7 +283,10 @@ class TemporalOpenAIRunner(AgentRunner):
                 )
 
         kwargs["run_config"] = run_config
-        return _convert_agent(self.model_params, starting_agent, None, run_context)
+        converted_agent = _convert_agent(
+            self.model_params, starting_agent, None, run_context, nexus_transport_mcp_server
+        )
+        return converted_agent, nexus_transport_mcp_server
 
     async def run(
         self,
@@ -215,7 +302,7 @@ class TemporalOpenAIRunner(AgentRunner):
                 **kwargs,
             )
 
-        converted_agent = self._prepare_workflow_run(starting_agent, kwargs)
+        converted_agent, injected_server = self._prepare_workflow_run(starting_agent, kwargs)
 
         try:
             return await self._runner.run(
@@ -234,6 +321,9 @@ class TemporalOpenAIRunner(AgentRunner):
                 raise reraise from e.__cause__
             else:
                 raise e
+        finally:
+            if injected_server is not None:
+                await _cleanup_nexus_transport_mcp_server(injected_server)
 
     def run_sync(
         self,
@@ -296,7 +386,7 @@ class TemporalOpenAIRunner(AgentRunner):
                 "heartbeats or the workflow stream signal channel)."
             )
 
-        converted_agent = self._prepare_workflow_run(starting_agent, kwargs)
+        converted_agent, injected_server = self._prepare_workflow_run(starting_agent, kwargs)
 
         streamed_result = self._runner.run_streamed(
             starting_agent=converted_agent,
@@ -322,24 +412,31 @@ class TemporalOpenAIRunner(AgentRunner):
 
         async def _stream_events_with_rewrap() -> AsyncIterator[Any]:
             try:
-                async for event in original_stream_events():
-                    yield event
-            except AgentsException as e:
-                _reraise_workflow_failure(e)
-                raise
-            # The agents framework may have stored the run-loop
-            # exception on ``_stored_exception`` (or surfaced it through
-            # the iterator) without re-raising it through stream_events.
-            # By the time the iterator is exhausted, ``run_loop_task``
-            # is done — surface its exception here so a failed run
-            # cannot appear successful, applying the workflow-failure
-            # rewrap when applicable.
-            if run_loop_task is not None and run_loop_task.done():
-                exc = run_loop_task.exception()
-                if exc is not None:
-                    if isinstance(exc, AgentsException):
-                        _reraise_workflow_failure(exc)
-                    raise exc
+                try:
+                    async for event in original_stream_events():
+                        yield event
+                except AgentsException as e:
+                    _reraise_workflow_failure(e)
+                    raise
+                # The agents framework may have stored the run-loop
+                # exception on ``_stored_exception`` (or surfaced it through
+                # the iterator) without re-raising it through stream_events.
+                # By the time the iterator is exhausted, ``run_loop_task``
+                # is done — surface its exception here so a failed run
+                # cannot appear successful, applying the workflow-failure
+                # rewrap when applicable.
+                if run_loop_task is not None and run_loop_task.done():
+                    exc = run_loop_task.exception()
+                    if exc is not None:
+                        if isinstance(exc, AgentsException):
+                            _reraise_workflow_failure(exc)
+                        raise exc
+            finally:
+                # cleanup() is a no-op for the current _NexusTransportMCPServer (nothing to
+                # actually release), but this stays symmetric with run()'s own cleanup call
+                # and with whatever else _prepare_workflow_run ever injects here.
+                if injected_server is not None:
+                    await _cleanup_nexus_transport_mcp_server(injected_server)
 
         streamed_result.stream_events = _stream_events_with_rewrap  # type: ignore[method-assign]
         return streamed_result

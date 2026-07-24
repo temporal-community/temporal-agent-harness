@@ -3,9 +3,10 @@
 Serves the InboundGateway over MCP Streamable HTTP so any MCP client
 (Gemini SDK, Claude Desktop, etc.) can reach durable tools via a plain HTTP URL.
 
-Usage::
+Usage (from the repo root — this module runs directly against the monorepo's own dependency
+graph, no separate package/venv for it; see examples/nexus_hello/justfile's `registry` recipe)::
 
-    uv run python -m mcp_server.main
+    uv run --extra nexus-mcp --group examples python -m durable_tools_gateway.server
 
 Environment variables:
 
@@ -53,14 +54,11 @@ from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
-from mcp_gateway import InboundGateway, ToolCallWorkflow, mcp_proxy_activity
-from registry import (
-    REGISTRY_TASK_QUEUE,
-    REGISTRY_WORKFLOW_ID,
-    RegistryServiceHandler,
-    ToolRegistryWorkflow,
-    fetch_external_tools,
-)
+from .activities import fetch_external_tools, mcp_proxy_activity
+from .inbound import InboundGateway
+from .registry import REGISTRY_TASK_QUEUE, REGISTRY_WORKFLOW_ID, ToolRegistryWorkflow
+from .registry_service_handler import RegistryServiceHandler
+from .tool_call import ToolCallWorkflow
 
 logger = logging.getLogger(__name__)
 

@@ -17,7 +17,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import timedelta
 from typing import Any
 
 import mcp.types as types
@@ -25,8 +24,9 @@ from mcp.server.lowlevel import Server
 from temporalio.client import Client
 from temporalio.common import WorkflowIDConflictPolicy
 
-from .tool_call import MCPServerKind, ToolCallWorkflow, ToolCallWorkflowInput
-from registry import REGISTRY_TASK_QUEUE, REGISTRY_WORKFLOW_ID, RegistryEntry, ToolRegistryWorkflow
+from .activities import ExternalMCPCallInput
+from .registry import REGISTRY_TASK_QUEUE, REGISTRY_WORKFLOW_ID, RegistryEntry, ToolRegistryWorkflow
+from .tool_call import ToolCallWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class InboundGateway:
         try:
             handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
             tool_dicts: list[dict] = await handle.query(
-                ToolRegistryWorkflow.list_all_tools
+                ToolRegistryWorkflow.list_tools
             )
             tools = [types.Tool(**d) for d in tool_dicts]
         except Exception as exc:
@@ -124,30 +124,15 @@ class InboundGateway:
             )
 
         wf_id = _stable_workflow_id(name, arguments, entry)
-
-        if entry.kind == "nexus":
-            wf_input = ToolCallWorkflowInput(
-                kind=MCPServerKind.NEXUS,
-                service=service,
-                operation=operation,
-                endpoint=entry.endpoint,
-                arguments=arguments,
-            )
-            logger.info(
-                "[gateway] call_tool nexus  service=%r  op=%r  endpoint=%r  wf=%s",
-                service, operation, entry.endpoint, wf_id,
-            )
-        else:
-            wf_input = ToolCallWorkflowInput(
-                kind=MCPServerKind.EXTERNAL,
-                server_url=entry.url,
-                tool_name=operation,
-                arguments=arguments,
-            )
-            logger.info(
-                "[gateway] call_tool external  service=%r  op=%r  url=%s  wf=%s",
-                service, operation, entry.url, wf_id,
-            )
+        wf_input = ExternalMCPCallInput(
+            server_url=entry.url,
+            tool_name=operation,
+            arguments=arguments,
+        )
+        logger.info(
+            "[gateway] call_tool external  service=%r  op=%r  url=%s  wf=%s",
+            service, operation, entry.url, wf_id,
+        )
 
         try:
             handle = await self._client.start_workflow(
@@ -184,9 +169,6 @@ def _stable_workflow_id(tool_name: str, arguments: dict[str, Any], registry_entr
     digest = hashlib.sha256(canonical.encode()).hexdigest()[:24]
 
     # For ease of debugging, encode data about the outbound call.
-    if registry_entry.kind == "nexus":
-        return f"mcp-{registry_entry.kind}-{registry_entry.endpoint}-{tool_name}-{digest}"
-    
     return f"mcp-{registry_entry.url}-{tool_name}-{digest}"
 
 

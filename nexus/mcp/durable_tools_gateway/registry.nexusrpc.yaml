@@ -1,0 +1,96 @@
+nexusrpc: "1.0.0"
+
+services:
+  RegistryService:
+    description: >
+      The Durable Tools Gateway's Nexus surface. Its sole purpose is registering
+      3rd-party (non-Nexus) MCP servers and invoking their tools via a standalone
+      activity on the caller's behalf — Nexus-native MCP servers register and are
+      called directly, bypassing this service entirely. Service workers in any
+      Temporal namespace call these operations to reach the gateway's
+      ToolRegistryWorkflow — a Nexus call rather than a direct workflow
+      signal/query so it works across namespace boundaries.
+    operations:
+      register_external:
+        description: Register a 3rd-party external MCP server with the gateway.
+        input:
+          $ref: "#/types/RegisterExternalInput"
+        output:
+          type: "null"
+      deregister:
+        description: Remove a service registration from the gateway.
+        input:
+          $ref: "#/types/DeregisterInput"
+        output:
+          type: "null"
+      list_tools:
+        description: >
+          Return all tool dicts for 3rd-party MCP servers currently registered
+          with the gateway. Part of the shared MCP-over-Nexus list_tools
+          contract (see mcp_over_nexus.MCPOverNexusService) so callers can
+          treat the gateway uniformly alongside any Nexus-native MCP server.
+        output:
+          $ref: "#/types/ListToolsOutput"
+      call_tool:
+        description: >
+          Invoke one tool on a 3rd-party MCP server registered with the
+          gateway, dispatched via a standalone activity (no intermediary
+          per-call workflow — the caller is itself already a durable Temporal
+          workflow, so nothing here needs its own separate durability).
+        input:
+          $ref: "#/types/CallToolInput"
+        output:
+          $ref: "#/types/CallToolOutput"
+
+types:
+  RegisterExternalInput:
+    type: object
+    description: Input for registering a 3rd-party external MCP server.
+    properties:
+      name:
+        type: string
+        description: Service name prefix for the external server.
+      url:
+        type: string
+        description: Streamable-HTTP MCP endpoint URL.
+
+  DeregisterInput:
+    type: object
+    description: Input for removing a service registration.
+    properties:
+      name:
+        type: string
+        description: Service name to remove.
+
+  ListToolsOutput:
+    type: object
+    description: All tool dicts for 3rd-party MCP servers currently registered with the gateway.
+    properties:
+      tools:
+        type: array
+        description: Serialised mcp.types.Tool dicts.
+        items:
+          type: object
+
+  CallToolInput:
+    type: object
+    description: Input for invoking one tool on a registered 3rd-party MCP server.
+    properties:
+      name:
+        type: string
+        description: Full prefixed tool name, e.g. "weather_get_forecast".
+      arguments:
+        type: object
+        description: Tool call arguments, as MCP's tools/call would pass them.
+
+  CallToolOutput:
+    type: object
+    description: >
+      The tool's result, already flattened to text. Errors surface as a raised
+      Nexus operation failure rather than a field on this type — callers catch
+      exceptions the same way they already do for direct Nexus-native tool
+      calls.
+    properties:
+      result:
+        type: string
+        description: The tool call's result, flattened to text.

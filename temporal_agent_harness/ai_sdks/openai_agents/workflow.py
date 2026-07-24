@@ -343,6 +343,248 @@ def stateful_mcp_server(
     )
 
 
+REGISTER_MCP_SERVER_SIGNAL = "register_mcp_server"
+DEREGISTER_MCP_SERVER_SIGNAL = "deregister_mcp_server"
+
+
+class NexusMcpServerRegistry:
+    """Per-agent-workflow live registry of every Nexus-reachable MCP tool source — Nexus-native
+    servers and proxies (like the Durable Tools Gateway) alike, registered exactly the same
+    way: a name and the Nexus endpoint that reaches it. Nothing else to declare.
+
+    The *name* must be whatever that service's own actual Nexus service name is (the same
+    requirement a Nexus-native server already has — e.g. ``"demo-tools"`` for tools named
+    ``demo-tools_*``, or ``durable_tools_gateway.REGISTRY_SERVICE_NAME`` for the gateway).
+    ``WorkflowTransport`` figures out on its own, from what each registered entry's
+    ``list_tools`` actually returns, whether it's serving its own tools directly (one static
+    Nexus operation per tool) or proxying tools registered on someone else's behalf (a
+    generic ``list_tools``/``call_tool(name, args)`` pair, for a tool set it can't know ahead
+    of time) — nothing about that distinction needs declaring at registration time.
+
+    There is exactly one of these per agent workflow execution, managed automatically — see
+    :func:`nexus_mcp_server_registry`. You should not normally need to construct this
+    directly; it exists as a public type mainly so ``isinstance``/type-hint usages have
+    something to reference.
+
+    Any caller with a client connected to this workflow's own namespace — e.g. a Nexus-native
+    server's own startup script, the Durable Tools Gateway's own worker, or an operator/demo
+    script — registers with a plain signal, the same way any other client-facing action on an
+    agent workflow works elsewhere in this harness::
+
+        await handle.signal(
+            NexusMcpServerRegistry.REGISTER_MCP_SERVER_SIGNAL,
+            args=["demo-tools", "demo-tools-endpoint"],
+        )
+
+    No Nexus round trip needed for registration itself — only registered *servers'* tool
+    calls go through Nexus. A workflow can also call :meth:`register` directly (e.g. to
+    pre-wire a default in its own ``@workflow.init``) rather than waiting on an external
+    signal.
+    """
+
+    REGISTER_MCP_SERVER_SIGNAL = REGISTER_MCP_SERVER_SIGNAL
+    DEREGISTER_MCP_SERVER_SIGNAL = DEREGISTER_MCP_SERVER_SIGNAL
+
+    def __init__(self) -> None:
+        self.servers: dict[str, str] = {}
+        """Live ``{name: nexus_endpoint}`` map, mutated in place by the signal handlers below
+        (or by :meth:`register`). Pass this directly to ``nexus_transport_mcp_server``/
+        ``WorkflowTransport`` — it stays live without needing its own wrapper type."""
+
+        # Register signal handlers dynamically so the containing workflow doesn't need to.
+        temporal_workflow.set_signal_handler(
+            REGISTER_MCP_SERVER_SIGNAL, self._handle_register
+        )
+        temporal_workflow.set_signal_handler(
+            DEREGISTER_MCP_SERVER_SIGNAL, self._handle_deregister
+        )
+
+    def register(self, name: str, endpoint: str) -> None:
+        """Register (or replace) a Nexus-reachable MCP tool source.
+
+        Args:
+            name: Must match that service's own actual Nexus service name — see the class
+                docstring.
+            endpoint: The Nexus endpoint name that reaches it.
+        """
+        self.servers[name] = endpoint
+        temporal_workflow.logger.info(
+            "[nexus-mcp-registry] registered %r -> %s", name, endpoint
+        )
+
+    def _handle_register(self, name: str, endpoint: str) -> None:
+        self.register(name, endpoint)
+
+    def _handle_deregister(self, name: str) -> None:
+        removed = self.servers.pop(name, None)
+        if removed is not None:
+            temporal_workflow.logger.info("[nexus-mcp-registry] deregistered %r", name)
+        else:
+            temporal_workflow.logger.debug(
+                "[nexus-mcp-registry] deregister: %r not found (stale signal, ignoring)", name
+            )
+
+
+# Stashed as a plain attribute on workflow.instance() (the workflow's own class instance,
+# which the Temporal SDK guarantees is one single, stable object for a given workflow
+# execution's entire lifetime) — NOT a module-level global, since a global would be shared
+# across every concurrently-running workflow on this worker. This is the same mechanism
+# TemporalOpenAIRunner uses to find "this workflow's" registry for automatic MCP server
+# injection (see _openai_runner.py) even though the runner object itself carries no
+# per-workflow state — confirmed live, including under concurrent workflow execution, before
+# relying on it here.
+_REGISTRY_INSTANCE_ATTR = "_temporal_agent_harness_nexus_mcp_registry"
+
+
+def nexus_mcp_server_registry() -> NexusMcpServerRegistry:
+    """Return the current workflow's :class:`NexusMcpServerRegistry`, creating it on first use.
+
+    There is exactly one per agent workflow execution, regardless of how many times or from
+    where this is called — :func:`nexus_transport_mcp_server` and ``OpenAIAgentsPlugin``'s
+    automatic MCP-server injection (when configured with ``nexus_transport=True``) both call
+    this internally, so a server registered via a signal is visible to both. Call this
+    yourself only if you want to inspect or explicitly pass around the registry (e.g. in a
+    status query); you never need to construct :class:`NexusMcpServerRegistry` directly.
+
+    .. important::
+        Do not call this from ``@workflow.init`` (``__init__``) — the Temporal SDK doesn't
+        set ``workflow.instance()`` (which this needs) until *after* construction completes,
+        so it raises ``AttributeError: 'NoneType' object has no attribute ...`` at that point
+        (confirmed live). Call it from ``@workflow.run`` (or any handler) instead, e.g. to
+        pre-register a default server before starting the harness's own turn loop.
+    """
+    instance = temporal_workflow.instance()
+    registry = getattr(instance, _REGISTRY_INSTANCE_ATTR, None)
+    if registry is None:
+        registry = NexusMcpServerRegistry()
+        setattr(instance, _REGISTRY_INSTANCE_ATTR, registry)
+    return registry
+
+
+# Distinguishes "caller didn't pass enabled_services at all" (-> enforce the harness's own
+# opt-in policy, reading the current AgentWorkflowRunner) from "caller explicitly passed
+# None" (-> disable filtering entirely, e.g. for a bare workflow with no AgentWorkflowRunner
+# at all) — None itself is a meaningful value here, so it can't double as "not provided".
+_ENABLED_SERVICES_UNSET: Any = object()
+
+
+def nexus_transport_mcp_server(
+    name: str | None = None,
+    *,
+    enabled_services: "Callable[[], frozenset[str]] | None" = _ENABLED_SERVICES_UNSET,
+    **kwargs: Any,
+) -> AbstractAsyncContextManager["MCPServer"]:
+    """A durable MCP server that reaches tools through Temporal Nexus.
+
+    Unlike :func:`stateless_mcp_server` / :func:`stateful_mcp_server`, this strategy calls
+    straight into ``nexus_mcp``'s ``WorkflowTransport`` in-process, in the workflow's own
+    event loop — no dedicated worker, no session, nothing to connect. All real I/O is still
+    routed through Nexus, uniformly, against whatever is registered live against this
+    workflow's own :func:`nexus_mcp_server_registry` — there is no separate, worker-level
+    "gateway" concept at all:
+
+      - A Nexus-native MCP server's own tools are called directly
+        (``workflow.create_nexus_client()`` against its own endpoint) — no proxy, no
+        activity, one Temporal hop.
+      - A tool prefix that doesn't match any directly-registered server instead falls back to
+        whichever registered entry is proxying tools registered on someone else's behalf
+        (e.g. the Durable Tools Gateway), which starts a plain workflow wrapping one activity to reach the 3rd-party
+        server on the caller's behalf.
+
+    ``WorkflowTransport`` figures out which of the two applies on its own, from what each
+    registered entry's ``list_tools`` actually returns — there's nothing to declare at
+    registration time. Both live in ``nexus_mcp``'s ``WorkflowTransport`` — this factory just
+    plugs that transport into an ``agents.mcp.MCPServer``. Registration is entirely self-serve
+    and per-workflow-execution — see :class:`NexusMcpServerRegistry`; this factory does not
+    register anything itself.
+
+    You will not normally call this directly — configure ``OpenAIAgentsPlugin`` with
+    ``nexus_transport=True`` instead, and every ``Agent`` gets one of these automatically,
+    with no ``mcp_servers=[...]`` wiring needed at the call site at all. Call this yourself
+    only if you need a *second*, differently-configured transport (e.g. a different
+    ``enabled_services`` policy, or ``require_approval``).
+
+    Requires the ``nexus-mcp`` extra (``uv sync --extra nexus-mcp``), which is only
+    resolvable from an editable checkout of this repo and requires Python >=3.13.
+
+    .. important::
+        The calling workflow must be declared ``@workflow.defn(sandboxed=False)``. Nothing
+        here opens a real session or anyio task group, but ``agents.mcp.server`` (home of
+        the ``MCPServer`` base class this implements) still does ``import anyio`` at module
+        scope, and re-executing that inside Temporal's sandboxed workflow runner hangs
+        rather than raising a clean error — confirmed empirically, see ``_nexus_mcp.py``'s
+        module docstring. This mirrors ``nexus_mcp``'s own ``ToolCallWorkflow`` /
+        ``ToolRegistryWorkflow``, which are themselves declared ``sandboxed=False``. Using
+        this inside a sandboxed workflow raises a clear ``ApplicationError`` at construction
+        time instead.
+
+    Args:
+        name: A readable name for the server. Defaults to ``"nexus-transport"``.
+        enabled_services: Which service names are available — reachability alone (a
+            registered Nexus-native server, or a service a registered proxy knows about) is
+            never enough; a service must also be *enabled*. Defaults to enforcing the
+            calling workflow's own opt-in list (``AgentWorkflowRunner.enabled_mcp_servers``,
+            itself sourced from ``AgentConfig.enabled_mcp_servers`` — empty unless a caller
+            or the agent's own default says otherwise), read live via
+            ``temporal_agent_harness.harness.agent_workflow.current_agent_workflow_runner``.
+            Pass ``None`` explicitly to disable filtering entirely (e.g. a bare workflow
+            with no ``AgentWorkflowRunner`` at all — every reachable service becomes
+            available, matching this function's original behavior); pass your own callable
+            for a custom policy.
+        **kwargs: Forwarded to ``agents.mcp.MCPServer.__init__`` — ``require_approval``,
+            ``failure_error_function``, ``tool_meta_resolver``, ``custom_data_extractor``,
+            ``use_structured_content``. (Not ``cache_tools_list``/``tool_filter``/
+            ``max_retry_attempts``/``client_session_timeout_seconds`` — those belong to
+            ``_MCPServerWithClientSession``, a real out-of-process-session strategy this one
+            doesn't use; see ``_nexus_mcp.py``'s module docstring for why.)
+
+    Example (manual usage — prefer ``OpenAIAgentsPlugin(nexus_transport=True)``)::
+
+        from temporalio import workflow
+        from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+            nexus_transport_mcp_server,
+        )
+        from agents import Agent, Runner
+
+        @workflow.defn(sandboxed=False)
+        class NexusToolsAgent:
+            @workflow.run
+            async def run(self, query: str) -> str:
+                async with nexus_transport_mcp_server() as mcp_server:
+                    agent = Agent(
+                        name="Assistant",
+                        instructions="Use the available tools to help with the request.",
+                        mcp_servers=[mcp_server],
+                    )
+                    result = await Runner.run(agent, input=query)
+                    return result.final_output
+    """
+    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
+        _NexusTransportMCPServer,
+    )
+
+    def _default_enabled_services() -> frozenset[str]:
+        from temporal_agent_harness.harness.agent_workflow import (
+            current_agent_workflow_runner,
+        )
+
+        runner = current_agent_workflow_runner()
+        return runner.enabled_mcp_servers if runner is not None else frozenset()
+
+    resolved_enabled_services = (
+        _default_enabled_services
+        if enabled_services is _ENABLED_SERVICES_UNSET
+        else enabled_services
+    )
+
+    return _NexusTransportMCPServer(
+        nexus_mcp_server_registry().servers,
+        name=name,
+        enabled_services=resolved_enabled_services,
+        **kwargs,
+    )
+
+
 class ToolSerializationError(TemporalError):
     """Error that occurs when a tool output could not be serialized.
 

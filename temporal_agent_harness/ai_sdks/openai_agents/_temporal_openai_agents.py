@@ -60,6 +60,7 @@ if typing.TYPE_CHECKING:
 def _set_open_ai_agent_temporal_overrides(
     model_params: ModelActivityParameters,
     start_spans_in_replay: bool = False,
+    nexus_transport: bool = False,
 ):
     previous_runner = get_default_agent_runner()
     previous_trace_provider = get_trace_provider()
@@ -68,7 +69,9 @@ def _set_open_ai_agent_temporal_overrides(
     )
 
     try:
-        set_default_agent_runner(TemporalOpenAIRunner(model_params))
+        set_default_agent_runner(
+            TemporalOpenAIRunner(model_params, nexus_transport)
+        )
         set_trace_provider(provider)
         yield provider
     finally:
@@ -222,6 +225,7 @@ class OpenAIAgentsPlugin(SimplePlugin):
         add_temporal_spans: bool = True,
         use_otel_instrumentation: bool = False,
         observer_factory: ObserverFactory | None = None,
+        nexus_transport: bool = False,
     ) -> None:
         """Initialize the OpenAI agents plugin.
 
@@ -256,6 +260,20 @@ class OpenAIAgentsPlugin(SimplePlugin):
                 stream). If ``None``, streaming publishes raw events to
                 ``model_params.streaming_topic`` as before.
                 Warning: streaming support is experimental and behavior may change in future versions.
+            nexus_transport: If true, every ``Agent`` constructed in a workflow on this
+                worker automatically gets a Nexus-transport MCP server
+                (``workflow.nexus_transport_mcp_server``, backed by ``nexus_mcp``'s
+                ``WorkflowTransport``) appended to its ``mcp_servers`` — no
+                ``mcp_servers=[...]`` wiring needed anywhere in workflow code, and no
+                ``async with`` needed either. What that transport actually reaches (1st-party
+                Nexus-native servers, and/or a proxy like the Durable Tools Gateway) is
+                entirely a function of what's registered live against each workflow's own
+                registry (see ``NexusMcpServerRegistry``) — fully self-serve, nothing to
+                configure here beyond turning the transport on. Requires the ``nexus-mcp``
+                extra and every calling workflow to be declared
+                ``@workflow.defn(sandboxed=False)`` — see ``nexus_transport_mcp_server``'s
+                docstring for why. Leave false (the default) for workers that don't use the
+                Nexus-transport MCP integration at all; nothing changes for them.
 
         """
         if model_params is None:
@@ -355,6 +373,7 @@ class OpenAIAgentsPlugin(SimplePlugin):
                 with _set_open_ai_agent_temporal_overrides(
                     model_params,
                     start_spans_in_replay=use_otel_instrumentation,
+                    nexus_transport=nexus_transport,
                 ):
                     yield
 

@@ -1,20 +1,24 @@
 """ToolRegistryWorkflow - routing table for the Durable Tool Call Gateway.
 
-A perpetual Temporal workflow (run once, lives forever) that maps service names
-to either a 1st-party Nexus service or a 3rd-party external MCP server URL.
-The InboundGateway queries it on every call to decide routing.
+A perpetual Temporal workflow (run once, lives forever) that maps 3rd-party
+external MCP server names to their URL and tool list. Nexus-native MCP
+servers never appear here — they register directly against the calling
+agent's own in-workflow registry (see
+``temporal_agent_harness.ai_sdks.openai_agents``'s ``NexusMcpServerRegistry``)
+and are called directly, bypassing the gateway entirely. The
+InboundGateway/RegistryServiceHandler query this workflow to decide routing
+for the 3rd-party servers that remain.
 
 Workflow ID:  REGISTRY_WORKFLOW_ID  (singleton per Temporal namespace)
 Task queue:   "mcp-registry"
 
 Signal / query handlers
 ------------------------
-  register_nexus(name, endpoint, tools)   add / update a 1st-party Nexus service
-  register_external(name, url)            queue a 3rd-party server for tool fetching
-  deregister(name)                        remove any entry by name
-  clear_all()                             remove all entries
-  find(name) -> RegistryEntry | None      look up routing for one service
-  list_all_tools() -> list[dict]          all tool dicts — nexus + external
+  register_external(name, url)      queue a 3rd-party server for tool fetching
+  deregister(name)                  remove any entry by name
+  clear_all()                       remove all entries
+  find(name) -> RegistryEntry | None look up routing for one service
+  list_tools() -> list[dict]        all tool dicts for registered servers
 """
 
 from __future__ import annotations
@@ -34,21 +38,11 @@ REGISTRY_TASK_QUEUE = "mcp-registry"
 
 @dataclass
 class RegistryEntry:
-    """Routing entry stored for one service name."""
+    """Routing entry stored for one 3rd-party external MCP server."""
 
-    kind: str
-    """``"nexus"`` for 1st-party Nexus services, ``"external"`` for 3rd-party
-    MCP servers reached over HTTP."""
-
-    # nexus only
-    endpoint: str = ""
-    """Temporal Nexus endpoint name to route this service's calls through."""
-
-    # external only
     url: str = ""
-    """Streamable-HTTP MCP endpoint URL for external servers."""
+    """Streamable-HTTP MCP endpoint URL."""
 
-    # both
     tools: list[dict[str, Any]] = field(default_factory=list)
     """Serialised ``mcp.types.Tool`` dicts (name already prefixed with
     ``{service_name}_``)."""
@@ -83,9 +77,7 @@ class ToolRegistryWorkflow:
                         "[registry] Failed registering external MCP server %r: could not fetch tools: %s", name, exc
                     )
                     continue
-                self._entries[name] = RegistryEntry(
-                    kind="external", url=url, tools=tools
-                )
+                self._entries[name] = RegistryEntry(url=url, tools=tools)
                 tool_names = [t.get("name", "?") for t in tools]
                 print(
                     f"[registry] Successfully registered external MCP server {name!r} at {url}  "
@@ -94,21 +86,6 @@ class ToolRegistryWorkflow:
                 )
 
     # -- registration ------------------------------------------------------------
-
-    @workflow.signal
-    def register_nexus(
-        self, name: str, endpoint: str, tools: list[dict[str, Any]]
-    ) -> None:
-        """Add or replace a 1st-party Nexus service registration."""
-        tool_names = [t.get("name", "?") for t in tools]
-        self._entries[name] = RegistryEntry(
-            kind="nexus", endpoint=endpoint, tools=tools
-        )
-        print(
-            f"[registry] Successfully registered Nexus MCP server {name!r} at {endpoint}  "
-            f"({len(tools)} tools: {tool_names})",
-            flush=True,
-        )
 
     @workflow.signal
     def register_external(self, name: str, url: str) -> None:
@@ -148,8 +125,8 @@ class ToolRegistryWorkflow:
         return self._entries.get(name)
 
     @workflow.query
-    def list_all_tools(self) -> list[dict[str, Any]]:
-        """Return all tool dicts — both 1st-party Nexus and 3rd-party external."""
+    def list_tools(self) -> list[dict[str, Any]]:
+        """Return all tool dicts for registered 3rd-party external servers."""
         result: list[dict[str, Any]] = []
         for entry in self._entries.values():
             result.extend(entry.tools)

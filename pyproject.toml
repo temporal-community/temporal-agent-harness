@@ -51,6 +51,32 @@ ui = [
 code-mode = [
     "pydantic-monty>=0.0.18",
 ]
+# The Nexus-transport MCP server: temporal_agent_harness.ai_sdks.openai_agents.workflow.
+# nexus_transport_mcp_server. Wraps nexus_mcp's WorkflowTransport (nexus/mcp, a sibling
+# package in this monorepo — see [tool.uv.sources] below) so `Agent.mcp_servers` can route
+# MCP tool calls through a Temporal Nexus endpoint or an activity-wrapped HTTP call, never
+# real I/O in the workflow itself. Needs the `openai-agents` extra's deps too (restated here
+# so this extra is self-sufficient), and Python >=3.13 (nexus-mcp's own floor). Only
+# resolvable from an editable checkout of this repo — nexus-mcp isn't published to PyPI.
+nexus-mcp = [
+    "nexus-mcp; python_version >= '3.13'",
+    "openai-agents>=0.17.5",
+    "mcp>=1.13.0,<2",
+    "temporalio[opentelemetry]>=1.30.0",
+]
+
+[tool.uv.sources]
+nexus-mcp = { path = "nexus/mcp", editable = true }
+
+[tool.uv]
+# nexus-mcp declares multiple top-level packages (transport, durable_tools_gateway, authoring
+# -- see its own pyproject.toml). Setuptools' default editable install for that shape uses a
+# PEP 660 custom MetaPathFinder (a .pth file that runs Python to map each package name to its
+# source dir at import time) -- fine for the interpreter, but static analyzers like pyright
+# don't execute that logic and report every one of those imports as unresolved. "compat" mode
+# instead emits a plain .pth file with a literal path appended to sys.path, which pyright (and
+# any other tool that just reads .pth files) can follow directly. No import paths change.
+config-settings-package = { "nexus-mcp" = { "editable_mode" = "compat" } }
 
 [dependency-groups]
 # Everything needed to RUN the bundled Monty example from a checkout. Not part of the
@@ -80,6 +106,9 @@ dev = [
     "temporalio[opentelemetry]>=1.30.0",
     # Pydantic AI integration (the ai_sdks glue + its tests) — mirrors the `pydantic-ai` extra.
     "pydantic-ai-slim[temporal]>=2.13",
+    # Nexus-transport MCP integration tests (mirrors the `nexus-mcp` extra) — only on
+    # Python >=3.13, nexus-mcp's own floor, so `uv sync`/`pytest` on older Pythons just skip it.
+    "nexus-mcp; python_version >= '3.13'",
     { include-group = "examples" },
 ]
 
