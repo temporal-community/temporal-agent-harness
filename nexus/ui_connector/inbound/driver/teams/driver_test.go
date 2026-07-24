@@ -9,11 +9,38 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/wire"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
+
+func TestDriverSupportsStreaming(t *testing.T) {
+	driver := NewDriver(workflow.ActivityOptions{})
+
+	tests := []struct {
+		name             string
+		conversationType string
+		expected         bool
+	}{
+		{name: "personal", conversationType: "personal", expected: true},
+		{name: "channel", conversationType: "channel", expected: false},
+		{name: "group chat", conversationType: " GROUPCHAT ", expected: false},
+		{name: "unknown", conversationType: "unknown", expected: true},
+		{name: "no message", expected: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := wire.Input{}
+			if tt.conversationType != "" {
+				input.Message = &wire.IncomingMessage{ConversationType: tt.conversationType}
+			}
+			assert.Equal(t, tt.expected, driver.SupportsStreaming(input))
+		})
+	}
+}
 
 func TestStreamActivityContextRoutesToPinnedWorker(t *testing.T) {
 	driver := NewDriver(workflow.ActivityOptions{StartToCloseTimeout: time.Minute})

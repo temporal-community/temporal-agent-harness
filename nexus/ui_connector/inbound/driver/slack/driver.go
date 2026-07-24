@@ -10,6 +10,7 @@ import (
 	slackapi "github.com/slack-go/slack"
 
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/wire"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -40,6 +41,11 @@ var _ inbound.Driver = (*Driver)(nil)
 // NewDriver returns a Driver that calls the Slack activities with the given options.
 func NewDriver(opts workflow.ActivityOptions) Driver {
 	return Driver{ActivityOptions: opts}
+}
+
+// SupportsStreaming reports that Slack supports incremental response updates.
+func (Driver) SupportsStreaming(wire.Input) bool {
+	return true
 }
 
 func (d Driver) BeginStream(ctx workflow.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error) {

@@ -270,6 +270,10 @@ const (
 // testInboundActivities implementation the test registered on the worker.
 type testInboundDriver struct{}
 
+func (testInboundDriver) SupportsStreaming(wire.Input) bool {
+	return true
+}
+
 func (testInboundDriver) activityOptions(ctx workflow.Context) workflow.Context {
 	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,

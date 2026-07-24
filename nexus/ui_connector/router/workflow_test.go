@@ -40,14 +40,22 @@ func (f *fakeOutbound) PollTurn(ctx workflow.Context, handle outbound.TurnHandle
 
 // fakeInbound is a minimal inbound.Driver test double that records calls in order.
 type fakeInbound struct {
-	calls           []string
-	streamStartErr  error
-	streamUpdateErr error
-	streamHandle    *inbound.StreamHandle
-	beginInputs     []inbound.BeginStreamInput
-	updateInputs    []inbound.UpdateStreamInput
-	finishInputs    []inbound.FinishStreamInput
-	approvalInputs  []inbound.ApprovalAcknowledgementInput
+	calls             []string
+	supportsStreaming *bool
+	streamStartErr    error
+	streamUpdateErr   error
+	streamHandle      *inbound.StreamHandle
+	beginInputs       []inbound.BeginStreamInput
+	updateInputs      []inbound.UpdateStreamInput
+	finishInputs      []inbound.FinishStreamInput
+	approvalInputs    []inbound.ApprovalAcknowledgementInput
+}
+
+func (f *fakeInbound) SupportsStreaming(wire.Input) bool {
+	if f.supportsStreaming == nil {
+		return true
+	}
+	return *f.supportsStreaming
 }
 
 func (f *fakeInbound) BeginStream(ctx workflow.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error) {
@@ -117,6 +125,11 @@ func teamsMessageInput(conversationType string) wire.Input {
 	}
 }
 
+func nonStreamingInbound() *fakeInbound {
+	supportsStreaming := false
+	return &fakeInbound{supportsStreaming: &supportsStreaming}
+}
+
 func newTestEnv(t *testing.T, w *RouterWorkflow) *testsuite.TestWorkflowEnvironment {
 	t.Helper()
 	s := testsuite.WorkflowTestSuite{}
@@ -155,7 +168,7 @@ func TestRouterWorkflow_TeamsSharedConversationPostsCompleteResponse(t *testing.
 					{Deltas: []outbound.Delta{{Text: "answer", IsFinal: true}}},
 				},
 			}
-			in := &fakeInbound{}
+			in := nonStreamingInbound()
 
 			w := NewRouterWorkflow(in, out)
 			env := newTestEnv(t, w)
@@ -184,7 +197,7 @@ func TestRouterWorkflow_TeamsSharedConversationPostsApprovalBeforeCompleteRespon
 			{Deltas: []outbound.Delta{{Text: "after", IsFinal: true}}},
 		},
 	}
-	in := &fakeInbound{}
+	in := nonStreamingInbound()
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -205,7 +218,7 @@ func TestRouterWorkflow_TeamsSharedConversationClosedPostsCollectedResponse(t *t
 			{Closed: true},
 		},
 	}
-	in := &fakeInbound{}
+	in := nonStreamingInbound()
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -224,7 +237,7 @@ func TestRouterWorkflow_TeamsSharedConversationDoesNotPostEmptyResponse(t *testi
 			{Deltas: []outbound.Delta{{IsFinal: true}}},
 		},
 	}
-	in := &fakeInbound{}
+	in := nonStreamingInbound()
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -244,7 +257,7 @@ func TestRouterWorkflow_TeamsSharedConversationDoesNotPostPartialResponseAfterPo
 		},
 		pollErr: assert.AnError,
 	}
-	in := &fakeInbound{}
+	in := nonStreamingInbound()
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)

@@ -5,9 +5,11 @@ package teams
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/wire"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -36,6 +38,22 @@ func NewDriver(opts workflow.ActivityOptions) Driver {
 
 func (d Driver) activityContext(ctx workflow.Context) workflow.Context {
 	return workflow.WithActivityOptions(ctx, d.ActivityOptions)
+}
+
+// SupportsStreaming reports whether the Teams conversation can receive
+// incremental response updates. Shared conversations require a complete
+// response because Teams does not support native streaming there.
+func (Driver) SupportsStreaming(input wire.Input) bool {
+	if input.Message == nil {
+		return true
+	}
+
+	switch strings.ToLower(strings.TrimSpace(input.Message.ConversationType)) {
+	case "channel", "groupchat":
+		return false
+	default:
+		return true
+	}
 }
 
 func (d Driver) streamActivityContext(ctx workflow.Context, handle inbound.StreamHandle) workflow.Context {

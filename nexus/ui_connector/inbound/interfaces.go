@@ -6,12 +6,19 @@
 // defined by this inbound.Driver interface to deliver the response back to the inbound side durably.
 package inbound
 
-import "go.temporal.io/sdk/workflow"
+import (
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/wire"
+	"go.temporal.io/sdk/workflow"
+)
 
 // Driver is implemented by a platform-specific workflow-side adapter and called
 // directly by RouterWorkflow. Concrete drivers durably dispatch platform I/O to
 // activity implementations (for example, SlackPlatform or the Python Teams worker).
 type Driver interface {
+	// SupportsStreaming reports whether the inbound conversation can receive
+	// incremental response updates.
+	SupportsStreaming(input wire.Input) bool
+
 	// BeginStream opens a response stream before any text deltas are delivered.
 	// It returns the durable handle that must be passed to subsequent updates and
 	// finalization. Drivers may emulate streaming by updating a single message.

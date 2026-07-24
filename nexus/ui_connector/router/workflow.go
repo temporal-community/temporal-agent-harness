@@ -2,7 +2,6 @@ package router
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound"
@@ -57,9 +56,9 @@ func (w *RouterWorkflow) Run(ctx workflow.Context, input wire.Input) error {
 		// An immediate, synchronous answer - no turn was created, nothing to poll.
 		return w.inbound.PostMessage(ctx, textMetadata(input, result.Reply))
 
-	case result.Handle != nil && !supportsStreaming(input):
-		// Teams channels and group chats do not support native streaming. Collect
-		// the complete response and post it as a single message.
+	case result.Handle != nil && !w.inbound.SupportsStreaming(input):
+		// Collect the complete response when the inbound conversation does not
+		// support native streaming, then post it as a single message.
 		return w.postResp(ctx, *result.Handle, input)
 
 	case result.Handle != nil:
@@ -89,26 +88,8 @@ func textMetadata(input wire.Input, text string) inbound.TextMetadata {
 	return metadata
 }
 
-// supportsStreaming reports whether the inbound conversation can receive
-// incremental response updates.
-func supportsStreaming(input wire.Input) bool {
-	if input.Message == nil {
-		return true
-	}
-	provider, _, found := strings.Cut(input.SessionID, ":")
-	if !found || !strings.EqualFold(provider, "teams") {
-		return true
-	}
-	switch strings.ToLower(strings.TrimSpace(input.Message.ConversationType)) {
-	case "channel", "groupchat":
-		return false
-	default:
-		return true
-	}
-}
-
-// postResp polls a turn to completion and posts all text as one message. Teams
-// channels and group chats use this path because they do not support native streams.
+// postResp polls a turn to completion and posts all text as one message for
+// inbound conversations that do not support native streams.
 func (w *RouterWorkflow) postResp(ctx workflow.Context, handle outbound.TurnHandle, input wire.Input) error {
 	cursor := handle.StreamHeadOffset
 	fullText := ""
@@ -184,9 +165,9 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHa
 		for _, delta := range res.Deltas {
 			if delta.ApprovalRequested != nil {
 				req := delta.ApprovalRequested
-				// Teams must finish the current stream before posting an approval card
-				// so the messages appear in order. Clearing the handle makes the next text
-				// delta start a new stream; Slack leaves this flag false.
+				// Some inbound drivers must finish the current stream before posting an
+				// approval card so the messages appear in order. Clearing the handle makes
+				// the next text delta start a new stream.
 				if streamHandle != nil && streamHandle.CloseBeforeApproval {
 					w.endStream(ctx, input, streamHandle)
 					streamHandle = nil
@@ -203,8 +184,8 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle outbound.TurnHa
 			}
 
 			if delta.Text != "" {
-				// A Teams approval may have closed the previous stream. Reopen it when
-				// response text resumes.
+				// An approval may have closed the previous stream. Reopen it when response
+				// text resumes.
 				if streamHandle == nil {
 					streamHandle, err = w.beginStream(ctx, input)
 					if err != nil {
