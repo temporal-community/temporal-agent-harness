@@ -60,30 +60,6 @@ class Settings:
         )
 
 
-def _worker_task_queue(shared_task_queue: str) -> str:
-    return f"{shared_task_queue}-stream-{uuid4().hex}"
-
-
-def _platform_from_settings(settings: Settings, worker_task_queue: str) -> TeamsPlatform:
-    app = App(
-        client_id=settings.microsoft_app_id,
-        client_secret=settings.microsoft_app_password,
-        tenant_id=settings.microsoft_tenant_id,
-        service_url=settings.teams_service_url,
-    )
-
-    def api_factory(service_url: str) -> ApiClient:
-        return ApiClient(service_url, app.api.http, cloud=app.cloud)
-
-    return TeamsPlatform(
-        app_id=settings.microsoft_app_id,
-        default_service_url=settings.teams_service_url,
-        api_factory=api_factory,
-        worker_task_queue=worker_task_queue,
-        app=app,
-    )
-
-
 def _parse(parser, payload: dict[str, Any]):
     try:
         return parser(payload)
@@ -121,9 +97,26 @@ class TeamsActivities:
 
 
 async def run() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = Settings.from_env()
-    worker_task_queue = _worker_task_queue(settings.task_queue)
-    platform = _platform_from_settings(settings, worker_task_queue)
+    worker_task_queue = f"{settings.task_queue}-stream-{uuid4().hex}"
+    app = App(
+        client_id=settings.microsoft_app_id,
+        client_secret=settings.microsoft_app_password,
+        tenant_id=settings.microsoft_tenant_id,
+        service_url=settings.teams_service_url,
+    )
+
+    def api_factory(service_url: str) -> ApiClient:
+        return ApiClient(service_url, app.api.http, cloud=app.cloud)
+
+    platform = TeamsPlatform(
+        app_id=settings.microsoft_app_id,
+        default_service_url=settings.teams_service_url,
+        api_factory=api_factory,
+        worker_task_queue=worker_task_queue,
+        app=app,
+    )
     if platform.app is not None:
         await platform.app.initialize()
 
@@ -162,7 +155,6 @@ async def run() -> None:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     asyncio.run(run())
 
 
