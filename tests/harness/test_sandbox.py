@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import timedelta
 from typing import Any, Mapping
@@ -87,7 +88,10 @@ class FakeBackend:
         if options.fail_with == "unavailable":
             raise SandboxUnavailable("no capacity")
         self.creates += 1
-        # Idempotent: an existing tenant sandbox is returned, not duplicated.
+        # Idempotent: an existing tenant sandbox is returned, not duplicated. A claim after a
+        # reclaim yields a LIVE sandbox under the same key — which is what a real claim-or-reuse
+        # backend does, and what makes on_reclaim="reacquire" recoverable.
+        self.reclaimed.discard(options.tenant_id)
         self.files.setdefault(options.tenant_id, {})
         return SandboxState(
             backend_ref=options.tenant_id,
@@ -463,3 +467,182 @@ async def test_end_to_end_injected_sandbox_tool(client_and_queue: Any) -> None:
     # The model never sees the injected parameter.
     starts = {e.tool_id: e.tool_input for e in events if e.type == AgentEventType.TOOL_START}
     assert starts["grep-1"] == {"pattern": "allergies"}
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: what happens when the sandbox dies mid-run
+# ---------------------------------------------------------------------------
+#
+# Two policies, two workflows, because the choice is made at attach time. Both kill the sandbox
+# between tool calls and record what each subsequent call saw, so the difference is observable
+# rather than inferred.
+
+RECLAIM_BACKEND = HydratingBackend(source={"a.md": b"hello\n"})
+
+
+@agent.tool_defn()
+async def touch_workspace(sandbox: Injected[SandboxHandle], label: str) -> str:
+    """Read the workspace, tagging the result with `label`."""
+    result = await sandbox.exec("grep", "-rn", "hello", ".")
+    return f"{label}:{result.stdout}"
+
+
+TOUCH_INJECTIONS: dict[str, Any] = {"sandbox": SandboxRef("workspace")}
+
+
+class _ReclaimProbeBase:
+    """Runs the tool, kills the sandbox, then runs it twice more, logging every outcome."""
+
+    on_reclaim: Any = "fail"
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+        )
+        attach_sandbox(
+            self._runner,
+            "workspace",
+            FakeOptions(tenant_id="acme"),
+            on_reclaim=self.on_reclaim,
+        )
+        self._log: list[str] = []
+
+    @workflow.query
+    def log(self) -> list[str]:
+        return self._log
+
+    @agent.accepts
+    async def probe(self, message: TextMessage) -> TextReply:
+        """Touch the workspace, lose the sandbox, then touch it twice more."""
+        await self._call("first")
+        # The sandbox goes away underneath the run: TTL, node drain, backend GC.
+        RECLAIM_BACKEND.reclaimed.add("acme")
+        await self._call("second")
+        await self._call("third")
+        self._log.append(f"creates={RECLAIM_BACKEND.creates}")
+        return TextReply(text="done")
+
+    async def _call(self, label: str) -> None:
+        try:
+            self._log.append(
+                await self._runner.run_tool(
+                    label, touch_workspace, label=label, injections=TOUCH_INJECTIONS
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - the outcome is the assertion
+            self._log.append(f"{label}:FAILED:{type(exc).__name__}")
+
+
+@workflow.defn(name="ReclaimFailProbe")
+@agent.defn
+class ReclaimFailProbe(_ReclaimProbeBase):
+    """Default policy: a reclaim is terminal and the model is told."""
+
+    on_reclaim = "fail"
+
+    # Temporal requires @workflow.run on the concrete class, so each probe declares its own.
+    @workflow.run
+    async def run(self, _config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+
+@workflow.defn(name="ReclaimReacquireProbe")
+@agent.defn
+class ReclaimReacquireProbe(_ReclaimProbeBase):
+    """Opt-in recovery: the workspace is derived, so a replacement is equivalent."""
+
+    on_reclaim = "reacquire"
+
+    @workflow.run
+    async def run(self, _config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+
+async def _run_probe(client: Client, task_queue: str, workflow_cls: Any) -> list[str]:
+    handle = await client.start_workflow(
+        workflow_cls.run,
+        AgentConfig(),
+        id=f"{workflow_cls.__name__}-{uuid.uuid4()}",
+        task_queue=task_queue,
+    )
+    await handle.execute_update(
+        SEND_AGENT_MESSAGE_UPDATE,
+        AgentMessage(type="probe", payload={"text": "go"}, expected_turn=1),
+        result_type=AgentMessageReply,
+    )
+    # The turn runs asynchronously after the update returns; wait for its final log line.
+    for _ in range(100):
+        log: list[str] = await handle.query(workflow_cls.log)
+        if any(entry.startswith("creates=") for entry in log):
+            return log
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"probe never finished: {log}")
+
+
+@pytest_asyncio.fixture
+async def reclaim_queue() -> Any:
+    env = await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter
+    )
+    provider = SandboxProvider("workspace", RECLAIM_BACKEND)
+    task_queue = f"reclaim-test-{uuid.uuid4()}"
+    async with Worker(
+        env.client,
+        task_queue=task_queue,
+        workflows=[ReclaimFailProbe, ReclaimReacquireProbe],
+        activities=list(provider.activities()),
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ):
+        try:
+            yield env.client, task_queue
+        finally:
+            await env.shutdown()
+
+
+def _reset_reclaim_backend() -> None:
+    RECLAIM_BACKEND.reclaimed.clear()
+    RECLAIM_BACKEND.files.clear()
+    RECLAIM_BACKEND.creates = 0
+    RECLAIM_BACKEND.hydrates = 0
+
+
+async def test_reclaim_default_fails_every_later_call(reclaim_queue: Any) -> None:
+    """Under ``on_reclaim="fail"`` the sandbox is NOT replaced — by design, not by omission.
+
+    Silently swapping in an empty workspace would present lost work as success, so the failure is
+    surfaced to the tool and reaches the model as an error result. The run continues; its sandbox
+    does not come back.
+    """
+    client, task_queue = reclaim_queue
+    _reset_reclaim_backend()
+
+    log = await _run_probe(client, task_queue, ReclaimFailProbe)
+
+    assert log[0] == "first:a.md:1:hello"
+    assert log[1].startswith("second:FAILED:")
+    assert log[2].startswith("third:FAILED:")
+    # One claim for the whole run: no replacement was provisioned.
+    assert log[3] == "creates=1"
+
+
+async def test_reclaim_reacquire_recovers_transparently(reclaim_queue: Any) -> None:
+    """Under ``on_reclaim="reacquire"`` the sandbox is replaced, re-hydrated, and the call retried.
+
+    The tool never sees the failure, so neither does the model — which is only the right behaviour
+    because this workspace is rebuilt entirely from the hydration source.
+    """
+    client, task_queue = reclaim_queue
+    _reset_reclaim_backend()
+
+    log = await _run_probe(client, task_queue, ReclaimReacquireProbe)
+
+    assert log[0] == "first:a.md:1:hello"
+    # The reclaim is absorbed: the retry lands on a fresh, hydrated sandbox and returns real output.
+    assert log[1] == "second:a.md:1:hello"
+    assert log[2] == "third:a.md:1:hello"
+    # Exactly one replacement — recovery happened once, then the new sandbox was reused.
+    assert log[3] == "creates=2"
+    assert RECLAIM_BACKEND.hydrates == 2

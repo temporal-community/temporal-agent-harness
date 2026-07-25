@@ -43,13 +43,21 @@
 #     durable filesystem: if the sandbox dies, whatever the model wrote in it is gone unless you
 #     persisted it. Treat the workspace as a cache — every durable fact should leave as a tool
 #     result or via :meth:`SandboxHandle.persist`. :class:`SandboxReclaimed` exists so an agent can
-#     tell "the call failed" from "the workspace is gone".
+#     tell "the call failed" from "the workspace is gone", and ``attach_sandbox(...,
+#     on_reclaim="reacquire")`` transparently replaces a reclaimed sandbox when — and only when —
+#     its workspace was entirely derived from the hydration source.
 
 from temporal_agent_harness.harness.sandbox.handle import (
     DEFAULT_ACTIVITY_CONFIG,
+    ReclaimRecovery,
     SandboxHandle,
 )
-from temporal_agent_harness.harness.sandbox.injection import SandboxRef, attach_sandbox
+from temporal_agent_harness.harness.sandbox.injection import (
+    OnReclaim,
+    SandboxRef,
+    attach_sandbox,
+    discard_sandbox,
+)
 from temporal_agent_harness.harness.sandbox.protocol import (
     ExecResult,
     FsEntry,
@@ -67,6 +75,8 @@ __all__ = [
     "DEFAULT_ACTIVITY_CONFIG",
     "ExecResult",
     "FsEntry",
+    "OnReclaim",
+    "ReclaimRecovery",
     "SandboxBackend",
     "SandboxError",
     "SandboxHandle",
@@ -78,4 +88,5 @@ __all__ = [
     "SandboxUnavailable",
     "SupportsHydration",
     "attach_sandbox",
+    "discard_sandbox",
 ]

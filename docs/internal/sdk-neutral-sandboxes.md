@@ -54,7 +54,7 @@ Two error types carry meaning the harness acts on:
 - `SandboxReclaimed` — **the sandbox is gone and anything written into it is lost.** Non-retryable,
   because a blind retry hands the agent a fresh empty workspace with no signal. This distinction is
   the one adopters most often discover late: durable execution gives you a durable *log*, not a
-  durable *filesystem*.
+  durable *filesystem*. What to do about it is a per-agent policy — see §2d.
 
 `SupportsHydration` is an optional capability for backends that can read the data store themselves.
 The payload crossing the activity boundary is then a *locator* rather than the data. That matters
@@ -97,6 +97,39 @@ one.
 `run_tool` gained four lines and no sandbox knowledge: it resolves anything implementing
 `LazyInjection` and is otherwise unchanged. Plain injections still pass through by identity, so the
 common path costs one `isinstance` per entry.
+
+### 2d. Recovering from a reclaim
+
+Detecting a reclaim is only half the story: without a way to act on it, a run whose sandbox dies
+keeps resolving the same dead identity and fails every remaining sandbox call. Which response is
+correct depends on something only the author knows — what the workspace held — so it is a parameter:
+
+```python
+attach_sandbox(runner, "workspace", options, on_reclaim="fail")       # default
+attach_sandbox(runner, "workspace", options, on_reclaim="reacquire")
+```
+
+- **`"fail"`** — the failure reaches the tool and so the model. Correct whenever the model wrote
+  anything into the workspace, because replacing it with an empty sandbox presents lost work as
+  success.
+- **`"reacquire"`** — claim a replacement, re-hydrate it, and retry the operation once. Correct when
+  the workspace is entirely derived from the hydration source, since the replacement is then
+  indistinguishable from the original. The tool never sees a failure, so neither does the model.
+
+Recovery is delegated rather than built into the handle: a handle holds an identity, and replacing a
+sandbox means re-running the claim, which the slot owns. The handle asks its `ReclaimRecovery` for a
+replacement and retries only if it gets one — so under the default policy its error path stays a
+plain re-raise. Exactly one retry: a reclaim loop is a provisioning problem, not something to paper
+over per call.
+
+`discard_sandbox(runner, provider)` is the escape hatch for the `"fail"` policy — a workflow that
+catches the failure and decides, with knowledge the harness lacks, that continuing on a fresh
+workspace is right can drop the claimed identity and carry on.
+
+One worker-side detail this required: the provider evicts its cached state when a backend reports a
+reclaim. A backend keyed on caller-supplied identity hands back the *same* `backend_ref` for the
+replacement, so without eviction the retry would hit a cached state describing the sandbox that just
+died.
 
 ## 3. Usage
 

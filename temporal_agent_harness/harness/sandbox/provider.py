@@ -21,6 +21,7 @@ from temporal_agent_harness.harness.sandbox.protocol import (
     ExecResult,
     SandboxBackend,
     SandboxError,
+    SandboxReclaimed,
     SandboxState,
     SupportsHydration,
 )
@@ -78,9 +79,20 @@ class SandboxProvider:
         try:
             resumed = await self._backend.resume(state)
         except SandboxError as exc:
-            raise _translate(exc) from exc
+            raise self._fail(state, exc) from exc
         self._resumed[resumed.backend_ref] = resumed
         return resumed
+
+    def _fail(self, state: SandboxState, exc: SandboxError) -> BaseException:
+        """Translate ``exc``, evicting the cached state first if the sandbox was reclaimed.
+
+        Eviction matters because a caller may re-claim under the same identity — a backend keyed on
+        caller-supplied identity hands back the same ``backend_ref`` for the replacement. Without
+        this, the next operation would hit a cached state describing the sandbox that just died.
+        """
+        if isinstance(exc, SandboxReclaimed):
+            self._resumed.pop(state.backend_ref, None)
+        return _translate(exc)
 
     def _hydration_backend(self) -> SupportsHydration:
         """The backend as a hydration-capable one, or a terminal failure explaining it is not."""
@@ -117,7 +129,7 @@ class SandboxProvider:
             try:
                 await backend.delete(args.state)
             except SandboxError as exc:
-                raise _translate(exc) from exc
+                raise _translate(exc) from exc  # cache popped in the finally below
             finally:
                 # Drop the cache entry either way: on success the sandbox is gone, and on failure
                 # a retry should re-attach rather than trust a possibly-dead cached state.
@@ -129,7 +141,7 @@ class SandboxProvider:
             try:
                 return await backend.exec(state, args.command, args.timeout)
             except SandboxError as exc:
-                raise _translate(exc) from exc
+                raise self._fail(state, exc) from exc
 
         @activity.defn(name=m.activity_name(prefix, m.RUN_CODE))
         async def run_code(args: m.RunCodeArgs) -> ExecResult:
@@ -137,7 +149,7 @@ class SandboxProvider:
             try:
                 return await backend.run_code(state, args.code, args.language, args.timeout)
             except SandboxError as exc:
-                raise _translate(exc) from exc
+                raise self._fail(state, exc) from exc
 
         @activity.defn(name=m.activity_name(prefix, m.READ))
         async def read(args: m.ReadArgs) -> m.ReadResult:
@@ -145,7 +157,7 @@ class SandboxProvider:
             try:
                 return m.ReadResult(data=await backend.read(state, args.path))
             except SandboxError as exc:
-                raise _translate(exc) from exc
+                raise self._fail(state, exc) from exc
 
         @activity.defn(name=m.activity_name(prefix, m.WRITE))
         async def write(args: m.WriteArgs) -> m.WriteResult:
@@ -153,7 +165,7 @@ class SandboxProvider:
             try:
                 return m.WriteResult(bytes_written=await backend.write(state, args.files))
             except SandboxError as exc:
-                raise _translate(exc) from exc
+                raise self._fail(state, exc) from exc
 
         @activity.defn(name=m.activity_name(prefix, m.LS))
         async def ls(args: m.LsArgs) -> m.LsResult:
@@ -161,14 +173,14 @@ class SandboxProvider:
             try:
                 return m.LsResult(entries=await backend.ls(state, args.path, args.depth))
             except SandboxError as exc:
-                raise _translate(exc) from exc
+                raise self._fail(state, exc) from exc
 
         @activity.defn(name=m.activity_name(prefix, m.RUNNING))
         async def running(args: m.StateArgs) -> m.RunningResult:
             try:
                 return m.RunningResult(is_running=await backend.running(args.state))
             except SandboxError as exc:
-                raise _translate(exc) from exc
+                raise self._fail(args.state, exc) from exc
 
         @activity.defn(name=m.activity_name(prefix, m.HYDRATE))
         async def hydrate(args: m.LocatorArgs) -> m.HydrateResult:
@@ -177,7 +189,7 @@ class SandboxProvider:
             try:
                 written = await hydratable.hydrate(state, args.locator)
             except SandboxError as exc:
-                raise _translate(exc) from exc
+                raise self._fail(state, exc) from exc
             return m.HydrateResult(files_written=written)
 
         @activity.defn(name=m.activity_name(prefix, m.PERSIST))
@@ -187,7 +199,7 @@ class SandboxProvider:
             try:
                 locator = await hydratable.persist(state, args.locator)
             except SandboxError as exc:
-                raise _translate(exc) from exc
+                raise self._fail(state, exc) from exc
             return m.PersistResult(locator=locator)
 
         return [

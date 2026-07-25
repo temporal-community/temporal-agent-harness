@@ -9,13 +9,19 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from temporalio import workflow
+from temporalio.exceptions import ApplicationError
 from temporalio.workflow import ActivityConfig
 
 from temporal_agent_harness.harness.sandbox import _activity_models as m
-from temporal_agent_harness.harness.sandbox.protocol import ExecResult, FsEntry, SandboxState
+from temporal_agent_harness.harness.sandbox.protocol import (
+    ExecResult,
+    FsEntry,
+    SandboxReclaimed,
+    SandboxState,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -23,6 +29,37 @@ if TYPE_CHECKING:
 # Sandbox operations are I/O against a remote environment: a cold start or a slow install can
 # legitimately take minutes, while a stuck one should not hang a turn forever.
 DEFAULT_ACTIVITY_CONFIG = ActivityConfig(start_to_close_timeout=timedelta(minutes=5))
+
+
+@runtime_checkable
+class ReclaimRecovery(Protocol):
+    """Supplies a replacement sandbox when the one in use has been reclaimed.
+
+    Implemented by whatever owns the run's sandbox (the slot behind ``attach_sandbox``), because
+    recovery means *replacing* the sandbox — which the handle cannot do on its own, since it holds
+    only an identity.
+    """
+
+    async def recover_from_reclaim(self) -> SandboxState | None:
+        """A fresh sandbox's state to retry against, or ``None`` to let the failure stand."""
+        ...
+
+
+def _is_reclaimed(exc: BaseException) -> bool:
+    """Whether ``exc`` is (or wraps) a reclaim failure.
+
+    A reclaim raised in a backend surfaces here as an ``ActivityError`` wrapping the
+    non-retryable ``ApplicationError`` the provider translated it into, so the whole cause chain
+    has to be walked rather than just the outermost exception.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ApplicationError) and current.type == SandboxReclaimed.code:
+            return True
+        current = getattr(current, "cause", None) or current.__cause__
+    return False
 
 
 class SandboxHandle:
@@ -41,11 +78,17 @@ class SandboxHandle:
         provider: str,
         state: SandboxState,
         config: ActivityConfig | None = None,
+        recovery: ReclaimRecovery | None = None,
     ) -> None:
-        """Bind ``state`` to the named provider's activities."""
+        """Bind ``state`` to the named provider's activities.
+
+        ``recovery``, when supplied, is consulted if an operation fails because the sandbox was
+        reclaimed — see :meth:`_call`.
+        """
         self._provider = provider
         self._state = state
         self._config: ActivityConfig = config or DEFAULT_ACTIVITY_CONFIG
+        self._recovery = recovery
 
     def __repr__(self) -> str:
         return f"SandboxHandle(provider={self._provider!r}, backend_ref={self._state.backend_ref!r})"
@@ -66,12 +109,37 @@ class SandboxHandle:
         return self._state.supports_pty
 
     async def _call(self, operation: str, arg: object, result_type: type | None = None) -> object:
+        """Dispatch one sandbox operation, recovering once if the sandbox was reclaimed.
+
+        Recovery is opt-in and delegated: the handle asks its :class:`ReclaimRecovery` for a
+        replacement sandbox, and only retries if it gets one. With no recovery configured — the
+        default — a reclaim propagates, which is the right outcome when the workspace held state
+        that cannot be rebuilt: silently swapping in an empty sandbox would hide real data loss.
+
+        Exactly one retry, against the replacement's state. If that fails too, the failure stands;
+        a reclaim loop means something is wrong with provisioning, not with this call.
+        """
         if not workflow.in_workflow():
             raise RuntimeError(
                 "SandboxHandle can only be used inside a workflow (an inline @agent.tool_defn "
                 "tool qualifies; an @agent.activity_tool_defn body does not, because its code "
                 "runs in an activity where execute_activity is unavailable)"
             )
+        try:
+            return await self._dispatch(operation, arg, result_type)
+        except Exception as exc:
+            if self._recovery is None or not _is_reclaimed(exc):
+                raise
+            replacement = await self._recovery.recover_from_reclaim()
+            if replacement is None:
+                raise
+            self._state = replacement
+            # Every argument model carries the sandbox identity, so the retry has to travel with
+            # the replacement's rather than the reclaimed one's.
+            retry_arg = arg.model_copy(update={"state": replacement}) if hasattr(arg, "model_copy") else arg
+            return await self._dispatch(operation, retry_arg, result_type)
+
+    async def _dispatch(self, operation: str, arg: object, result_type: type | None) -> object:
         return await workflow.execute_activity(
             m.activity_name(self._provider, operation),
             arg,
@@ -187,4 +255,4 @@ class SandboxHandle:
         return result.locator  # type: ignore[union-attr]
 
 
-__all__ = ["DEFAULT_ACTIVITY_CONFIG", "SandboxHandle"]
+__all__ = ["DEFAULT_ACTIVITY_CONFIG", "ReclaimRecovery", "SandboxHandle"]
