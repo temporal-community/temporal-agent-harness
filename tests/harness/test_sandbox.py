@@ -592,7 +592,7 @@ async def reclaim_queue() -> Any:
     async with Worker(
         env.client,
         task_queue=task_queue,
-        workflows=[ReclaimFailProbe, ReclaimReacquireProbe, TeardownProbe],
+        workflows=[ReclaimFailProbe, ReclaimReacquireProbe, TeardownProbe, NoHydrateProbe],
         activities=list(provider.activities()),
         workflow_runner=UnsandboxedWorkflowRunner(),
     ):
@@ -688,6 +688,36 @@ class TeardownProbe:
         )
 
 
+@workflow.defn(name="NoHydrateProbe")
+@agent.defn
+class NoHydrateProbe:
+    """Claims a sandbox with hydration turned off."""
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+        )
+        attach_sandbox(
+            self._runner, "workspace", FakeOptions(tenant_id="dry"), hydrate=False
+        )
+
+    @workflow.run
+    async def run(self, _config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+    @agent.accepts
+    async def probe(self, message: TextMessage) -> TextReply:
+        """Touch the sandbox so it gets claimed, without hydrating it."""
+        return TextReply(
+            text=await self._runner.run_tool(
+                "t", touch_workspace, label="x", injections=TOUCH_INJECTIONS
+            )
+        )
+
+
 async def test_sandbox_is_deleted_when_the_run_ends(reclaim_queue: Any) -> None:
     """``on_complete="delete"`` ties the sandbox's lifetime to the agent's, not to a backend TTL.
 
@@ -774,3 +804,55 @@ def test_on_complete_keep_registers_no_hook() -> None:
 
     attach_sandbox(runner, "other", FakeOptions(tenant_id="t"), on_complete="delete")  # type: ignore[arg-type]
     assert len(runner.hooks) == 1
+
+
+def test_hydrate_parameter_forms() -> None:
+    """One parameter, three meanings — and no way to read "on" as "off".
+
+    ``hydrate=None`` used to mean "hydrate, deriving the locator", which read exactly backwards
+    next to a separate ``hydrate_on_claim`` flag. Collapsing them removed the trap.
+    """
+
+    class Runner:
+        def __init__(self) -> None:
+            self.injection_slots: dict[str, Any] = {}
+
+        def add_completion_hook(self, hook: Any) -> None:  # pragma: no cover - unused here
+            pass
+
+    runner = Runner()
+    options = FakeOptions(tenant_id="t")
+
+    attach_sandbox(runner, "default", options)  # type: ignore[arg-type]
+    assert runner.injection_slots["sandbox:default"].hydrate is True
+
+    attach_sandbox(runner, "off", options, hydrate=False)  # type: ignore[arg-type]
+    assert runner.injection_slots["sandbox:off"].hydrate is False
+
+    attach_sandbox(runner, "explicit", options, hydrate="staging/fixtures")  # type: ignore[arg-type]
+    assert runner.injection_slots["sandbox:explicit"].hydrate == "staging/fixtures"
+
+
+async def test_hydrate_false_skips_hydration(reclaim_queue: Any) -> None:
+    """``hydrate=False`` claims the sandbox without populating it."""
+    client, task_queue = reclaim_queue
+    _reset_reclaim_backend()
+
+    handle = await client.start_workflow(
+        NoHydrateProbe.run,
+        AgentConfig(),
+        id=f"NoHydrateProbe-{uuid.uuid4()}",
+        task_queue=task_queue,
+    )
+    await handle.execute_update(
+        SEND_AGENT_MESSAGE_UPDATE,
+        AgentMessage(type="probe", payload={"text": "go"}, expected_turn=1),
+        result_type=AgentMessageReply,
+    )
+    for _ in range(100):
+        if RECLAIM_BACKEND.creates:
+            break
+        await asyncio.sleep(0.05)
+
+    assert RECLAIM_BACKEND.creates == 1
+    assert RECLAIM_BACKEND.hydrates == 0

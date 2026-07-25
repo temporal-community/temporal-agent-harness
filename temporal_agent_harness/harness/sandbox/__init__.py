@@ -31,7 +31,7 @@
 #
 # Workflow (per run)::
 #
-#     attach_sandbox(runner, "workspace", MyOptions(tenant_id=cfg.tenant_id))
+#     attach_sandbox(runner, "workspace", MyOptions(tenant_id=cfg.tenant_id))  # hydrate=True
 #
 # Two properties worth knowing before you design around this:
 #

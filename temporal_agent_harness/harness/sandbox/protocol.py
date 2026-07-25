@@ -203,7 +203,16 @@ class SupportsHydration(Protocol):
       reference there is one copy, in the store you already govern.
 
     ``locator=None`` means "whatever this sandbox's own identity implies" — the natural default for
-    a backend whose sandboxes are keyed on caller-supplied identity.
+    a backend whose sandboxes are keyed on caller-supplied identity. The harness never interprets a
+    locator: make it whatever addresses your data (an object-store prefix, a git ref, a snapshot id).
+
+    One implementation choice worth making deliberately, because it decides how this scales: whether
+    the data flows *through* your control plane (list the objects, then write them into the sandbox)
+    or is pulled by the sandbox *itself* (credentials or a mount inside it, or pre-signed URLs). The
+    first is simpler and keeps credentials out of the sandbox; the second is what holds up when the
+    workspace is large, since the proxying process otherwise materializes the whole thing. A backend
+    hydrating a handful of small files can take the easy path; one checking out a repository probably
+    cannot.
     """
 
     async def hydrate(self, state: SandboxState, locator: str | None = None) -> int:

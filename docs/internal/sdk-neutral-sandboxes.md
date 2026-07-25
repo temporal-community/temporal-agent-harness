@@ -62,6 +62,18 @@ for two independent reasons: size (workspace contents never become a payload, so
 codec is involved) and copies (by-value transfer creates an additional persisted copy in whatever
 store the codec offloads to, with its own retention and replay coupling).
 
+The harness never interprets a locator, so it can address whatever the backend understands — an
+object-store prefix, a git ref, a snapshot id. Two notes for implementers, both in the protocol
+docstring:
+
+* **Hydration is not claim-time-only.** `attach_sandbox(hydrate=...)` is a convenience for the common
+  case; `SandboxHandle.hydrate(locator)` is callable whenever, so a tool can pull more data mid-run.
+* **Decide deliberately whether data flows through your control plane or is pulled by the sandbox.**
+  Listing objects and writing them into the sandbox is simpler and keeps credentials out of the
+  sandbox, but the proxying process materializes the whole workspace; a sandbox that pulls for itself
+  (a mount, in-sandbox credentials, pre-signed URLs) is what holds up when the workspace is large. A
+  few small files can take the easy path; a repository checkout probably cannot.
+
 ### 2b. `harness/sandbox/provider.py` — worker side
 
 `SandboxProvider(name, backend)` emits the backend's activities, each prefixed with the provider

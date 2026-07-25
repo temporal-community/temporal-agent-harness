@@ -18,7 +18,7 @@
 #
 # ...then, per run, say what "workspace" means for this agent::
 #
-#     attach_sandbox(runner, "workspace", MyOptions(tenant_id=config.tenant_id), hydrate=None)
+#     attach_sandbox(runner, "workspace", MyOptions(tenant_id=config.tenant_id))
 #
 # The sandbox is claimed on first use, so a run whose model never calls a sandbox tool never pays
 # for one.
@@ -91,15 +91,13 @@ class _SandboxSlot:
         provider: str,
         options: SandboxOptions,
         *,
-        hydrate: str | None = None,
-        hydrate_on_claim: bool = False,
+        hydrate: bool | str = True,
         activity_config: ActivityConfig | None = None,
         on_reclaim: OnReclaim = "fail",
     ) -> None:
         self.provider = provider
         self.options = options
-        self.hydrate = hydrate
-        self.hydrate_on_claim = hydrate_on_claim
+        self.hydrate: bool | str = hydrate
         self.activity_config = activity_config
         self.on_reclaim: OnReclaim = on_reclaim
         self.state: SandboxState | None = None
@@ -132,8 +130,10 @@ class _SandboxSlot:
             **(self.activity_config or _CREATE_CONFIG),
         )
         handle = self._handle_for(self.state)
-        if self.hydrate_on_claim:
-            await handle.hydrate(self.hydrate)
+        if self.hydrate is not False:
+            # A string is an explicit locator; True (or an empty string) asks the backend to derive
+            # one from the sandbox's own identity.
+            await handle.hydrate(self.hydrate if isinstance(self.hydrate, str) and self.hydrate else None)
         return handle
 
     async def release(self) -> None:
@@ -159,8 +159,7 @@ def attach_sandbox(
     provider: str,
     options: SandboxOptions,
     *,
-    hydrate: str | None = None,
-    hydrate_on_claim: bool = True,
+    hydrate: bool | str = True,
     activity_config: ActivityConfig | None = None,
     on_reclaim: OnReclaim = "fail",
     on_complete: OnComplete = "keep",
@@ -176,11 +175,15 @@ def attach_sandbox(
         provider: Name of the :class:`~...provider.SandboxProvider` registered on the worker. Also
             the key a :class:`SandboxRef` uses to find this declaration.
         options: Backend creation options — where per-run identity goes.
-        hydrate: Locator passed to the backend's hydrate. ``None`` asks the backend to derive it
-            from the sandbox's own identity, which is the common case.
-        hydrate_on_claim: Whether to hydrate immediately after claiming. Leave True when the
-            sandbox needs its input data before any tool reads it; set False for a backend with no
-            hydration support, or when you want to control hydration explicitly.
+        hydrate: Whether — and from where — to populate the workspace right after claiming.
+            ``True`` (default) hydrates and lets the backend derive the source from the sandbox's own
+            identity, which is the common case. ``False`` skips it: use that for a backend with no
+            hydration support, or when a tool controls hydration itself. A string is an explicit
+            locator, whose meaning is the backend's (an object-store prefix, a git ref, a snapshot
+            id — the harness never interprets it).
+
+            Hydration is not limited to claim time either way: ``SandboxHandle.hydrate(locator)`` is
+            callable whenever, so a tool can pull more data mid-run.
         activity_config: Timeout/retry configuration for this sandbox's activities.
         on_reclaim: What to do if the sandbox is reclaimed mid-run — ``"fail"`` (default) surfaces
             the failure to the tool and so to the model; ``"reacquire"`` transparently claims and
@@ -220,7 +223,6 @@ def attach_sandbox(
         provider,
         options,
         hydrate=hydrate,
-        hydrate_on_claim=hydrate_on_claim,
         activity_config=activity_config,
         on_reclaim=on_reclaim,
     )
