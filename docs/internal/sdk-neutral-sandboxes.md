@@ -1,6 +1,6 @@
 # SDK-Neutral Sandboxes
 
-**Status:** ✅ Implemented (see `tests/harness/test_sandbox.py`).
+**Status:** ✅ Implemented (see `tests/harness/test_sandbox.py`, `tests/ai_sdks/pydantic_ai/test_sandbox_injection.py`).
 **Scope:** `harness/sandbox/` (new package), `harness/agent_workflow.py` (`LazyInjection` +
 `injection_slots` + resolution in `run_tool`), `harness/agent.py` (re-export).
 
@@ -150,3 +150,21 @@ model-authored scripts can call sandbox tools with no extra plumbing.
 - **No bundled backend.** `tests/harness/test_sandbox.py` has an in-memory one that doubles as the
   reference implementation. A runnable example against a real sandbox provider is a natural
   follow-up.
+
+## 6. Cross-SDK coverage
+
+`tests/ai_sdks/pydantic_ai/test_sandbox_injection.py` is the regression guard for the claim in §1:
+it wires the seam onto a real `TemporalAgent` exactly as an author would (the shape of
+`examples/pydantic_ai_hello`), with a `FunctionModel` so it needs no API key, and asserts a Pydantic
+AI tool receives a working sandbox handle. There is no `RunConfig`, no `SandboxRunConfig`, and no
+`openai-agents` import in that file.
+
+It also pins the two properties most likely to regress quietly: the sandbox is claimed and hydrated
+exactly **once** per run despite the tool being reachable on every call, and the model's `tool_input`
+contains only the parameters the model chose — the injected handle never appears in its schema.
+
+Worth keeping in mind for future SDK integrations: an integration inherits sandboxes for free if (and
+only if) it routes tool calls through `run_tool` and can run a tool in-workflow. The Pydantic AI
+adapter satisfies both — `build_harness_toolset` returns the `tool_activity_config` that disables the
+per-tool activity wrapper, which a sandbox handle requires since it dispatches activities of its
+own.
