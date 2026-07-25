@@ -162,6 +162,17 @@ that run as retried, observable Temporal activities, and inline workflow tools
 standardized event stream. (A third flavor — **callback tools** — runs on an attached client
 instead of the worker; see below.)
 
+### 📦 Sandboxes, for any SDK
+Agents that run model-authored code, or browse data they shouldn't hold in process, need an isolated
+environment. `harness/sandbox` is an **SDK-neutral** seam for that: implement `SandboxBackend` for
+your sandbox provider once, register it with `SandboxProvider("name", backend)`, and every sandbox
+operation becomes its own durable, retried activity. Tools receive a handle by declaring
+`sandbox: Injected[SandboxHandle]` — resolved by the harness runner, so it works for **every** AI SDK
+the harness wraps, and Code Mode scripts get it for free. The sandbox is claimed lazily on first use,
+so a run that never touches one never pays for it. Backends that can read your data store directly
+can also hydrate the workspace **by reference**, keeping its contents out of activity payloads
+entirely. See [docs/internal/sdk-neutral-sandboxes.md](docs/internal/sdk-neutral-sandboxes.md).
+
 ### 📞 Callback tools — let the client run the tool
 An agent running on a Temporal worker often needs to act somewhere it can't reach — a file on the
 user's laptop, a photo from their phone, a device on a private network. A **callback tool**
