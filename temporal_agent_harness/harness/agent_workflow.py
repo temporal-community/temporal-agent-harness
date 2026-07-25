@@ -1352,6 +1352,8 @@ class AgentWorkflowRunner:
         # (a claimed resource, a cached handle). Keyed by whatever the implementation chooses.
         # Workflow state, so it survives across turns and is reconstructed by replay.
         self._injection_slots: dict[str, Any] = {}
+        # Cleanups to run when the turn loop ends — see add_completion_hook.
+        self._completion_hooks: list[Callable[[], Awaitable[None]]] = []
 
         # Register protocol handlers dynamically so the containing workflow doesn't need to.
         workflow.set_update_handler(
@@ -1632,6 +1634,31 @@ class AgentWorkflowRunner:
     def current_status(self) -> AgentStatus:
         """A current :class:`AgentStatus` snapshot for in-workflow handlers."""
         return self._status.to_agent_status()
+
+    def add_completion_hook(self, hook: Callable[[], Awaitable[None]]) -> None:
+        """Register a cleanup to run when the agent's turn loop ends.
+
+        Hooks run inside the workflow, after the loop exits, whether it ended by ``close`` or by
+        raising — so they may dispatch activities to release whatever they own. They run in
+        registration order, and a hook that raises is logged and skipped rather than allowed to
+        mask the run's outcome or block the hooks after it.
+
+        Intended for a per-run resource whose lifetime should track the agent's rather than an
+        external TTL. Note this fires at loop exit, which is not the same as durability against a
+        terminated workflow: a hard terminate stops the workflow without running hooks, so anything
+        that must not leak needs a backstop on the owning service too.
+        """
+        self._completion_hooks.append(hook)
+
+    async def _run_completion_hooks(self) -> None:
+        """Run every registered completion hook, surviving individual failures."""
+        for hook in self._completion_hooks:
+            try:
+                await hook()
+            except Exception:
+                # Cleanup is best-effort by construction: the agent has already finished, and a
+                # failure to release a resource must not rewrite how the run itself ended.
+                workflow.logger.exception("agent completion hook failed")
 
     @property
     def injection_slots(self) -> dict[str, Any]:
@@ -1993,7 +2020,18 @@ class AgentWorkflowRunner:
         — the single reliable end-of-turn signal — before looping. A handler that raises
         does NOT end the session: its error surfaces as an :class:`AgentError` and the loop
         continues with the next message.
+
+        When the loop ends, any hooks registered via :meth:`add_completion_hook` run, so per-run
+        resources are released whether the agent closed cleanly or the loop raised.
         """
+        try:
+            await self._turn_loop(agent)
+        finally:
+            # Release per-run resources however the loop ended — normally, or by raising.
+            await self._run_completion_hooks()
+
+    async def _turn_loop(self, agent: object) -> None:
+        """The turn loop itself; see :meth:`run` for the contract it implements."""
         while not self._closed:
             await workflow.wait_condition(
                 lambda: self._status.has_pending_turns or self._closed

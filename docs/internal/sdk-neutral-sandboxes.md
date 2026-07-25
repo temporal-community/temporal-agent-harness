@@ -131,6 +131,39 @@ reclaim. A backend keyed on caller-supplied identity hands back the *same* `back
 replacement, so without eviction the retry would hit a cached state describing the sandbox that just
 died.
 
+### 2e. Lifetime, and what this does not guarantee
+
+Two things worth being explicit about, because a reader may assume more than is here.
+
+**The seam is not an isolation boundary.** It passes your options to `backend.create()` and holds
+whatever `backend_ref` comes back, opaquely. Whether two different identities get two different
+sandboxes is entirely the backend's property — enforced by whatever the backend enforces it with (a
+uniqueness constraint, a per-tenant namespace, separate pods). The harness cannot detect a backend
+that maps two identities onto one sandbox, and should not be cited as the control that prevents it.
+
+**A sandbox does not end when the run does, by default.** Lifetime belongs to the backend's TTL and
+GC, not the workflow — which is correct for a backend whose sandboxes are addressed by a durable
+identity and deliberately outlive one run so the next reuses a warm workspace. When the sandbox is
+genuinely run-scoped, say so:
+
+```python
+attach_sandbox(runner, "workspace", options, on_complete="delete")
+```
+
+That registers an `AgentWorkflowRunner.add_completion_hook`, so the sandbox is released when the turn
+loop ends — normally or by raising. Note the honest limit: a hard workflow terminate does not run
+completion hooks, so a backend-side TTL remains the backstop rather than an optimisation.
+
+`add_completion_hook` is generic and sandbox-agnostic, like `LazyInjection`: any per-run resource that
+should track the agent's lifetime can use it. Hooks run in registration order and a failing hook is
+logged and skipped, since cleanup must not rewrite how the run itself ended.
+
+**One sandbox per provider per run.** The slot memoises its claim, so identity is fixed at first use.
+Re-attaching with *different* options after a claim now raises instead of being silently ignored —
+without that, tools would keep using the first sandbox while the code read as though it had switched.
+An agent serving several subjects therefore needs a provider (or a run) per subject; that is a real
+constraint, and the guard exists so it fails loudly rather than mixing data.
+
 ## 3. Usage
 
 ```python

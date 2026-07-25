@@ -592,7 +592,7 @@ async def reclaim_queue() -> Any:
     async with Worker(
         env.client,
         task_queue=task_queue,
-        workflows=[ReclaimFailProbe, ReclaimReacquireProbe],
+        workflows=[ReclaimFailProbe, ReclaimReacquireProbe, TeardownProbe],
         activities=list(provider.activities()),
         workflow_runner=UnsandboxedWorkflowRunner(),
     ):
@@ -646,3 +646,131 @@ async def test_reclaim_reacquire_recovers_transparently(reclaim_queue: Any) -> N
     # Exactly one replacement — recovery happened once, then the new sandbox was reused.
     assert log[3] == "creates=2"
     assert RECLAIM_BACKEND.hydrates == 2
+
+
+# ---------------------------------------------------------------------------
+# Lifetime and identity: teardown on completion, and the multi-subject guard
+# ---------------------------------------------------------------------------
+
+LIFETIME_BACKEND = HydratingBackend(source={"a.md": b"hello\n"})
+
+
+@workflow.defn(name="TeardownProbe")
+@agent.defn
+class TeardownProbe:
+    """Claims a run-scoped sandbox and lets the completion hook release it."""
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+        )
+        attach_sandbox(
+            self._runner,
+            "workspace",
+            FakeOptions(tenant_id="ephemeral"),
+            on_complete="delete",
+        )
+
+    @workflow.run
+    async def run(self, _config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+    @agent.accepts
+    async def probe(self, message: TextMessage) -> TextReply:
+        """Touch the sandbox so it gets claimed, then let the run end."""
+        return TextReply(
+            text=await self._runner.run_tool(
+                "t", touch_workspace, label="x", injections=TOUCH_INJECTIONS
+            )
+        )
+
+
+async def test_sandbox_is_deleted_when_the_run_ends(reclaim_queue: Any) -> None:
+    """``on_complete="delete"`` ties the sandbox's lifetime to the agent's, not to a backend TTL.
+
+    Without it the sandbox outlives the run and its hydrated contents sit there until the backend
+    reaps them, which is the right default for a backend that reuses sandboxes across runs but the
+    wrong one for a sandbox that only ever served this run.
+    """
+    client, task_queue = reclaim_queue
+    _reset_reclaim_backend()
+
+    handle = await client.start_workflow(
+        TeardownProbe.run,
+        AgentConfig(),
+        id=f"TeardownProbe-{uuid.uuid4()}",
+        task_queue=task_queue,
+    )
+    await handle.execute_update(
+        SEND_AGENT_MESSAGE_UPDATE,
+        AgentMessage(type="probe", payload={"text": "go"}, expected_turn=1),
+        result_type=AgentMessageReply,
+    )
+    # The sandbox exists while the run is live...
+    for _ in range(100):
+        if "ephemeral" in RECLAIM_BACKEND.files:
+            break
+        await asyncio.sleep(0.05)
+    assert "ephemeral" in RECLAIM_BACKEND.files
+
+    # ...and is gone once the loop ends. `close` is what ends it; the hook runs after.
+    await handle.signal("close")
+    await handle.result()
+    assert "ephemeral" not in RECLAIM_BACKEND.files
+
+
+def test_reattaching_different_identity_after_a_claim_is_rejected() -> None:
+    """The multi-subject footgun, made loud.
+
+    The slot memoises its claim, so a second attach with different identity would be silently
+    ignored while the code reads as though the sandbox had switched — with tools still touching the
+    first subject's workspace. One sandbox per provider per run is the rule; an agent serving several
+    subjects needs a provider (or a run) each.
+    """
+
+    class Runner:
+        def __init__(self) -> None:
+            self.injection_slots: dict[str, Any] = {}
+            self.hooks: list[Any] = []
+
+        def add_completion_hook(self, hook: Any) -> None:
+            self.hooks.append(hook)
+
+    runner = Runner()
+    attach_sandbox(runner, "workspace", FakeOptions(tenant_id="patient-a"))  # type: ignore[arg-type]
+
+    # Before a claim, re-declaring is harmless — nothing has been provisioned yet.
+    attach_sandbox(runner, "workspace", FakeOptions(tenant_id="patient-b"))  # type: ignore[arg-type]
+
+    slot = runner.injection_slots["sandbox:workspace"]
+    slot.state = SandboxState(backend_ref="patient-b")  # simulate the claim
+
+    # Identical options after a claim: a no-op, so re-running an init path is safe.
+    attach_sandbox(runner, "workspace", FakeOptions(tenant_id="patient-b"))  # type: ignore[arg-type]
+    assert runner.injection_slots["sandbox:workspace"].state is not None
+
+    # Different identity after a claim: refused, naming the claimed sandbox.
+    with pytest.raises(RuntimeError, match="already claimed for provider 'workspace'"):
+        attach_sandbox(runner, "workspace", FakeOptions(tenant_id="patient-c"))  # type: ignore[arg-type]
+
+
+def test_on_complete_keep_registers_no_hook() -> None:
+    """The default leaves lifetime to the backend, so nothing is registered."""
+
+    class Runner:
+        def __init__(self) -> None:
+            self.injection_slots: dict[str, Any] = {}
+            self.hooks: list[Any] = []
+
+        def add_completion_hook(self, hook: Any) -> None:
+            self.hooks.append(hook)
+
+    runner = Runner()
+    attach_sandbox(runner, "workspace", FakeOptions(tenant_id="t"))  # type: ignore[arg-type]
+    assert runner.hooks == []
+
+    attach_sandbox(runner, "other", FakeOptions(tenant_id="t"), on_complete="delete")  # type: ignore[arg-type]
+    assert len(runner.hooks) == 1

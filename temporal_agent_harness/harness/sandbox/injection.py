@@ -60,6 +60,19 @@ _CREATE_CONFIG: ActivityConfig = ActivityConfig(start_to_close_timeout=timedelta
 # the harness picks.
 OnReclaim = Literal["fail", "reacquire"]
 
+# What to do with the sandbox when the agent's turn loop ends.
+#
+#   "keep"   — leave it. Right for a backend whose sandboxes are addressed by a durable identity
+#              (a tenant, a conversation, a repository) and deliberately outlive one run so the next
+#              run reuses the warm workspace. Lifetime is then the backend's TTL, not the agent's.
+#   "delete" — release it. Right when the sandbox is genuinely run-scoped, so its lifetime — and
+#              the lifetime of whatever data was hydrated into it — tracks the agent's rather than
+#              an external reaper's.
+#
+# "keep" is the default because deleting a sandbox a backend intends to reuse is destructive and
+# silent, whereas keeping one that could have been released is merely wasteful.
+OnComplete = Literal["keep", "delete"]
+
 
 class _SandboxSlot:
     """One run's sandbox: what to claim, and the state once claimed.
@@ -123,6 +136,13 @@ class _SandboxSlot:
             await handle.hydrate(self.hydrate)
         return handle
 
+    async def release(self) -> None:
+        """Delete the claimed sandbox, if one was ever claimed. Idempotent."""
+        if self.state is None:
+            return
+        state, self.state = self.state, None
+        await self._handle_for(state).delete()
+
     def _handle_for(self, state: SandboxState) -> SandboxHandle:
         # Pass self as the recovery only when recovery is actually enabled, so the handle's
         # error path stays a plain re-raise under the default policy.
@@ -143,6 +163,7 @@ def attach_sandbox(
     hydrate_on_claim: bool = True,
     activity_config: ActivityConfig | None = None,
     on_reclaim: OnReclaim = "fail",
+    on_complete: OnComplete = "keep",
 ) -> None:
     """Declare, for this run, the sandbox that ``SandboxRef(provider)`` resolves to.
 
@@ -166,12 +187,36 @@ def attach_sandbox(
             re-hydrates a replacement, then retries the operation once. Choose ``"reacquire"`` only
             when the workspace is entirely derived from the hydration source; if the model writes
             state you care about, ``"fail"`` is what stops lost work from looking like success.
+        on_complete: Whether to ``"delete"`` the sandbox when the agent's turn loop ends, or
+            ``"keep"`` it (default) and leave its lifetime to the backend. Use ``"delete"`` when the
+            sandbox is run-scoped, so the data hydrated into it does not outlive the run that needed
+            it. Note that a hard workflow terminate skips completion hooks, so a backend-side TTL is
+            still the backstop rather than an optimisation.
 
-    Calling it twice for the same ``provider`` replaces the declaration, which also discards any
-    sandbox already claimed under it — so do not use that to re-point a sandbox mid-run. To drop a
-    sandbox deliberately, use :func:`discard_sandbox`.
+    Raises:
+        RuntimeError: if a sandbox has already been claimed for ``provider`` under DIFFERENT
+            options. Re-attaching different identity mid-run is almost always a bug — the slot
+            memoises its claim, so the tools would keep using the first sandbox while the code reads
+            as though it had switched. Use :func:`discard_sandbox` to release the claim first, and
+            note that one sandbox per provider per run means an agent handling multiple subjects
+            needs a provider (or a run) per subject.
+
+    Re-attaching with identical options after a claim is a no-op, so calling this from a handler that
+    may run more than once is safe.
     """
-    runner.injection_slots[_SLOT_PREFIX + provider] = _SandboxSlot(
+    key = _SLOT_PREFIX + provider
+    existing = runner.injection_slots.get(key)
+    if existing is not None and existing.state is not None:
+        if existing.options.model_dump(mode="json") == options.model_dump(mode="json"):
+            return
+        raise RuntimeError(
+            f"a sandbox is already claimed for provider {provider!r} under different options "
+            f"(claimed={existing.state.backend_ref!r}). The claim is memoised for the run, so the "
+            f"new options would be ignored and tools would keep using the claimed sandbox. Call "
+            f"discard_sandbox(runner, {provider!r}) first if replacing it is intended."
+        )
+
+    slot = _SandboxSlot(
         provider,
         options,
         hydrate=hydrate,
@@ -179,6 +224,9 @@ def attach_sandbox(
         activity_config=activity_config,
         on_reclaim=on_reclaim,
     )
+    runner.injection_slots[key] = slot
+    if on_complete == "delete":
+        runner.add_completion_hook(slot.release)
 
 
 def discard_sandbox(runner: AgentWorkflowRunner, provider: str) -> bool:
@@ -230,4 +278,4 @@ class SandboxRef:
         return await slot.handle()
 
 
-__all__ = ["OnReclaim", "SandboxRef", "attach_sandbox", "discard_sandbox"]
+__all__ = ["OnComplete", "OnReclaim", "SandboxRef", "attach_sandbox", "discard_sandbox"]

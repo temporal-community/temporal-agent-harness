@@ -53,6 +53,7 @@ from temporal_agent_harness.harness.sandbox.handle import (
     SandboxHandle,
 )
 from temporal_agent_harness.harness.sandbox.injection import (
+    OnComplete,
     OnReclaim,
     SandboxRef,
     attach_sandbox,
@@ -75,6 +76,7 @@ __all__ = [
     "DEFAULT_ACTIVITY_CONFIG",
     "ExecResult",
     "FsEntry",
+    "OnComplete",
     "OnReclaim",
     "ReclaimRecovery",
     "SandboxBackend",
