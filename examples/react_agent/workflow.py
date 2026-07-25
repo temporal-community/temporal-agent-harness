@@ -11,7 +11,10 @@ into the live turn stream. The
 local tools are durable harness activity tools adapted onto the SDK with ``as_openai_agent_tools``
 (so the harness owns the approval policy and each tool's ``tool_start`` / ``tool_end`` /
 ``tool_error`` events); the F1 tools come from a durable, activity-backed MCP server registered on
-the worker and referenced here with ``stateless_mcp_server``.
+the worker and referenced here with ``stateless_mcp_server``. It also has one human-in-the-loop
+tool, ``ask_user`` (an ``@agent.callback_tool_defn`` callback tool): when the model needs
+clarification it parks the turn in-workflow until an external client returns the user's answer —
+see ``client.py``.
 
 This is the harness form of workshop demo2/demo3 (OpenAI Agents SDK + Temporal, then MCP): the
 Agents SDK drives the reason-act loop; Temporal makes it durable; the harness standardizes it.
@@ -39,6 +42,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
+    from .human_tools import HUMAN_TOOLS
     from .tool_activities import ALL_TOOLS
 
 
@@ -55,7 +59,12 @@ Use your tools to answer accurately rather than guessing. You can find the weath
    coordinates from the IP), then `get_weather`.
 Chain tools as needed — you will usually need more than one — and once you have enough
 information, reply in a sentence or two. `get_weather` returns the temperature in Fahrenheit, a
-weather code, and wind speed; summarize it in plain language."""
+weather code, and wind speed; summarize it in plain language.
+
+If a request is ambiguous or needs information only the user can give — which city they mean, or
+permission to use their current location — call `ask_user` with a clear question and use their
+answer to continue. Prefer asking over guessing when it matters. If the user's answer is not clear
+call `ask_user` again."""
 
 
 @workflow.defn(name="ReactAgent")
@@ -87,7 +96,10 @@ class ReactAgentWorkflow:
             name="ReactAgent",
             instructions=SYSTEM_INSTRUCTION,
             model=DEFAULT_MODEL,
-            tools=as_openai_agent_tools(self._runner, ALL_TOOLS),
+            # ALL_TOOLS are durable activity tools; HUMAN_TOOLS is the ask_user callback tool.
+            # Both mix freely through the one adapter — a callback tool carries __agent_tool__ and
+            # funnels into run_tool exactly like an activity tool.
+            tools=as_openai_agent_tools(self._runner, [*ALL_TOOLS, *HUMAN_TOOLS]),
             # Reference the worker-registered MCP provider by name; stateless_mcp_server
             # returns the durable reference the runner resolves to activity-backed MCP
             # operations. Passing the bare name string here is silently non-durable.

@@ -14,6 +14,7 @@ Ask it a question and it chains tools to find the answer:
 - **Weather by city** — `get_coordinates(city)` → `get_weather(lat, lon)`
 - **Weather where you are** — `get_ip_address()` → `get_location_info(ip)` → `get_weather(lat, lon)`
 - **Formula 1 data** — tools from an external **F1 MCP server** (schedules, results, drivers, …)
+- **Ask you a question** — when a request is ambiguous, it calls `ask_user` and waits for your answer
 
 | Tool | Source | Purpose |
 |------|--------|---------|
@@ -22,6 +23,7 @@ Ask it a question and it chains tools to find the answer:
 | `get_coordinates` | Open-Meteo Geocoding | Lat-lon for a city name |
 | `get_weather` | Open-Meteo Forecast | Current temperature (°F), weather code, wind speed |
 | F1 tools | `f1-data` MCP server | Formula 1 schedules, results, and driver/constructor data |
+| `ask_user` | the human (callback tool) | Ask the user a clarifying question and use their answer |
 
 ## What it demonstrates
 
@@ -45,21 +47,33 @@ Ask it a question and it chains tools to find the answer:
   through the streaming activity and the harness observer translates raw OpenAI events into the
   live turn stream (`model_interaction_started` → `reply_delta` … `tool_requested` … `tool_start` /
   `tool_end` … `model_interaction_ended`).
+- **Human-in-the-loop via a callback tool.** `ask_user` is an `@agent.callback_tool_defn` tool: it
+  has **no server-side body**. When the model calls it, the harness publishes a `callback_requested`
+  event and **parks the turn in-workflow** (durably — no activity timeout) until an external client
+  returns the user's answer, which becomes the tool result and the same turn continues. This is the
+  *participation* form of HITL (the model asks the human a question), distinct from tool *approval*
+  (authorizing an action). Crucially, **fulfillment is decoupled from any UI** — it's a Temporal
+  update (`provide_callback_result`), reachable over HTTP at `POST /api/callback-result`. Our
+  terminal `client.py` is one such fulfiller; the packaged web UI does not implement one (see below).
 - **No approvals yet.** The approval policy is `dangerously_skip_all()` — tool calls run without a
-  human gate. A future HITL demo flips this to gate the harness-wrapped tools.
+  human gate. A future HITL demo flips this to gate the harness-wrapped tools. (`ask_user` is marked
+  `inherently_safe`, so even then, *asking* a question is never itself gated.)
 
 ## Layout
 
 | File | Role |
 |---|---|
-| `workflow.py` | `ReactAgent` — the harness agent; one `ask` handler, local tools adapted onto the SDK plus the F1 MCP server, driven by `Runner.run_streamed`. |
+| `workflow.py` | `ReactAgent` — the harness agent; one `ask` handler, local tools + `ask_user` adapted onto the SDK plus the F1 MCP server, driven by `Runner.run_streamed`. |
 | `tool_activities.py` | The four location/weather tools as `@agent.activity_tool_defn` activities (httpx), plus `ALL_TOOLS` / `ALL_ACTIVITIES`. |
+| `human_tools.py` | The `ask_user` human-in-the-loop **callback tool** (`@agent.callback_tool_defn`), plus `HUMAN_TOOLS`. No activity body — fulfilled by a client. |
 | `worker.py` | Worker hosting the workflow + the four tool activities; registers the F1 MCP provider and wires the plugin for the harness streaming seam. |
+| `client.py` | A terminal client: a session picker that shows which sessions are **waiting on an `ask_user`**, then lets you answer open questions, chat, or create a session — all over HTTP. |
 | `agents.toml` | Registry entry that makes this agent selectable in the shared web UI. |
 
-Like the other examples, there is **no per-example client**: it's driven by the shared example
-stack — the packaged `SessionManagerWorkflow` worker plus the FastAPI app and web UI
-(`examples/app.py`). Registering the agent in `agents.toml` is all it takes to make it driveable.
+The agent is driven by the shared example stack — the packaged `SessionManagerWorkflow` worker plus
+the FastAPI app and web UI (`examples/app.py`); registering it in `agents.toml` is all that takes.
+Unlike the simpler examples, it **also ships a terminal `client.py`** — needed to answer `ask_user`,
+since the packaged web UI has no affordance for fulfilling a callback tool.
 
 ## Run it
 
@@ -78,21 +92,34 @@ just temporal          # 1. local Temporal dev server (or bring your own)
 just session-manager   # 2. packaged session-manager worker
 just server            # 3. builds the Svelte UI, then serves API + UI on http://localhost:8000
 just worker            # 4. the agent worker
+just client            # 5. terminal client that chats + answers ask_user
 ```
 
 `just server` builds the web UI first, so it needs `pnpm` on your PATH. (If the build reports
 missing modules, run `just app-install` once. For UI hot-reloading, `just ui-dev` runs it on Vite
 with `/api` proxied to the server on :8000.)
 
-Open http://localhost:8000, pick **ReAct Agent**, and try:
+**Two ways to drive it.** The **web UI** (open http://localhost:8000, pick **ReAct Agent**) is
+great for the tool-chaining demo — each tool call appears live and the reply streams in token by
+token; weather tools show as harness tool cards, F1 MCP calls appear as activities in the Temporal
+Web UI (see the caveat above). But the web UI **cannot answer `ask_user`** — it has no fulfillment
+affordance — so use the **terminal client** (`just client`) to exercise the human-in-the-loop tool.
 
-- *"What's the weather in Tokyo?"* (city → coordinates → weather)
-- *"What's the weather where I am?"* (IP → location → weather)
-- *"When is the next Formula 1 race?"* (F1 MCP tools)
+**The terminal client** opens a **session picker** that lists the ReAct agent's open sessions and
+marks which are waiting on an `ask_user` (⏳). From it you can:
 
-Each tool call appears live as the model chains them, and the reply streams in token by token. The
-weather tools show up as harness tool cards; the F1 MCP calls appear as activities in the Temporal
-Web UI (see the caveat above).
+- **Create a new session** (`n`) and chat. Try *"What's the weather in Tokyo?"* (tools chain), then
+  *"What's the weather?"* — ambiguous, so the model calls `ask_user`; the client prompts you and
+  your answer (e.g. *"Tokyo"*) flows back and the turn completes. *"When is the next Formula 1
+  race?"* exercises the F1 MCP tools.
+- **Answer a waiting session** — including one where the question was raised from the *web UI*
+  (which can't answer it): pick the ⏳ session, its open questions are listed, and your answers are
+  submitted; the client then shows the agent's continued reply.
+- **`--session <id>`** opens a session directly, surfacing any already-pending question.
+
+Inside a session, client-local navigation is keyed off `:` (not `/`, which is reserved for the
+harness's own slash commands): `:questions` re-checks for open questions, `:sessions` returns to the
+picker, and `:quit` exits.
 
 Without `just`, the equivalent commands (from the repo root):
 
@@ -100,4 +127,5 @@ Without `just`, the equivalent commands (from the repo root):
 uv run --group examples python -m examples.session_manager_worker
 uv run --group examples python -m examples.app examples/react_agent/agents.toml --host 0.0.0.0 --port 8000
 uv run --group examples python -m examples.react_agent.worker
+uv run --group examples python -m examples.react_agent.client
 ```

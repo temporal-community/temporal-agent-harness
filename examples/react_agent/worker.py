@@ -112,7 +112,9 @@ async def main() -> None:
         task_queue=task_queue,
         workflows=[ReactAgentWorkflow],
         # The four location/weather tool activity bodies. The OpenAI model activities
-        # (incl. invoke_model_activity_streaming) are registered by the plugin.
+        # (incl. invoke_model_activity_streaming) are registered by the plugin. The ask_user
+        # callback tool has no activity body — it's fulfilled by the client — so nothing to
+        # register for it here.
         activities=ALL_ACTIVITIES,
     )
     print(

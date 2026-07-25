@@ -6,11 +6,16 @@
 #   just session-manager   # 2. packaged session-manager worker
 #   just server            # 3. FastAPI API + UI on :8000
 #   just worker            # 4. this example's agent worker
+#   just client            # 5. terminal client: session picker + answer ask_user + chat
 #
-# Then open http://localhost:8000, pick "ReAct Agent", and chat (e.g. "What's the weather
-# in Barcelona?" or "What's the weather where I am?"). The reply streams token by token and each
-# tool call shows up live. `just server` builds the Svelte UI first (needs `pnpm`); `just ui-dev`
-# runs it on Vite instead.
+# Two ways to drive it:
+#   * Web UI — open http://localhost:8000, pick "ReAct Agent", and chat (e.g. "What's the weather
+#     in Barcelona?"). The reply streams token by token and each tool call shows up live. Note the
+#     web UI can chat but has NO affordance to answer the agent's `ask_user` question.
+#   * Terminal client (`just client`) — opens a session picker showing which sessions are waiting
+#     on an `ask_user`; from it you can answer open questions (even ones raised from the web UI),
+#     chat, or create a session. This is how the human-in-the-loop tool gets answered.
+# `just server` builds the Svelte UI first (needs `pnpm`); `just ui-dev` runs it on Vite instead.
 #
 # uv installs the project's `examples` dependency group (incl. the OpenAI Agents SDK) on demand,
 # so there's no separate install step. First-time setup: `cp .env.example .env.local` from the
@@ -62,3 +67,8 @@ ui-dev:
 # Run the ReactAgent worker.
 worker:
     cd "{{root}}" && uv run --group examples python -m examples.react_agent.worker
+
+# Run the terminal client: session picker (shows which sessions await ask_user) + answer + chat.
+# Needs the server (recipe 3) up. Extra args pass through, e.g. `just client --session <id>`.
+client *ARGS:
+    cd "{{root}}" && uv run --group examples python -m examples.react_agent.client {{ARGS}}

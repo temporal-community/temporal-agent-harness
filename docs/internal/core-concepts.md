@@ -114,13 +114,48 @@ flavors are the "**where does the tool run**" axis:
 |---|---|---|
 | `@agent.tool_defn` | **inline**, in the workflow | deterministic, side-effect-free-ish work |
 | `@agent.activity_tool_defn` | on a **worker**, as a durable activity | for I/O / nondeterminism / long-running. Produces two objects: an in-workflow *dispatcher* (gate + `execute_activity`) and a generated `@activity.defn` *body* (real work + event publishing); register the body via `agent.tool_activity(t)`. |
-| `@agent.callback_tool_defn` | on an **external client** | body is a declaration only; the call pauses in-workflow and emits `callback_requested`; a client posts the result back and the turn resumes. (See the OpenCode coding-agent example.) |
+| `@agent.callback_tool_defn` | on an **external client** | body is a declaration only; the call pauses in-workflow and emits `callback_requested`; a client posts the result back and the turn resumes. (See **Callback tools** below.) |
 
 Approval policy is resolved as: caller's `AgentConfig.approval_policy` if given, else the agent's
 required `approval_policy_default`, then mutable at runtime via `runner.set_approval_policy(...)`.
 `inherently_safe` on a tool is only a *hint* — the policy decides. (See
 `human-in-the-loop-tool-approvals.md`. Note: the packaged UI can *resolve* approvals and read the
 live policy, but has no control to *set* the policy at session creation.)
+
+## Callback tools — pausing a turn for an off-worker result
+
+`@agent.callback_tool_defn` (the "runs on an external client" flavor above) deserves its own mental
+model: **an inline tool that parks the whole turn in-workflow until a client supplies the result.**
+It's how an agent running in the cloud calls a tool that must run wherever the needed resource lives
+— a file on the user's laptop, a photo on their phone, or the human themselves (`ask_user`).
+
+- **The tool has no body.** The author declares only a signature and a *concrete return type* (the
+  body is literally `...`). That return type is the contract: its JSON schema is handed to the
+  client, and the client's result is validated/coerced against it before it becomes the return value.
+- **Calling it parks the workflow, not an activity.** Because it's inline (not `activity_tool_defn`),
+  the wait is a `workflow.wait_condition` — it consumes no activity / `start_to_close_timeout` and can
+  sit durably for hours or days across worker restarts. That "no activity" is exactly what makes an
+  open-ended human-in-the-loop wait cheap.
+- **A typed pending-entry, pushed *and* queryable.** On call it registers a `_CallbackEntry` (keyed
+  by per-call `tool_id`) in workflow state, publishes a `callback_requested` event (args + expected
+  `output_schema`), then waits. Many can be pending at once — a turn's tool calls run concurrently,
+  each on its own `tool_id`. A client discovers them two ways: the pushed event, or the
+  `pending_callbacks` list on the `agent_status` query (the late-attach / reconnect path).
+- **A client resolves it out-of-band.** Fulfillment is a Temporal *update* (`provide_callback_result`,
+  keyed by `tool_id`), validated at the boundary — unknown id / already-resolved / output-type
+  mismatch are all rejected, and a malformed result does *not* consume the one-shot gate (resubmit
+  works). The `wait_condition` observes the state flip and the turn resumes: `ok` → the validated
+  value is the tool's return; `error` / timeout / agent-close → a tool error the model sees (the turn
+  never crashes).
+- **It's off the agent-to-agent front door.** Like tool approval, `provide_callback_result` is
+  excluded from `agent_interface` — a parent agent driving this one can't fabricate its child's
+  callback result; fulfillment is a control-plane action by whoever attached.
+
+Fulfillment is decoupled from any UI: the packaged server mirrors the update at
+`POST /api/callback-result`, but any client speaking the update works. Examples:
+`examples/react_agent` (`ask_user`) and the OpenCode coding agent. Machinery in
+`harness/agent_workflow.py` (`callback_tool_defn`, `await_callback_result`, the `_CallbackEntry`
+registry).
 
 ## Slash commands — the operator channel every agent gets (and extends cheaply)
 
