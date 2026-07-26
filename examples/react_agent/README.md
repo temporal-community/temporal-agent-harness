@@ -84,10 +84,38 @@ since the packaged web UI has no affordance for fulfilling a callback tool.
 Prereqs, from the repo root:
 
 1. `cp .env.example .env.local` and set `OPENAI_API_KEY` (and your Temporal connection profile).
-2. Install the **F1 MCP server** locally and point the worker at it. By default the worker looks in
-   `~/Projects/Temporal/AI/MCP/f1-mcp-server`; override with `F1_MCP_SERVER_HOME`. The worker
-   launches it with `node <home>/build/index.js` after activating that project's venv, so build it
-   there first.
+2. Install the **F1 MCP server** locally (see below) and point the worker at it via
+   `F1_MCP_SERVER_HOME`.
+
+### The F1 MCP server
+
+An external dependency, not bundled here — this example is the harness port of the workshop's
+[demo3-mcp](https://github.com/temporal-community/ai-agents-workshop-python/blob/main/demo3-mcp/README.md),
+and the F1 tools come from [`rakeshgangwar/f1-mcp-server`](https://github.com/rakeshgangwar/f1-mcp-server).
+It's a Node.js (TypeScript) MCP server that shells out to `python3` for FastF1 data, so it needs
+both a built Node entrypoint and a Python venv. Prereqs: Node.js 18+, Python 3.10+, `uv`.
+
+```sh
+git clone https://github.com/rakeshgangwar/f1-mcp-server.git
+cd f1-mcp-server
+npm install && npm run build          # produces build/index.js
+
+uv venv                                # the Python side FastF1 shells into
+source .venv/bin/activate
+uv pip install fastf1 pandas numpy
+deactivate
+```
+
+Then point the worker at that checkout:
+
+```sh
+export F1_MCP_SERVER_HOME=/absolute/path/to/f1-mcp-server   # or set it in the repo-root .env.local
+```
+
+The worker (`worker.py`) launches it per the workshop:
+`bash -c "source $F1_MCP_SERVER_HOME/.venv/bin/activate && node $F1_MCP_SERVER_HOME/build/index.js"`.
+`F1_MCP_SERVER_HOME` defaults to `~/Projects/Temporal/AI/MCP/f1-mcp-server` if unset. Verify the
+exact steps against the workshop README linked above.
 
 Then, each in its own terminal:
 
