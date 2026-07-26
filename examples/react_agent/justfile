@@ -65,6 +65,9 @@ ui-dev:
     cd "{{ui}}" && pnpm run dev
 
 # Run the ReactAgent worker.
+# Streaming is on by default; run non-streaming (Runner.run) with `REACT_AGENT_STREAM=0 just worker`
+# (or set REACT_AGENT_STREAM in ../../.env.local, which is dotenv-loaded). The flag is read by the
+# worker process, where the workflow runs.
 worker:
     cd "{{root}}" && uv run --group examples python -m examples.react_agent.worker
 

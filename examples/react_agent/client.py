@@ -151,7 +151,8 @@ async def _observe(
     submitted), then render forward. ``None`` (the chat path) renders immediately.
     """
     live = open_after is None
-    printed_prefix = False
+    printed_prefix = False  # currently mid-line on a streamed reply
+    streamed_any = False  # any reply_delta rendered this turn → suppress the terminal reply
     async for event_type, data in _iter_sse(resp):
         if not live:
             if event_type == "callback_resolved" and data.get("tool_id") in open_after:
@@ -161,12 +162,21 @@ async def _observe(
             if not printed_prefix:
                 print("\nreact> ", end="", flush=True)
                 printed_prefix = True
+            streamed_any = True
             print(data.get("text", ""), end="", flush=True)
         elif event_type == "callback_requested":
             if printed_prefix:
                 print()
                 printed_prefix = False
             await _handle_callback_requested(http, session_id, data)
+        elif event_type == "reply":
+            # Non-streaming mode (Runner.run) emits no reply_delta — the answer arrives only in this
+            # terminal event (AgentReply.output). Render it when nothing streamed; in streaming mode
+            # the deltas already showed it, so skip.
+            if not streamed_any:
+                out = data.get("output")
+                text = out.get("text") if isinstance(out, dict) else out
+                print(f"\nreact> {text}")
         elif event_type == "error":
             print(f"\n[error] {data.get('message', 'unknown error')}")
         elif event_type == "turn_end":

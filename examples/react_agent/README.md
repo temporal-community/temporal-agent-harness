@@ -43,10 +43,14 @@ Ask it a question and it chains tools to find the answer:
   - **Caveat — MCP tools bypass the harness.** MCP calls do **not** go through `run_tool`, so they
     do not appear as harness tool cards on the turn stream and are **not** approval-gateable. The
     harness-wrapped weather tools still show full lifecycle. This illustrates the harness boundary.
-- **Streaming, not blocking.** The turn runs `Runner.run_streamed(...)`, so model calls route
-  through the streaming activity and the harness observer translates raw OpenAI events into the
-  live turn stream (`model_interaction_started` → `reply_delta` … `tool_requested` … `tool_start` /
-  `tool_end` … `model_interaction_ended`).
+- **Streaming is a toggle.** By default (`REACT_AGENT_STREAM` unset/`1`) the turn runs
+  `Runner.run_streamed(...)`, so model calls route through the streaming activity and the harness
+  observer translates raw OpenAI events into the live turn stream (`model_interaction_started` →
+  `reply_delta` … `tool_requested` … `tool_start` / `tool_end` → `model_interaction_ended`). Set
+  `REACT_AGENT_STREAM=0` (in the **worker's** environment) and the turn runs `Runner.run(...)`
+  instead: it completes and returns one reply. Tool cards, the `ask_user` flow, and the final reply
+  still appear on the turn stream; token-by-token `reply_delta` and the `model_interaction_*`
+  brackets do not. (The terminal client renders either mode.)
 - **Human-in-the-loop via a callback tool.** `ask_user` is an `@agent.callback_tool_defn` tool: it
   has **no server-side body**. When the model calls it, the harness publishes a `callback_requested`
   event and **parks the turn in-workflow** (durably — no activity timeout) until an external client
