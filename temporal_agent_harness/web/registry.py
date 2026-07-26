@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tomllib
+from collections.abc import Iterable
 from pathlib import Path
 
 from temporal_agent_harness.web.session_manager import AgentDescriptor, AgentRegistry
@@ -42,5 +43,40 @@ def load_agent_registry(path: Path | str) -> AgentRegistry:
                 description=" ".join(str(entry["description"]).split()),
             )
         )
+
+    return AgentRegistry(agents=agents)
+
+
+def load_agent_registries(paths: Iterable[Path | str]) -> AgentRegistry:
+    """Load and merge several agent registry TOML files into one :class:`AgentRegistry`.
+
+    Each file is parsed with :func:`load_agent_registry`, then the agents are concatenated. Both
+    ``key`` and ``workflow_type`` must be unique across the merged set — ``key`` because the UI /
+    ``by_key`` rely on it, and ``workflow_type`` because :meth:`AgentRegistry.by_workflow_type`
+    (which session creation routes on) returns the first match, so a duplicate would silently
+    shadow. Passing a single path yields the same registry as :func:`load_agent_registry`.
+    """
+    agents: list[AgentDescriptor] = []
+    seen_keys: dict[str, Path] = {}
+    seen_types: dict[str, Path] = {}
+    for path in paths:
+        registry_path = Path(path)
+        for descriptor in load_agent_registry(registry_path).agents:
+            if descriptor.key in seen_keys:
+                raise ValueError(
+                    f"Duplicate agent key {descriptor.key!r} across registries "
+                    f"({seen_keys[descriptor.key]} and {registry_path})."
+                )
+            if descriptor.workflow_type in seen_types:
+                raise ValueError(
+                    f"Duplicate agent workflow_type {descriptor.workflow_type!r} across "
+                    f"registries ({seen_types[descriptor.workflow_type]} and {registry_path})."
+                )
+            seen_keys[descriptor.key] = registry_path
+            seen_types[descriptor.workflow_type] = registry_path
+            agents.append(descriptor)
+
+    if not agents:
+        raise ValueError("No agent registries provided.")
 
     return AgentRegistry(agents=agents)

@@ -1,7 +1,12 @@
-# Project-level recipes for building, checking, and packaging the harness. Each example owns its
-# own justfile (its server / worker / registry / recipes); this top-level file stays lean and
-# just delegates the Monty stack + build/package. The shared repo-root .env.local is read by each
-# example's justfile via dotenv-path.
+# Project-level recipes. Two ways to run the examples:
+#   * ONE example standalone — from its own dir: `cd examples/<x> && just server|worker|client`.
+#     Each example owns its justfile and is unchanged by the aggregate recipes here.
+#   * ALL examples behind one UI — the aggregate recipes below: `server` merges every example's
+#     agents.toml so the UI lists all agents; run each agent worker (or `just workers` to co-launch
+#     them), plus the clients for the human-in-the-loop / callback agents.
+# The aggregate recipes read the shared repo-root .env.local (creds: OPENAI_API_KEY, GEMINI_API_KEY,
+# F1_MCP_SERVER_HOME, ...). Prerequisites + run order: see the "Run everything" section in README.md.
+# Build/package + Nexus/Slack/Teams connector recipes follow the run recipes.
 
 ui := justfile_directory() / "ui"
 monty := justfile_directory() / "examples" / "monty"
@@ -149,22 +154,96 @@ teams-webhook:
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \
     go run ./teams_to_temporal_agent_harness_connector/cmd/webhook/
 
-# Start a local Temporal dev server for the Monty example.
+# ===== Run ALL example agents behind one UI (each example is still runnable from its own dir) =====
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+# Start this fresh, or run `just reset-manager` before `server`, so the merged registry takes effect.
 temporal:
-    cd "{{monty}}" && just temporal
+    temporal server start-dev
 
-# Run the packaged session-manager worker for the Monty example.
+# Run the shared, agent-agnostic session-manager worker (hosts only SessionManagerWorkflow).
 session-manager:
-    cd "{{monty}}" && just session-manager
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    set -a; [ -f .env.local ] && . ./.env.local; set +a
+    uv run --group examples python -m examples.session_manager_worker
 
-# Build and serve the Svelte UI + FastAPI API on http://localhost:8000.
-server:
-    cd "{{monty}}" && just server
+# Build the UI, then serve EVERY example's agents.toml merged on http://localhost:8000, so the UI
+# lists all agents. (An agent only runs if its worker is up — see the worker recipes below.)
+server: app-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    set -a; [ -f .env.local ] && . ./.env.local; set +a
+    uv run --group examples python -m examples.app \
+        examples/openai_hello/agents.toml \
+        examples/pydantic_ai_hello/agents.toml \
+        examples/react_agent/agents.toml \
+        examples/monty/agents.toml \
+        examples/callback_tools/wiki_agent/agents.toml \
+        examples/callback_tools/coding_agent/agents.toml \
+        --host 0.0.0.0 --port 8000
 
 # Run the Svelte Vite dev server with /api proxied to the server on :8000.
 ui-dev:
-    cd "{{monty}}" && just ui-dev
+    pnpm --dir "{{ui}}" run dev
 
-# Run the Monty example agent worker.
-monty-worker:
+# --- Per-example agent workers (each loads .env.local via its own justfile) ---
+worker-openai-hello:
+    cd "{{justfile_directory()}}/examples/openai_hello" && just worker
+
+worker-pydantic:
+    cd "{{justfile_directory()}}/examples/pydantic_ai_hello" && just worker
+
+worker-react:
+    cd "{{justfile_directory()}}/examples/react_agent" && just worker
+
+worker-monty:
     cd "{{monty}}" && just worker
+
+worker-wiki:
+    cd "{{justfile_directory()}}/examples/callback_tools/wiki_agent" && just worker
+
+worker-coding:
+    cd "{{justfile_directory()}}/examples/callback_tools/coding_agent" && just worker
+
+# Co-launch all six agent workers in one terminal (Ctrl-C stops them all; logs interleave).
+# Requires every agent's prerequisites at once (both API keys, the F1 MCP server, etc.).
+workers:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Stop every worker on Ctrl-C / TERM. Trap the signals explicitly so cleanup runs regardless of
+    # what the shell is blocked on; clear the traps first so `kill 0` (SIGTERM to the whole process
+    # group, incl. this shell) runs once. (Ctrl-C also reaches the workers directly via the
+    # foreground process group; this makes the intent explicit and cleans up any straggler.)
+    trap 'trap - INT TERM EXIT; kill 0' INT TERM EXIT
+    just worker-openai-hello &
+    just worker-pydantic &
+    just worker-react &
+    just worker-monty &
+    just worker-wiki &
+    just worker-coding &
+    wait
+
+# --- Clients / external processes for the human-in-the-loop & callback agents ---
+# ReAct client: answers the `ask_user` callback (plain chat also works in the web UI).
+react-client *ARGS:
+    cd "{{justfile_directory()}}/examples/react_agent" && just client {{ARGS}}
+
+# Wiki client: REQUIRED — fulfills the wiki callback tools against a local dir (default ./wiki).
+wiki-client *ARGS:
+    cd "{{justfile_directory()}}/examples/callback_tools/wiki_agent" && just client {{ARGS}}
+
+# Coding shim: REQUIRED — the OpenCode shim that fulfills the coding callback tools (attach the
+# OpenCode TUI to it). Pass a working dir, e.g. `just coding-shim ~/some/project`.
+coding-shim *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{justfile_directory()}}"
+    uv run --group examples python -m examples.callback_tools.coding_agent.opencode_shim {{ARGS}}
+
+# Terminate the session-manager workflow so the next `server` start re-seeds it with the current
+# (merged) registry. Needed when switching which agents are served without a fresh Temporal.
+reset-manager:
+    temporal workflow terminate -w session-manager || true
