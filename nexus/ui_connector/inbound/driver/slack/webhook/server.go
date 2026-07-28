@@ -1,6 +1,7 @@
 package webhook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -47,7 +48,34 @@ func NewServer(tc client.Client, taskQueue, signingSecret, botUserID string) *we
 }
 
 func (s *webhookServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if err := s.verifySlackRequest(r); err != nil {
+		http.Error(w, "invalid Slack signature", http.StatusUnauthorized)
+		return
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+func (s *webhookServer) verifySlackRequest(r *http.Request) error {
+	verifier, err := slackapi.NewSecretsVerifier(r.Header, s.signingSecret)
+	if err != nil {
+		return fmt.Errorf("create Slack signature verifier: %w", err)
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return fmt.Errorf("read Slack request body: %w", err)
+	}
+	if _, err := verifier.Write(body); err != nil {
+		return fmt.Errorf("hash Slack request body: %w", err)
+	}
+	if err := verifier.Ensure(); err != nil {
+		return fmt.Errorf("verify Slack request signature: %w", err)
+	}
+
+	// Restore the exact raw body after signature verification so the route
+	// handler can parse it normally.
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	return nil
 }
 
 func (s *webhookServer) handleEvents(w http.ResponseWriter, r *http.Request) {
