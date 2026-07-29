@@ -12,14 +12,26 @@ use sandboxing never need remote-box installed.
   * `build_sandbox` / `check_sandbox` — the offline/CI-only entry point that builds (or verifies)
     a `SandboxConfig`'s image ahead of a deploy. Runtime never builds (see
     `SandboxConfig.require_prebuilt`).
+  * `BackendProvider` — the type of an async producer of a backend config, for configs whose
+    fields can only be obtained by doing I/O (a minted token, a short-lived credential). Registered
+    by name on the worker; an agent selects one by passing that name as its `SandboxConfig.backend`.
   * Worker registration is separate, from `.activities` — mirrors
     `harness/code_mode/activities.py`'s `CODE_MODE_ACTIVITIES` split:
 
         from temporal_agent_harness.harness.sandbox.activities import SANDBOX_ACTIVITIES
         Worker(..., activities=[*SANDBOX_ACTIVITIES, agent.tool_activity(my_sandboxed_tool), ...])
+
+    ...or, when an agent on the worker names a provider as its `backend`, the factory that takes
+    the provider registry (use one or the other, never both — the activity names are claimed once):
+
+        from temporal_agent_harness.harness.sandbox.activities import sandbox_activities
+        Worker(..., activities=[
+            *sandbox_activities({"minted-token": daytona_with_minted_token}),
+            agent.tool_activity(my_sandboxed_tool),
+        ])
 """
 
 from temporal_agent_harness.harness.sandbox.build import build_sandbox, check_sandbox
-from temporal_agent_harness.harness.sandbox.config import SandboxConfig
+from temporal_agent_harness.harness.sandbox.config import BackendProvider, SandboxConfig
 
-__all__ = ["SandboxConfig", "build_sandbox", "check_sandbox"]
+__all__ = ["BackendProvider", "SandboxConfig", "build_sandbox", "check_sandbox"]

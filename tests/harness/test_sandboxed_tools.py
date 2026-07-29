@@ -13,6 +13,7 @@
 # (any activity_tool_defn tool with a non-builtin type would hit it), so worked around here rather
 # than fixed in this PR.
 
+import asyncio
 import os
 import uuid
 from pathlib import Path
@@ -22,14 +23,15 @@ import pytest
 pytest.importorskip("remote")
 
 import pytest_asyncio
-from temporalio import workflow
+from temporalio import activity, workflow
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamClient
-from temporalio.testing import WorkflowEnvironment
+from temporalio.exceptions import ApplicationError
+from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from remote import Subprocess
+from remote import Daytona, Subprocess
 
 from temporal_agent_harness.harness import AgentWorkflowRunner, agent
 from temporal_agent_harness.harness.agent_protocol import (
@@ -49,8 +51,19 @@ from temporal_agent_harness.harness.sandbox import SandboxConfig, build_sandbox,
 from temporal_agent_harness.harness.sandbox.activities import (
     SANDBOX_ACTIVITIES,
     _SESSIONS,
+    SandboxActivities,
     get_or_resume_session,
 )
+from temporal_agent_harness.harness.sandbox.models import (
+    SANDBOX_ACTIVATE_ACTIVITY,
+    SANDBOX_PAUSE_ACTIVITY,
+    SANDBOX_TERMINATE_ACTIVITY,
+    SandboxActivateInput,
+    SandboxPauseInput,
+    SandboxRefResult,
+    SandboxTerminateInput,
+)
+from temporal_agent_harness.harness.sandbox_ref import SandboxRef
 
 from _sandboxed_tool_fixtures import PidInput, PidResult, get_sandbox_pid, get_sandbox_pid_2
 from _real_sandbox_workflow_fixtures import (
@@ -328,6 +341,241 @@ def test_sandboxed_activity_tool_defn_rejects_bad_shape_at_decoration_time():
 
         @agent.activity_tool_defn(sandboxed=True)
         async def two_args(a: PidInput, b: PidInput) -> PidResult: ...
+
+
+# ---------------------------------------------------------------------------
+# SandboxConfig(backend="<provider name>"): the backend produced by a worker-registered async hook
+# ---------------------------------------------------------------------------
+#
+# Two halves, tested separately:
+#   * The ACTIVITY half (SandboxActivities + its injected name -> provider registry) — driven
+#     directly, via ActivityEnvironment or a plain call, since it's just worker-side code.
+#   * The WORKFLOW half (name the provider once, then thread the config it produced everywhere) —
+#     driven end to end against STUB lifecycle activities registered under the real activity names.
+#     Stubs, not the real ones, because the whole point is to observe exactly what the runner sends
+#     each activity, and to hand back a config distinguishable from anything declared statically.
+
+
+async def test_resolve_backend_returns_the_config_the_provider_produced():
+    """The motivating case: a Daytona config whose env vars aren't knowable until some I/O runs."""
+
+    async def mint() -> Daytona:
+        return Daytona(snapshot_name="probe", env_vars={"MINTED": "tok-123"})
+
+    activities = SandboxActivities({"mint": mint})
+    resolved = await activities._resolve_backend("mint")
+
+    assert isinstance(resolved, Daytona)
+    assert resolved.snapshot_name == "probe"
+    assert resolved.env_vars == {"MINTED": "tok-123"}
+
+
+async def test_resolve_backend_rejects_unregistered_provider_name():
+    async def mint() -> Subprocess:
+        return Subprocess()
+
+    activities = SandboxActivities({"registered-one": mint})
+    with pytest.raises(ApplicationError) as excinfo:
+        await activities._resolve_backend("typo")
+
+    assert excinfo.value.type == "SandboxBackendProviderNotRegistered"
+    assert excinfo.value.non_retryable  # a missing registration is not a transient failure
+    assert "registered-one" in str(excinfo.value)  # tells you what IS registered
+
+
+async def test_resolve_backend_rejects_provider_returning_non_backend_config():
+    async def junk() -> dict:
+        return {"type": 1}  # a dump, not a config — a plausible mistake worth a clear error
+
+    activities = SandboxActivities({"junk": junk})
+    with pytest.raises(ApplicationError) as excinfo:
+        await activities._resolve_backend("junk")
+
+    assert excinfo.value.type == "SandboxBackendProviderInvalidResult"
+    assert excinfo.value.non_retryable
+
+
+async def test_sandbox_activate_runs_named_provider_and_echoes_its_backend():
+    """The real activate activity: provider awaited once, its config used AND echoed back."""
+    calls = 0
+
+    async def provider() -> Subprocess:
+        nonlocal calls
+        calls += 1
+        return Subprocess()
+
+    activities = SandboxActivities({"probe-provider": provider})
+    env = ActivityEnvironment()
+    result = await env.run(
+        activities.sandbox_activate,
+        SandboxActivateInput(backend="probe-provider", local_project_root=str(_HERE)),
+    )
+
+    assert calls == 1
+    assert result.backend == Subprocess().model_dump(mode="json")
+    assert result.ref.backend == "SUBPROCESS"  # a real sandbox, made from the produced config
+
+    # Real Subprocess sandbox — tear it down (and clear the worker-local session cache) via the
+    # real terminate activity rather than leaking it for the rest of the session.
+    await env.run(
+        activities.sandbox_terminate,
+        SandboxTerminateInput(
+            ref=result.ref,
+            backend=Subprocess().model_dump(mode="json"),
+            local_project_root=str(_HERE),
+        ),
+    )
+
+
+async def test_sandbox_activate_with_a_concrete_backend_echoes_none():
+    """A config (not a name) -> no provider involved, and `backend=None` back: "keep what you
+    have", which is what lets the runner treat a produced config as sticky for the run."""
+    activities = SandboxActivities()
+    env = ActivityEnvironment()
+    result = await env.run(
+        activities.sandbox_activate,
+        SandboxActivateInput(
+            backend=Subprocess().model_dump(mode="json"),
+            local_project_root=str(_HERE),
+        ),
+    )
+
+    assert result.backend is None
+
+    await env.run(
+        activities.sandbox_terminate,
+        SandboxTerminateInput(
+            ref=result.ref,
+            backend=Subprocess().model_dump(mode="json"),
+            local_project_root=str(_HERE),
+        ),
+    )
+
+
+# --- the workflow half, against stub lifecycle activities ------------------------------------
+
+_PROVIDER_NAME = "probe-provider"
+
+# What the stub activate pretends the named provider produced. Deliberately a DIFFERENT backend
+# shape from any static config here, so every later activity input either carries it (proving the
+# produced config was threaded) or doesn't (proving it wasn't). Never handed to remote-box: these
+# agents run no tools, and the lifecycle activities they hit are stubs.
+_PROVIDED_BACKEND = Daytona(
+    snapshot_name="provided", env_vars={"MINTED": "tok-123"}
+).model_dump(mode="json")
+
+_activate_inputs: list[SandboxActivateInput] = []
+_pause_inputs: list[SandboxPauseInput] = []
+_terminate_inputs: list[SandboxTerminateInput] = []
+
+
+@activity.defn(name=SANDBOX_ACTIVATE_ACTIVITY)
+async def stub_activate(input: SandboxActivateInput) -> SandboxRefResult:
+    """Records what the runner asked for, and echoes a produced backend exactly when handed a
+    provider name — the real activity's contract, minus any actual sandbox."""
+    _activate_inputs.append(input)
+    return SandboxRefResult(
+        ref=SandboxRef(backend="SUBPROCESS", sandbox_id="stub-sandbox"),
+        backend=_PROVIDED_BACKEND if isinstance(input.backend, str) else None,
+    )
+
+
+@activity.defn(name=SANDBOX_PAUSE_ACTIVITY)
+async def stub_pause(input: SandboxPauseInput) -> SandboxRefResult:
+    _pause_inputs.append(input)
+    return SandboxRefResult(ref=input.ref)
+
+
+@activity.defn(name=SANDBOX_TERMINATE_ACTIVITY)
+async def stub_terminate(input: SandboxTerminateInput) -> None:
+    _terminate_inputs.append(input)
+
+
+async def _wait_until(predicate, what: str, timeout: float = 30.0) -> None:
+    deadline = timeout / 0.05
+    while deadline > 0:
+        if predicate():
+            return
+        await asyncio.sleep(0.05)
+        deadline -= 1
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+@workflow.defn
+@agent.defn
+class ProvidedBackendAgent:
+    """Names a provider as its backend. Runs no tools — this is about the lifecycle itself."""
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            # NB: constructed right here, never via a helper — WorkflowStream() refuses to be built
+            # anywhere but directly inside @workflow.init.
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+            sandbox=SandboxConfig(backend=_PROVIDER_NAME, local_project_root=_HERE),
+        )
+
+    @workflow.run
+    async def run(self, config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+    @agent.accepts
+    async def probe(self, message: TextMessage) -> TextReply:
+        """Reply without touching a tool."""
+        return TextReply(text="ok")
+
+
+async def test_named_provider_runs_once_and_its_backend_is_threaded_through_the_run():
+    """Two turns against stub lifecycle activities: the name goes out once, the config that came
+    back goes out everywhere after."""
+    _activate_inputs.clear()
+    _pause_inputs.clear()
+    _terminate_inputs.clear()
+    env = await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter)
+    task_queue = f"stub-sandbox-lifecycle-test-{uuid.uuid4()}"
+    async with Worker(
+        env.client,
+        task_queue=task_queue,
+        workflows=[ProvidedBackendAgent],
+        activities=[stub_activate, stub_pause, stub_terminate],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ):
+        handle = await env.client.start_workflow(
+            ProvidedBackendAgent.run,
+            AgentConfig(),
+            id=f"ProvidedBackendAgent-{uuid.uuid4()}",
+            task_queue=task_queue,
+        )
+        for turn in (1, 2):
+            await handle.execute_update(
+                SEND_AGENT_MESSAGE_UPDATE,
+                AgentMessage(type="probe", payload={"text": "hi"}, expected_turn=turn),
+                result_type=AgentMessageReply,
+            )
+            # Let each turn fully finish before queueing the next, so turn 2 hits an idle (paused)
+            # agent — the sequence that exercises "activate again, but don't re-run the provider".
+            # The stub's own recorded pause is the end-of-turn signal: these activities run in this
+            # very process, so it's both cheaper and more precise than watching the event stream.
+            await _wait_until(lambda: len(_pause_inputs) == turn, f"turn {turn} to pause")
+        await handle.signal("close")
+        await handle.result()
+    await env.shutdown()
+
+    # Turn 1: nothing produced yet, so the runner sends the provider NAME for the activity to run.
+    assert len(_activate_inputs) == 2
+    assert _activate_inputs[0].backend == _PROVIDER_NAME
+    # Turn 2: the name is NOT sent again — the config produced on turn 1 is, so the provider never
+    # re-runs (no repeat I/O, no churning the config under an already-created sandbox).
+    assert _activate_inputs[1].backend == _PROVIDED_BACKEND
+
+    # ...and every other sandbox-touching activity re-supplies that same produced config (they have
+    # no registry of their own), so a worker reattaching on a cache miss uses the backend the
+    # sandbox was actually made with.
+    assert _pause_inputs and all(i.backend == _PROVIDED_BACKEND for i in _pause_inputs)
+    assert len(_terminate_inputs) == 1
+    assert _terminate_inputs[0].backend == _PROVIDED_BACKEND
 
 
 # ---------------------------------------------------------------------------

@@ -54,7 +54,9 @@ code-mode = [
 # Exploratory: remote-box, for sandboxed tool execution support. remote-box requires
 # Python>=3.12, stricter than this project's >=3.11 floor, hence the marker below.
 sandbox = [
-    "remote-box>=0.6.0; python_version >= '3.12'",
+    # >=0.7.0 for Daytona's `env_vars` (injected into the sandbox at creation) — the field a
+    # SandboxConfig.backend_provider most usefully fills in with a value it had to go get.
+    "remote-box>=0.7.0; python_version >= '3.12'",
 ]
 
 [dependency-groups]

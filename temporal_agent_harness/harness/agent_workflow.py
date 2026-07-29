@@ -1337,6 +1337,12 @@ class AgentWorkflowRunner:
         # from any worker process on a cache miss) — see `harness/sandbox/`.
         self._sandbox_config: SandboxConfig | None = sandbox
         self.sandbox_ref: SandboxRef | None = None
+        # Set once, from the first `sandbox_activate` result, when (and only when) the config's
+        # `backend` is a provider NAME rather than a config: the backend config that provider
+        # produced, which from then on is what this run re-supplies everywhere a backend is needed
+        # (see `_sandbox_backend_arg`). Recorded in activity history rather than recomputed, so the
+        # provider's I/O never runs on replay.
+        self._sandbox_backend: dict[str, Any] | None = None
 
         # Register protocol handlers dynamically so the containing workflow doesn't need to.
         workflow.set_update_handler(
@@ -2042,7 +2048,7 @@ class AgentWorkflowRunner:
             SANDBOX_ACTIVATE_ACTIVITY,
             SandboxActivateInput(
                 ref=self.sandbox_ref,
-                backend=config.backend.model_dump(mode="json"),
+                backend=self._sandbox_backend_arg(),
                 local_project_root=str(config.local_project_root),
                 require_prebuilt=config.require_prebuilt,
             ),
@@ -2050,6 +2056,8 @@ class AgentWorkflowRunner:
             **self._sandbox_activity_config(),
         )
         self.sandbox_ref = result.ref
+        if result.backend is not None:
+            self._sandbox_backend = result.backend
 
     async def _pause_sandbox(self) -> None:
         """Pause this run's sandbox — called between turns, only when actually about to
@@ -2071,7 +2079,7 @@ class AgentWorkflowRunner:
             SANDBOX_PAUSE_ACTIVITY,
             SandboxPauseInput(
                 ref=self.sandbox_ref,
-                backend=config.backend.model_dump(mode="json"),
+                backend=self._resolved_sandbox_backend(),
                 local_project_root=str(config.local_project_root),
             ),
             result_type=SandboxRefResult,
@@ -2096,12 +2104,48 @@ class AgentWorkflowRunner:
             SANDBOX_TERMINATE_ACTIVITY,
             SandboxTerminateInput(
                 ref=self.sandbox_ref,
-                backend=config.backend.model_dump(mode="json"),
+                backend=self._resolved_sandbox_backend(),
                 local_project_root=str(config.local_project_root),
             ),
             **self._sandbox_activity_config(),
         )
         self.sandbox_ref = None
+
+    def _sandbox_backend_arg(self) -> dict[str, Any] | str:
+        """What to send as ``sandbox_activate``'s ``backend``: a concrete config dump, or — only
+        until this run has one — the provider name to resolve it from.
+
+        Once a provider has run, its result (``_sandbox_backend``) is what gets sent, so the
+        provider is never named twice in a run: no repeated I/O, and no chance of churning the
+        config out from under an already-created sandbox.
+        """
+        config = self._sandbox_config
+        assert config is not None
+        if self._sandbox_backend is not None:
+            return self._sandbox_backend
+        if isinstance(config.backend, str):
+            return config.backend
+        return config.backend.model_dump(mode="json")
+
+    def _resolved_sandbox_backend(self) -> dict[str, Any]:
+        """The concrete backend config for this run, for everything OTHER than activation.
+
+        Pause, terminate and every sandboxed tool call re-supply the backend config (so a worker
+        that never activated this run's sandbox can still reattach via ``RemoteSession.resume``),
+        and none of them can resolve a provider — only the activate activity holds the registry. All
+        are reachable only after an activation has succeeded, which is exactly what guarantees a
+        concrete config is available here: a provider-named backend has been replaced by its result
+        by then.
+        """
+        config = self._sandbox_config
+        assert config is not None
+        if self._sandbox_backend is not None:
+            return self._sandbox_backend
+        assert not isinstance(config.backend, str), (
+            "internal harness error: a provider-named sandbox backend was never resolved, yet a "
+            "post-activation sandbox activity is being dispatched"
+        )
+        return config.backend.model_dump(mode="json")
 
     def _sandbox_activity_config(self) -> ActivityConfig:
         config = self._sandbox_config
@@ -2913,7 +2957,7 @@ def activity_tool_defn(
                     )
                 sandbox_ctx = SandboxToolContext(
                     ref=runner.sandbox_ref,
-                    backend=runner._sandbox_config.backend.model_dump(mode="json"),
+                    backend=runner._resolved_sandbox_backend(),
                     local_project_root=str(runner._sandbox_config.local_project_root),
                 )
 

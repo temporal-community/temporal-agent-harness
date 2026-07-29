@@ -24,7 +24,12 @@ SANDBOX_TERMINATE_ACTIVITY = "sandbox_terminate"
 
 class SandboxActivateInput(BaseModel):
     ref: SandboxRef | None = None
-    backend: dict[str, Any]
+    backend: dict[str, Any] | str
+    """Mirrors ``SandboxConfig.backend``: the backend config as a plain dict, or the NAME of a
+    provider registered on the worker (``sandbox_activities({name: provider})``) for the activity to
+    look up and await. Only ever a name on the run's FIRST activation — the activity hands the
+    config it resolved back in ``SandboxRefResult.backend``, and the runner sends that dict from
+    then on."""
     local_project_root: str
     require_prebuilt: bool = True
 
@@ -43,3 +48,9 @@ class SandboxTerminateInput(BaseModel):
 
 class SandboxRefResult(BaseModel):
     ref: SandboxRef
+    backend: dict[str, Any] | None = None
+    """The backend config a named provider produced, echoed back so the runner can persist it as
+    workflow state and thread it into every later sandbox-touching activity. None whenever no
+    provider ran — the overwhelmingly common case, since ``backend`` is normally a config already —
+    meaning "keep using what you have". Recording it here, in activity history, is what keeps a
+    provider's I/O off the replay path."""

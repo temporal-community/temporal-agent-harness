@@ -4,6 +4,7 @@
 # is how an agent author opts into that dependency — core harness code (`agent_workflow.py`)
 # never imports it.
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -19,6 +20,20 @@ try:
     from remote import AnyBackendConfig
 except ImportError as exc:
     raise RuntimeError(_INSTALL_MESSAGE) from exc
+
+BackendProvider = Callable[[], Awaitable[AnyBackendConfig]]
+"""An async producer of a whole backend config, for a :class:`SandboxConfig` that can't state one
+up front.
+
+Takes nothing and returns the config to create the sandbox with — the way to supply values that
+simply aren't knowable at import time (a minted token, a short-lived credential, a per-run
+endpoint) because obtaining them needs I/O.
+
+Providers are worker-side objects: they're registered by name when constructing the sandbox
+lifecycle activities (``sandbox_activities({"name": provider})`` — see
+``harness/sandbox/activities.py``), and an agent selects one by passing that name as its
+:attr:`SandboxConfig.backend` instead of a config. See that field for when a provider runs.
+"""
 
 
 class SandboxConfig(BaseModel):
@@ -59,7 +74,59 @@ class SandboxConfig(BaseModel):
     surfaces it.
     """
 
-    backend: AnyBackendConfig
+    backend: AnyBackendConfig | str
+    """The backend config itself, OR the name of a worker-registered :data:`BackendProvider` that
+    produces one.
+
+    Pass a config whenever you can state it up front — that's the normal case, and the rest of this
+    class assumes it. Pass a NAME when some field of it can only be obtained by doing I/O (a token
+    minted from an external service, a short-lived credential, a per-run endpoint), so no literal
+    could express it. A provider is a live async callable, which can neither be constructed in
+    workflow code nor serialized into an activity's input, so the two halves are wired by name: the
+    worker registers the callable, the agent names it::
+
+        # ---- worker side: the provider, and the name it answers to
+        async def daytona_with_minted_token() -> Daytona:
+            token = await mint_token()  # a real network call; runs inside the activity
+            return Daytona(
+                snapshot_name="my-agent",
+                dockerfile_path="Dockerfile.my-agent",
+                env_vars={"TOKEN": token},   # injected into the sandbox at creation
+            )
+
+        Worker(..., activities=[
+            *sandbox_activities({"minted-token": daytona_with_minted_token}),
+            agent.tool_activity(my_sandboxed_tool),
+        ])
+
+        # ---- agent side: name it instead of declaring a config
+        SANDBOX = SandboxConfig(backend="minted-token", local_project_root=Path(__file__).parent)
+
+    The provider owns the WHOLE config — it isn't handed a base to amend — so keep the fields the
+    image is built from (``snapshot_name``/``template_prefix``, ``dockerfile_path``,
+    ``sandbox_class``) in agreement with what was built ahead of time, or activation will fail the
+    ``require_prebuilt`` check. A name no worker registered also fails activation non-retryably,
+    with the registered names listed, rather than silently sandboxing somewhere unintended.
+
+    **When a provider runs:** exactly once per workflow run, inside the ``sandbox_activate``
+    activity, on the first activation (the turn that actually creates this run's sandbox). Its
+    result is returned to the workflow, persisted as workflow state, and threaded into every later
+    sandbox-touching activity (activate/pause/terminate AND every sandboxed tool call, which
+    re-supply the backend config so a worker that never activated this run can still reattach), so
+    all of them agree on the one config for the run. Being recorded in activity history is also
+    what makes it replay-safe: a provider does I/O, so it must never be re-run on replay, and it
+    isn't.
+
+    It CAN run more than once for a single sandbox, though: ``sandbox_activate`` is a Temporal
+    activity like any other, so a retried attempt (worker crash, timeout) re-runs the provider
+    before its result was ever recorded. Write it so a second call is harmless — mint a fresh token
+    rather than consuming a one-shot resource.
+
+    **Offline builds:** ``build_sandbox``/``check_sandbox`` can't run a provider (they're offline,
+    and there's no worker), so for a provider-named backend they take the concrete config to build
+    explicitly — ``build_sandbox(config, backend=Daytona(...))``.
+    """
+
     local_project_root: Path
 
     require_prebuilt: bool = True
