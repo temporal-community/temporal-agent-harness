@@ -107,7 +107,7 @@ slack-connector:
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-slack}" \
-    go run ./slack_to_temporal_agent_harness_connector/cmd/worker/
+    go run ./slack/cmd/worker/
 
 # Run the Slack webhook server.
 # Requires: SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET
@@ -118,7 +118,7 @@ slack-webhook:
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-slack}" \
-    go run ./slack_to_temporal_agent_harness_connector/cmd/webhook/
+    go run ./slack/cmd/webhook/
 
 # Run the Teams Connector workflow worker. Safe to run multiple instances.
 teams-connector:
@@ -126,7 +126,7 @@ teams-connector:
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \
-    go run ./teams_to_temporal_agent_harness_connector/cmd/worker/
+    go run ./teams/cmd/worker/
 
 # Run the Python Teams SDK activity worker. Safe to run multiple instances.
 # Requires: MICROSOFT_TENANT_ID, MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD
@@ -147,7 +147,7 @@ teams-webhook:
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
     CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \
-    go run ./teams_to_temporal_agent_harness_connector/cmd/webhook/
+    go run ./teams/cmd/webhook/
 
 # Start a local Temporal dev server for the Monty example.
 temporal:
