@@ -1,0 +1,105 @@
+nexusrpc: "1.0.0"
+
+services:
+  RegistryService:
+    fqn: RegistryService
+    description: >
+      The Durable Tools Gateway's Nexus surface. Its sole purpose is registering
+      3rd-party (non-Nexus) MCP servers and invoking their tools via a standalone
+      activity on the caller's behalf — Nexus-native MCP servers register and are
+      called directly, bypassing this service entirely. Service workers in any
+      Temporal namespace call these operations to reach the gateway's
+      ToolRegistryWorkflow — a Nexus call rather than a direct workflow
+      signal/query so it works across namespace boundaries.
+    operations:
+      registerExternal:
+        description: Register a 3rd-party external MCP server with the gateway.
+        input: { $ref: "#/$defs/RegisterExternalInput" }
+      deregister:
+        description: Remove a service registration from the gateway.
+        input: { $ref: "#/$defs/DeregisterInput" }
+      listTools:
+        # fqn pins the wire name to authoring.internal_utils.LIST_TOOLS_OPERATION,
+        # the generic operation name workflow_transport.py's WorkflowTransport dispatches
+        # to on ANY MCP-over-Nexus service (hand-authored or generated) — without this,
+        # nex-gen's default PascalCase wire name ("ListTools") would silently break that
+        # generic dispatch for this service.
+        fqn: list_tools
+        description: >
+          Return all tool dicts for 3rd-party MCP servers currently registered
+          with the gateway. Part of the shared MCP-over-Nexus list_tools
+          contract (see mcp_over_nexus.MCPOverNexusService) so callers can
+          treat the gateway uniformly alongside any Nexus-native MCP server.
+        output:
+          $ref: "#/$defs/ListToolsOutput"
+      callTool:
+        # fqn pins the wire name to authoring.internal_utils.CALL_TOOL_OPERATION — see
+        # the listTools comment above.
+        fqn: call_tool
+        description: >
+          Invoke one tool on a 3rd-party MCP server registered with the
+          gateway, dispatched via a standalone activity (no intermediary
+          per-call workflow — the caller is itself already a durable Temporal
+          workflow, so nothing here needs its own separate durability).
+        input:
+          $ref: "#/$defs/CallToolInput"
+        output:
+          $ref: "#/$defs/CallToolOutput"
+
+$defs:
+  RegisterExternalInput:
+    type: object
+    description: Input for registering a 3rd-party external MCP server.
+    properties:
+      name:
+        type: string
+        description: Service name prefix for the external server.
+      url:
+        type: string
+        description: Streamable-HTTP MCP endpoint URL.
+
+  DeregisterInput:
+    type: object
+    description: Input for removing a service registration.
+    properties:
+      name:
+        type: string
+        description: Service name to remove.
+
+  ListToolsOutput:
+    type: object
+    description: All tool dicts for 3rd-party MCP servers currently registered with the gateway.
+    properties:
+      tools:
+        type: array
+        description: Serialised mcp.types.Tool dicts.
+        items:
+          type: object
+          additionalProperties: true
+
+  CallToolInput:
+    type: object
+    description: Input for invoking one tool on a registered 3rd-party MCP server.
+    properties:
+      name:
+        type: string
+        description: Full prefixed tool name, e.g. "weather_get_forecast".
+      arguments:
+        type: object
+        additionalProperties: true
+        description: Tool call arguments, as MCP's tools/call would pass them.
+
+  CallToolOutput:
+    type: object
+    description: >
+      The tool's result, carried as a serialised mcp.types.CallToolResult (content
+      blocks + structuredContent + isError) rather than flattened to text — a TOOL-LEVEL
+      error (isError=true) is DATA on this type, per the MCP spec, not a raised Nexus
+      operation failure; only an actual RPC/infra failure (the 3rd-party server
+      unreachable, etc.) raises. Callers reconstruct with
+      mcp.types.CallToolResult.model_validate(output.result).
+    properties:
+      result:
+        type: object
+        additionalProperties: true
+        description: Serialised mcp.types.CallToolResult dict.

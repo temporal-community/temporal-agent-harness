@@ -168,6 +168,43 @@ class CustomFallbackProbeAgent(_BaseProbe):
         await self._runner.run(self)
 
 
+@workflow.defn
+@agent.defn
+class GatedExternalCallProbeAgent:
+    """Exercises ``AgentWorkflowRunner.run_gated_tool_call`` directly — the primitive an
+    ``agents.mcp.MCPServer.call_tool`` implementation is wrapped through (see
+    ``openai_agents_harness.gate_mcp_server_for_harness``) so MCP tool calls, which the
+    OpenAI Agents SDK dispatches without ever going through ``run_tool``/``tool_defn``,
+    still go through the same approval gate + tool lifecycle events as any other tool."""
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+        )
+
+    @workflow.run
+    async def run(self, config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+    @agent.accepts
+    async def act(self, message: TextMessage) -> TextReply:
+        """Run a gated external call through run_gated_tool_call."""
+
+        async def _call() -> str:
+            return f"external:{message.text}"
+
+        try:
+            result = await self._runner.run_gated_tool_call(
+                "ext-1", "external_tool", {"text": message.text}, _call
+            )
+        except agent.ToolApprovalDenied as e:
+            result = f"denied:{e.reason}"
+        return TextReply(text=result)
+
+
 # ---------------------------------------------------------------------------
 # Fixture + helpers
 # ---------------------------------------------------------------------------
@@ -182,7 +219,11 @@ async def env_and_client():
     async with Worker(
         env.client,
         task_queue=task_queue,
-        workflows=[ApprovalProbeAgent, CustomFallbackProbeAgent],
+        workflows=[
+            ApprovalProbeAgent,
+            CustomFallbackProbeAgent,
+            GatedExternalCallProbeAgent,
+        ],
         activities=[
             agent.tool_activity(gated_activity_tool),
             agent.tool_activity(safe_activity_tool),
@@ -692,3 +733,68 @@ async def test_inline_workflow_tool_gates(env_and_client):
         AgentEventType.TOOL_END,
     ]
     assert _reply_text(events) == "wf:Z"
+
+
+# ---------------------------------------------------------------------------
+# run_gated_tool_call — the primitive MCP-sourced tool calls (which the OpenAI Agents
+# SDK dispatches directly via MCPServer.call_tool, bypassing run_tool/tool_defn
+# entirely) are wrapped through so they don't silently skip the approval gate.
+# ---------------------------------------------------------------------------
+
+
+async def test_gated_external_call_requires_approval_then_executes(env_and_client):
+    client, task_queue = env_and_client
+    handle = await _start(
+        client, task_queue, workflow_cls=GatedExternalCallProbeAgent
+    )
+    await _send(handle, "hello", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    events: list[AgentEvent] = []
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            ev = item.data
+            events.append(ev)
+            if (
+                ev.event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and ev.event.tool_id == "ext-1"
+            ):
+                assert ev.event.tool_name == "external_tool"
+                assert ev.event.tool_input == {"text": "hello"}
+                await agent_client.approve_tool("ext-1", approved=True)
+            if ev.event.type == AgentEventType.TURN_END:
+                break
+
+    # Same gated lifecycle as a run_tool-dispatched tool: nothing executes before approval.
+    assert _types_for(events, "ext-1") == [
+        AgentEventType.TOOL_APPROVAL_REQUESTED,
+        AgentEventType.TOOL_APPROVAL_RESOLVED,
+        AgentEventType.TOOL_START,
+        AgentEventType.TOOL_END,
+    ]
+    assert _reply_text(events) == "external:hello"
+
+
+async def test_gated_external_call_denied_never_executes(env_and_client):
+    client, task_queue = env_and_client
+    handle = await _start(
+        client, task_queue, workflow_cls=GatedExternalCallProbeAgent
+    )
+    await _send(handle, "hello", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    events: list[AgentEvent] = []
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            ev = item.data
+            events.append(ev)
+            if (
+                ev.event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and ev.event.tool_id == "ext-1"
+            ):
+                await agent_client.approve_tool("ext-1", approved=False, reason="no")
+            if ev.event.type == AgentEventType.TURN_END:
+                break
+
+    assert not any(e.event.type == AgentEventType.TOOL_START for e in events)
+    assert _reply_text(events) == "denied:no"

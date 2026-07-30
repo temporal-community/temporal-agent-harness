@@ -60,6 +60,7 @@ if typing.TYPE_CHECKING:
 def _set_open_ai_agent_temporal_overrides(
     model_params: ModelActivityParameters,
     start_spans_in_replay: bool = False,
+    nexus_mcp_initial_servers: dict[str, str] | None = None,
 ):
     previous_runner = get_default_agent_runner()
     previous_trace_provider = get_trace_provider()
@@ -68,7 +69,9 @@ def _set_open_ai_agent_temporal_overrides(
     )
 
     try:
-        set_default_agent_runner(TemporalOpenAIRunner(model_params))
+        set_default_agent_runner(
+            TemporalOpenAIRunner(model_params, nexus_mcp_initial_servers)
+        )
         set_trace_provider(provider)
         yield provider
     finally:
@@ -222,6 +225,7 @@ class OpenAIAgentsPlugin(SimplePlugin):
         add_temporal_spans: bool = True,
         use_otel_instrumentation: bool = False,
         observer_factory: ObserverFactory | None = None,
+        nexus_mcp_initial_servers: dict[str, str] | None = None,
     ) -> None:
         """Initialize the OpenAI agents plugin.
 
@@ -256,6 +260,17 @@ class OpenAIAgentsPlugin(SimplePlugin):
                 stream). If ``None``, streaming publishes raw events to
                 ``model_params.streaming_topic`` as before.
                 Warning: streaming support is experimental and behavior may change in future versions.
+            nexus_mcp_initial_servers: Controls whether the agent gets a Nexus-transport MCP
+                server, AND what it starts out registered with:
+                - ``None`` (default): no Nexus-transport MCP server at all. Nothing changes
+                  for workers that don't need the Nexus-transport MCP integration.
+                - ``{}``: the agent gets a Nexus-transport MCP server with nothing
+                  pre-registered -- register Nexus-native tools / the
+                  nexus/mcp/durable_tools_gateway (for 3rd-party MCP servers) live, via a
+                  ``register_mcp_server`` signal against the running workflow.
+                - ``{name: endpoint, ...}``: same server, pre-registered with these -- no
+                  signal needed to use them. Live registration of additional servers still
+                  works on top of this, same as the empty-dict case.
 
         """
         if model_params is None:
@@ -355,6 +370,7 @@ class OpenAIAgentsPlugin(SimplePlugin):
                 with _set_open_ai_agent_temporal_overrides(
                     model_params,
                     start_spans_in_replay=use_otel_instrumentation,
+                    nexus_mcp_initial_servers=nexus_mcp_initial_servers,
                 ):
                     yield
 

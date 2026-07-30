@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from agents.mcp import MCPServer
 from openai.types.responses import (
     ResponseCompletedEvent,
     ResponseFunctionCallArgumentsDeltaEvent,
@@ -84,6 +85,7 @@ __all__ = [
     "stream_to_provider",
     "as_openai_agent_tool",
     "as_openai_agent_tools",
+    "gate_mcp_server_for_harness",
 ]
 
 _INSTALL_MESSAGE = (
@@ -295,13 +297,15 @@ def stream_to_provider(model: str | None, run_context: Any) -> _HarnessStreamTok
     Reads the in-flight turn's stream context off that runner and bundles it with the
     model. Returns ``None`` when the run context is not a harness runner or there is no
     active turn, so the vendored stub falls back to ``streaming_topic``.
+
+    Duck-types ``run_context`` instead of ``isinstance(..., AgentWorkflowRunner)`` --
+    sandboxed workflows can reload that class, making ``isinstance`` silently False across
+    module reloads. Dumping to a plain dict sidesteps the same issue for pydantic.
     """
-    if not isinstance(run_context, AgentWorkflowRunner):
-        return None
-    context = run_context.current_stream_context
+    context = getattr(run_context, "current_stream_context", None)
     if context is None:
         return None
-    return _HarnessStreamToken(context=context, model=model)
+    return _HarnessStreamToken(context=context.model_dump(), model=model)
 
 
 def harness_observer_factory(token: Any) -> StreamObserver[Any]:
@@ -430,6 +434,84 @@ def as_openai_agent_tools(
         )
         for tool in tools
     ]
+
+
+class _GatedMCPServer(MCPServer):
+    """Delegates every ``MCPServer`` operation to a wrapped inner server, except
+    ``call_tool`` -- which runs through the harness's approval gate and tool-lifecycle
+    events. See :func:`gate_mcp_server_for_harness`.
+
+    Defined statically (not built dynamically at runtime) -- Temporal's workflow sandbox
+    doesn't support subclassing a proxied class from inside sandboxed code, so this must
+    subclass the real ``MCPServer`` at module-import time, the same way
+    ``_NexusTransportMCPServer`` does."""
+
+    _harness_gated_mcp_server = True
+
+    def __init__(self, inner: Any, runner: AgentWorkflowRunner) -> None:
+        super().__init__()
+        self._inner = inner
+        self._runner = runner
+
+    @property
+    def name(self) -> str:
+        return self._inner.name
+
+    async def connect(self) -> None:
+        await self._inner.connect()
+
+    async def cleanup(self) -> None:
+        await self._inner.cleanup()
+
+    async def __aenter__(self) -> "_GatedMCPServer":
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        await self.cleanup()
+
+    @property
+    def cached_tools(self) -> Any:
+        return self._inner.cached_tools
+
+    async def list_tools(self, run_context: Any = None, agent: Any = None) -> Any:
+        return await self._inner.list_tools(run_context, agent)
+
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        meta: dict[str, Any] | None = None,
+    ) -> Any:
+        call_id = _new_tool_call_id(f"mcp:{self._inner.name}:{tool_name}")
+        return await self._runner.run_gated_tool_call(
+            call_id,
+            tool_name,
+            arguments or {},
+            lambda: self._inner.call_tool(tool_name, arguments, meta),
+        )
+
+    async def list_prompts(self) -> Any:
+        return await self._inner.list_prompts()
+
+    async def get_prompt(
+        self, name: str, arguments: dict[str, Any] | None = None
+    ) -> Any:
+        return await self._inner.get_prompt(name, arguments)
+
+
+def gate_mcp_server_for_harness(server: Any, runner: AgentWorkflowRunner) -> Any:
+    """Wrap ``server`` so its tool calls run through the harness's ``ToolApprovalPolicy``
+    gate and publish ``tool_start``/``tool_end``/``tool_error`` events.
+
+    The OpenAI Agents SDK calls ``MCPServer.call_tool`` directly -- never through
+    :func:`as_openai_agent_tool`'s dispatch -- so any ``Agent.mcp_servers`` entry (Nexus
+    transport included) otherwise bypasses the harness's tool-approval system entirely.
+    Idempotent: wrapping an already-wrapped server returns it unchanged.
+    """
+    if getattr(server, "_harness_gated_mcp_server", False):
+        return server
+    return _GatedMCPServer(server, runner)
 
 
 def _require_harness_tool(tool_callable: Callable[..., Any]) -> None:

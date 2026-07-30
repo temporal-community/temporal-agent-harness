@@ -1207,7 +1207,6 @@ class _WorkflowStatus:
 # AgentWorkflowRunner
 # ---------------------------------------------------------------------------
 
-
 class AgentWorkflowRunner:
     """Workflow-side agent runtime: discovers ``@agent.accepts`` handlers and dispatches.
 
@@ -2349,6 +2348,80 @@ class AgentWorkflowRunner:
             _CURRENT_TOOL_INJECTIONS.reset(injections_token)
             _CURRENT_TOOL_ID.reset(tool_id_token)
             _CURRENT_RUNNER.reset(runner_token)
+
+    async def run_gated_tool_call(
+        self,
+        call_id: str,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        call: Callable[[], Awaitable[Any]],
+        *,
+        inherently_safe: bool = False,
+    ) -> Any:
+        """Run one externally-dispatched tool call through the harness's standard tool
+        lifecycle: approval gating, then ``tool_start``/``tool_end``/``tool_error`` events.
+
+        For a tool call that does NOT already go through :func:`tool_defn` /
+        :func:`activity_tool_defn` — e.g. an ``agents.mcp.MCPServer.call_tool``
+        implementation, which the OpenAI Agents SDK invokes directly and which would
+        otherwise bypass ``ToolApprovalPolicy`` entirely. ``call`` performs the actual
+        tool call (already carrying its own name/arguments); this wraps it the same way
+        :func:`tool_defn`'s own wrapper wraps a workflow tool.
+        """
+        return await self.run_tool(
+            call_id,
+            self._dispatch_gated_tool_call,
+            tool_name,
+            tool_input,
+            call,
+            inherently_safe=inherently_safe,
+        )
+
+    async def _dispatch_gated_tool_call(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+        call: Callable[[], Awaitable[Any]],
+        *,
+        inherently_safe: bool,
+    ) -> Any:
+        """The body ``run_gated_tool_call`` runs via ``run_tool`` — mirrors ``tool_defn``'s
+        own wrapper (approval gate, then ``tool_start``/``tool_end``/``tool_error``), but
+        for a caller-supplied ``call`` rather than an in-workflow function.
+
+        Publishing is best-effort: unlike ``tool_defn`` tools (always dispatched from
+        within the harness's own turn loop), an MCP tool call can happen with no active
+        turn at all (e.g. ``Runner.run_streamed`` called directly, outside
+        ``@agent.accepts``) — skip publishing rather than fail; ``_apply_approval_policy``
+        itself already only requires a turn when the call actually needs gating.
+        """
+        tool_id = _current_tool_id()
+        await _apply_approval_policy(tool_name, tool_input, inherently_safe=inherently_safe)
+        ctx = self.current_stream_context
+
+        if ctx is not None:
+            self._pub(
+                ctx.turn_id,
+                ctx.turn_number,
+                ToolStartEvent(tool_id=tool_id, tool_name=tool_name, tool_input=tool_input),
+            )
+        try:
+            result = await call()
+        except Exception as e:
+            if ctx is not None:
+                self._pub(
+                    ctx.turn_id,
+                    ctx.turn_number,
+                    ToolErrorEvent(tool_id=tool_id, tool_name=tool_name, message=str(e)),
+                )
+            raise
+        if ctx is not None:
+            self._pub(
+                ctx.turn_id,
+                ctx.turn_number,
+                ToolEndEvent(tool_id=tool_id, tool_name=tool_name, tool_output=str(result)),
+            )
+        return result
 
     # -- Internal -----------------------------------------------------------
 

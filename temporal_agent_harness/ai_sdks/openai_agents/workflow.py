@@ -4,7 +4,7 @@ import functools
 import inspect
 import json
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any
@@ -340,6 +340,196 @@ def stateful_mcp_server(
 
     return _StatefulMCPServerReference(
         name, config, server_session_config, factory_argument
+    )
+
+
+REGISTER_MCP_SERVER_SIGNAL = "register_mcp_server"
+DEREGISTER_MCP_SERVER_SIGNAL = "deregister_mcp_server"
+LIST_REGISTERED_MCP_SERVERS_QUERY = "list_registered_mcp_servers"
+
+
+class NexusMcpServerRegistry:
+    """Per-workflow registry of Nexus-reachable MCP tool sources.
+
+    Two ways to populate it:
+
+    * A known, fixed tool set, declared once at workflow-definition time (symmetric to
+      ``AgentWorkflowRunner``'s ``approval_policy_default``) -- no live registration call
+      needed at all::
+
+          nexus_mcp_server_registry(default_servers={"demo-tools": "demo-tools-endpoint"})
+
+    * A genuinely dynamic registration, live from any client::
+
+          await handle.signal(
+              NexusMcpServerRegistry.REGISTER_MCP_SERVER_SIGNAL,
+              args=["demo-tools", "demo-tools-endpoint"],
+          )
+
+      A SIGNAL, deliberately, not an update: a client typically registers a tool source
+      immediately after starting a fresh conversation, and an update sent before its
+      handler exists fails outright (confirmed live), whereas a signal is buffered by the
+      server until one is registered -- so registration works regardless of how early it's
+      sent, with no need to wait for the workflow to reach any particular point first. The
+      trade-off is no synchronous ack/validation error; a caller that needs to confirm a
+      registration landed (or was rejected -- an invalid one is logged and dropped, not
+      applied) can follow up with the ``list_registered_mcp_servers`` query.
+
+    Or call `register` directly from within the workflow.
+    """
+
+    def __init__(self, default_servers: Mapping[str, str] | None = None) -> None:
+        self.servers: dict[str, str] = dict(default_servers or {})
+        """Map storing `{nexus_service_name: nexus_endpoint}`, with a basic CRUD via signal handlers."""
+
+        # Register signal/query handlers dynamically so the containing workflow doesn't
+        # need to.
+        temporal_workflow.set_signal_handler(
+            REGISTER_MCP_SERVER_SIGNAL, self._handle_register
+        )
+        temporal_workflow.set_signal_handler(
+            DEREGISTER_MCP_SERVER_SIGNAL, self._handle_deregister
+        )
+        temporal_workflow.set_query_handler(
+            LIST_REGISTERED_MCP_SERVERS_QUERY, self._handle_list
+        )
+
+    def register(self, name: str, endpoint: str) -> None:
+        """Register (or replace) a Nexus-reachable MCP tool source.
+
+        Args:
+            name: Must match that service's own actual Nexus service name — see the class
+                docstring.
+            endpoint: The Nexus endpoint name that reaches it.
+        """
+        self.servers[name] = endpoint
+        temporal_workflow.logger.info(
+            "[nexus-mcp-registry] registered %r -> %s", name, endpoint
+        )
+
+    def _handle_register(self, name: str, endpoint: str) -> None:
+        if not name or not endpoint:
+            temporal_workflow.logger.error(
+                "[nexus-mcp-registry] dropping registration: both name and endpoint are "
+                "required (got name=%r, endpoint=%r)", name, endpoint,
+            )
+            return
+        # name is routed on by splitting a tool name on its FIRST underscore (see
+        # WorkflowTransport._call_tool) -- an underscore in the service name itself makes
+        # every one of its tools unroutable, so reject it here rather than at call time.
+        # A signal can't reject synchronously (see the class docstring); logging and
+        # dropping is the best this handler can do -- check
+        # list_registered_mcp_servers to confirm a registration actually landed.
+        with temporal_workflow.unsafe.imports_passed_through():
+            try:
+                from authoring import validate_service_name
+            except ModuleNotFoundError:
+                temporal_workflow.logger.error(
+                    "[nexus-mcp-registry] dropping registration %r: the `nexus-mcp` "
+                    "extra is not installed (uv sync --extra nexus-mcp)", name,
+                )
+                return
+        try:
+            validate_service_name(name)
+        except ValueError as exc:
+            temporal_workflow.logger.error(
+                "[nexus-mcp-registry] dropping registration %r: %s", name, exc
+            )
+            return
+        self.register(name, endpoint)
+
+    def _handle_deregister(self, name: str) -> None:
+        removed = self.servers.pop(name, None)
+        if removed is not None:
+            temporal_workflow.logger.info("[nexus-mcp-registry] deregistered %r", name)
+        else:
+            temporal_workflow.logger.debug(
+                "[nexus-mcp-registry] deregister: %r not found (stale signal, ignoring)", name
+            )
+
+    def _handle_list(self) -> dict[str, str]:
+        return dict(self.servers)
+
+
+# Stashed on workflow.instance() (stable per execution) -- not a module global, which
+# would leak across concurrently-running workflows on this worker.
+_REGISTRY_INSTANCE_ATTR = "__temporal_agent_harness_nexus_mcp_registry"
+
+
+def nexus_mcp_server_registry(
+    default_servers: Mapping[str, str] | None = None,
+) -> NexusMcpServerRegistry:
+    """Return this workflow's `NexusMcpServerRegistry`, creating it on first use.
+
+    One per workflow execution, shared by every caller. This allows us to only have
+    a singleton of the registry of all Nexus MCP servers registerred to this run.
+
+    Args:
+        default_servers: `{nexus_service_name: nexus_endpoint}` entries to seed the
+            registry with when creating it -- lets a workflow author declare a known,
+            fixed tool set at workflow-definition time, with no live registration call
+            needed for the common case. Ignored on every call after the first (the
+            registry already exists by then).
+
+    NOTE: Don't call from ``@workflow.init`` -- ``workflow.instance()`` isn't set yet there.
+          Call from ``@workflow.run`` or a handler instead. Registration itself still works
+          fine regardless -- ``register_mcp_server`` is a signal, buffered by the server
+          until its handler exists, so a caller never needs to wait for this to have run.
+    """
+    instance = temporal_workflow.instance()
+    registry = getattr(instance, _REGISTRY_INSTANCE_ATTR, None)
+    if registry is None:
+        registry = NexusMcpServerRegistry(default_servers)
+        setattr(instance, _REGISTRY_INSTANCE_ATTR, registry)
+    return registry
+
+
+def nexus_transport_mcp_server(
+    name: str | None = None,
+    allowed_servers: frozenset[str] | None = None,
+    **kwargs: Any,
+) -> AbstractAsyncContextManager["MCPServer"]:
+    """A durable MCP server backed by `nexus_mcp`'s `WorkflowTransport`: tool calls go
+    through Nexus, against whatever's registered in this workflow's `nexus_mcp_server_registry`.
+    By default every registered service is visible, immediately, no separate enable/restrict
+    step -- pass `allowed_servers` to narrow that for one particular agent (see below).
+
+    `OpenAIAgentsPlugin(nexus_mcp_initial_servers={...})` auto-injects one of these into EVERY
+    agent (and handoff target) in the graph, all sharing the same unrestricted visibility.
+    To give a specific agent a narrower slice of the registry instead, construct its own
+    scoped instance directly and pass it via `Agent(mcp_servers=[...])` -- the plugin skips
+    auto-injecting its own once an agent already carries one::
+
+        restricted = nexus_transport_mcp_server(allowed_servers=frozenset({"weather-tools"}))
+        agent = Agent(name="Weather", mcp_servers=[restricted])  # sees ONLY weather-tools,
+                                                                  # even if other servers are
+                                                                  # registered against this
+                                                                  # workflow too.
+
+    Requires the `nexus-mcp` package.
+
+    Args:
+        name: A readable name for the server. Defaults to `"nexus-transport"` if not provided.
+        allowed_servers: If given, restricts this instance to only these registered names --
+            everything else registered against the same workflow-wide registry stays
+            invisible to it. `None` (the default) sees everything registered.
+        **kwargs: Forwarded to `agents.mcp.MCPServer.__init__` (`require_approval`,
+            `failure_error_function`, etc).
+
+    Example:
+        async with nexus_transport_mcp_server() as mcp_server:
+            agent = Agent(name="Assistant", instructions="...", mcp_servers=[mcp_server])
+            result = await Runner.run(agent, input=query)
+    """
+    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
+        _NexusTransportMCPServer,
+    )
+
+    return _NexusTransportMCPServer(
+        nexus_mcp_server_registry().servers,
+        name=name,
+        allowed_servers=allowed_servers,
+        **kwargs,
     )
 
 

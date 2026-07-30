@@ -17,7 +17,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["registry*", "mcp_gateway*"]
+include = ["transport*", "durable_tools_gateway*", "authoring*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -38,3 +38,7 @@ history.enableChasm:
   - value: true
 history.enableCHASMCallbacks:
   - value: true
+nexusoperation.enableStandalone:
+  - value: true
+activity.enableStandalone:
+  - value: true

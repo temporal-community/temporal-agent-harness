@@ -43,6 +43,7 @@ $defs:
     type: object
     properties:
       sessionId:
+        x-go-name: SessionID
         type: string
         description: "Provider-prefixed session identifier (e.g. slack:C12345)"
       msgType:
@@ -64,6 +65,7 @@ $defs:
         type: integer
         description: "Monotonic turn counter for this session"
       turnId:
+        x-go-name: TurnID
         type: string
         description: "Unique ID for this turn"
       streamHeadOffset:
@@ -81,6 +83,7 @@ $defs:
     type: object
     properties:
       sessionId:
+        x-go-name: SessionID
         type: string
         description: "Provider-prefixed session identifier"
       name:
@@ -108,9 +111,11 @@ $defs:
     type: object
     properties:
       sessionId:
+        x-go-name: SessionID
         type: string
         description: "Provider-prefixed session identifier"
       toolId:
+        x-go-name: ToolID
         type: string
         description: "The tool_id from the ToolApprovalRequested stream event"
       approved:
@@ -132,6 +137,7 @@ $defs:
     type: object
     properties:
       toolId:
+        x-go-name: ToolID
         type: string
         description: "Echo of the resolved tool ID"
       accepted:
@@ -146,6 +152,7 @@ $defs:
     type: object
     properties:
       sessionId:
+        x-go-name: SessionID
         type: string
         description: "Provider-prefixed session identifier"
     required:
@@ -254,6 +261,7 @@ $defs:
     description: "Mirrors harness AgentStatus - the single source of truth for session state"
     properties:
       agentId:
+        x-go-name: AgentID
         type: string
         description: "This agent's own short ID (stamped on every event it publishes)"
       currentTurn:
@@ -325,6 +333,7 @@ $defs:
     description: "A gated tool call awaiting a human decision (mirrors harness PendingApproval)"
     properties:
       toolId:
+        x-go-name: ToolID
         type: string
         description: "ID to pass to approveToolCall"
       toolName:
@@ -417,6 +426,7 @@ $defs:
     type: object
     properties:
       sessionId:
+        x-go-name: SessionID
         type: string
         description: "Provider-prefixed session identifier"
       cursor:
