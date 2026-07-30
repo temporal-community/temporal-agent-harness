@@ -47,6 +47,12 @@ services:
           $ref: "#/$defs/PollMessagesInput"
         output:
           $ref: "#/$defs/PollMessagesOutput"
+      provideCallbackResult:
+        description: "Fulfill a pending callback tool call (a tool with no worker-side body - an attached client executes it and submits the outcome here). Mirrors AgentClient.provide_callback_result(). Exactly one of result/error should be set."
+        input:
+          $ref: "#/$defs/ProvideCallbackResultInput"
+        output:
+          $ref: "#/$defs/ProvideCallbackResultOutput"
 
 $defs:
   SendAgentMessageInput:
@@ -275,17 +281,59 @@ $defs:
       isMessageQueuingEnabled:
         type: boolean
         description: "True if the session accepts messages while a turn is active"
+      pendingTurns:
+        type: array
+        items:
+          $ref: "#/$defs/PendingTurn"
+        description: "Messages waiting in the agent's queue behind the active turn"
       pendingApprovals:
         type: array
         items:
           $ref: "#/$defs/PendingApproval"
         description: "Gated tool calls currently awaiting a human decision"
+      pendingCallbacks:
+        type: array
+        items:
+          $ref: "#/$defs/PendingCallback"
+        description: "Callback tool calls currently awaiting a client-supplied result"
+      subagents:
+        type: array
+        items:
+          $ref: "#/$defs/SubagentInfo"
+        description: "Subagents this agent is currently driving"
+      approvalPolicy:
+        $ref: "#/$defs/ApprovalPolicy"
+      hasCustomApprovalFallback:
+        type: boolean
+        description: "Whether a developer custom-approval predicate is wired (the predicate itself is non-serializable and never surfaced)"
     required:
       - agentId
       - currentTurn
       - turnActive
       - isMessageQueuingEnabled
+      - pendingTurns
       - pendingApprovals
+      - pendingCallbacks
+      - subagents
+      - approvalPolicy
+      - hasCustomApprovalFallback
+    additionalProperties: false
+
+  PendingTurn:
+    type: object
+    description: "A message waiting in the agent's queue (mirrors harness PendingTurn)"
+    properties:
+      turnNumber:
+        type: integer
+      turnId:
+        type: string
+      message:
+        type: string
+        description: "JSON-compacted {type, payload} envelope of the queued message"
+    required:
+      - turnNumber
+      - turnId
+      - message
     additionalProperties: false
 
   PendingApproval:
@@ -309,6 +357,76 @@ $defs:
       - toolName
       - toolInput
       - turnNumber
+    additionalProperties: false
+
+  PendingCallback:
+    type: object
+    description: "A callback tool call awaiting a client-supplied result (mirrors harness PendingCallback)"
+    properties:
+      toolId:
+        type: string
+        description: "ID to pass to provideCallbackResult"
+      toolName:
+        type: string
+        description: "Human-readable tool name"
+      toolInput:
+        type: string
+        description: "JSON-encoded model-facing tool input (injected parameters excluded)"
+      outputSchema:
+        type: string
+        description: "JSON-encoded JSON Schema the submitted result must match"
+      turnNumber:
+        type: integer
+        description: "Turn that triggered this callback request"
+    required:
+      - toolId
+      - toolName
+      - toolInput
+      - outputSchema
+      - turnNumber
+    additionalProperties: false
+
+  SubagentInfo:
+    type: object
+    description: "An active subagent this agent is driving (mirrors harness SubagentInfo)"
+    properties:
+      subagentId:
+        type: string
+        description: "The short id this agent references the subagent by"
+      agentKey:
+        type: string
+      workflowId:
+        type: string
+        description: "The subagent's real child workflow ID"
+      nextExpectedTurn:
+        type: integer
+    required:
+      - subagentId
+      - agentKey
+      - workflowId
+      - nextExpectedTurn
+    additionalProperties: false
+
+  ApprovalPolicy:
+    type: object
+    description: "The live tool-approval policy the agent is running under (mirrors harness ToolApprovalPolicy)"
+    properties:
+      dangerouslySkipAllApprovals:
+        type: boolean
+        description: "If true, no tool call is ever gated"
+      autoApproveInherentlySafe:
+        type: boolean
+        description: "If true, tools that declared themselves inherently_safe skip the gate"
+      autoApproveTools:
+        type: array
+        items:
+          type: string
+        uniqueItems: true
+        description: "Specific tool names auto-approved regardless of the layers above"
+    required:
+      - dangerouslySkipAllApprovals
+      - autoApproveInherentlySafe
+      - autoApproveTools
     additionalProperties: false
 
   PollMessagesInput:
@@ -368,4 +486,40 @@ $defs:
       - topic
       - data
       - offset
+    additionalProperties: false
+
+  ProvideCallbackResultInput:
+    type: object
+    description: "Payload for the provideCallbackResult operation. Exactly one of result/error should be set."
+    properties:
+      sessionId:
+        type: string
+        description: "Provider-prefixed session identifier"
+      toolId:
+        type: string
+        description: "The tool_id from the CallbackRequested stream event"
+      result:
+        type: object
+        additionalProperties: true
+        description: "The value the client produced. Object-shaped only over this operation - nex-gen's Go target can't compile a oneOf with an object branch (generates a dangling type reference), so a scalar/list result must be wrapped, e.g. {\"value\": ...}."
+      error:
+        type: string
+        description: "Set instead of result when the client could not fulfill the call"
+    required:
+      - sessionId
+      - toolId
+    additionalProperties: false
+
+  ProvideCallbackResultOutput:
+    type: object
+    properties:
+      toolId:
+        type: string
+        description: "Echo of the resolved tool ID"
+      accepted:
+        type: boolean
+        description: "Always true on success (the update validator rejects invalid submissions before the handler runs)"
+    required:
+      - toolId
+      - accepted
     additionalProperties: false

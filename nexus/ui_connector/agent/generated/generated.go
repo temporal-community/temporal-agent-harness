@@ -3,6 +3,7 @@ package generated
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/nexus-rpc/sdk-go/nexus"
 )
@@ -24,6 +25,8 @@ var AgentService = struct {
 	QueryAgentStatus nexus.OperationReference[QuerySessionInput, AgentStatusOutput]
 	// Async operation - attaches a completion callback to WorkflowStream's built-in poll update so reply_delta events published from the agent workflow are delivered. Returns a batch of stream items (WorkflowStream PollResult wire format) plus the next cursor.
 	PollMessages nexus.OperationReference[PollMessagesInput, PollMessagesOutput]
+	// Fulfill a pending callback tool call (a tool with no worker-side body - an attached client executes it and submits the outcome here). Mirrors AgentClient.provide_callback_result(). Exactly one of result/error should be set.
+	ProvideCallbackResult nexus.OperationReference[ProvideCallbackResultInput, ProvideCallbackResultOutput]
 }{
 	ServiceName: "AgentService",
 	SendAgentMessage: nexus.NewOperationReference[SendAgentMessageInput, SendMessageOutput]("SendAgentMessage"),
@@ -33,6 +36,7 @@ var AgentService = struct {
 	QueryOperatorInterface: nexus.NewOperationReference[QuerySessionInput, QueryOperatorInterfaceOutput]("QueryOperatorInterface"),
 	QueryAgentStatus: nexus.NewOperationReference[QuerySessionInput, AgentStatusOutput]("QueryAgentStatus"),
 	PollMessages: nexus.NewOperationReference[PollMessagesInput, PollMessagesOutput]("PollMessages"),
+	ProvideCallbackResult: nexus.NewOperationReference[ProvideCallbackResultInput, ProvideCallbackResultOutput]("ProvideCallbackResult"),
 }
 
 
@@ -190,8 +194,18 @@ type AgentStatusOutput struct {
 	TurnActive bool `json:"turnActive"`
 	// IsMessageQueuingEnabled True if the session accepts messages while a turn is active
 	IsMessageQueuingEnabled bool `json:"isMessageQueuingEnabled"`
+	// PendingTurns Messages waiting in the agent's queue behind the active turn
+	PendingTurns []PendingTurn `json:"pendingTurns"`
 	// PendingApprovals Gated tool calls currently awaiting a human decision
 	PendingApprovals []PendingApproval `json:"pendingApprovals"`
+	// PendingCallbacks Callback tool calls currently awaiting a client-supplied result
+	PendingCallbacks []PendingCallback `json:"pendingCallbacks"`
+	// Subagents this agent is currently driving
+	Subagents []SubagentInfo `json:"subagents"`
+	// ApprovalPolicy corresponds to the "approvalPolicy" JSON property.
+	ApprovalPolicy ApprovalPolicy `json:"approvalPolicy"`
+	// HasCustomApprovalFallback Whether a developer custom-approval predicate is wired (the predicate itself is non-serializable and never surfaced)
+	HasCustomApprovalFallback bool `json:"hasCustomApprovalFallback"`
 }
 
 // Validate checks m against every constraint and returns a *ValidationError
@@ -201,6 +215,7 @@ func (m AgentStatusOutput) Validate() error {
 	if (m.CurrentTurn < -integerCap || m.CurrentTurn > integerCap) {
 		errs = append(errs, Violation{"currentTurn", "exceeds ±(2^53-1) integer cap"})
 	}
+	mergeNested(&errs, "approvalPolicy", m.ApprovalPolicy.Validate())
 	if len(errs) > 0 {
 		return &ValidationError{Violations: errs}
 	}
@@ -217,7 +232,7 @@ func (m *AgentStatusOutput) UnmarshalJSON(data []byte) error {
 	var errs []Violation
 	for k := range all {
 		switch k {
-		case "agentId", "currentTurn", "turnActive", "isMessageQueuingEnabled", "pendingApprovals":
+		case "agentId", "currentTurn", "turnActive", "isMessageQueuingEnabled", "pendingTurns", "pendingApprovals", "pendingCallbacks", "subagents", "approvalPolicy", "hasCustomApprovalFallback":
 		default:
 			errs = append(errs, Violation{k, "unknown field"})
 		}
@@ -241,12 +256,43 @@ func (m *AgentStatusOutput) UnmarshalJSON(data []byte) error {
 	if v, ok := parseBoolField(get("isMessageQueuingEnabled"), "isMessageQueuingEnabled", true, false, &errs); ok {
 		m.IsMessageQueuingEnabled = v
 	}
+	if raw := get("pendingTurns"); raw == nil {
+		errs = append(errs, Violation{"pendingTurns", "required"})
+	} else if isNull(*raw) {
+		errs = append(errs, Violation{"pendingTurns", "explicit null not allowed"})
+	} else if err := json.Unmarshal(*raw, &m.PendingTurns); err != nil {
+		errs = append(errs, Violation{"pendingTurns", "expected array"})
+	}
 	if raw := get("pendingApprovals"); raw == nil {
 		errs = append(errs, Violation{"pendingApprovals", "required"})
 	} else if isNull(*raw) {
 		errs = append(errs, Violation{"pendingApprovals", "explicit null not allowed"})
 	} else if err := json.Unmarshal(*raw, &m.PendingApprovals); err != nil {
 		errs = append(errs, Violation{"pendingApprovals", "expected array"})
+	}
+	if raw := get("pendingCallbacks"); raw == nil {
+		errs = append(errs, Violation{"pendingCallbacks", "required"})
+	} else if isNull(*raw) {
+		errs = append(errs, Violation{"pendingCallbacks", "explicit null not allowed"})
+	} else if err := json.Unmarshal(*raw, &m.PendingCallbacks); err != nil {
+		errs = append(errs, Violation{"pendingCallbacks", "expected array"})
+	}
+	if raw := get("subagents"); raw == nil {
+		errs = append(errs, Violation{"subagents", "required"})
+	} else if isNull(*raw) {
+		errs = append(errs, Violation{"subagents", "explicit null not allowed"})
+	} else if err := json.Unmarshal(*raw, &m.Subagents); err != nil {
+		errs = append(errs, Violation{"subagents", "expected array"})
+	}
+	if raw := get("approvalPolicy"); raw == nil {
+		errs = append(errs, Violation{"approvalPolicy", "required"})
+	} else if isNull(*raw) {
+		errs = append(errs, Violation{"approvalPolicy", "explicit null not allowed"})
+	} else {
+		mergeNested(&errs, "approvalPolicy", json.Unmarshal(*raw, &m.ApprovalPolicy))
+	}
+	if v, ok := parseBoolField(get("hasCustomApprovalFallback"), "hasCustomApprovalFallback", true, false, &errs); ok {
+		m.HasCustomApprovalFallback = v
 	}
 	if len(errs) > 0 {
 		return &ValidationError{Violations: errs}
@@ -264,7 +310,110 @@ func (m AgentStatusOutput) MarshalJSON() ([]byte, error) {
 	marshalField(out, "currentTurn", m.CurrentTurn, &errs)
 	marshalField(out, "turnActive", m.TurnActive, &errs)
 	marshalField(out, "isMessageQueuingEnabled", m.IsMessageQueuingEnabled, &errs)
+	marshalField(out, "pendingTurns", m.PendingTurns, &errs)
 	marshalField(out, "pendingApprovals", m.PendingApprovals, &errs)
+	marshalField(out, "pendingCallbacks", m.PendingCallbacks, &errs)
+	marshalField(out, "subagents", m.Subagents, &errs)
+	marshalField(out, "approvalPolicy", m.ApprovalPolicy, &errs)
+	marshalField(out, "hasCustomApprovalFallback", m.HasCustomApprovalFallback, &errs)
+	if len(errs) > 0 {
+		return nil, &ValidationError{Violations: errs}
+	}
+	return json.Marshal(out)
+}
+
+
+// ApprovalPolicy The live tool-approval policy the agent is running under (mirrors harness ToolApprovalPolicy)
+type ApprovalPolicy struct {
+	// DangerouslySkipAllApprovals If true, no tool call is ever gated
+	DangerouslySkipAllApprovals bool `json:"dangerouslySkipAllApprovals"`
+	// AutoApproveInherentlySafe If true, tools that declared themselves inherently_safe skip the gate
+	AutoApproveInherentlySafe bool `json:"autoApproveInherentlySafe"`
+	// AutoApproveTools Specific tool names auto-approved regardless of the layers above
+	AutoApproveTools []string `json:"autoApproveTools"`
+}
+
+// Validate checks m against every constraint and returns a *ValidationError
+// listing any violations.
+func (m ApprovalPolicy) Validate() error {
+	var errs []Violation
+	{
+		seen := make(map[string]int, len(m.AutoApproveTools))
+		for i, e := range m.AutoApproveTools {
+			if j, ok := seen[e]; ok {
+				errs = append(errs, Violation{"autoApproveTools", fmt.Sprintf("duplicate items: element at index %d equals index %d", i, j)})
+			} else {
+				seen[e] = i
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// UnmarshalJSON parses data into m and validates it, returning a
+// *ValidationError listing any violations.
+func (m *ApprovalPolicy) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	var errs []Violation
+	for k := range all {
+		switch k {
+		case "dangerouslySkipAllApprovals", "autoApproveInherentlySafe", "autoApproveTools":
+		default:
+			errs = append(errs, Violation{k, "unknown field"})
+		}
+	}
+	get := func(k string) *json.RawMessage {
+		if v, ok := all[k]; ok {
+			return &v
+		}
+		return nil
+	}
+	_ = get
+	if v, ok := parseBoolField(get("dangerouslySkipAllApprovals"), "dangerouslySkipAllApprovals", true, false, &errs); ok {
+		m.DangerouslySkipAllApprovals = v
+	}
+	if v, ok := parseBoolField(get("autoApproveInherentlySafe"), "autoApproveInherentlySafe", true, false, &errs); ok {
+		m.AutoApproveInherentlySafe = v
+	}
+	if raw := get("autoApproveTools"); raw == nil {
+		errs = append(errs, Violation{"autoApproveTools", "required"})
+	} else if isNull(*raw) {
+		errs = append(errs, Violation{"autoApproveTools", "explicit null not allowed"})
+	} else if err := json.Unmarshal(*raw, &m.AutoApproveTools); err != nil {
+		errs = append(errs, Violation{"autoApproveTools", "expected array"})
+	} else {
+		{
+			seen := make(map[string]int, len(m.AutoApproveTools))
+			for i, e := range m.AutoApproveTools {
+				if j, ok := seen[e]; ok {
+					errs = append(errs, Violation{"autoApproveTools", fmt.Sprintf("duplicate items: element at index %d equals index %d", i, j)})
+				} else {
+					seen[e] = i
+				}
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// MarshalJSON validates m, then serializes it to JSON, returning a
+// *ValidationError if validation fails.
+func (m ApprovalPolicy) MarshalJSON() ([]byte, error) {
+	var errs []Violation
+	addViolations(&errs, m.Validate())
+	out := map[string]json.RawMessage{}
+	marshalField(out, "dangerouslySkipAllApprovals", m.DangerouslySkipAllApprovals, &errs)
+	marshalField(out, "autoApproveInherentlySafe", m.AutoApproveInherentlySafe, &errs)
+	marshalField(out, "autoApproveTools", m.AutoApproveTools, &errs)
 	if len(errs) > 0 {
 		return nil, &ValidationError{Violations: errs}
 	}
@@ -838,6 +987,170 @@ func (m PendingApproval) MarshalJSON() ([]byte, error) {
 }
 
 
+// PendingCallback A callback tool call awaiting a client-supplied result (mirrors harness PendingCallback)
+type PendingCallback struct {
+	// ToolId ID to pass to provideCallbackResult
+	ToolId string `json:"toolId"`
+	// ToolName Human-readable tool name
+	ToolName string `json:"toolName"`
+	// ToolInput JSON-encoded model-facing tool input (injected parameters excluded)
+	ToolInput string `json:"toolInput"`
+	// OutputSchema JSON-encoded JSON Schema the submitted result must match
+	OutputSchema string `json:"outputSchema"`
+	// TurnNumber Turn that triggered this callback request
+	TurnNumber int64 `json:"turnNumber"`
+}
+
+// Validate checks m against every constraint and returns a *ValidationError
+// listing any violations.
+func (m PendingCallback) Validate() error {
+	var errs []Violation
+	if (m.TurnNumber < -integerCap || m.TurnNumber > integerCap) {
+		errs = append(errs, Violation{"turnNumber", "exceeds ±(2^53-1) integer cap"})
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// UnmarshalJSON parses data into m and validates it, returning a
+// *ValidationError listing any violations.
+func (m *PendingCallback) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	var errs []Violation
+	for k := range all {
+		switch k {
+		case "toolId", "toolName", "toolInput", "outputSchema", "turnNumber":
+		default:
+			errs = append(errs, Violation{k, "unknown field"})
+		}
+	}
+	get := func(k string) *json.RawMessage {
+		if v, ok := all[k]; ok {
+			return &v
+		}
+		return nil
+	}
+	_ = get
+	if v, ok := parseStringField(get("toolId"), "toolId", true, false, &errs); ok {
+		m.ToolId = v
+	}
+	if v, ok := parseStringField(get("toolName"), "toolName", true, false, &errs); ok {
+		m.ToolName = v
+	}
+	if v, ok := parseStringField(get("toolInput"), "toolInput", true, false, &errs); ok {
+		m.ToolInput = v
+	}
+	if v, ok := parseStringField(get("outputSchema"), "outputSchema", true, false, &errs); ok {
+		m.OutputSchema = v
+	}
+	if v, ok := parseIntegerField(get("turnNumber"), "turnNumber", true, false, &errs); ok {
+		m.TurnNumber = v
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// MarshalJSON validates m, then serializes it to JSON, returning a
+// *ValidationError if validation fails.
+func (m PendingCallback) MarshalJSON() ([]byte, error) {
+	var errs []Violation
+	addViolations(&errs, m.Validate())
+	out := map[string]json.RawMessage{}
+	marshalField(out, "toolId", m.ToolId, &errs)
+	marshalField(out, "toolName", m.ToolName, &errs)
+	marshalField(out, "toolInput", m.ToolInput, &errs)
+	marshalField(out, "outputSchema", m.OutputSchema, &errs)
+	marshalField(out, "turnNumber", m.TurnNumber, &errs)
+	if len(errs) > 0 {
+		return nil, &ValidationError{Violations: errs}
+	}
+	return json.Marshal(out)
+}
+
+
+// PendingTurn A message waiting in the agent's queue (mirrors harness PendingTurn)
+type PendingTurn struct {
+	// TurnNumber corresponds to the "turnNumber" JSON property.
+	TurnNumber int64 `json:"turnNumber"`
+	// TurnId corresponds to the "turnId" JSON property.
+	TurnId string `json:"turnId"`
+	// Message JSON-compacted {type, payload} envelope of the queued message
+	Message string `json:"message"`
+}
+
+// Validate checks m against every constraint and returns a *ValidationError
+// listing any violations.
+func (m PendingTurn) Validate() error {
+	var errs []Violation
+	if (m.TurnNumber < -integerCap || m.TurnNumber > integerCap) {
+		errs = append(errs, Violation{"turnNumber", "exceeds ±(2^53-1) integer cap"})
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// UnmarshalJSON parses data into m and validates it, returning a
+// *ValidationError listing any violations.
+func (m *PendingTurn) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	var errs []Violation
+	for k := range all {
+		switch k {
+		case "turnNumber", "turnId", "message":
+		default:
+			errs = append(errs, Violation{k, "unknown field"})
+		}
+	}
+	get := func(k string) *json.RawMessage {
+		if v, ok := all[k]; ok {
+			return &v
+		}
+		return nil
+	}
+	_ = get
+	if v, ok := parseIntegerField(get("turnNumber"), "turnNumber", true, false, &errs); ok {
+		m.TurnNumber = v
+	}
+	if v, ok := parseStringField(get("turnId"), "turnId", true, false, &errs); ok {
+		m.TurnId = v
+	}
+	if v, ok := parseStringField(get("message"), "message", true, false, &errs); ok {
+		m.Message = v
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// MarshalJSON validates m, then serializes it to JSON, returning a
+// *ValidationError if validation fails.
+func (m PendingTurn) MarshalJSON() ([]byte, error) {
+	var errs []Violation
+	addViolations(&errs, m.Validate())
+	out := map[string]json.RawMessage{}
+	marshalField(out, "turnNumber", m.TurnNumber, &errs)
+	marshalField(out, "turnId", m.TurnId, &errs)
+	marshalField(out, "message", m.Message, &errs)
+	if len(errs) > 0 {
+		return nil, &ValidationError{Violations: errs}
+	}
+	return json.Marshal(out)
+}
+
+
 // PollMessagesInput is generated from the corresponding JSON Schema definition.
 type PollMessagesInput struct {
 	// SessionId Provider-prefixed session identifier
@@ -997,6 +1310,153 @@ func (m PollMessagesOutput) MarshalJSON() ([]byte, error) {
 	if m.Closed != nil {
 		marshalField(out, "closed", *m.Closed, &errs)
 	}
+	if len(errs) > 0 {
+		return nil, &ValidationError{Violations: errs}
+	}
+	return json.Marshal(out)
+}
+
+
+// ProvideCallbackResultInput Payload for the provideCallbackResult operation. Exactly one of result/error should be set.
+type ProvideCallbackResultInput struct {
+	// SessionId Provider-prefixed session identifier
+	SessionId string `json:"sessionId"`
+	// ToolId The tool_id from the CallbackRequested stream event
+	ToolId string `json:"toolId"`
+	// Result The value the client produced. Object-shaped only over this operation - nex-gen's Go target can't compile a oneOf with an object branch (generates a dangling type reference), so a scalar/list result must be wrapped, e.g. {"value": ...}.
+	Result *map[string]json.RawMessage `json:"result,omitempty"`
+	// Error Set instead of result when the client could not fulfill the call
+	Error *string `json:"error,omitempty"`
+}
+
+// Validate checks m against every constraint and returns a *ValidationError
+// listing any violations.
+func (m ProvideCallbackResultInput) Validate() error {
+	var errs []Violation
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// UnmarshalJSON parses data into m and validates it, returning a
+// *ValidationError listing any violations.
+func (m *ProvideCallbackResultInput) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	var errs []Violation
+	for k := range all {
+		switch k {
+		case "sessionId", "toolId", "result", "error":
+		default:
+			errs = append(errs, Violation{k, "unknown field"})
+		}
+	}
+	get := func(k string) *json.RawMessage {
+		if v, ok := all[k]; ok {
+			return &v
+		}
+		return nil
+	}
+	_ = get
+	if v, ok := parseStringField(get("sessionId"), "sessionId", true, false, &errs); ok {
+		m.SessionId = v
+	}
+	if v, ok := parseStringField(get("toolId"), "toolId", true, false, &errs); ok {
+		m.ToolId = v
+	}
+	if v, ok := parseStringField(get("error"), "error", false, false, &errs); ok {
+		m.Error = &v
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// MarshalJSON validates m, then serializes it to JSON, returning a
+// *ValidationError if validation fails.
+func (m ProvideCallbackResultInput) MarshalJSON() ([]byte, error) {
+	var errs []Violation
+	addViolations(&errs, m.Validate())
+	out := map[string]json.RawMessage{}
+	marshalField(out, "sessionId", m.SessionId, &errs)
+	marshalField(out, "toolId", m.ToolId, &errs)
+	if m.Result != nil {
+		marshalField(out, "result", *m.Result, &errs)
+	}
+	if m.Error != nil {
+		marshalField(out, "error", *m.Error, &errs)
+	}
+	if len(errs) > 0 {
+		return nil, &ValidationError{Violations: errs}
+	}
+	return json.Marshal(out)
+}
+
+
+// ProvideCallbackResultOutput is generated from the corresponding JSON Schema definition.
+type ProvideCallbackResultOutput struct {
+	// ToolId Echo of the resolved tool ID
+	ToolId string `json:"toolId"`
+	// Accepted Always true on success (the update validator rejects invalid submissions before the handler runs)
+	Accepted bool `json:"accepted"`
+}
+
+// Validate checks m against every constraint and returns a *ValidationError
+// listing any violations.
+func (m ProvideCallbackResultOutput) Validate() error {
+	var errs []Violation
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// UnmarshalJSON parses data into m and validates it, returning a
+// *ValidationError listing any violations.
+func (m *ProvideCallbackResultOutput) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	var errs []Violation
+	for k := range all {
+		switch k {
+		case "toolId", "accepted":
+		default:
+			errs = append(errs, Violation{k, "unknown field"})
+		}
+	}
+	get := func(k string) *json.RawMessage {
+		if v, ok := all[k]; ok {
+			return &v
+		}
+		return nil
+	}
+	_ = get
+	if v, ok := parseStringField(get("toolId"), "toolId", true, false, &errs); ok {
+		m.ToolId = v
+	}
+	if v, ok := parseBoolField(get("accepted"), "accepted", true, false, &errs); ok {
+		m.Accepted = v
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// MarshalJSON validates m, then serializes it to JSON, returning a
+// *ValidationError if validation fails.
+func (m ProvideCallbackResultOutput) MarshalJSON() ([]byte, error) {
+	var errs []Violation
+	addViolations(&errs, m.Validate())
+	out := map[string]json.RawMessage{}
+	marshalField(out, "toolId", m.ToolId, &errs)
+	marshalField(out, "accepted", m.Accepted, &errs)
 	if len(errs) > 0 {
 		return nil, &ValidationError{Violations: errs}
 	}
@@ -1361,6 +1821,88 @@ func (m StreamItem) MarshalJSON() ([]byte, error) {
 	marshalField(out, "topic", m.Topic, &errs)
 	marshalField(out, "data", m.Data, &errs)
 	marshalField(out, "offset", m.Offset, &errs)
+	if len(errs) > 0 {
+		return nil, &ValidationError{Violations: errs}
+	}
+	return json.Marshal(out)
+}
+
+
+// SubagentInfo An active subagent this agent is driving (mirrors harness SubagentInfo)
+type SubagentInfo struct {
+	// SubagentId The short id this agent references the subagent by
+	SubagentId string `json:"subagentId"`
+	// AgentKey corresponds to the "agentKey" JSON property.
+	AgentKey string `json:"agentKey"`
+	// WorkflowId The subagent's real child workflow ID
+	WorkflowId string `json:"workflowId"`
+	// NextExpectedTurn corresponds to the "nextExpectedTurn" JSON property.
+	NextExpectedTurn int64 `json:"nextExpectedTurn"`
+}
+
+// Validate checks m against every constraint and returns a *ValidationError
+// listing any violations.
+func (m SubagentInfo) Validate() error {
+	var errs []Violation
+	if (m.NextExpectedTurn < -integerCap || m.NextExpectedTurn > integerCap) {
+		errs = append(errs, Violation{"nextExpectedTurn", "exceeds ±(2^53-1) integer cap"})
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// UnmarshalJSON parses data into m and validates it, returning a
+// *ValidationError listing any violations.
+func (m *SubagentInfo) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	var errs []Violation
+	for k := range all {
+		switch k {
+		case "subagentId", "agentKey", "workflowId", "nextExpectedTurn":
+		default:
+			errs = append(errs, Violation{k, "unknown field"})
+		}
+	}
+	get := func(k string) *json.RawMessage {
+		if v, ok := all[k]; ok {
+			return &v
+		}
+		return nil
+	}
+	_ = get
+	if v, ok := parseStringField(get("subagentId"), "subagentId", true, false, &errs); ok {
+		m.SubagentId = v
+	}
+	if v, ok := parseStringField(get("agentKey"), "agentKey", true, false, &errs); ok {
+		m.AgentKey = v
+	}
+	if v, ok := parseStringField(get("workflowId"), "workflowId", true, false, &errs); ok {
+		m.WorkflowId = v
+	}
+	if v, ok := parseIntegerField(get("nextExpectedTurn"), "nextExpectedTurn", true, false, &errs); ok {
+		m.NextExpectedTurn = v
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// MarshalJSON validates m, then serializes it to JSON, returning a
+// *ValidationError if validation fails.
+func (m SubagentInfo) MarshalJSON() ([]byte, error) {
+	var errs []Violation
+	addViolations(&errs, m.Validate())
+	out := map[string]json.RawMessage{}
+	marshalField(out, "subagentId", m.SubagentId, &errs)
+	marshalField(out, "agentKey", m.AgentKey, &errs)
+	marshalField(out, "workflowId", m.WorkflowId, &errs)
+	marshalField(out, "nextExpectedTurn", m.NextExpectedTurn, &errs)
 	if len(errs) > 0 {
 		return nil, &ValidationError{Violations: errs}
 	}
