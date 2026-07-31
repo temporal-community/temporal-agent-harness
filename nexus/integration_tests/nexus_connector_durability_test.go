@@ -13,11 +13,9 @@ import (
 
 	"github.com/nexus-rpc/sdk-go/nexus"
 	"github.com/stretchr/testify/require"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/driver/temporal_agent_harness"
-	harnessgen "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/driver/temporal_agent_harness/generated"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/agent"
+	harnessgen "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/agent/generated"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/wire"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
@@ -37,7 +35,7 @@ func TestConnector_TwoMessagesDeliveredAcrossWorkerRestart(t *testing.T) {
 	temporalClient := devserver.Client()
 
 	agentTaskQueue := TaskQueue(t, "agent-")
-	CreateNexusEndpoint(t, temporalClient, temporal_agent_harness.AgentNexusEndpoint, agentTaskQueue)
+	CreateNexusEndpoint(t, temporalClient, agent.AgentNexusEndpoint, agentTaskQueue)
 	startMockAgentWorker(t, temporalClient, agentTaskQueue, connectorTurnItems(t, 4))
 
 	connectorTaskQueue := TaskQueue(t, "connector-")
@@ -46,13 +44,13 @@ func TestConnector_TwoMessagesDeliveredAcrossWorkerRestart(t *testing.T) {
 	worker1 := startConnectorWorker(t, temporalClient, connectorTaskQueue, platform)
 	defer worker1.Stop()
 
-	msg1 := wire.IncomingMessage{MessageID: "m1", Sender: "user", Text: "hello", Timestamp: "1000.0"}
+	msg1 := router.IncomingMessage{MessageID: "m1", Sender: "user", Text: "hello", Timestamp: "1000.0"}
 	require.NoError(t, startMessageConnector(t, temporalClient, connectorTaskQueue, "integ", "slack:C001", msg1))
 	platform.waitCompletions(t, 1, 30*time.Second)
 
 	worker0.Stop()
 
-	msg2 := wire.IncomingMessage{MessageID: "m2", Sender: "user", Text: "world", Timestamp: "2000.0"}
+	msg2 := router.IncomingMessage{MessageID: "m2", Sender: "user", Text: "world", Timestamp: "2000.0"}
 	require.NoError(t, startMessageConnector(t, temporalClient, connectorTaskQueue, "integ", "slack:C001", msg2))
 	platform.waitCompletions(t, 1, 30*time.Second)
 
@@ -65,7 +63,7 @@ func TestConnector_MultipleSessionsSurviveWorkerDeath(t *testing.T) {
 	temporalClient := devserver.Client()
 
 	agentTaskQueue := TaskQueue(t, "agent-")
-	CreateNexusEndpoint(t, temporalClient, temporal_agent_harness.AgentNexusEndpoint, agentTaskQueue)
+	CreateNexusEndpoint(t, temporalClient, agent.AgentNexusEndpoint, agentTaskQueue)
 	startMockAgentWorker(t, temporalClient, agentTaskQueue, connectorTurnItems(t, 4))
 
 	connectorTaskQueue := TaskQueue(t, "connector-")
@@ -76,7 +74,7 @@ func TestConnector_MultipleSessionsSurviveWorkerDeath(t *testing.T) {
 
 	sessions := []string{"slack:C101", "slack:C102"}
 	for _, sess := range sessions {
-		msg := wire.IncomingMessage{MessageID: "r1", Sender: "user", Text: "ping", Timestamp: "1000.0"}
+		msg := router.IncomingMessage{MessageID: "r1", Sender: "user", Text: "ping", Timestamp: "1000.0"}
 		require.NoError(t, startMessageConnector(t, temporalClient, connectorTaskQueue, "integ", sess, msg))
 	}
 	platform.waitCompletions(t, len(sessions), 30*time.Second)
@@ -84,7 +82,7 @@ func TestConnector_MultipleSessionsSurviveWorkerDeath(t *testing.T) {
 	worker0.Stop()
 
 	for _, sess := range sessions {
-		msg := wire.IncomingMessage{MessageID: "r2", Sender: "user", Text: "pong", Timestamp: "2000.0"}
+		msg := router.IncomingMessage{MessageID: "r2", Sender: "user", Text: "pong", Timestamp: "2000.0"}
 		require.NoError(t, startMessageConnector(t, temporalClient, connectorTaskQueue, "integ", sess, msg))
 	}
 	platform.waitCompletions(t, len(sessions), 30*time.Second)
@@ -101,7 +99,7 @@ func TestConnector_WorkerDiesMidActivity_OtherWorkerCompletes(t *testing.T) {
 	temporalClient := devserver.Client()
 
 	agentTaskQueue := TaskQueue(t, "agent-")
-	CreateNexusEndpoint(t, temporalClient, temporal_agent_harness.AgentNexusEndpoint, agentTaskQueue)
+	CreateNexusEndpoint(t, temporalClient, agent.AgentNexusEndpoint, agentTaskQueue)
 	startMockAgentWorker(t, temporalClient, agentTaskQueue, connectorTurnItems(t, 2))
 
 	connectorTaskQueue := TaskQueue(t, "connector-")
@@ -110,7 +108,7 @@ func TestConnector_WorkerDiesMidActivity_OtherWorkerCompletes(t *testing.T) {
 
 	worker0 := startConnectorWorker(t, temporalClient, connectorTaskQueue, blocker)
 
-	msg := wire.IncomingMessage{MessageID: "m1", Sender: "user", Text: "hello", Timestamp: "1000.0"}
+	msg := router.IncomingMessage{MessageID: "m1", Sender: "user", Text: "hello", Timestamp: "1000.0"}
 	wfID := router.RouterWorkflowID("integ", "slack:C003", msg.MessageID)
 	require.NoError(t, startMessageConnector(t, temporalClient, connectorTaskQueue, "integ", "slack:C003", msg))
 
@@ -139,20 +137,20 @@ func TestConnector_WorkerDiesMidActivity_OtherWorkerCompletes(t *testing.T) {
 // -- helpers -----------------------------------------------------------------
 
 // startMessageConnector starts a fresh RouterWorkflow for one message.
-func startMessageConnector(t *testing.T, tc client.Client, taskQueue, identity, sessionID string, msg wire.IncomingMessage) error {
+func startMessageConnector(t *testing.T, tc client.Client, taskQueue, identity, sessionID string, msg router.IncomingMessage) error {
 	t.Helper()
 	wfID := router.RouterWorkflowID(identity, sessionID, msg.MessageID)
 	_, err := tc.ExecuteWorkflow(context.Background(),
 		client.StartWorkflowOptions{ID: wfID, TaskQueue: taskQueue},
 		router.WorkflowName,
-		wire.Input{Identity: identity, SessionID: sessionID, Message: &msg},
+		router.Input{Identity: identity, SessionID: sessionID, Message: &msg},
 	)
 	return err
 }
 
 // -- Local copies of workflow-internal wire types -----------------------------
 //
-// streamItem and turnEvent are unexported in the temporal_agent_harness package; we
+// streamItem and turnEvent are unexported in the agent package; we
 // replicate their JSON structure here so tests can build correctly-encoded payloads
 // without depending on package internals.
 // TODO: refactor/figure out how to do this cleanly without duplicating code.
@@ -243,20 +241,20 @@ func startMockAgentWorker(t *testing.T, tc client.Client, agentTaskQueue string,
 	return w
 }
 
-// testInboundActivities is satisfied by anything providing the raw (context.Context)
+// testOutboundActivities is satisfied by anything providing the raw (context.Context)
 // activity implementations this test registers on the connector worker — the test
 // double standing in for a real platform driver's activities (cf. SlackPlatform).
-type testInboundActivities interface {
+type testOutboundActivities interface {
 	// Streaming APIs are intended to be used together to start/update/end a streamed response.
-	BeginStream(ctx context.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error)
-	UpdateStream(ctx context.Context, input inbound.UpdateStreamInput) error
-	FinishStream(ctx context.Context, input inbound.FinishStreamInput) error
+	BeginStream(ctx context.Context, input router.BeginStreamInput) (router.StreamHandle, error)
+	UpdateStream(ctx context.Context, input router.UpdateStreamInput) error
+	FinishStream(ctx context.Context, input router.FinishStreamInput) error
 
-	PostMessage(ctx context.Context, input inbound.TextMetadata) error
-	PostApprovalPrompt(ctx context.Context, input inbound.ApprovalPromptInput) error
+	PostMessage(ctx context.Context, input router.TextMetadata) error
+	PostApprovalPrompt(ctx context.Context, input router.ApprovalPromptInput) error
 }
 
-// Activity name constants for this test's inbound driver, private to this file — a
+// Activity name constants for this test's outbound driver, private to this file — a
 // real driver (e.g. slack.Driver) is free to choose its own.
 const (
 	testBeginStreamActivity        = "TestBeginStream"
@@ -266,50 +264,52 @@ const (
 	testPostApprovalPromptActivity = "TestPostApprovalPrompt"
 )
 
-// testInboundDriver implements inbound.Driver by dispatching to whichever
-// testInboundActivities implementation the test registered on the worker.
-type testInboundDriver struct{}
+// testOutboundDriver implements router.OutboundDriver by dispatching to whichever
+// testOutboundActivities implementation the test registered on the worker.
+type testOutboundDriver struct{}
 
-func (testInboundDriver) SupportsStreaming(wire.Input) bool {
+func (testOutboundDriver) SupportsStreaming(router.Input) bool {
 	return true
 }
 
-func (testInboundDriver) activityOptions(ctx workflow.Context) workflow.Context {
+func (testOutboundDriver) activityOptions(ctx workflow.Context) workflow.Context {
 	return workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: 30 * time.Second,
 		RetryPolicy:         &temporal.RetryPolicy{MaximumAttempts: 1},
 	})
 }
 
-func (d testInboundDriver) BeginStream(ctx workflow.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error) {
-	var handle inbound.StreamHandle
+func (d testOutboundDriver) BeginStream(ctx workflow.Context, input router.BeginStreamInput) (router.StreamHandle, error) {
+	var handle router.StreamHandle
 	err := workflow.ExecuteActivity(d.activityOptions(ctx), testBeginStreamActivity, input).Get(ctx, &handle)
 	return handle, err
 }
 
-func (d testInboundDriver) UpdateStream(ctx workflow.Context, input inbound.UpdateStreamInput) error {
+func (d testOutboundDriver) UpdateStream(ctx workflow.Context, input router.UpdateStreamInput) error {
 	return workflow.ExecuteActivity(d.activityOptions(ctx), testUpdateStreamActivity, input).Get(ctx, nil)
 }
 
-func (d testInboundDriver) FinishStream(ctx workflow.Context, input inbound.FinishStreamInput) error {
+func (d testOutboundDriver) FinishStream(ctx workflow.Context, input router.FinishStreamInput) error {
 	return workflow.ExecuteActivity(d.activityOptions(ctx), testFinishStreamActivity, input).Get(ctx, nil)
 }
 
-func (d testInboundDriver) PostMessage(ctx workflow.Context, input inbound.TextMetadata) error {
+func (d testOutboundDriver) PostMessage(ctx workflow.Context, input router.TextMetadata) error {
 	return workflow.ExecuteActivity(d.activityOptions(ctx), testPostMessageActivity, input).Get(ctx, nil)
 }
 
-func (d testInboundDriver) PostApprovalPrompt(ctx workflow.Context, input inbound.ApprovalPromptInput) error {
+func (d testOutboundDriver) PostApprovalPrompt(ctx workflow.Context, input router.ApprovalPromptInput) error {
 	return workflow.ExecuteActivity(d.activityOptions(ctx), testPostApprovalPromptActivity, input).Get(ctx, nil)
 }
 
-func (testInboundDriver) UpdateMessage(workflow.Context, inbound.UpdateMessageInput) error {
+// AcknowledgeApproval is a no-op — none of these durability tests exercise the
+// tool-approval acknowledgement path.
+func (testOutboundDriver) AcknowledgeApproval(workflow.Context, router.ApprovalAcknowledgementInput) error {
 	return nil
 }
 
-func startConnectorWorker(t *testing.T, tc client.Client, connectorTaskQueue string, platform testInboundActivities) sdkworker.Worker {
+func startConnectorWorker(t *testing.T, tc client.Client, connectorTaskQueue string, platform testOutboundActivities) sdkworker.Worker {
 	t.Helper()
-	routerWorkflow := router.NewRouterWorkflow(testInboundDriver{}, &temporal_agent_harness.Driver{})
+	routerWorkflow := router.NewRouterWorkflow(testOutboundDriver{}, &agent.Driver{})
 	w := sdkworker.New(tc, connectorTaskQueue, sdkworker.Options{})
 	w.RegisterWorkflowWithOptions(routerWorkflow.Run, workflow.RegisterOptions{Name: router.WorkflowName})
 	w.RegisterActivityWithOptions(platform.BeginStream, activity.RegisterOptions{Name: testBeginStreamActivity})
@@ -343,7 +343,7 @@ func connectorTurnItems(t *testing.T, n int) []harnessgen.ItemElement {
 }
 
 // -- mockMsgPlatform ---------------------------------------------------------
-// Mock inbound activity implementation — tracks start/append/stop/post counts via the
+// Mock outbound activity implementation — tracks start/append/stop/post counts via the
 // durable stream lifecycle.
 
 type mockMsgPlatform struct {
@@ -359,25 +359,25 @@ func newmockMsgPlatform() *mockMsgPlatform {
 	return &mockMsgPlatform{completions: make(chan struct{}, 64)}
 }
 
-func (p *mockMsgPlatform) BeginStream(_ context.Context, in inbound.BeginStreamInput) (inbound.StreamHandle, error) {
+func (p *mockMsgPlatform) BeginStream(_ context.Context, in router.BeginStreamInput) (router.StreamHandle, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.starts++
-	return inbound.StreamHandle{
-		ID:           "stream-1",
-		SessionID:    in.SessionID,
-		WireTextMode: inbound.StreamWireTextDelta,
+	return router.StreamHandle{
+		ID:            "stream-1",
+		SessionID:     in.SessionID,
+		TransportMode: "native",
 	}, nil
 }
 
-func (p *mockMsgPlatform) UpdateStream(_ context.Context, _ inbound.UpdateStreamInput) error {
+func (p *mockMsgPlatform) UpdateStream(_ context.Context, _ router.UpdateStreamInput) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.appends++
 	return nil
 }
 
-func (p *mockMsgPlatform) FinishStream(_ context.Context, _ inbound.FinishStreamInput) error {
+func (p *mockMsgPlatform) FinishStream(_ context.Context, _ router.FinishStreamInput) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.stops++
@@ -385,7 +385,7 @@ func (p *mockMsgPlatform) FinishStream(_ context.Context, _ inbound.FinishStream
 	return nil
 }
 
-func (p *mockMsgPlatform) PostMessage(_ context.Context, _ inbound.TextMetadata) error {
+func (p *mockMsgPlatform) PostMessage(_ context.Context, _ router.TextMetadata) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.posts++
@@ -394,8 +394,8 @@ func (p *mockMsgPlatform) PostMessage(_ context.Context, _ inbound.TextMetadata)
 }
 
 // PostApprovalPrompt is a no-op here — none of these durability tests exercise
-// the tool-approval flow, but the mock must still satisfy testInboundActivities.
-func (p *mockMsgPlatform) PostApprovalPrompt(_ context.Context, _ inbound.ApprovalPromptInput) error {
+// the tool-approval flow, but the mock must still satisfy testOutboundActivities.
+func (p *mockMsgPlatform) PostApprovalPrompt(_ context.Context, _ router.ApprovalPromptInput) error {
 	return nil
 }
 
@@ -426,25 +426,25 @@ type blockOnStart struct {
 	once      sync.Once
 }
 
-func (b *blockOnStart) BeginStream(ctx context.Context, in inbound.BeginStreamInput) (inbound.StreamHandle, error) {
+func (b *blockOnStart) BeginStream(ctx context.Context, in router.BeginStreamInput) (router.StreamHandle, error) {
 	// Block the start call until the context is cancelled (simulates worker crash).
 	b.once.Do(func() { close(b.started) })
 	<-ctx.Done()
-	return inbound.StreamHandle{}, ctx.Err()
+	return router.StreamHandle{}, ctx.Err()
 }
 
-func (b *blockOnStart) UpdateStream(ctx context.Context, in inbound.UpdateStreamInput) error {
+func (b *blockOnStart) UpdateStream(ctx context.Context, in router.UpdateStreamInput) error {
 	return b.recording.UpdateStream(ctx, in)
 }
 
-func (b *blockOnStart) FinishStream(ctx context.Context, in inbound.FinishStreamInput) error {
+func (b *blockOnStart) FinishStream(ctx context.Context, in router.FinishStreamInput) error {
 	return b.recording.FinishStream(ctx, in)
 }
 
-func (b *blockOnStart) PostMessage(ctx context.Context, in inbound.TextMetadata) error {
+func (b *blockOnStart) PostMessage(ctx context.Context, in router.TextMetadata) error {
 	return b.recording.PostMessage(ctx, in)
 }
 
-func (b *blockOnStart) PostApprovalPrompt(ctx context.Context, in inbound.ApprovalPromptInput) error {
+func (b *blockOnStart) PostApprovalPrompt(ctx context.Context, in router.ApprovalPromptInput) error {
 	return b.recording.PostApprovalPrompt(ctx, in)
 }
