@@ -5,117 +5,114 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/inbound"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/wire"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/workflow"
 )
 
-// fakeOutbound is a minimal outbound.Driver test double: a canned StartTurn result,
+// fakeBackend is a minimal BackendDriver test double: a canned StartTurn result,
 // plus one PollResult per call to PollTurn (Closed thereafter).
-type fakeOutbound struct {
-	startResult outbound.StartResult
+type fakeBackend struct {
+	startResult StartResult
 	startErr    error
-	pollResults []outbound.PollResult
+	pollResults []PollResult
 	pollErr     error
 	pollCalls   int
 }
 
-func (f *fakeOutbound) StartTurn(ctx workflow.Context, input wire.Input) (outbound.StartResult, error) {
+func (f *fakeBackend) StartTurn(ctx workflow.Context, input Input) (StartResult, error) {
 	return f.startResult, f.startErr
 }
 
-func (f *fakeOutbound) PollTurn(ctx workflow.Context, handle outbound.TurnHandle, cursor int64) (outbound.PollResult, error) {
+func (f *fakeBackend) PollTurn(ctx workflow.Context, handle TurnHandle, cursor int64) (PollResult, error) {
 	if f.pollCalls >= len(f.pollResults) {
 		if f.pollErr != nil {
-			return outbound.PollResult{}, f.pollErr
+			return PollResult{}, f.pollErr
 		}
-		return outbound.PollResult{Closed: true}, nil
+		return PollResult{Closed: true}, nil
 	}
 	res := f.pollResults[f.pollCalls]
 	f.pollCalls++
 	return res, nil
 }
 
-// fakeInbound is a minimal inbound.Driver test double that records calls in order.
-type fakeInbound struct {
+// fakeOutbound is a minimal OutboundDriver test double that records calls in order.
+type fakeOutbound struct {
 	calls             []string
 	supportsStreaming *bool
 	streamStartErr    error
 	streamUpdateErr   error
-	streamHandle      *inbound.StreamHandle
-	beginInputs       []inbound.BeginStreamInput
-	updateInputs      []inbound.UpdateStreamInput
-	finishInputs      []inbound.FinishStreamInput
-	approvalInputs    []inbound.ApprovalAcknowledgementInput
+	streamHandle      *StreamHandle
+	beginInputs       []BeginStreamInput
+	updateInputs      []UpdateStreamInput
+	finishInputs      []FinishStreamInput
+	approvalInputs    []ApprovalAcknowledgementInput
 }
 
-func (f *fakeInbound) SupportsStreaming(wire.Input) bool {
+func (f *fakeOutbound) SupportsStreaming(Input) bool {
 	if f.supportsStreaming == nil {
 		return true
 	}
 	return *f.supportsStreaming
 }
 
-func (f *fakeInbound) BeginStream(ctx workflow.Context, input inbound.BeginStreamInput) (inbound.StreamHandle, error) {
+func (f *fakeOutbound) BeginStream(ctx workflow.Context, input BeginStreamInput) (StreamHandle, error) {
 	f.calls = append(f.calls, "Start")
 	f.beginInputs = append(f.beginInputs, input)
 	if f.streamStartErr != nil {
-		return inbound.StreamHandle{}, f.streamStartErr
+		return StreamHandle{}, f.streamStartErr
 	}
 	if f.streamHandle != nil {
 		handle := *f.streamHandle
 		handle.SessionID = input.SessionID
 		return handle, nil
 	}
-	return inbound.StreamHandle{
+	return StreamHandle{
 		ID:        "stream-1",
 		SessionID: input.SessionID,
 	}, nil
 }
 
-func (f *fakeInbound) UpdateStream(ctx workflow.Context, input inbound.UpdateStreamInput) error {
+func (f *fakeOutbound) UpdateStream(ctx workflow.Context, input UpdateStreamInput) error {
 	f.calls = append(f.calls, "Append:"+input.Delta)
 	f.updateInputs = append(f.updateInputs, input)
 	return f.streamUpdateErr
 }
 
-func (f *fakeInbound) FinishStream(ctx workflow.Context, input inbound.FinishStreamInput) error {
+func (f *fakeOutbound) FinishStream(ctx workflow.Context, input FinishStreamInput) error {
 	f.calls = append(f.calls, "End")
 	f.finishInputs = append(f.finishInputs, input)
 	return nil
 }
 
-func (f *fakeInbound) PostMessage(ctx workflow.Context, input inbound.TextMetadata) error {
+func (f *fakeOutbound) PostMessage(ctx workflow.Context, input TextMetadata) error {
 	f.calls = append(f.calls, "PostMessage:"+input.Text)
 	return nil
 }
 
-func (f *fakeInbound) PostApprovalPrompt(ctx workflow.Context, input inbound.ApprovalPromptInput) error {
+func (f *fakeOutbound) PostApprovalPrompt(ctx workflow.Context, input ApprovalPromptInput) error {
 	f.calls = append(f.calls, "PostApprovalPrompt:"+input.ToolName)
 	return nil
 }
 
-func (f *fakeInbound) AcknowledgeApproval(ctx workflow.Context, input inbound.ApprovalAcknowledgementInput) error {
+func (f *fakeOutbound) AcknowledgeApproval(ctx workflow.Context, input ApprovalAcknowledgementInput) error {
 	f.calls = append(f.calls, "AcknowledgeApproval:"+input.ToolName)
 	f.approvalInputs = append(f.approvalInputs, input)
 	return nil
 }
 
-func defaultInput() wire.Input {
-	return wire.Input{
+func defaultInput() Input {
+	return Input{
 		Identity:  "default",
 		SessionID: "slack:C12345",
-		Message:   &wire.IncomingMessage{MessageID: "m1", Text: "hello"},
+		Message:   &IncomingMessage{MessageID: "m1", Text: "hello"},
 	}
 }
 
-func teamsMessageInput(conversationType string) wire.Input {
-	return wire.Input{
+func teamsMessageInput(conversationType string) Input {
+	return Input{
 		Identity:  "default",
 		SessionID: "teams:conversation-1",
-		Message: &wire.IncomingMessage{
+		Message: &IncomingMessage{
 			MessageID:        "message-1",
 			Text:             "question",
 			ConversationType: conversationType,
@@ -125,9 +122,9 @@ func teamsMessageInput(conversationType string) wire.Input {
 	}
 }
 
-func nonStreamingInbound() *fakeInbound {
+func nonStreamingOutbound() *fakeOutbound {
 	supportsStreaming := false
-	return &fakeInbound{supportsStreaming: &supportsStreaming}
+	return &fakeOutbound{supportsStreaming: &supportsStreaming}
 }
 
 func newTestEnv(t *testing.T, w *RouterWorkflow) *testsuite.TestWorkflowEnvironment {
@@ -139,14 +136,14 @@ func newTestEnv(t *testing.T, w *RouterWorkflow) *testsuite.TestWorkflowEnvironm
 }
 
 func TestRouterWorkflow_MessageTurn_StreamsDeltas(t *testing.T) {
-	handle := outbound.TurnHandle{TurnNumber: 1}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{
-			{Deltas: []outbound.Delta{{Text: "hello "}, {Text: "world", IsFinal: true}}},
+	handle := TurnHandle{TurnNumber: 1}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{{Text: "hello "}, {Text: "world", IsFinal: true}}},
 		},
 	}
-	in := &fakeInbound{}
+	in := &fakeOutbound{}
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -160,15 +157,15 @@ func TestRouterWorkflow_MessageTurn_StreamsDeltas(t *testing.T) {
 func TestRouterWorkflow_TeamsSharedConversationPostsCompleteResponse(t *testing.T) {
 	for _, conversationType := range []string{"channel", "groupChat"} {
 		t.Run(conversationType, func(t *testing.T) {
-			handle := outbound.TurnHandle{}
-			out := &fakeOutbound{
-				startResult: outbound.StartResult{Handle: &handle},
-				pollResults: []outbound.PollResult{
-					{Deltas: []outbound.Delta{{Text: "partial "}}},
-					{Deltas: []outbound.Delta{{Text: "answer", IsFinal: true}}},
+			handle := TurnHandle{}
+			out := &fakeBackend{
+				startResult: StartResult{Handle: &handle},
+				pollResults: []PollResult{
+					{Deltas: []Delta{{Text: "partial "}}},
+					{Deltas: []Delta{{Text: "answer", IsFinal: true}}},
 				},
 			}
-			in := nonStreamingInbound()
+			in := nonStreamingOutbound()
 
 			w := NewRouterWorkflow(in, out)
 			env := newTestEnv(t, w)
@@ -186,18 +183,18 @@ func TestRouterWorkflow_TeamsSharedConversationPostsCompleteResponse(t *testing.
 }
 
 func TestRouterWorkflow_TeamsSharedConversationPostsApprovalBeforeCompleteResponse(t *testing.T) {
-	handle := outbound.TurnHandle{}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{
-			{Deltas: []outbound.Delta{
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{
 				{Text: "before"},
-				{ApprovalRequested: &outbound.ApprovalRequest{ToolID: "tool-1", ToolName: "deploy"}},
+				{ApprovalRequested: &ApprovalRequest{ToolID: "tool-1", ToolName: "deploy"}},
 			}},
-			{Deltas: []outbound.Delta{{Text: "after", IsFinal: true}}},
+			{Deltas: []Delta{{Text: "after", IsFinal: true}}},
 		},
 	}
-	in := nonStreamingInbound()
+	in := nonStreamingOutbound()
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -210,15 +207,15 @@ func TestRouterWorkflow_TeamsSharedConversationPostsApprovalBeforeCompleteRespon
 }
 
 func TestRouterWorkflow_TeamsSharedConversationClosedPostsCollectedResponse(t *testing.T) {
-	handle := outbound.TurnHandle{}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{
-			{Deltas: []outbound.Delta{{Text: "complete"}}},
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{{Text: "complete"}}},
 			{Closed: true},
 		},
 	}
-	in := nonStreamingInbound()
+	in := nonStreamingOutbound()
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -230,14 +227,14 @@ func TestRouterWorkflow_TeamsSharedConversationClosedPostsCollectedResponse(t *t
 }
 
 func TestRouterWorkflow_TeamsSharedConversationDoesNotPostEmptyResponse(t *testing.T) {
-	handle := outbound.TurnHandle{}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{
-			{Deltas: []outbound.Delta{{IsFinal: true}}},
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{{IsFinal: true}}},
 		},
 	}
-	in := nonStreamingInbound()
+	in := nonStreamingOutbound()
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -249,15 +246,15 @@ func TestRouterWorkflow_TeamsSharedConversationDoesNotPostEmptyResponse(t *testi
 }
 
 func TestRouterWorkflow_TeamsSharedConversationDoesNotPostPartialResponseAfterPollFailure(t *testing.T) {
-	handle := outbound.TurnHandle{}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{
-			{Deltas: []outbound.Delta{{Text: "partial"}}},
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{{Text: "partial"}}},
 		},
 		pollErr: assert.AnError,
 	}
-	in := nonStreamingInbound()
+	in := nonStreamingOutbound()
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -269,14 +266,14 @@ func TestRouterWorkflow_TeamsSharedConversationDoesNotPostPartialResponseAfterPo
 }
 
 func TestRouterWorkflow_NonTeamsChannelStillStreams(t *testing.T) {
-	handle := outbound.TurnHandle{}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{
-			{Deltas: []outbound.Delta{{Text: "answer", IsFinal: true}}},
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{{Text: "answer", IsFinal: true}}},
 		},
 	}
-	in := &fakeInbound{}
+	in := &fakeOutbound{}
 	input := defaultInput()
 	input.Message.ConversationType = "channel"
 
@@ -290,8 +287,8 @@ func TestRouterWorkflow_NonTeamsChannelStillStreams(t *testing.T) {
 }
 
 func TestRouterWorkflow_SynchronousReply_PostsMessageWithoutPolling(t *testing.T) {
-	out := &fakeOutbound{startResult: outbound.StartResult{Reply: "pong"}}
-	in := &fakeInbound{}
+	out := &fakeBackend{startResult: StartResult{Reply: "pong"}}
+	in := &fakeOutbound{}
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -304,15 +301,15 @@ func TestRouterWorkflow_SynchronousReply_PostsMessageWithoutPolling(t *testing.T
 }
 
 func TestRouterWorkflow_FireAndForget_DoesNothingFurther(t *testing.T) {
-	out := &fakeOutbound{startResult: outbound.StartResult{}}
-	in := &fakeInbound{}
+	out := &fakeBackend{startResult: StartResult{}}
+	in := &fakeOutbound{}
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
-	env.ExecuteWorkflow(w.Run, wire.Input{
+	env.ExecuteWorkflow(w.Run, Input{
 		Identity:  "default",
 		SessionID: "slack:C12345",
-		Slash:     &wire.SlashCommand{Name: "noop"},
+		Slash:     &SlashCommand{Name: "noop"},
 	})
 
 	require.True(t, env.IsWorkflowCompleted())
@@ -321,16 +318,16 @@ func TestRouterWorkflow_FireAndForget_DoesNothingFurther(t *testing.T) {
 	assert.Equal(t, 0, out.pollCalls)
 }
 
-func TestRouterWorkflow_ApprovalAcknowledgesInboundDriver(t *testing.T) {
-	out := &fakeOutbound{startResult: outbound.StartResult{}}
-	in := &fakeInbound{}
+func TestRouterWorkflow_ApprovalAcknowledgesOutboundDriver(t *testing.T) {
+	out := &fakeBackend{startResult: StartResult{}}
+	in := &fakeOutbound{}
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
-	env.ExecuteWorkflow(w.Run, wire.Input{
+	env.ExecuteWorkflow(w.Run, Input{
 		Identity:  "default",
 		SessionID: "teams:conversation-1",
-		Approval: &wire.ApprovalDecision{
+		Approval: &ApprovalDecision{
 			ToolID:     "tool-1",
 			ToolName:   "deploy",
 			Approved:   true,
@@ -352,17 +349,17 @@ func TestRouterWorkflow_ApprovalAcknowledgesInboundDriver(t *testing.T) {
 }
 
 func TestRouterWorkflow_ApprovalRequestedDelta_PostsPrompt(t *testing.T) {
-	handle := outbound.TurnHandle{}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{
-			{Deltas: []outbound.Delta{
-				{ApprovalRequested: &outbound.ApprovalRequest{ToolID: "t1", ToolName: "search"}},
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{
+				{ApprovalRequested: &ApprovalRequest{ToolID: "t1", ToolName: "search"}},
 				{Text: "done", IsFinal: true},
 			}},
 		},
 	}
-	in := &fakeInbound{}
+	in := &fakeOutbound{}
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -373,16 +370,16 @@ func TestRouterWorkflow_ApprovalRequestedDelta_PostsPrompt(t *testing.T) {
 	assert.Equal(t, []string{"Start", "PostApprovalPrompt:search", "Append:done", "End"}, in.calls)
 }
 
-func TestRouterWorkflow_StreamStartFails_StopsWithoutPolling(t *testing.T) {
-	handle := outbound.TurnHandle{}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{
-			{Deltas: []outbound.Delta{{Text: "partial "}}},
-			{Deltas: []outbound.Delta{{Text: "answer", IsFinal: true}}},
+func TestRouterWorkflow_StreamStartFails_FallsBackToPostMessage(t *testing.T) {
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{{Text: "partial "}}},
+			{Deltas: []Delta{{Text: "answer", IsFinal: true}}},
 		},
 	}
-	in := &fakeInbound{streamStartErr: assert.AnError}
+	in := &fakeOutbound{streamStartErr: assert.AnError}
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -390,21 +387,21 @@ func TestRouterWorkflow_StreamStartFails_StopsWithoutPolling(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	assert.Equal(t, []string{"Start"}, in.calls)
-	assert.Equal(t, 0, out.pollCalls)
+	assert.Equal(t, []string{"Start", "PostMessage:partial answer"}, in.calls)
+	assert.Equal(t, 2, out.pollCalls)
 	assert.Empty(t, in.updateInputs)
 	assert.Empty(t, in.finishInputs)
 }
 
 func TestRouterWorkflow_FinalOnlyDelta_DoesNotSendEmptyUpdate(t *testing.T) {
-	handle := outbound.TurnHandle{}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{
-			{Deltas: []outbound.Delta{{IsFinal: true}}},
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{{IsFinal: true}}},
 		},
 	}
-	in := &fakeInbound{}
+	in := &fakeOutbound{}
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -417,12 +414,12 @@ func TestRouterWorkflow_FinalOnlyDelta_DoesNotSendEmptyUpdate(t *testing.T) {
 }
 
 func TestRouterWorkflow_ClosedTurn_FinishesEagerlyStartedStream(t *testing.T) {
-	handle := outbound.TurnHandle{}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{{Closed: true}},
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{{Closed: true}},
 	}
-	in := &fakeInbound{}
+	in := &fakeOutbound{}
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -435,15 +432,15 @@ func TestRouterWorkflow_ClosedTurn_FinishesEagerlyStartedStream(t *testing.T) {
 }
 
 func TestRouterWorkflow_TeamsPersonalStreamsDeltas(t *testing.T) {
-	handle := outbound.TurnHandle{TurnID: "turn-1", TurnNumber: 1}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{{Deltas: []outbound.Delta{
+	handle := TurnHandle{TurnID: "turn-1", TurnNumber: 1}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{{Deltas: []Delta{
 			{Text: "hello "},
 			{Text: "world", IsFinal: true},
 		}}},
 	}
-	in := &fakeInbound{streamHandle: &inbound.StreamHandle{
+	in := &fakeOutbound{streamHandle: &StreamHandle{
 		ID:        "teams-stream-1",
 		TaskQueue: "teams-worker-1",
 	}}
@@ -464,16 +461,16 @@ func TestRouterWorkflow_TeamsPersonalStreamsDeltas(t *testing.T) {
 }
 
 func TestRouterWorkflow_ContinuesLiveUpdatesAfterFailureAndFinishes(t *testing.T) {
-	handle := outbound.TurnHandle{TurnID: "turn-1"}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{{Deltas: []outbound.Delta{
+	handle := TurnHandle{TurnID: "turn-1"}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{{Deltas: []Delta{
 			{Text: "first "},
 			{Text: "second "},
 			{Text: "third", IsFinal: true},
 		}}},
 	}
-	in := &fakeInbound{streamUpdateErr: assert.AnError}
+	in := &fakeOutbound{streamUpdateErr: assert.AnError}
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
@@ -487,26 +484,26 @@ func TestRouterWorkflow_ContinuesLiveUpdatesAfterFailureAndFinishes(t *testing.T
 }
 
 func TestRouterWorkflow_TeamsClosesStreamAtApprovalBoundary(t *testing.T) {
-	handle := outbound.TurnHandle{TurnID: "turn-1", TurnNumber: 1}
-	out := &fakeOutbound{
-		startResult: outbound.StartResult{Handle: &handle},
-		pollResults: []outbound.PollResult{{Deltas: []outbound.Delta{
+	handle := TurnHandle{TurnID: "turn-1", TurnNumber: 1}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{{Deltas: []Delta{
 			{Text: "before"},
-			{ApprovalRequested: &outbound.ApprovalRequest{ToolID: "tool-1", ToolName: "deploy"}},
+			{ApprovalRequested: &ApprovalRequest{ToolID: "tool-1", ToolName: "deploy"}},
 			{Text: "after", IsFinal: true},
 		}}},
 	}
-	in := &fakeInbound{streamHandle: &inbound.StreamHandle{
+	in := &fakeOutbound{streamHandle: &StreamHandle{
 		ID:                  "teams-stream-1",
 		CloseBeforeApproval: true,
 	}}
 
 	w := NewRouterWorkflow(in, out)
 	env := newTestEnv(t, w)
-	env.ExecuteWorkflow(w.Run, wire.Input{
+	env.ExecuteWorkflow(w.Run, Input{
 		Identity:  "default",
 		SessionID: "teams:conversation-1",
-		Message:   &wire.IncomingMessage{MessageID: "message-1", Text: "question"},
+		Message:   &IncomingMessage{MessageID: "message-1", Text: "question"},
 	})
 
 	require.True(t, env.IsWorkflowCompleted())
