@@ -24,9 +24,13 @@ func TestParseChannel(t *testing.T) {
 		{"slack:C12345", "C12345", false},
 		{"slack:C0B6KE9B1LJ", "C0B6KE9B1LJ", false},
 		{"discord:987654", "987654", false},
+		// Thread-scoped sessions carry a trailing thread root, which must be ignored.
+		{"slack:C12345:1699887766.001100", "C12345", false},
+		{"slack:C0B6KE9B1LJ:1783689596.364049", "C0B6KE9B1LJ", false},
 		{"", "", true},
 		{"nocolon", "", true},
 		{"slack:", "", true},
+		{"slack::1699.0001", "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.input, func(t *testing.T) {
@@ -52,7 +56,7 @@ func TestSlackPlatform_BeginStream_InvalidSessionID(t *testing.T) {
 		TextMetadata: router.TextMetadata{SessionID: "nocolon"},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "provider:id")
+	assert.Contains(t, err.Error(), "invalid session ID")
 }
 
 func TestSlackPlatform_UpdateStream_InvalidSessionID(t *testing.T) {
@@ -61,7 +65,7 @@ func TestSlackPlatform_UpdateStream_InvalidSessionID(t *testing.T) {
 		Handle:       router.StreamHandle{ID: "stream-1", SessionID: "nocolon"},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "provider:id")
+	assert.Contains(t, err.Error(), "invalid session ID")
 }
 
 func TestSlackPlatform_FinishStream_InvalidSessionID(t *testing.T) {
@@ -70,7 +74,7 @@ func TestSlackPlatform_FinishStream_InvalidSessionID(t *testing.T) {
 		Handle:       router.StreamHandle{ID: "stream-1", SessionID: "nocolon"},
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "provider:id")
+	assert.Contains(t, err.Error(), "invalid session ID")
 }
 
 func TestSlackPlatform_UpdateStream_RequiresStreamID(t *testing.T) {
@@ -160,7 +164,7 @@ func TestSlackPlatform_PostMessage_InvalidSessionID(t *testing.T) {
 		Text:      "hello",
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "provider:id")
+	assert.Contains(t, err.Error(), "invalid session ID")
 }
 
 func TestSlackPlatform_PostPrompt_UnknownType(t *testing.T) {

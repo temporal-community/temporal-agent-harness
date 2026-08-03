@@ -19,6 +19,11 @@ type Input struct {
 // interaction sub-field is set.
 func (i Input) ThreadID() string {
 	if i.Message != nil {
+		if i.Message.ThreadID != "" {
+			return i.Message.ThreadID
+		}
+		// Platforms that don't populate a dedicated thread root (e.g. Teams) key
+		// threading off the message's own timestamp instead.
 		return i.Message.Timestamp
 	}
 	if i.Slash != nil {
@@ -40,10 +45,16 @@ func (i Input) SenderID() string {
 
 // IncomingMessage carries the raw message delivered from the platform.
 type IncomingMessage struct {
-	MessageID        string
-	Sender           string
-	Text             string
-	Timestamp        string
+	MessageID string
+	Sender    string
+	Text      string
+	Timestamp string
+	// ThreadID is the thread root the reply should be posted under: the thread's
+	// parent ts for a threaded reply, or the message's own ts for a top-level
+	// message (which starts a new thread). Also scopes the agent session. Left
+	// empty by platforms (e.g. Teams) that don't have this concept; ThreadID()
+	// falls back to Timestamp in that case.
+	ThreadID         string
 	ConversationType string
 	ServiceURL       string
 	ChannelID        string

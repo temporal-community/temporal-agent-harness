@@ -86,8 +86,10 @@ func (d Driver) AcknowledgeApproval(workflow.Context, router.ApprovalAcknowledge
 }
 
 // RegisterActivities registers platform's methods on w under the activity names Driver
-// dispatches to. Call this from the worker binary alongside NewDriver.
-func RegisterActivities(w worker.Worker, platform *SlackPlatform) {
+// dispatches to. Call this from the worker binary alongside NewDriver. w is
+// worker.Registry (not worker.Worker) so this also works for a Lambda worker's
+// lambdaworker.Options, which implements Registry but not the full Worker interface.
+func RegisterActivities(w worker.Registry, platform *SlackPlatform) {
 	w.RegisterActivityWithOptions(platform.BeginStream, activity.RegisterOptions{Name: beginStreamActivity})
 	w.RegisterActivityWithOptions(platform.UpdateStream, activity.RegisterOptions{Name: updateStreamActivity})
 	w.RegisterActivityWithOptions(platform.FinishStream, activity.RegisterOptions{Name: finishStreamActivity})
@@ -105,13 +107,16 @@ type ApprovalButtonValue struct {
 	Approved  bool   `json:"a"`
 }
 
-// parseChannel strips the provider prefix from a session ID (e.g. "slack:C12345" → "C12345").
+// parseChannel extracts the channel from a session ID. Sessions are
+// "provider:channel" or, when thread-scoped, "provider:channel:threadRoot"
+// (e.g. "slack:C12345" or "slack:C12345:1699.0001" → "C12345"). The channel is
+// always the second colon-delimited segment; a trailing thread root is ignored.
 func parseChannel(sessionID string) (string, error) {
-	_, ch, found := strings.Cut(sessionID, ":")
-	if !found || ch == "" {
-		return "", fmt.Errorf("invalid session ID %q: expected \"provider:id\" format", sessionID)
+	parts := strings.SplitN(sessionID, ":", 3)
+	if len(parts) < 2 || parts[1] == "" {
+		return "", fmt.Errorf("invalid session ID %q: expected \"provider:channel[:threadRoot]\" format", sessionID)
 	}
-	return ch, nil
+	return parts[1], nil
 }
 
 // SlackPlatform is the real Activity implementation backing Driver: its methods make
