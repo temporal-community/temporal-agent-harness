@@ -383,46 +383,68 @@ self._runner = AgentWorkflowRunner(
 - [uv](https://docs.astral.sh/uv/) for dependency management
 - [just](https://just.systems/) for the example recipes
 - [pnpm](https://pnpm.io/) for building or developing the Svelte UI
-- A Temporal service. The Monty example can start a local dev server with `just temporal`
-  if you have the `temporal` CLI installed.
+- A Temporal service. `just temporal` starts a local dev server if you have the `temporal`
+  CLI installed.
 
-## Run The Example
+## Run the examples
 
-The [`examples/monty`](examples/monty) example is the best end-to-end path: a
-conversational travel agent and a subagent-driven variant, all built on Code Mode. First
-create local environment settings at the **repo root** (one `.env.local` serves every
-example):
+One `.env.local` at the **repo root** serves every example. Create it and install the UI deps once:
 
 ```bash
 cp .env.example .env.local
-```
-
-Set `GEMINI_API_KEY` in `.env.local` for the conversational agents. The example
-defaults to the committed `temporal.local.toml` profile, which points at a local
-Temporal dev server.
-
-Install the Svelte UI dependencies once from the repo root:
-
-```bash
 just app-install
 ```
 
-Run each command in its own terminal from the repo root:
+Set the creds for whichever agents you'll run: `OPENAI_API_KEY` (react_agent, openai_hello,
+pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding). The default committed
+`temporal.local.toml` profile points at a local Temporal dev server.
+
+### One example, standalone
+
+Each example runs on its own from its directory — [`examples/monty`](examples/monty) (a
+conversational Code Mode travel agent + a subagent variant) is the best starting point:
 
 ```bash
+cd examples/monty
 just temporal          # local Temporal dev server; skip if you bring your own
 just session-manager   # worker hosting the packaged SessionManagerWorkflow
-just server            # builds and serves the Svelte UI + /api on http://localhost:8000
-just monty-worker      # Monty agent worker
+just server            # builds + serves the Svelte UI + /api on :8000 (this example's agents only)
+just worker            # this example's agent worker
 ```
 
-These root recipes delegate into `examples/monty`, which reads the same repo-root
-`.env.local`. You can also run the same recipes directly from `examples/monty`; there the
-agent worker recipe is named `just worker`.
+Open <http://localhost:8000> and pick an agent. Every example follows the same recipe set
+(`temporal` / `session-manager` / `server` / `worker`, plus `client` where noted). `just server`
+runs `app-build` first, so :8000 serves the freshly built UI from
+`temporal_agent_harness/ui/dist`.
 
-Open <http://localhost:8000> and select a Monty agent. `just server` runs
-`app-build` first, so port 8000 serves the current built Svelte UI from
-`temporal_agent_harness/ui/dist`, not the legacy static HTML files.
+### All examples behind one UI
+
+The **root** justfile runs every example agent at once so the UI lists them all. From the repo root,
+each in its own terminal:
+
+```bash
+just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
+just session-manager   # shared session-manager worker
+just server            # serves the MERGED registry (all agents) on http://localhost:8000
+just workers           # co-launch all six agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
+```
+
+Then create a session for any agent in the UI. A few need extra setup or a client:
+
+| Agent | Needs |
+|---|---|
+| OpenAI Hello · Pydantic AI Hello | `OPENAI_API_KEY`; chat directly in the UI |
+| Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
+| ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
+| Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client --wiki-dir ./wiki`** — required, or its tool calls hang |
+| Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
+
+**Gotcha — the session manager caches its registry.** The server seeds the `session-manager`
+workflow with the registry on first start and reuses the existing one after that. So when you switch
+between a single-example server and the all-agents server (or change the set), run
+`just reset-manager` before the next `just server`, or start a fresh Temporal dev server. Also: an
+agent whose worker isn't running will accept a created session but never progress (it parks) — start
+its worker.
 
 ## Status & docs
 
