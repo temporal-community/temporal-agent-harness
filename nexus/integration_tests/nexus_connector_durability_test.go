@@ -25,6 +25,19 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// ptr returns a pointer to v, for populating nex-gen's pointer-typed optional fields.
+func ptr[T any](v T) *T { return &v }
+
+// derefOrZero returns *p, or the zero value of T if p is nil, for reading
+// nex-gen's pointer-typed optional fields.
+func derefOrZero[T any](p *T) T {
+	if p == nil {
+		var zero T
+		return zero
+	}
+	return *p
+}
+
 // -- Tests --------------------------------------------------------------------
 
 func TestConnector_TwoMessagesDeliveredAcrossWorkerRestart(t *testing.T) {
@@ -176,7 +189,7 @@ type agentTurnEvent struct {
 
 // makeAgentStreamItem encodes an agentStreamItem into the wire format
 // expected by the driver's decoder.
-func makeAgentStreamItem(t *testing.T, item agentStreamItem, offset int64, topic string) harnessgen.ItemElement {
+func makeAgentStreamItem(t *testing.T, item agentStreamItem, offset int64, topic string) harnessgen.StreamItem {
 	t.Helper()
 	data, err := json.Marshal(item)
 	require.NoError(t, err)
@@ -186,7 +199,7 @@ func makeAgentStreamItem(t *testing.T, item agentStreamItem, offset int64, topic
 	}
 	b, err := proto.Marshal(payload)
 	require.NoError(t, err)
-	return harnessgen.ItemElement{
+	return harnessgen.StreamItem{
 		Topic:  topic,
 		Offset: offset,
 		Data:   base64.StdEncoding.EncodeToString(b),
@@ -200,18 +213,18 @@ func makeAgentStreamItem(t *testing.T, item agentStreamItem, offset int64, topic
 //   - sendMessage always succeeds and reports TurnNumber=1.
 //   - pollMessages returns at most 2 items per call (one complete turn) starting
 //     at the requested cursor, then Closed=true once all items are exhausted.
-func mockAgentSvc(items []harnessgen.ItemElement) *nexus.Service {
+func mockAgentSvc(items []harnessgen.StreamItem) *nexus.Service {
 	svc := nexus.NewService(harnessgen.AgentService.ServiceName)
 	svc.MustRegister(nexus.NewSyncOperation(
 		harnessgen.AgentService.SendAgentMessage.Name(),
 		func(_ context.Context, _ harnessgen.SendAgentMessageInput, _ nexus.StartOperationOptions) (harnessgen.SendMessageOutput, error) {
-			return harnessgen.SendMessageOutput{TurnNumber: 1, TurnID: "t1"}, nil
+			return harnessgen.SendMessageOutput{TurnNumber: 1, TurnId: "t1"}, nil
 		},
 	))
 	svc.MustRegister(nexus.NewSyncOperation(
 		harnessgen.AgentService.PollMessages.Name(),
 		func(_ context.Context, input harnessgen.PollMessagesInput, _ nexus.StartOperationOptions) (harnessgen.PollMessagesOutput, error) {
-			var out []harnessgen.ItemElement
+			var out []harnessgen.StreamItem
 			for _, item := range items {
 				if item.Offset >= input.Cursor {
 					out = append(out, item)
@@ -221,7 +234,7 @@ func mockAgentSvc(items []harnessgen.ItemElement) *nexus.Service {
 				}
 			}
 			if len(out) == 0 {
-				return harnessgen.PollMessagesOutput{Closed: true, NextOffset: input.Cursor}, nil
+				return harnessgen.PollMessagesOutput{Closed: ptr(true), NextOffset: input.Cursor, Items: []harnessgen.StreamItem{}}, nil
 			}
 			return harnessgen.PollMessagesOutput{
 				Items:      out,
@@ -232,7 +245,7 @@ func mockAgentSvc(items []harnessgen.ItemElement) *nexus.Service {
 	return svc
 }
 
-func startMockAgentWorker(t *testing.T, tc client.Client, agentTaskQueue string, items []harnessgen.ItemElement) sdkworker.Worker {
+func startMockAgentWorker(t *testing.T, tc client.Client, agentTaskQueue string, items []harnessgen.StreamItem) sdkworker.Worker {
 	t.Helper()
 	w := sdkworker.New(tc, agentTaskQueue, sdkworker.Options{DisableWorkflowWorker: true})
 	w.RegisterNexusService(mockAgentSvc(items))
@@ -323,9 +336,9 @@ func startConnectorWorker(t *testing.T, tc client.Client, connectorTaskQueue str
 
 // connectorTurnItems pre-generates stream items for n complete turns.
 // Each turn i gets two events: a reply_delta at offset 2i and a reply at 2i+1.
-func connectorTurnItems(t *testing.T, n int) []harnessgen.ItemElement {
+func connectorTurnItems(t *testing.T, n int) []harnessgen.StreamItem {
 	t.Helper()
-	items := make([]harnessgen.ItemElement, 0, n*2)
+	items := make([]harnessgen.StreamItem, 0, n*2)
 	for i := 0; i < n; i++ {
 		base := int64(i * 2)
 		items = append(items,

@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	h "github.com/temporal-community/temporal-agent-harness/nexus/agent_adapter/nexus_worker/handler"
+	hgen "github.com/temporal-community/temporal-agent-harness/nexus/agent_adapter/nexus_worker/handler/generated"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/temporal"
 	sdkworker "go.temporal.io/sdk/worker"
@@ -264,12 +265,12 @@ type callerOutput struct {
 }
 
 func callerWorkflow(ctx workflow.Context, input callerInput) (callerOutput, error) {
-	nc := workflow.NewNexusClient(nexusAgentEndpoint, h.AgentService.ServiceName)
+	nc := workflow.NewNexusClient(nexusAgentEndpoint, hgen.AgentService.ServiceName)
 	opOpts := workflow.NexusOperationOptions{ScheduleToCloseTimeout: 60 * time.Second}
 
-	var sendOut h.SendMessageOutput
-	if err := nc.ExecuteOperation(ctx, h.AgentService.SendAgentMessage, h.SendAgentMessageInput{
-		SessionID: input.SessionID,
+	var sendOut hgen.SendMessageOutput
+	if err := nc.ExecuteOperation(ctx, hgen.AgentService.SendAgentMessage, hgen.SendAgentMessageInput{
+		SessionId: input.SessionID,
 		MsgType:   "ask",
 		Payload:   fmt.Sprintf(`{"text":%q}`, input.Message),
 	}, opOpts).Get(ctx, &sendOut); err != nil {
@@ -279,14 +280,14 @@ func callerWorkflow(ctx workflow.Context, input callerInput) (callerOutput, erro
 }
 
 func pollOnlyWorkflow(ctx workflow.Context, sessionID string) (bool, error) {
-	nc := workflow.NewNexusClient(nexusAgentEndpoint, h.AgentService.ServiceName)
-	var pollOut h.PollMessagesOutput
-	if err := nc.ExecuteOperation(ctx, h.AgentService.PollMessages, h.PollMessagesInput{
-		SessionID:      sessionID,
+	nc := workflow.NewNexusClient(nexusAgentEndpoint, hgen.AgentService.ServiceName)
+	var pollOut hgen.PollMessagesOutput
+	if err := nc.ExecuteOperation(ctx, hgen.AgentService.PollMessages, hgen.PollMessagesInput{
+		SessionId:      sessionID,
 		Cursor:         0,
-		TimeoutSeconds: 5,
+		TimeoutSeconds: ptr(5.0),
 	}, workflow.NexusOperationOptions{ScheduleToCloseTimeout: 30 * time.Second}).Get(ctx, &pollOut); err != nil {
 		return false, err
 	}
-	return pollOut.Closed, nil
+	return derefOrZero(pollOut.Closed), nil
 }
