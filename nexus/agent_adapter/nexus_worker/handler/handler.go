@@ -34,7 +34,13 @@ import (
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/temporalnexus"
+
+	"github.com/temporal-community/temporal-agent-harness/nexus/agent_adapter/nexus_worker/handler/generated"
 )
+
+// ptr returns a pointer to v, for populating our IDL stub's optional fields,
+// which are represented as pointer-typed fields in Go.
+func ptr[T any](v T) *T { return &v }
 
 // ---------------------------------------------------------------------------
 // Internal workflow constants
@@ -183,7 +189,7 @@ type operatorCommand struct {
 // ---------------------------------------------------------------------------
 
 func NewAgentNexusService(cfg Config) *nexus.Service {
-	svc := nexus.NewService(AgentService.ServiceName)
+	svc := nexus.NewService(generated.AgentService.ServiceName)
 	svc.MustRegister(
 		newSendAgentMessageOperation(cfg),
 		newExecuteOperatorCommandOperation(cfg),
@@ -210,7 +216,7 @@ func sendAgentMessageTurn(
 	workflowID string,
 	msg AgentMessage,
 	requestID string,
-) (SendMessageOutput, error) {
+) (generated.SendMessageOutput, error) {
 	startCfg := agentStartConfig{IsMessageQueuingEnabled: cfg.IsMessageQueuingEnabled}
 
 	// On the first attempt we optimistically expect turn 1. On retries we query
@@ -221,11 +227,11 @@ func sendAgentMessageTurn(
 		if attempt > 0 {
 			qh, err := c.QueryWorkflow(ctx, workflowID, "", AgentStatusQuery)
 			if err != nil {
-				return SendMessageOutput{}, fmt.Errorf("query agent_status failed with: %w", err)
+				return generated.SendMessageOutput{}, fmt.Errorf("query agent_status failed with: %w", err)
 			}
 			var status AgentStatus
 			if err := qh.Get(&status); err != nil {
-				return SendMessageOutput{}, fmt.Errorf("decode agent_status failed with: %w", err)
+				return generated.SendMessageOutput{}, fmt.Errorf("decode agent_status failed with: %w", err)
 			}
 			expectedTurn = status.CurrentTurn + len(status.PendingTurns) + 1
 		}
@@ -258,7 +264,7 @@ func sendAgentMessageTurn(
 			},
 		})
 		if err != nil {
-			return SendMessageOutput{}, fmt.Errorf("UpdateWithStart failed with: %w", err)
+			return generated.SendMessageOutput{}, fmt.Errorf("UpdateWithStart failed with: %w", err)
 		}
 
 		var result UserInputResult
@@ -267,17 +273,17 @@ func sendAgentMessageTurn(
 				time.Sleep(time.Duration((attempt+1)*50) * time.Millisecond)
 				continue
 			}
-			return SendMessageOutput{}, fmt.Errorf("get update result failed with: %w", err)
+			return generated.SendMessageOutput{}, fmt.Errorf("get update result failed with: %w", err)
 		}
 
-		return SendMessageOutput{
+		return generated.SendMessageOutput{
 			TurnNumber:       int64(result.TurnNumber),
-			TurnID:           result.TurnID,
-			StreamHeadOffset: int64(streamHeadOffset),
-			Pending:          result.Pending,
+			TurnId:           result.TurnID,
+			StreamHeadOffset: ptr(int64(streamHeadOffset)),
+			Pending:          ptr(result.Pending),
 		}, nil
 	}
-	return SendMessageOutput{}, fmt.Errorf("sendAgentMessageTurn: exhausted retries")
+	return generated.SendMessageOutput{}, fmt.Errorf("sendAgentMessageTurn: exhausted retries")
 }
 
 func isStaleTurn(err error) bool {
@@ -287,15 +293,15 @@ func isStaleTurn(err error) bool {
 
 // newSendAgentMessageOperation is the generic send — mirrors AgentClient.send_message().
 // msgType routes to any @agent.accepts handler; payload is its JSON-encoded input model.
-func newSendAgentMessageOperation(cfg Config) nexus.Operation[SendAgentMessageInput, SendMessageOutput] {
+func newSendAgentMessageOperation(cfg Config) nexus.Operation[generated.SendAgentMessageInput, generated.SendMessageOutput] {
 	return nexus.NewSyncOperation(
-		AgentService.SendAgentMessage.Name(),
-		func(ctx context.Context, input SendAgentMessageInput, opts nexus.StartOperationOptions) (SendMessageOutput, error) {
+		generated.AgentService.SendAgentMessage.Name(),
+		func(ctx context.Context, input generated.SendAgentMessageInput, opts nexus.StartOperationOptions) (generated.SendMessageOutput, error) {
 			c := temporalnexus.GetClient(ctx)
-			workflowID := cfg.WorkflowIDPrefix + input.SessionID
+			workflowID := cfg.WorkflowIDPrefix + input.SessionId
 			var payload map[string]any
 			if err := json.Unmarshal([]byte(input.Payload), &payload); err != nil {
-				return SendMessageOutput{}, fmt.Errorf("invalid payload JSON: %w", err)
+				return generated.SendMessageOutput{}, fmt.Errorf("invalid payload JSON: %w", err)
 			}
 			msg := AgentMessage{Type: input.MsgType, Payload: payload}
 			return sendAgentMessageTurn(ctx, c, cfg, workflowID, msg, opts.RequestID)
@@ -307,27 +313,31 @@ func newSendAgentMessageOperation(cfg Config) nexus.Operation[SendAgentMessageIn
 // executeOperatorCommand — harness-level operator commands (no turn)
 // ---------------------------------------------------------------------------
 
-func newExecuteOperatorCommandOperation(cfg Config) nexus.Operation[ExecuteOperatorCommandInput, ExecuteOperatorCommandOutput] {
+func newExecuteOperatorCommandOperation(cfg Config) nexus.Operation[generated.ExecuteOperatorCommandInput, generated.ExecuteOperatorCommandOutput] {
 	return nexus.NewSyncOperation(
-		AgentService.ExecuteOperatorCommand.Name(),
-		func(ctx context.Context, input ExecuteOperatorCommandInput, opts nexus.StartOperationOptions) (ExecuteOperatorCommandOutput, error) {
+		generated.AgentService.ExecuteOperatorCommand.Name(),
+		func(ctx context.Context, input generated.ExecuteOperatorCommandInput, opts nexus.StartOperationOptions) (generated.ExecuteOperatorCommandOutput, error) {
 			c := temporalnexus.GetClient(ctx)
-			workflowID := cfg.WorkflowIDPrefix + input.SessionID
+			workflowID := cfg.WorkflowIDPrefix + input.SessionId
+			var arg string
+			if input.Arg != nil {
+				arg = *input.Arg
+			}
 			handle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
 				UpdateID:     fmt.Sprintf("op-%s", opts.RequestID),
 				WorkflowID:   workflowID,
 				UpdateName:   ExecuteOperatorCommandUpdate,
-				Args:         []any{operatorCommandRequest{Name: input.Name, Arg: input.Arg}},
+				Args:         []any{operatorCommandRequest{Name: input.Name, Arg: arg}},
 				WaitForStage: client.WorkflowUpdateStageCompleted,
 			})
 			if err != nil {
-				return ExecuteOperatorCommandOutput{}, fmt.Errorf("UpdateWorkflow failed with: %w", err)
+				return generated.ExecuteOperatorCommandOutput{}, fmt.Errorf("UpdateWorkflow failed with: %w", err)
 			}
 			var result operatorCommandResult
 			if err := handle.Get(ctx, &result); err != nil {
-				return ExecuteOperatorCommandOutput{}, fmt.Errorf("get operator command result failed with: %w", err)
+				return generated.ExecuteOperatorCommandOutput{}, fmt.Errorf("get operator command result failed with: %w", err)
 			}
-			return ExecuteOperatorCommandOutput{Reply: result.Text}, nil
+			return generated.ExecuteOperatorCommandOutput{Reply: result.Text}, nil
 		},
 	)
 }
@@ -336,32 +346,40 @@ func newExecuteOperatorCommandOperation(cfg Config) nexus.Operation[ExecuteOpera
 // approveToolCall — resolve a pending tool-approval gate
 // ---------------------------------------------------------------------------
 
-func newApproveToolCallOperation(cfg Config) nexus.Operation[ApproveToolCallInput, ApproveToolCallOutput] {
+func newApproveToolCallOperation(cfg Config) nexus.Operation[generated.ApproveToolCallInput, generated.ApproveToolCallOutput] {
 	return nexus.NewSyncOperation(
-		AgentService.ApproveToolCall.Name(),
-		func(ctx context.Context, input ApproveToolCallInput, opts nexus.StartOperationOptions) (ApproveToolCallOutput, error) {
+		generated.AgentService.ApproveToolCall.Name(),
+		func(ctx context.Context, input generated.ApproveToolCallInput, opts nexus.StartOperationOptions) (generated.ApproveToolCallOutput, error) {
 			c := temporalnexus.GetClient(ctx)
-			workflowID := cfg.WorkflowIDPrefix + input.SessionID
+			workflowID := cfg.WorkflowIDPrefix + input.SessionId
+			var reason string
+			if input.Reason != nil {
+				reason = *input.Reason
+			}
+			var remember bool
+			if input.Remember != nil {
+				remember = *input.Remember
+			}
 			handle, err := c.UpdateWorkflow(ctx, client.UpdateWorkflowOptions{
 				UpdateID:   fmt.Sprintf("approve-%s", opts.RequestID),
 				WorkflowID: workflowID,
 				UpdateName: ToolApprovalUpdate,
 				Args: []any{toolApprovalDecision{
-					ToolID:   input.ToolID,
+					ToolID:   input.ToolId,
 					Approved: input.Approved,
-					Reason:   input.Reason,
-					Remember: input.Remember,
+					Reason:   reason,
+					Remember: remember,
 				}},
 				WaitForStage: client.WorkflowUpdateStageCompleted,
 			})
 			if err != nil {
-				return ApproveToolCallOutput{}, fmt.Errorf("UpdateWorkflow failed with: %w", err)
+				return generated.ApproveToolCallOutput{}, fmt.Errorf("UpdateWorkflow failed with: %w", err)
 			}
 			var result toolApprovalResult
 			if err := handle.Get(ctx, &result); err != nil {
-				return ApproveToolCallOutput{}, fmt.Errorf("get tool approval result failed with: %w", err)
+				return generated.ApproveToolCallOutput{}, fmt.Errorf("get tool approval result failed with: %w", err)
 			}
-			return ApproveToolCallOutput{ToolID: result.ToolID, Accepted: result.Accepted}, nil
+			return generated.ApproveToolCallOutput{ToolId: result.ToolID, Accepted: result.Accepted}, nil
 		},
 	)
 }
@@ -370,40 +388,40 @@ func newApproveToolCallOperation(cfg Config) nexus.Operation[ApproveToolCallInpu
 // queryOperatorInterface — discover available slash commands
 // ---------------------------------------------------------------------------
 
-func newQueryOperatorInterfaceOperation(cfg Config) nexus.Operation[QuerySessionInput, QueryOperatorInterfaceOutput] {
+func newQueryOperatorInterfaceOperation(cfg Config) nexus.Operation[generated.QuerySessionInput, generated.QueryOperatorInterfaceOutput] {
 	return nexus.NewSyncOperation(
-		AgentService.QueryOperatorInterface.Name(),
-		func(ctx context.Context, input QuerySessionInput, _ nexus.StartOperationOptions) (QueryOperatorInterfaceOutput, error) {
+		generated.AgentService.QueryOperatorInterface.Name(),
+		func(ctx context.Context, input generated.QuerySessionInput, _ nexus.StartOperationOptions) (generated.QueryOperatorInterfaceOutput, error) {
 			c := temporalnexus.GetClient(ctx)
-			workflowID := cfg.WorkflowIDPrefix + input.SessionID
+			workflowID := cfg.WorkflowIDPrefix + input.SessionId
 			qh, err := c.QueryWorkflow(ctx, workflowID, "", OperatorInterfaceQuery)
 			if err != nil {
-				return QueryOperatorInterfaceOutput{}, fmt.Errorf("query operator_interface failed with: %w", err)
+				return generated.QueryOperatorInterfaceOutput{}, fmt.Errorf("query operator_interface failed with: %w", err)
 			}
 			var cmds []operatorCommand
 			if err := qh.Get(&cmds); err != nil {
-				return QueryOperatorInterfaceOutput{}, fmt.Errorf("decode operator_interface failed with: %w", err)
+				return generated.QueryOperatorInterfaceOutput{}, fmt.Errorf("decode operator_interface failed with: %w", err)
 			}
-			out := make([]CommandElement, len(cmds))
+			out := make([]generated.OperatorCommand, len(cmds))
 			for i, cmd := range cmds {
-				el := CommandElement{
+				el := generated.OperatorCommand{
 					Name:        cmd.Name,
 					Label:       cmd.Label,
 					Description: cmd.Description,
 					Source:      cmd.Source,
 				}
 				if cmd.Argument != nil {
-					el.Argument = &Argument{
+					el.Argument = &generated.OperatorCommandArgument{
 						Kind:          cmd.Argument.Kind,
 						Required:      cmd.Argument.Required,
 						Choices:       cmd.Argument.Choices,
-						Placeholder:   cmd.Argument.Placeholder,
-						AllowMultiple: cmd.Argument.AllowMultiple,
+						Placeholder:   ptr(cmd.Argument.Placeholder),
+						AllowMultiple: ptr(cmd.Argument.AllowMultiple),
 					}
 				}
 				out[i] = el
 			}
-			return QueryOperatorInterfaceOutput{Commands: out}, nil
+			return generated.QueryOperatorInterfaceOutput{Commands: out}, nil
 		},
 	)
 }
@@ -412,32 +430,32 @@ func newQueryOperatorInterfaceOperation(cfg Config) nexus.Operation[QuerySession
 // queryAgentInterface — discover @agent.accepts handlers (mirrors AgentClient.get_agent_interface)
 // ---------------------------------------------------------------------------
 
-func newQueryAgentInterfaceOperation(cfg Config) nexus.Operation[QuerySessionInput, AgentInterfaceOutput] {
+func newQueryAgentInterfaceOperation(cfg Config) nexus.Operation[generated.QuerySessionInput, generated.AgentInterfaceOutput] {
 	return nexus.NewSyncOperation(
-		AgentService.QueryAgentInterface.Name(),
-		func(ctx context.Context, input QuerySessionInput, _ nexus.StartOperationOptions) (AgentInterfaceOutput, error) {
+		generated.AgentService.QueryAgentInterface.Name(),
+		func(ctx context.Context, input generated.QuerySessionInput, _ nexus.StartOperationOptions) (generated.AgentInterfaceOutput, error) {
 			c := temporalnexus.GetClient(ctx)
-			workflowID := cfg.WorkflowIDPrefix + input.SessionID
+			workflowID := cfg.WorkflowIDPrefix + input.SessionId
 			qh, err := c.QueryWorkflow(ctx, workflowID, "", AgentInterfaceQuery)
 			if err != nil {
-				return AgentInterfaceOutput{}, fmt.Errorf("query agent_interface failed with: %w", err)
+				return generated.AgentInterfaceOutput{}, fmt.Errorf("query agent_interface failed with: %w", err)
 			}
 			var fns []acceptedFunction
 			if err := qh.Get(&fns); err != nil {
-				return AgentInterfaceOutput{}, fmt.Errorf("decode agent_interface failed with: %w", err)
+				return generated.AgentInterfaceOutput{}, fmt.Errorf("decode agent_interface failed with: %w", err)
 			}
-			out := make([]HandlerElement, len(fns))
+			out := make([]generated.AcceptedFunction, len(fns))
 			for i, fn := range fns {
 				params, _ := json.Marshal(fn.Parameters)
 				output, _ := json.Marshal(fn.Output)
-				out[i] = HandlerElement{
+				out[i] = generated.AcceptedFunction{
 					Name:        fn.Name,
 					Description: fn.Description,
 					Parameters:  string(params),
 					Output:      string(output),
 				}
 			}
-			return AgentInterfaceOutput{Handlers: out}, nil
+			return generated.AgentInterfaceOutput{Handlers: out}, nil
 		},
 	)
 }
@@ -446,32 +464,32 @@ func newQueryAgentInterfaceOperation(cfg Config) nexus.Operation[QuerySessionInp
 // queryAgentStatus — session state snapshot (mirrors AgentClient.get_status)
 // ---------------------------------------------------------------------------
 
-func newQueryAgentStatusOperation(cfg Config) nexus.Operation[QuerySessionInput, AgentStatusOutput] {
+func newQueryAgentStatusOperation(cfg Config) nexus.Operation[generated.QuerySessionInput, generated.AgentStatusOutput] {
 	return nexus.NewSyncOperation(
-		AgentService.QueryAgentStatus.Name(),
-		func(ctx context.Context, input QuerySessionInput, _ nexus.StartOperationOptions) (AgentStatusOutput, error) {
+		generated.AgentService.QueryAgentStatus.Name(),
+		func(ctx context.Context, input generated.QuerySessionInput, _ nexus.StartOperationOptions) (generated.AgentStatusOutput, error) {
 			c := temporalnexus.GetClient(ctx)
-			workflowID := cfg.WorkflowIDPrefix + input.SessionID
+			workflowID := cfg.WorkflowIDPrefix + input.SessionId
 			qh, err := c.QueryWorkflow(ctx, workflowID, "", AgentStatusQuery)
 			if err != nil {
-				return AgentStatusOutput{}, fmt.Errorf("query agent_status failed with: %w", err)
+				return generated.AgentStatusOutput{}, fmt.Errorf("query agent_status failed with: %w", err)
 			}
 			var status AgentStatus
 			if err := qh.Get(&status); err != nil {
-				return AgentStatusOutput{}, fmt.Errorf("decode agent_status failed with: %w", err)
+				return generated.AgentStatusOutput{}, fmt.Errorf("decode agent_status failed with: %w", err)
 			}
-			approvals := make([]PendingApprovalElement, len(status.PendingApprovals))
+			approvals := make([]generated.PendingApproval, len(status.PendingApprovals))
 			for i, pa := range status.PendingApprovals {
 				input, _ := json.Marshal(pa.ToolInput)
-				approvals[i] = PendingApprovalElement{
-					ToolID:     pa.ToolID,
+				approvals[i] = generated.PendingApproval{
+					ToolId:     pa.ToolID,
 					ToolName:   pa.ToolName,
 					ToolInput:  string(input),
 					TurnNumber: int64(pa.TurnNumber),
 				}
 			}
-			return AgentStatusOutput{
-				AgentID:                 status.AgentID,
+			return generated.AgentStatusOutput{
+				AgentId:                 status.AgentID,
 				CurrentTurn:             int64(status.CurrentTurn),
 				TurnActive:              status.TurnActive,
 				IsMessageQueuingEnabled: status.IsMessageQueuingEnabled,
@@ -486,15 +504,15 @@ func newQueryAgentStatusOperation(cfg Config) nexus.Operation[QuerySessionInput,
 // ---------------------------------------------------------------------------
 
 type pollMessagesOperation struct {
-	nexus.UnimplementedOperation[PollMessagesInput, PollMessagesOutput]
+	nexus.UnimplementedOperation[generated.PollMessagesInput, generated.PollMessagesOutput]
 	cfg Config
 }
 
-func newPollMessagesOperation(cfg Config) nexus.Operation[PollMessagesInput, PollMessagesOutput] {
+func newPollMessagesOperation(cfg Config) nexus.Operation[generated.PollMessagesInput, generated.PollMessagesOutput] {
 	return &pollMessagesOperation{cfg: cfg}
 }
 
-func (o *pollMessagesOperation) Name() string { return AgentService.PollMessages.Name() }
+func (o *pollMessagesOperation) Name() string { return generated.AgentService.PollMessages.Name() }
 
 // Start registers a callback for the pollMessages operation by invoking WorkflowService.UpdateWorkflowExecution
 // directly with the appropriate completion callbacks attached. When the update is accepted,
@@ -509,19 +527,22 @@ func (o *pollMessagesOperation) Name() string { return AgentService.PollMessages
 // TODO (short-term): look into batching some of these.
 func (o *pollMessagesOperation) Start(
 	ctx context.Context,
-	input PollMessagesInput,
+	input generated.PollMessagesInput,
 	opts nexus.StartOperationOptions,
-) (nexus.HandlerStartOperationResult[PollMessagesOutput], error) {
+) (nexus.HandlerStartOperationResult[generated.PollMessagesOutput], error) {
 	c := temporalnexus.GetClient(ctx)
 	info := temporalnexus.GetOperationInfo(ctx)
 	dc := converter.GetDefaultDataConverter()
 
 	log.Printf("[nexus-debug] pollMessages Start: session=%s cursor=%d callbackURL=%q requestID=%q",
-		input.SessionID, input.Cursor, opts.CallbackURL, opts.RequestID)
+		input.SessionId, input.Cursor, opts.CallbackURL, opts.RequestID)
 
-	workflowID := o.cfg.WorkflowIDPrefix + input.SessionID
+	workflowID := o.cfg.WorkflowIDPrefix + input.SessionId
 	updateID := fmt.Sprintf("poll-%s", opts.RequestID)
-	timeoutSeconds := input.TimeoutSeconds
+	var timeoutSeconds float64
+	if input.TimeoutSeconds != nil {
+		timeoutSeconds = *input.TimeoutSeconds
+	}
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = DefaultPollTimeoutSeconds
 	}
@@ -549,8 +570,8 @@ func (o *pollMessagesOperation) Start(
 	})
 	if err != nil {
 		if isWorkflowCompleted(err) {
-			return &nexus.HandlerStartOperationResultSync[PollMessagesOutput]{
-				Value: PollMessagesOutput{Closed: true, NextOffset: input.Cursor},
+			return &nexus.HandlerStartOperationResultSync[generated.PollMessagesOutput]{
+				Value: generated.PollMessagesOutput{Closed: ptr(true), NextOffset: input.Cursor, Items: []generated.StreamItem{}},
 			}, nil
 		}
 		return nil, fmt.Errorf("UpdateWorkflowExecution: %w", err)
@@ -563,11 +584,11 @@ func (o *pollMessagesOperation) Start(
 	}
 
 	if success := outcome.GetSuccess(); success != nil {
-		var out PollMessagesOutput
+		var out generated.PollMessagesOutput
 		if err := dc.FromPayloads(success, &out); err != nil {
 			return nil, fmt.Errorf("decode PollMessagesOutput: %w", err)
 		}
-		return &nexus.HandlerStartOperationResultSync[PollMessagesOutput]{Value: out}, nil
+		return &nexus.HandlerStartOperationResultSync[generated.PollMessagesOutput]{Value: out}, nil
 	}
 
 	token, err := encodePollToken(workflowID, updateID)

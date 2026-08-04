@@ -2,52 +2,53 @@ nexusrpc: "1.0.0"
 
 services:
   AgentService:
+    fqn: AgentService
     description: "Nexus service that exposes an agent session to external callers (e.g. the Slack connector). The connector calls sendAgentMessage to deliver user input and pollMessages to consume the agent's response stream."
     operations:
       sendAgentMessage:
         description: "Start or reuse an agent workflow session and deliver a message to a named @agent.accepts handler. Mirrors AgentClient.send_message() - msgType is the handler name (e.g. 'ask', 'slash'), payload is its JSON-encoded input model. Returns the turn output for polling via pollMessages."
         input:
-          $ref: "#/types/SendAgentMessageInput"
+          $ref: "#/$defs/SendAgentMessageInput"
         output:
-          $ref: "#/types/SendMessageOutput"
+          $ref: "#/$defs/SendMessageOutput"
       executeOperatorCommand:
         description: "Execute a harness-level operator command (e.g. /approvals, /stop, /status). Does not create a turn - the harness applies the change directly and returns a reply string synchronously."
         input:
-          $ref: "#/types/ExecuteOperatorCommandInput"
+          $ref: "#/$defs/ExecuteOperatorCommandInput"
         output:
-          $ref: "#/types/ExecuteOperatorCommandOutput"
+          $ref: "#/$defs/ExecuteOperatorCommandOutput"
       approveToolCall:
         description: "Resolve a pending tool-approval gate. The workflow's tool_approval update records the decision; the gated tool call proceeds (or is rejected) immediately."
         input:
-          $ref: "#/types/ApproveToolCallInput"
+          $ref: "#/$defs/ApproveToolCallInput"
         output:
-          $ref: "#/types/ApproveToolCallOutput"
+          $ref: "#/$defs/ApproveToolCallOutput"
       queryAgentInterface:
         description: "Return the list of @agent.accepts handlers the agent exposes - name, description, and input/output schemas - mirroring AgentClient.get_agent_interface(). Use this to construct valid sendAgentMessage payloads or to model the agent as a subagent tool."
         input:
-          $ref: "#/types/QuerySessionInput"
+          $ref: "#/$defs/QuerySessionInput"
         output:
-          $ref: "#/types/AgentInterfaceOutput"
+          $ref: "#/$defs/AgentInterfaceOutput"
       queryOperatorInterface:
         description: "Return the list of operator commands the agent accepts. Use this to build the Slack App manifest slash_commands section and to route incoming slash commands to the correct operation."
         input:
-          $ref: "#/types/QuerySessionInput"
+          $ref: "#/$defs/QuerySessionInput"
         output:
-          $ref: "#/types/QueryOperatorInterfaceOutput"
+          $ref: "#/$defs/QueryOperatorInterfaceOutput"
       queryAgentStatus:
         description: "Return a snapshot of the agent session's current state: turn counter, whether a turn is active, pending tool approvals, and message-queuing configuration. Mirrors AgentClient.get_status()."
         input:
-          $ref: "#/types/QuerySessionInput"
+          $ref: "#/$defs/QuerySessionInput"
         output:
-          $ref: "#/types/AgentStatusOutput"
+          $ref: "#/$defs/AgentStatusOutput"
       pollMessages:
         description: "Async operation - attaches a completion callback to WorkflowStream's built-in poll update so reply_delta events published from the agent workflow are delivered. Returns a batch of stream items (WorkflowStream PollResult wire format) plus the next cursor."
         input:
-          $ref: "#/types/PollMessagesInput"
+          $ref: "#/$defs/PollMessagesInput"
         output:
-          $ref: "#/types/PollMessagesOutput"
+          $ref: "#/$defs/PollMessagesOutput"
 
-types:
+$defs:
   SendAgentMessageInput:
     type: object
     properties:
@@ -167,7 +168,7 @@ types:
       handlers:
         type: array
         items:
-          $ref: "#/types/AcceptedFunction"
+          $ref: "#/$defs/AcceptedFunction"
         description: "Ordered list of @agent.accepts handlers the agent exposes"
     required:
       - handlers
@@ -202,7 +203,7 @@ types:
       commands:
         type: array
         items:
-          $ref: "#/types/OperatorCommand"
+          $ref: "#/$defs/OperatorCommand"
         description: "Ordered list of operator commands the agent accepts"
     required:
       - commands
@@ -224,7 +225,7 @@ types:
         type: string
         description: "'harness' for built-in commands, 'agent' for agent-registered ones"
       argument:
-        $ref: "#/types/OperatorCommandArgument"
+        $ref: "#/$defs/OperatorCommandArgument"
     required:
       - name
       - label
@@ -277,7 +278,7 @@ types:
       pendingApprovals:
         type: array
         items:
-          $ref: "#/types/PendingApproval"
+          $ref: "#/$defs/PendingApproval"
         description: "Gated tool calls currently awaiting a human decision"
     required:
       - agentId
@@ -333,7 +334,7 @@ types:
       items:
         type: array
         items:
-          $ref: "#/types/StreamItem"
+          $ref: "#/$defs/StreamItem"
         description: "Stream events since cursor; decode each as TurnEvent and map to Slack output"
       next_offset:
         type: integer

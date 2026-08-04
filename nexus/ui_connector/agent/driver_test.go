@@ -138,7 +138,7 @@ func TestStartTurn_Message_ReturnsHandleFromSendAgentMessage(t *testing.T) {
 		harnessgen.AgentService.SendAgentMessage.Name(),
 		func(ctx context.Context, input harnessgen.SendAgentMessageInput, opts nexus.StartOperationOptions) (harnessgen.SendMessageOutput, error) {
 			assert.Equal(t, "ask", input.MsgType)
-			return harnessgen.SendMessageOutput{TurnNumber: 2, StreamHeadOffset: 5}, nil
+			return harnessgen.SendMessageOutput{TurnNumber: 2, StreamHeadOffset: ptr(int64(5))}, nil
 		},
 	))
 
@@ -163,7 +163,7 @@ func TestStartTurn_Slash_HarnessCommand_ReturnsSynchronousReply(t *testing.T) {
 	svc.MustRegister(nexus.NewSyncOperation(
 		harnessgen.AgentService.QueryOperatorInterface.Name(),
 		func(ctx context.Context, input harnessgen.QuerySessionInput, opts nexus.StartOperationOptions) (harnessgen.QueryOperatorInterfaceOutput, error) {
-			return harnessgen.QueryOperatorInterfaceOutput{Commands: []harnessgen.CommandElement{
+			return harnessgen.QueryOperatorInterfaceOutput{Commands: []harnessgen.OperatorCommand{
 				{Name: "stop", Source: "harness"},
 			}}, nil
 		},
@@ -195,7 +195,7 @@ func TestStartTurn_Slash_AgentOwned_CreatesTurn(t *testing.T) {
 	svc.MustRegister(nexus.NewSyncOperation(
 		harnessgen.AgentService.QueryOperatorInterface.Name(),
 		func(ctx context.Context, input harnessgen.QuerySessionInput, opts nexus.StartOperationOptions) (harnessgen.QueryOperatorInterfaceOutput, error) {
-			return harnessgen.QueryOperatorInterfaceOutput{}, nil // "scope" is not harness-owned
+			return harnessgen.QueryOperatorInterfaceOutput{Commands: []harnessgen.OperatorCommand{}}, nil // "scope" is not harness-owned
 		},
 	))
 	svc.MustRegister(nexus.NewSyncOperation(
@@ -227,8 +227,8 @@ func TestStartTurn_Approval_CallsApproveToolCall(t *testing.T) {
 	svc.MustRegister(nexus.NewSyncOperation(
 		harnessgen.AgentService.ApproveToolCall.Name(),
 		func(ctx context.Context, input harnessgen.ApproveToolCallInput, opts nexus.StartOperationOptions) (harnessgen.ApproveToolCallOutput, error) {
-			gotToolID, gotApproved = input.ToolID, input.Approved
-			return harnessgen.ApproveToolCallOutput{Accepted: true, ToolID: input.ToolID}, nil
+			gotToolID, gotApproved = input.ToolId, input.Approved
+			return harnessgen.ApproveToolCallOutput{Accepted: true, ToolId: input.ToolId}, nil
 		},
 	))
 
@@ -248,7 +248,7 @@ func TestStartTurn_Approval_CallsApproveToolCall(t *testing.T) {
 }
 
 func TestPollTurn_StartsFromCursorAndSkipsStaleEvents(t *testing.T) {
-	items := []harnessgen.ItemElement{
+	items := []harnessgen.StreamItem{
 		makeTestStreamItem(t, streamItem{TurnID: "old", TurnNumber: 1, Event: turnEvent{Type: "reply_delta", Text: "stale"}}, 0, turnEventsTopic),
 		makeTestStreamItem(t, streamItem{TurnID: "t2", TurnNumber: 2, Event: turnEvent{Type: "reply_delta", Text: "fresh"}}, 1, turnEventsTopic),
 	}
@@ -281,7 +281,7 @@ func TestPollTurn_StartsFromCursorAndSkipsStaleEvents(t *testing.T) {
 }
 
 func TestPollTurn_ToolApprovalRequested_ProducesApprovalDelta(t *testing.T) {
-	items := []harnessgen.ItemElement{
+	items := []harnessgen.StreamItem{
 		makeTestStreamItem(t, streamItem{TurnID: "t1", TurnNumber: 1, Event: turnEvent{
 			Type: "tool_approval_requested", ToolID: "t1", ToolName: "search",
 		}}, 0, turnEventsTopic),
@@ -313,7 +313,7 @@ func TestPollTurn_Closed(t *testing.T) {
 	svc.MustRegister(nexus.NewSyncOperation(
 		harnessgen.AgentService.PollMessages.Name(),
 		func(ctx context.Context, input harnessgen.PollMessagesInput, opts nexus.StartOperationOptions) (harnessgen.PollMessagesOutput, error) {
-			return harnessgen.PollMessagesOutput{Closed: true, NextOffset: input.Cursor}, nil
+			return harnessgen.PollMessagesOutput{Closed: ptr(true), NextOffset: input.Cursor, Items: []harnessgen.StreamItem{}}, nil
 		},
 	))
 
@@ -335,7 +335,7 @@ func TestPollTurn_Closed(t *testing.T) {
 
 // makeTestStreamItem encodes a streamItem into the wire format expected by decodeTurnEvent:
 // base64(proto.Marshal(Payload{encoding:"json/plain", data:<json>}))
-func makeTestStreamItem(t *testing.T, si streamItem, offset int64, topic string) harnessgen.ItemElement {
+func makeTestStreamItem(t *testing.T, si streamItem, offset int64, topic string) harnessgen.StreamItem {
 	t.Helper()
 	data, err := json.Marshal(si)
 	require.NoError(t, err)
@@ -345,7 +345,7 @@ func makeTestStreamItem(t *testing.T, si streamItem, offset int64, topic string)
 	}
 	b, err := proto.Marshal(payload)
 	require.NoError(t, err)
-	return harnessgen.ItemElement{
+	return harnessgen.StreamItem{
 		Topic:  topic,
 		Offset: offset,
 		Data:   base64.StdEncoding.EncodeToString(b),

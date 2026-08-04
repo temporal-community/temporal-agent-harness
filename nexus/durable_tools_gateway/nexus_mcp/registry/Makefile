@@ -1,12 +1,12 @@
-.PHONY: generate install-nexgen build test test-contract vet
+.PHONY: generate install-nexgen
 
-# Installs the newest nex-gen release into `go env GOPATH`/bin, replacing whatever's
-# there if a newer tag exists. We're deliberately tracking latest (not pinning) while
-# nex-gen is under active development — no backward-compat concerns here yet.
+# Installs the newest nex-gen release into ~/.local/bin, replacing whatever's there if a
+# newer tag exists. We're deliberately tracking latest (not pinning) while nex-gen is
+# under active development — no backward-compat concerns here yet.
 # (Every nex-gen release is marked "pre-release" on GitHub, so /releases/latest 404s;
 # we list releases instead and take the first, which is the newest.)
 install-nexgen:
-	@BINDIR=$$(go env GOPATH)/bin; \
+	@BINDIR="$$HOME/.local/bin"; \
 	OS=$$(uname -s); ARCH=$$(uname -m); \
 	case "$$OS-$$ARCH" in \
 		Darwin-arm64) TARGET=aarch64-apple-darwin ;; \
@@ -22,23 +22,7 @@ install-nexgen:
 	echo "Installing nex-gen $$TAG ($$TARGET) to $$BINDIR..."; \
 	mkdir -p "$$BINDIR" && curl -sL "$$URL" | tar xz -C "$$BINDIR" nexgen && chmod +x "$$BINDIR/nexgen"
 
-# Regenerates the handler-side Go bindings from the shared agent.nexusrpc.yaml contract.
-# Note: nex-gen clears its --output directory before writing, so generated code lives in
-# its own handler/generated subpackage rather than alongside hand-written handler.go.
+# Regenerates the RegistryService Python bindings. generated/ contains only generated
+# code (safe to overwrite wholesale — nex-gen clears its --output directory on every run).
 generate: install-nexgen
-	$$(go env GOPATH)/bin/nexgen go agent.nexusrpc.yaml --output handler/generated
-
-build:
-	go build ./...
-
-vet:
-	go vet ./...
-
-# Run all tests. Contract tests (requiring uv/Python) skip gracefully if unavailable.
-test:
-	go test -race -count=1 ./...
-
-# Run only the contract tests; fails loudly if uv is not installed.
-test-contract:
-	@command -v uv >/dev/null 2>&1 || (echo "error: uv not found — required for contract tests" && exit 1)
-	go test -race -count=1 -run 'Contract' ./...
+	"$$HOME/.local/bin/nexgen" python registry.nexusrpc.yaml --output generated

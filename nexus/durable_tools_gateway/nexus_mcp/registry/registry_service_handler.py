@@ -13,7 +13,7 @@ import nexusrpc.handler
 from nexusrpc.handler import StartOperationContext
 from temporalio.client import Client
 
-from .registry_service import (
+from .generated import (
     DeregisterInput,
     RegisterExternalInput,
     RegisterNexusInput,
