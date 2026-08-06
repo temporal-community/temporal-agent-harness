@@ -1,4 +1,6 @@
-.PHONY: generate install-nexgen build test test-go test-python test-contract lint lint-python fmt vet workflowcheck ci run-teams-activity-worker install-dev-server start-dev-server
+.PHONY: generate generate-from-local install-nexgen build test test-go test-python test-contract lint lint-python fmt vet workflowcheck ci run-teams-activity-worker install-dev-server start-dev-server
+
+CONTRACT_URL := https://raw.githubusercontent.com/temporal-community/temporal-agent-harness/main/temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml
 
 # Installs the newest nex-gen release into `go env GOPATH`/bin, replacing whatever's
 # there if a newer tag exists. We're deliberately tracking latest (not pinning) while
@@ -22,11 +24,15 @@ install-nexgen:
 	echo "Installing nex-gen $$TAG ($$TARGET) to $$BINDIR..."; \
 	mkdir -p "$$BINDIR" && curl -sL "$$URL" | tar xz -C "$$BINDIR" nexgen && chmod +x "$$BINDIR/nexgen"
 
-# Regenerates the caller-side Go bindings from the same agent.nexusrpc.yaml contract the
-# handler generates from. agent/generated/ contains only generated code (safe to overwrite
-# wholesale — nex-gen clears its --output directory on every run).
+# Gets the contract from GitHub main. Use this if the handler is in a different repo.
+# nexgen cannot read a URL. This target saves the file first, then generates from it.
 generate: install-nexgen
-	$$(go env GOPATH)/bin/nexgen go ../agent_adapter/nexus_worker/agent.nexusrpc.yaml --output agent/generated
+	curl -sL -o agent.nexusrpc.yaml "$(CONTRACT_URL)"
+	$$(go env GOPATH)/bin/nexgen go agent.nexusrpc.yaml --output agent/generated
+
+# Gets the contract from the local checkout. Use this in this monorepo.
+generate-from-local: install-nexgen
+	$$(go env GOPATH)/bin/nexgen go ../../temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml --output agent/generated
 
 build:
 	go build ./...

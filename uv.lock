@@ -3007,9 +3007,9 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], marker = "extra == 'pydantic-ai'", specifier = ">=2.13" },
     { name = "pydantic-monty", marker = "extra == 'code-mode'", specifier = ">=0.0.18" },
-    { name = "temporalio", specifier = ">=1.30.0" },
-    { name = "temporalio", extras = ["aioboto3"], marker = "extra == 's3'", specifier = ">=1.30.0" },
-    { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'openai-agents'", specifier = ">=1.30.0" },
+    { name = "temporalio", git = "https://github.com/temporalio/sdk-python?rev=29e0c51b0f832e0c9148f28ebba4000ab183d42f" },
+    { name = "temporalio", extras = ["aioboto3"], marker = "extra == 's3'", git = "https://github.com/temporalio/sdk-python?rev=29e0c51b0f832e0c9148f28ebba4000ab183d42f" },
+    { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'openai-agents'", git = "https://github.com/temporalio/sdk-python?rev=29e0c51b0f832e0c9148f28ebba4000ab183d42f" },
 ]
 provides-extras = ["genai", "s3", "openai-agents", "pydantic-ai", "ui", "code-mode"]
 
@@ -3027,8 +3027,8 @@ dev = [
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "setuptools", specifier = ">=68" },
-    { name = "temporalio", extras = ["aioboto3"], specifier = ">=1.30.0" },
-    { name = "temporalio", extras = ["opentelemetry"], specifier = ">=1.30.0" },
+    { name = "temporalio", extras = ["aioboto3"], git = "https://github.com/temporalio/sdk-python?rev=29e0c51b0f832e0c9148f28ebba4000ab183d42f" },
+    { name = "temporalio", extras = ["opentelemetry"], git = "https://github.com/temporalio/sdk-python?rev=29e0c51b0f832e0c9148f28ebba4000ab183d42f" },
 ]
 examples = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
@@ -3043,20 +3043,12 @@ examples = [
 [[package]]
 name = "temporalio"
 version = "1.30.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/temporalio/sdk-python?rev=29e0c51b0f832e0c9148f28ebba4000ab183d42f#29e0c51b0f832e0c9148f28ebba4000ab183d42f" }
 dependencies = [
     { name = "nexus-rpc" },
     { name = "protobuf" },
     { name = "types-protobuf" },
     { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/00/b0/ad8fc3cd7425c6551a637bf23c798e8fdd8eb7a3ec4fee4f46f7678ba8d2/temporalio-1.30.0.tar.gz", hash = "sha256:7c025919511bb465392d547e48ccb85fd560a995db4ebcc82fdb43cddf088e6f", size = 2686876, upload-time = "2026-07-02T21:04:46.713Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/02/39/842fdffe93388dd30ac12a53a698f71cbfb68b3bc938f30f3e5d6a36d4ad/temporalio-1.30.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:6773a6b708dee7675fcbb681bf28e48337ce43b8467ceba8f903e78ae68909f8", size = 14520026, upload-time = "2026-07-02T21:04:31.384Z" },
-    { url = "https://files.pythonhosted.org/packages/40/f3/a2237d5265eb29de591abeac7610a48616b590a1b923b4919f60ee81adfa/temporalio-1.30.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:4038c3ce2d9acc12fef31dd16ef9be8cc7f721672da5662aa05e3942d0b5c9d1", size = 14018523, upload-time = "2026-07-02T21:04:34.405Z" },
-    { url = "https://files.pythonhosted.org/packages/e6/57/dc648d812f4c688bd246a616f0d65c5f03b33675df2effb1b480e1df6d21/temporalio-1.30.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:108d1a56e174eabc18add58316084cdead230e239d3df22bbe999d6954986591", size = 14330502, upload-time = "2026-07-02T21:04:37.39Z" },
-    { url = "https://files.pythonhosted.org/packages/1c/e1/dbd57de0f5090891850c2ee5490319834a12b704076b11f32a4a149998d4/temporalio-1.30.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:47b156138de30c2cd6723d5bfc06a30abcf680344c5481abb31f2a98a9b1f809", size = 14833364, upload-time = "2026-07-02T21:04:40.454Z" },
-    { url = "https://files.pythonhosted.org/packages/30/2a/6d41289c11465ba276a8b417f31d2e469f0fe4b8afacd61d5244151c5fce/temporalio-1.30.0-cp310-abi3-win_amd64.whl", hash = "sha256:3adee28d5ec47bd6309a5eeef7b00126373f119bc5c1b058a34de098542f4da7", size = 15181893, upload-time = "2026-07-02T21:04:43.609Z" },
 ]
 
 [package.optional-dependencies]

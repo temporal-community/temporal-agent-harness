@@ -11,8 +11,10 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from typing import Any, TypeVar
 
-from temporalio.client import Client, WorkflowUpdateFailedError
+from temporalio.client import Client, WithStartWorkflowOperation, WorkflowUpdateFailedError
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
+
+from temporalio.common import WorkflowIDConflictPolicy
 
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_INTERFACE_QUERY,
@@ -23,6 +25,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
     TOOL_APPROVAL_UPDATE,
     AcceptedFunction,
+    AgentConfig,
     AgentEvent,
     AgentEventType,
     AgentMessage,
@@ -167,6 +170,7 @@ class AgentClient:
         approved: bool,
         reason: str | None = None,
         remember: bool = False,
+        update_id: str | None = None,
     ) -> ToolApprovalResult:
         """Resolve a pending tool approval (see :class:`ToolApprovalRequested`).
 
@@ -181,6 +185,10 @@ class AgentClient:
         :class:`ToolApprovalPolicy` allow-list, so future calls of it skip the gate and any
         other call of that tool currently waiting auto-resolves. Read the updated policy
         back via :meth:`get_status` (``approval_policy``) to persist it for next session.
+
+        ``update_id`` lets a caller supply its own idempotency key (e.g. a retried Nexus
+        request) instead of an auto-generated one, so retries resolve the same update
+        instead of double-submitting.
         """
         handle = self._temporal.get_workflow_handle(self._workflow_id)
         try:
@@ -189,6 +197,7 @@ class AgentClient:
                 ToolApprovalDecision(
                     tool_id=tool_id, approved=approved, reason=reason, remember=remember
                 ),
+                id=update_id,
                 result_type=ToolApprovalResult,
             )
         except WorkflowUpdateFailedError as e:
@@ -214,6 +223,7 @@ class AgentClient:
         *,
         result: Any = None,
         error: str | None = None,
+        update_id: str | None = None,
     ) -> CallbackResultAck:
         """Fulfill a pending callback tool call (see :class:`CallbackRequested`).
 
@@ -232,12 +242,15 @@ class AgentClient:
         validation raises :class:`CallbackResultError` (idempotent — a double-submit fails
         rather than overwriting a settled result; a malformed result can be corrected and
         resubmitted, since it does not consume the pending gate).
+
+        ``update_id`` — see :meth:`approve_tool`'s note on caller-supplied idempotency keys.
         """
         handle = self._temporal.get_workflow_handle(self._workflow_id)
         try:
             return await handle.execute_update(
                 PROVIDE_CALLBACK_RESULT_UPDATE,
                 CallbackResult(tool_id=tool_id, result=result, error=error),
+                id=update_id,
                 result_type=CallbackResultAck,
             )
         except WorkflowUpdateFailedError as e:
@@ -277,18 +290,21 @@ class AgentClient:
         )
 
     async def execute_operator_command(
-        self, name: str, *, arg: str | None = None
+        self, name: str, *, arg: str | None = None, update_id: str | None = None
     ) -> OperatorCommandResult:
         """Execute an operator-only command without creating an agent turn.
 
         This is the execution counterpart to :meth:`get_operator_interface`. It routes to
         the workflow's first-class operator update rather than ``send_agent_message``, so
         it can change runtime controls even while a model turn is busy.
+
+        ``update_id`` — see :meth:`approve_tool`'s note on caller-supplied idempotency keys.
         """
         handle = self._temporal.get_workflow_handle(self._workflow_id)
         return await handle.execute_update(
             EXECUTE_OPERATOR_COMMAND_UPDATE,
             OperatorCommandRequest(name=name, arg=arg),
+            id=update_id,
             result_type=OperatorCommandResult,
         )
 
@@ -345,6 +361,53 @@ class AgentClient:
         :class:`AgentMessageReply` confirms the workflow accepted or queued the turn.
         """
         return await self._submit_message(msg_type, payload, expected_turn)
+
+    async def start_and_submit_message(
+        self,
+        msg_type: str,
+        payload: dict[str, Any],
+        expected_turn: int,
+        *,
+        workflow_name: str,
+        task_queue: str,
+        start_config: AgentConfig,
+        update_id: str | None = None,
+    ) -> AgentMessageReply:
+        """Like :meth:`_submit_message`, but starts the workflow first if it isn't already
+        running — for callers that can't assume it exists (e.g. Nexus's
+        ``sendAgentMessage``, which must create-or-reuse a session in one call). Needs
+        ``workflow_name``/``task_queue`` since every other method assumes the workflow is
+        already running and never needs them.
+
+        ``update_id`` — see :meth:`approve_tool`'s note.
+
+        Raises:
+            StaleTurnError: The client is behind the workflow.
+            AgentBusyError: The agent is busy and does not support enqueuing.
+        """
+        start_op = WithStartWorkflowOperation(
+            workflow_name,
+            start_config,
+            id=self._workflow_id,
+            task_queue=task_queue,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        )
+        try:
+            return await self._temporal.execute_update_with_start_workflow(
+                SEND_AGENT_MESSAGE_UPDATE,
+                AgentMessage(type=msg_type, payload=payload, expected_turn=expected_turn),
+                start_workflow_operation=start_op,
+                id=update_id,
+                result_type=AgentMessageReply,
+            )
+        except WorkflowUpdateFailedError as e:
+            cause = e.cause
+            error_type = getattr(cause, "type", None) if cause else None
+            if error_type == "StaleTurn":
+                raise StaleTurnError(str(cause)) from e
+            if error_type == "AgentBusy":
+                raise AgentBusyError(str(cause)) from e
+            raise
 
     async def send_message(
         self,
