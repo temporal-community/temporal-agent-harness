@@ -9,20 +9,28 @@ same idea as a merkle tree over the tree's contents).
 The embedder is injectable so the machinery is testable offline with a
 deterministic stub; production uses OpenAI embeddings.
 
-The search reads the project on the worker's filesystem (``CODING_AGENT_WORKSPACE``),
-which is the same directory mounted into the sandbox, so what the agent searches
-and what it edits are the same files.
+The search reads the project on the worker's filesystem
+(``CODING_AGENT_WORKSPACE``, default the worker's cwd). That is not the same
+place the ``docker`` sandbox edits files, so out of the box search can look at a
+different tree than the sandbox tools touch. Two things keep it useful anyway:
+the results carry the matched code (not just line ranges), and with the
+``local`` backend the tools run on the host over this same directory. See the
+README's coherence note.
 
 NB: no ``from __future__ import annotations``; the tool annotations build the
 model-facing schema at runtime.
 """
 
+import asyncio
 import hashlib
 import json
 import math
 import os
+from datetime import timedelta
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Callable, Sequence
+
+from temporalio.workflow import ActivityConfig
 
 from temporal_agent_harness.harness import agent
 
@@ -31,8 +39,12 @@ Embedder = Callable[[Sequence[str]], "list[list[float]]"]
 
 _CHUNK_LINES = 60
 _SKIP_DIRS = {".git", "node_modules", ".venv", "__pycache__", ".mypy_cache", "dist", "build"}
+_SKIP_FILES = {"package-lock.json", "poetry.lock", "uv.lock", "yarn.lock", "Cargo.lock"}
 _TEXT_MAX_BYTES = 200_000  # skip anything larger; not source
 _DEFAULT_TOP_K = 8
+# OpenAI caps inputs and tokens per embeddings request, so a first index of a real
+# repo cannot go in one call. Embed in batches and persist after each.
+_EMBED_BATCH = 128
 
 
 def _chunks(text: str) -> list[tuple[int, int, str]]:
@@ -47,10 +59,17 @@ def _chunks(text: str) -> list[tuple[int, int, str]]:
     return out
 
 
+def _skip_file(name: str) -> bool:
+    # Do not embed secrets or machine-generated lockfiles into a third-party API.
+    return name == ".env" or name.startswith(".env.") or name in _SKIP_FILES
+
+
 def _walk_text_files(root: Path):
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
         for name in filenames:
+            if _skip_file(name):
+                continue
             path = Path(dirpath) / name
             try:
                 if path.stat().st_size > _TEXT_MAX_BYTES:
@@ -81,8 +100,8 @@ class CodebaseIndex:
                 self._vectors = json.loads(cache_path.read_text())
             except (OSError, ValueError):
                 self._vectors = {}
-        # (path, start, end, hash), rebuilt each index() from the current tree.
-        self._chunks: list[tuple[str, int, int, str]] = []
+        # (path, start, end, hash, body), rebuilt each index() from the current tree.
+        self._chunks: list[tuple[str, int, int, str, str]] = []
 
     def index(self) -> int:
         """Scan the tree, embedding any chunk whose content hash is not cached.
@@ -93,16 +112,21 @@ class CodebaseIndex:
             rel = str(path.relative_to(self._root))
             for start, end, body in _chunks(text):
                 h = hashlib.sha256(body.encode()).hexdigest()
-                self._chunks.append((rel, start, end, h))
+                self._chunks.append((rel, start, end, h, body))
                 if h not in self._vectors and h not in to_embed:
                     to_embed[h] = body
-        if to_embed:
-            hashes = list(to_embed)
-            vectors = self._embedder([to_embed[h] for h in hashes])
-            for h, vec in zip(hashes, vectors):
+        if not to_embed:
+            return 0
+        hashes = list(to_embed)
+        # Batch so a large first index stays under the API's per-request limit, and persist
+        # after each batch so a crash mid-index resumes from what was already embedded.
+        for i in range(0, len(hashes), _EMBED_BATCH):
+            batch = hashes[i : i + _EMBED_BATCH]
+            vectors = self._embedder([to_embed[h] for h in batch])
+            for h, vec in zip(batch, vectors):
                 self._vectors[h] = list(vec)
             self._persist()
-        return len(to_embed)
+        return len(hashes)
 
     def _persist(self) -> None:
         if not self._cache_path:
@@ -112,25 +136,25 @@ class CodebaseIndex:
         tmp.write_text(json.dumps(self._vectors))
         tmp.replace(self._cache_path)
 
-    def search(self, query: str, k: int = _DEFAULT_TOP_K) -> list[tuple[str, int, int, float]]:
-        """Return the top-k (path, start_line, end_line, score) for a query."""
+    def search(self, query: str, k: int = _DEFAULT_TOP_K) -> list[tuple[str, int, int, float, str]]:
+        """Return the top-k (path, start_line, end_line, score, body) for a query."""
         [qvec] = self._embedder([query])
         scored = [
-            (path, start, end, _cosine(qvec, self._vectors[h]))
-            for path, start, end, h in self._chunks
+            (path, start, end, _cosine(qvec, self._vectors[h]), body)
+            for path, start, end, h, body in self._chunks
             if h in self._vectors
         ]
         scored.sort(key=lambda t: t[3], reverse=True)
         return scored[:k]
 
 
-def format_hits(root: Path, hits: list[tuple[str, int, int, float]]) -> str:
+def format_hits(root: Path, hits: list[tuple[str, int, int, float, str]]) -> str:
     if not hits:
         return "no matches"
-    lines = []
-    for rel, start, end, score in hits:
-        lines.append(f"{rel}:{start}-{end}  (score {score:.2f})")
-    return "\n".join(lines)
+    blocks = []
+    for rel, start, end, score, body in hits:
+        blocks.append(f"{rel}:{start}-{end}  (score {score:.2f})\n{body}")
+    return "\n\n".join(blocks)
 
 
 def _workspace_root() -> Path:
@@ -156,16 +180,27 @@ def _openai_embedder() -> Embedder:
     return embed
 
 
-@agent.activity_tool_defn(inherently_safe=True)
+@agent.activity_tool_defn(
+    inherently_safe=True,
+    # First-time indexing walks and embeds the whole tree; the 30s default would time out on a
+    # real repo. (A production index would heartbeat and run in a background service.)
+    activity_config=ActivityConfig(start_to_close_timeout=timedelta(minutes=10)),
+)
 async def codebase_search(query: str) -> str:
     """Search the repository by MEANING for code relevant to a query, e.g. "where are retries
-    configured" or "the function that validates the token". Returns the most relevant file regions
-    as `path:start-end`; read those regions to see the code. Use it to find where something lives
-    before reading or editing; it complements plain text search."""
+    configured" or "the function that validates the token". Returns the most relevant file
+    regions as `path:start-end` followed by the code itself, best match first. Use it to find
+    where something lives before reading or editing; it complements plain text search."""
     root = _workspace_root()
-    index = CodebaseIndex(root, _openai_embedder(), cache_path=_cache_path(root))
-    index.index()
-    return format_hits(root, index.search(query))
+
+    def _run() -> str:
+        index = CodebaseIndex(root, _openai_embedder(), cache_path=_cache_path(root))
+        index.index()
+        return format_hits(root, index.search(query))
+
+    # Indexing and embedding are blocking (file walk + the sync OpenAI client); keep them off the
+    # worker's event loop so co-located sandbox activities and heartbeats are not stalled.
+    return await asyncio.to_thread(_run)
 
 
 SEARCH_TOOLS = [codebase_search]

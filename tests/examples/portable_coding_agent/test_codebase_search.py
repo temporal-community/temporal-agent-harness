@@ -40,6 +40,29 @@ def test_search_ranks_the_relevant_file_first(tmp_path: Path):
     assert hits[0][0] == "retry.py"
 
 
+def test_search_results_carry_the_code(tmp_path: Path):
+    # Results include the matched chunk body, not just line ranges, so they are usable even
+    # when the tool cannot read the file back (e.g. an isolated sandbox).
+    index = CodebaseIndex(_repo(tmp_path), _stub_embed)
+    index.index()
+    top = index.search("retry backoff", k=1)[0]
+    body = top[4]
+    assert "retry" in body
+    assert "retry.py" in format_hits(index._root, [top])
+    assert body in format_hits(index._root, [top])
+
+
+def test_secret_and_lockfiles_are_skipped(tmp_path: Path):
+    repo = _repo(tmp_path)
+    (repo / ".env").write_text("OPENAI_API_KEY=retry-secret\n")
+    (repo / "uv.lock").write_text("retry\n")
+    index = CodebaseIndex(repo, _stub_embed)
+    index.index()
+    paths = {path for path, *_ in index.search("retry", k=10)}
+    assert ".env" not in paths
+    assert "uv.lock" not in paths
+
+
 def test_vendored_dirs_are_skipped(tmp_path: Path):
     index = CodebaseIndex(_repo(tmp_path), _stub_embed)
     index.index()
