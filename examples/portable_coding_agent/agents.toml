@@ -1,0 +1,16 @@
+# Registry of agents the portable coding agent example UI can launch.
+#
+# The shared FastAPI server (examples/app.py) reads this file and serves it back
+# over the session manager's `available_agents` query. To expose a new agent:
+# register its @workflow.defn on a worker, then add a [[agents]] entry here.
+
+[[agents]]
+key = "portable-coding-agent"
+workflow_type = "PortableCodingAgent"
+task_queue = "portable-coding-agent"
+label = "Portable Coding Agent"
+description = """
+A coding agent whose shell and file edits run inside a sandbox (a Docker container by default),
+driven by the OpenAI Agents SDK's sandbox tools and made durable through the harness's
+temporal_sandbox_client. The model call runs on its own task queue. The same agent runs with no
+server through local_runner.py."""
