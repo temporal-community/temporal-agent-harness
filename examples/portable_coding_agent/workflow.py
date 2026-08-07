@@ -9,13 +9,20 @@ named backend through ``temporal_sandbox_client`` and each sandbox operation
 becomes a Temporal activity, served by the ``SandboxClientProvider`` the worker
 registers (see ``worker.py``).
 
+Sandbox lifetime is worth knowing. Today each message runs one ``Runner.run``,
+which creates a fresh sandbox on first tool use and the SDK deletes it at the end
+of the run, so file state does NOT carry across messages (only the durable
+conversation does). Reusing one sandbox across a session's messages means holding
+its session state in workflow state and passing it back on the next run; that is
+the main open item for this example (see the README).
+
 Two placement facts worth knowing when a pool of workers serves many sessions:
 
-- A session's sandbox lives on the worker that created it (a Docker container on
-  that host). The sandbox activities go to the workflow's own task queue and are
-  dispatched eagerly, so they tend to return to that worker. With a pool this
-  wants the same locality guarantees as any session-bound worker state; a
-  sandbox operation that lands on a worker without the container cannot serve it.
+- Within a single message, the sandbox operations (create / exec / read / write /
+  delete) go to the workflow's own task queue and are dispatched eagerly, so they
+  tend to return to the worker that holds the container; a sandbox operation that
+  lands on a worker without it cannot serve it. Once the sandbox is reused across
+  messages this becomes a real session-affinity requirement.
 - The MODEL call runs on its own task queue (set on the plugin in ``worker.py``),
   since it is the long, provider-bound step.
 
@@ -62,6 +69,10 @@ You are a coding agent working inside a sandbox. The user talks to you in plain 
 do the work by exploring the project, editing files, and running commands, then verifying the \
 result. You act only through your tools.
 
+Your sandbox may start empty or already hold the user's project, and it may not persist between \
+messages, so do not assume files you saw earlier are still there: check what is actually present \
+before you rely on it. Work only inside the sandbox workspace.
+
 How to work:
 - UNDERSTAND first. Explore before you change anything: list directories, read the files you will \
 touch, and search. Use `codebase_search` to find relevant code by meaning ("where are retries \
@@ -71,12 +82,16 @@ each `completed` as you finish, keeping exactly one in progress. Skip the plan f
 one-step change.
 - ASK when it matters. If the task is ambiguous or needs a decision only the user can make, call \
 `ask_user` rather than guess.
-- DELEGATE a self-contained sub-task with `task` when it helps (for example a focused search or a \
-mechanical change across files); use its result and carry on.
+- DELEGATE a self-contained sub-task to a subagent when it helps (for example a focused search or \
+a mechanical change across files); give it everything it needs, use its result, and carry on.
 - Make small, surgical edits that match the project's existing style and conventions.
 - VERIFY your work. Run the build or the relevant test after a change and fix what you broke; \
 prefer the narrowest check that proves the change.
+- Keep command output small: read and search targeted regions rather than dumping whole files or \
+long logs; pipe through head/tail or grep when you need only part.
 - Work in parallel when it is safe: batch independent reads and searches into one step.
+- Do not spin. If the same step fails a couple of times, change approach; if you are still \
+blocked, say what is blocking you (or ask) instead of looping.
 - Keep going until the task is actually done. Then reply in brief prose: what you changed, which \
 files, and how you checked it. Never invent file contents or command output you did not see."""
 

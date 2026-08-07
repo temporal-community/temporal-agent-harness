@@ -56,7 +56,10 @@ async def main() -> None:
         sys.exit("error: OPENAI_API_KEY env var not set")
 
     checkpoint = _checkpoint_path(args.session)
-    saved = json.loads(checkpoint.read_text()) if checkpoint.exists() else {}
+    try:
+        saved = json.loads(checkpoint.read_text()) if checkpoint.exists() else {}
+    except (OSError, ValueError):
+        saved = {}  # a truncated or corrupt checkpoint starts a fresh conversation
     conversation: list = saved.get("conversation", [])
     todos: list[dict] = saved.get("todos", [])
 
@@ -66,17 +69,21 @@ async def main() -> None:
     # the plan is a local list, ask_user prompts the terminal, codebase_search reads the
     # workspace, and task runs a nested sandboxed agent.
     @function_tool
-    async def update_plan(todos_json: str) -> str:
-        """Record your step-by-step plan as a JSON array of {step, status} objects; replaces the
-        previous plan. status is pending / in_progress / completed."""
-        todos[:] = [Todo.model_validate(t).model_dump() for t in json.loads(todos_json)]
-        return render_plan([Todo.model_validate(t) for t in todos])
+    async def update_plan(plan: list[Todo]) -> str:
+        """Record or update your step-by-step plan for the current task. Pass the FULL list every
+        time; it replaces the previous plan. Each item is {step, status} where status is
+        pending / in_progress / completed. Keep exactly one step in_progress."""
+        todos[:] = [t.model_dump() for t in plan]
+        return render_plan(plan)
 
     @function_tool
     async def ask_user(question: str) -> str:
         """Ask the user a question when the task is ambiguous or needs a decision only they can
         make. Returns their answer."""
-        return await asyncio.to_thread(input, f"\n[agent asks] {question}\n> ")
+        try:
+            return await asyncio.to_thread(input, f"\n[agent asks] {question}\n> ")
+        except EOFError:
+            return "(no answer: input is not available; proceed with a reasonable assumption)"
 
     @function_tool
     async def codebase_search(query: str) -> str:

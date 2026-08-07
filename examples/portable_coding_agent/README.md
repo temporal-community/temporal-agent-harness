@@ -46,11 +46,13 @@ tells it to:
 
 One consistency note for `codebase_search`: it reads the project on the worker's
 disk, while the `docker` sandbox has its own workspace, so out of the box the
-agent can search a repo the sandbox is not editing. To keep search and edits on
-the same files, run the `local` backend (tools run on the host, over the same
-directory the search reads) or hydrate the sandbox from that directory. A host
-bind mount is not a first-class option in this SDK sandbox, which is why a
-production build indexes through an indexing service instead.
+agent can search a repo the sandbox is not editing. The results carry the matched
+code (not just line ranges), so a mismatch still returns usable content rather
+than pointers the sandbox cannot open. To keep search and edits on the same
+files, run the `local` backend (tools run on the host, over the same directory
+the search reads) or hydrate the sandbox from that directory. A host bind mount
+is not a first-class option in this SDK sandbox, which is why a production build
+indexes through an indexing service instead.
 
 It is a sibling to [`callback_tools/coding_agent`](../callback_tools/coding_agent),
 which keeps its tools on the user's laptop and reasons in the cloud through
@@ -88,16 +90,18 @@ Then open http://localhost:8000, pick "Portable Coding Agent", and chat.
 
 ### Placement, and why it is set up this way
 
-A session's sandbox lives on the worker that created it (with the `docker`
-backend, a container on that host). Its sandbox operations
+The sandbox a message creates lives on the worker that created it, for the
+length of that message (with the `docker` backend, a container on that host; see
+Status for why it is per-message today). Its sandbox operations
 (create / exec / read / write / delete) run as activities on the workflow's own
 task queue and are dispatched eagerly, so they tend to return to that worker; the
 session worker also sets a short `sticky_queue_schedule_to_start_timeout` so a
-lost worker is re-dispatched quickly. In a pool of workers this is a real
-affinity requirement: a sandbox operation that lands on a worker without the
-session's container cannot serve it. Run a single session worker, or keep sandbox
-operations local to the worker holding the container, until that affinity is
-guaranteed. The model call, by contrast, runs on its own task queue
+lost worker is re-dispatched quickly. Within a message this is already an affinity
+concern: a sandbox operation that lands on a worker without the container cannot
+serve it. Once the sandbox is reused across a session's messages it becomes a
+hard affinity requirement, so run a single session worker, or keep sandbox
+operations local to the worker holding the container, until that is guaranteed.
+The model call, by contrast, runs on its own task queue
 (`portable-coding-agent-model`) because it is the long, provider-bound step.
 
 ## Local mode (no server)
@@ -116,12 +120,12 @@ conversation across restarts.
 
 ## Working on an existing project
 
-The sandbox starts empty and is created fresh per session, so out of the box the
-agent builds and runs code inside the sandbox rather than editing a repo on your
-disk. To work on existing code, mount it into the sandbox: the Docker backend
-supports volume mounts, so a project directory can be mounted read-write and the
-agent edits it in place. Wiring a host mount through the run config is the
-natural next step for this example and is not done here yet.
+The sandbox starts empty and is created fresh for each message (see Status), so
+out of the box the agent builds and runs code inside the sandbox rather than
+editing a repo on your disk. To work on existing code, mount it into the sandbox:
+the Docker backend supports volume mounts, so a project directory can be mounted
+read-write and the agent edits it in place. Wiring a host mount through the run
+config is the natural next step for this example and is not done here yet.
 
 ## What a fuller build adds
 
@@ -158,6 +162,21 @@ workers register all four tool families (sandbox, plan, search activity, ask
 callback, `task` subagent). The durable ask-callback and subagent turns run on
 the harness's own callback and `subagent_toolset` mechanisms; a full durable
 run of each is not exercised here.
+
+Known limitations, in priority order:
+
+- **The sandbox is per-message, not per-session.** Each message runs one
+  `Runner.run`, which creates a sandbox and the SDK deletes it at the end of the
+  run, so a file the agent writes in one message is gone in the next (the durable
+  conversation still remembers it, which is the confusing part). Persisting it
+  means keeping the sandbox session state in workflow state and passing it back on
+  the next run (the no-delete path is a reused live session), plus deleting it when
+  the agent closes. This is the main open item.
+- **A durable `task` subagent can block on `ask_user`.** The child is another
+  instance of this workflow, so it carries `ask_user`, but nothing in this example
+  attaches a client to a child workflow to answer it. Give subagents a no-ask
+  variant (or drop `ASK_TOOLS` for children) and cap delegation depth before
+  relying on the durable delegation path.
 
 The durable path needed a harness fix (a separate commit in this PR): the model
 activity was validating its input back into the typed item union, which made
