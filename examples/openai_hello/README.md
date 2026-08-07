@@ -10,18 +10,25 @@ streaming activity, to the live turn stream the web UI consumes.
 - **Streaming, not blocking.** The turn runs `Runner.run_streamed(...)` (not `Runner.run`).
   Only the streamed path routes model calls through `invoke_model_activity_streaming`, and it's
   that activity that feeds each raw OpenAI event to the harness observer.
-- **The observer seam.** The worker builds the plugin with the two harness hooks:
+- **The observer seams.** The worker builds the plugin with the harness hooks:
   ```python
   OpenAIAgentsPlugin(
-      model_params=ModelActivityParameters(stream_to_provider=stream_to_provider),
+      model_params=ModelActivityParameters(
+          stream_to_provider=stream_to_provider,
+          model_call_observer_provider=model_call_observer_provider,
+      ),
       observer_factory=harness_observer_factory,
   )
   ```
-  `stream_to_provider` resolves the in-flight turn's stream context ambiently off the running
-  workflow (no runner threading); `harness_observer_factory` turns it into the observer that
-  translates raw OpenAI events into harness vocabulary — `model_interaction_started` →
-  `reply_delta` … `tool_requested` … `model_interaction_ended`. There are **no run hooks**:
-  the model-interaction bracket comes from the observer.
+  `stream_to_provider` reads the in-flight turn's stream context off the run context the workflow
+  threads in (`Runner.run_streamed(..., context=self._runner)`); `harness_observer_factory` turns
+  it into the observer that translates raw OpenAI events into harness vocabulary —
+  `model_interaction_started` → `reply_delta` … `tool_requested` … `model_interaction_ended`.
+  There are **no run hooks**: the model-interaction bracket comes from the observer.
+  `model_call_observer_provider` is the non-streamed counterpart — it brackets a `Runner.run`
+  model call from workflow code, so `model_interaction_*` (with token usage) and `tool_requested`
+  are reported whether or not tokens are streamed. Only `reply_delta` / `thought_summary` /
+  `text_annotation` are streaming-specific.
 - **Harness-owned tools.** `get_weather` is a normal `@agent.tool_defn`, adapted onto the SDK
   with `as_openai_agent_tool(...)`, so the harness keeps approval + `tool_start`/`tool_end`.
 

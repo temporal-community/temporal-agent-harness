@@ -15,9 +15,18 @@ sdk-python. Wired into the vendored ``openai_agents`` streaming activity via
 :func:`select_observer`; the harness-specific observer lives in
 :mod:`temporal_agent_harness.ai_sdks.openai_agents_harness`.
 
-See :py:class:`StreamObserver` for the live-streaming observer contract.
+See :py:class:`StreamObserver` for the live-streaming observer contract (raw
+provider events, observed in the activity) and :py:class:`ModelCallObserver` for
+the model-invocation contract (the started/ended bracket and its usage, observed
+in the workflow around EVERY model call — streamed or not).
 """
 
+from temporal_agent_harness.ai_sdks.integration_helpers._model_call_observer import (
+    ModelCallObserver,
+    ModelCallObserverProvider,
+    NullModelCallObserver,
+    select_model_call_observer,
+)
 from temporal_agent_harness.ai_sdks.integration_helpers._stream_observer import (
     ObserverFactory,
     RawTopicObserver,
@@ -26,8 +35,12 @@ from temporal_agent_harness.ai_sdks.integration_helpers._stream_observer import 
 )
 
 __all__ = [
+    "ModelCallObserver",
+    "ModelCallObserverProvider",
+    "NullModelCallObserver",
     "ObserverFactory",
     "RawTopicObserver",
     "StreamObserver",
+    "select_model_call_observer",
     "select_observer",
 ]

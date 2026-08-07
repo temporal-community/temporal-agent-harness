@@ -2,10 +2,12 @@
 # harness-specific that the vendored `openai_agents/` package deliberately does NOT know about:
 # the live translator (`OpenAIStreamObserver`) that folds raw OpenAI Responses stream events into
 # the harness turn-stream vocabulary, the observer factory + `stream_to_provider` that route those
-# events to the in-flight turn with zero explicit threading, and `as_openai_agent_tool(s)` adapting
-# harness tools onto the SDK. Kept a sibling of the vendored tree (not inside it) so that tree stays
-# pristine for future upstream merges. Mirrors the structure of the Gemini plugin's
-# `_interactions_activity._StreamEventPublisher`.
+# events to the in-flight turn with zero explicit threading, its non-streaming counterpart
+# (`OpenAIModelCallObserver` + `model_call_observer_provider`) that brackets a `Runner.run` model
+# call workflow-side so the model-invocation events are not a streaming-only privilege, and
+# `as_openai_agent_tool(s)` adapting harness tools onto the SDK. Kept a sibling of the vendored tree
+# (not inside it) so that tree stays pristine for future upstream merges. Mirrors the structure of
+# the Gemini plugin's `_interactions_activity._StreamEventPublisher`.
 
 """Harness integration for the OpenAI Agents SDK.
 
@@ -17,10 +19,14 @@ Wire it onto a worker by building the vendored plugin with the harness seam:
 ... )
 >>> from temporal_agent_harness.ai_sdks.openai_agents_harness import (
 ...     harness_observer_factory,
+...     model_call_observer_provider,
 ...     stream_to_provider,
 ... )
 >>> plugin = OpenAIAgentsPlugin(
-...     model_params=ModelActivityParameters(stream_to_provider=stream_to_provider),
+...     model_params=ModelActivityParameters(
+...         stream_to_provider=stream_to_provider,
+...         model_call_observer_provider=model_call_observer_provider,
+...     ),
 ...     observer_factory=harness_observer_factory,
 ... )
 
@@ -28,6 +34,15 @@ With that in place, an agent's ``Runner.run_streamed(...)`` model calls stream
 ``reply_delta`` / ``thought_summary`` / ``text_annotation`` / ``tool_requested`` and
 ``model_interaction_started`` / ``…_ended`` onto the harness turn stream live — the same
 vocabulary the Gemini plugin produces.
+
+**Non-streamed turns report the same model-invocation facts.** ``Runner.run(...)``
+publishes ``model_interaction_started`` / ``…_ended`` (with token usage) and
+``tool_requested`` too, via ``model_call_observer_provider`` — those are facts about the
+turn, not streaming artifacts, so the turn stream must not get weaker just because
+tokens weren't streamed. Only the genuinely streaming-specific deltas (``reply_delta``,
+``thought_summary``, ``text_annotation``) are absent. Both paths read the run context the
+workflow threads in, so pass ``context=<your runner>`` on ``Runner.run(...)`` as well as
+on ``Runner.run_streamed(...)``.
 
 .. warning::
     Streaming support is experimental and may change in future versions.
@@ -79,8 +94,10 @@ if TYPE_CHECKING:
     from agents.items import TResponseStreamEvent
 
 __all__ = [
+    "OpenAIModelCallObserver",
     "OpenAIStreamObserver",
     "harness_observer_factory",
+    "model_call_observer_provider",
     "stream_to_provider",
     "as_openai_agent_tool",
     "as_openai_agent_tools",
@@ -239,6 +256,96 @@ class OpenAIStreamObserver:
                 tool_input=_parse_tool_args(raw),
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# Non-streamed calls: the model-invocation bracket, published workflow-side
+# ---------------------------------------------------------------------------
+#
+# `model_interaction_started` / `…_ended` (with usage) and `tool_requested` are facts
+# about the TURN — the model was invoked, here is its span, what it cost, and what it
+# asked for. They are true whether or not the reply tokens were streamed out, so they
+# must not be reachable only through the streaming seam. `Runner.run` has no
+# activity-side event stream to observe, so this observer brackets the model activity
+# from the WORKFLOW side instead and reads the same facts off the returned
+# `ModelResponse`.
+#
+# Only `reply_delta` / `thought_summary` / `text_annotation` are genuinely
+# streaming-specific, and they stay absent when not streaming — that is the real
+# difference between the two modes, and the only one.
+
+
+class OpenAIModelCallObserver:
+    """Publish one NON-streamed OpenAI model call's interaction bracket, workflow-side.
+
+    A :class:`ModelCallObserver` — the non-streaming counterpart of
+    :class:`OpenAIStreamObserver`, resolved per call by
+    :func:`model_call_observer_provider`. ``Runner.run`` collects the whole response
+    inside the model activity and hands it back to the workflow, so there is no live
+    event stream to fold; instead this brackets the activity dispatch (``__enter__``
+    → ``model_interaction_started``, ``__exit__`` → ``model_interaction_ended``, so
+    the span is the real model-call latency) and reads the rest off the returned
+    ``ModelResponse``: its token usage, and one ``tool_requested`` per function call
+    the model asked for — keyed by the SDK ``call_id``, the same id
+    ``as_openai_agent_tool`` hands to ``run_tool``, so ``tool_requested`` and the
+    eventual ``tool_start`` / ``tool_end`` share a ``tool_id``.
+
+    Publishes through the live in-workflow runner (not
+    :meth:`~AgentWorkflowRunner.publisher_from_activity`, which only works inside an
+    activity). The ended bracket always closes, even when the model call fails —
+    usage then stays ``None``.
+    """
+
+    def __init__(self, runner: AgentWorkflowRunner, *, model: str | None = None) -> None:
+        self._runner = runner
+        # The requested model id, known at dispatch, so BOTH brackets name it —
+        # matching the streamed observer.
+        self._model = model
+        self._usage: TokenUsage | None = None
+
+    def __enter__(self) -> OpenAIModelCallObserver:
+        # Open the span before the activity is dispatched, so it measures the whole call.
+        self._runner.publish(ModelInteractionStarted(model=self._model))
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool | None:
+        # Always close the started bracket, even if the model call raised (usage then
+        # stays None). Never swallow the failure: the turn owns it.
+        self._runner.publish(ModelInteractionEnded(model=self._model, usage=self._usage))
+        return False
+
+    def on_response(self, response: Any) -> None:
+        """Read usage and the model's tool requests off a completed ``ModelResponse``."""
+        self._usage = _to_token_usage(getattr(response, "usage", None))
+        for item in getattr(response, "output", None) or []:
+            if isinstance(item, ResponseFunctionToolCall):
+                self._runner.publish(
+                    ToolRequested(
+                        tool_id=item.call_id,
+                        tool_name=item.name,
+                        tool_input=_parse_tool_args(item.arguments or ""),
+                    )
+                )
+
+
+def model_call_observer_provider(
+    model: str | None, run_context: Any
+) -> OpenAIModelCallObserver | None:
+    """Per-call observer provider for non-streamed calls (wired as
+    ``model_params.model_call_observer_provider``).
+
+    Called once per ``Runner.run`` model request, in workflow context, with the
+    requested model id and the object the agent passed as
+    ``Runner.run(..., context=self._runner)`` — the same threading the streamed path
+    needs, which is why the non-streaming call site must pass ``context`` too.
+    Returns ``None`` when that is not a harness runner or no turn is in flight, so the
+    call proceeds unobserved rather than raising.
+    """
+    if not isinstance(run_context, AgentWorkflowRunner):
+        return None
+    if run_context.current_stream_context is None:
+        return None
+    return OpenAIModelCallObserver(run_context, model=model)
 
 
 def _parse_tool_args(raw: str) -> dict[str, Any]:

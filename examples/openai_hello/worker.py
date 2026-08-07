@@ -14,6 +14,13 @@ The plugin is wired for the HARNESS STREAMING PATH:
     translates raw OpenAI events into the harness turn-stream vocabulary live.
 Drop either one and streaming falls back to the plugin's plain raw-topic behavior.
 
+``model_params.model_call_observer_provider=model_call_observer_provider`` is the
+non-streaming counterpart: it brackets a ``Runner.run`` model call in workflow code so
+``model_interaction_started`` / ``…_ended`` (with token usage) and ``tool_requested`` reach the
+turn stream even when nothing is token-streamed. This agent always streams, but the hook is
+wired so switching the call site to ``Runner.run(..., context=self._runner)`` keeps the same
+observability.
+
 Env vars (set in .env.local — see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile
     OPENAI_API_KEY                            required — the agent calls the OpenAI API
@@ -38,6 +45,7 @@ from temporal_agent_harness.ai_sdks.openai_agents import (
 )
 from temporal_agent_harness.ai_sdks.openai_agents_harness import (
     harness_observer_factory,
+    model_call_observer_provider,
     stream_to_provider,
 )
 
@@ -64,6 +72,10 @@ async def main() -> None:
             heartbeat_timeout=timedelta(seconds=30),
             # The harness streaming seam: route streamed events to the in-flight turn.
             stream_to_provider=stream_to_provider,
+            # Its non-streaming counterpart: bracket every `Runner.run` model call
+            # workflow-side, so model_interaction_started/ended (with token usage) and
+            # tool_requested land on the turn stream whether or not tokens streamed.
+            model_call_observer_provider=model_call_observer_provider,
         ),
         observer_factory=harness_observer_factory,
     )
