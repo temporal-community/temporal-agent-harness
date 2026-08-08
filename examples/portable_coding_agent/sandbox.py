@@ -21,9 +21,10 @@ lives on the worker that created it (see the README's note on placement).
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from agents import RunConfig
-from agents.sandbox import SandboxRunConfig
+from agents.sandbox import Manifest, SandboxRunConfig
 from agents.sandbox.session.sandbox_client import (
     BaseSandboxClient,
     BaseSandboxClientOptions,
@@ -36,6 +37,26 @@ SANDBOX_NAME = "coding-sandbox"
 
 def sandbox_kind() -> str:
     return os.environ.get("CODING_AGENT_SANDBOX", "docker").strip().lower()
+
+
+def workspace_root() -> Path:
+    """The project the agent works on. Search reads it; the local backend edits it in place."""
+    return Path(os.environ.get("CODING_AGENT_WORKSPACE", ".")).resolve()
+
+
+def sandbox_manifest(kind: str | None = None) -> Manifest | None:
+    """Root the LOCAL backend at the project so the agent edits it in place; None otherwise.
+
+    The docker backend cannot bind-mount a host directory (its SDK options expose no mount),
+    so it keeps an isolated workspace. The unix-local backend, given a caller-provided root, is
+    never deleted or cleared by the SDK (``workspace_root_owned`` stays False and we use no
+    snapshot), so edits land in the real repo and persist on disk. This is opt-in: it needs both
+    ``CODING_AGENT_SANDBOX=local`` and ``CODING_AGENT_WORKSPACE`` set.
+    """
+    kind = kind or sandbox_kind()
+    if kind == "local" and os.environ.get("CODING_AGENT_WORKSPACE"):
+        return Manifest(root=str(workspace_root()))
+    return None
 
 
 def _image() -> str:
@@ -77,5 +98,9 @@ def sandbox_options(kind: str | None = None) -> BaseSandboxClientOptions:
 def local_run_config() -> RunConfig:
     """RunConfig for the no-Temporal local runner: the real client, used directly."""
     return RunConfig(
-        sandbox=SandboxRunConfig(client=build_sandbox_client(), options=sandbox_options())
+        sandbox=SandboxRunConfig(
+            client=build_sandbox_client(),
+            options=sandbox_options(),
+            manifest=sandbox_manifest(),
+        )
     )

@@ -40,6 +40,8 @@ from temporalio.workflow import ActivityConfig
 with workflow.unsafe.imports_passed_through():
     from agents import RunConfig, Runner, TResponseInputItem
     from agents.sandbox import SandboxAgent, SandboxRunConfig
+    from agents.sandbox.session.sandbox_session import SandboxSession
+    from agents.sandbox.session.sandbox_session_state import SandboxSessionState
 
     from temporal_agent_harness.ai_sdks.openai_agents.workflow import temporal_sandbox_client
     from temporal_agent_harness.ai_sdks.openai_agents_harness import as_openai_agent_tools
@@ -56,7 +58,7 @@ with workflow.unsafe.imports_passed_through():
     from .ask import ASK_TOOLS
     from .codebase_search import SEARCH_TOOLS
     from .plan import PLAN_TOOLS
-    from .sandbox import SANDBOX_NAME, sandbox_options
+    from .sandbox import SANDBOX_NAME, sandbox_manifest, sandbox_options
 
 
 TASK_QUEUE = "portable-coding-agent"
@@ -112,10 +114,27 @@ class PortableCodingAgentWorkflow:
         self._conversation: list[TResponseInputItem] = []
         # The plan, durable workflow state, edited in place by `update_plan`.
         self._todos: list = []
+        # The sandbox is created once for the session and reused every turn; only its serializable
+        # state lives in workflow state, so a lost worker can resume the same sandbox (subject to the
+        # placement note in the README). None until the first turn creates it.
+        self._sandbox_state: SandboxSessionState | None = None
+
+    def _sandbox_client(self):
+        return temporal_sandbox_client(
+            SANDBOX_NAME, config=ActivityConfig(start_to_close_timeout=timedelta(minutes=5))
+        )
 
     @workflow.run
     async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
+        try:
+            await self._runner.run(self)
+        finally:
+            # The session is ours (owns_session=False in the SDK), so nothing else deletes it.
+            # Reclaim the sandbox when the agent closes; an abandoned workflow is swept out of band.
+            if self._sandbox_state is not None:
+                client = self._sandbox_client()
+                await client.delete(await client.resume(self._sandbox_state))
+                self._sandbox_state = None
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
@@ -141,21 +160,30 @@ class PortableCodingAgentWorkflow:
             instructions=SYSTEM_INSTRUCTION,
             tools=tools,
         )
+        # Reuse one sandbox for the whole session: create it on the first turn, resume it after.
+        # Each sandbox operation (create / resume / exec / read / write / delete) is a Temporal
+        # activity. Passing a live session (not client/options) makes the SDK treat it as not-owned,
+        # so it does NOT delete the sandbox at the end of the run and files persist to the next turn.
+        client = self._sandbox_client()
+        if self._sandbox_state is None:
+            session: SandboxSession = await client.create(
+                manifest=sandbox_manifest(), options=sandbox_options()
+            )
+        else:
+            session = await client.resume(self._sandbox_state)
+        # Pass BOTH: the SDK prefers `session` (so it reuses this one and does not delete it), while
+        # `client`/`options` satisfy the harness runner's requirement that a temporal client is set.
         run_config = RunConfig(
             sandbox=SandboxRunConfig(
-                # Reference the worker-registered backend by name; each sandbox operation
-                # (create / exec / read / write / delete) becomes a Temporal activity.
-                client=temporal_sandbox_client(
-                    SANDBOX_NAME,
-                    config=ActivityConfig(start_to_close_timeout=timedelta(minutes=5)),
-                ),
-                options=sandbox_options(),
+                client=client, session=session, options=sandbox_options()
             )
         )
+
         input_items: list[TResponseInputItem] = [
             *self._conversation,
             {"role": "user", "content": message.text},
         ]
         result = await Runner.run(sdk_agent, input=input_items, run_config=run_config)
         self._conversation = result.to_input_list()
+        self._sandbox_state = session.state
         return TextReply(text=str(result.final_output))
