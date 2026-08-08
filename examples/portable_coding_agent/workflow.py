@@ -59,11 +59,32 @@ with workflow.unsafe.imports_passed_through():
     from .codebase_search import SEARCH_TOOLS
     from .plan import PLAN_TOOLS
     from .sandbox import SANDBOX_NAME, sandbox_manifest, sandbox_options
+    from .web import WEB_TOOLS
 
 
 TASK_QUEUE = "portable-coding-agent"
 MODEL_QUEUE = f"{TASK_QUEUE}-model"
 DEFAULT_MODEL = "gpt-5-mini"
+# A subagent is another instance of this workflow driven as a child. Cap how deep delegation can
+# nest (1 = only the top-level agent delegates), so a subagent cannot spawn subagents without bound.
+MAX_DELEGATION_DEPTH = 1
+
+SUBAGENT_ADDENDUM = """
+
+You are a subagent handling one delegated sub-task. You cannot ask the user, so do not wait on \
+anyone: make a reasonable assumption, state it in your reply, and finish the sub-task yourself."""
+
+
+def _subagent_policy(agent_id: str | None) -> tuple[bool, bool]:
+    """Return (can_ask_user, can_delegate) from the agent's id depth.
+
+    A subagent's ``agent_id`` is a compound ``{parent}-{child}`` id (a top-level agent's is a
+    single segment or None), so the number of ``-`` separators is the delegation depth. Only the
+    top-level agent has a client attached to answer ``ask_user``; a subagent that asked would block
+    forever. Delegation is allowed only while under ``MAX_DELEGATION_DEPTH``.
+    """
+    depth = agent_id.count("-") if agent_id else 0
+    return depth == 0, depth < MAX_DELEGATION_DEPTH
 
 
 SYSTEM_INSTRUCTION = """\
@@ -78,7 +99,8 @@ before you rely on it. Work only inside the sandbox workspace.
 How to work:
 - UNDERSTAND first. Explore before you change anything: list directories, read the files you will \
 touch, and search. Use `codebase_search` to find relevant code by meaning ("where are retries \
-configured") and plain text search for exact strings. Read a file before you edit it.
+configured") and shell tools like `grep` and `find` for exact strings and file names. Read a file \
+before you edit it.
 - PLAN multi-step work with `update_plan`: lay out the steps, mark one `in_progress`, and mark \
 each `completed` as you finish, keeping exactly one in progress. Skip the plan for a trivial \
 one-step change.
@@ -86,7 +108,11 @@ one-step change.
 `ask_user` rather than guess.
 - DELEGATE a self-contained sub-task to a subagent when it helps (for example a focused search or \
 a mechanical change across files); give it everything it needs, use its result, and carry on.
-- Make small, surgical edits that match the project's existing style and conventions.
+- Use `web_fetch` for documentation or an error message that is not in the repository; prefer the \
+repository itself for anything already in it.
+- Make small, surgical edits that match the project's existing style and conventions. If an edit \
+does not apply cleanly, re-read the exact lines and retry with more surrounding context rather than \
+forcing it or guessing the file's contents.
 - VERIFY your work. Run the build or the relevant test after a change and fix what you broke; \
 prefer the narrowest check that proves the change.
 - Keep command output small: read and search targeted regions rather than dumping whole files or \
@@ -114,6 +140,8 @@ class PortableCodingAgentWorkflow:
         self._conversation: list[TResponseInputItem] = []
         # The plan, durable workflow state, edited in place by `update_plan`.
         self._todos: list = []
+        # Compound id when this instance is a subagent; gates ask_user + delegation depth.
+        self._agent_id = config.agent_id
         # The sandbox is created once for the session and reused every turn; only its serializable
         # state lives in workflow state, so a lost worker can resume the same sandbox (subject to the
         # placement note in the README). None until the first turn creates it.
@@ -145,19 +173,23 @@ class PortableCodingAgentWorkflow:
         # plan (inline, its sink is the workflow's todo list), ask_user (a callback the client
         # answers), codebase_search (an activity), and a `task` subagent toolset that drives
         # another instance of this agent as a child workflow.
+        can_ask, can_delegate = _subagent_policy(self._agent_id)
         tools = [
             *as_openai_agent_tools(self._runner, PLAN_TOOLS, injections={"sink": self._todos}),
-            *as_openai_agent_tools(self._runner, ASK_TOOLS),
             *as_openai_agent_tools(self._runner, SEARCH_TOOLS),
-            *as_openai_agent_tools(
+            *as_openai_agent_tools(self._runner, WEB_TOOLS),
+        ]
+        if can_ask:
+            tools += as_openai_agent_tools(self._runner, ASK_TOOLS)
+        if can_delegate:
+            tools += as_openai_agent_tools(
                 self._runner,
                 subagent_toolset(PortableCodingAgentWorkflow, key="task", task_queue=TASK_QUEUE),
-            ),
-        ]
+            )
         sdk_agent = SandboxAgent(
             name="PortableCodingAgent",
             model=DEFAULT_MODEL,
-            instructions=SYSTEM_INSTRUCTION,
+            instructions=SYSTEM_INSTRUCTION if can_ask else SYSTEM_INSTRUCTION + SUBAGENT_ADDENDUM,
             tools=tools,
         )
         # Reuse one sandbox for the whole session: create it on the first turn, resume it after.

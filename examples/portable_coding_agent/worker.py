@@ -43,6 +43,7 @@ from temporal_agent_harness.harness import agent
 
 from .codebase_search import codebase_search
 from .sandbox import SANDBOX_NAME, build_sandbox_client, sandbox_kind
+from .web import web_fetch
 from .workflow import MODEL_QUEUE, TASK_QUEUE, PortableCodingAgentWorkflow
 
 
@@ -70,10 +71,10 @@ async def main() -> None:
         client,
         task_queue=session_queue,
         workflows=[PortableCodingAgentWorkflow],
-        # codebase_search is the one activity-backed tool; the rest are the sandbox's tools, the
-        # inline plan/subagent tools, and the ask_user callback. The plugin registers the sandbox
-        # provider + model activities.
-        activities=[agent.tool_activity(codebase_search)],
+        # codebase_search and web_fetch are the activity-backed tools; the rest are the sandbox's
+        # tools, the inline plan/subagent tools, and the ask_user callback. The plugin registers the
+        # sandbox provider + model activities.
+        activities=[agent.tool_activity(codebase_search), agent.tool_activity(web_fetch)],
         # Keep a session's sandbox operations returning to the worker that holds its container:
         # eager execution on, and a short sticky timeout so a lost worker is re-dispatched fast.
         disable_eager_activity_execution=False,
