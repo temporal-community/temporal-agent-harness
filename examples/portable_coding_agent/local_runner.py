@@ -11,10 +11,11 @@ checkpoint file.
         --session myproj "write a script that prints the first 10 fibonacci numbers and run it"
 
 Needs OPENAI_API_KEY. With ``CODING_AGENT_SANDBOX=docker`` (default) the tools run
-in a container; ``=local`` runs them on the host with no isolation (trusted use,
-or no Docker). The sandbox is created fresh per run, so the session id chains the
-conversation, not the sandbox filesystem; mount a project to work on existing
-code (see the README).
+in an isolated container; ``=local`` runs them on the host with no isolation
+(trusted use, or no Docker). To work on an existing repo, use ``=local`` and set
+``CODING_AGENT_WORKSPACE`` to it: the agent then edits that repo in place and
+reads its ``AGENTS.md`` if present (see the README). Otherwise the sandbox starts
+empty and the session id only chains the conversation.
 """
 
 from __future__ import annotations

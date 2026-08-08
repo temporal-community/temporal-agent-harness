@@ -9,20 +9,21 @@ named backend through ``temporal_sandbox_client`` and each sandbox operation
 becomes a Temporal activity, served by the ``SandboxClientProvider`` the worker
 registers (see ``worker.py``).
 
-Sandbox lifetime is worth knowing. Today each message runs one ``Runner.run``,
-which creates a fresh sandbox on first tool use and the SDK deletes it at the end
-of the run, so file state does NOT carry across messages (only the durable
-conversation does). Reusing one sandbox across a session's messages means holding
-its session state in workflow state and passing it back on the next run; that is
-the main open item for this example (see the README).
+One sandbox is reused for the whole session: the first message creates it, later
+messages resume it, and it is deleted when the agent closes. The SDK deletes a
+sandbox at the end of a run unless a live session is passed in, so the workflow
+keeps only the serializable session state in workflow state and passes a resumed
+live session each turn (which the SDK treats as not-owned, so it survives), and a
+file written in one message is there in the next.
 
 Two placement facts worth knowing when a pool of workers serves many sessions:
 
-- Within a single message, the sandbox operations (create / exec / read / write /
-  delete) go to the workflow's own task queue and are dispatched eagerly, so they
-  tend to return to the worker that holds the container; a sandbox operation that
-  lands on a worker without it cannot serve it. Once the sandbox is reused across
-  messages this becomes a real session-affinity requirement.
+- The sandbox's operations (create / resume / exec / read / write / delete) go to
+  the workflow's own task queue and are dispatched eagerly, so they tend to return
+  to the worker that holds the container. Because the sandbox persists across
+  messages, this is a hard session-affinity requirement: an operation that lands
+  on a worker without the container cannot serve it, and the ``docker`` backend
+  can resume only on the host that still has it.
 - The MODEL call runs on its own task queue (set on the plugin in ``worker.py``),
   since it is the long, provider-bound step.
 
