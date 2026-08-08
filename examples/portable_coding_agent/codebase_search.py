@@ -108,14 +108,23 @@ class CodebaseIndex:
         Returns the number of newly embedded chunks."""
         self._chunks = []
         to_embed: dict[str, str] = {}
+        live: set[str] = set()
         for path, text in _walk_text_files(self._root):
             rel = str(path.relative_to(self._root))
             for start, end, body in _chunks(text):
                 h = hashlib.sha256(body.encode()).hexdigest()
                 self._chunks.append((rel, start, end, h, body))
+                live.add(h)
                 if h not in self._vectors and h not in to_embed:
                     to_embed[h] = body
+        # Evict vectors for chunks that no longer exist (edited or deleted files), so the cache
+        # tracks the tree instead of growing forever.
+        stale = [h for h in self._vectors if h not in live]
+        for h in stale:
+            del self._vectors[h]
         if not to_embed:
+            if stale:
+                self._persist()
             return 0
         hashes = list(to_embed)
         # Batch so a large first index stays under the API's per-request limit, and persist

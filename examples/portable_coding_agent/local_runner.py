@@ -38,7 +38,8 @@ from .codebase_search import (
 )
 from .plan import Todo, render_plan
 from .sandbox import local_run_config, sandbox_kind
-from .workflow import DEFAULT_MODEL, SYSTEM_INSTRUCTION
+from .web import fetch_text
+from .workflow import DEFAULT_MODEL, SUBAGENT_ADDENDUM, SYSTEM_INSTRUCTION
 
 
 def _checkpoint_path(session_id: str) -> Path:
@@ -65,9 +66,17 @@ async def main() -> None:
 
     model = os.environ.get("CODING_AGENT_MODEL", DEFAULT_MODEL)
 
+    # Prepend project guidance if the workspace ships an AGENTS.md (an open convention). In local
+    # mode the workspace is the real repo, so this is the file the agent is about to work on.
+    guide = ""
+    guide_path = _workspace_root() / "AGENTS.md"
+    if guide_path.is_file():
+        guide = "\n\nProject guidance from AGENTS.md:\n" + guide_path.read_text()[:4000]
+    instructions = SYSTEM_INSTRUCTION + guide
+
     # Local variants of the same tools the durable workflow composes. Here they run directly:
     # the plan is a local list, ask_user prompts the terminal, codebase_search reads the
-    # workspace, and task runs a nested sandboxed agent.
+    # workspace, web_fetch pulls a URL, and task runs a nested sandboxed agent.
     @function_tool
     async def update_plan(plan: list[Todo]) -> str:
         """Record or update your step-by-step plan for the current task. Pass the FULL list every
@@ -77,36 +86,48 @@ async def main() -> None:
         return render_plan(plan)
 
     @function_tool
-    async def ask_user(question: str) -> str:
+    async def ask_user(question: str, choices: list[str] = []) -> str:
         """Ask the user a question when the task is ambiguous or needs a decision only they can
-        make. Returns their answer."""
+        make. Pass `choices` to offer options (empty for a free-form answer). Returns their answer."""
+        prompt = f"\n[agent asks] {question}\n"
+        if choices:
+            prompt += "\n".join(f"  {i}) {c}" for i, c in enumerate(choices, 1)) + "\n"
         try:
-            return await asyncio.to_thread(input, f"\n[agent asks] {question}\n> ")
+            answer = await asyncio.to_thread(input, prompt + "> ")
         except EOFError:
             return "(no answer: input is not available; proceed with a reasonable assumption)"
+        if choices and answer.strip().isdigit() and 1 <= int(answer) <= len(choices):
+            return choices[int(answer) - 1]
+        return answer
 
     @function_tool
     async def codebase_search(query: str) -> str:
-        """Search the project by meaning and return the most relevant file regions as
-        `path:start-end`. Read those regions to see the code."""
+        """Search the project by meaning and return the most relevant file regions with their code.
+        Use it to find where something lives before reading or editing."""
         root = _workspace_root()
         index = CodebaseIndex(root, _openai_embedder(), cache_path=_cache_path(root))
         index.index()
         return format_hits(root, index.search(query))
 
     @function_tool
-    async def task(instructions: str) -> str:
+    async def web_fetch(url: str) -> str:
+        """Fetch a web page or raw file over HTTP(S) and return its text, for documentation or an
+        error message the repository does not contain."""
+        return await fetch_text(url)
+
+    @function_tool
+    async def task(task_instructions: str) -> str:
         """Delegate a self-contained sub-task to a fresh sandboxed agent and return its result.
-        Give it everything it needs in `instructions`; it does not see this conversation."""
-        sub = SandboxAgent(name="Task", model=model, instructions=SYSTEM_INSTRUCTION)
-        sub_result = await Runner.run(sub, input=instructions, run_config=local_run_config())
+        Give it everything it needs; it does not see this conversation."""
+        sub = SandboxAgent(name="Task", model=model, instructions=SYSTEM_INSTRUCTION + SUBAGENT_ADDENDUM)
+        sub_result = await Runner.run(sub, input=task_instructions, run_config=local_run_config())
         return str(sub_result.final_output)
 
     sdk_agent = SandboxAgent(
         name="PortableCodingAgent",
         model=model,
-        instructions=SYSTEM_INSTRUCTION,
-        tools=[update_plan, ask_user, codebase_search, task],
+        instructions=instructions,
+        tools=[update_plan, ask_user, codebase_search, web_fetch, task],
     )
     result = await Runner.run(
         sdk_agent,
