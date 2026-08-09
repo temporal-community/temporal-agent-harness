@@ -1,0 +1,22 @@
+# Registry of agents the hello-Gemini-Enterprise example UI can launch.
+#
+# The shared FastAPI server (examples/app.py) reads this file and passes the parsed
+# registry into the packaged SessionManagerWorkflow as its workflow init arg. The
+# manager then serves it back over the `available_agents` query, so the app server
+# can expose it at /api/agents without hardcoding the agent list.
+#
+# To expose a new agent: register its @workflow.defn on a worker, then add a
+# [[agents]] entry here.
+
+[[agents]]
+key = "hello-gemini-enterprise"
+workflow_type = "HelloGeminiEnterpriseAgent"
+task_queue = "hello-gemini-enterprise"
+label = "Hello Gemini Enterprise"
+description = """
+A hello-world Gemini agent on the Interactions API. Chat in plain text; it replies in
+prose and can call one tool (get_weather) for a city's weather. Exists to prove the
+backend swap: the same workflow runs against either the consumer Gemini Developer API or
+Google's Gemini Enterprise Agent Platform (GEAP, the Vertex AI rebrand), chosen entirely
+by the worker's genai.Client — no workflow change. Set GOOGLE_GENAI_USE_VERTEXAI=true and
+GOOGLE_CLOUD_PROJECT on the worker to switch."""
