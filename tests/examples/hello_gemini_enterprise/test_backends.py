@@ -55,6 +55,9 @@ from examples.hello_gemini_enterprise.worker import (
     _use_geap,
 )
 from examples.hello_gemini_enterprise.workflow import HelloGeminiEnterpriseAgentWorkflow
+from examples.hello_gemini_enterprise.workflow_generate_content import (
+    HelloGeminiEnterpriseGenerateContentWorkflow,
+)
 
 
 def _skip_reason() -> str | None:
@@ -89,7 +92,10 @@ async def client_and_queue():
     async with Worker(
         env.client,
         task_queue=task_queue,
-        workflows=[HelloGeminiEnterpriseAgentWorkflow],
+        workflows=[
+            HelloGeminiEnterpriseAgentWorkflow,
+            HelloGeminiEnterpriseGenerateContentWorkflow,
+        ],
         # No tool activities (get_weather is inline); just the Gemini plugin's activities,
         # which is where the real client and the backend decision live.
         activities=list(GeminiApiCaller(gemini).activities()),
@@ -114,18 +120,20 @@ async def _turn_events(client: Client, workflow_id: str) -> list[AgentEvent]:
     return events
 
 
-async def test_one_turn_with_a_tool_call(client_and_queue):
-    """A real turn against the selected backend: the model calls get_weather and answers.
+async def _assert_weather_turn(client, task_queue, workflow_cls, label: str) -> None:
+    """Drive one real weather turn through ``workflow_cls`` and assert the harness contract.
 
-    Asserting on the TOOL CALL, not just on prose, is deliberate — a backend that merely
-    returns text would pass a text-only assertion while silently failing to support the
-    Interactions API's function-calling, which is the thing the prototype depends on.
+    Shared by both surfaces so the two are held to the IDENTICAL bar — that is what makes the
+    Interactions-vs-generate_content comparison meaningful rather than anecdotal.
+
+    Asserting on the TOOL CALL, not just on prose, is deliberate: a backend that merely returns
+    text would pass a text-only assertion while silently failing at function calling, which is the
+    thing the real agent depends on.
     """
-    client, task_queue = client_and_queue
     handle = await client.start_workflow(
-        HelloGeminiEnterpriseAgentWorkflow.run,
+        workflow_cls.run,
         AgentConfig(),
-        id=f"HelloGeminiEnterpriseAgent-{uuid.uuid4()}",
+        id=f"{workflow_cls.__name__}-{uuid.uuid4()}",
         task_queue=task_queue,
     )
     await handle.execute_update(
@@ -139,14 +147,13 @@ async def test_one_turn_with_a_tool_call(client_and_queue):
     )
 
     events = await _turn_events(client, handle.id)
-    kinds = [e.event.type for e in events]
-    print(f"[hello_gemini_enterprise] turn events: {[str(k) for k in kinds]}")
+    print(f"[{label}] turn events: {[str(e.event.type) for e in events]}")
 
     errors = [e.event for e in events if e.event.type == AgentEventType.ERROR]
     assert not errors, f"turn failed: {errors}"
 
-    # The model asked for the tool, and the harness ran it (proving run_tool still owns the
-    # lifecycle on this backend).
+    # The model asked for the tool, and the harness ran it — proving run_tool still owns the
+    # approval gate and lifecycle events on this surface.
     tool_starts = [e.event for e in events if e.event.type == AgentEventType.TOOL_START]
     assert [t.tool_name for t in tool_starts] == ["get_weather"], (
         f"expected exactly one get_weather call, got {[t.tool_name for t in tool_starts]}"
@@ -157,5 +164,30 @@ async def test_one_turn_with_a_tool_call(client_and_queue):
     replies = [e.event for e in events if e.event.type == AgentEventType.REPLY]
     assert len(replies) == 1
     text = replies[0].output.get("text") or ""
-    print(f"[hello_gemini_enterprise] reply: {text!r}")
+    print(f"[{label}] reply: {text!r}")
     assert "72" in text, f"reply did not use the tool result: {text!r}"
+
+
+async def test_interactions_surface(client_and_queue):
+    """The Interactions API agent. Passes on the consumer API; EXPECTED TO FAIL on GEAP (see
+    the header) with 400 'Unsupported model interaction'."""
+    client, task_queue = client_and_queue
+    await _assert_weather_turn(
+        client, task_queue, HelloGeminiEnterpriseAgentWorkflow, "interactions"
+    )
+
+
+async def test_generate_content_surface(client_and_queue):
+    """The ``models.generate_content`` agent — the port, and the surface that works on GEAP.
+
+    This is the load-bearing test of the migration question: same tool, same persona, same
+    harness tool lifecycle, a surface GEAP actually serves. If this passes on GEAP, moving the
+    real agent off Interactions is a mechanical port rather than an open question.
+    """
+    client, task_queue = client_and_queue
+    await _assert_weather_turn(
+        client,
+        task_queue,
+        HelloGeminiEnterpriseGenerateContentWorkflow,
+        "generate_content",
+    )

@@ -69,6 +69,7 @@ from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
 
 from .workflow import TASK_QUEUE, HelloGeminiEnterpriseAgentWorkflow
+from .workflow_generate_content import HelloGeminiEnterpriseGenerateContentWorkflow
 
 DEFAULT_LOCATION = "global"
 
@@ -162,7 +163,13 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue=task_queue,
-        workflows=[HelloGeminiEnterpriseAgentWorkflow],
+        # BOTH surfaces, one worker, one client: the Interactions agent (which GEAP refuses)
+        # and the generate_content agent (which GEAP serves). Registering them together is what
+        # makes them A/B-able — identical tool, identical persona, identical backend config.
+        workflows=[
+            HelloGeminiEnterpriseAgentWorkflow,
+            HelloGeminiEnterpriseGenerateContentWorkflow,
+        ],
         # No tool activities: get_weather is an inline workflow tool. The Gemini interactions
         # activity is registered by the plugin above.
         activities=[],

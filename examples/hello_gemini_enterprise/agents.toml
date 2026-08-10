@@ -20,3 +20,15 @@ backend swap: the same workflow runs against either the consumer Gemini Develope
 Google's Gemini Enterprise Agent Platform (GEAP, the Vertex AI rebrand), chosen entirely
 by the worker's genai.Client — no workflow change. Set GOOGLE_GENAI_USE_VERTEXAI=true and
 GOOGLE_CLOUD_PROJECT on the worker to switch."""
+
+[[agents]]
+key = "hello-gemini-enterprise-gc"
+workflow_type = "HelloGeminiEnterpriseGenerateContentAgent"
+task_queue = "hello-gemini-enterprise"
+label = "Hello Gemini Enterprise (generate_content)"
+description = """
+The SAME agent as above, on models.generate_content instead of the Interactions API — the
+port that actually runs on GEAP. Identical tool and persona, so any difference you see
+between the two is a property of the API surface, not the agent. Run both against the same
+worker to compare: the Interactions one fails on GEAP ("Unsupported model interaction"),
+this one completes turn_started -> tool_start -> tool_end -> reply -> turn_end."""

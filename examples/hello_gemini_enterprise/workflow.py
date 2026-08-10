@@ -68,6 +68,8 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
+    from .tools import SYSTEM_INSTRUCTION, get_weather
+
 
 TASK_QUEUE = "hello-gemini-enterprise"
 
@@ -78,22 +80,6 @@ TASK_QUEUE = "hello-gemini-enterprise"
 # it here (not via an env var: reading the environment in workflow code would make the model a
 # non-deterministic input that isn't recorded in history).
 DEFAULT_MODEL = "gemini-3.5-flash"
-
-SYSTEM_INSTRUCTION = """\
-You are a friendly assistant. Answer the user in brief, natural prose.
-
-You have one tool, `get_weather`, which returns the current weather for a city. When the user
-asks about the weather somewhere, call it (don't guess), then tell them the answer in a sentence
-or two. For anything else, just reply directly."""
-
-
-@agent.tool_defn(inherently_safe=True)
-async def get_weather(city: str) -> str:
-    """Return the current weather for a city. `city` is a plain city name, e.g. "Paris"."""
-    # Canned lookup — a hello-world, not a real weather service. Being an inline
-    # `tool_defn` (not an activity tool) keeps the worker free of tool activities, so the
-    # only thing the worker registers is the Gemini plugin whose client we are testing.
-    return f"It's 72°F and sunny in {city}."
 
 
 @workflow.defn(name="HelloGeminiEnterpriseAgent")

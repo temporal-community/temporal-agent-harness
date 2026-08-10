@@ -68,25 +68,81 @@ that base, then `interactions.create(agent=…)`). Skipped on cost grounds and b
 base isn't the shape a harness agent needs — it would confirm the agent-interaction path is
 functional, but wouldn't change the conclusion for a Gemini-model agent.
 
+### But `models.generate_content` DOES work on GEAP — proven end to end
+
+`workflow_generate_content.py` is the same agent on `models.generate_content`, and it runs a full
+harness turn on GEAP:
+
+```
+[generate_content] turn events: ['turn_started', 'tool_start', 'tool_end', 'reply', 'turn_end']
+[generate_content] reply: "It's currently 72°F and sunny in Paris."
+```
+
+The tool call went through `run_tool`, so the approval gate and tool lifecycle events are intact.
+That makes moving off Interactions a **mechanical port, not an open question** — see
+`workflow_generate_content.py`'s module docstring for a per-item accounting of what the port costs.
+Note what that event list is *missing*, though: no `model_interaction_*`, no `tool_requested` —
+the observability gap below, confirmed by measurement rather than inferred.
+
+### Retrieval: `file_search` is hard-blocked on GEAP
+
+The Interactions API's built-in `file_search` (and its file-search stores) is not merely absent from
+GEAP — the SDK refuses it by mode, with an unusually direct message:
+
+| Call on GEAP | Result |
+|---|---|
+| `file_search_stores.list()` | ❌ `"This method is only supported in Gemini Developer API mode, not in Gemini Enterprise Agent Platform mode."` |
+| `Tool(file_search=…)` | ❌ `"file_search parameter is only supported in Gemini Developer API mode, not in Gemini Enterprise Agent Platform mode."` |
+| `Tool(retrieval=vertex_ai_search=…)` | ✅ accepted |
+| `Tool(retrieval=vertex_rag_store=…)` | ✅ accepted |
+
+So GEAP's retrieval story is `Tool(retrieval=…)`, in one of two shapes — **RAG Engine**
+(`vertex_rag_store`, a managed corpus, the closer conceptual analogue to file-search stores) or
+**Vertex AI Search** (`vertex_ai_search`, a Discovery Engine datastore). Both tool shapes are
+accepted; neither is proven end-to-end here, because both need real ingested data.
+
+Two costs that aren't obvious from the table:
+
+- **Ingestion moves to a different SDK.** `google-genai` can *use* a RAG corpus but cannot create
+  one or import files into it — that's `google-cloud-aiplatform`, which is not currently a
+  dependency of this repo. So the store-management code the prototype has today doesn't port; it
+  gets rewritten against a new library.
+- **Citations change shape.** The harness currently maps `text_annotation` off the Interactions
+  API's `FileCitation`. Retrieval-tool results arrive as grounding metadata instead, so the citation
+  handling is new code too.
+
+A third option worth weighing precisely because of that: **retrieval as an ordinary harness tool**
+(`@agent.activity_tool_defn async def search_docs(query: str)`), backed by whatever you like. It's
+more code than a provider built-in, but it is **provider-agnostic** — the same tool works on GEAP
+*and* on OpenAI, so it decouples the retrieval decision from the model-backend decision — and
+because it goes through `run_tool` it gets the approval gate and full tool lifecycle events, which a
+server-side built-in span never will.
+
 ### What this means for a real migration
 
 The client swap below is correct and remains the whole *configuration* story — but for an
 Interactions-API agent it is necessary and **not sufficient**. Porting
 `internal-ai-prototypes/agent` to GEAP today means:
 
-1. **Moving its inner loop from `interactions.create` to `models.generate_content`.** The harness
-   already supports this via `google_genai_client(vertexai=True, project=…, location=…)`, and it
-   demonstrably works on GEAP. This is the real work: rewriting the SSE step/delta reduction as a
-   `generate_content` tool-calling loop.
-2. **Replacing the built-in `file_search` tool**, which has no drop-in GEAP equivalent (that's
-   Vertex RAG Engine / Vertex AI Search) — a separate investigation regardless of surface.
-3. **Accepting an observability regression, or fixing it.** The harness's `generate_content` path
-   currently publishes only `reply_delta` — no `model_interaction_*` bracket, no `tool_requested`,
-   unlike the Interactions path. Porting without addressing that loses the model spans and token
-   accounting.
+1. **Moving its inner loop from `interactions.create` to `models.generate_content`** — done and
+   proven here in `workflow_generate_content.py`. The reduction actually gets *simpler* (finished
+   parts instead of an SSE step/delta fold with argument-fragment reassembly); the tool loop is
+   unchanged, because harness tools require `run_tool` and so Gemini's automatic function calling
+   can't be used on either surface.
+2. **Owning conversation state.** `previous_interaction_id` (one server-side string) becomes a
+   client-side `list[Content]` you thread and grow. The transcript then lives in workflow state and
+   history, and the context window is yours to manage. This is the largest *structural* change.
+3. **Rebuilding retrieval** — see above. New tool shape, new ingestion library, new citation
+   handling. The biggest unknown, and the item to scope first.
+4. **Accepting an observability regression, or fixing it.** Measured: the `generate_content` path
+   publishes no `model_interaction_*` and no `tool_requested` (its non-streamed activity publishes
+   nothing at all; the streamed one publishes only `reply_delta`). That's the same coupling fixed
+   for the OpenAI integration in issue #50, and it wants the same fix — publish at the model-call
+   boundary — before anything real ships on this path.
 
 The cheaper alternative is to wait: nothing about the harness or the prototype needs to change if
-Google ships model interactions on GEAP, since the client swap already works.
+Google ships model interactions on GEAP, since the client swap already works. Whether that's viable
+depends on your deadline, not on the code.
 
 ## The configuration story (verified, and still the whole of it)
 
