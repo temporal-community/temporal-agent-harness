@@ -54,11 +54,11 @@ from temporal_agent_harness.harness.agent_protocol import (
     RUN_SUBAGENT_TURN_ACTIVITY,
     TURN_EVENTS_TOPIC,
     AgentEvent,
-    AgentEventType,
     RunSubagentTurnInput,
     SubagentMessageSent,
     SubagentTurnResult,
 )
+from temporal_agent_harness.harness._turn_fold import TurnFold
 from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
 
@@ -177,8 +177,10 @@ class SubagentActivities:
         an activity that gated on a grandchild's ``turn_end`` (a turn it never mounts) would wedge.
         """
         stream = WorkflowStreamClient.create(self._client, req.child_workflow_id)
-        output: dict[str, Any] = {}
-        got_reply = False
+        # The fold is shared with AgentClient.run_turn; only the READING differs (see the
+        # module docstring of ``_turn_fold`` and the note above about why this path must not
+        # merge). It also filters to our turn_id, so the loop no longer needs to.
+        fold = TurnFold(turn_id=progress.turn_id)
         async for item in stream.subscribe(
             topics=[TURN_EVENTS_TOPIC],
             from_offset=progress.consumed_offset,
@@ -188,25 +190,21 @@ class SubagentActivities:
             # Advance the resume offset for EVERY item seen (mutated in place so the background
             # heartbeat re-sends the latest), then act only on our turn's events.
             progress.consumed_offset = item.offset + 1
-            envelope: AgentEvent = item.data
-            if envelope.turn_id != progress.turn_id:
-                continue
-            payload = envelope.event
-            if payload.type == AgentEventType.ERROR:
+            ended = fold.feed(item.data)
+            if fold.error is not None:
+                # Raised the moment the terminal error is seen — NOT after turn_end — so this
+                # keeps the pre-fold behavior of not consuming the trailing turn_end.
                 # Carry the child's ACTUAL accepted turn number so the parent closes the bracket
                 # on the same turn the dispatch marker opened (see _accepted_turn_from_error).
                 raise ApplicationError(
-                    payload.message or "subagent turn failed",
+                    fold.error,
                     {"subagent_turn": progress.turn_number},
                     type="SubagentTurnError",
                     non_retryable=True,
                 )
-            if payload.type == AgentEventType.REPLY:
-                output = payload.output
-                got_reply = True
-            if payload.type == AgentEventType.TURN_END:
+            if ended:
                 break
-        return output, got_reply
+        return fold.output, fold.got_reply
 
     @asynccontextmanager
     async def _auto_heartbeat(self, progress: _TurnProgress) -> AsyncIterator[None]:

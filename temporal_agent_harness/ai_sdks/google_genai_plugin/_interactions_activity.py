@@ -59,6 +59,7 @@ from temporal_agent_harness.harness.agent_workflow import (
     TurnEventPublisher,
 )
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
+from temporal_agent_harness.harness import tracing
 from temporalio import activity
 
 from ._interactions_models import _InteractionResult
@@ -104,6 +105,21 @@ def make_gemini_interactions_create_streamed(client: GeminiClient):
             # event (so usage stays None if the stream errors before completing).
             model = kwargs.get("model")
             usage: TokenUsage | None = None
+            # The OTel counterpart of that bracket. Entered on the same stack so it closes
+            # after the finally below (and therefore after usage is recorded), and created
+            # unconditionally — unlike the events, the span does not need a stream_context,
+            # because the enclosing turn span arrives through Temporal's own header
+            # propagation. This is the whole point of tracing at the harness layer: the Gemini
+            # integration has no OTel story of its own, and gets one anyway.
+            attempt, activity_type = tracing.activity_context()
+            span = stack.enter_context(
+                tracing.model_span(
+                    model=model,
+                    sdk=tracing.SDK_GOOGLE_GENAI,
+                    attempt=attempt,
+                    activity_type=activity_type,
+                )
+            )
             if publisher is not None:
                 publisher.publish(ModelInteractionStarted(model=model))
             try:
@@ -116,7 +132,16 @@ def make_gemini_interactions_create_streamed(client: GeminiClient):
                     if isinstance(event, InteractionCompletedEvent):
                         usage = _to_token_usage(event.interaction.usage)
                     collected.append(event.model_dump(exclude_none=True, mode="json"))
+            except Exception as e:
+                span.record_error(str(e) or type(e).__name__, exception=e)
+                raise
             finally:
+                if usage is not None:
+                    span.set_usage(
+                        input_tokens=usage.input_tokens,
+                        output_tokens=usage.output_tokens,
+                        total_tokens=usage.total_tokens,
+                    )
                 if publisher is not None:
                     publisher.publish(ModelInteractionEnded(model=model, usage=usage))
 

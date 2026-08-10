@@ -294,11 +294,44 @@ class MessageQueued(StreamEvent[Literal[AgentEventType.MESSAGE_QUEUED]]):
 
 
 class TurnStarted(StreamEvent[Literal[AgentEventType.TURN_STARTED]]):
-    """A turn has begun processing."""
+    """A turn has begun processing.
+
+    Carries the turn's OpenTelemetry ids when tracing is configured — the join between this
+    durable event stream and the trace an observability/eval backend sees. A consumer that
+    wants to attach a score to this turn, link it to a dataset item, or deep-link a UI to the
+    trace reads ``otel_trace_id`` from here rather than trying to re-derive it (it cannot: the
+    ids come from the workflow's deterministic RNG, which is not reproducible outside the
+    workflow). Both are ``""`` when tracing is not enabled, which is the default.
+    """
 
     type: Literal[AgentEventType.TURN_STARTED] = AgentEventType.TURN_STARTED
     user_message: str = Field(
         description="The user message this turn is now actively processing."
+    )
+    # Defaulted, and must stay that way: AgentEvents are persisted pydantic models on a durable
+    # stream, so a required field added here would fail validation when an existing session's
+    # history is replayed.
+    otel_trace_id: str = Field(
+        default="",
+        description=(
+            "Lowercase-hex (32 char) OpenTelemetry trace id of this turn's root span, or "
+            '"" when tracing is not configured.'
+        ),
+    )
+    otel_span_id: str = Field(
+        default="",
+        description=(
+            "Lowercase-hex (16 char) span id of this turn's root span, or \"\" when tracing "
+            "is not configured."
+        ),
+    )
+    labels: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Observability labels in effect for this turn: the session's "
+            "AgentConfig.labels merged with this message's AgentMessage.labels (per-turn "
+            "wins). Never interpreted by the harness."
+        ),
     )
 
 

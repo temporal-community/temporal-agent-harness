@@ -73,6 +73,7 @@ from temporal_agent_harness.harness.agent_workflow import (
     TurnEventPublisher,
 )
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
+from temporal_agent_harness.harness import tracing
 
 if TYPE_CHECKING:
     from agents import Tool
@@ -143,6 +144,7 @@ class OpenAIStreamObserver:
         self._model = model
         self._stack: AsyncExitStack | None = None
         self._publisher: TurnEventPublisher | None = None
+        self._span: tracing.AgentSpan = tracing.AgentSpan(None)
         # Function-call item id -> (call_id, tool_name), recorded on
         # response.output_item.added and consumed on the matching …arguments.done.
         self._fn_calls: dict[str, tuple[str, str]] = {}
@@ -156,6 +158,19 @@ class OpenAIStreamObserver:
         self._publisher = await self._stack.enter_async_context(
             AgentWorkflowRunner.publisher_from_activity(self._context)
         )
+        # The OTel counterpart of the model_interaction bracket below, opened on the same
+        # stack so it spans exactly the same window. This runs inside the model activity, so
+        # Temporal's OTel plugin has already made the enclosing turn span current here — the
+        # generation nests under the turn with no context plumbing of ours.
+        attempt, activity_type = tracing.activity_context()
+        self._span = self._stack.enter_context(
+            tracing.model_span(
+                model=self._model,
+                sdk=tracing.SDK_OPENAI_AGENTS,
+                attempt=attempt,
+                activity_type=activity_type,
+            )
+        )
         # Open the model-interaction span at dispatch, before awaiting any event, so the
         # span duration is the real call latency.
         self._publisher.publish(ModelInteractionStarted(model=self._model))
@@ -163,6 +178,14 @@ class OpenAIStreamObserver:
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool | None:
         try:
+            if self._usage is not None:
+                self._span.set_usage(
+                    input_tokens=self._usage.input_tokens,
+                    output_tokens=self._usage.output_tokens,
+                    total_tokens=self._usage.total_tokens,
+                )
+            if exc is not None:
+                self._span.record_error(str(exc) or type(exc).__name__)
             if self._publisher is not None:
                 # In a finally-equivalent: always close the started bracket, even if the
                 # stream errored (usage then stays None). Published while the
@@ -175,6 +198,7 @@ class OpenAIStreamObserver:
                 await self._stack.aclose()
                 self._stack = None
             self._publisher = None
+            self._span = tracing.AgentSpan(None)
         # Never swallow a stream error: the batched-collect path owns failures.
         return False
 

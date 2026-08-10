@@ -278,3 +278,15 @@ install-nexgen:
 nexus-agent-generate: install-nexgen
     "$HOME/.local/bin/nexgen" python temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml \
         --output temporal_agent_harness/nexus_agent_adapter/generated
+
+# --- Evals (Monty) -----------------------------------------------------------------------
+# Delegates into examples/monty. Traces and scores go to Langfuse; see that justfile's notes.
+
+evals-seed:
+    cd "{{monty}}" && just evals-seed
+
+evals-run NAME:
+    cd "{{monty}}" && just evals-run "{{NAME}}"
+
+evals-case NAME CASE:
+    cd "{{monty}}" && just evals-case "{{NAME}}" "{{CASE}}"

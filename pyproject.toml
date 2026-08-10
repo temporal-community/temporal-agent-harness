@@ -51,6 +51,17 @@ ui = [
 code-mode = [
     "pydantic-monty>=0.0.18",
 ]
+# Evals + tracing: temporal_agent_harness.evals, and the OTel spans the harness emits from the
+# turn loop and the tool/model paths. The instrumentation itself (harness/tracing.py) degrades
+# to no-ops when opentelemetry is absent, so only applications that actually want traces need
+# this. `temporalio[opentelemetry]` supplies the replay-safe tracer provider + workflow plugin;
+# `langfuse` is needed only for the dataset/experiment/score APIs, not for trace export (that
+# goes over plain OTLP).
+evals = [
+    "temporalio[opentelemetry]>=1.30.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.30.0",
+    "langfuse>=3.0",
+]
 
 [dependency-groups]
 # Everything needed to RUN the bundled Monty example from a checkout. Not part of the

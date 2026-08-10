@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
-from typing import Any, TypeVar
+from dataclasses import dataclass
+from typing import Any, Generic, TypeVar
 
+from pydantic import BaseModel
 from temporalio.client import Client, WithStartWorkflowOperation, WorkflowUpdateFailedError
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
 
@@ -37,10 +39,12 @@ from temporal_agent_harness.harness.agent_protocol import (
     OperatorCommandResult,
     PendingApproval,
     PendingCallback,
+    TokenUsage,
     ToolApprovalDecision,
     ToolApprovalResult,
     AgentMessageReply,
 )
+from temporal_agent_harness.harness._turn_fold import TurnFold
 from temporal_agent_harness.harness.stream_merge import (
     DEFAULT_STALL_GRACE_SECONDS,
     merge_stream,
@@ -53,6 +57,9 @@ from temporal_agent_harness.harness.stream_merge.cursor import Cursor
 DEFAULT_TURN_TIMEOUT = 300.0
 
 T = TypeVar("T")
+# The pydantic model a caller expects a turn's reply to validate into (``run_turn``'s
+# ``output_type``), so ``TurnResult.typed`` is statically that model rather than ``Any``.
+OutT = TypeVar("OutT", bound=BaseModel)
 
 # ---------------------------------------------------------------------------
 # Exceptions
@@ -118,6 +125,42 @@ AgentStreamOutput = AgentEvent | AgentTurnError | AgentTurnTimeout
 # within one subagent turn carries the same value (the cursor as of that turn's dispatch). See
 # ``stream_merge.merge.MergedItem``.
 OnItemCallback = Callable[[AgentStreamOutput, int], T]
+
+
+@dataclass(frozen=True)
+class TurnResult(Generic[OutT]):
+    """One completed turn, as a test / eval runner / script wants it.
+
+    Returned by :meth:`AgentClient.run_turn`. A plain frozen dataclass rather than a pydantic
+    model on purpose: it is a local return value, never serialized, and ``events`` already
+    holds validated :class:`AgentEvent`s that a pydantic field would pointlessly re-validate.
+
+    ``output`` is the handler's return model as JSON — always populated on a successful turn.
+    ``typed`` is that dict re-validated into the ``output_type`` the caller named, or ``None``
+    if they named none. ``error`` is set (and ``output`` empty) when the turn ended in an error
+    and the caller asked not to raise.
+
+    ``otel_trace_id`` is this turn's trace, read off ``TurnStarted``. It is the handle an eval
+    runner uses to attach a score, or link the turn to a dataset item, after the fact — and is
+    ``""`` when tracing is not configured.
+    """
+
+    turn_id: str
+    turn_number: int
+    output: dict[str, Any]
+    typed: OutT | None
+    error: str | None
+    events: tuple[AgentEvent, ...]
+    usage: TokenUsage
+    model_interactions: int
+    otel_trace_id: str
+    labels: dict[str, str]
+    accepted_offset: int
+    resume_offset: int
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None
 
 
 # ---------------------------------------------------------------------------
@@ -308,11 +351,25 @@ class AgentClient:
             result_type=OperatorCommandResult,
         )
 
+    async def next_turn_number(self) -> int:
+        """The turn number the agent will assign to the next message sent right now.
+
+        Accounts for turns already queued behind an active one, so it is correct for an agent
+        with message queuing enabled — the naive ``current_turn + 1`` is not, and would be
+        rejected as stale. Costs one ``agent_status`` query; a caller sending several messages
+        back-to-back should track the number itself from each
+        :attr:`AgentMessageReply.turn_number` instead of calling this per message.
+        """
+        status = await self.get_status()
+        return status.current_turn + len(status.pending_turns) + 1
+
     async def _submit_message(
         self,
         msg_type: str,
         payload: dict[str, Any],
         expected_turn: int,
+        *,
+        labels: dict[str, str] | None = None,
     ) -> AgentMessageReply:
         """Submit one message to the agent's front door, WITHOUT streaming the turn.
 
@@ -335,7 +392,10 @@ class AgentClient:
             return await handle.execute_update(
                 SEND_AGENT_MESSAGE_UPDATE,
                 AgentMessage(
-                    type=msg_type, payload=payload, expected_turn=expected_turn
+                    type=msg_type,
+                    payload=payload,
+                    expected_turn=expected_turn,
+                    labels=labels or {},
                 ),
                 result_type=AgentMessageReply,
             )
@@ -462,6 +522,115 @@ class AgentClient:
             on_item=on_item,
             timeout=timeout,
             stall_grace_seconds=subagent_stall_grace_seconds,
+        )
+
+    async def run_turn(
+        self,
+        msg_type: str,
+        payload: dict[str, Any],
+        *,
+        expected_turn: int | None = None,
+        output_type: type[OutT] | None = None,
+        labels: dict[str, str] | None = None,
+        timeout: float | None = DEFAULT_TURN_TIMEOUT,
+        collect_events: bool = True,
+        raise_on_error: bool = True,
+        subagent_stall_grace_seconds: float = DEFAULT_STALL_GRACE_SECONDS,
+    ) -> TurnResult[OutT]:
+        """Run one turn to completion and return its outcome.
+
+        The batch-oriented counterpart to :meth:`send_message`: same machinery, but it drains
+        the turn instead of handing you a stream, and gives you the things a test, an eval
+        runner, or a script actually wants — the handler's typed reply, the turn's total token
+        usage, and its trace id. Without this every caller re-implements the same
+        ``next(e.event for e in events if e.event.type == REPLY)`` scan.
+
+        Use :meth:`send_message` instead when the point IS the stream (a chat UI rendering
+        deltas as they arrive); ``run_turn`` waits for the whole turn before returning anything.
+
+        Args:
+            msg_type: Name of the target ``@agent.accepts`` handler.
+            payload: JSON of that handler's input model.
+            expected_turn: The turn number this message should be. ``None`` derives it via
+                :meth:`next_turn_number` — one extra query, but it means a caller running a
+                scripted conversation never has to track turn numbers.
+            output_type: When given, the reply dict is re-validated into this model and returned
+                as :attr:`TurnResult.typed`. The agent already guarantees its handler returned
+                this type, but the reply crosses the wire as a dict, so a caller that wants the
+                model back has to say which one.
+            labels: Per-turn observability labels (see ``AgentMessage.labels``) — e.g. the
+                dataset item this run came from.
+            collect_events: Keep every event in :attr:`TurnResult.events`. Set ``False`` for
+                long or high-volume turns where only the outcome matters; the fold still
+                produces output/usage/error either way.
+            raise_on_error: Raise :class:`AgentTurnError` if the turn ended in an error. Set
+                ``False`` to get the failure as data instead — what a batch runner scoring many
+                cases wants, since a failed case is a result, not a crash.
+
+        Raises:
+            StaleTurnError: The client is behind the workflow.
+            AgentBusyError: The agent is busy and does not support enqueuing.
+            AgentTurnTimeout: The turn did not finish within ``timeout``.
+            AgentTurnError: The turn ended in an error and ``raise_on_error`` is set.
+        """
+        if expected_turn is None:
+            expected_turn = await self.next_turn_number()
+        reply = await self._submit_message(
+            msg_type, payload, expected_turn, labels=labels
+        )
+        fold = TurnFold(turn_id=reply.turn_id)
+        events: list[AgentEvent] = []
+        resume_offset = reply.accepted_offset
+        timed_out = False
+
+        # Reuse the same merged stream send_message drives, so a subagent-driving turn is
+        # drained exactly as faithfully here as in the UI path. ``_merged_turn`` is an async
+        # generator, so it is iterated directly rather than awaited.
+        merged = self._merged_turn(
+            reply,
+            on_item=lambda item, offset: (item, offset),
+            timeout=timeout,
+            stall_grace_seconds=subagent_stall_grace_seconds,
+        )
+        async for item, offset in merged:
+            if offset >= 0:
+                resume_offset = offset
+            if isinstance(item, AgentTurnTimeout):
+                timed_out = True
+                break
+            if isinstance(item, AgentTurnError):
+                # _merged_turn substitutes this for OUR turn's terminal AgentError; the fold
+                # never sees that event, so record the error here instead.
+                fold.error = str(item)
+                continue
+            if collect_events:
+                events.append(item)
+            fold.feed(item)
+
+        if timed_out:
+            raise AgentTurnTimeout(
+                f"turn {reply.turn_number} did not complete within {timeout}s"
+            )
+        if fold.error is not None and raise_on_error:
+            raise AgentTurnError(fold.error)
+
+        typed: OutT | None = None
+        if output_type is not None and fold.got_reply:
+            typed = output_type.model_validate(fold.output)
+
+        return TurnResult(
+            turn_id=reply.turn_id,
+            turn_number=reply.turn_number,
+            output=fold.output,
+            typed=typed,
+            error=fold.error,
+            events=tuple(events),
+            usage=fold.usage,
+            model_interactions=fold.model_interactions,
+            otel_trace_id=fold.otel_trace_id,
+            labels=fold.labels,
+            accepted_offset=reply.accepted_offset,
+            resume_offset=resume_offset,
         )
 
     async def _merged_turn(
