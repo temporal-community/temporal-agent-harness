@@ -180,6 +180,7 @@ server: app-build
         examples/openai_hello/agents.toml \
         examples/pydantic_ai_hello/agents.toml \
         examples/hello_gemini_enterprise/agents.toml \
+        examples/hello_openai_file_search/agents.toml \
         examples/react_agent/agents.toml \
         examples/monty/agents.toml \
         examples/callback_tools/wiki_agent/agents.toml \
@@ -203,6 +204,9 @@ worker-react:
 worker-hello-geap:
     cd "{{justfile_directory()}}/examples/hello_gemini_enterprise" && just worker
 
+worker-openai-file-search:
+    cd "{{justfile_directory()}}/examples/hello_openai_file_search" && just worker
+
 worker-monty:
     cd "{{monty}}" && just worker
 
@@ -212,7 +216,7 @@ worker-wiki:
 worker-coding:
     cd "{{justfile_directory()}}/examples/callback_tools/coding_agent" && just worker
 
-# Co-launch all seven agent workers in one terminal (Ctrl-C stops them all; logs interleave).
+# Co-launch all eight agent workers in one terminal (Ctrl-C stops them all; logs interleave).
 # Requires every agent's prerequisites at once (both API keys, the F1 MCP server, etc.).
 workers:
     #!/usr/bin/env bash
@@ -226,6 +230,7 @@ workers:
     just worker-pydantic &
     just worker-react &
     just worker-hello-geap &
+    just worker-openai-file-search &
     just worker-monty &
     just worker-wiki &
     just worker-coding &

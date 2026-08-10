@@ -432,7 +432,7 @@ each in its own terminal:
 just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
 just session-manager   # shared session-manager worker
 just server            # serves the MERGED registry (all agents) on http://localhost:8000
-just workers           # co-launch all seven agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
+just workers           # co-launch all eight agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
 ```
 
 Then create a session for any agent in the UI. A few need extra setup or a client:
@@ -442,6 +442,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | OpenAI Hello · Pydantic AI Hello | `OPENAI_API_KEY`; chat directly in the UI |
 | Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
 | Hello Gemini Enterprise | `GEMINI_API_KEY`, **or** `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_CLOUD_PROJECT` + ADC for GEAP ([details](examples/hello_gemini_enterprise/README.md)); chat directly in the UI |
+| Hello OpenAI file_search | `OPENAI_API_KEY`; the worker creates + ingests a vector store on first run ([details](examples/hello_openai_file_search/README.md)); chat directly in the UI |
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
 | Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client --wiki-dir ./wiki`** — required, or its tool calls hang |
 | Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
