@@ -9,22 +9,33 @@ Hosts only the HelloGeminiEnterpriseAgent workflow. Its one tool (``get_weather`
 harness tool with no worker-side body, so there are no tool activities to register — the only
 thing registered here is the Gemini plugin, which is exactly what this example is testing.
 
-**This file is the entire migration.** ``workflow.py`` never names a backend: it calls
+**This file is the entire backend decision.** ``workflow.py`` never names a backend: it calls
 ``gemini.interactions.create(...)`` on the harness's Temporal-aware shim, which forwards the
 kwargs into the plugin's activity, and the real ``genai.Client`` constructed below is what
 resolves the endpoint and the credentials. So pointing this agent at Google's **Gemini
-Enterprise Agent Platform** (GEAP — the 2026 rebrand of Vertex AI; same SDK, same APIs, no
-breaking changes) instead of the consumer Gemini Developer API is a change to ``_gemini_client``
-and nothing else. No workflow edit, no new workflow history, and a live session cannot tell
-which one it is running against.
+Enterprise Agent Platform** (GEAP — the 2026 rebrand of Vertex AI) instead of the consumer
+Gemini Developer API is a change to ``_gemini_client`` and nothing else — no workflow edit, no
+new workflow history.
+
+.. warning::
+    **Measured 2026-08-10: the GEAP branch does not work for THIS agent.** GEAP hosts the
+    Interactions API but refuses the shape this agent needs:
+    ``interactions.create(model=...)`` returns ``400 'Unsupported model interaction: <model>'``
+    for every model id and name form, while ``models.generate_content`` on the very same client
+    and model succeeds — and you cannot route around it via a custom Agent, because
+    ``agents.create`` accepts only ``base_agent='antigravity-preview-05-2026'``. So the client
+    swap below is necessary but NOT sufficient for an Interactions-API agent. It is still
+    correct, and still the whole configuration story: what's missing is the API surface, not the
+    wiring. Full evidence in README.md ("The verdict").
 
 Env vars (set in the repo-root .env.local — see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE  Temporal connection profile
     HELLO_GEAP_TASK_QUEUE                    task queue to poll (default: hello-gemini-enterprise)
 
-    GOOGLE_GENAI_USE_VERTEXAI  "true" to call GEAP / Agent Platform; anything else (or unset)
-                               uses the consumer Gemini Developer API. Read by the google-genai
-                               SDK itself as well, so it is the SDK's own idiom, not ours.
+    GOOGLE_GENAI_USE_ENTERPRISE  "true" to call GEAP / Agent Platform; anything else (or unset)
+    (or GOOGLE_GENAI_USE_VERTEXAI) uses the consumer Gemini Developer API. Both names are read by
+                               the google-genai SDK itself — ENTERPRISE is the current spelling,
+                               VERTEXAI the legacy alias — so this is the SDK's idiom, not ours.
     When unset/false — consumer Gemini Developer API:
         GEMINI_API_KEY         required. Endpoint: generativelanguage.googleapis.com
     When true — GEAP / Agent Platform:
@@ -63,12 +74,16 @@ DEFAULT_LOCATION = "global"
 
 
 def _use_geap() -> bool:
-    """Whether to target GEAP / Agent Platform rather than the consumer Gemini API."""
-    return os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
+    """Whether to target GEAP / Agent Platform rather than the consumer Gemini API.
+
+    Honors both spellings the google-genai SDK itself accepts —
+    ``GOOGLE_GENAI_USE_ENTERPRISE`` (current) and ``GOOGLE_GENAI_USE_VERTEXAI`` (legacy) — so
+    whichever one is already in an environment works here too. Either being truthy selects GEAP.
+    """
+    return any(
+        os.environ.get(name, "").strip().lower() in {"1", "true", "yes"}
+        for name in ("GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GENAI_USE_VERTEXAI")
+    )
 
 
 def _gemini_client() -> GeminiClient:
@@ -106,7 +121,11 @@ def _gemini_client() -> GeminiClient:
             "that has the Agent Platform API enabled."
         )
     location = os.environ.get("GOOGLE_CLOUD_LOCATION") or DEFAULT_LOCATION
-    return GeminiClient(vertexai=True, project=project, location=location)
+    # `enterprise=` is the current name for what used to be `vertexai=`; the SDK treats them as
+    # exact aliases (`resolved_vertexai = enterprise if enterprise is not None else vertexai`,
+    # google/genai/client.py) and its own docstring calls `vertexai` the legacy flag. Using the
+    # new name to match Google's current GEAP samples — it changes nothing at runtime.
+    return GeminiClient(enterprise=True, project=project, location=location)
 
 
 def _backend_description() -> str:

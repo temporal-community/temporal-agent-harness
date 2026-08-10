@@ -13,6 +13,14 @@
 #     GOOGLE_GENAI_USE_VERTEXAI=true GOOGLE_CLOUD_PROJECT=<project> \
 #       uv run pytest tests/examples/hello_gemini_enterprise -v -s
 #
+# EXPECTED RESULT ON GEAP TODAY (measured 2026-08-10): FAILURE, in the model activity, with
+#     400 'Unsupported model interaction: <model>'
+# GEAP hosts the Interactions API but does not serve model interactions, and a custom Agent can't
+# be built over a Gemini model (`base_agent` accepts only 'antigravity-preview-05-2026'). That
+# failure is the finding, not a regression — see examples/hello_gemini_enterprise/README.md. The
+# test is left un-xfailed on purpose: when Google ships model interactions on GEAP, this goes green
+# on its own and tells us so.
+#
 # This hits a real model and costs real tokens — one short turn per test.
 
 from __future__ import annotations
