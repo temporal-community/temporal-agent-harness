@@ -21,7 +21,6 @@ from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
 
-from temporal_agent_harness.evals import setup_tracing
 from temporal_agent_harness.evals.langfuse import run_experiment, seed_dataset
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
 
@@ -29,13 +28,19 @@ from examples.monty.evals.dataset import DATASET_DESCRIPTION, DATASET_NAME, case
 from examples.monty.evals.evaluators import DEFAULT_EVALUATORS
 
 
-async def _connect(*, traced: bool) -> Client:
+async def _connect() -> Client:
+    """A plain client — deliberately NOT traced.
+
+    This process only sends messages and reads replies; it creates no spans of its own. The
+    traces come from the WORKER, where the workflow and its activities run, and which enables
+    tracing itself (see ``examples/monty/worker.py``). Installing a tracer provider here would
+    look like it was doing something and do nothing at all — so if a run produces scores but no
+    traces, the worker is the thing to check.
+    """
     connect_config = ClientConfig.load_client_connect_config()
-    plugins = [setup_tracing()] if traced else []
     return await Client.connect(
         **connect_config,
         data_converter=await with_large_payload_offload(pydantic_data_converter),
-        plugins=plugins,
     )
 
 
@@ -46,7 +51,7 @@ async def _seed() -> None:
 
 
 async def _run(name: str, case_ids: list[str] | None, concurrency: int) -> None:
-    client = await _connect(traced=True)
+    client = await _connect()
     summary = await run_experiment(
         client,
         DATASET_NAME,
