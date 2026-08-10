@@ -7,52 +7,36 @@ services:
     operations:
       sendAgentMessage:
         description: "Start or reuse an agent workflow session and deliver a message to a named @agent.accepts handler. Mirrors AgentClient.send_message() - msgType is the handler name (e.g. 'ask', 'slash'), payload is its JSON-encoded input model. Returns the turn output for polling via pollMessages."
-        input:
-          $ref: "#/$defs/SendAgentMessageInput"
-        output:
-          $ref: "#/$defs/SendMessageOutput"
+        input: { $ref: "#/$defs/SendAgentMessageInput" }
+        output: { $ref: "#/$defs/SendMessageOutput" }
       executeOperatorCommand:
         description: "Execute a harness-level operator command (e.g. /approvals, /stop, /status). Does not create a turn - the harness applies the change directly and returns a reply string synchronously."
-        input:
-          $ref: "#/$defs/ExecuteOperatorCommandInput"
-        output:
-          $ref: "#/$defs/ExecuteOperatorCommandOutput"
+        input: { $ref: "#/$defs/ExecuteOperatorCommandInput" }
+        output: { $ref: "#/$defs/ExecuteOperatorCommandOutput" }
       approveToolCall:
         description: "Resolve a pending tool-approval gate. The workflow's tool_approval update records the decision; the gated tool call proceeds (or is rejected) immediately."
-        input:
-          $ref: "#/$defs/ApproveToolCallInput"
-        output:
-          $ref: "#/$defs/ApproveToolCallOutput"
+        input: { $ref: "#/$defs/ApproveToolCallInput" }
+        output: { $ref: "#/$defs/ApproveToolCallOutput" }
       queryAgentInterface:
         description: "Return the list of @agent.accepts handlers the agent exposes - name, description, and input/output schemas - mirroring AgentClient.get_agent_interface(). Use this to construct valid sendAgentMessage payloads or to model the agent as a subagent tool."
-        input:
-          $ref: "#/$defs/QuerySessionInput"
-        output:
-          $ref: "#/$defs/AgentInterfaceOutput"
+        input: { $ref: "#/$defs/QuerySessionInput" }
+        output: { $ref: "#/$defs/AgentInterfaceOutput" }
       queryOperatorInterface:
         description: "Return the list of operator commands the agent accepts. Use this to build the Slack App manifest slash_commands section and to route incoming slash commands to the correct operation."
-        input:
-          $ref: "#/$defs/QuerySessionInput"
-        output:
-          $ref: "#/$defs/QueryOperatorInterfaceOutput"
+        input: { $ref: "#/$defs/QuerySessionInput" }
+        output: { $ref: "#/$defs/QueryOperatorInterfaceOutput" }
       queryAgentStatus:
         description: "Return a snapshot of the agent session's current state: turn counter, whether a turn is active, pending tool approvals, and message-queuing configuration. Mirrors AgentClient.get_status()."
-        input:
-          $ref: "#/$defs/QuerySessionInput"
-        output:
-          $ref: "#/$defs/AgentStatusOutput"
+        input: { $ref: "#/$defs/QuerySessionInput" }
+        output: { $ref: "#/$defs/AgentStatusOutput" }
       pollMessages:
         description: "Async operation - attaches a completion callback to WorkflowStream's built-in poll update so reply_delta events published from the agent workflow are delivered. Returns a batch of stream items (WorkflowStream PollResult wire format) plus the next cursor."
-        input:
-          $ref: "#/$defs/PollMessagesInput"
-        output:
-          $ref: "#/$defs/PollMessagesOutput"
+        input: { $ref: "#/$defs/PollMessagesInput" }
+        output: { $ref: "#/$defs/PollMessagesOutput" }
       provideCallbackResult:
         description: "Fulfill a pending callback tool call (a tool with no worker-side body - an attached client executes it and submits the outcome here). Mirrors AgentClient.provide_callback_result(). Exactly one of result/error should be set."
-        input:
-          $ref: "#/$defs/ProvideCallbackResultInput"
-        output:
-          $ref: "#/$defs/ProvideCallbackResultOutput"
+        input: { $ref: "#/$defs/ProvideCallbackResultInput" }
+        output: { $ref: "#/$defs/ProvideCallbackResultOutput" }
 
 $defs:
   SendAgentMessageInput:

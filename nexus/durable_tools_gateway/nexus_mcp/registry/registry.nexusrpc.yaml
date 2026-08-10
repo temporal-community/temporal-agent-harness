@@ -11,16 +11,13 @@ services:
     operations:
       registerNexus:
         description: Register a 1st-party Nexus service with the gateway.
-        input:
-          $ref: "#/$defs/RegisterNexusInput"
+        input: { $ref: "#/$defs/RegisterNexusInput" }
       registerExternal:
         description: Register a 3rd-party external MCP server with the gateway.
-        input:
-          $ref: "#/$defs/RegisterExternalInput"
+        input: { $ref: "#/$defs/RegisterExternalInput" }
       deregister:
         description: Remove a service registration from the gateway.
-        input:
-          $ref: "#/$defs/DeregisterInput"
+        input: { $ref: "#/$defs/DeregisterInput" }
 
 $defs:
   RegisterNexusInput:
