@@ -1,5 +1,8 @@
 # Hello Gemini Enterprise
 
+> **Decision doc:** the GEAP-vs-OpenAI comparison this example feeds into lives at
+> [`docs/internal/gemini-interactions-migration-options.md`](../../docs/internal/gemini-interactions-migration-options.md).
+
 A hello-world Gemini agent — one tool, plain-text chat — that runs **unchanged** against either
 Gemini backend:
 
@@ -98,15 +101,43 @@ GEAP — the SDK refuses it by mode, with an unusually direct message:
 
 So GEAP's retrieval story is `Tool(retrieval=…)`, in one of two shapes — **RAG Engine**
 (`vertex_rag_store`, a managed corpus, the closer conceptual analogue to file-search stores) or
-**Vertex AI Search** (`vertex_ai_search`, a Discovery Engine datastore). Both tool shapes are
-accepted; neither is proven end-to-end here, because both need real ingested data.
+**Vertex AI Search** (`vertex_ai_search`, a Discovery Engine datastore).
 
-Two costs that aren't obvious from the table:
+**RAG Engine is proven end to end** — `rag_engine_probe.py` creates a corpus, ingests a document
+stating a figure no model could know, and retrieves it:
 
-- **Ingestion moves to a different SDK.** `google-genai` can *use* a RAG corpus but cannot create
-  one or import files into it — that's `google-cloud-aiplatform`, which is not currently a
-  dependency of this repo. So the store-management code the prototype has today doesn't port; it
-  gets rewritten against a new library.
+```
+3. query in us-west1 with gemini-2.5-flash
+  reply: 'The Zarnak coefficient for the 2026-Q3 reference build is 47.3 milliseconds.'
+   => RETRIEVAL PROVEN
+```
+
+So the capability exists. Run it yourself:
+
+```bash
+uv run --group examples python -m examples.hello_gemini_enterprise.rag_engine_probe \
+    --project <project> --demo-silent-failure
+```
+
+Four costs that aren't obvious from the table, each of which cost a failed attempt to find (all
+documented in `rag_engine_probe.py`):
+
+- **⚠️ A region mismatch silently returns NO retrieval.** A client at `location="global"` querying
+  the `us-west1` corpus answered fluently from parametric knowledge, said it had no such
+  information, and **raised nothing**. A nonexistent datastore behaves identically. For a doc-QA
+  agent this is close to the worst possible failure mode — it doesn't break, it just quietly stops
+  retrieving — so anything built here needs a liveness assertion, not merely error handling. The
+  `--demo-silent-failure` flag reproduces it.
+- **Regions constrain the model.** Corpora are regional (`global` is not a RAG location), and model
+  availability is regional too: `gemini-3.5-flash` serves at `global` but **404s in `us-west1`**,
+  where `gemini-2.5-flash` works. Choosing RAG can therefore force you onto an older model.
+- **Ingestion moves to a different SDK, and there's a project-level setup decision.**
+  `google-genai` can *use* a RAG corpus but cannot create one or import files — that's
+  `google-cloud-aiplatform` (not a dependency here; the probe uses raw REST instead). On top of
+  that, Serverless-vs-Spanner is a **project-level** choice (`ragEngineConfig`), and
+  `us-central1`/`us-east1`/`us-east4` refuse Spanner for new projects on capacity grounds. So the
+  prototype's store-management code doesn't port — it gets rewritten, after an infrastructure
+  decision.
 - **Citations change shape.** The harness currently maps `text_annotation` off the Interactions
   API's `FileCitation`. Retrieval-tool results arrive as grounding metadata instead, so the citation
   handling is new code too.

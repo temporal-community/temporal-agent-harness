@@ -1,5 +1,8 @@
 # Hello OpenAI file_search
 
+> **Decision doc:** the GEAP-vs-OpenAI comparison this example feeds into lives at
+> [`docs/internal/gemini-interactions-migration-options.md`](../../docs/internal/gemini-interactions-migration-options.md).
+
 A doc-QA agent on OpenAI's **hosted `file_search`**, over a small vector store the worker ingests at
 startup. The counterpart to [`examples/hello_gemini_enterprise`](../hello_gemini_enterprise): that
 one asks whether a harness Gemini agent can move to GEAP; this one answers the question that
