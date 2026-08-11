@@ -154,6 +154,66 @@ func TestRouterWorkflow_MessageTurn_StreamsDeltas(t *testing.T) {
 	assert.Equal(t, []string{"Start", "Append:hello ", "Append:world", "End"}, in.calls)
 }
 
+func TestRouterWorkflow_AccumulatesCitationsForFinishStream(t *testing.T) {
+	handle := TurnHandle{TurnNumber: 1}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{
+				{Text: "hello "},
+				{Citations: []Citation{{URL: "https://example.com/doc", Title: "Doc", EndIndex: 3}}},
+				{Text: "world", IsFinal: true},
+			}},
+		},
+	}
+	in := &fakeOutbound{}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Len(t, in.finishInputs, 1)
+	assert.Equal(t, "hello world", in.finishInputs[0].Text)
+	assert.Equal(t, []Citation{{URL: "https://example.com/doc", Title: "Doc", EndIndex: 3}}, in.finishInputs[0].Citations)
+	// A citation-only delta (no text) doesn't trigger a live append - Slack's
+	// append-only stream can't position it until FinishStream sees the full text.
+	assert.Equal(t, []string{"Start", "Append:hello ", "Append:world", "End"}, in.calls)
+}
+
+func TestRouterWorkflow_ApprovalBoundary_ResetsSegmentCitations(t *testing.T) {
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{
+				{Text: "before"},
+				{Citations: []Citation{{URL: "https://example.com/before", EndIndex: 1}}},
+				{ApprovalRequested: &ApprovalRequest{ToolID: "tool-1", ToolName: "deploy"}},
+			}},
+			{Deltas: []Delta{
+				{Text: "after"},
+				{Citations: []Citation{{URL: "https://example.com/after", EndIndex: 1}}, IsFinal: true},
+			}},
+		},
+	}
+	streamHandle := StreamHandle{CloseBeforeApproval: true}
+	in := &fakeOutbound{streamHandle: &streamHandle}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Len(t, in.finishInputs, 2)
+	assert.Equal(t, "before", in.finishInputs[0].Text)
+	assert.Equal(t, []Citation{{URL: "https://example.com/before", EndIndex: 1}}, in.finishInputs[0].Citations)
+	assert.Equal(t, "after", in.finishInputs[1].Text)
+	assert.Equal(t, []Citation{{URL: "https://example.com/after", EndIndex: 1}}, in.finishInputs[1].Citations)
+}
+
 func TestRouterWorkflow_TeamsSharedConversationPostsCompleteResponse(t *testing.T) {
 	for _, conversationType := range []string{"channel", "groupChat"} {
 		t.Run(conversationType, func(t *testing.T) {

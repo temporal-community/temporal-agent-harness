@@ -93,6 +93,10 @@ func turnEventToDelta(e turnEvent) *router.Delta {
 		return &router.Delta{Text: " ✅\n\n"}
 	case "tool_error":
 		return &router.Delta{Text: " ❌ Error: " + e.Message + "\n\n"}
+	case "text_annotation":
+		if citations := extractCitations(e.Delta); len(citations) > 0 {
+			return &router.Delta{Citations: citations}
+		}
 	case "reply":
 		// Text was already fully streamed via reply_delta events; this just signals completion.
 		return &router.Delta{IsFinal: true}
@@ -110,6 +114,50 @@ func turnEventToDelta(e turnEvent) *router.Delta {
 		}}
 	}
 	return nil
+}
+
+// extractCitations decodes the annotations carried by a text_annotation event's delta
+// payload (harness's TextAnnotationDelta -> {"annotations": [FileCitationAnnotation, ...]})
+// into generic router.Citations. URL/title preference mirrors the web UI
+// (ui/src/lib/components/chat/MarkdownMessage.svelte): custom_metadata.deep_url falls back
+// to document_uri; title prefers custom_metadata.heading, then .title, then file_name.
+// EndIndex carries the annotation's end_index through unchanged - a rune offset into the
+// harness's Python string (Unicode code points) - so outbound drivers can splice citation
+// markers inline at the same position the web UI does.
+func extractCitations(delta map[string]any) []router.Citation {
+	raw, _ := delta["annotations"].([]any)
+	citations := make([]router.Citation, 0, len(raw))
+	for _, item := range raw {
+		ann, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		meta, _ := ann["custom_metadata"].(map[string]any)
+
+		url, _ := meta["deep_url"].(string)
+		if url == "" {
+			url, _ = ann["document_uri"].(string)
+		}
+
+		title, _ := meta["heading"].(string)
+		if title == "" {
+			title, _ = meta["title"].(string)
+		}
+		if title == "" {
+			title, _ = ann["file_name"].(string)
+		}
+		if title == "" {
+			title = "Source"
+		}
+
+		endIndex := -1
+		if v, ok := ann["end_index"].(float64); ok {
+			endIndex = int(v)
+		}
+
+		citations = append(citations, router.Citation{URL: url, Title: title, EndIndex: endIndex})
+	}
+	return citations
 }
 
 // Driver implements router.BackendDriver against the temporal-agent-harness's Nexus agent

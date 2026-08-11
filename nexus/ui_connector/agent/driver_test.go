@@ -53,6 +53,41 @@ func TestTurnEventToDelta(t *testing.T) {
 	}
 }
 
+func TestTurnEventToDelta_TextAnnotation_ProducesCitations(t *testing.T) {
+	d := turnEventToDelta(turnEvent{
+		Type: "text_annotation",
+		Delta: map[string]any{
+			"annotations": []any{
+				map[string]any{
+					"type":         "file_citation",
+					"file_name":    "runbook.md",
+					"document_uri": "https://example.com/runbook",
+					"end_index":    float64(42),
+					"custom_metadata": map[string]any{
+						"deep_url": "https://example.com/runbook#section-2",
+						"heading":  "Section 2",
+					},
+				},
+				map[string]any{
+					"type":      "file_citation",
+					"file_name": "notes.txt",
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, d)
+	assert.Empty(t, d.Text)
+	require.Len(t, d.Citations, 2)
+	assert.Equal(t, router.Citation{URL: "https://example.com/runbook#section-2", Title: "Section 2", EndIndex: 42}, d.Citations[0])
+	assert.Equal(t, router.Citation{URL: "", Title: "notes.txt", EndIndex: -1}, d.Citations[1])
+}
+
+func TestTurnEventToDelta_TextAnnotation_NoAnnotations_ReturnsNil(t *testing.T) {
+	d := turnEventToDelta(turnEvent{Type: "text_annotation", Delta: map[string]any{}})
+	assert.Nil(t, d)
+}
+
 func TestToolCompletionSeparatesFollowingReply(t *testing.T) {
 	start := turnEventToDelta(turnEvent{Type: "tool_start", ToolName: "file_search"})
 	end := turnEventToDelta(turnEvent{Type: "tool_end"})

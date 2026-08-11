@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"unicode"
 
 	slackapi "github.com/slack-go/slack"
 
@@ -119,6 +121,106 @@ func parseChannel(sessionID string) (string, error) {
 	return parts[1], nil
 }
 
+// mrkdwnLink renders a link in Slack's classic mrkdwn syntax, used by the chat.postMessage
+// "text" field (and Block Kit "mrkdwn" text objects).
+func mrkdwnLink(url, title string) string {
+	return fmt.Sprintf("<%s|%s>", url, title)
+}
+
+// commonmarkLink renders a link in standard CommonMark syntax, used by the "markdown_text"
+// field of the newer chat.startStream/appendStream/chat.update-with-markdown_text API -
+// which, unlike the rest of the Slack API, does NOT accept mrkdwn's <url|title> syntax.
+func commonmarkLink(url, title string) string {
+	return fmt.Sprintf("[%s](%s)", title, url)
+}
+
+// spliceCitations inserts numbered citation markers (e.g. "[1]") into text at each
+// citation's EndIndex, matching where the web UI splices its own inline footnote markers
+// (ui/src/lib/components/chat/MarkdownMessage.svelte): numbers are assigned by array order
+// (no dedup - a repeated source gets a new number each time it's cited), and citations
+// landing on the same index render as adjacent markers. A citation with no known position
+// (EndIndex < 0) is appended at the very end of the text. link formats one citation's
+// marker; callers must pass the syntax their target Slack API field expects (see
+// mrkdwnLink and commonmarkLink).
+//
+// EndIndex refers to a position in text that, by the time a citation arrives, has usually
+// already been streamed and displayed - Slack's streaming API can only append, so this
+// can't happen incrementally as text streams. Callers must buffer the full turn's text and
+// citations and call this once, after the fact (see SlackPlatform.FinishStream).
+func spliceCitations(text string, citations []router.Citation, link func(url, title string) string) string {
+	if len(citations) == 0 {
+		return text
+	}
+	runes := []rune(text)
+	markersByIndex := make(map[int][]string, len(citations))
+	var order []int
+	for i, c := range citations {
+		idx := c.EndIndex
+		if idx < 0 || idx > len(runes) {
+			idx = len(runes)
+		}
+		idx = snapToWordEnd(runes, idx)
+		if _, ok := markersByIndex[idx]; !ok {
+			order = append(order, idx)
+		}
+		markersByIndex[idx] = append(markersByIndex[idx], link(c.URL, fmt.Sprintf("[%d]", i+1)))
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(order)))
+	for _, idx := range order {
+		// Trim any spaces already adjacent to the insertion point and add back exactly
+		// one on each side (but not if there's no text on that side at all, i.e. the
+		// marker sits at the very start/end), rather than layering our own spacing on
+		// top of whatever happened to already be there (which could yield none, or two).
+		left := trimTrailingSpaces(runes[:idx])
+		right := trimLeadingSpaces(runes[idx:])
+		markerText := strings.Join(markersByIndex[idx], " ")
+		if len(left) > 0 {
+			markerText = " " + markerText
+		}
+		if len(right) > 0 {
+			markerText += " "
+		}
+		marker := []rune(markerText)
+		merged := make([]rune, 0, len(left)+len(marker)+len(right))
+		merged = append(merged, left...)
+		merged = append(merged, marker...)
+		merged = append(merged, right...)
+		runes = merged
+	}
+	return string(runes)
+}
+
+// snapToWordEnd moves idx forward past the rest of the current word if it would
+// otherwise land inside one (e.g. between "st" and "ep" in "step") - a citation's
+// EndIndex doesn't always land on a word boundary, and inserting a marker there would
+// visibly split the word. Letters and digits count as word characters; everything
+// else (spaces, punctuation) is treated as a boundary.
+func snapToWordEnd(runes []rune, idx int) int {
+	isWordChar := func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }
+	if idx > 0 && idx < len(runes) && isWordChar(runes[idx-1]) && isWordChar(runes[idx]) {
+		for idx < len(runes) && isWordChar(runes[idx]) {
+			idx++
+		}
+	}
+	return idx
+}
+
+func trimTrailingSpaces(runes []rune) []rune {
+	i := len(runes)
+	for i > 0 && runes[i-1] == ' ' {
+		i--
+	}
+	return runes[:i]
+}
+
+func trimLeadingSpaces(runes []rune) []rune {
+	i := 0
+	for i < len(runes) && runes[i] == ' ' {
+		i++
+	}
+	return runes[i:]
+}
+
 // SlackPlatform is the real Activity implementation backing Driver: its methods make
 // the actual Slack API calls and are registered on the worker under the activity names
 // Driver dispatches to. It also exposes additional Slack-specific methods not covered
@@ -187,8 +289,12 @@ func (p *SlackPlatform) UpdateStream(ctx context.Context, input router.UpdateStr
 	return nil
 }
 
-// FinishStream stops and finalises a native Slack stream.
-// An ID that identifies the stream is required.
+// FinishStream stops and finalises a native Slack stream. An ID that identifies the
+// stream is required. chat.appendStream can only append, so if the turn carried any
+// citations, this also corrects the finished message with chat.update, splicing inline
+// citation markers into the text at their proper position now that the full text is
+// known - the message will visibly jump from the raw streamed text to the corrected
+// version at this point.
 func (p *SlackPlatform) FinishStream(ctx context.Context, input router.FinishStreamInput) error {
 	channel, err := parseChannel(input.SessionID)
 	if err != nil {
@@ -203,6 +309,15 @@ func (p *SlackPlatform) FinishStream(ctx context.Context, input router.FinishStr
 	if _, _, err := p.client.StopStreamContext(ctx, channel, input.Handle.ID); err != nil {
 		return fmt.Errorf("chat.stopStream: %w", err)
 	}
+	if len(input.Citations) == 0 {
+		return nil
+	}
+	finalText := spliceCitations(input.Text, input.Citations, commonmarkLink)
+	if _, _, _, err := p.client.UpdateMessageContext(ctx, channel, input.Handle.ID,
+		slackapi.MsgOptionMarkdownText(finalText),
+	); err != nil {
+		return fmt.Errorf("chat.update: %w", err)
+	}
 	return nil
 }
 
@@ -211,7 +326,7 @@ func (p *SlackPlatform) PostMessage(ctx context.Context, input router.TextMetada
 	if err != nil {
 		return err
 	}
-	opts := []slackapi.MsgOption{slackapi.MsgOptionText(input.Text, false)}
+	opts := []slackapi.MsgOption{slackapi.MsgOptionText(spliceCitations(input.Text, input.Citations, mrkdwnLink), false)}
 	if input.ThreadID != "" {
 		opts = append(opts, slackapi.MsgOptionTS(input.ThreadID))
 	}

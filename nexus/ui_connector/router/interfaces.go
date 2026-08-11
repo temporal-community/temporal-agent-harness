@@ -57,8 +57,22 @@ type TextMetadata struct {
 	SessionID  string
 	ThreadID   string
 	Text       string
+	Citations  []Citation
 	ServiceURL string
 	ChannelID  string
+}
+
+// Citation is a backend-agnostic reference to a source document supporting part of a
+// reply. EndIndex is the rune offset into the turn's full accumulated reply text right
+// after which this citation belongs (matching the web UI's inline footnote placement,
+// ui/src/lib/components/chat/MarkdownMessage.svelte); -1 if unknown. Outbound drivers
+// decide whether and how to use it - e.g. splicing an inline marker at that position
+// once the full text is known, since it usually refers to text already delivered by
+// the time the citation itself arrives.
+type Citation struct {
+	URL      string
+	Title    string
+	EndIndex int
 }
 
 // UpdateMessageInput replaces an existing platform message.
@@ -139,6 +153,7 @@ type PollResult struct {
 // Delta is one backend-agnostic unit of turn output.
 type Delta struct {
 	Text              string
+	Citations         []Citation // sources cited by the reply text delivered so far
 	IsFinal           bool
 	ApprovalRequested *ApprovalRequest // non-nil if this delta is a tool-approval gate
 }
