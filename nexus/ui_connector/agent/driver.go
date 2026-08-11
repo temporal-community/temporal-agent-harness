@@ -85,14 +85,14 @@ func turnEventToDelta(e turnEvent) *router.Delta {
 		return &router.Delta{Text: e.Text}
 	case "thought_summary":
 		if text, ok := e.Delta["text"].(string); ok && text != "" {
-			return &router.Delta{Text: text}
+			return &router.Delta{ThoughtSummary: text}
 		}
 	case "tool_start":
-		return &router.Delta{Text: "\n_" + e.ToolName + "..._"}
+		return &router.Delta{ToolStatus: &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolStarted}}
 	case "tool_end":
-		return &router.Delta{Text: " ✅\n\n"}
+		return &router.Delta{ToolStatus: &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolCompleted}}
 	case "tool_error":
-		return &router.Delta{Text: " ❌ Error: " + e.Message + "\n\n"}
+		return &router.Delta{ToolStatus: &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolErrored, Message: e.Message}}
 	case "text_annotation":
 		if citations := extractCitations(e.Delta); len(citations) > 0 {
 			return &router.Delta{Citations: citations}
@@ -116,14 +116,9 @@ func turnEventToDelta(e turnEvent) *router.Delta {
 	return nil
 }
 
-// extractCitations decodes the annotations carried by a text_annotation event's delta
-// payload (harness's TextAnnotationDelta -> {"annotations": [FileCitationAnnotation, ...]})
-// into generic router.Citations. URL/title preference mirrors the web UI
-// (ui/src/lib/components/chat/MarkdownMessage.svelte): custom_metadata.deep_url falls back
-// to document_uri; title prefers custom_metadata.heading, then .title, then file_name.
-// EndIndex carries the annotation's end_index through unchanged - a rune offset into the
-// harness's Python string (Unicode code points) - so outbound drivers can splice citation
-// markers inline at the same position the web UI does.
+// extractCitations decodes a text_annotation event's annotations into router.Citations.
+// URL falls back from custom_metadata.deep_url to document_uri; title from
+// custom_metadata.heading, then .title, then file_name, then "Source".
 func extractCitations(delta map[string]any) []router.Citation {
 	raw, _ := delta["annotations"].([]any)
 	citations := make([]router.Citation, 0, len(raw))

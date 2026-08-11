@@ -97,14 +97,17 @@ func textMetadata(input Input, text string) TextMetadata {
 func (w *RouterWorkflow) postResp(ctx workflow.Context, handle TurnHandle, input Input) error {
 	cursor := handle.StreamHeadOffset
 	fullText := ""
+	hasContent := false
 	var citations []Citation
+	var segments []Delta
 
 	post := func() error {
-		if fullText == "" {
+		if !hasContent {
 			return nil
 		}
 		metadata := textMetadata(input, fullText)
 		metadata.Citations = citations
+		metadata.Segments = segments
 		return w.outbound.PostMessage(ctx, metadata)
 	}
 
@@ -136,6 +139,10 @@ func (w *RouterWorkflow) postResp(ctx workflow.Context, handle TurnHandle, input
 
 			fullText += delta.Text
 			citations = append(citations, delta.Citations...)
+			segments = append(segments, delta)
+			if delta.Text != "" || delta.ToolStatus != nil || delta.ThoughtSummary != "" || len(delta.Citations) > 0 {
+				hasContent = true
+			}
 			if delta.IsFinal {
 				return post()
 			}
@@ -208,9 +215,9 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, inp
 
 			segmentCitations = append(segmentCitations, delta.Citations...)
 
-			if delta.Text != "" {
+			if delta.Text != "" || delta.ToolStatus != nil || delta.ThoughtSummary != "" {
 				// An approval may have closed the previous stream. Reopen it when response
-				// text resumes.
+				// content resumes.
 				if streamHandle == nil {
 					streamHandle, err = w.beginStream(ctx, input)
 					if err != nil {
@@ -219,7 +226,7 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, inp
 					}
 				}
 				segmentText += delta.Text
-				w.updateStream(ctx, input, streamHandle, delta.Text)
+				w.updateStream(ctx, input, streamHandle, delta)
 			}
 
 			if delta.IsFinal {
@@ -245,19 +252,23 @@ func (w *RouterWorkflow) beginStream(ctx workflow.Context, input Input) (*Stream
 	return &streamHandle, nil
 }
 
+// updateStream forwards one delta's content to the outbound driver verbatim - it does
+// not interpret Text/ToolStatus/ThoughtSummary; that's entirely the driver's call.
 func (w *RouterWorkflow) updateStream(
 	ctx workflow.Context,
 	input Input,
 	handle *StreamHandle,
-	delta string,
+	delta Delta,
 ) {
 	if handle == nil {
 		return
 	}
 	if err := w.outbound.UpdateStream(ctx, UpdateStreamInput{
-		TextMetadata: textMetadata(input, ""),
-		Handle:       *handle,
-		Delta:        delta,
+		TextMetadata:   textMetadata(input, ""),
+		Handle:         *handle,
+		Delta:          delta.Text,
+		ToolStatus:     delta.ToolStatus,
+		ThoughtSummary: delta.ThoughtSummary,
 	}); err != nil {
 		workflow.GetLogger(ctx).Warn("streamResp: stream update failed", "error", err)
 	}
