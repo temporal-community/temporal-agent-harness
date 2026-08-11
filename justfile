@@ -290,3 +290,11 @@ evals-run NAME:
 
 evals-case NAME CASE:
     cd "{{monty}}" && just evals-case "{{NAME}}" "{{CASE}}"
+
+# The same eval loop against the OpenAI Agents SDK example — same dataset format, same scorer
+# shape, different AI SDK. Needs `just worker-openai-hello` running.
+evals-seed-openai:
+    cd "{{justfile_directory()}}/examples/openai_hello" && just evals-seed
+
+evals-run-openai NAME:
+    cd "{{justfile_directory()}}/examples/openai_hello" && just evals-run "{{NAME}}"

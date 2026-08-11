@@ -34,6 +34,10 @@ Zoom call watch that.
 5. Four terminals, cwd `examples/monty`: `temporal` · `session-manager` · `worker` · `server`.
    Browser tabs: Langfuse, `localhost:8000` (agent UI), `localhost:8233` (Temporal UI).
 
+6. **Only if you plan to do Act 4** (the cross-SDK bit): `OPENAI_API_KEY` set, plus a fifth
+   terminal for `just worker-openai-hello`, and rehearse `just evals-seed-openai &&
+   just evals-run-openai baseline` too.
+
 ---
 
 ## Act 1 — traces, with no eval code at all (4 min)
@@ -153,6 +157,39 @@ trust, and a broken one silently invalidates every number it produces.
 
 ---
 
+## Act 4 (optional, 2 min) — the same thing on a different AI SDK
+
+The strongest structural point in the whole demo, and it costs two minutes.
+
+`examples/openai_hello` is the OpenAI Agents SDK example: a one-tool weather assistant, nothing
+to do with travel booking or Code Mode or Gemini. It has its own dataset and scorers in
+`examples/openai_hello/evals/`.
+
+```bash
+just worker-openai-hello          # separate terminal; needs OPENAI_API_KEY
+just evals-seed-openai
+just evals-run-openai v1
+```
+
+Show one of its traces next to a Monty trace. **Same span names, same shape, same attributes.**
+Then say:
+
+> The turn, tool and approval spans come from the harness runner and the tool dispatchers, so
+> they are identical for every SDK. The dataset format and the scorers are the same too — the
+> only thing that changed is `workflow_type`. Gemini here is the interesting case *because* it
+> has no OpenTelemetry integration of its own and still produces a full trace.
+
+If someone asks about prompts and completions: the OpenAI plugin has a `use_otel_instrumentation`
+flag that turns on the Agents SDK's own OpenInference instrumentation, and those spans nest under
+ours automatically. Set `OPENAI_HELLO_SDK_TRACING=1` (needs
+`openinference-instrumentation-openai-agents` installed). The harness is told it is on so it
+stops reporting the same tokens and the backend does not bill them twice.
+
+**Do not switch this on live unless you rehearsed it** — it needs a package that is not a harness
+dependency, and it fails at worker startup if missing.
+
+---
+
 ## Code walkthrough (10 min, screen-share)
 
 Five files, in this order. The narrative is *"we tried to build a lot and Temporal had already
@@ -214,10 +251,12 @@ signature feature. It's a known limitation, written down, not yet solved.
 run the loop is that a case here is a multi-turn conversation against a durable session, and the
 scores read the tool-call stream. Neither fits a single-shot task function.
 
-**"Does this work with OpenAI Agents / Pydantic AI?"** — The turn/tool/approval spans, yes,
-identically — they're at the harness layer, which is the whole argument for putting them there.
-Model spans are wired for all three SDKs. Gemini is the one demoed precisely *because* it has no
-OTel integration of its own and gets a full trace anyway.
+**"Does this work with OpenAI Agents / Pydantic AI?"** — Yes, and Act 4 shows it running. The
+turn/tool/approval spans are at the harness layer, so they're identical for every SDK; model
+spans are wired for all three. Gemini is the headline case precisely *because* it has no OTel
+integration of its own and gets a full trace anyway. One gotcha worth knowing if you improvise:
+`OpenAIAgentsPlugin` supplies its own payload converter and rejects a foreign one, so an OpenAI
+worker must not also pass `data_converter=`.
 
 **"Double-counted cost if I also turn on my SDK's instrumentation?"** — No. Tell the harness and
 it stops claiming those tokens under the semantic-convention keys. Scoped per SDK, because one
