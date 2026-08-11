@@ -9,6 +9,7 @@ import (
 
 	slackapi "github.com/slack-go/slack"
 
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/citations"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/worker"
@@ -119,6 +120,12 @@ func parseChannel(sessionID string) (string, error) {
 	return parts[1], nil
 }
 
+// mrkdwnLink renders a link in Slack's classic mrkdwn syntax, used by the chat.postMessage
+// "text" field (and Block Kit "mrkdwn" text objects).
+func mrkdwnLink(url, title string) string {
+	return fmt.Sprintf("<%s|%s>", url, title)
+}
+
 // SlackPlatform is the real Activity implementation backing Driver: its methods make
 // the actual Slack API calls and are registered on the worker under the activity names
 // Driver dispatches to. It also exposes additional Slack-specific methods not covered
@@ -163,8 +170,12 @@ func (p *SlackPlatform) BeginStream(ctx context.Context, input router.BeginStrea
 	}, nil
 }
 
-// UpdateStream appends the pending agent delta to a native Slack stream.
-// An ID that identifies the stream is required.
+// UpdateStream appends the pending agent delta to a native Slack stream, rendering
+// whichever of Delta/ToolStatus/ThoughtSummary is present - see flattenForDisplay. This
+// live view is independent of the citation-indexed text FinishStream corrects the
+// message to: that always rebuilds from clean reply-only text, so whatever gets shown
+// here (including tool status/thinking) is transient and gets replaced once the turn
+// ends, regardless of what it looked like while streaming.
 func (p *SlackPlatform) UpdateStream(ctx context.Context, input router.UpdateStreamInput) error {
 	channel, err := parseChannel(input.SessionID)
 	if err != nil {
@@ -176,19 +187,45 @@ func (p *SlackPlatform) UpdateStream(ctx context.Context, input router.UpdateStr
 	if input.Handle.SessionID != input.SessionID {
 		return errors.New("stream handle session does not match input session")
 	}
-	if input.Delta == "" {
+	text := flattenForDisplay(input)
+	if text == "" {
 		return nil
 	}
 	if _, _, err := p.client.AppendStreamContext(ctx, channel, input.Handle.ID,
-		slackapi.MsgOptionMarkdownText(input.Delta),
+		slackapi.MsgOptionMarkdownText(text),
 	); err != nil {
 		return fmt.Errorf("chat.appendStream: %w", err)
 	}
 	return nil
 }
 
-// FinishStream stops and finalises a native Slack stream.
-// An ID that identifies the stream is required.
+// flattenForDisplay renders one delta's content for the live stream view. Slack's SDK
+// has no equivalent of chat.startStream's rich "task_update" chunk (checked both the
+// pinned and latest slack-go releases - neither implements it), so tool status renders
+// as plain inline text, the same as it always did.
+func flattenForDisplay(input router.UpdateStreamInput) string {
+	switch {
+	case input.ToolStatus != nil:
+		switch input.ToolStatus.Status {
+		case router.ToolStarted:
+			return "\n_" + input.ToolStatus.ToolName + "..._"
+		case router.ToolCompleted:
+			return " ✅\n\n"
+		case router.ToolErrored:
+			return " ❌ Error: " + input.ToolStatus.Message + "\n\n"
+		}
+		return ""
+	case input.ThoughtSummary != "":
+		return input.ThoughtSummary
+	default:
+		return input.Delta
+	}
+}
+
+// FinishStream stops a native Slack stream, then corrects the message to the clean
+// reply text with citation markers spliced in (see citations.Splice) - overwriting
+// whatever was live-appended. Skips the correction if there's no reply text, since
+// chat.update rejects an empty markdown_text; the live-streamed text stands instead.
 func (p *SlackPlatform) FinishStream(ctx context.Context, input router.FinishStreamInput) error {
 	channel, err := parseChannel(input.SessionID)
 	if err != nil {
@@ -203,6 +240,15 @@ func (p *SlackPlatform) FinishStream(ctx context.Context, input router.FinishStr
 	if _, _, err := p.client.StopStreamContext(ctx, channel, input.Handle.ID); err != nil {
 		return fmt.Errorf("chat.stopStream: %w", err)
 	}
+	finalText := citations.Splice(input.Text, input.Citations, citations.CommonMarkLink)
+	if finalText == "" {
+		return nil
+	}
+	if _, _, _, err := p.client.UpdateMessageContext(ctx, channel, input.Handle.ID,
+		slackapi.MsgOptionMarkdownText(finalText),
+	); err != nil {
+		return fmt.Errorf("chat.update: %w", err)
+	}
 	return nil
 }
 
@@ -211,7 +257,7 @@ func (p *SlackPlatform) PostMessage(ctx context.Context, input router.TextMetada
 	if err != nil {
 		return err
 	}
-	opts := []slackapi.MsgOption{slackapi.MsgOptionText(input.Text, false)}
+	opts := []slackapi.MsgOption{slackapi.MsgOptionText(citations.Splice(input.Text, input.Citations, mrkdwnLink), false)}
 	if input.ThreadID != "" {
 		opts = append(opts, slackapi.MsgOptionTS(input.ThreadID))
 	}

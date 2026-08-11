@@ -85,14 +85,18 @@ func turnEventToDelta(e turnEvent) *router.Delta {
 		return &router.Delta{Text: e.Text}
 	case "thought_summary":
 		if text, ok := e.Delta["text"].(string); ok && text != "" {
-			return &router.Delta{Text: text}
+			return &router.Delta{ThoughtSummary: text}
 		}
 	case "tool_start":
-		return &router.Delta{Text: "\n_" + e.ToolName + "..._"}
+		return &router.Delta{ToolStatus: &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolStarted}}
 	case "tool_end":
-		return &router.Delta{Text: " ✅\n\n"}
+		return &router.Delta{ToolStatus: &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolCompleted}}
 	case "tool_error":
-		return &router.Delta{Text: " ❌ Error: " + e.Message + "\n\n"}
+		return &router.Delta{ToolStatus: &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolErrored, Message: e.Message}}
+	case "text_annotation":
+		if citations := extractCitations(e.Delta); len(citations) > 0 {
+			return &router.Delta{Citations: citations}
+		}
 	case "reply":
 		// Text was already fully streamed via reply_delta events; this just signals completion.
 		return &router.Delta{IsFinal: true}
@@ -110,6 +114,45 @@ func turnEventToDelta(e turnEvent) *router.Delta {
 		}}
 	}
 	return nil
+}
+
+// extractCitations decodes a text_annotation event's annotations into router.Citations.
+// URL falls back from custom_metadata.deep_url to document_uri; title from
+// custom_metadata.heading, then .title, then file_name, then "Source".
+func extractCitations(delta map[string]any) []router.Citation {
+	raw, _ := delta["annotations"].([]any)
+	citations := make([]router.Citation, 0, len(raw))
+	for _, item := range raw {
+		ann, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		meta, _ := ann["custom_metadata"].(map[string]any)
+
+		url, _ := meta["deep_url"].(string)
+		if url == "" {
+			url, _ = ann["document_uri"].(string)
+		}
+
+		title, _ := meta["heading"].(string)
+		if title == "" {
+			title, _ = meta["title"].(string)
+		}
+		if title == "" {
+			title, _ = ann["file_name"].(string)
+		}
+		if title == "" {
+			title = "Source"
+		}
+
+		endIndex := -1
+		if v, ok := ann["end_index"].(float64); ok {
+			endIndex = int(v)
+		}
+
+		citations = append(citations, router.Citation{URL: url, Title: title, EndIndex: endIndex})
+	}
+	return citations
 }
 
 // Driver implements router.BackendDriver against the temporal-agent-harness's Nexus agent

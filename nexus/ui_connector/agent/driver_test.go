@@ -30,11 +30,7 @@ func TestTurnEventToDelta(t *testing.T) {
 	}{
 		{"reply_delta", turnEvent{Type: "reply_delta", Text: "hello"}, "hello", false, false},
 		{"reply", turnEvent{Type: "reply", Text: "full text"}, "", true, false},
-		{"tool_start", turnEvent{Type: "tool_start", ToolName: "search"}, "\n_search..._", false, false},
-		{"tool_end", turnEvent{Type: "tool_end"}, " ✅\n\n", false, false},
-		{"tool_error", turnEvent{Type: "tool_error", Message: "oops"}, " ❌ Error: oops\n\n", false, false},
 		{"error", turnEvent{Type: "error", Message: "crash"}, "[error] crash", true, false},
-		{"thought_summary with text", turnEvent{Type: "thought_summary", Delta: map[string]any{"text": "thinking..."}}, "thinking...", false, false},
 		{"thought_summary empty text", turnEvent{Type: "thought_summary", Delta: map[string]any{"text": ""}}, "", false, true},
 		{"unknown type", turnEvent{Type: "unknown_event"}, "", false, true},
 	}
@@ -53,19 +49,97 @@ func TestTurnEventToDelta(t *testing.T) {
 	}
 }
 
-func TestToolCompletionSeparatesFollowingReply(t *testing.T) {
-	start := turnEventToDelta(turnEvent{Type: "tool_start", ToolName: "file_search"})
-	end := turnEventToDelta(turnEvent{Type: "tool_end"})
+func TestTurnEventToDelta_ToolStatus(t *testing.T) {
+	cases := []struct {
+		name  string
+		event turnEvent
+		want  router.ToolStatus
+	}{
+		{
+			"tool_start",
+			turnEvent{Type: "tool_start", ToolID: "t1", ToolName: "search"},
+			router.ToolStatus{ToolID: "t1", ToolName: "search", Status: router.ToolStarted},
+		},
+		{
+			"tool_end",
+			turnEvent{Type: "tool_end", ToolID: "t1", ToolName: "search"},
+			router.ToolStatus{ToolID: "t1", ToolName: "search", Status: router.ToolCompleted},
+		},
+		{
+			"tool_error",
+			turnEvent{Type: "tool_error", ToolID: "t1", ToolName: "search", Message: "oops"},
+			router.ToolStatus{ToolID: "t1", ToolName: "search", Status: router.ToolErrored, Message: "oops"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := turnEventToDelta(tc.event)
+			require.NotNil(t, d)
+			require.NotNil(t, d.ToolStatus)
+			assert.Equal(t, tc.want, *d.ToolStatus)
+			assert.Empty(t, d.Text, "tool status deltas carry no text - rendering is up to the outbound driver")
+		})
+	}
+}
+
+func TestTurnEventToDelta_ThoughtSummary(t *testing.T) {
+	d := turnEventToDelta(turnEvent{Type: "thought_summary", Delta: map[string]any{"text": "thinking..."}})
+	require.NotNil(t, d)
+	assert.Equal(t, "thinking...", d.ThoughtSummary)
+	assert.Empty(t, d.Text, "thought summaries are not reply text - citations must not be indexed against them")
+}
+
+func TestTurnEventToDelta_TextAnnotation_ProducesCitations(t *testing.T) {
+	d := turnEventToDelta(turnEvent{
+		Type: "text_annotation",
+		Delta: map[string]any{
+			"annotations": []any{
+				map[string]any{
+					"type":         "file_citation",
+					"file_name":    "runbook.md",
+					"document_uri": "https://example.com/runbook",
+					"end_index":    float64(42),
+					"custom_metadata": map[string]any{
+						"deep_url": "https://example.com/runbook#section-2",
+						"heading":  "Section 2",
+					},
+				},
+				map[string]any{
+					"type":      "file_citation",
+					"file_name": "notes.txt",
+				},
+			},
+		},
+	})
+
+	require.NotNil(t, d)
+	assert.Empty(t, d.Text)
+	require.Len(t, d.Citations, 2)
+	assert.Equal(t, router.Citation{URL: "https://example.com/runbook#section-2", Title: "Section 2", EndIndex: 42}, d.Citations[0])
+	assert.Equal(t, router.Citation{URL: "", Title: "notes.txt", EndIndex: -1}, d.Citations[1])
+}
+
+func TestTurnEventToDelta_TextAnnotation_NoAnnotations_ReturnsNil(t *testing.T) {
+	d := turnEventToDelta(turnEvent{Type: "text_annotation", Delta: map[string]any{}})
+	assert.Nil(t, d)
+}
+
+// TestToolStatusCarriesNoText guards against tool_start/tool_end/tool_error deltas
+// contributing anything to the reply text that citations get indexed against - see
+// teamsoutbound.flattenSegments for where this structured status gets turned back
+// into the "\n_toolName..._" ✅ text Teams shows, and slackoutbound's UpdateStream for
+// how Slack renders it as a separate threaded message instead.
+func TestToolStatusCarriesNoText(t *testing.T) {
+	start := turnEventToDelta(turnEvent{Type: "tool_start", ToolID: "t1", ToolName: "file_search"})
+	end := turnEventToDelta(turnEvent{Type: "tool_end", ToolID: "t1", ToolName: "file_search"})
 	reply := turnEventToDelta(turnEvent{Type: "reply_delta", Text: "A Local Activity runs in the Workflow process."})
 	require.NotNil(t, start)
 	require.NotNil(t, end)
 	require.NotNil(t, reply)
 
-	text := start.Text + end.Text + reply.Text
-	assert.Equal(t,
-		"\n_file_search..._ ✅\n\nA Local Activity runs in the Workflow process.",
-		text,
-	)
+	assert.Empty(t, start.Text)
+	assert.Empty(t, end.Text)
+	assert.Equal(t, "A Local Activity runs in the Workflow process.", reply.Text)
 }
 
 func TestReplyEventDoesNotAppendText(t *testing.T) {

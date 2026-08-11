@@ -53,12 +53,29 @@ type ApprovalAcknowledgementInput struct {
 }
 
 type TextMetadata struct {
-	SenderID   string
-	SessionID  string
-	ThreadID   string
-	Text       string
+	SenderID  string
+	SessionID string
+	ThreadID  string
+	Text      string
+	Citations []Citation
+	// Segments is the ordered sequence of every delta that made up this message/turn
+	// (reply text, tool status, thought summaries), for outbound drivers whose platform
+	// has no richer way to show tool status than inline text and so must reconstruct
+	// their own single flattened rendering (see teamsoutbound.flattenSegments). Drivers
+	// that render tool status separately (e.g. Slack, live, via UpdateStream) don't need
+	// this - it's only populated for the non-streaming PostMessage path.
+	Segments   []Delta
 	ServiceURL string
 	ChannelID  string
+}
+
+// Citation is a backend-agnostic reference to a source document supporting part of a
+// reply. EndIndex marks where in the reply text it belongs; -1 if unknown. Outbound
+// drivers decide whether and how to render it.
+type Citation struct {
+	URL      string
+	Title    string
+	EndIndex int
 }
 
 // UpdateMessageInput replaces an existing platform message.
@@ -84,8 +101,10 @@ type BeginStreamInput struct {
 
 type UpdateStreamInput struct {
 	TextMetadata
-	Handle StreamHandle
-	Delta  string
+	Handle         StreamHandle
+	Delta          string // reply text chunk; empty if this update instead carries ToolStatus/ThoughtSummary
+	ToolStatus     *ToolStatus
+	ThoughtSummary string
 }
 
 type FinishStreamInput struct {
@@ -136,11 +155,35 @@ type PollResult struct {
 	Closed     bool
 }
 
-// Delta is one backend-agnostic unit of turn output.
+// Delta is one backend-agnostic unit of turn output. Exactly one of Text,
+// ToolStatus, ThoughtSummary, or ApprovalRequested is meaningfully populated for a
+// given delta; Citations may ride alongside one of those or arrive alone. Router
+// never inspects which; it only accumulates and forwards.
 type Delta struct {
-	Text              string
+	Text              string      // a reply-text chunk - the ONLY field citations are indexed against
+	Citations         []Citation  // citations for the reply text delivered so far
+	ToolStatus        *ToolStatus // non-nil if this delta reports a tool call's lifecycle
+	ThoughtSummary    string      // a thought-summary chunk (the model's internal reasoning, distinct from the reply)
 	IsFinal           bool
 	ApprovalRequested *ApprovalRequest // non-nil if this delta is a tool-approval gate
+}
+
+// ToolStatusKind is the lifecycle state a ToolStatus delta reports.
+type ToolStatusKind string
+
+const (
+	ToolStarted   ToolStatusKind = "started"
+	ToolCompleted ToolStatusKind = "completed"
+	ToolErrored   ToolStatusKind = "errored"
+)
+
+// ToolStatus reports one tool call's lifecycle transition. ToolID correlates every
+// status delta for the same invocation (started -> completed/errored).
+type ToolStatus struct {
+	ToolID   string
+	ToolName string
+	Status   ToolStatusKind
+	Message  string // populated when Status is ToolErrored
 }
 
 // ApprovalRequest signals that a tool call is gated pending a human decision. This

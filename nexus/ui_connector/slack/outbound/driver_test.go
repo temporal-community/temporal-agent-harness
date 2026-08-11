@@ -95,6 +95,68 @@ func TestSlackPlatform_FinishStream_RequiresStreamID(t *testing.T) {
 	assert.Contains(t, err.Error(), "stream handle ID is required")
 }
 
+func TestFlattenForDisplay(t *testing.T) {
+	cases := []struct {
+		name  string
+		input router.UpdateStreamInput
+		want  string
+	}{
+		{"reply text", router.UpdateStreamInput{Delta: "hello"}, "hello"},
+		{"tool started", router.UpdateStreamInput{ToolStatus: &router.ToolStatus{ToolName: "search", Status: router.ToolStarted}}, "\n_search..._"},
+		{"tool completed", router.UpdateStreamInput{ToolStatus: &router.ToolStatus{ToolName: "search", Status: router.ToolCompleted}}, " ✅\n\n"},
+		{"tool errored", router.UpdateStreamInput{ToolStatus: &router.ToolStatus{ToolName: "search", Status: router.ToolErrored, Message: "timeout"}}, " ❌ Error: timeout\n\n"},
+		{"thought summary", router.UpdateStreamInput{ThoughtSummary: "thinking..."}, "thinking..."},
+		{"empty", router.UpdateStreamInput{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, flattenForDisplay(tc.input))
+		})
+	}
+}
+
+// TestSlackPlatform_UpdateStream_ToolStatusAndThoughtSummary_AppendInline verifies tool
+// status and thought summaries append into the same live stream as reply text (one
+// message, not a separate one per event) - the citation-position bug this used to risk
+// is instead prevented by FinishStream always rebuilding the final message from
+// clean reply-only text, regardless of what was shown live.
+func TestSlackPlatform_UpdateStream_ToolStatusAndThoughtSummary_AppendInline(t *testing.T) {
+	type request struct {
+		path string
+		form url.Values
+	}
+	var requests []request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		requests = append(requests, request{path: r.URL.Path, form: r.Form})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": "C12345", "ts": "1721609700.000000"})
+	}))
+	defer srv.Close()
+	client := slackapi.New("test-token", slackapi.OptionAPIURL(srv.URL+"/"))
+	platform := NewSlackPlatform(client, "")
+
+	handle := router.StreamHandle{ID: "1721609600.123456", SessionID: "slack:C12345"}
+	require.NoError(t, platform.UpdateStream(context.Background(), router.UpdateStreamInput{
+		TextMetadata: router.TextMetadata{SessionID: "slack:C12345"},
+		Handle:       handle,
+		ToolStatus:   &router.ToolStatus{ToolName: "search", Status: router.ToolStarted},
+	}))
+	require.NoError(t, platform.UpdateStream(context.Background(), router.UpdateStreamInput{
+		TextMetadata:   router.TextMetadata{SessionID: "slack:C12345"},
+		Handle:         handle,
+		ThoughtSummary: "thinking...",
+	}))
+
+	require.Len(t, requests, 2)
+	for _, req := range requests {
+		assert.Equal(t, "/chat.appendStream", req.path)
+		assert.Equal(t, "1721609600.123456", req.form.Get("ts"))
+	}
+	assert.Equal(t, "\n_search..._", requests[0].form.Get("markdown_text"))
+	assert.Equal(t, "thinking...", requests[1].form.Get("markdown_text"))
+}
+
 func TestSlackPlatform_StatelessStreamLifecycle(t *testing.T) {
 	type request struct {
 		path string
@@ -156,6 +218,96 @@ func TestSlackPlatform_StatelessStreamLifecycle(t *testing.T) {
 
 	assert.Equal(t, "/chat.stopStream", requests[2].path)
 	assert.Equal(t, "1721609600.123456", requests[2].form.Get("ts"))
+}
+
+// TestSlackPlatform_FinishStream_NoCitations_StillCorrectsMessage verifies FinishStream
+// always rebuilds the message from clean reply-only text, even with no citations -
+// necessary because tool status/thinking may have been live-appended (see
+// UpdateStream/flattenForDisplay) and must not survive into the final message.
+func TestSlackPlatform_FinishStream_NoCitations_StillCorrectsMessage(t *testing.T) {
+	type request struct {
+		path string
+		form url.Values
+	}
+	var requests []request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		requests = append(requests, request{path: r.URL.Path, form: r.Form})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": "C12345", "ts": "1721609600.123456"})
+	}))
+	defer srv.Close()
+	client := slackapi.New("test-token", slackapi.OptionAPIURL(srv.URL+"/"))
+	platform := NewSlackPlatform(client, "")
+
+	err := platform.FinishStream(context.Background(), router.FinishStreamInput{
+		TextMetadata: router.TextMetadata{SessionID: "slack:C12345", Text: "hello world"},
+		Handle:       router.StreamHandle{ID: "1721609600.123456", SessionID: "slack:C12345"},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, requests, 2)
+	assert.Equal(t, "/chat.stopStream", requests[0].path)
+	assert.Equal(t, "/chat.update", requests[1].path)
+	assert.Equal(t, "hello world", requests[1].form.Get("markdown_text"))
+}
+
+// TestSlackPlatform_FinishStream_EmptyText_SkipsCorrection guards the edge case where
+// there's nothing to correct to (e.g. a turn that ended with no reply text at all) -
+// chat.update with empty markdown_text would otherwise error.
+func TestSlackPlatform_FinishStream_EmptyText_SkipsCorrection(t *testing.T) {
+	type request struct{ path string }
+	var requests []request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, request{path: r.URL.Path})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": "C12345", "ts": "1721609600.123456"})
+	}))
+	defer srv.Close()
+	client := slackapi.New("test-token", slackapi.OptionAPIURL(srv.URL+"/"))
+	platform := NewSlackPlatform(client, "")
+
+	err := platform.FinishStream(context.Background(), router.FinishStreamInput{
+		TextMetadata: router.TextMetadata{SessionID: "slack:C12345"},
+		Handle:       router.StreamHandle{ID: "1721609600.123456", SessionID: "slack:C12345"},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, requests, 1)
+	assert.Equal(t, "/chat.stopStream", requests[0].path)
+}
+
+func TestSlackPlatform_FinishStream_WithCitations_CorrectsMessage(t *testing.T) {
+	type request struct {
+		path string
+		form url.Values
+	}
+	var requests []request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		requests = append(requests, request{path: r.URL.Path, form: r.Form})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": "C12345", "ts": "1721609600.123456"})
+	}))
+	defer srv.Close()
+	client := slackapi.New("test-token", slackapi.OptionAPIURL(srv.URL+"/"))
+	platform := NewSlackPlatform(client, "")
+
+	err := platform.FinishStream(context.Background(), router.FinishStreamInput{
+		TextMetadata: router.TextMetadata{
+			SessionID: "slack:C12345",
+			Text:      "hello world",
+			Citations: []router.Citation{{URL: "https://example.com/doc", EndIndex: 5}},
+		},
+		Handle: router.StreamHandle{ID: "1721609600.123456", SessionID: "slack:C12345"},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, requests, 2)
+	assert.Equal(t, "/chat.stopStream", requests[0].path)
+	assert.Equal(t, "/chat.update", requests[1].path)
+	assert.Equal(t, "1721609600.123456", requests[1].form.Get("ts"))
+	assert.Equal(t, "hello [[1]](https://example.com/doc) world", requests[1].form.Get("markdown_text"))
 }
 
 func TestSlackPlatform_PostMessage_InvalidSessionID(t *testing.T) {

@@ -45,6 +45,7 @@ type fakeOutbound struct {
 	beginInputs       []BeginStreamInput
 	updateInputs      []UpdateStreamInput
 	finishInputs      []FinishStreamInput
+	postMessageInputs []TextMetadata
 	approvalInputs    []ApprovalAcknowledgementInput
 }
 
@@ -86,6 +87,7 @@ func (f *fakeOutbound) FinishStream(ctx workflow.Context, input FinishStreamInpu
 
 func (f *fakeOutbound) PostMessage(ctx workflow.Context, input TextMetadata) error {
 	f.calls = append(f.calls, "PostMessage:"+input.Text)
+	f.postMessageInputs = append(f.postMessageInputs, input)
 	return nil
 }
 
@@ -152,6 +154,124 @@ func TestRouterWorkflow_MessageTurn_StreamsDeltas(t *testing.T) {
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
 	assert.Equal(t, []string{"Start", "Append:hello ", "Append:world", "End"}, in.calls)
+}
+
+func TestRouterWorkflow_AccumulatesCitationsForFinishStream(t *testing.T) {
+	handle := TurnHandle{TurnNumber: 1}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{
+				{Text: "hello "},
+				{Citations: []Citation{{URL: "https://example.com/doc", Title: "Doc", EndIndex: 3}}},
+				{Text: "world", IsFinal: true},
+			}},
+		},
+	}
+	in := &fakeOutbound{}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Len(t, in.finishInputs, 1)
+	assert.Equal(t, "hello world", in.finishInputs[0].Text)
+	assert.Equal(t, []Citation{{URL: "https://example.com/doc", Title: "Doc", EndIndex: 3}}, in.finishInputs[0].Citations)
+	// A citation-only delta (no text) doesn't trigger a live append - Slack's
+	// append-only stream can't position it until FinishStream sees the full text.
+	assert.Equal(t, []string{"Start", "Append:hello ", "Append:world", "End"}, in.calls)
+}
+
+func TestRouterWorkflow_ForwardsToolStatusAndThoughtSummaryVerbatim(t *testing.T) {
+	handle := TurnHandle{TurnNumber: 1}
+	toolStatus := &ToolStatus{ToolID: "t1", ToolName: "search", Status: ToolStarted}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{
+				{ToolStatus: toolStatus},
+				{ThoughtSummary: "thinking..."},
+				{Text: "answer", IsFinal: true},
+			}},
+		},
+	}
+	in := &fakeOutbound{}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Len(t, in.updateInputs, 3)
+	// router doesn't interpret ToolStatus/ThoughtSummary, it just forwards them -
+	// rendering is entirely the outbound driver's decision.
+	assert.Same(t, toolStatus, in.updateInputs[0].ToolStatus)
+	assert.Empty(t, in.updateInputs[0].Delta)
+	assert.Equal(t, "thinking...", in.updateInputs[1].ThoughtSummary)
+	assert.Nil(t, in.updateInputs[1].ToolStatus)
+	assert.Equal(t, "answer", in.updateInputs[2].Delta)
+}
+
+func TestRouterWorkflow_PostResp_PassesSegmentsToPostMessage(t *testing.T) {
+	handle := TurnHandle{}
+	toolStatus := &ToolStatus{ToolID: "t1", ToolName: "search", Status: ToolStarted}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{
+				{ToolStatus: toolStatus},
+				{Text: "answer", IsFinal: true},
+			}},
+		},
+	}
+	in := nonStreamingOutbound()
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, teamsMessageInput("channel"))
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Len(t, in.postMessageInputs, 1)
+	assert.Equal(t, "answer", in.postMessageInputs[0].Text)
+	require.Len(t, in.postMessageInputs[0].Segments, 2)
+	assert.Same(t, toolStatus, in.postMessageInputs[0].Segments[0].ToolStatus)
+	assert.Equal(t, "answer", in.postMessageInputs[0].Segments[1].Text)
+}
+
+func TestRouterWorkflow_ApprovalBoundary_ResetsSegmentCitations(t *testing.T) {
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{
+				{Text: "before"},
+				{Citations: []Citation{{URL: "https://example.com/before", EndIndex: 1}}},
+				{ApprovalRequested: &ApprovalRequest{ToolID: "tool-1", ToolName: "deploy"}},
+			}},
+			{Deltas: []Delta{
+				{Text: "after"},
+				{Citations: []Citation{{URL: "https://example.com/after", EndIndex: 1}}, IsFinal: true},
+			}},
+		},
+	}
+	streamHandle := StreamHandle{CloseBeforeApproval: true}
+	in := &fakeOutbound{streamHandle: &streamHandle}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Len(t, in.finishInputs, 2)
+	assert.Equal(t, "before", in.finishInputs[0].Text)
+	assert.Equal(t, []Citation{{URL: "https://example.com/before", EndIndex: 1}}, in.finishInputs[0].Citations)
+	assert.Equal(t, "after", in.finishInputs[1].Text)
+	assert.Equal(t, []Citation{{URL: "https://example.com/after", EndIndex: 1}}, in.finishInputs[1].Citations)
 }
 
 func TestRouterWorkflow_TeamsSharedConversationPostsCompleteResponse(t *testing.T) {
@@ -224,6 +344,31 @@ func TestRouterWorkflow_TeamsSharedConversationClosedPostsCollectedResponse(t *t
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
 	assert.Equal(t, []string{"PostMessage:complete"}, in.calls)
+}
+
+// TestRouterWorkflow_TeamsSharedConversationPostsCitationOnlyResponse guards against a
+// citation-only delta (no Text/ToolStatus/ThoughtSummary) being mistaken for no content
+// and dropped, e.g. an annotation for text delivered in an earlier delta.
+func TestRouterWorkflow_TeamsSharedConversationPostsCitationOnlyResponse(t *testing.T) {
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{
+				{Citations: []Citation{{URL: "https://example.com/doc", EndIndex: 0}}, IsFinal: true},
+			}},
+		},
+	}
+	in := nonStreamingOutbound()
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, teamsMessageInput("channel"))
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Len(t, in.postMessageInputs, 1)
+	assert.Equal(t, []Citation{{URL: "https://example.com/doc", EndIndex: 0}}, in.postMessageInputs[0].Citations)
 }
 
 func TestRouterWorkflow_TeamsSharedConversationDoesNotPostEmptyResponse(t *testing.T) {
