@@ -181,7 +181,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.13.0" },
     { name = "nexus-mcp", editable = "nexus_mcp" },
     { name = "starlette", specifier = ">=0.40.0" },
-    { name = "temporal-agent-harness", git = "ssh://git@github.com/temporal-community/temporal-agent-harness.git?branch=main" },
+    { name = "temporal-agent-harness", git = "https://github.com/temporal-community/temporal-agent-harness.git?branch=main" },
     { name = "temporalio", specifier = ">=1.15.0" },
     { name = "uvicorn", specifier = ">=0.30.0" },
 ]
@@ -611,7 +611,7 @@ wheels = [
 [[package]]
 name = "temporal-agent-harness"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/temporal-community/temporal-agent-harness.git?branch=main#5f70680f8ee6de22d889f038638f76c2daea90e7" }
+source = { git = "https://github.com/temporal-community/temporal-agent-harness.git?branch=main#a22c28bc1e9050fde142da5d4c53df18ea78b920" }
 dependencies = [
     { name = "pydantic" },
     { name = "temporalio" },
@@ -619,21 +619,13 @@ dependencies = [
 
 [[package]]
 name = "temporalio"
-version = "1.29.0"
-source = { registry = "https://pypi.org/simple" }
+version = "1.30.0"
+source = { git = "https://github.com/temporalio/sdk-python?rev=29e0c51b0f832e0c9148f28ebba4000ab183d42f#29e0c51b0f832e0c9148f28ebba4000ab183d42f" }
 dependencies = [
     { name = "nexus-rpc" },
     { name = "protobuf" },
     { name = "types-protobuf" },
     { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/95/22e2e19ad95d42d69320e8cd8d48c8543841f367d2d5a4dca48165e466d2/temporalio-1.29.0.tar.gz", hash = "sha256:3fbfddc5f847956ca20c2e671d3f09cefdb2ab6f0d6a6d59664c6102e922f80b", size = 2657001, upload-time = "2026-06-17T21:18:16.72Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/82/e0810e7e7f5f4eb97e40468abf6bc8d3df0dbc882c09a2c207c38c90d56d/temporalio-1.29.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:9d18f989fbea13014e3221de034fbd1945ec05499b663195f0eacb49cc922986", size = 14874156, upload-time = "2026-06-17T21:18:03.299Z" },
-    { url = "https://files.pythonhosted.org/packages/41/48/55a2f948f4cd30d8dcaf1d37a15e23b34d90a68d0d1da6765a08c650bbb2/temporalio-1.29.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:28bc12b64a7ffc08f7709897d3a0c93faa8972227734669f248cb7de2ce3e69f", size = 14384773, upload-time = "2026-06-17T21:18:06.151Z" },
-    { url = "https://files.pythonhosted.org/packages/1d/71/a13f427089b54de4e11f347b2043934d693baffda569c4b4914e588a6074/temporalio-1.29.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:dd02a107c3f5fa088ed5e4aeda9af91d11afbc53dfd5b28d730776354b159297", size = 14602055, upload-time = "2026-06-17T21:18:08.704Z" },
-    { url = "https://files.pythonhosted.org/packages/73/6a/3ee32775c9b5172560add2ec69c554f476bc6c51ea7a3c24206e03f08cc5/temporalio-1.29.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:950b42e05793762eb7b4b3809e78c9e9dcdf2f23f797aa939ac17eca8ad9b3d3", size = 15075878, upload-time = "2026-06-17T21:18:11.499Z" },
-    { url = "https://files.pythonhosted.org/packages/f5/92/24ef16052075a08e7ed071311704a244944485bc8581d82313f0c3d1b385/temporalio-1.29.0-cp310-abi3-win_amd64.whl", hash = "sha256:8969718f947c6b9df3b51ab4a71bad67abfce81a1023aa1a598a224b712b713a", size = 15333733, upload-time = "2026-06-17T21:18:14.201Z" },
 ]
 
 [[package]]
