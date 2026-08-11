@@ -75,7 +75,7 @@ func main() {
 		log.Printf("Slack bot user ID: %s (forwarding only messages that mention the bot)", bot.UserID)
 	}
 
-	handler := slackinbound.NewServer(tc, flags.taskQueue, flags.slackSigningSecret, bot.UserID)
+	handler := slackinbound.NewServer(tc, flags.taskQueue, flags.slackSigningSecret, bot.UserID, "agent-")
 	addr := ":" + flags.webhookPort
 	log.Printf("Slack webhook server listening on %s", addr)
 	if err := http.ListenAndServe(addr, handler); err != nil {

@@ -19,7 +19,7 @@ import (
 
 const (
 	// AgentNexusEndpoint is the Nexus endpoint name the driver targets.
-	AgentNexusEndpoint = "nexus-agent-endpoint"
+	AgentNexusEndpoint = "support-agent-nexus"
 	turnEventsTopic    = "turn_events"
 )
 
