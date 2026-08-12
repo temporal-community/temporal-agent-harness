@@ -14,6 +14,7 @@ import (
 	"github.com/slack-go/slack/slackevents"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	slackoutbound "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack/outbound"
+	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
 )
 
@@ -106,7 +107,10 @@ func (s *webhookServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 			// below - a bare return reads as a 5xx to the Lambda proxy and Slack retries.
 			if ev.BotID == "" {
 				mentioned := s.isMentioned(ev)
-				if mentioned || ev.ThreadTimeStamp != "" {
+				switch {
+				case mentioned:
+					s.signalIncomingMessage(r.Context(), ev, mentioned)
+				case ev.ThreadTimeStamp != "" && s.threadHasBotSession(r.Context(), ev.Channel, ev.ThreadTimeStamp):
 					s.signalIncomingMessage(r.Context(), ev, mentioned)
 				}
 			}
@@ -124,6 +128,29 @@ func (s *webhookServer) isMentioned(ev *slackevents.MessageEvent) bool {
 // new thread), so each conversation gets an isolated session.
 func threadSessionID(channel, threadRoot string) string {
 	return fmt.Sprintf("slack:%s:%s", channel, threadRoot)
+}
+
+// threadHasBotSession reports whether any router workflow was ever started for this
+// thread - which only happens when some message in it mentioned the bot, since a
+// mention-free message only reaches signalIncomingMessage once this check already
+// passed. The bot may have been mentioned on the thread root or on any reply deep in
+// the thread, so the triggering message's own ts (baked into the trailing segment of
+// its workflow ID) isn't known in advance; every router workflow for this thread
+// shares the same "connector-<identity>-<sessionID>-" prefix though, since sessionID
+// is scoped to the thread rather than the message. A prefix search on that avoids
+// starting a router workflow, and querying the backend, for every reply in threads
+// that never involved the bot.
+func (s *webhookServer) threadHasBotSession(ctx context.Context, channel, threadRoot string) bool {
+	prefix := router.RouterWorkflowIDPrefix(defaultIdentity, threadSessionID(channel, threadRoot))
+	resp, err := s.tc.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{
+		Query:    fmt.Sprintf("WorkflowId STARTS_WITH %q", prefix),
+		PageSize: 1,
+	})
+	if err != nil {
+		log.Printf("threadHasBotSession: list workflows for prefix %s failed: %v", prefix, err)
+		return false
+	}
+	return len(resp.GetExecutions()) > 0
 }
 
 func (s *webhookServer) signalIncomingMessage(ctx context.Context, ev *slackevents.MessageEvent, mentioned bool) {
