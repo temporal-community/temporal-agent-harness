@@ -16,6 +16,7 @@ type flags struct {
 	temporalAddress    string
 	connectorNamespace string
 	taskQueue          string
+	identity           string
 	webhookPort        string
 }
 
@@ -41,6 +42,11 @@ func ensureFlags() *flags {
 	if taskQueue == "" {
 		taskQueue = "nexus-connector-slack"
 	}
+	// Distinguishes this server's router workflows from any other identity
+	// sharing the same connectorNamespace (e.g. running multiple environments
+	// against one Temporal namespace). Empty defers to inbound.NewServer's
+	// own default.
+	identity := os.Getenv("CONNECTOR_IDENTITY")
 	webhookPort := os.Getenv("WEBHOOK_PORT")
 	if webhookPort == "" {
 		webhookPort = "8080"
@@ -51,6 +57,7 @@ func ensureFlags() *flags {
 		temporalAddress:    temporalAddress,
 		connectorNamespace: connectorNamespace,
 		taskQueue:          taskQueue,
+		identity:           identity,
 		webhookPort:        webhookPort,
 	}
 }
@@ -75,7 +82,7 @@ func main() {
 		log.Printf("Slack bot user ID: %s (forwarding mentions, plus replies in threads the bot was mentioned in)", bot.UserID)
 	}
 
-	handler := slackinbound.NewServer(tc, flags.taskQueue, flags.slackSigningSecret, bot.UserID)
+	handler := slackinbound.NewServer(tc, flags.taskQueue, flags.identity, flags.slackSigningSecret, bot.UserID)
 	addr := ":" + flags.webhookPort
 	log.Printf("Slack webhook server listening on %s", addr)
 	if err := http.ListenAndServe(addr, handler); err != nil {

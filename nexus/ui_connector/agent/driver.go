@@ -157,12 +157,27 @@ func extractCitations(delta map[string]any) []router.Citation {
 
 // Driver implements router.BackendDriver against the temporal-agent-harness's Nexus agent
 // service.
-type Driver struct{}
+type Driver struct {
+	// NexusEndpoint is the Nexus endpoint name to target. Leave empty to use
+	// AgentNexusEndpoint. Set this explicitly when running multiple
+	// environments (e.g. prod/staging/ondemand) against the same Temporal
+	// Cloud account — Nexus endpoint names must be unique account-wide, not
+	// just namespace-wide, so each environment needs its own.
+	NexusEndpoint string
+}
+
+// nexusEndpoint returns d.NexusEndpoint, or AgentNexusEndpoint if unset.
+func (d *Driver) nexusEndpoint() string {
+	if d.NexusEndpoint == "" {
+		return AgentNexusEndpoint
+	}
+	return d.NexusEndpoint
+}
 
 // StartTurn dispatches a message, slash command, or approval decision to the agent
 // nexus service, translating the backend's response into a generic router.StartResult.
 func (d *Driver) StartTurn(ctx workflow.Context, input router.Input) (router.StartResult, error) {
-	agentClient := workflow.NewNexusClient(AgentNexusEndpoint, harnessgen.AgentService.ServiceName)
+	agentClient := workflow.NewNexusClient(d.nexusEndpoint(), harnessgen.AgentService.ServiceName)
 
 	switch {
 	case input.Message != nil:
@@ -272,7 +287,7 @@ func resolveApproval(ctx workflow.Context, agentClient workflow.NexusClient, ses
 // PollTurn polls the Nexus agent response stream starting from cursor and decodes each
 // item into a generic router.Delta.
 func (d *Driver) PollTurn(ctx workflow.Context, handle router.TurnHandle, cursor int64) (router.PollResult, error) {
-	agentClient := workflow.NewNexusClient(AgentNexusEndpoint, harnessgen.AgentService.ServiceName)
+	agentClient := workflow.NewNexusClient(d.nexusEndpoint(), harnessgen.AgentService.ServiceName)
 
 	var pollOut harnessgen.PollMessagesOutput
 	if err := agentClient.ExecuteOperation(ctx, harnessgen.AgentService.PollMessages,

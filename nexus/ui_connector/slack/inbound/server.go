@@ -28,15 +28,25 @@ const (
 type webhookServer struct {
 	tc            client.Client
 	taskQueue     string
+	identity      string
 	signingSecret string
 	botUserID     string
 	mux           *http.ServeMux
 }
 
-func NewServer(tc client.Client, taskQueue, signingSecret, botUserID string) *webhookServer {
+// NewServer wires up a Slack webhook handler. identity distinguishes this
+// server's router workflows from any other identity sharing the same
+// Temporal namespace (e.g. running prod/staging/ondemand environments
+// against one "connector" namespace) — it's baked into every router
+// workflow ID this server starts. Pass "" to use defaultIdentity.
+func NewServer(tc client.Client, taskQueue, identity, signingSecret, botUserID string) *webhookServer {
+	if identity == "" {
+		identity = defaultIdentity
+	}
 	s := &webhookServer{
 		tc:            tc,
 		taskQueue:     taskQueue,
+		identity:      identity,
 		signingSecret: signingSecret,
 		botUserID:     botUserID,
 		mux:           http.NewServeMux(),
@@ -141,7 +151,7 @@ func threadSessionID(channel, threadRoot string) string {
 // starting a router workflow, and querying the backend, for every reply in threads
 // that never involved the bot.
 func (s *webhookServer) threadHasBotSession(ctx context.Context, channel, threadRoot string) bool {
-	prefix := router.RouterWorkflowIDPrefix(defaultIdentity, threadSessionID(channel, threadRoot))
+	prefix := router.RouterWorkflowIDPrefix(s.identity, threadSessionID(channel, threadRoot))
 	resp, err := s.tc.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{
 		Query:    fmt.Sprintf("WorkflowId STARTS_WITH %q", prefix),
 		PageSize: 1,
@@ -167,12 +177,12 @@ func (s *webhookServer) signalIncomingMessage(ctx context.Context, ev *slackeven
 		ThreadID:                threadRoot,
 		RequiresExistingSession: !mentioned,
 	}
-	wfID := router.RouterWorkflowID(defaultIdentity, sessionID, ev.TimeStamp)
+	wfID := router.RouterWorkflowID(s.identity, sessionID, ev.TimeStamp)
 	if _, err := s.tc.ExecuteWorkflow(ctx,
 		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
 		router.WorkflowName,
 		router.Input{
-			Identity:  defaultIdentity,
+			Identity:  s.identity,
 			SessionID: sessionID,
 			Message:   &msg,
 		},
@@ -201,12 +211,12 @@ func (s *webhookServer) handleSlashCommands(w http.ResponseWriter, r *http.Reque
 
 	sessionID := fmt.Sprintf("slack:%s", channelID)
 
-	wfID := router.RouterWorkflowID(defaultIdentity, sessionID, triggerID)
+	wfID := router.RouterWorkflowID(s.identity, sessionID, triggerID)
 	if _, err := s.tc.ExecuteWorkflow(r.Context(),
 		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
 		router.WorkflowName,
 		router.Input{
-			Identity:  defaultIdentity,
+			Identity:  s.identity,
 			SessionID: sessionID,
 			Slash: &router.SlashCommand{
 				Name:     command,
@@ -248,13 +258,13 @@ func (s *webhookServer) handleInteractions(w http.ResponseWriter, r *http.Reques
 		}
 
 		// Start a dedicated workflow to call approveToolCall via Nexus.
-		wfID := router.RouterWorkflowID(defaultIdentity, val.SessionID, "approval-"+val.ToolID)
+		wfID := router.RouterWorkflowID(s.identity, val.SessionID, "approval-"+val.ToolID)
 		if _, err := s.tc.ExecuteWorkflow(r.Context(),
 			client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
 			router.WorkflowName,
 			router.Input{
 				SessionID: val.SessionID,
-				Identity:  defaultIdentity,
+				Identity:  s.identity,
 				Approval: &router.ApprovalDecision{
 					ToolID:   val.ToolID,
 					ToolName: val.ToolName,
