@@ -204,27 +204,85 @@ func (p *SlackPlatform) UpdateStream(ctx context.Context, input router.UpdateStr
 // pinned and latest slack-go releases - neither implements it), so tool status renders
 // as plain inline text, the same as it always did.
 func flattenForDisplay(input router.UpdateStreamInput) string {
+	return flattenDeltaText(router.Delta{
+		Text:           input.Delta,
+		ToolStatus:     input.ToolStatus,
+		ThoughtSummary: input.ThoughtSummary,
+	})
+}
+
+// flattenDeltaText renders one delta's content as plain inline text - the same
+// rendering flattenForDisplay uses live, reused here so the final message (built from
+// Segments) shows tool status/thought summaries identically to how they looked while
+// streaming, instead of being dropped.
+func flattenDeltaText(d router.Delta) string {
 	switch {
-	case input.ToolStatus != nil:
-		switch input.ToolStatus.Status {
+	case d.ToolStatus != nil:
+		switch d.ToolStatus.Status {
 		case router.ToolStarted:
-			return "\n_" + input.ToolStatus.ToolName + "..._"
+			return "\n_" + d.ToolStatus.ToolName + "..._"
 		case router.ToolCompleted:
 			return " ✅\n\n"
 		case router.ToolErrored:
-			return " ❌ Error: " + input.ToolStatus.Message + "\n\n"
+			return " ❌ Error: " + d.ToolStatus.Message + "\n\n"
 		}
 		return ""
-	case input.ThoughtSummary != "":
-		return input.ThoughtSummary
+	case d.ThoughtSummary != "":
+		return d.ThoughtSummary
 	default:
-		return input.Delta
+		return d.Text
 	}
 }
 
-// FinishStream stops a native Slack stream, then corrects the message to the clean
-// reply text with citation markers spliced in (see citations.Splice) - overwriting
-// whatever was live-appended. Skips the correction if there's no reply text, since
+// flattenSegments concatenates every delta's flattened text in order, producing the
+// full message text (reply + tool status + thought summaries) for the final,
+// citation-spliced message.
+func flattenSegments(segments []router.Delta) string {
+	var b strings.Builder
+	for _, d := range segments {
+		b.WriteString(flattenDeltaText(d))
+	}
+	return b.String()
+}
+
+// retargetCitations rewrites each citation's EndIndex from an offset into the reply
+// text alone (see router.Delta.Text) to the matching offset in flattenSegments' output,
+// which interleaves tool status/thought summary text between reply chunks.
+func retargetCitations(segments []router.Delta, cs []router.Citation) []router.Citation {
+	if len(cs) == 0 {
+		return cs
+	}
+	retargeted := make([]router.Citation, len(cs))
+	for i, c := range cs {
+		c.EndIndex = retargetEndIndex(segments, c.EndIndex)
+		retargeted[i] = c
+	}
+	return retargeted
+}
+
+func retargetEndIndex(segments []router.Delta, endIndex int) int {
+	if endIndex < 0 {
+		return -1
+	}
+	var replyOffset, flatOffset int
+	for _, seg := range segments {
+		if seg.Text != "" {
+			replyLen := len([]rune(seg.Text))
+			if endIndex <= replyOffset+replyLen {
+				return flatOffset + (endIndex - replyOffset)
+			}
+			replyOffset += replyLen
+		}
+		flatOffset += len([]rune(flattenDeltaText(seg)))
+	}
+	return flatOffset
+}
+
+// FinishStream stops a native Slack stream, then corrects the message to the full
+// flattened turn (reply text plus tool status/thought summaries, see flattenSegments)
+// with citation markers spliced in at their retargeted positions - overwriting whatever
+// was live-appended, so the final message keeps the same tool-use lines shown live
+// instead of dropping them. Skips the correction if there's no content at all, since
 // chat.update rejects an empty markdown_text; the live-streamed text stands instead.
 func (p *SlackPlatform) FinishStream(ctx context.Context, input router.FinishStreamInput) error {
 	channel, err := parseChannel(input.SessionID)
@@ -240,7 +298,8 @@ func (p *SlackPlatform) FinishStream(ctx context.Context, input router.FinishStr
 	if _, _, err := p.client.StopStreamContext(ctx, channel, input.Handle.ID); err != nil {
 		return fmt.Errorf("chat.stopStream: %w", err)
 	}
-	finalText := citations.Splice(input.Text, input.Citations, citations.CommonMarkLink)
+	text := flattenSegments(input.Segments)
+	finalText := citations.Splice(text, retargetCitations(input.Segments, input.Citations), citations.CommonMarkLink)
 	if finalText == "" {
 		return nil
 	}
@@ -257,7 +316,8 @@ func (p *SlackPlatform) PostMessage(ctx context.Context, input router.TextMetada
 	if err != nil {
 		return err
 	}
-	opts := []slackapi.MsgOption{slackapi.MsgOptionText(citations.Splice(input.Text, input.Citations, mrkdwnLink), false)}
+	text := flattenSegments(input.Segments)
+	opts := []slackapi.MsgOption{slackapi.MsgOptionText(citations.Splice(text, retargetCitations(input.Segments, input.Citations), mrkdwnLink), false)}
 	if input.ThreadID != "" {
 		opts = append(opts, slackapi.MsgOptionTS(input.ThreadID))
 	}
