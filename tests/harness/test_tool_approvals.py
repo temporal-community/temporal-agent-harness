@@ -72,9 +72,18 @@ async def gated_workflow_tool(text: str) -> str:
     return f"wf:{text}"
 
 
+@agent.tool_defn(inherently_safe=True, always_require_approval=True)
+async def forced_approval_workflow_tool(text: str) -> str:
+    """An inline tool that no automatic policy layer may approve."""
+    return f"forced:{text}"
+
+
 def _approve_gated_activity_tool(ctx: ToolApprovalContext) -> bool:
-    """A developer custom fallback: auto-approve only ``gated_activity_tool``."""
-    return ctx.tool_name == "gated_activity_tool"
+    """A developer fallback that opts the two named tools into auto-approval."""
+    return ctx.tool_name in {
+        "gated_activity_tool",
+        "forced_approval_workflow_tool",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +114,8 @@ class _BaseProbe:
             call_id, tool, arg = "s1", safe_activity_tool, "S"
         elif text == "workflow-tool":
             call_id, tool, arg = "wf-1", gated_workflow_tool, "Z"
+        elif text == "forced-workflow-tool":
+            call_id, tool, arg = "forced-1", forced_approval_workflow_tool, "F"
         else:
             call_id, tool, arg = "g1", gated_activity_tool, "S"
 
@@ -417,6 +428,236 @@ async def test_dangerously_skip_all_auto_approves(env_and_client):
     assert _reply_text(events) == "act:S"
 
 
+async def test_forced_approval_tool_stays_pending_under_skip_all(env_and_client):
+    """A tool that always requires approval cannot execute under an allow-all policy."""
+    client, task_queue = env_and_client
+    handle = await _start(
+        client,
+        task_queue,
+        config=AgentConfig(approval_policy=ToolApprovalPolicy.dangerously_skip_all()),
+    )
+    await _send(handle, "forced-workflow-tool", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            event = item.data.event
+            if (
+                event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and event.tool_id == "forced-1"
+            ):
+                pending = await agent_client.get_pending_approvals()
+                assert [approval.tool_id for approval in pending] == ["forced-1"]
+                await agent_client.approve_tool("forced-1", approved=True)
+                break
+
+    events = await _drain_to_turn_end(client, handle.id)
+    assert _types_for(events, "forced-1")[-2:] == [
+        AgentEventType.TOOL_START,
+        AgentEventType.TOOL_END,
+    ]
+
+
+async def test_forced_approval_tool_stays_pending_under_allow_safe(env_and_client):
+    """A forced approval overrides the tool's own inherently-safe hint."""
+    client, task_queue = env_and_client
+    handle = await _start(
+        client,
+        task_queue,
+        config=AgentConfig(approval_policy=ToolApprovalPolicy.allow_inherently_safe()),
+    )
+    await _send(handle, "forced-workflow-tool", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    seen: list[AgentEvent] = []
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            seen.append(item.data)
+            event = item.data.event
+            if (
+                event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and event.tool_id == "forced-1"
+            ):
+                assert not any(
+                    envelope.event.type == AgentEventType.TOOL_START
+                    and getattr(envelope.event, "tool_id", None) == "forced-1"
+                    for envelope in seen
+                )
+                await agent_client.approve_tool("forced-1", approved=True)
+                break
+
+    events = await _drain_to_turn_end(client, handle.id)
+    assert AgentEventType.TOOL_END in _types_for(events, "forced-1")
+
+
+async def test_live_allowlist_does_not_release_forced_approval(env_and_client):
+    """A live /allow-tools update cannot release an already-pending forced call."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue)
+    await _send(handle, "forced-workflow-tool", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            event = item.data.event
+            if (
+                event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and event.tool_id == "forced-1"
+            ):
+                break
+
+    await agent_client.execute_operator_command(
+        "allow-tools", arg="forced_approval_workflow_tool"
+    )
+    assert [
+        approval.tool_id for approval in await agent_client.get_pending_approvals()
+    ] == ["forced-1"]
+
+    await agent_client.approve_tool("forced-1", approved=True)
+    events = await _drain_to_turn_end(client, handle.id)
+    assert AgentEventType.TOOL_END in _types_for(events, "forced-1")
+
+
+async def test_remembered_allow_does_not_autoapprove_forced_tool(env_and_client):
+    """A persisted allow-list entry from an earlier session cannot bypass a forced gate."""
+    client, task_queue = env_and_client
+    handle = await _start(
+        client,
+        task_queue,
+        config=AgentConfig(
+            approval_policy=ToolApprovalPolicy.allow_tools(
+                ["forced_approval_workflow_tool"]
+            )
+        ),
+    )
+    await _send(handle, "forced-workflow-tool", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            event = item.data.event
+            if (
+                event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and event.tool_id == "forced-1"
+            ):
+                assert [
+                    approval.tool_id
+                    for approval in await agent_client.get_pending_approvals()
+                ] == ["forced-1"]
+                await agent_client.approve_tool("forced-1", approved=True)
+                break
+
+    events = await _drain_to_turn_end(client, handle.id)
+    assert AgentEventType.TOOL_END in _types_for(events, "forced-1")
+
+
+async def test_custom_fallback_does_not_autoapprove_forced_tool(env_and_client):
+    """A developer fallback returning true cannot bypass a forced gate."""
+    client, task_queue = env_and_client
+    handle = await _start(
+        client,
+        task_queue,
+        workflow_cls=CustomFallbackProbeAgent,
+    )
+    await _send(handle, "forced-workflow-tool", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            event = item.data.event
+            if (
+                event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and event.tool_id == "forced-1"
+            ):
+                assert [
+                    approval.tool_id
+                    for approval in await agent_client.get_pending_approvals()
+                ] == ["forced-1"]
+                await agent_client.approve_tool("forced-1", approved=True)
+                break
+
+    events = await _drain_to_turn_end(client, handle.id)
+    assert AgentEventType.TOOL_END in _types_for(events, "forced-1")
+
+
+async def test_forced_approval_metadata_disallows_remember(env_and_client):
+    """Event and late-attaching status metadata disable remember for a forced call."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue)
+    await _send(handle, "forced-workflow-tool", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            event = item.data.event
+            if (
+                event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and event.tool_id == "forced-1"
+            ):
+                assert event.remember_allowed is False
+                pending = await agent_client.get_pending_approvals()
+                assert pending[0].remember_allowed is False
+                await agent_client.approve_tool("forced-1", approved=True)
+                break
+
+    await _drain_to_turn_end(client, handle.id)
+
+
+async def test_normal_approval_metadata_allows_remember(env_and_client):
+    """Ordinary gated calls continue to advertise the existing remember affordance."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue)
+    await _send(handle, "single", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            event = item.data.event
+            if (
+                event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and event.tool_id == "g1"
+            ):
+                assert event.remember_allowed is True
+                pending = await agent_client.get_pending_approvals()
+                assert pending[0].remember_allowed is True
+                await agent_client.approve_tool("g1", approved=True)
+                break
+
+    await _drain_to_turn_end(client, handle.id)
+
+
+async def test_forced_approval_rejects_remember_without_mutating_policy(
+    env_and_client,
+):
+    """A forbidden remember decision is rejected before it can settle or change policy."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue)
+    await _send(handle, "forced-workflow-tool", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            event = item.data.event
+            if (
+                event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and event.tool_id == "forced-1"
+            ):
+                break
+
+    policy_before = (await agent_client.get_status()).approval_policy
+    with pytest.raises(ToolApprovalError) as rejected:
+        await agent_client.approve_tool(
+            "forced-1", approved=True, remember=True
+        )
+    assert rejected.value.error_type == "ToolApprovalRememberNotAllowed"
+    status = await agent_client.get_status()
+    assert status.approval_policy == policy_before
+    assert [approval.tool_id for approval in status.pending_approvals] == ["forced-1"]
+
+    await agent_client.approve_tool("forced-1", approved=True)
+    await _drain_to_turn_end(client, handle.id)
+
+
 async def test_config_policy_overrides_agent_default(env_and_client):
     """The agent's default gates everything; a caller's config policy wins, so the same
     tool runs ungated. Also surfaced on the status query."""
@@ -577,7 +818,7 @@ async def test_pending_approval_visible_in_status(env_and_client):
     assert await agent_client.get_pending_approvals() == []
 
 
-async def test_approval_is_idempotent(env_and_client):
+async def test_approval_duplicate_is_idempotent_but_conflict_is_rejected(env_and_client):
     client, task_queue = env_and_client
     handle = await _start(client, task_queue)
     await _send(handle, "single", expected_turn=1)
@@ -595,12 +836,116 @@ async def test_approval_is_idempotent(env_and_client):
         await agent_client.approve_tool("does-not-exist", approved=True)
     assert unknown.value.error_type == "UnknownToolApproval"
 
-    await agent_client.approve_tool("g1", approved=True)
+    first = await agent_client.approve_tool("g1", approved=True)
+    duplicate = await agent_client.approve_tool("g1", approved=True)
+    assert duplicate == first
+
     with pytest.raises(ToolApprovalError) as dup:
         await agent_client.approve_tool("g1", approved=False)
     assert dup.value.error_type == "ToolApprovalAlreadyResolved"
 
     await _drain_to_turn_end(client, handle.id)
+
+
+async def test_duplicate_approval_with_changed_reason_is_rejected(env_and_client):
+    """The same approval boolean does not make a changed reason idempotent."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue)
+    await _send(handle, "single", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            if (
+                item.data.event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and item.data.event.tool_id == "g1"
+            ):
+                break
+
+    await agent_client.approve_tool("g1", approved=True, reason="first")
+    with pytest.raises(ToolApprovalError) as conflict:
+        await agent_client.approve_tool("g1", approved=True, reason="changed")
+    assert conflict.value.error_type == "ToolApprovalAlreadyResolved"
+
+    await _drain_to_turn_end(client, handle.id)
+
+
+async def test_duplicate_approval_with_changed_remember_is_rejected(env_and_client):
+    """The same approval boolean does not make a changed remember flag idempotent."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue)
+    await _send(handle, "single", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            if (
+                item.data.event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and item.data.event.tool_id == "g1"
+            ):
+                break
+
+    await agent_client.approve_tool("g1", approved=True, remember=False)
+    with pytest.raises(ToolApprovalError) as conflict:
+        await agent_client.approve_tool("g1", approved=True, remember=True)
+    assert conflict.value.error_type == "ToolApprovalAlreadyResolved"
+
+    await _drain_to_turn_end(client, handle.id)
+
+
+async def test_identical_denial_duplicate_is_idempotent(env_and_client):
+    """Retrying the exact denial observes the same settled acknowledgement."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue)
+    await _send(handle, "single", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            if (
+                item.data.event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and item.data.event.tool_id == "g1"
+            ):
+                break
+
+    first = await agent_client.approve_tool(
+        "g1", approved=False, reason="not allowed"
+    )
+    duplicate = await agent_client.approve_tool(
+        "g1", approved=False, reason="not allowed"
+    )
+    assert duplicate == first
+
+    events = await _drain_to_turn_end(client, handle.id)
+    assert _reply_text(events) == "denied:not allowed"
+
+
+async def test_identical_duplicate_emits_one_resolution_event(env_and_client):
+    """An idempotent retry acknowledges the settlement without publishing it twice."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue)
+    await _send(handle, "single", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            if (
+                item.data.event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and item.data.event.tool_id == "g1"
+            ):
+                break
+
+    await agent_client.approve_tool("g1", approved=True)
+    await agent_client.approve_tool("g1", approved=True)
+    events = await _drain_to_turn_end(client, handle.id)
+
+    resolutions = [
+        event
+        for event in events
+        if event.event.type == AgentEventType.TOOL_APPROVAL_RESOLVED
+        and event.event.tool_id == "g1"
+    ]
+    assert len(resolutions) == 1
 
 
 async def test_concurrent_first_approved_executes_first(env_and_client):

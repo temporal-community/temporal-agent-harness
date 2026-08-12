@@ -1,4 +1,8 @@
 import type { AgentSseFrame, FileCitationAnnotation } from "$lib/api/types";
+import {
+  defaultAgentPresentationAdapter,
+  type AgentPresentationAdapter
+} from "./messagePresentation";
 
 export type TranscriptItem =
   | {
@@ -16,6 +20,7 @@ export type TranscriptItem =
       streaming: boolean;
       timestamp: number;
       citations: FileCitationAnnotation[];
+      output?: Record<string, unknown> | null;
     }
   | {
       kind: "tool";
@@ -45,29 +50,6 @@ export type TranscriptItem =
       status: "running" | "completed" | "failed";
       timestamp: number;
     };
-
-function renderUserMessage(value: string): string {
-  if (!value.startsWith("{")) return value;
-  try {
-    const message = JSON.parse(value) as {
-      type?: string;
-      payload?: { name?: string; arg?: string; text?: string };
-      script?: string;
-    };
-    if (typeof message.payload?.text === "string") return message.payload.text;
-    if (typeof message.script === "string") return message.script;
-    if (
-      (message.type !== "slash" && message.type !== "slash_command") ||
-      !message.payload?.name
-    ) {
-      return value;
-    }
-    const command = message.payload.name === "set-model" ? "model" : message.payload.name;
-    return `/${command}${message.payload.arg ? ` ${message.payload.arg}` : ""}`;
-  } catch {
-    return value;
-  }
-}
 
 function textFromReply(data: { text?: unknown; output?: unknown }): string {
   if (typeof data.text === "string") return data.text;
@@ -100,7 +82,10 @@ function operatorCommandDisplay(data: {
   return `${label}${data.arg ? ` ${data.arg}` : ""}`;
 }
 
-export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
+export function buildTranscript(
+  frames: AgentSseFrame[],
+  presentationAdapter: AgentPresentationAdapter = defaultAgentPresentationAdapter
+): TranscriptItem[] {
   const items: TranscriptItem[] = [];
   const replyIndexByTurn = new Map<number, number>();
   const toolIndexById = new Map<string, number>();
@@ -116,7 +101,7 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
         kind: "user",
         id: `user-${frame.data.turn_id}`,
         turnNumber: turn_number,
-        text: renderUserMessage(frame.data.user_message),
+        text: presentationAdapter.messageText(frame.data.user_message),
         timestamp
       });
     }
@@ -196,7 +181,7 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
     }
 
     if (frame.event === "reply") {
-      const text = textFromReply(frame.data);
+      const text = presentationAdapter.replyText?.(frame.data) ?? textFromReply(frame.data);
       let itemIndex = replyIndexByTurn.get(turn_number);
       if (itemIndex == null) {
         itemIndex = items.length;
@@ -208,7 +193,8 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
           text,
           streaming: false,
           timestamp,
-          citations: citationsByTurn.get(turn_number) ?? []
+          citations: citationsByTurn.get(turn_number) ?? [],
+          output: frame.data.output
         });
       } else {
         const item = items[itemIndex];
@@ -216,6 +202,7 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
           item.text = text || item.text;
           item.streaming = false;
           item.citations = citationsByTurn.get(turn_number) ?? [];
+          item.output = frame.data.output;
         }
       }
     }

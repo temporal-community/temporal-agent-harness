@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -1026,6 +1026,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/ee/02a2c011bdab74c6fb3c75474d40b3052059d95df7e73351460c8588d963/h11-0.16.0.tar.gz", hash = "sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1", size = 101250, upload-time = "2025-04-24T03:35:25.427Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl", hash = "sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86", size = 37515, upload-time = "2025-04-24T03:35:24.344Z" },
+]
+
+[[package]]
+name = "honcho"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/65/c8/d860888358bf5c8a6e7d78d1b508b59b0e255afd5655f243b8f65166dafd/honcho-2.0.0.tar.gz", hash = "sha256:af3815c03c634bf67d50f114253ea9fef72ecff26e4fd06b29234789ac5b8b2e", size = 45618, upload-time = "2024-10-06T14:26:53.871Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/48/1c/25631fc359955569e63f5446dbb7022c320edf9846cbe892ee5113433a7e/honcho-2.0.0-py3-none-any.whl", hash = "sha256:56dcd04fc72d362a4befb9303b1a1a812cba5da283526fbc6509be122918ddf3", size = 22093, upload-time = "2024-10-06T14:26:52.181Z" },
 ]
 
 [[package]]
@@ -2976,6 +2988,7 @@ dev = [
     { name = "fastapi", extra = ["standard"] },
     { name = "google-auth" },
     { name = "google-genai" },
+    { name = "honcho" },
     { name = "httpx" },
     { name = "mcp" },
     { name = "moto", extra = ["server"] },
@@ -2986,15 +2999,18 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "setuptools" },
     { name = "temporalio", extra = ["aioboto3", "opentelemetry"] },
+    { name = "watchfiles" },
 ]
 examples = [
     { name = "fastapi", extra = ["standard"] },
     { name = "google-auth" },
     { name = "google-genai" },
+    { name = "honcho" },
     { name = "httpx" },
     { name = "openai-agents" },
     { name = "pydantic-ai-slim", extra = ["temporal"] },
     { name = "pydantic-monty" },
+    { name = "watchfiles" },
 ]
 
 [package.metadata]
@@ -3018,6 +3034,7 @@ dev = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
     { name = "google-auth", specifier = ">=2.53.0" },
     { name = "google-genai", specifier = ">=2.0.0" },
+    { name = "honcho", specifier = ">=2.0.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", specifier = ">=1.9.4,<2" },
     { name = "moto", extras = ["server"], specifier = ">=5.2.1" },
@@ -3029,15 +3046,18 @@ dev = [
     { name = "setuptools", specifier = ">=68" },
     { name = "temporalio", extras = ["aioboto3"], git = "https://github.com/temporalio/sdk-python?rev=29e0c51b0f832e0c9148f28ebba4000ab183d42f" },
     { name = "temporalio", extras = ["opentelemetry"], git = "https://github.com/temporalio/sdk-python?rev=29e0c51b0f832e0c9148f28ebba4000ab183d42f" },
+    { name = "watchfiles", specifier = ">=1.0.0" },
 ]
 examples = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
     { name = "google-auth", specifier = ">=2.53.0" },
     { name = "google-genai", specifier = ">=2.0.0" },
+    { name = "honcho", specifier = ">=2.0.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "openai-agents", specifier = ">=0.17.5" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
     { name = "pydantic-monty", specifier = ">=0.0.18" },
+    { name = "watchfiles", specifier = ">=1.0.0" },
 ]
 
 [[package]]

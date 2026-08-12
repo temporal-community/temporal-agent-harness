@@ -1,10 +1,25 @@
+<script module lang="ts">
+  import type { Session } from "$lib/api/types";
+  import type { AgentPresentationAdapter } from "$lib/state/messagePresentation";
+
+  export function sessionInitialMessageText(
+    session: Session,
+    presentation: AgentPresentationAdapter
+  ): string {
+    return session.initial_user_message
+      ? presentation.messageText(session.initial_user_message)
+      : "No user message yet";
+  }
+</script>
+
 <script lang="ts">
   import { ChevronDown, History, Plus, Search, X } from "@lucide/svelte";
-  import type { AgentDescriptor, Session } from "$lib/api/types";
+  import type { AgentDescriptor } from "$lib/api/types";
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
   import StatusChip, {
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
+  import { defaultAgentPresentationAdapter } from "$lib/state/messagePresentation";
 
   interface Props {
     sessions?: Session[];
@@ -17,6 +32,7 @@
     closedWorkflowIds?: string[];
     error?: string | null;
     pendingApprovalCount?: number;
+    presentation?: AgentPresentationAdapter;
     onNewSession?: (workflowType: string) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
   }
@@ -32,6 +48,7 @@
     closedWorkflowIds = [],
     error = null,
     pendingApprovalCount = 0,
+    presentation = defaultAgentPresentationAdapter,
     onNewSession,
     onSelectSession
   }: Props = $props();
@@ -103,7 +120,7 @@
   }
 
   function sessionInitialMessage(session: Session): string {
-    return session.initial_user_message?.trim() || "No user message yet";
+    return sessionInitialMessageText(session, presentation);
   }
 
   function sessionAgentLabel(session: Session): string {

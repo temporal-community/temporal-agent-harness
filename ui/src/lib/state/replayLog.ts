@@ -11,6 +11,11 @@ import {
   summarizeCost,
   type UsageTotals
 } from "$lib/cost/pricing";
+import {
+  defaultAgentPresentationAdapter,
+  messageDisplayText,
+  type AgentPresentationAdapter
+} from "./messagePresentation";
 
 export type ReplayActor =
   | "user"
@@ -59,6 +64,7 @@ export interface ReplayLogRow {
   toolId?: ToolId;
   toolName?: string;
   input?: JsonRecord;
+  rememberAllowed?: boolean;
   output?: string;
   citations: FileCitationAnnotation[];
   usage?: UsageTotals;
@@ -108,29 +114,6 @@ export interface ReplayLogFrame {
   role?: "parent" | "subagent";
   label?: string;
   parentTurnNumber?: number;
-}
-
-function renderUserMessage(value: string): string {
-  if (!value.startsWith("{")) return value;
-  try {
-    const message = JSON.parse(value) as {
-      type?: string;
-      payload?: { name?: string; arg?: string; text?: string };
-      script?: string;
-    };
-    if (typeof message.payload?.text === "string") return message.payload.text;
-    if (typeof message.script === "string") return message.script;
-    if (
-      (message.type !== "slash" && message.type !== "slash_command") ||
-      !message.payload?.name
-    ) {
-      return value;
-    }
-    const command = message.payload.name === "set-model" ? "model" : message.payload.name;
-    return `/${command}${message.payload.arg ? ` ${message.payload.arg}` : ""}`;
-  } catch {
-    return value;
-  }
 }
 
 function thoughtText(delta: JsonRecord): string {
@@ -195,7 +178,8 @@ function normalizeReplayLogFrame(item: AgentSseFrame | ReplayLogFrame): ReplayLo
 
 function rowFromFrame(
   entry: ReplayLogFrame,
-  frameIndex: number
+  frameIndex: number,
+  presentationAdapter: AgentPresentationAdapter
 ): ReplayLogRow | null {
   const { frame } = entry;
   const ordinal = frameIndex + 1;
@@ -247,7 +231,7 @@ function rowFromFrame(
       actor: "user",
       tone: "queue",
       label: "User message received",
-      body: renderUserMessage(frame.data.user_message)
+      body: presentationAdapter.messageText(frame.data.user_message)
     };
   }
 
@@ -257,7 +241,7 @@ function rowFromFrame(
       actor: "queue",
       tone: "queue",
       label: "Message queued",
-      body: renderUserMessage(frame.data.user_message),
+      body: presentationAdapter.messageText(frame.data.user_message),
       marker: "queue",
       markerLabel: "queued turn"
     };
@@ -351,6 +335,7 @@ function rowFromFrame(
       toolId: frame.data.tool_id,
       toolName: frame.data.tool_name,
       input: frame.data.tool_input,
+      rememberAllowed: frame.data.remember_allowed ?? true,
       status: "awaiting",
       marker: "approval",
       markerLabel: "approval requested"
@@ -530,7 +515,7 @@ function rowFromFrame(
       actor: "agent",
       tone: "done",
       label: "Final reply",
-      body: textFromReply(frame.data),
+      body: presentationAdapter.replyText?.(frame.data) ?? textFromReply(frame.data),
       status: "complete"
     };
   }
@@ -584,9 +569,12 @@ function buildSummary(turnNumber: number, rows: ReplayLogRow[]): TurnLogSummary 
   };
 }
 
-export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): ReplayLog {
+export function buildReplayLog(
+  input: Array<AgentSseFrame | ReplayLogFrame>,
+  presentationAdapter: AgentPresentationAdapter = defaultAgentPresentationAdapter
+): ReplayLog {
   const rows = input
-    .map((item, index) => rowFromFrame(normalizeReplayLogFrame(item), index))
+    .map((item, index) => rowFromFrame(normalizeReplayLogFrame(item), index, presentationAdapter))
     .filter((row): row is ReplayLogRow => row != null);
 
   const groupedRows = new Map<number, ReplayLogRow[]>();

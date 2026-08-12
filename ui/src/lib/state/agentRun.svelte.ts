@@ -19,6 +19,11 @@ import {
 import { buildReplayLog, buildReplayMarkers } from "./replayLog";
 import { buildStepTimeline, type StepTimelineFrame } from "./stepTimeline";
 import { buildTranscript } from "./transcript";
+import {
+  defaultAgentPresentationAdapter,
+  messageIdentity,
+  type AgentPresentationAdapter
+} from "./messagePresentation";
 
 export type PlaybackSpeed = 1 | 2 | 5 | 10;
 
@@ -122,63 +127,8 @@ function writeCachedFrames(sessionId: string, frames: AgentSseFrame[]): void {
   }
 }
 
-function renderUserMessage(value: string): string {
-  if (!value.startsWith("{")) return value;
-  try {
-    const message = JSON.parse(value) as {
-      type?: string;
-      payload?: { name?: string; arg?: string; text?: string; script?: string };
-      script?: string;
-    };
-    if (typeof message.payload?.text === "string") return message.payload.text;
-    if (typeof message.payload?.script === "string") return message.payload.script;
-    if (typeof message.script === "string") return message.script;
-    if (
-      (message.type !== "slash" && message.type !== "slash_command") ||
-      !message.payload?.name
-    ) {
-      return value;
-    }
-    return slashCommandDisplayText(message.payload.name, message.payload.arg);
-  } catch {
-    return value;
-  }
-}
-
 function isAgentMessageObject(message: AgentInboundMessage): message is AgentMessageObject {
   return typeof message === "object" && message !== null;
-}
-
-function slashCommandDisplayText(name: string, arg?: string): string {
-  const command = name === "set-model" ? "model" : name;
-  return `/${command}${arg ? ` ${arg}` : ""}`;
-}
-
-function displayTextForMessage(message: AgentInboundMessage): string {
-  if (typeof message === "string") return message.trim();
-  if (
-    message.type === "slash" &&
-    typeof message.payload === "object" &&
-    message.payload != null &&
-    "name" in message.payload &&
-    typeof message.payload.name === "string"
-  ) {
-    const arg =
-      "arg" in message.payload && typeof message.payload.arg === "string"
-        ? message.payload.arg
-        : undefined;
-    return slashCommandDisplayText(message.payload.name, arg);
-  }
-  if (
-    message.type === "run_script" &&
-    typeof message.payload === "object" &&
-    message.payload != null &&
-    "script" in message.payload &&
-    typeof message.payload.script === "string"
-  ) {
-    return message.payload.script.trim();
-  }
-  return JSON.stringify(message);
 }
 
 function frameKey(frame: AgentSseFrame): string {
@@ -195,6 +145,21 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
+function submitErrorStatus(error: unknown): number | null {
+  if (typeof error === "object" && error !== null && "status" in error) {
+    const status = (error as { status?: unknown }).status;
+    if (typeof status === "number" && Number.isInteger(status)) return status;
+  }
+  if (!(error instanceof Error)) return null;
+  const match = error.message.match(/(?:HTTP\s+|failed \()(\d{3})\b/i);
+  return match ? Number(match[1]) : null;
+}
+
+function submitFailureCanBeReconciled(error: unknown): boolean {
+  const status = submitErrorStatus(error);
+  return status === null || status >= 500 || status === 408 || status === 429;
+}
+
 function isOperatorCommandFrame(frame: AgentSseFrame): boolean {
   return (
     frame.event === "operator_command_started" ||
@@ -209,6 +174,7 @@ function isStopOperatorCommandName(name: string): boolean {
 
 export class AgentRunController {
   #api: AgentApi;
+  #presentation: AgentPresentationAdapter = defaultAgentPresentationAdapter;
   #initialized = false;
 
   frames = $state<AgentSseFrame[]>([]);
@@ -218,7 +184,7 @@ export class AgentRunController {
   closedWorkflowIds = $state<string[]>([]);
   viewIndex = $state(0);
   playing = $state(false);
-  following = $state(false);
+  following = $state(true);
   connecting = $state(false);
   sending = $state(false);
   creatingSession = $state(false);
@@ -232,6 +198,15 @@ export class AgentRunController {
   #streamVersion = 0;
   #connectionVersion = 0;
   #sendVersion = 0;
+  #connectionErrorRevision = 0;
+  #failedSubmit: {
+    expectedTurn: number;
+    revision: number;
+    messageIdentity: string;
+    canReconcile: boolean;
+    matchingTurnObserved: boolean;
+  } | null = null;
+  #rootAgentId: string | null = null;
   #streamAbort: AbortController | null = null;
   #interfaceRequests = new Set<string>();
   #operatorInterfaceRequests = new Set<string>();
@@ -242,8 +217,12 @@ export class AgentRunController {
   #submitQueue: Promise<void> = Promise.resolve();
   #timer: number | null = null;
 
-  constructor(api: AgentApi = new HttpAgentApi()) {
+  constructor(
+    api: AgentApi = new HttpAgentApi(),
+    presentation?: AgentPresentationAdapter
+  ) {
     this.#api = api;
+    if (presentation) this.#presentation = presentation;
   }
 
   replayTimeline = $derived(this.#replayTimeline());
@@ -266,13 +245,22 @@ export class AgentRunController {
   sessionClosed = $derived(
     this.session != null && this.#isWorkflowClosed(this.session.workflow_id)
   );
-  replayLog = $derived(buildReplayLog(this.visibleReplayTimeline));
-  fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
+  replayLog = $derived(buildReplayLog(this.visibleReplayTimeline, this.#presentation));
+  fullReplayLog = $derived(buildReplayLog(this.replayTimeline, this.#presentation));
   chatTranscript = $derived(
     buildTranscript(
       this.replayTimeline
         .filter((entry) => entry.role === "parent" || isOperatorCommandFrame(entry.frame))
-        .map((entry) => entry.frame)
+        .map((entry) => entry.frame),
+      this.#presentation
+    )
+  );
+  visibleChatTranscript = $derived(
+    buildTranscript(
+      this.visibleReplayTimeline
+        .filter((entry) => entry.role === "parent" || isOperatorCommandFrame(entry.frame))
+        .map((entry) => entry.frame),
+      this.#presentation
     )
   );
   currentLogRow = $derived(
@@ -319,6 +307,28 @@ export class AgentRunController {
 
   #isCurrentConnection(connectionVersion: number): boolean {
     return connectionVersion === this.#connectionVersion;
+  }
+
+  #setConnectionError(error: string | null): number {
+    this.#connectionErrorRevision += 1;
+    this.connectionError = error;
+    this.#failedSubmit = null;
+    return this.#connectionErrorRevision;
+  }
+
+  #setSubmitFailure(
+    expectedTurn: number,
+    error: string,
+    submittedMessageIdentity: string,
+    canReconcile: boolean
+  ): void {
+    this.#failedSubmit = {
+      expectedTurn,
+      revision: this.#setConnectionError(error),
+      messageIdentity: submittedMessageIdentity,
+      canReconcile,
+      matchingTurnObserved: false
+    };
   }
 
   #replayTimeline(): ReplayTimelineEntry[] {
@@ -711,7 +721,7 @@ export class AgentRunController {
     this.#initialized = true;
     const connectionVersion = this.#beginConnection();
     this.connecting = true;
-    this.connectionError = null;
+    this.#setConnectionError(null);
 
     try {
       const agents = await this.#loadAgents();
@@ -751,8 +761,9 @@ export class AgentRunController {
       await this.attach(this.lastResumeOffset);
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
-        this.connectionError =
-          error instanceof Error ? error.message : "Failed to initialize agent session.";
+        this.#setConnectionError(
+          error instanceof Error ? error.message : "Failed to initialize agent session."
+        );
       }
     } finally {
       if (this.#isCurrentConnection(connectionVersion)) this.connecting = false;
@@ -766,7 +777,7 @@ export class AgentRunController {
     this.sending = false;
     this.creatingSession = true;
     this.connecting = true;
-    this.connectionError = null;
+    this.#setConnectionError(null);
 
     try {
       const agents = await this.#loadAgents();
@@ -799,8 +810,9 @@ export class AgentRunController {
       await this.attach(0);
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
-        this.connectionError =
-          error instanceof Error ? error.message : "Failed to create agent session.";
+        this.#setConnectionError(
+          error instanceof Error ? error.message : "Failed to create agent session."
+        );
       }
     } finally {
       if (this.#isCurrentConnection(connectionVersion)) {
@@ -823,7 +835,7 @@ export class AgentRunController {
     this.creatingSession = false;
     this.connecting = true;
     this.sending = false;
-    this.connectionError = null;
+    this.#setConnectionError(null);
     this.#resetSessionView();
     this.session = session;
     writeStoredActiveSessionId(session.workflow_id);
@@ -838,8 +850,9 @@ export class AgentRunController {
       await this.attach(this.lastResumeOffset);
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
-        this.connectionError =
-          error instanceof Error ? error.message : "Failed to load selected session.";
+        this.#setConnectionError(
+          error instanceof Error ? error.message : "Failed to load selected session."
+        );
       }
     } finally {
       if (this.#isCurrentConnection(connectionVersion)) this.connecting = false;
@@ -859,7 +872,7 @@ export class AgentRunController {
         if (streamVersion !== this.#streamVersion || this.session?.workflow_id !== session.workflow_id) {
           break;
         }
-        this.#appendFrame(frame);
+        this.#appendFrame(frame, { sourceWorkflowId: session.workflow_id });
       }
     } catch (error) {
       if (!isAbortError(error)) throw error;
@@ -910,7 +923,7 @@ export class AgentRunController {
   }
 
   async sendMessage(message: AgentInboundMessage): Promise<void> {
-    const displayText = displayTextForMessage(message);
+    const displayText = this.#presentation.messageText(message);
     if (!displayText) return;
     await this.initialize();
     const session = this.session;
@@ -918,14 +931,15 @@ export class AgentRunController {
     try {
       await this.#refreshWorkflowExecutionState(session.workflow_id);
     } catch (error) {
-      this.connectionError =
+      this.#setConnectionError(
         error instanceof Error
           ? error.message
-          : "Failed to check workflow status.";
-      return;
+          : "Failed to check workflow status."
+      );
+      throw error;
     }
     if (this.#isWorkflowClosed(session.workflow_id)) {
-      this.connectionError = null;
+      this.#setConnectionError(null);
       this.sending = false;
       return;
     }
@@ -933,16 +947,20 @@ export class AgentRunController {
     this.pause();
     const expectedTurn = this.expectedTurn;
     this.expectedTurn += 1;
-    ++this.#sendVersion;
+    const sendVersion = ++this.#sendVersion;
     this.sending = true;
-    this.connectionError = null;
-    this.#recordInitialUserMessage(displayText);
+    this.#setConnectionError(null);
+    this.#recordInitialUserMessage(
+      typeof message === "string" ? message : JSON.stringify(message)
+    );
+    const outboundMessage = this.#messageForSession(message, session);
+    const submittedMessageIdentity = messageIdentity(outboundMessage);
 
     const submitted = this.#submitQueue.then(async () => {
       if (this.session?.workflow_id !== session.workflow_id) return;
       await this.#api.submitMessage({
         session_id: session.workflow_id,
-        message: this.#messageForSession(message, session),
+        message: outboundMessage,
         expected_turn: expectedTurn
       });
     });
@@ -954,21 +972,33 @@ export class AgentRunController {
       void this.attach(this.lastResumeOffset, { clearSendingOnIdle: true }).catch(
         (error: unknown) => {
           if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
-            this.connectionError =
-              error instanceof Error ? error.message : "Failed to stream messages.";
+            this.#setConnectionError(
+              error instanceof Error ? error.message : "Failed to stream messages."
+            );
             this.sending = false;
           }
         }
       );
     } catch (error) {
-      if (isAbortError(error) || this.session?.workflow_id !== session.workflow_id) {
+      if (
+        isAbortError(error) ||
+        this.session?.workflow_id !== session.workflow_id ||
+        sendVersion !== this.#sendVersion
+      ) {
         return;
       }
       this.expectedTurn = Math.max(1, expectedTurn);
-      this.connectionError =
+      const submitError =
         error instanceof Error ? error.message : "Failed to send message.";
+      this.#setSubmitFailure(
+        expectedTurn,
+        submitError,
+        submittedMessageIdentity,
+        submitFailureCanBeReconciled(error)
+      );
       this.sending = false;
       await this.attach(this.lastResumeOffset);
+      if (this.#failedSubmit?.expectedTurn === expectedTurn) throw error;
     }
   }
 
@@ -985,7 +1015,7 @@ export class AgentRunController {
         ? workflowId
         : session.workflow_id;
 
-    this.connectionError = null;
+    this.#setConnectionError(null);
     try {
       if (!isStopOperatorCommandName(name)) {
         await this.#refreshWorkflowExecutionState(targetWorkflowId);
@@ -1013,8 +1043,9 @@ export class AgentRunController {
           clearSendingOnIdle: shouldClearSendingOnIdle
         }).catch((error: unknown) => {
           if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
-            this.connectionError =
-              error instanceof Error ? error.message : "Failed to stream operator events.";
+            this.#setConnectionError(
+              error instanceof Error ? error.message : "Failed to stream operator events."
+            );
             if (shouldClearSendingOnIdle) this.sending = false;
           }
         });
@@ -1024,17 +1055,19 @@ export class AgentRunController {
           this.#resumeOffsetForWorkflow(targetWorkflowId)
         ).catch((error: unknown) => {
           if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
-            this.connectionError =
+            this.#setConnectionError(
               error instanceof Error
                 ? error.message
-                : "Failed to stream operator events.";
+                : "Failed to stream operator events."
+            );
           }
         });
       }
       return result;
     } catch (error) {
-      this.connectionError =
-        error instanceof Error ? error.message : "Failed to execute operator command.";
+      this.#setConnectionError(
+        error instanceof Error ? error.message : "Failed to execute operator command."
+      );
       throw error;
     }
   }
@@ -1051,7 +1084,7 @@ export class AgentRunController {
       throw new Error("Cannot resolve approval for an unknown agent workflow.");
     }
 
-    this.connectionError = null;
+    this.#setConnectionError(null);
     try {
       await this.#api.approve({
         session_id: workflowId,
@@ -1061,8 +1094,9 @@ export class AgentRunController {
         remember: approved && remember
       });
     } catch (error) {
-      this.connectionError =
-        error instanceof Error ? error.message : "Failed to resolve tool approval.";
+      this.#setConnectionError(
+        error instanceof Error ? error.message : "Failed to resolve tool approval."
+      );
       throw error;
     }
   }
@@ -1123,9 +1157,11 @@ export class AgentRunController {
     this.#frameKeys = new Set<string>();
     this.#workflowResumeOffsets = new Map<string, number>();
     this.viewIndex = 0;
-    this.following = false;
+    this.following = true;
     this.expectedTurn = 1;
     this.lastResumeOffset = 0;
+    this.#failedSubmit = null;
+    this.#rootAgentId = null;
   }
 
   #appendFrame(
@@ -1137,11 +1173,47 @@ export class AgentRunController {
     this.#frameKeys.add(key);
 
     if (!("type" in frame.data)) {
-      this.connectionError = frame.data.message;
+      this.#setConnectionError(frame.data.message);
     }
     const publisherWorkflowId =
       this.#publisherWorkflowId(frame) ?? options.sourceWorkflowId;
     const isRootFrame = publisherWorkflowId === this.session?.workflow_id;
+
+    const failedSubmit = this.#failedSubmit;
+    const isExplicitRootStream = options.sourceWorkflowId === this.session?.workflow_id;
+    if (
+      isExplicitRootStream &&
+      isRootFrame &&
+      frame.event === "turn_started" &&
+      "type" in frame.data &&
+      (this.#rootAgentId == null || this.#rootAgentId === frame.data.agent_id)
+    ) {
+      this.#rootAgentId = frame.data.agent_id;
+    }
+    if (
+      isExplicitRootStream &&
+      isRootFrame &&
+      frame.event === "turn_started" &&
+      "type" in frame.data &&
+      failedSubmit?.canReconcile &&
+      failedSubmit.expectedTurn === frame.data.turn_number &&
+      failedSubmit.revision === this.#connectionErrorRevision &&
+      messageIdentity(frame.data.user_message) === failedSubmit.messageIdentity
+    ) {
+      failedSubmit.matchingTurnObserved = true;
+    }
+    if (
+      isExplicitRootStream &&
+      frame.event === "turn_end" &&
+      "type" in frame.data &&
+      this.#rootAgentId === frame.data.agent_id &&
+      failedSubmit?.canReconcile &&
+      failedSubmit.matchingTurnObserved &&
+      failedSubmit?.expectedTurn === frame.data.turn_number &&
+      failedSubmit?.revision === this.#connectionErrorRevision
+    ) {
+      this.#setConnectionError(null);
+    }
 
     this.frames = [...this.frames, frame];
     this.following = true;
@@ -1177,7 +1249,7 @@ export class AgentRunController {
       this.expectedTurn = frame.data.turn_number + 1;
     }
     if (isRootFrame && frame.event === "turn_started" && frame.data.turn_number === 1) {
-      this.#recordInitialUserMessage(renderUserMessage(frame.data.user_message));
+      this.#recordInitialUserMessage(frame.data.user_message);
     }
     if (
       publisherWorkflowId &&
@@ -1316,6 +1388,8 @@ export class AgentRunController {
   }
 }
 
-export function createAgentRunController(): AgentRunController {
-  return new AgentRunController();
+export function createAgentRunController(
+  options: { presentation?: AgentPresentationAdapter } = {}
+): AgentRunController {
+  return new AgentRunController(undefined, options.presentation);
 }

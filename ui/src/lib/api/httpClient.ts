@@ -22,10 +22,23 @@ function apiPath(path: string): string {
   return `api/${path.replace(/^\/+/, "")}`;
 }
 
+export class HttpResponseError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "HttpResponseError";
+    this.status = status;
+  }
+}
+
 async function json<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
   if (!response.ok) {
-    throw new Error(await responseErrorMessage(response, `Request failed (${response.status})`));
+    throw new HttpResponseError(
+      response.status,
+      await responseErrorMessage(response, `Request failed (${response.status})`)
+    );
   }
   return response.json() as Promise<T>;
 }
@@ -133,7 +146,10 @@ export class HttpAgentApi implements AgentApi {
       { signal }
     );
     if (!response.ok) {
-      throw new Error(await responseErrorMessage(response, `Attach failed (${response.status})`));
+      throw new HttpResponseError(
+        response.status,
+        await responseErrorMessage(response, `Attach failed (${response.status})`)
+      );
     }
     yield* readSse(response);
   }
@@ -158,7 +174,10 @@ export class HttpAgentApi implements AgentApi {
       signal
     });
     if (!response.ok) {
-      throw new Error(await responseErrorMessage(response, `Chat failed (${response.status})`));
+      throw new HttpResponseError(
+        response.status,
+        await responseErrorMessage(response, `Chat failed (${response.status})`)
+      );
     }
     yield* readSse(response);
   }

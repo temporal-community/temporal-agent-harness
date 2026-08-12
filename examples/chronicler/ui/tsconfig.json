@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "allowJs": false,
+    "checkJs": false,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "noEmit": true,
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "typeRoots": ["../../../ui/node_modules/@types"],
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "$lib/bridge/*": ["src/lib/bridge/*"],
+      "$lib/*": ["../../../ui/src/lib/*"],
+      "$chronicler/*": ["src/lib/*"],
+      "$ui/*": ["../../../ui/src/*"],
+      "svelte": ["../../../ui/node_modules/svelte"],
+      "svelte/elements": ["../../../ui/node_modules/svelte/elements.d.ts"],
+      "svelte/*": ["../../../ui/node_modules/svelte/types/index.d.ts"],
+      "@lucide/svelte": ["../../../ui/node_modules/@lucide/svelte"],
+      "vitest": ["../../../ui/node_modules/vitest"],
+      "vite/client": ["../../../ui/node_modules/vite/client.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte"],
+  "exclude": ["vite.config.ts", "vitest.config.ts", "svelte.config.js"]
+}

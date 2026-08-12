@@ -507,6 +507,10 @@ class ToolApprovalRequested(ToolEvent[Literal[AgentEventType.TOOL_APPROVAL_REQUE
         "excluded — they are not the model's choice) so an approver sees exactly what the model "
         "asked for.",
     )
+    remember_allowed: bool = Field(
+        default=True,
+        description="Whether an approval may be remembered for future calls of this tool.",
+    )
 
 
 class ToolApprovalResolved(ToolEvent[Literal[AgentEventType.TOOL_APPROVAL_RESOLVED]]):

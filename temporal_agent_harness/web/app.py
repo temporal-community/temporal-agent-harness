@@ -9,15 +9,20 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 from temporalio.api.enums.v1 import EventType
 from temporalio.api.history.v1 import HistoryEvent
-from temporalio.client import Client, WorkflowExecutionStatus, WorkflowHandle
+from temporalio.client import (
+    Client,
+    WorkflowExecutionStatus,
+    WorkflowHandle,
+    WorkflowUpdateFailedError,
+)
 from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
@@ -31,6 +36,7 @@ from temporal_agent_harness.harness.agent_client import (
     AgentTurnError,
     AgentTurnTimeout,
     CallbackResultError,
+    MalformedMessageError,
     StaleTurnError,
     ToolApprovalError,
 )
@@ -43,6 +49,13 @@ from temporal_agent_harness.harness.agent_protocol import (
     OperatorCommand,
     OperatorCommandResult,
     SEND_AGENT_MESSAGE_UPDATE,
+)
+from temporal_agent_harness.harness.local_operations import (
+    COMPLETE_LOCAL_OPERATION_UPDATE,
+    PENDING_LOCAL_OPERATIONS_QUERY,
+    LocalOperationAck,
+    LocalOperationRequest,
+    LocalOperationResult,
 )
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
@@ -101,6 +114,40 @@ class CallbackResultRequestBody(BaseModel):
     # reports that the client could not fulfill the call.
     result: Any = None
     error: str | None = None
+
+
+class LocalOperationResultRequestBody(BaseModel):
+    """Browser bridge completion payload.
+
+    ``bridge_id`` and ``root_id`` select the pending operation but are not
+    authentication credentials. Deployments must authenticate and authorize
+    bridge requests before exposing these transport hooks to untrusted clients.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    bridge_id: str = Field(min_length=1)
+    root_id: str = Field(min_length=1)
+    outcome: Literal["success", "error"]
+    result: Any = None
+    error: str | None = None
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> LocalOperationResultRequestBody:
+        if self.outcome == "success" and self.error is not None:
+            raise ValueError("A successful outcome cannot include an error.")
+        if self.outcome == "error" and not self.error:
+            raise ValueError("An error outcome requires a non-empty error.")
+        if self.outcome == "error" and self.result is not None:
+            raise ValueError("An error outcome cannot include a result.")
+        return self
+
+
+class LocalOperationCompletionRequestBody(LocalOperationResultRequestBody):
+    """Canonical completion payload with opaque workflow and operation identifiers."""
+
+    workflow_id: str = Field(min_length=1)
+    operation_id: str = Field(min_length=1)
 
 
 def create_agent_harness_app(
@@ -257,6 +304,50 @@ def create_agent_harness_app(
         )
         return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
 
+    @app.get(
+        "/api/local-operations",
+        summary="Poll pending browser bridge operations",
+        description=(
+            "Canonical transport for workflow IDs containing arbitrary characters, including "
+            "slashes. The workflow ID is carried as an opaque query value. bridge_id and "
+            "root_id are routing fields, not authentication; production deployments must add "
+            "authentication and authorization in front of this transport endpoint."
+        ),
+    )
+    async def pending_local_operations_canonical(
+        workflow_id: str = Query(min_length=1),
+        bridge_id: str = Query(min_length=1),
+        root_id: str = Query(min_length=1),
+        capability: list[str] | None = Query(default=None),
+    ):
+        return await _local_operations_snapshot_response(
+            app.state.temporal,
+            workflow_id=workflow_id,
+            bridge_id=bridge_id,
+            root_id=root_id,
+            capabilities=capability,
+        )
+
+    @app.post(
+        "/api/local-operation-results",
+        summary="Complete a pending browser bridge operation",
+        description=(
+            "Canonical completion transport for opaque workflow and operation identifiers. "
+            "Both identifiers are carried in the request body, so slashes are unambiguous. "
+            "bridge_id and root_id are routing fields, not authentication; production "
+            "deployments must add authentication and authorization."
+        ),
+    )
+    async def complete_local_operation_canonical(
+        req: LocalOperationCompletionRequestBody,
+    ):
+        return await _complete_local_operation_response(
+            app.state.temporal,
+            workflow_id=req.workflow_id,
+            operation_id=req.operation_id,
+            req=req,
+        )
+
     @app.post("/api/operator-commands")
     async def execute_operator_command(req: OperatorCommandRequestBody):
         client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
@@ -325,6 +416,13 @@ def create_agent_harness_app(
             content={"error": "agent_busy", "message": str(exc)},
         )
 
+    @app.exception_handler(MalformedMessageError)
+    async def malformed_message_handler(request, exc):
+        return JSONResponse(
+            status_code=422,
+            content={"error": "malformed_message", "message": str(exc)},
+        )
+
     @app.exception_handler(ToolApprovalError)
     async def tool_approval_handler(request, exc):
         return JSONResponse(
@@ -361,6 +459,129 @@ def _resolve_registry(
     if registry_path is not None:
         return load_agent_registry(registry_path)
     raise ValueError("create_agent_harness_app requires registry or registry_path.")
+
+
+async def _query_pending_local_operations(
+    temporal: Client,
+    workflow_id: str,
+) -> list[LocalOperationRequest]:
+    """Read the workflow-owned pending snapshot without mutating it."""
+
+    handle = temporal.get_workflow_handle(workflow_id)
+    try:
+        return await handle.query(
+            PENDING_LOCAL_OPERATIONS_QUERY,
+            result_type=list[LocalOperationRequest],
+        )
+    except RPCError as exc:
+        if exc.status != RPCStatusCode.NOT_FOUND:
+            raise
+        raise HTTPException(
+            status_code=404,
+            detail=f"Workflow {workflow_id!r} was not found.",
+        ) from exc
+
+
+async def _local_operations_snapshot_response(
+    temporal: Client,
+    *,
+    workflow_id: str,
+    bridge_id: str,
+    root_id: str,
+    capabilities: list[str] | None,
+) -> JSONResponse:
+    pending = await _query_pending_local_operations(temporal, workflow_id)
+    supported = set(capabilities or ())
+    operations = [
+        operation
+        for operation in pending
+        if operation.bridge_id == bridge_id
+        and operation.root_id == root_id
+        and (not supported or operation.kind in supported)
+    ]
+    content = {
+        "workflow_id": workflow_id,
+        "bridge_id": bridge_id,
+        "root_id": root_id,
+        "operations": TypeAdapter(list[LocalOperationRequest]).dump_python(
+            operations,
+            mode="json",
+        ),
+    }
+    return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
+
+
+async def _complete_local_operation_response(
+    temporal: Client,
+    *,
+    workflow_id: str,
+    operation_id: str,
+    req: LocalOperationResultRequestBody,
+) -> JSONResponse:
+    pending = await _query_pending_local_operations(temporal, workflow_id)
+    operation = next(
+        (item for item in pending if item.operation_id == operation_id),
+        None,
+    )
+    if operation is None:
+        raise HTTPException(
+            status_code=410,
+            detail=f"Local operation {operation_id!r} is not pending.",
+        )
+    if operation.bridge_id != req.bridge_id or operation.root_id != req.root_id:
+        raise HTTPException(
+            status_code=409,
+            detail="The pending operation belongs to a different bridge or root.",
+        )
+
+    handle = temporal.get_workflow_handle(workflow_id)
+    try:
+        ack: LocalOperationAck = await handle.execute_update(
+            COMPLETE_LOCAL_OPERATION_UPDATE,
+            LocalOperationResult(
+                operation_id=operation_id,
+                result=req.result if req.outcome == "success" else None,
+                error=req.error if req.outcome == "error" else None,
+            ),
+            result_type=LocalOperationAck,
+        )
+    except WorkflowUpdateFailedError as exc:
+        cause = exc.cause
+        error_type = getattr(cause, "type", None) or type(cause).__name__
+        message = str(cause)
+        malformed = (
+            "MalformedLocalOperationResult" in error_type
+            or "MalformedLocalOperationResult" in message
+            or "does not match the declared output type" in message
+        )
+        settled = "LocalOperationAlreadyResolved" in error_type or (
+            "already" in message.lower()
+            and any(
+                state in message.lower()
+                for state in ("resolved", "succeeded", "failed")
+            )
+        )
+        raise HTTPException(
+            status_code=422 if malformed else 410 if settled else 409,
+            detail={
+                "error": "invalid_local_operation_result"
+                if malformed
+                else "local_operation_settled"
+                if settled
+                else "local_operation_conflict",
+                "message": message,
+            },
+        ) from exc
+    except RPCError as exc:
+        if exc.status != RPCStatusCode.NOT_FOUND:
+            raise
+        raise HTTPException(
+            status_code=404,
+            detail=f"Workflow {workflow_id!r} was not found.",
+        ) from exc
+
+    content = TypeAdapter(LocalOperationAck).dump_python(ack, mode="json")
+    return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
 
 async def _workflow_execution_state(

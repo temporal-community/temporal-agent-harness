@@ -1,8 +1,8 @@
 """Shared FastAPI entrypoint for the bundled examples.
 
-Every example serves the same packaged harness web app — the only per-example difference is which
-``agents.toml`` registry it exposes. So rather than copy-paste a one-line ``app.py`` into each
-example, this single module builds the app from one or more registry paths passed as arguments:
+Every generic example serves the same packaged harness web app. Rather than copy-paste a one-line
+``app.py`` into each example, this single module builds the app from one or more registry paths
+passed as arguments:
 
     python -m examples.app <path/to/agents.toml> [more/agents.toml ...] [--host HOST] [--port PORT]
 

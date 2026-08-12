@@ -8,7 +8,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -25,6 +25,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     SEND_AGENT_MESSAGE_UPDATE,
 )
+from temporal_agent_harness.harness.agent_client import AgentClient, MalformedMessageError
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.web import (
     SESSION_MANAGER_TASK_QUEUE,
@@ -132,6 +133,36 @@ def test_submit_message_request_rejects_client_supplied_from_offset() -> None:
     assert response.status_code == 422
     detail = response.json()["detail"]
     assert any("from_offset" in item.get("loc", []) for item in detail)
+
+
+def test_submit_message_reports_malformed_agent_payload_as_a_422() -> None:
+    message = "MalformedMessage: Payload for function 'start_audio' is invalid."
+    app = create_agent_harness_app(registry=AgentRegistry())
+    app.state.temporal = object()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    with patch.object(
+        AgentClient,
+        "submit_message",
+        new=AsyncMock(side_effect=MalformedMessageError(message)),
+    ):
+        response = client.post(
+            "/api/messages",
+            json={
+                "session_id": "agent-session-test",
+                "message": {
+                    "type": "start_audio",
+                    "payload": {"preflighted_paths": ["audio/recap.wav"]},
+                },
+                "expected_turn": 2,
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "error": "malformed_message",
+        "message": message,
+    }
 
 
 def test_operator_command_request_rejects_client_supplied_from_offset() -> None:
@@ -415,6 +446,59 @@ assert dist is not None
 assert (dist / "index.html").is_file()
 assert (dist / "temporal-logo.svg").is_file()
 print(dist)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_extracted_wheel_can_construct_generic_web_app_without_example_extras(
+    built_distributions: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    wheel_path, _ = built_distributions
+    extracted = tmp_path / "wheel"
+    extracted.mkdir()
+
+    with zipfile.ZipFile(wheel_path) as wheel:
+        wheel.extractall(extracted)
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(extracted)
+    script = """
+import builtins
+
+original_import = builtins.__import__
+
+def import_without_repository_extras(
+    name, globals=None, locals=None, fromlist=(), level=0
+):
+    if name == "examples" or name.startswith("examples."):
+        raise ModuleNotFoundError("repository examples are not installed")
+    if (
+        name == "google.genai"
+        or name.startswith("google.genai.")
+        or (name == "google" and "genai" in fromlist)
+    ):
+        raise ModuleNotFoundError("the GenAI extra is not installed")
+    return original_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = import_without_repository_extras
+
+from temporal_agent_harness.web import AgentRegistry, create_agent_harness_app
+
+app = create_agent_harness_app(registry=AgentRegistry())
+paths = {route.path for route in app.routes}
+assert "/api/agents" in paths
+assert "/api/local-operations" in paths
+assert not any(path.startswith("/api/chronicler/") for path in paths)
 """
     result = subprocess.run(
         [sys.executable, "-c", script],

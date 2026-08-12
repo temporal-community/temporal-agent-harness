@@ -1,0 +1,19 @@
+# Registry of agents the Chronicler example UI can launch.
+#
+# The FastAPI server in examples/chronicler/app.py reads this file and passes the parsed
+# registry into the packaged SessionManagerWorkflow as its workflow init arg. The manager then
+# serves it back over the `available_agents` query, so the app server can expose it at
+# /api/agents without hardcoding the agent list.
+#
+# To expose a new agent: register its @workflow.defn on a worker, then add a [[agents]] entry.
+
+[[agents]]
+key = "chronicler"
+workflow_type = "ChroniclerAgent"
+task_queue = "chronicler-agent"
+label = "Chronicler (D&D archivist)"
+description = """
+A review-first spoken-recap workflow. Select an existing transcript or draft a clearly synthetic
+one, review the exact transcript, narration, fixed Charon voice, and destinations, then explicitly
+approve generation. The model cannot invoke audio generation from chat; the browser fulfills
+create-only writes beneath the folder you connect."""

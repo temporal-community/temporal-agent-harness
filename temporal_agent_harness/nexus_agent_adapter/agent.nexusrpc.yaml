@@ -336,11 +336,15 @@ $defs:
       turnNumber:
         type: integer
         description: "Turn that triggered this approval request"
+      rememberAllowed:
+        type: boolean
+        description: "False when this call requires an explicit decision and clients must not offer approve-and-remember"
     required:
       - toolId
       - toolName
       - toolInput
       - turnNumber
+      - rememberAllowed
     additionalProperties: false
 
   PendingCallback:

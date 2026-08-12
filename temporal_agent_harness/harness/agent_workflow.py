@@ -293,7 +293,11 @@ def _current_runner() -> AgentWorkflowRunner:
 
 
 async def _apply_approval_policy(
-    tool_name: str, tool_input: dict[str, Any], *, inherently_safe: bool
+    tool_name: str,
+    tool_input: dict[str, Any],
+    *,
+    inherently_safe: bool,
+    always_require_approval: bool = False,
 ) -> None:
     """Enforce the agent's tool-approval policy for the in-flight tool call.
 
@@ -311,8 +315,9 @@ async def _apply_approval_policy(
         raises :class:`ToolApprovalDenied`.
 
     Safe-by-default: with the baseline policy nothing is auto-approved, so every tool call
-    is gated unless the policy (or fallback) opts it out. The tool's own
-    ``inherently_safe`` claim is just an input to that decision — the *policy* decides.
+    is gated unless the policy (or fallback) opts it out. A call marked
+    ``always_require_approval`` bypasses those automatic layers. The tool's own
+    ``inherently_safe`` claim is otherwise just an input to the policy decision.
 
     Concurrency: each gated call runs as its own asyncio task (the agent dispatches a
     turn's tool calls under ``asyncio.gather``), so many of these waits coexist, each
@@ -326,7 +331,9 @@ async def _apply_approval_policy(
             f"tool {tool_name!r} has no active runner — it must be invoked via "
             f"run_tool within an active turn"
         )
-    if runner._auto_approves(tool_name, tool_input, inherently_safe=inherently_safe):
+    if not always_require_approval and runner._auto_approves(
+        tool_name, tool_input, inherently_safe=inherently_safe
+    ):
         return  # policy (or custom fallback) approves — dispatch without gating.
     tool_id = _current_tool_id()
     ctx = runner.current_stream_context
@@ -342,12 +349,16 @@ async def _apply_approval_policy(
         ctx.turn_number,
         ctx.turn_id,
         inherently_safe=inherently_safe,
+        always_require_approval=always_require_approval,
     )
     runner._pub(
         ctx.turn_id,
         ctx.turn_number,
         ToolApprovalRequested(
-            tool_id=tool_id, tool_name=tool_name, tool_input=tool_input
+            tool_id=tool_id,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            remember_allowed=not always_require_approval,
         ),
     )
 
@@ -741,6 +752,8 @@ class _ApprovalEntry:
     # The tool's static ``inherently_safe`` self-assertion, retained so a runtime policy
     # change can re-evaluate this still-PENDING call against the new policy.
     inherently_safe: bool
+    # A per-tool hard gate that neither policy updates nor remembered allows may release.
+    always_require_approval: bool = False
     status: _ApprovalStatus = _ApprovalStatus.PENDING
     reason: str | None = None
     # Whether the resolving decision asked to be remembered (allow-list this tool). False
@@ -964,6 +977,7 @@ class _WorkflowStatus:
         turn_id: str,
         *,
         inherently_safe: bool,
+        always_require_approval: bool = False,
     ) -> None:
         """Record a gated tool call as PENDING approval. Called by the gate when the
         active policy does not auto-approve the call."""
@@ -974,6 +988,7 @@ class _WorkflowStatus:
             turn_number=turn_number,
             turn_id=turn_id,
             inherently_safe=inherently_safe,
+            always_require_approval=always_require_approval,
         )
 
     def approval_entry(self, tool_id: str) -> _ApprovalEntry | None:
@@ -1020,6 +1035,7 @@ class _WorkflowStatus:
                 tool_name=e.tool_name,
                 tool_input=e.tool_input,
                 turn_number=e.turn_number,
+                remember_allowed=not e.always_require_approval,
             )
             for e in self._approvals.values()
             if e.status is _ApprovalStatus.PENDING
@@ -1443,11 +1459,10 @@ class AgentWorkflowRunner:
             )
 
     def _validate_tool_approval(self, decision: ToolApprovalDecision) -> None:
-        """Reject an approval for an unknown tool id, or one already resolved.
+        """Reject an unknown tool id or a decision that conflicts with its settlement.
 
-        The latter is the idempotency guard: once a human has approved or denied a
-        gated call, a second ``tool_approval`` update for the same id fails rather than
-        flipping the settled decision. Runs before :meth:`_handle_tool_approval`."""
+        An identical retry is accepted idempotently; a different later decision cannot
+        flip the settled outcome. Runs before :meth:`_handle_tool_approval`."""
         entry = self._status.approval_entry(decision.tool_id)
         if entry is None:
             raise ApplicationError(
@@ -1456,10 +1471,23 @@ class AgentWorkflowRunner:
                 non_retryable=True,
             )
         if entry.status is not _ApprovalStatus.PENDING:
+            settled_approved = entry.status is _ApprovalStatus.APPROVED
+            if (
+                decision.approved == settled_approved
+                and decision.reason == entry.reason
+                and decision.remember == entry.remember
+            ):
+                return
             raise ApplicationError(
                 f"tool approval for tool_id={decision.tool_id!r} is already "
                 f"{entry.status.value}",
                 type="ToolApprovalAlreadyResolved",
+                non_retryable=True,
+            )
+        if decision.remember and entry.always_require_approval:
+            raise ApplicationError(
+                f"tool approval for tool_id={decision.tool_id!r} cannot be remembered",
+                type="ToolApprovalRememberNotAllowed",
                 non_retryable=True,
             )
 
@@ -1490,6 +1518,8 @@ class AgentWorkflowRunner:
         ``tool_approval_resolved`` is causally ordered before the events of any call the
         cascade auto-resolves as a consequence (see :meth:`_resolve_and_publish`)."""
         entry = self._status.approval_entry(decision.tool_id)
+        if entry is not None and entry.status is not _ApprovalStatus.PENDING:
+            return ToolApprovalResult(tool_id=decision.tool_id, accepted=True)
         self._resolve_and_publish(
             decision.tool_id,
             approved=decision.approved,
@@ -1628,7 +1658,7 @@ class AgentWorkflowRunner:
         calls pending (they still need an explicit decision)."""
         self._status.set_approval_policy(new_policy)
         for entry in self._status.pending_approval_entries():
-            if self._auto_approves(
+            if not entry.always_require_approval and self._auto_approves(
                 entry.tool_name, entry.tool_input, inherently_safe=entry.inherently_safe
             ):
                 self._resolve_and_publish(
@@ -2661,7 +2691,9 @@ def tool_activity(tool: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def tool_defn(
-    *, inherently_safe: bool = False
+    *,
+    inherently_safe: bool = False,
+    always_require_approval: bool = False,
 ) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
     """Define an agent tool that runs INLINE in the workflow (no activity)::
 
@@ -2680,6 +2712,11 @@ def tool_defn(
     deterministic, side-effect-free-ish work that belongs in the workflow itself; reach for
     :func:`activity_tool_defn` when the work must cross into an activity (I/O,
     nondeterminism, long-running).
+
+    ``always_require_approval=True`` is the narrow exception for a tool whose every call
+    must receive a fresh human decision. It overrides allow-all, inherently-safe,
+    allow-list, remembered, live policy-update, and custom-fallback auto-approval, and the
+    resulting pending approval does not permit ``remember=True``.
     """
 
     def decorator(user_fn: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
@@ -2710,7 +2747,10 @@ def tool_defn(
 
             model_input = _tool_input(sig.model_sig, args, kwargs)
             await _apply_approval_policy(
-                tool_name, model_input, inherently_safe=inherently_safe
+                tool_name,
+                model_input,
+                inherently_safe=inherently_safe,
+                always_require_approval=always_require_approval,
             )
 
             runner._pub(
