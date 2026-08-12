@@ -91,6 +91,14 @@ func textMetadata(input Input, text string) TextMetadata {
 		SenderID:  input.SenderID(),
 		Text:      text,
 	}
+	// Segments defaults to a single reply-text delta so drivers that build their final
+	// message from Segments (e.g. slackoutbound, teamsoutbound) still render text
+	// delivered outside the polling loop, such as a synchronous slash-command reply.
+	// Callers that poll a turn (postResp, streamResp) overwrite this with the real
+	// per-delta sequence.
+	if text != "" {
+		metadata.Segments = []Delta{{Text: text}}
+	}
 	if input.Message != nil {
 		metadata.ServiceURL = input.Message.ServiceURL
 		metadata.ChannelID = input.Message.ChannelID
@@ -175,27 +183,28 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, inp
 		return w.postResp(ctx, handle, input)
 	}
 
-	// segmentText/segmentCitations accumulate the current open stream's full content,
-	// separately from the live per-delta UpdateStream calls below. Outbound drivers that
-	// can only append while streaming (e.g. Slack's chat.appendStream) need the full text
-	// and citations together, after the fact, to correct the message with inline citation
-	// markers once the segment ends - see endStream. Reset whenever a new segment begins
-	// (initially, and after an approval closes the previous one).
+	// segmentText/segmentCitations/segments accumulate the current open stream's full
+	// content, separately from the live per-delta UpdateStream calls below. Outbound
+	// drivers that can only append while streaming (e.g. Slack's chat.appendStream) need
+	// the full text, citations, and ordered deltas together, after the fact, to correct
+	// the message once the segment ends - see endStream. Reset whenever a new segment
+	// begins (initially, and after an approval closes the previous one).
 	var segmentText string
 	var segmentCitations []Citation
+	var segments []Delta
 
 	for {
 		res, err := w.backend.PollTurn(ctx, handle, cursor)
 		if err != nil {
 			workflow.GetLogger(ctx).Warn("streamResp: PollTurn failed", "error", err)
-			w.endStream(ctx, input, streamHandle, segmentText, segmentCitations)
+			w.endStream(ctx, input, streamHandle, segmentText, segmentCitations, segments)
 			return nil
 		}
 		cursor = res.NextCursor
 
 		// A turn may close without an explicit final delta.
 		if res.Closed {
-			w.endStream(ctx, input, streamHandle, segmentText, segmentCitations)
+			w.endStream(ctx, input, streamHandle, segmentText, segmentCitations, segments)
 			return nil
 		}
 
@@ -206,10 +215,11 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, inp
 				// approval card so the messages appear in order. Clearing the handle makes
 				// the next text delta start a new stream.
 				if streamHandle != nil && streamHandle.CloseBeforeApproval {
-					w.endStream(ctx, input, streamHandle, segmentText, segmentCitations)
+					w.endStream(ctx, input, streamHandle, segmentText, segmentCitations, segments)
 					streamHandle = nil
 					segmentText = ""
 					segmentCitations = nil
+					segments = nil
 				}
 				if err := w.outbound.PostApprovalPrompt(ctx, ApprovalPromptInput{
 					TextMetadata: textMetadata(input, ""),
@@ -223,6 +233,7 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, inp
 			}
 
 			segmentCitations = append(segmentCitations, delta.Citations...)
+			segments = append(segments, delta)
 
 			if delta.Text != "" || delta.ToolStatus != nil || delta.ThoughtSummary != "" {
 				// An approval may have closed the previous stream. Reopen it when response
@@ -239,7 +250,7 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, inp
 			}
 
 			if delta.IsFinal {
-				w.endStream(ctx, input, streamHandle, segmentText, segmentCitations)
+				w.endStream(ctx, input, streamHandle, segmentText, segmentCitations, segments)
 				return nil
 			}
 		}
@@ -283,16 +294,17 @@ func (w *RouterWorkflow) updateStream(
 	}
 }
 
-// endStream closes handle's stream. fullText/citations are the segment's complete
-// content, passed through so an outbound driver that can only append while streaming
-// can correct the finished message with inline citation markers afterward (see
+// endStream closes handle's stream. fullText/citations/segments are the segment's
+// complete content, passed through so an outbound driver that can only append while
+// streaming can correct the finished message afterward (see
 // slackoutbound.SlackPlatform.FinishStream).
-func (w *RouterWorkflow) endStream(ctx workflow.Context, input Input, handle *StreamHandle, fullText string, citations []Citation) {
+func (w *RouterWorkflow) endStream(ctx workflow.Context, input Input, handle *StreamHandle, fullText string, citations []Citation, segments []Delta) {
 	if handle == nil {
 		return
 	}
 	metadata := textMetadata(input, fullText)
 	metadata.Citations = citations
+	metadata.Segments = segments
 	if err := w.outbound.FinishStream(ctx, FinishStreamInput{
 		TextMetadata: metadata,
 		Handle:       *handle,

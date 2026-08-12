@@ -115,11 +115,52 @@ func TestFlattenForDisplay(t *testing.T) {
 	}
 }
 
+func TestFlattenSegments(t *testing.T) {
+	segments := []router.Delta{
+		{ToolStatus: &router.ToolStatus{ToolID: "t1", ToolName: "file_search", Status: router.ToolStarted}},
+		{ToolStatus: &router.ToolStatus{ToolID: "t1", ToolName: "file_search", Status: router.ToolCompleted}},
+		{Text: "A Local Activity runs in the Workflow process."},
+	}
+	assert.Equal(t,
+		"\n_file_search..._ ✅\n\nA Local Activity runs in the Workflow process.",
+		flattenSegments(segments),
+	)
+}
+
+func TestRetargetEndIndex(t *testing.T) {
+	segments := []router.Delta{
+		{ToolStatus: &router.ToolStatus{ToolName: "search", Status: router.ToolStarted}},   // "\n_search..._"
+		{ToolStatus: &router.ToolStatus{ToolName: "search", Status: router.ToolCompleted}}, // " ✅\n\n"
+		{Text: "hello world"},
+	}
+	cases := []struct {
+		name     string
+		endIndex int
+		want     int
+	}{
+		{"offset into the reply text skips past the tool-status prefix", 5, len([]rune("\n_search..._ ✅\n\n")) + 5},
+		{"offset at the end of the reply text", 11, len([]rune(flattenSegments(segments)))},
+		{"negative EndIndex stays negative - Splice appends at the very end", -1, -1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, retargetEndIndex(segments, tc.endIndex))
+		})
+	}
+}
+
+func TestRetargetCitations_NoToolStatus_LeavesEndIndexUnchanged(t *testing.T) {
+	segments := []router.Delta{{Text: "hello world"}}
+	got := retargetCitations(segments, []router.Citation{{URL: "https://example.com/doc", EndIndex: 5}})
+	assert.Equal(t, []router.Citation{{URL: "https://example.com/doc", EndIndex: 5}}, got)
+}
+
 // TestSlackPlatform_UpdateStream_ToolStatusAndThoughtSummary_AppendInline verifies tool
 // status and thought summaries append into the same live stream as reply text (one
 // message, not a separate one per event) - the citation-position bug this used to risk
-// is instead prevented by FinishStream always rebuilding the final message from
-// clean reply-only text, regardless of what was shown live.
+// is instead prevented by FinishStream rebuilding the final message from Segments and
+// retargeting citations against the flattened result (see retargetEndIndex), regardless
+// of what was shown live.
 func TestSlackPlatform_UpdateStream_ToolStatusAndThoughtSummary_AppendInline(t *testing.T) {
 	type request struct {
 		path string
@@ -221,9 +262,7 @@ func TestSlackPlatform_StatelessStreamLifecycle(t *testing.T) {
 }
 
 // TestSlackPlatform_FinishStream_NoCitations_StillCorrectsMessage verifies FinishStream
-// always rebuilds the message from clean reply-only text, even with no citations -
-// necessary because tool status/thinking may have been live-appended (see
-// UpdateStream/flattenForDisplay) and must not survive into the final message.
+// always rebuilds the message from Segments, even with no citations.
 func TestSlackPlatform_FinishStream_NoCitations_StillCorrectsMessage(t *testing.T) {
 	type request struct {
 		path string
@@ -241,8 +280,12 @@ func TestSlackPlatform_FinishStream_NoCitations_StillCorrectsMessage(t *testing.
 	platform := NewSlackPlatform(client, "")
 
 	err := platform.FinishStream(context.Background(), router.FinishStreamInput{
-		TextMetadata: router.TextMetadata{SessionID: "slack:C12345", Text: "hello world"},
-		Handle:       router.StreamHandle{ID: "1721609600.123456", SessionID: "slack:C12345"},
+		TextMetadata: router.TextMetadata{
+			SessionID: "slack:C12345",
+			Text:      "hello world",
+			Segments:  []router.Delta{{Text: "hello world"}},
+		},
+		Handle: router.StreamHandle{ID: "1721609600.123456", SessionID: "slack:C12345"},
 	})
 	require.NoError(t, err)
 
@@ -250,6 +293,45 @@ func TestSlackPlatform_FinishStream_NoCitations_StillCorrectsMessage(t *testing.
 	assert.Equal(t, "/chat.stopStream", requests[0].path)
 	assert.Equal(t, "/chat.update", requests[1].path)
 	assert.Equal(t, "hello world", requests[1].form.Get("markdown_text"))
+}
+
+// TestSlackPlatform_FinishStream_PreservesToolStatusInFinalMessage verifies tool status
+// lines from Segments survive into the corrected final message, with citations
+// retargeted to their position in the flattened (tool-status-included) text - this is
+// the behavior that replaced the old "always rebuild from clean reply-only text" design.
+func TestSlackPlatform_FinishStream_PreservesToolStatusInFinalMessage(t *testing.T) {
+	type request struct {
+		path string
+		form url.Values
+	}
+	var requests []request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, r.ParseForm())
+		requests = append(requests, request{path: r.URL.Path, form: r.Form})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": "C12345", "ts": "1721609600.123456"})
+	}))
+	defer srv.Close()
+	client := slackapi.New("test-token", slackapi.OptionAPIURL(srv.URL+"/"))
+	platform := NewSlackPlatform(client, "")
+
+	err := platform.FinishStream(context.Background(), router.FinishStreamInput{
+		TextMetadata: router.TextMetadata{
+			SessionID: "slack:C12345",
+			Segments: []router.Delta{
+				{ToolStatus: &router.ToolStatus{ToolName: "search", Status: router.ToolStarted}},
+				{ToolStatus: &router.ToolStatus{ToolName: "search", Status: router.ToolCompleted}},
+				{Text: "hello world"},
+			},
+			Citations: []router.Citation{{URL: "https://example.com/doc", EndIndex: 5}},
+		},
+		Handle: router.StreamHandle{ID: "1721609600.123456", SessionID: "slack:C12345"},
+	})
+	require.NoError(t, err)
+
+	require.Len(t, requests, 2)
+	assert.Equal(t, "/chat.update", requests[1].path)
+	assert.Equal(t, "\n_search..._ ✅\n\nhello [[1]](https://example.com/doc) world", requests[1].form.Get("markdown_text"))
 }
 
 // TestSlackPlatform_FinishStream_EmptyText_SkipsCorrection guards the edge case where
@@ -297,6 +379,7 @@ func TestSlackPlatform_FinishStream_WithCitations_CorrectsMessage(t *testing.T) 
 		TextMetadata: router.TextMetadata{
 			SessionID: "slack:C12345",
 			Text:      "hello world",
+			Segments:  []router.Delta{{Text: "hello world"}},
 			Citations: []router.Citation{{URL: "https://example.com/doc", EndIndex: 5}},
 		},
 		Handle: router.StreamHandle{ID: "1721609600.123456", SessionID: "slack:C12345"},

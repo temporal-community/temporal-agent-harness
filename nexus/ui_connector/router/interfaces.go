@@ -61,9 +61,9 @@ type TextMetadata struct {
 	// Segments is the ordered sequence of every delta that made up this message/turn
 	// (reply text, tool status, thought summaries), for outbound drivers whose platform
 	// has no richer way to show tool status than inline text and so must reconstruct
-	// their own single flattened rendering (see teamsoutbound.flattenSegments). Drivers
-	// that render tool status separately (e.g. Slack, live, via UpdateStream) don't need
-	// this - it's only populated for the non-streaming PostMessage path.
+	// their own single flattened rendering (see teamsoutbound.flattenSegments and
+	// slackoutbound.flattenSegments). Populated for both the non-streaming PostMessage
+	// path and, once a stream segment ends, FinishStream.
 	Segments   []Delta
 	ServiceURL string
 	ChannelID  string

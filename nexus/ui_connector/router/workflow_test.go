@@ -215,6 +215,32 @@ func TestRouterWorkflow_ForwardsToolStatusAndThoughtSummaryVerbatim(t *testing.T
 	assert.Equal(t, "answer", in.updateInputs[2].Delta)
 }
 
+func TestRouterWorkflow_StreamResp_PassesSegmentsToFinishStream(t *testing.T) {
+	handle := TurnHandle{TurnNumber: 1}
+	toolStatus := &ToolStatus{ToolID: "t1", ToolName: "search", Status: ToolStarted}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{
+				{ToolStatus: toolStatus},
+				{Text: "answer", IsFinal: true},
+			}},
+		},
+	}
+	in := &fakeOutbound{}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Len(t, in.finishInputs, 1)
+	require.Len(t, in.finishInputs[0].Segments, 2)
+	assert.Same(t, toolStatus, in.finishInputs[0].Segments[0].ToolStatus)
+	assert.Equal(t, "answer", in.finishInputs[0].Segments[1].Text)
+}
+
 func TestRouterWorkflow_PostResp_PassesSegmentsToPostMessage(t *testing.T) {
 	handle := TurnHandle{}
 	toolStatus := &ToolStatus{ToolID: "t1", ToolName: "search", Status: ToolStarted}
@@ -272,6 +298,11 @@ func TestRouterWorkflow_ApprovalBoundary_ResetsSegmentCitations(t *testing.T) {
 	assert.Equal(t, []Citation{{URL: "https://example.com/before", EndIndex: 1}}, in.finishInputs[0].Citations)
 	assert.Equal(t, "after", in.finishInputs[1].Text)
 	assert.Equal(t, []Citation{{URL: "https://example.com/after", EndIndex: 1}}, in.finishInputs[1].Citations)
+	// Segments must reset at the approval boundary too, not just text/citations - the
+	// second segment's Segments shouldn't carry over deltas from before the approval.
+	for _, seg := range in.finishInputs[1].Segments {
+		assert.NotEqual(t, "before", seg.Text)
+	}
 }
 
 func TestRouterWorkflow_TeamsSharedConversationPostsCompleteResponse(t *testing.T) {
