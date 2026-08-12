@@ -11,7 +11,9 @@
   } from "$lib/components/primitives/StatusChip.svelte";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
+  import type { AgentUiExtensions } from "$lib/agentUiExtensions";
   import { createAgentRunController } from "$lib/state/agentRun.svelte";
+  import { untrack } from "svelte";
 
   type RightPanelView = "chat" | "latency" | "logs";
 
@@ -20,7 +22,12 @@
   const RIGHT_PANEL_KEYBOARD_STEP = 24;
   const LEFT_PANE_MIN_WIDTH = 480;
 
-  const run = createAgentRunController();
+  let { extensions = {} }: { extensions?: AgentUiExtensions } = $props();
+
+  const run = createAgentRunController({
+    presentation: untrack(() => extensions.presentation)
+  });
+  const HeaderControl = $derived(extensions.headerControl);
   let rightPanelView = $state<RightPanelView>("chat");
   let transcriptFilter = $state<TranscriptFilter>("all");
   let workspaceElement = $state<HTMLElement | null>(null);
@@ -32,17 +39,19 @@
   });
 
   const pendingApprovalCount = $derived.by(() => {
-    const resolvedToolIds = new Set<string>();
+    const approvalKey = (workflowId: string | undefined, toolId: string) =>
+      `${workflowId ?? run.runInfo.sessionId}:${toolId}`;
+    const resolvedApprovalKeys = new Set<string>();
     for (const row of run.fullReplayLog.rows) {
       if (row.event === "tool_approval_resolved" && row.toolId) {
-        resolvedToolIds.add(row.toolId);
+        resolvedApprovalKeys.add(approvalKey(row.workflowId, row.toolId));
       }
     }
     return run.fullReplayLog.rows.filter(
       (row) =>
         row.event === "tool_approval_requested" &&
         row.toolId != null &&
-        !resolvedToolIds.has(row.toolId)
+        !resolvedApprovalKeys.has(approvalKey(row.workflowId, row.toolId))
     ).length;
   });
 
@@ -163,12 +172,16 @@
         closedWorkflowIds={run.closedWorkflowIds}
         error={run.connectionError}
         {pendingApprovalCount}
+        presentation={extensions.presentation}
         onNewSession={(workflowType) => run.startNewSession(workflowType)}
         onSelectSession={(sessionId) => run.selectSession(sessionId)}
       />
     </div>
 
     <div class="replay-status">
+      {#if HeaderControl}
+        <HeaderControl />
+      {/if}
       <StatusChip
         label={run.graph.status}
         kind={graphStatusKind(run.graph.status)}
@@ -236,8 +249,8 @@
           <AgentChatPanel
             layout="embedded"
             showHeader={false}
-            items={run.chatTranscript}
-            logs={run.fullReplayLog.rows}
+            items={run.visibleChatTranscript}
+            logs={run.replayLog.rows}
             sessions={run.sessions}
             agentLabel={run.runInfo.agentLabel}
             sessionId={run.runInfo.sessionId}
@@ -245,6 +258,10 @@
             agentInterface={run.agentInterfaces[run.runInfo.sessionId] ?? []}
             operatorTargets={run.operatorTargets}
             currentAgentWorkflowType={run.session?.agent_workflow_type ?? null}
+            workspaceComponent={extensions.workspaceComponent}
+            toolPresentation={extensions.toolPresentation}
+            presentation={extensions.presentation}
+            following={run.following}
             connecting={run.connecting}
             sending={run.sending}
             creatingSession={run.creatingSession}

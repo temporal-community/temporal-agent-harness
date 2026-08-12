@@ -1,3 +1,43 @@
+<script module lang="ts">
+  import type { AgentInboundMessage as ComposerInboundMessage } from "$lib/api/types";
+  import type { ReplayLogRow as ToolActivityRow } from "$lib/state/replayLog";
+  import type { TranscriptItem as WorkspaceTranscriptItem } from "$lib/state/transcript";
+
+  export interface AgentWorkspaceProps {
+    items: WorkspaceTranscriptItem[];
+    sessionId: string;
+    following: boolean;
+    closed: boolean;
+    onSend?: (message: ComposerInboundMessage) => void | Promise<void>;
+  }
+
+  export interface AgentToolActivityProps {
+    row: ToolActivityRow;
+    sessionId: string;
+    following: boolean;
+    closed: boolean;
+    onSend?: (message: ComposerInboundMessage) => void | Promise<void>;
+  }
+
+  export interface ToolPresentation {
+    attachment: import("svelte").Component<AgentToolActivityProps>;
+    isHost: (row: ToolActivityRow, rows: ToolActivityRow[]) => boolean;
+  }
+
+  export async function submitComposerMessage(
+    onSend: (message: ComposerInboundMessage) => void | Promise<void>,
+    outbound: ComposerInboundMessage,
+    retryDraft: string
+  ): Promise<{ sent: boolean; draft: string }> {
+    try {
+      await onSend(outbound);
+      return { sent: true, draft: "" };
+    } catch {
+      return { sent: false, draft: retryDraft };
+    }
+  }
+</script>
+
 <script lang="ts">
   import {
     ArrowUp,
@@ -18,7 +58,8 @@
     XCircle,
     Wrench
   } from "@lucide/svelte";
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
+  import type { Component } from "svelte";
   import { fade } from "svelte/transition";
   import type {
     AgentDescriptor,
@@ -36,6 +77,10 @@
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
   import type { ReplayLogRow } from "$lib/state/replayLog";
+  import {
+    defaultAgentPresentationAdapter,
+    type AgentPresentationAdapter
+  } from "$lib/state/messagePresentation";
   import type { TranscriptItem } from "$lib/state/transcript";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
 
@@ -74,6 +119,10 @@
     operatorTargetRole?: OperatorTargetRole;
     operatorTargets?: OperatorTargetOption[];
     currentAgentWorkflowType?: string | null;
+    workspaceComponent?: Component<AgentWorkspaceProps> | null;
+    toolPresentation?: ToolPresentation | null;
+    presentation?: AgentPresentationAdapter;
+    following?: boolean;
     connecting?: boolean;
     sending?: boolean;
     creatingSession?: boolean;
@@ -128,6 +177,10 @@
     operatorTargetRole = "parent",
     operatorTargets = [],
     currentAgentWorkflowType = null,
+    workspaceComponent: WorkspaceComponent = null,
+    toolPresentation = null,
+    presentation = defaultAgentPresentationAdapter,
+    following = true,
     connecting = false,
     sending = false,
     creatingSession = false,
@@ -150,7 +203,21 @@
   let sessionDrawerOpen = $state(false);
   let newSessionMenuOpen = $state(false);
   let sessionSearch = $state("");
-  let expandedActivityTurns = $state<number[]>([]);
+  function toolPresentationHost(
+    presentation: ToolPresentation | null,
+    rows: ReplayLogRow[]
+  ): ReplayLogRow | null {
+    if (!presentation) return null;
+    return rows.find((row) => presentation.isHost(row, rows)) ?? null;
+  }
+
+  const initialToolPresentationHost = untrack(() => toolPresentationHost(toolPresentation, logs));
+  let expandedActivityTurns = $state<number[]>(
+    initialToolPresentationHost ? [initialToolPresentationHost.turnNumber] : []
+  );
+  let autoExpandedActivityTurn = $state<number | null>(
+    initialToolPresentationHost?.turnNumber ?? null
+  );
   let expandedLogRows = $state<string[]>([]);
   let observedActivitySessionId = $state<string | null>(null);
   let observedActivityOrdinals = $state<Record<number, number>>({});
@@ -172,6 +239,19 @@
   const logsByTurn = $derived(groupLogsByTurn(logs));
   const resolvedApprovalKeys = $derived(resolvedApprovalIds(logs));
   const pendingApprovalRows = $derived(logs.filter((row) => isApprovalPending(row)));
+  const toolPresentationHostRow = $derived(toolPresentationHost(toolPresentation, logs));
+  const ToolActivityAttachment = $derived(toolPresentation?.attachment ?? null);
+
+  $effect(() => {
+    const nextAutoExpandedTurn = toolPresentationHostRow?.turnNumber ?? null;
+    if (nextAutoExpandedTurn === autoExpandedActivityTurn) return;
+    expandedActivityTurns = [
+      ...expandedActivityTurns.filter((turn) => turn !== autoExpandedActivityTurn),
+      ...(nextAutoExpandedTurn === null ? [] : [nextAutoExpandedTurn])
+    ];
+    autoExpandedActivityTurn = nextAutoExpandedTurn;
+  });
+
   const sources = $derived(uniqueCitations(messages.flatMap((message) => message.citations)));
   const sessionItems = $derived(sortedSessions(sessions));
   const sessionSearchTerm = $derived(sessionSearch.trim().toLowerCase());
@@ -850,7 +930,9 @@
   }
 
   function sessionInitialMessage(session: Session): string {
-    return session.initial_user_message?.trim() || "No user message yet";
+    return session.initial_user_message
+      ? presentation.messageText(session.initial_user_message)
+      : "No user message yet";
   }
 
   function sessionAgentLabel(session: Session): string {
@@ -1308,7 +1390,8 @@
     const outbound: AgentInboundMessage = slashMessage ?? question;
     const displayText = commandDisplayText(outbound);
     if (onSend) {
-      await onSend(outbound);
+      const result = await submitComposerMessage(onSend, outbound, question);
+      if (!result.sent) draft = result.draft;
       return;
     }
 
@@ -1736,7 +1819,10 @@
                       {@const fullDetail = logFullDetail(log)}
                       {@const scriptDetail = logScript(log)}
                       {@const rowDuration = logElapsedDuration(log, activityLogs)}
-                      <div class={`activity-row ${rowExpanded ? "expanded" : ""}`}>
+                      <div
+                        class={`activity-row ${rowExpanded ? "expanded" : ""}`}
+                        data-activity-id={log.id}
+                      >
                         <button
                           type="button"
                           class={`${activityLineClass(log, log.ordinal === activeLog.ordinal)} activity-row-button`}
@@ -1784,6 +1870,15 @@
                           {/if}
                           <pre class="activity-detail">{fullDetail}</pre>
                         {/if}
+                        {#if ToolActivityAttachment && toolPresentationHostRow?.id === log.id}
+                          <ToolActivityAttachment
+                            row={log}
+                            {sessionId}
+                            {following}
+                            {closed}
+                            {onSend}
+                          />
+                        {/if}
                       </div>
                     {/each}
                   </div>
@@ -1803,6 +1898,11 @@
             </div>
           </article>
         {/if}
+
+        {#if WorkspaceComponent}
+          <WorkspaceComponent {items} {sessionId} {following} {closed} {onSend} />
+        {/if}
+
       </div>
     {/if}
 
@@ -1849,16 +1949,18 @@
                   <CheckCircle2 size={13} />
                   <span>Approve</span>
                 </button>
-                <button
-                  type="button"
-                  class="approval-remember"
-                  disabled={!onApproveTool || isApprovalResolving(approval)}
-                  onclick={(event) => void resolveApproval(event, approval, true, true)}
-                  onkeydown={(event) => event.stopPropagation()}
-                >
-                  <ShieldCheck size={13} />
-                  <span>Approve and remember</span>
-                </button>
+                {#if approval.rememberAllowed !== false}
+                  <button
+                    type="button"
+                    class="approval-remember"
+                    disabled={!onApproveTool || isApprovalResolving(approval)}
+                    onclick={(event) => void resolveApproval(event, approval, true, true)}
+                    onkeydown={(event) => event.stopPropagation()}
+                  >
+                    <ShieldCheck size={13} />
+                    <span>Approve and remember</span>
+                  </button>
+                {/if}
                 <button
                   type="button"
                   class="approval-reject"

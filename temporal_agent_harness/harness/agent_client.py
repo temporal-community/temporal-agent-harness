@@ -79,13 +79,22 @@ class AgentBusyError(Exception):
     """A turn is already in progress and message queuing is disabled."""
 
 
+class MalformedMessageError(Exception):
+    """A message payload does not match the selected agent handler's input model."""
+
+    def __init__(self, message: str, *, details: tuple[Any, ...] = ()) -> None:
+        super().__init__(message)
+        self.details = details
+
+
 class ToolApprovalError(Exception):
     """A tool-approval decision was rejected by the workflow.
 
     Raised by :meth:`AgentClient.approve_tool` when the workflow's update validator
-    rejects the decision — the ``tool_id`` is unknown, or the approval was already
-    resolved (a double-submit). ``error_type`` carries the workflow-side type
-    (``UnknownToolApproval`` / ``ToolApprovalAlreadyResolved``).
+    rejects the decision — the ``tool_id`` is unknown, the decision conflicts with a
+    settled outcome, or the call does not permit remembering. ``error_type`` carries the
+    workflow-side type (``UnknownToolApproval`` / ``ToolApprovalAlreadyResolved`` /
+    ``ToolApprovalRememberNotAllowed``).
     """
 
     def __init__(self, message: str, *, error_type: str | None = None) -> None:
@@ -177,14 +186,19 @@ class AgentClient:
         ``tool_id`` is the id carried by the ``tool_approval_requested`` event and listed
         under :attr:`AgentStatus.pending_approvals`. On approval the gated call dispatches
         immediately; on denial the model receives ``reason`` as the tool's error result.
-        Resolving an unknown id, or one already resolved, raises :class:`ToolApprovalError`
-        (the decision is idempotent — a double-submit fails rather than flipping it).
+        Resolving an unknown id, or submitting a decision that conflicts with an already
+        settled outcome, raises :class:`ToolApprovalError`. An identical duplicate is
+        idempotent and returns the same acknowledgement without publishing another
+        resolution event.
 
         ``remember=True`` (only meaningful with ``approved=True``) is "approve, and stop
         asking me about this tool": it adds the tool to the agent's live
         :class:`ToolApprovalPolicy` allow-list, so future calls of it skip the gate and any
         other call of that tool currently waiting auto-resolves. Read the updated policy
         back via :meth:`get_status` (``approval_policy``) to persist it for next session.
+        When the pending approval has ``remember_allowed=False``, the workflow rejects
+        ``remember=True`` as ``ToolApprovalRememberNotAllowed`` and leaves both the call
+        and live policy unchanged.
 
         ``update_id`` lets a caller supply its own idempotency key (e.g. a retried Nexus
         request) instead of an auto-generated one, so retries resolve the same update
@@ -203,7 +217,11 @@ class AgentClient:
         except WorkflowUpdateFailedError as e:
             cause = e.cause
             error_type = getattr(cause, "type", None) if cause else None
-            if error_type in ("UnknownToolApproval", "ToolApprovalAlreadyResolved"):
+            if error_type in (
+                "UnknownToolApproval",
+                "ToolApprovalAlreadyResolved",
+                "ToolApprovalRememberNotAllowed",
+            ):
                 raise ToolApprovalError(str(cause), error_type=error_type) from e
             raise
 
@@ -329,6 +347,7 @@ class AgentClient:
         Raises:
             StaleTurnError: The client is behind the workflow.
             AgentBusyError: The agent is busy and does not support enqueuing.
+            MalformedMessageError: The payload does not match the handler input model.
         """
         handle = self._temporal.get_workflow_handle(self._workflow_id)
         try:
@@ -346,6 +365,9 @@ class AgentClient:
                 raise StaleTurnError(str(cause)) from e
             if error_type == "AgentBusy":
                 raise AgentBusyError(str(cause)) from e
+            if error_type == "MalformedMessage":
+                details = tuple(getattr(cause, "details", ())) if cause else ()
+                raise MalformedMessageError(str(cause), details=details) from e
             raise
 
     async def submit_message(
@@ -384,6 +406,7 @@ class AgentClient:
         Raises:
             StaleTurnError: The client is behind the workflow.
             AgentBusyError: The agent is busy and does not support enqueuing.
+            MalformedMessageError: The payload does not match the handler input model.
         """
         start_op = WithStartWorkflowOperation(
             workflow_name,
@@ -407,6 +430,9 @@ class AgentClient:
                 raise StaleTurnError(str(cause)) from e
             if error_type == "AgentBusy":
                 raise AgentBusyError(str(cause)) from e
+            if error_type == "MalformedMessage":
+                details = tuple(getattr(cause, "details", ())) if cause else ()
+                raise MalformedMessageError(str(cause), details=details) from e
             raise
 
     async def send_message(
@@ -455,6 +481,7 @@ class AgentClient:
         Raises:
             StaleTurnError: The client is behind the workflow.
             AgentBusyError: The agent is busy and does not support enqueuing.
+            MalformedMessageError: The payload does not match the handler input model.
         """
         reply = await self._submit_message(msg_type, payload, expected_turn)
         return self._merged_turn(

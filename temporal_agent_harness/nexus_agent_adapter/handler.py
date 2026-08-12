@@ -20,6 +20,7 @@ from temporalio.service import RPCError
 from temporal_agent_harness.harness.agent_client import (
     AgentClient,
     CallbackResultError,
+    MalformedMessageError,
     StaleTurnError,
     ToolApprovalError,
 )
@@ -198,6 +199,11 @@ class AgentServiceHandler:
             except StaleTurnError:
                 await asyncio.sleep((attempt + 1) * 0.05)
                 continue
+            except MalformedMessageError as e:
+                raise HandlerError(
+                    str(e),
+                    type=HandlerErrorType.BAD_REQUEST,
+                ) from e
             return SendMessageOutput(
                 turn_number=reply.turn_number,
                 turn_id=reply.turn_id,
@@ -296,6 +302,7 @@ class AgentServiceHandler:
                     tool_name=pa.tool_name,
                     tool_input=json.dumps(pa.tool_input),
                     turn_number=pa.turn_number,
+                    remember_allowed=pa.remember_allowed,
                 )
                 for pa in status.pending_approvals
             ],

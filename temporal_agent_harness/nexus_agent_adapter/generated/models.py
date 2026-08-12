@@ -337,6 +337,11 @@ class PendingApproval(pydantic.BaseModel):
     turn_number: SpecInt = pydantic.Field(alias="turnNumber")
     """Turn that triggered this approval request"""
 
+    remember_allowed: bool = pydantic.Field(alias="rememberAllowed")
+    """False when this call requires an explicit decision and clients must not offer
+    approve-and-remember
+    """
+
     @pydantic.model_serializer(mode="wrap")
     def _serialize(
         self,

@@ -55,7 +55,7 @@ from temporal_agent_harness.harness.agent_protocol import (
 )
 from temporalio.exceptions import ApplicationError
 
-from temporal_agent_harness.harness.agent_client import AgentClient
+from temporal_agent_harness.harness.agent_client import AgentClient, MalformedMessageError
 from temporal_agent_harness.harness.agent_workflow import _discover_handlers
 
 # ---------------------------------------------------------------------------
@@ -294,6 +294,20 @@ async def test_rejects_malformed_payload(client_and_queue):
     cause = excinfo.value.cause
     assert getattr(cause, "type", None) == "MalformedMessage"
     assert "Greeting" in str(cause)
+
+
+async def test_agent_client_surfaces_malformed_message_details(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+    agent_client = AgentClient(client, handle.id)
+
+    with pytest.raises(MalformedMessageError) as rejected:
+        await agent_client.submit_message("greet", {}, expected_turn=1)
+
+    assert "Greeting" in str(rejected.value)
+    assert len(rejected.value.details) == 1
+    assert rejected.value.details[0]["function"] == "greet"
+    assert "Field required" in rejected.value.details[0]["error"]
 
 
 async def test_agent_interface_query_announces_handlers(client_and_queue):

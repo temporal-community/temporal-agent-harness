@@ -412,21 +412,22 @@ just server            # builds + serves the Svelte UI + /api on :8000 (this exa
 just worker            # this example's agent worker
 ```
 
-Open <http://localhost:8000> and pick an agent. Every example follows the same recipe set
+Open <http://localhost:8000> and pick an agent. The generic examples follow the same recipe set
 (`temporal` / `session-manager` / `server` / `worker`, plus `client` where noted). `just server`
 runs `app-build` first, so :8000 serves the freshly built UI from
-`temporal_agent_harness/ui/dist`.
+`temporal_agent_harness/ui/dist`. Specialized examples such as
+[Chronicler](examples/chronicler/README.md) run through their own justfile and UI bundle.
 
-### All examples behind one UI
+### All generic examples behind one UI
 
-The **root** justfile runs every example agent at once so the UI lists them all. From the repo root,
-each in its own terminal:
+The **root** justfile runs the generic example agents at once so the UI lists them all. From the
+repo root, each in its own terminal:
 
 ```bash
 just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
 just session-manager   # shared session-manager worker
 just server            # serves the MERGED registry (all agents) on http://localhost:8000
-just workers           # co-launch all six agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
+just workers           # co-launch all six generic workers (Ctrl-C stops them; or run `just worker-<name>` each)
 ```
 
 Then create a session for any agent in the UI. A few need extra setup or a client:
@@ -438,6 +439,9 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
 | Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client --wiki-dir ./wiki`** — required, or its tool calls hang |
 | Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
+
+Run [Chronicler](examples/chronicler/README.md) separately: it has a specialized audio UI and
+example-only API routes, so it is intentionally excluded from the aggregate server and workers.
 
 **Gotcha — the session manager caches its registry.** The server seeds the `session-manager`
 workflow with the registry on first start and reuses the existing one after that. So when you switch

@@ -1,0 +1,5 @@
+# Generated audio-demo sessions, synthesized artifacts, and runtime registry — not committed.
+# A fresh checkout starts empty; create a recap or ingest source audio to populate these locally.
+*.wav
+artifacts/
+sessions.json

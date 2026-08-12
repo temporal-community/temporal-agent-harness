@@ -27,3 +27,18 @@ Local testing:
 just server  # builds and serves the Svelte UI on port 8000
 just ui-dev  # optional Vite frontend, with /api proxy
 ```
+
+## Extension seams
+
+`AgentUiExtensions` lets an example add presentation without putting example contracts in the
+generic UI:
+
+- `headerControl` supplies a header component with no application-specific props.
+- `workspaceComponent` receives the current transcript items, session ID, following/closed state,
+  and optional `onSend` callback through `AgentWorkspaceProps`.
+- `toolPresentation` supplies an attachment component for a tool activity and an `isHost` predicate
+  that selects its host row from the available activity rows.
+- `presentation` is an `AgentPresentationAdapter`: `messageText` formats inbound messages, and an
+  optional `replyText` formats reply data.
+
+Examples own their extension implementations and pass them to `App` through this interface.

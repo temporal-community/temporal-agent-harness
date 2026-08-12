@@ -323,6 +323,7 @@ export interface ToolRequestedEvent
 export interface ToolApprovalRequestedEvent
   extends ToolEventDataBase<"tool_approval_requested"> {
   tool_input: JsonRecord;
+  remember_allowed?: boolean;
 }
 
 export interface ToolApprovalResolvedEvent

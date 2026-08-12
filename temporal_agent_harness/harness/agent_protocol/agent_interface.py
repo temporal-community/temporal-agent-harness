@@ -358,10 +358,11 @@ class ToolApprovalDecision:
     under :attr:`AgentStatus.pending_approvals`). ``approved`` is the human's decision;
     ``reason`` is an optional note surfaced on the resolution event and, on denial, fed
     back to the model as the tool's error result. The workflow's update validator rejects
-    a decision for an unknown ``tool_id`` or one already resolved (idempotent — a
-    double-submit fails rather than flipping a settled decision).
+    a decision for an unknown ``tool_id`` or one that conflicts with an already-settled
+    decision. An identical retry is idempotent and returns the original acknowledgement.
 
-    ``remember`` applies the decision to *future* calls of the same tool too: an
+    ``remember`` applies the decision to *future* calls of the same tool too when the
+    pending approval advertises ``remember_allowed=True``: an
     ``approved`` + ``remember`` decision adds the tool to the live
     :class:`ToolApprovalPolicy`'s allow-list, so the agent stops asking about it (and any
     other call of that tool currently waiting auto-resolves). This is the "approve, and
@@ -438,12 +439,16 @@ class PendingApproval:
     Lets a client that attaches after the :class:`ToolApprovalRequested` event was
     published still discover and act on outstanding approvals. ``tool_input`` is the
     model-facing input (injected parameters excluded).
+
+    ``remember_allowed`` is false when this specific call must always receive an explicit
+    decision, so clients must not offer an "approve and remember" action.
     """
 
     tool_id: str
     tool_name: str
     tool_input: dict[str, Any]
     turn_number: int
+    remember_allowed: bool = True
 
 
 @dataclass

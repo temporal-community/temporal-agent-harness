@@ -1,9 +1,10 @@
 # Project-level recipes. Two ways to run the examples:
 #   * ONE example standalone — from its own dir: `cd examples/<x> && just server|worker|client`.
 #     Each example owns its justfile and is unchanged by the aggregate recipes here.
-#   * ALL examples behind one UI — the aggregate recipes below: `server` merges every example's
+#   * ALL generic examples behind one UI — the aggregate recipes below: `server` merges their
 #     agents.toml so the UI lists all agents; run each agent worker (or `just workers` to co-launch
-#     them), plus the clients for the human-in-the-loop / callback agents.
+#     them), plus the clients for the human-in-the-loop / callback agents. Specialized examples
+#     such as Chronicler run through their own justfile and UI bundle.
 # The aggregate recipes read the shared repo-root .env.local (creds: OPENAI_API_KEY, GEMINI_API_KEY,
 # F1_MCP_SERVER_HOME, ...). Prerequisites + run order: see the "Run everything" section in README.md.
 # Build/package + Nexus/Slack/Teams connector recipes follow the run recipes.
@@ -208,7 +209,7 @@ worker-wiki:
 worker-coding:
     cd "{{justfile_directory()}}/examples/callback_tools/coding_agent" && just worker
 
-# Co-launch all six agent workers in one terminal (Ctrl-C stops them all; logs interleave).
+# Co-launch all six generic agent workers in one terminal (Ctrl-C stops them all; logs interleave).
 # Requires every agent's prerequisites at once (both API keys, the F1 MCP server, etc.).
 workers:
     #!/usr/bin/env bash
