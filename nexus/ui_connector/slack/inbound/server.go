@@ -14,7 +14,6 @@ import (
 	"github.com/slack-go/slack/slackevents"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	slackoutbound "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack/outbound"
-	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
 )
 
@@ -30,21 +29,16 @@ type webhookServer struct {
 	taskQueue     string
 	signingSecret string
 	botUserID     string
-	// agentWorkflowIDPrefix must match the adapter's AGENT_WORKFLOW_ID_PREFIX
-	// (default "agent-"): the agent session workflow ID is this prefix + sessionID.
-	// Used to check whether a thread already has a live agent session.
-	agentWorkflowIDPrefix string
-	mux                   *http.ServeMux
+	mux           *http.ServeMux
 }
 
-func NewServer(tc client.Client, taskQueue, signingSecret, botUserID, agentWorkflowIDPrefix string) *webhookServer {
+func NewServer(tc client.Client, taskQueue, signingSecret, botUserID string) *webhookServer {
 	s := &webhookServer{
-		tc:                    tc,
-		taskQueue:             taskQueue,
-		signingSecret:         signingSecret,
-		botUserID:             botUserID,
-		agentWorkflowIDPrefix: agentWorkflowIDPrefix,
-		mux:                   http.NewServeMux(),
+		tc:            tc,
+		taskQueue:     taskQueue,
+		signingSecret: signingSecret,
+		botUserID:     botUserID,
+		mux:           http.NewServeMux(),
 	}
 	s.mux.HandleFunc(routeEvents, s.handleEvents)
 	s.mux.HandleFunc(routeInteractions, s.handleInteractions)
@@ -107,44 +101,22 @@ func (s *webhookServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	case slackevents.CallbackEvent:
 		if ev, ok := evt.InnerEvent.Data.(*slackevents.MessageEvent); ok {
-			// Never act on the bot's own messages (including its streamed replies,
-			// which Slack echoes back as events); otherwise defer to shouldHandle.
-			// Either way we fall through to the single WriteHeader(200) ack below —
-			// never bare-return, or the Lambda proxy adapter reports "Status code
-			// not set on response" (a 5xx to Slack, which then retries).
-			if ev.BotID == "" && s.shouldHandle(r.Context(), ev) {
-				s.signalIncomingMessage(r.Context(), ev)
+			// Ignore the bot's own messages (including its streamed replies, which
+			// Slack echoes back as events). Always fall through to WriteHeader(200)
+			// below - a bare return reads as a 5xx to the Lambda proxy and Slack retries.
+			if ev.BotID == "" {
+				mentioned := s.isMentioned(ev)
+				if mentioned || ev.ThreadTimeStamp != "" {
+					s.signalIncomingMessage(r.Context(), ev, mentioned)
+				}
 			}
 		}
 	}
 	w.WriteHeader(http.StatusOK)
 }
 
-// shouldHandle decides whether an inbound human message should reach the agent.
-// It qualifies if it @-mentions the bot (starting a new thread, or addressing the
-// bot anywhere), OR it is a reply in a thread the bot has already engaged — i.e.
-// an agent session workflow already exists for that thread. The latter lets a
-// user continue in-thread without re-mentioning the bot, while unrelated human
-// threads (no session) are left alone.
-func (s *webhookServer) shouldHandle(ctx context.Context, ev *slackevents.MessageEvent) bool {
-	if s.botUserID == "" || strings.Contains(ev.Text, "<@"+s.botUserID+">") {
-		return true
-	}
-	if ev.ThreadTimeStamp == "" {
-		return false
-	}
-	return s.sessionExists(ctx, threadSessionID(ev.Channel, ev.ThreadTimeStamp))
-}
-
-// sessionExists reports whether a live agent session workflow already exists for
-// sessionID — the gate that limits mention-free continuation to threads the bot
-// actually started.
-func (s *webhookServer) sessionExists(ctx context.Context, sessionID string) bool {
-	resp, err := s.tc.DescribeWorkflowExecution(ctx, s.agentWorkflowIDPrefix+sessionID, "")
-	if err != nil {
-		return false
-	}
-	return resp.GetWorkflowExecutionInfo().GetStatus() == enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING
+func (s *webhookServer) isMentioned(ev *slackevents.MessageEvent) bool {
+	return s.botUserID == "" || strings.Contains(ev.Text, "<@"+s.botUserID+">")
 }
 
 // threadSessionID scopes an agent session to one Slack thread: the channel plus
@@ -154,18 +126,19 @@ func threadSessionID(channel, threadRoot string) string {
 	return fmt.Sprintf("slack:%s:%s", channel, threadRoot)
 }
 
-func (s *webhookServer) signalIncomingMessage(ctx context.Context, ev *slackevents.MessageEvent) {
+func (s *webhookServer) signalIncomingMessage(ctx context.Context, ev *slackevents.MessageEvent, mentioned bool) {
 	threadRoot := ev.ThreadTimeStamp
 	if threadRoot == "" {
 		threadRoot = ev.TimeStamp
 	}
 	sessionID := threadSessionID(ev.Channel, threadRoot)
 	msg := router.IncomingMessage{
-		MessageID: ev.TimeStamp,
-		Sender:    ev.User,
-		Text:      ev.Text,
-		Timestamp: ev.TimeStamp,
-		ThreadID:  threadRoot,
+		MessageID:               ev.TimeStamp,
+		Sender:                  ev.User,
+		Text:                    ev.Text,
+		Timestamp:               ev.TimeStamp,
+		ThreadID:                threadRoot,
+		RequiresExistingSession: !mentioned,
 	}
 	wfID := router.RouterWorkflowID(defaultIdentity, sessionID, ev.TimeStamp)
 	if _, err := s.tc.ExecuteWorkflow(ctx,
