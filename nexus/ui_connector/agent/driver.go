@@ -166,6 +166,18 @@ func (d *Driver) StartTurn(ctx workflow.Context, input router.Input) (router.Sta
 
 	switch {
 	case input.Message != nil:
+		if input.Message.RequiresExistingSession {
+			// Mention-free thread continuation: only proceed if the agent already has a
+			// live session for this thread by probing with a query.
+			var statusOut harnessgen.AgentStatusOutput
+			if err := agentClient.ExecuteOperation(ctx, harnessgen.AgentService.QueryAgentStatus,
+				harnessgen.QuerySessionInput{SessionId: input.SessionID},
+				workflow.NexusOperationOptions{ScheduleToCloseTimeout: 10 * time.Second},
+			).Get(ctx, &statusOut); err != nil {
+				return router.StartResult{}, nil
+			}
+		}
+
 		payload := fmt.Sprintf(`{"text":%q}`, input.Message.Text)
 		sendOut, err := sendAgentMessage(ctx, agentClient, input.SessionID, "ask", payload)
 		if err != nil {

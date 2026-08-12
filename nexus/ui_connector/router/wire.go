@@ -58,6 +58,11 @@ type IncomingMessage struct {
 	ConversationType string
 	ServiceURL       string
 	ChannelID        string
+	// RequiresExistingSession is set when the inbound driver is relaying this message
+	// on a "continue in-thread without re-mentioning the bot" basis rather than an
+	// explicit @-mention. The backend must not start a new agent session on its
+	// account - only deliver it if a live session already exists for this thread.
+	RequiresExistingSession bool
 }
 
 // SlashCommand carries a slash command invocation from the platform.
