@@ -27,7 +27,16 @@ type RouterWorkflow struct {
 // interactionID should be the platform's own unique ID for the event (Slack
 // message timestamp, trigger_id for slash commands, etc.).
 func RouterWorkflowID(identity, sessionID, interactionID string) string {
-	return fmt.Sprintf("connector-%s-%s-%s", identity, sessionID, interactionID)
+	return RouterWorkflowIDPrefix(identity, sessionID) + interactionID
+}
+
+// RouterWorkflowIDPrefix returns the shared prefix of every RouterWorkflowID for a
+// given session, with everything up to but excluding interactionID. Every
+// interaction within one session (e.g. every reply in a Slack thread) produces a
+// workflow ID with this same prefix, so it can be used to search for any workflow
+// ever started for the session without knowing which interactionID triggered it.
+func RouterWorkflowIDPrefix(identity, sessionID string) string {
+	return fmt.Sprintf("connector-%s-%s-", identity, sessionID)
 }
 
 func NewRouterWorkflow(outboundDriver OutboundDriver, backendDriver BackendDriver) *RouterWorkflow {

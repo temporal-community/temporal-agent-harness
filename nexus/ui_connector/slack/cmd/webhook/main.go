@@ -72,7 +72,7 @@ func main() {
 		log.Fatalf("Failed to initialise Slack bot: %v", err)
 	}
 	if bot.UserID != "" {
-		log.Printf("Slack bot user ID: %s (forwarding only messages that mention the bot)", bot.UserID)
+		log.Printf("Slack bot user ID: %s (forwarding mentions, plus replies in threads the bot was mentioned in)", bot.UserID)
 	}
 
 	handler := slackinbound.NewServer(tc, flags.taskQueue, flags.slackSigningSecret, bot.UserID)
