@@ -38,7 +38,7 @@ def _case(*steps: TurnStep, expected: dict | None = None) -> TurnScript:
 CASES: dict[str, TurnScript] = {
     "weather-uses-the-tool": _case(
         TurnStep.text("What's the weather in Tokyo?"),
-        expected={"weather_cities": ["Tokyo"]},
+        expected={"weather_cities": ["Osaka"]},
     ),
     "chitchat-uses-no-tool": _case(
         TurnStep.text("Hi! Who are you, in one sentence?"),
