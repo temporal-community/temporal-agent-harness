@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, History, Plus, Search, X } from "@lucide/svelte";
+  import { ChevronDown, History, Plus, RefreshCw, Search, X } from "@lucide/svelte";
   import type { AgentDescriptor, Session } from "$lib/api/types";
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
   import StatusChip, {
@@ -13,12 +13,14 @@
     connecting?: boolean;
     sending?: boolean;
     creatingSession?: boolean;
+    refreshingSessions?: boolean;
     closed?: boolean;
     closedWorkflowIds?: string[];
     error?: string | null;
     pendingApprovalCount?: number;
     onNewSession?: (workflowType: string) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
+    onRefreshSessions?: () => void | Promise<void>;
   }
 
   let {
@@ -28,12 +30,14 @@
     connecting = false,
     sending = false,
     creatingSession = false,
+    refreshingSessions = false,
     closed = false,
     closedWorkflowIds = [],
     error = null,
     pendingApprovalCount = 0,
     onNewSession,
-    onSelectSession
+    onSelectSession,
+    onRefreshSessions
   }: Props = $props();
 
   let sessionDrawerOpen = $state(false);
@@ -194,6 +198,11 @@
     }
     sessionDrawerOpen = false;
   }
+
+  async function refreshSessions(): Promise<void> {
+    if (!onRefreshSessions || refreshingSessions) return;
+    await onRefreshSessions();
+  }
 </script>
 
 <div class="session-controls">
@@ -285,14 +294,28 @@
           <History size={15} />
           <span>Sessions</span>
         </span>
-        <button
-          type="button"
-          class="session-popover-close"
-          aria-label="Close sessions"
-          onclick={() => (sessionDrawerOpen = false)}
-        >
-          <X size={15} />
-        </button>
+        <div class="session-popover-actions">
+          {#if onRefreshSessions}
+            <button
+              type="button"
+              class="session-popover-refresh"
+              class:spinning={refreshingSessions}
+              aria-label="Refresh sessions"
+              disabled={refreshingSessions}
+              onclick={() => void refreshSessions()}
+            >
+              <RefreshCw size={14} />
+            </button>
+          {/if}
+          <button
+            type="button"
+            class="session-popover-close"
+            aria-label="Close sessions"
+            onclick={() => (sessionDrawerOpen = false)}
+          >
+            <X size={15} />
+          </button>
+        </div>
       </header>
 
       <label class="session-search">
@@ -323,7 +346,7 @@
             <span class="session-copy">
               <time>{sessionCreatedAt(item.created_at)}</time>
               <strong>{sessionInitialMessage(item)}</strong>
-              <small>{sessionAgentLabel(item)}</small>
+              <small>{sessionAgentLabel(item)}{item.is_discovered ? " · discovered" : ""}</small>
             </span>
             <StatusChip
               label={sessionStatusLabel(item)}
@@ -495,6 +518,13 @@
     font-weight: 700;
   }
 
+  .session-popover-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .session-popover-refresh,
   .session-popover-close,
   .new-session-close {
     width: 28px;
@@ -509,6 +539,8 @@
     cursor: pointer;
   }
 
+  .session-popover-refresh:hover:not(:disabled),
+  .session-popover-refresh:focus-visible:not(:disabled),
   .session-popover-close:hover,
   .session-popover-close:focus-visible,
   .new-session-close:hover,
@@ -516,6 +548,24 @@
     color: var(--text-1);
     border-color: var(--border-strong);
     outline: 0;
+  }
+
+  .session-popover-refresh:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+
+  .session-popover-refresh.spinning :global(svg) {
+    animation: session-refresh-spin 800ms linear infinite;
+  }
+
+  @keyframes session-refresh-spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .session-search {

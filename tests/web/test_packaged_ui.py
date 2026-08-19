@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tarfile
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -28,6 +29,7 @@ from temporal_agent_harness.harness.agent_protocol import (
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.web import (
     SESSION_MANAGER_TASK_QUEUE,
+    AgentDescriptor,
     AgentRegistry,
     Session,
     SessionManagerWorkflow,
@@ -35,6 +37,7 @@ from temporal_agent_harness.web import (
     create_session_manager_worker,
 )
 from temporal_agent_harness.web.app import (
+    _discover_untracked_sessions,
     _ensure_session_manager_workflow,
     _session_with_execution_state,
     _workflow_execution_state,
@@ -241,6 +244,7 @@ async def test_session_execution_state_reports_completed_workflow_closed() -> No
         "label": "Session 1",
         "agent_workflow_type": "TestAgent",
         "is_message_queuing_enabled": True,
+        "is_discovered": False,
         "execution_status": "COMPLETED",
         "closed": True,
     }
@@ -270,6 +274,111 @@ async def test_session_execution_state_includes_initial_user_message() -> None:
     result = await _session_with_execution_state(temporal, session)
 
     assert result["initial_user_message"] == "Seven Nation Army"
+
+
+async def test_discover_untracked_sessions_finds_running_workflow_not_in_manager_list() -> None:
+    handle = _FakeWorkflowHandle(status=WorkflowExecutionStatus.RUNNING)
+    started_at = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    temporal = _FakeTemporalClient(
+        handle,
+        workflow_executions=[
+            _fake_workflow_execution(
+                id="agent-session-outside",
+                workflow_type="TestAgent",
+                start_time=started_at,
+            )
+        ],
+    )
+    registry = AgentRegistry(
+        agents=[
+            AgentDescriptor(
+                key="test",
+                workflow_type="TestAgent",
+                task_queue="test-agent",
+                label="Test Agent",
+                description="A test agent.",
+            )
+        ]
+    )
+
+    discovered = await _discover_untracked_sessions(temporal, registry, known_workflow_ids=set())
+
+    assert discovered == [
+        Session(
+            workflow_id="agent-session-outside",
+            created_at=started_at.timestamp(),
+            label="Test Agent",
+            agent_workflow_type="TestAgent",
+            is_discovered=True,
+        )
+    ]
+    assert temporal.list_workflows_calls == [
+        {"query": "ExecutionStatus='Running' AND (WorkflowType='TestAgent')", "limit": 200}
+    ]
+
+
+async def test_discover_untracked_sessions_excludes_already_known_workflow_ids() -> None:
+    handle = _FakeWorkflowHandle(status=WorkflowExecutionStatus.RUNNING)
+    temporal = _FakeTemporalClient(
+        handle,
+        workflow_executions=[
+            _fake_workflow_execution(id="agent-session-known", workflow_type="TestAgent")
+        ],
+    )
+    registry = AgentRegistry(
+        agents=[
+            AgentDescriptor(
+                key="test",
+                workflow_type="TestAgent",
+                task_queue="test-agent",
+                label="Test Agent",
+                description="A test agent.",
+            )
+        ]
+    )
+
+    discovered = await _discover_untracked_sessions(
+        temporal, registry, known_workflow_ids={"agent-session-known"}
+    )
+
+    assert discovered == []
+
+
+async def test_discover_untracked_sessions_skips_workflow_types_outside_registry() -> None:
+    handle = _FakeWorkflowHandle(status=WorkflowExecutionStatus.RUNNING)
+    temporal = _FakeTemporalClient(
+        handle,
+        workflow_executions=[
+            _fake_workflow_execution(id="agent-session-other", workflow_type="OtherWorkflow")
+        ],
+    )
+    registry = AgentRegistry(
+        agents=[
+            AgentDescriptor(
+                key="test",
+                workflow_type="TestAgent",
+                task_queue="test-agent",
+                label="Test Agent",
+                description="A test agent.",
+            )
+        ]
+    )
+
+    discovered = await _discover_untracked_sessions(temporal, registry, known_workflow_ids=set())
+
+    assert discovered == []
+
+
+async def test_discover_untracked_sessions_skips_list_workflows_when_registry_is_empty() -> None:
+    handle = _FakeWorkflowHandle(status=WorkflowExecutionStatus.RUNNING)
+    temporal = _FakeTemporalClient(handle)
+
+    discovered = await _discover_untracked_sessions(
+        temporal, AgentRegistry(), known_workflow_ids=set()
+    )
+
+    assert discovered == []
+    assert temporal.list_workflows_calls == []
 
 
 async def test_session_manager_startup_starts_when_missing() -> None:
@@ -461,12 +570,15 @@ class _FakeTemporalClient:
         *,
         start_result: object | None = None,
         start_error: Exception | None = None,
+        workflow_executions: list[object] | None = None,
     ) -> None:
         self.handle = handle
         self.start_result = start_result
         self.start_error = start_error
         self.get_handle_ids: list[str] = []
         self.start_calls: list[dict[str, object]] = []
+        self.list_workflows_calls: list[dict[str, object]] = []
+        self.workflow_executions = workflow_executions or []
         self.data_converter = pydantic_data_converter
 
     def get_workflow_handle(self, workflow_id: str) -> _FakeWorkflowHandle:
@@ -478,6 +590,21 @@ class _FakeTemporalClient:
         if self.start_error is not None:
             raise self.start_error
         return self.start_result
+
+    async def list_workflows(self, query: str | None = None, **kwargs):
+        self.list_workflows_calls.append({"query": query, **kwargs})
+        for execution in self.workflow_executions:
+            yield execution
+
+
+def _fake_workflow_execution(
+    *, id: str, workflow_type: str, start_time: datetime | None = None
+) -> object:
+    return SimpleNamespace(
+        id=id,
+        workflow_type=workflow_type,
+        start_time=start_time or datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
 
 
 async def _history_event_for_agent_message(message: AgentMessage) -> HistoryEvent:
