@@ -27,6 +27,12 @@ var AgentService = struct {
 	PollMessages nexus.OperationReference[PollMessagesInput, PollMessagesOutput]
 	// Fulfill a pending callback tool call (a tool with no worker-side body - an attached client executes it and submits the outcome here). Mirrors AgentClient.provide_callback_result(). Exactly one of result/error should be set.
 	ProvideCallbackResult nexus.OperationReference[ProvideCallbackResultInput, ProvideCallbackResultOutput]
+	// Gracefully stop the agent workflow via the harness 'close' signal: it winds down its turn loop and auto-denies any pending approvals/callbacks. Fire-and-forget - does not wait for the workflow to finish closing.
+	CloseSession nexus.OperationReference[QuerySessionInput, CloseSessionOutput]
+	// Return the agent workflow's own execution status (running/completed/failed/etc.), independent of its application-level state. Used to show closed sessions in a session list and to answer standalone workflow-status checks. executionStatus is NOT_FOUND (closed=true) if no such workflow exists.
+	DescribeSession nexus.OperationReference[QuerySessionInput, DescribeSessionOutput]
+	// Return every currently-running workflow of this handler's own configured agent type - i.e. sessions that exist in the namespace but weren't necessarily reached via sendAgentMessage by this caller (e.g. started by another connector, or directly against the worker). Scoped to this handler's own workflowName; never returns workflows of other types.
+	DiscoverSessions nexus.OperationReference[EmptyInput, DiscoverSessionsOutput]
 }{
 	ServiceName: "AgentService",
 	SendAgentMessage: nexus.NewOperationReference[SendAgentMessageInput, SendMessageOutput]("SendAgentMessage"),
@@ -37,6 +43,9 @@ var AgentService = struct {
 	QueryAgentStatus: nexus.NewOperationReference[QuerySessionInput, AgentStatusOutput]("QueryAgentStatus"),
 	PollMessages: nexus.NewOperationReference[PollMessagesInput, PollMessagesOutput]("PollMessages"),
 	ProvideCallbackResult: nexus.NewOperationReference[ProvideCallbackResultInput, ProvideCallbackResultOutput]("ProvideCallbackResult"),
+	CloseSession: nexus.NewOperationReference[QuerySessionInput, CloseSessionOutput]("CloseSession"),
+	DescribeSession: nexus.NewOperationReference[QuerySessionInput, DescribeSessionOutput]("DescribeSession"),
+	DiscoverSessions: nexus.NewOperationReference[EmptyInput, DiscoverSessionsOutput]("DiscoverSessions"),
 }
 
 
@@ -570,6 +579,259 @@ func (m ApproveToolCallOutput) MarshalJSON() ([]byte, error) {
 	out := map[string]json.RawMessage{}
 	marshalField(out, "toolId", m.ToolId, &errs)
 	marshalField(out, "accepted", m.Accepted, &errs)
+	if len(errs) > 0 {
+		return nil, &ValidationError{Violations: errs}
+	}
+	return json.Marshal(out)
+}
+
+
+// CloseSessionOutput is generated from the corresponding JSON Schema definition.
+type CloseSessionOutput struct {
+	// SessionId Echo of the closed session ID
+	SessionId string `json:"sessionId"`
+}
+
+// Validate checks m against every constraint and returns a *ValidationError
+// listing any violations.
+func (m CloseSessionOutput) Validate() error {
+	var errs []Violation
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// UnmarshalJSON parses data into m and validates it, returning a
+// *ValidationError listing any violations.
+func (m *CloseSessionOutput) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	var errs []Violation
+	for k := range all {
+		switch k {
+		case "sessionId":
+		default:
+			errs = append(errs, Violation{k, "unknown field"})
+		}
+	}
+	get := func(k string) *json.RawMessage {
+		if v, ok := all[k]; ok {
+			return &v
+		}
+		return nil
+	}
+	_ = get
+	if v, ok := parseStringField(get("sessionId"), "sessionId", true, false, &errs); ok {
+		m.SessionId = v
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// MarshalJSON validates m, then serializes it to JSON, returning a
+// *ValidationError if validation fails.
+func (m CloseSessionOutput) MarshalJSON() ([]byte, error) {
+	var errs []Violation
+	addViolations(&errs, m.Validate())
+	out := map[string]json.RawMessage{}
+	marshalField(out, "sessionId", m.SessionId, &errs)
+	if len(errs) > 0 {
+		return nil, &ValidationError{Violations: errs}
+	}
+	return json.Marshal(out)
+}
+
+
+// DescribeSessionOutput is generated from the corresponding JSON Schema definition.
+type DescribeSessionOutput struct {
+	// WorkflowId corresponds to the "workflowId" JSON property.
+	WorkflowId string `json:"workflowId"`
+	// ExecutionStatus RUNNING, COMPLETED, FAILED, CANCELED, TERMINATED, CONTINUED_AS_NEW, TIMED_OUT, or NOT_FOUND if the workflow doesn't exist
+	ExecutionStatus string `json:"executionStatus"`
+	// Closed True unless executionStatus is RUNNING
+	Closed bool `json:"closed"`
+}
+
+// Validate checks m against every constraint and returns a *ValidationError
+// listing any violations.
+func (m DescribeSessionOutput) Validate() error {
+	var errs []Violation
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// UnmarshalJSON parses data into m and validates it, returning a
+// *ValidationError listing any violations.
+func (m *DescribeSessionOutput) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	var errs []Violation
+	for k := range all {
+		switch k {
+		case "workflowId", "executionStatus", "closed":
+		default:
+			errs = append(errs, Violation{k, "unknown field"})
+		}
+	}
+	get := func(k string) *json.RawMessage {
+		if v, ok := all[k]; ok {
+			return &v
+		}
+		return nil
+	}
+	_ = get
+	if v, ok := parseStringField(get("workflowId"), "workflowId", true, false, &errs); ok {
+		m.WorkflowId = v
+	}
+	if v, ok := parseStringField(get("executionStatus"), "executionStatus", true, false, &errs); ok {
+		m.ExecutionStatus = v
+	}
+	if v, ok := parseBoolField(get("closed"), "closed", true, false, &errs); ok {
+		m.Closed = v
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// MarshalJSON validates m, then serializes it to JSON, returning a
+// *ValidationError if validation fails.
+func (m DescribeSessionOutput) MarshalJSON() ([]byte, error) {
+	var errs []Violation
+	addViolations(&errs, m.Validate())
+	out := map[string]json.RawMessage{}
+	marshalField(out, "workflowId", m.WorkflowId, &errs)
+	marshalField(out, "executionStatus", m.ExecutionStatus, &errs)
+	marshalField(out, "closed", m.Closed, &errs)
+	if len(errs) > 0 {
+		return nil, &ValidationError{Violations: errs}
+	}
+	return json.Marshal(out)
+}
+
+
+// DiscoverSessionsOutput is generated from the corresponding JSON Schema definition.
+type DiscoverSessionsOutput struct {
+	// Sessions corresponds to the "sessions" JSON property.
+	Sessions []SessionSummary `json:"sessions"`
+}
+
+// Validate checks m against every constraint and returns a *ValidationError
+// listing any violations.
+func (m DiscoverSessionsOutput) Validate() error {
+	var errs []Violation
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// UnmarshalJSON parses data into m and validates it, returning a
+// *ValidationError listing any violations.
+func (m *DiscoverSessionsOutput) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	var errs []Violation
+	for k := range all {
+		switch k {
+		case "sessions":
+		default:
+			errs = append(errs, Violation{k, "unknown field"})
+		}
+	}
+	get := func(k string) *json.RawMessage {
+		if v, ok := all[k]; ok {
+			return &v
+		}
+		return nil
+	}
+	_ = get
+	if raw := get("sessions"); raw == nil {
+		errs = append(errs, Violation{"sessions", "required"})
+	} else if isNull(*raw) {
+		errs = append(errs, Violation{"sessions", "explicit null not allowed"})
+	} else if err := json.Unmarshal(*raw, &m.Sessions); err != nil {
+		errs = append(errs, Violation{"sessions", "expected array"})
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// MarshalJSON validates m, then serializes it to JSON, returning a
+// *ValidationError if validation fails.
+func (m DiscoverSessionsOutput) MarshalJSON() ([]byte, error) {
+	var errs []Violation
+	addViolations(&errs, m.Validate())
+	out := map[string]json.RawMessage{}
+	marshalField(out, "sessions", m.Sessions, &errs)
+	if len(errs) > 0 {
+		return nil, &ValidationError{Violations: errs}
+	}
+	return json.Marshal(out)
+}
+
+
+// EmptyInput Marker input for operations that take no arguments
+type EmptyInput struct {
+}
+
+// Validate checks m against every constraint and returns a *ValidationError
+// listing any violations.
+func (m EmptyInput) Validate() error {
+	var errs []Violation
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// UnmarshalJSON parses data into m and validates it, returning a
+// *ValidationError listing any violations.
+func (m *EmptyInput) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	var errs []Violation
+	for k := range all {
+		switch k {
+		default:
+			errs = append(errs, Violation{k, "unknown field"})
+		}
+	}
+	get := func(k string) *json.RawMessage {
+		if v, ok := all[k]; ok {
+			return &v
+		}
+		return nil
+	}
+	_ = get
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// MarshalJSON validates m, then serializes it to JSON, returning a
+// *ValidationError if validation fails.
+func (m EmptyInput) MarshalJSON() ([]byte, error) {
+	var errs []Violation
+	addViolations(&errs, m.Validate())
+	out := map[string]json.RawMessage{}
 	if len(errs) > 0 {
 		return nil, &ValidationError{Violations: errs}
 	}
@@ -1745,6 +2007,85 @@ func (m SendMessageOutput) MarshalJSON() ([]byte, error) {
 	if m.Pending != nil {
 		marshalField(out, "pending", *m.Pending, &errs)
 	}
+	if len(errs) > 0 {
+		return nil, &ValidationError{Violations: errs}
+	}
+	return json.Marshal(out)
+}
+
+
+// SessionSummary One running workflow of this handler's own agent type, discovered via visibility (mirrors harness Session, minus anything only a session-manager would know)
+type SessionSummary struct {
+	// SessionId The session ID to pass to every other operation - the workflow ID with this handler's workflowIdPrefix stripped
+	SessionId string `json:"sessionId"`
+	// CreatedAt Unix epoch seconds
+	CreatedAt float64 `json:"createdAt"`
+	// ExecutionStatus corresponds to the "executionStatus" JSON property.
+	ExecutionStatus string `json:"executionStatus"`
+	// Closed corresponds to the "closed" JSON property.
+	Closed bool `json:"closed"`
+}
+
+// Validate checks m against every constraint and returns a *ValidationError
+// listing any violations.
+func (m SessionSummary) Validate() error {
+	var errs []Violation
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// UnmarshalJSON parses data into m and validates it, returning a
+// *ValidationError listing any violations.
+func (m *SessionSummary) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	var errs []Violation
+	for k := range all {
+		switch k {
+		case "sessionId", "createdAt", "executionStatus", "closed":
+		default:
+			errs = append(errs, Violation{k, "unknown field"})
+		}
+	}
+	get := func(k string) *json.RawMessage {
+		if v, ok := all[k]; ok {
+			return &v
+		}
+		return nil
+	}
+	_ = get
+	if v, ok := parseStringField(get("sessionId"), "sessionId", true, false, &errs); ok {
+		m.SessionId = v
+	}
+	if v, ok := parseNumberField(get("createdAt"), "createdAt", true, false, &errs); ok {
+		m.CreatedAt = v
+	}
+	if v, ok := parseStringField(get("executionStatus"), "executionStatus", true, false, &errs); ok {
+		m.ExecutionStatus = v
+	}
+	if v, ok := parseBoolField(get("closed"), "closed", true, false, &errs); ok {
+		m.Closed = v
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// MarshalJSON validates m, then serializes it to JSON, returning a
+// *ValidationError if validation fails.
+func (m SessionSummary) MarshalJSON() ([]byte, error) {
+	var errs []Violation
+	addViolations(&errs, m.Validate())
+	out := map[string]json.RawMessage{}
+	marshalField(out, "sessionId", m.SessionId, &errs)
+	marshalField(out, "createdAt", m.CreatedAt, &errs)
+	marshalField(out, "executionStatus", m.ExecutionStatus, &errs)
+	marshalField(out, "closed", m.Closed, &errs)
 	if len(errs) > 0 {
 		return nil, &ValidationError{Violations: errs}
 	}

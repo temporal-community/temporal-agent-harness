@@ -37,6 +37,18 @@ services:
         description: "Fulfill a pending callback tool call (a tool with no worker-side body - an attached client executes it and submits the outcome here). Mirrors AgentClient.provide_callback_result(). Exactly one of result/error should be set."
         input: { $ref: "#/$defs/ProvideCallbackResultInput" }
         output: { $ref: "#/$defs/ProvideCallbackResultOutput" }
+      closeSession:
+        description: "Gracefully stop the agent workflow via the harness 'close' signal: it winds down its turn loop and auto-denies any pending approvals/callbacks. Fire-and-forget - does not wait for the workflow to finish closing."
+        input: { $ref: "#/$defs/QuerySessionInput" }
+        output: { $ref: "#/$defs/CloseSessionOutput" }
+      describeSession:
+        description: "Return the agent workflow's own execution status (running/completed/failed/etc.), independent of its application-level state. Used to show closed sessions in a session list and to answer standalone workflow-status checks. executionStatus is NOT_FOUND (closed=true) if no such workflow exists."
+        input: { $ref: "#/$defs/QuerySessionInput" }
+        output: { $ref: "#/$defs/DescribeSessionOutput" }
+      discoverSessions:
+        description: "Return every currently-running workflow of this handler's own configured agent type - i.e. sessions that exist in the namespace but weren't necessarily reached via sendAgentMessage by this caller (e.g. started by another connector, or directly against the worker). Scoped to this handler's own workflowName; never returns workflows of other types."
+        input: { $ref: "#/$defs/EmptyInput" }
+        output: { $ref: "#/$defs/DiscoverSessionsOutput" }
 
 $defs:
   SendAgentMessageInput:
@@ -506,4 +518,69 @@ $defs:
     required:
       - toolId
       - accepted
+    additionalProperties: false
+
+  EmptyInput:
+    type: object
+    description: "Marker input for operations that take no arguments"
+    properties: {}
+    additionalProperties: false
+
+  CloseSessionOutput:
+    type: object
+    properties:
+      sessionId:
+        type: string
+        description: "Echo of the closed session ID"
+    required:
+      - sessionId
+    additionalProperties: false
+
+  DescribeSessionOutput:
+    type: object
+    properties:
+      workflowId:
+        type: string
+      executionStatus:
+        type: string
+        description: "RUNNING, COMPLETED, FAILED, CANCELED, TERMINATED, CONTINUED_AS_NEW, TIMED_OUT, or NOT_FOUND if the workflow doesn't exist"
+      closed:
+        type: boolean
+        description: "True unless executionStatus is RUNNING"
+    required:
+      - workflowId
+      - executionStatus
+      - closed
+    additionalProperties: false
+
+  SessionSummary:
+    type: object
+    description: "One running workflow of this handler's own agent type, discovered via visibility (mirrors harness Session, minus anything only a session-manager would know)"
+    properties:
+      sessionId:
+        type: string
+        description: "The session ID to pass to every other operation - the workflow ID with this handler's workflowIdPrefix stripped"
+      createdAt:
+        type: number
+        description: "Unix epoch seconds"
+      executionStatus:
+        type: string
+      closed:
+        type: boolean
+    required:
+      - sessionId
+      - createdAt
+      - executionStatus
+      - closed
+    additionalProperties: false
+
+  DiscoverSessionsOutput:
+    type: object
+    properties:
+      sessions:
+        type: array
+        items:
+          $ref: "#/$defs/SessionSummary"
+    required:
+      - sessions
     additionalProperties: false

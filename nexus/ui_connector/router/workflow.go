@@ -43,13 +43,35 @@ func NewRouterWorkflow(outboundDriver OutboundDriver, backendDriver BackendDrive
 	return &RouterWorkflow{outbound: outboundDriver, backend: backendDriver}
 }
 
+// RunResult is Run's return value: a plain copy of whatever BackendDriver.StartTurn
+// already produced (StartResult/TurnHandle), surfaced synchronously for a caller that
+// wants it back immediately - e.g. the debug UI's non-streaming submit endpoint, which
+// needs turn/offset info before it can open its own attach stream. Slack/Teams's
+// fire-and-forget inbound webhooks never read this; Run still computes it unconditionally
+// since doing so adds no branching of its own, only relays what StartTurn returned.
+type RunResult struct {
+	Reply            string
+	TurnID           string
+	TurnNumber       int64
+	StreamHeadOffset int64
+	Pending          bool
+}
+
 // Run is the workflow that makes a single turn between the outbound driver and the
 // backend durable.
-func (w *RouterWorkflow) Run(ctx workflow.Context, input Input) error {
+func (w *RouterWorkflow) Run(ctx workflow.Context, input Input) (RunResult, error) {
 	result, err := w.backend.StartTurn(ctx, input)
 	if err != nil {
 		workflow.GetLogger(ctx).Warn("RouterWorkflow: StartTurn failed", "error", err)
-		return nil
+		return RunResult{}, nil
+	}
+
+	runResult := RunResult{Reply: result.Reply}
+	if result.Handle != nil {
+		runResult.TurnID = result.Handle.TurnID
+		runResult.TurnNumber = result.Handle.TurnNumber
+		runResult.StreamHeadOffset = result.Handle.StreamHeadOffset
+		runResult.Pending = result.Handle.Pending
 	}
 
 	if approval := input.Approval; approval != nil {
@@ -61,26 +83,26 @@ func (w *RouterWorkflow) Run(ctx workflow.Context, input Input) error {
 		}); err != nil {
 			workflow.GetLogger(ctx).Warn("RouterWorkflow: AcknowledgeApproval failed", "error", err)
 		}
-		return nil
+		return runResult, nil
 	}
 
 	switch {
 	case result.Reply != "":
 		// An immediate, synchronous answer - no turn was created, nothing to poll.
-		return w.outbound.PostMessage(ctx, textMetadata(input, result.Reply))
+		return runResult, w.outbound.PostMessage(ctx, textMetadata(input, result.Reply))
 
 	case result.Handle != nil && !w.outbound.SupportsStreaming(input):
 		// Collect the complete response when the outbound conversation does not
 		// support native streaming, then post it as a single message.
-		return w.postResp(ctx, *result.Handle, input)
+		return runResult, w.postResp(ctx, *result.Handle, input)
 
 	case result.Handle != nil:
 		// A turn was created; consume its response stream and deliver it outbound.
-		return w.streamResp(ctx, *result.Handle, input)
+		return runResult, w.streamResp(ctx, *result.Handle, input)
 
 	default:
 		// Fire-and-forget (e.g. an approval decision was resolved) - nothing further.
-		return nil
+		return runResult, nil
 	}
 }
 
@@ -148,6 +170,7 @@ func (w *RouterWorkflow) postResp(ctx workflow.Context, handle TurnHandle, input
 					ToolID:       req.ToolID,
 					ToolName:     req.ToolName,
 					ToolInput:    req.ToolInputJSON,
+					Payload:      delta.Payload,
 				}); err != nil {
 					workflow.GetLogger(ctx).Warn("postResp: PostApprovalPrompt failed", "error", err)
 				}
@@ -157,7 +180,7 @@ func (w *RouterWorkflow) postResp(ctx workflow.Context, handle TurnHandle, input
 			fullText += delta.Text
 			citations = append(citations, delta.Citations...)
 			segments = append(segments, delta)
-			if delta.Text != "" || delta.ToolStatus != nil || delta.ThoughtSummary != "" || len(delta.Citations) > 0 {
+			if delta.Text != "" || delta.ToolStatus != nil || delta.ThoughtSummary != "" || len(delta.Citations) > 0 || len(delta.Payload) > 0 {
 				hasContent = true
 			}
 			if delta.IsFinal {
@@ -226,6 +249,7 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, inp
 					ToolID:       req.ToolID,
 					ToolName:     req.ToolName,
 					ToolInput:    req.ToolInputJSON,
+					Payload:      delta.Payload,
 				}); err != nil {
 					workflow.GetLogger(ctx).Warn("streamResp: PostApprovalPrompt failed", "error", err)
 				}
@@ -235,7 +259,7 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, inp
 			segmentCitations = append(segmentCitations, delta.Citations...)
 			segments = append(segments, delta)
 
-			if delta.Text != "" || delta.ToolStatus != nil || delta.ThoughtSummary != "" {
+			if delta.Text != "" || delta.ToolStatus != nil || delta.ThoughtSummary != "" || len(delta.Payload) > 0 {
 				// An approval may have closed the previous stream. Reopen it when response
 				// content resumes.
 				if streamHandle == nil {
@@ -289,6 +313,8 @@ func (w *RouterWorkflow) updateStream(
 		Delta:          delta.Text,
 		ToolStatus:     delta.ToolStatus,
 		ThoughtSummary: delta.ThoughtSummary,
+		EventType:      delta.EventType,
+		Payload:        delta.Payload,
 	}); err != nil {
 		workflow.GetLogger(ctx).Warn("streamResp: stream update failed", "error", err)
 	}

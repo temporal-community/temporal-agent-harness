@@ -13,9 +13,9 @@ from dataclasses import dataclass
 from nexusrpc import HandlerError, HandlerErrorType
 from nexusrpc.handler import StartOperationContext, service_handler, sync_operation
 from temporalio import nexus
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.contrib.workflow_streams import PollInput, PollResult
-from temporalio.service import RPCError
+from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_harness.harness.agent_client import (
     AgentClient,
@@ -42,6 +42,10 @@ from .generated import (
     AgentStatusOutput,
     ApproveToolCallInput,
     ApproveToolCallOutput,
+    CloseSessionOutput,
+    DescribeSessionOutput,
+    DiscoverSessionsOutput,
+    EmptyInput,
     ExecuteOperatorCommandInput,
     ExecuteOperatorCommandOutput,
     OperatorCommand as NexusOperatorCommand,
@@ -57,10 +61,13 @@ from .generated import (
     QuerySessionInput,
     SendAgentMessageInput,
     SendMessageOutput,
+    SessionSummary as NexusSessionSummary,
     StreamItem,
     SubagentInfo as NexusSubagentInfo,
 )
 from .generated import AgentService as AgentServiceDefinition
+
+_DISCOVERY_LIMIT = 200
 
 # WorkflowStream's private poll-update name (not part of its public API), hardcoded since
 # pollMessages must attach to it for any agent without importing that agent's workflow code.
@@ -327,6 +334,73 @@ class AgentServiceHandler:
         return ProvideCallbackResultOutput(
             tool_id=result.tool_id, accepted=result.accepted
         )
+
+    # -----------------------------------------------------------------------
+    # closeSession — stop the agent workflow's turn loop
+    # -----------------------------------------------------------------------
+
+    @sync_operation
+    async def close_session(
+        self, ctx: StartOperationContext, input: QuerySessionInput
+    ) -> CloseSessionOutput:
+        handle = self._client.get_workflow_handle(self._workflow_id(input.session_id))
+        try:
+            await handle.signal("close")
+        except RPCError as e:
+            if e.status != RPCStatusCode.NOT_FOUND:
+                raise
+            # Already gone - closing a session that doesn't exist is not an error.
+        return CloseSessionOutput(session_id=input.session_id)
+
+    # -----------------------------------------------------------------------
+    # describeSession — workflow execution status, independent of app state
+    # -----------------------------------------------------------------------
+
+    @sync_operation
+    async def describe_session(
+        self, ctx: StartOperationContext, input: QuerySessionInput
+    ) -> DescribeSessionOutput:
+        workflow_id = self._workflow_id(input.session_id)
+        handle = self._client.get_workflow_handle(workflow_id)
+        try:
+            desc = await handle.describe()
+        except RPCError as e:
+            if e.status != RPCStatusCode.NOT_FOUND:
+                raise
+            return DescribeSessionOutput(
+                workflow_id=workflow_id, execution_status="NOT_FOUND", closed=True
+            )
+        return DescribeSessionOutput(
+            workflow_id=workflow_id,
+            execution_status=desc.status.name,
+            closed=desc.status != WorkflowExecutionStatus.RUNNING,
+        )
+
+    # -----------------------------------------------------------------------
+    # discoverSessions — running workflows of this handler's own agent type
+    # -----------------------------------------------------------------------
+
+    @sync_operation
+    async def discover_sessions(
+        self, ctx: StartOperationContext, input: EmptyInput
+    ) -> DiscoverSessionsOutput:
+        escaped_type = self._config.workflow_name.replace("'", "''")
+        query = f"ExecutionStatus='Running' AND WorkflowType='{escaped_type}'"
+
+        sessions: list[NexusSessionSummary] = []
+        async for execution in self._client.list_workflows(
+            query=query, limit=_DISCOVERY_LIMIT
+        ):
+            session_id = execution.id.removeprefix(self._config.workflow_id_prefix)
+            sessions.append(
+                NexusSessionSummary(
+                    session_id=session_id,
+                    created_at=execution.start_time.timestamp(),
+                    execution_status=WorkflowExecutionStatus.RUNNING.name,
+                    closed=False,
+                )
+            )
+        return DiscoverSessionsOutput(sessions=sessions)
 
     # -----------------------------------------------------------------------
     # pollMessages — async operation backed by WorkflowStream's poll update

@@ -27,6 +27,7 @@ from temporal_agent_harness.nexus_agent_adapter.generated import (
 )
 from temporal_agent_harness.nexus_agent_adapter.generated import (
     ApproveToolCallInput,
+    EmptyInput,
     ExecuteOperatorCommandInput,
     PollMessagesInput,
     QuerySessionInput,
@@ -527,3 +528,177 @@ async def test_full_operation_surface(env: WorkflowEnvironment) -> None:
         assert result.approve_accepted
         assert result.status_reply
         assert result.poll_item_count > 0
+
+
+# ---------------------------------------------------------------------------
+# Session lifecycle/discovery — closeSession, describeSession, discoverSessions.
+# ---------------------------------------------------------------------------
+
+
+class DescribeOutput(BaseModel):
+    workflow_id: str
+    execution_status: str
+    closed: bool
+
+
+@workflow.defn
+class DescribeCallerWorkflow:
+    @workflow.run
+    async def run(self, input: CallerInput) -> DescribeOutput:
+        client = workflow.create_nexus_client(
+            service=AgentServiceDefinition, endpoint=input.endpoint
+        )
+        out = await client.execute_operation(
+            AgentServiceDefinition.describe_session,
+            QuerySessionInput(session_id=input.session_id),
+        )
+        return DescribeOutput(
+            workflow_id=out.workflow_id,
+            execution_status=out.execution_status,
+            closed=out.closed,
+        )
+
+
+async def test_describe_session_not_found_for_unknown_session(
+    env: WorkflowEnvironment,
+) -> None:
+    """A session that was never sent a message has no workflow yet - NOT_FOUND, not an
+    error - so a UI can safely describe a session before its first message."""
+    client = env.client
+    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
+    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
+    caller_task_queue = f"caller-{uuid.uuid4()}"
+
+    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
+
+    config = Config(
+        agent_task_queue=f"agent-{uuid.uuid4()}",
+        workflow_name="ProbeAgent",
+        workflow_id_prefix="probe-",
+        is_message_queuing_enabled=False,
+    )
+
+    async with Worker(
+        client,
+        task_queue=nexus_task_queue,
+        nexus_service_handlers=[AgentServiceHandler(client, config)],
+    ), Worker(
+        client, task_queue=caller_task_queue, workflows=[DescribeCallerWorkflow]
+    ):
+        session_id = str(uuid.uuid4())
+        handle = await client.start_workflow(
+            DescribeCallerWorkflow.run,
+            CallerInput(endpoint=endpoint_name, session_id=session_id),
+            id=f"describe-caller-{session_id}",
+            task_queue=caller_task_queue,
+        )
+        result = await handle.result()
+
+        assert result.execution_status == "NOT_FOUND"
+        assert result.closed
+
+
+class LifecycleOutput(BaseModel):
+    running_status: str
+    running_closed: bool
+    discovered_session_ids: list[str]
+    closed_eventually: bool
+
+
+@workflow.defn
+class LifecycleCallerWorkflow:
+    """Sends a message (starting the session's workflow), then exercises
+    discoverSessions/describeSession/closeSession against it."""
+
+    @workflow.run
+    async def run(self, input: CallerInput) -> LifecycleOutput:
+        client = workflow.create_nexus_client(
+            service=AgentServiceDefinition, endpoint=input.endpoint
+        )
+        await client.execute_operation(
+            AgentServiceDefinition.send_agent_message,
+            SendAgentMessageInput(
+                session_id=input.session_id,
+                msg_type="ask",
+                payload=json.dumps({"text": "hi"}),
+            ),
+        )
+
+        running = await client.execute_operation(
+            AgentServiceDefinition.describe_session,
+            QuerySessionInput(session_id=input.session_id),
+        )
+
+        discovered = await client.execute_operation(
+            AgentServiceDefinition.discover_sessions, EmptyInput()
+        )
+
+        await client.execute_operation(
+            AgentServiceDefinition.close_session,
+            QuerySessionInput(session_id=input.session_id),
+        )
+
+        closed_eventually = False
+        for _ in range(50):
+            desc = await client.execute_operation(
+                AgentServiceDefinition.describe_session,
+                QuerySessionInput(session_id=input.session_id),
+            )
+            if desc.closed:
+                closed_eventually = True
+                break
+            await workflow.sleep(0.1)
+
+        return LifecycleOutput(
+            running_status=running.execution_status,
+            running_closed=running.closed,
+            discovered_session_ids=[s.session_id for s in discovered.sessions],
+            closed_eventually=closed_eventually,
+        )
+
+
+async def test_session_lifecycle_discover_describe_close(
+    env: WorkflowEnvironment,
+) -> None:
+    client = env.client
+    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
+    agent_task_queue = f"agent-{uuid.uuid4()}"
+    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
+    caller_task_queue = f"caller-{uuid.uuid4()}"
+
+    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
+
+    config = Config(
+        agent_task_queue=agent_task_queue,
+        workflow_name="ProbeAgent",
+        workflow_id_prefix="probe-",
+        is_message_queuing_enabled=False,
+    )
+
+    async with Worker(
+        client, task_queue=agent_task_queue, workflows=[ProbeAgent]
+    ), Worker(
+        client,
+        task_queue=nexus_task_queue,
+        nexus_service_handlers=[AgentServiceHandler(client, config)],
+    ), Worker(
+        client, task_queue=caller_task_queue, workflows=[LifecycleCallerWorkflow]
+    ):
+        session_id = str(uuid.uuid4())
+        handle = await client.start_workflow(
+            LifecycleCallerWorkflow.run,
+            CallerInput(endpoint=endpoint_name, session_id=session_id),
+            id=f"lifecycle-caller-{session_id}",
+            task_queue=caller_task_queue,
+        )
+        result = await handle.result()
+
+        assert result.running_status == "RUNNING"
+        assert not result.running_closed
+        assert session_id in result.discovered_session_ids, (
+            "discoverSessions must find a session it never itself started via "
+            "sendAgentMessage, only visibility"
+        )
+        assert result.closed_eventually, (
+            "closeSession's signal must eventually wind the workflow down"
+        )

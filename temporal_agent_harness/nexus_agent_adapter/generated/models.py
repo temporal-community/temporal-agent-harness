@@ -202,6 +202,59 @@ class ApproveToolCallOutput(pydantic.BaseModel):
         return _emit_set_fields(self, handler)
 
 
+class CloseSessionOutput(pydantic.BaseModel):
+    model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="forbid")
+
+    session_id: str = pydantic.Field(alias="sessionId")
+    """Echo of the closed session ID"""
+
+    @pydantic.model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: typing.Callable[[pydantic.BaseModel], typing.Any],
+    ) -> dict[str, object]:
+        return _emit_set_fields(self, handler)
+
+
+class DescribeSessionOutput(pydantic.BaseModel):
+    model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="forbid")
+
+    workflow_id: str = pydantic.Field(alias="workflowId")
+
+    execution_status: str = pydantic.Field(alias="executionStatus")
+    """RUNNING, COMPLETED, FAILED, CANCELED, TERMINATED, CONTINUED_AS_NEW, TIMED_OUT, or
+    NOT_FOUND if the workflow doesn't exist
+    """
+
+    closed: bool = pydantic.Field()
+    """True unless executionStatus is RUNNING"""
+
+    @pydantic.model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: typing.Callable[[pydantic.BaseModel], typing.Any],
+    ) -> dict[str, object]:
+        return _emit_set_fields(self, handler)
+
+
+class DiscoverSessionsOutput(pydantic.BaseModel):
+    model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="forbid")
+
+    sessions: list[SessionSummary] = pydantic.Field()
+
+    @pydantic.model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: typing.Callable[[pydantic.BaseModel], typing.Any],
+    ) -> dict[str, object]:
+        return _emit_set_fields(self, handler)
+
+
+class EmptyInput(pydantic.BaseModel):
+    """Marker input for operations that take no arguments"""
+    model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="forbid")
+
+
 class ExecuteOperatorCommandInput(pydantic.BaseModel):
     model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="forbid")
 
@@ -598,6 +651,32 @@ class SendMessageOutput(pydantic.BaseModel):
         handler: typing.Callable[[object], typing.Any],
     ) -> typing.Any:
         return _reject_explicit_null(cls, data, handler)
+
+    @pydantic.model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: typing.Callable[[pydantic.BaseModel], typing.Any],
+    ) -> dict[str, object]:
+        return _emit_set_fields(self, handler)
+
+
+class SessionSummary(pydantic.BaseModel):
+    """One running workflow of this handler's own agent type, discovered via visibility
+    (mirrors harness Session, minus anything only a session-manager would know)
+    """
+    model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="forbid")
+
+    session_id: str = pydantic.Field(alias="sessionId")
+    """The session ID to pass to every other operation - the workflow ID with this
+    handler's workflowIdPrefix stripped
+    """
+
+    created_at: float = pydantic.Field(alias="createdAt")
+    """Unix epoch seconds"""
+
+    execution_status: str = pydantic.Field(alias="executionStatus")
+
+    closed: bool = pydantic.Field()
 
     @pydantic.model_serializer(mode="wrap")
     def _serialize(

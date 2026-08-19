@@ -56,7 +56,13 @@ func (d Driver) BeginStream(ctx workflow.Context, input router.BeginStreamInput)
 	return handle, err
 }
 
+// UpdateStream skips scheduling the activity entirely when the delta has no rendered
+// text (e.g. a subagent or model-usage event Slack has no representation for), avoiding
+// a wasted Slack API round trip for events Slack can't render anyway.
 func (d Driver) UpdateStream(ctx workflow.Context, input router.UpdateStreamInput) error {
+	if flattenForDisplay(input) == "" {
+		return nil
+	}
 	return workflow.ExecuteActivity(
 		workflow.WithActivityOptions(ctx, d.ActivityOptions), updateStreamActivity, input,
 	).Get(ctx, nil)

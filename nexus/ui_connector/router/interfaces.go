@@ -1,6 +1,10 @@
 package router
 
-import "go.temporal.io/sdk/workflow"
+import (
+	"encoding/json"
+
+	"go.temporal.io/sdk/workflow"
+)
 
 // OutboundDriver is implemented by a platform-specific workflow-side adapter and called
 // directly by RouterWorkflow. Concrete drivers durably dispatch platform I/O to
@@ -40,7 +44,8 @@ type ApprovalPromptInput struct {
 	TextMetadata
 	ToolID    string
 	ToolName  string
-	ToolInput string // JSON-encoded model-facing input (for display)
+	ToolInput string          // JSON-encoded model-facing input (for display)
+	Payload   json.RawMessage // the complete tool_approval_requested event; see Delta.Payload
 }
 
 // ApprovalAcknowledgementInput carries a resolved approval decision back to the
@@ -105,6 +110,8 @@ type UpdateStreamInput struct {
 	Delta          string // reply text chunk; empty if this update instead carries ToolStatus/ThoughtSummary
 	ToolStatus     *ToolStatus
 	ThoughtSummary string
+	EventType      string          // see Delta.EventType
+	Payload        json.RawMessage // see Delta.Payload
 }
 
 type FinishStreamInput struct {
@@ -146,6 +153,11 @@ type TurnHandle struct {
 	TurnID           string
 	TurnNumber       int64
 	StreamHeadOffset int64
+	// Pending is true if the backend queued this turn behind an already-active one
+	// rather than dispatching it immediately. Slack/Teams never inspect this; it exists
+	// for a caller that wants StartTurn's outcome back synchronously (see
+	// RouterWorkflow's RunResult).
+	Pending bool
 }
 
 // PollResult is one batch of a turn's response stream.
@@ -159,6 +171,16 @@ type PollResult struct {
 // ToolStatus, ThoughtSummary, or ApprovalRequested is meaningfully populated for a
 // given delta; Citations may ride alongside one of those or arrive alone. Router
 // never inspects which; it only accumulates and forwards.
+//
+// EventType/Payload are a second, independent rendering of the same event: EventType is
+// the harness's own event type string (e.g. "reply_delta", "subagent_started",
+// "model_interaction_ended", ...) and Payload is that event's complete JSON, with the
+// stream envelope's agent_id/turn_id/turn_number/timestamp flattened in. A BackendDriver
+// populates both on every delta, even ones with no text/tool-status/thought-summary
+// rendering below (e.g. a subagent or model-usage event) - outbound drivers that only
+// render text (Slack, Teams) key off Text/ToolStatus/ThoughtSummary and ignore
+// EventType/Payload; a full-fidelity outbound driver (e.g. an SSE-based UI) keys off
+// Payload alone and can safely ignore the rest of this struct.
 type Delta struct {
 	Text              string      // a reply-text chunk - the ONLY field citations are indexed against
 	Citations         []Citation  // citations for the reply text delivered so far
@@ -166,6 +188,8 @@ type Delta struct {
 	ThoughtSummary    string      // a thought-summary chunk (the model's internal reasoning, distinct from the reply)
 	IsFinal           bool
 	ApprovalRequested *ApprovalRequest // non-nil if this delta is a tool-approval gate
+	EventType         string           // the harness's own event type string; always set
+	Payload           json.RawMessage  // the complete event, envelope fields flattened in; always set
 }
 
 // ToolStatusKind is the lifecycle state a ToolStatus delta reports.

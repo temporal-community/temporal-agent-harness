@@ -1,7 +1,7 @@
 # ui_connector
 
-Connects chat platforms (Slack, Teams, ...) to the temporal-agent-harness agent, through
-one Temporal workflow: `RouterWorkflow`.
+Connects chat platforms (Slack, Teams, the debug UI, ...) to the temporal-agent-harness
+agent, through one Temporal workflow: `RouterWorkflow`.
 
 ## Data flow
 
@@ -42,14 +42,23 @@ teams/             everything Teams (same inbound/outbound split)
   cmd/{webhook,worker}/  the two binaries
 
 agent/             the one BackendDriver impl: Nexus caller into temporal-agent-harness
+
+debugui/           the debug UI's Nexus-fronted deployment mode (see below) - inbound
+                   HTTP+SSE server, OutboundDriver, and the non-turn workflows
+                   (session lifecycle/discovery/status/attach) RouterWorkflow doesn't
+                   own. Single binary (cmd/debugui), unlike Slack/Teams's two.
 ```
 
-**Dependency direction:** `slack/*`, `teams/*`, `agent` all import `router`. `router`
-imports nothing platform-specific. Never add a `router` -> platform import.
+**Dependency direction:** `slack/*`, `teams/*`, `debugui/*`, `agent` all import `router`.
+`router` imports nothing platform-specific. Never add a `router` -> platform import.
 
-**Two binaries per platform**, under that platform's own folder (`slack/cmd/`, `teams/cmd/`):
+**Two binaries per platform** for Slack/Teams, under that platform's own folder
+(`slack/cmd/`, `teams/cmd/`):
 - `cmd/webhook` - HTTP server + Temporal client only. No workflow/worker.
 - `cmd/worker` - registers `RouterWorkflow` + the outbound driver's activities.
+
+`debugui` collapses these into one binary (`debugui/cmd/debugui`) instead, since a debug
+UI is normally run as a single instance - see `debugui`'s package doc for why.
 
 ## Writing a new driver (e.g. Discord)
 
@@ -121,6 +130,38 @@ yourplatform.RegisterActivities(w, platform) // if you have real Activities to r
 
 In `yourplatform/cmd/webhook/main.go`: just the HTTP server + Temporal client, pointing at
 the same `taskQueue`.
+
+## The debug UI's Nexus-fronted mode (`debugui/`)
+
+Slack/Teams are genuinely remote from the agent - no direct Temporal credentials to its
+namespace, everything crosses Nexus. The debug UI is normally colocated and trusted
+instead (`temporal_agent_harness/web`'s FastAPI app, used by every example in this repo,
+talks to the agent's namespace directly) - that path is unchanged and is still the right
+choice for a local example that runs its own agent worker alongside the UI.
+
+`debugui/` is for the other case: a debug UI pointed at an agent it doesn't own or run
+locally (e.g. `examples/qa_agent`). It holds the same trust boundary Slack/Teams get -
+Nexus only, never a direct Temporal client into the agent's namespace - by reusing
+`router.OutboundDriver`/`BackendDriver` (`agent.Driver`) exactly like Slack/Teams for
+turn-shaped traffic (chat send, streaming reply, approvals).
+
+Two things don't fit `RouterWorkflow`'s turn-scoped shape, so they're not forced into it:
+
+- **Session admin** (list/describe/close sessions, status, interface discovery) isn't a
+  turn at all - no Message/Slash/Approval fits it. `debugui/admin` has one small
+  workflow per Nexus operation instead (`DescribeSessionWorkflow`, `QueryStatusWorkflow`,
+  ...), following the exact same "one HTTP request in, one Nexus call out" shape as
+  `RouterWorkflow`, just for a different request kind.
+- **Whole-session replay/tail** (`GET /api/attach`) is session-scoped, not turn-scoped -
+  it wants every turn's events from an offset onward, not one turn's stream.
+  `debugui/admin.AttachWorkflow` polls `agent.PollSession` (no turn-number floor, unlike
+  `PollTurn`) and publishes to the same broker `RouterWorkflow`'s outbound driver does.
+
+Because a single debug UI instance's registry can span several agent types on different
+Nexus endpoints (unlike a Slack/Teams deployment, which only ever needs one),
+`debugui/admin`'s workflows all take their Nexus endpoint as part of their input rather
+than fixing it at registration time, and `cmd/debugui` registers one `RouterWorkflow`
+type per registered agent (see `debuguiinbound.RouterWorkflowName`).
 
 ## Gotchas
 

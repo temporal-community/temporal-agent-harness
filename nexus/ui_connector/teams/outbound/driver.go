@@ -76,12 +76,18 @@ func (d Driver) BeginStream(ctx workflow.Context, input router.BeginStreamInput)
 // into the plain text string the Python activity worker's contract expects, since Teams
 // has no richer way to show tool status than the same inline markers it always used -
 // see flattenDeltaText.
+// UpdateStream skips scheduling the (pinned) activity entirely when the delta has no
+// rendered text (e.g. a subagent or model-usage event Teams has no representation for),
+// avoiding a wasted round trip to the pinned Python worker for events Teams can't render.
 func (d Driver) UpdateStream(ctx workflow.Context, input router.UpdateStreamInput) error {
 	input.Delta = flattenDeltaText(router.Delta{
 		Text:           input.Delta,
 		ToolStatus:     input.ToolStatus,
 		ThoughtSummary: input.ThoughtSummary,
 	})
+	if input.Delta == "" {
+		return nil
+	}
 	return workflow.ExecuteActivity(d.streamActivityContext(ctx, input.Handle), updateStreamActivity, input).Get(ctx, nil)
 }
 

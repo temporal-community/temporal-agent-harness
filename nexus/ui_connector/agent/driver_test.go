@@ -26,23 +26,19 @@ func TestTurnEventToDelta(t *testing.T) {
 		event     turnEvent
 		wantText  string
 		wantFinal bool
-		wantNil   bool
 	}{
-		{"reply_delta", turnEvent{Type: "reply_delta", Text: "hello"}, "hello", false, false},
-		{"reply", turnEvent{Type: "reply", Text: "full text"}, "", true, false},
-		{"error", turnEvent{Type: "error", Message: "crash"}, "[error] crash", true, false},
-		{"thought_summary empty text", turnEvent{Type: "thought_summary", Delta: map[string]any{"text": ""}}, "", false, true},
-		{"unknown type", turnEvent{Type: "unknown_event"}, "", false, true},
+		{"reply_delta", turnEvent{Type: "reply_delta", Text: "hello"}, "hello", false},
+		{"reply", turnEvent{Type: "reply", Text: "full text"}, "", true},
+		{"error", turnEvent{Type: "error", Message: "crash"}, "[error] crash", true},
+		{"thought_summary empty text", turnEvent{Type: "thought_summary", Delta: map[string]any{"text": ""}}, "", false},
+		{"unknown type", turnEvent{Type: "unknown_event"}, "", false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := turnEventToDelta(tc.event)
-			if tc.wantNil {
-				assert.Nil(t, d)
-				return
-			}
-			require.NotNil(t, d)
+			require.NotNil(t, d, "turnEventToDelta must never return nil - a full-fidelity outbound driver still needs EventType for events with no text rendering")
+			assert.Equal(t, tc.event.Type, d.EventType)
 			assert.Equal(t, tc.wantText, d.Text)
 			assert.Equal(t, tc.wantFinal, d.IsFinal)
 		})
@@ -119,9 +115,11 @@ func TestTurnEventToDelta_TextAnnotation_ProducesCitations(t *testing.T) {
 	assert.Equal(t, router.Citation{URL: "", Title: "notes.txt", EndIndex: -1}, d.Citations[1])
 }
 
-func TestTurnEventToDelta_TextAnnotation_NoAnnotations_ReturnsNil(t *testing.T) {
+func TestTurnEventToDelta_TextAnnotation_NoAnnotations_ProducesEmptyCitations(t *testing.T) {
 	d := turnEventToDelta(turnEvent{Type: "text_annotation", Delta: map[string]any{}})
-	assert.Nil(t, d)
+	require.NotNil(t, d)
+	assert.Equal(t, "text_annotation", d.EventType)
+	assert.Empty(t, d.Citations)
 }
 
 // TestToolStatusCarriesNoText guards against tool_start/tool_end/tool_error deltas
@@ -163,18 +161,29 @@ func TestToolApprovalRequestedEvent_ProducesApprovalRequestedDelta(t *testing.T)
 
 func TestDecodeTurnEvent_RoundTrip(t *testing.T) {
 	si := streamItem{
+		AgentID:    "agent-1",
 		TurnID:     "t1",
 		TurnNumber: 3,
 		Timestamp:  1700000000.0,
 		Event:      turnEvent{Type: "reply_delta", Text: "hello"},
 	}
-	item := makeTestStreamItem(t, si, 0, turnEventsTopic)
+	item := makeTestStreamItem(t, si, 42, turnEventsTopic)
 
-	turnNumber, got, err := decodeTurnEvent(item)
+	got, merged, err := decodeTurnEvent(item)
 	require.NoError(t, err)
-	assert.Equal(t, 3, turnNumber)
-	assert.Equal(t, "reply_delta", got.Type)
-	assert.Equal(t, "hello", got.Text)
+	assert.Equal(t, 3, got.TurnNumber)
+	assert.Equal(t, "reply_delta", got.Event.Type)
+	assert.Equal(t, "hello", got.Event.Text)
+
+	var mergedFields map[string]any
+	require.NoError(t, json.Unmarshal(merged, &mergedFields))
+	assert.Equal(t, "reply_delta", mergedFields["type"])
+	assert.Equal(t, "hello", mergedFields["text"])
+	assert.Equal(t, "agent-1", mergedFields["agent_id"])
+	assert.Equal(t, "t1", mergedFields["turn_id"])
+	assert.Equal(t, float64(3), mergedFields["turn_number"])
+	assert.Equal(t, 1700000000.0, mergedFields["timestamp"])
+	assert.Equal(t, float64(42), mergedFields["resume_offset"])
 }
 
 // -- Driver tests -------------------------------------------------------------

@@ -8,6 +8,10 @@ from .models import (
     AgentStatusOutput,
     ApproveToolCallInput,
     ApproveToolCallOutput,
+    CloseSessionOutput,
+    DescribeSessionOutput,
+    DiscoverSessionsOutput,
+    EmptyInput,
     ExecuteOperatorCommandInput,
     ExecuteOperatorCommandOutput,
     PollMessagesInput,
@@ -98,4 +102,34 @@ class AgentService:
     """Fulfill a pending callback tool call (a tool with no worker-side body - an attached
     client executes it and submits the outcome here). Mirrors
     AgentClient.provide_callback_result(). Exactly one of result/error should be set.
+    """
+
+    close_session: Operation[
+        QuerySessionInput,
+        CloseSessionOutput,
+    ] = Operation(name="CloseSession")
+    """Gracefully stop the agent workflow via the harness 'close' signal: it winds down its
+    turn loop and auto-denies any pending approvals/callbacks. Fire-and-forget - does
+    not wait for the workflow to finish closing.
+    """
+
+    describe_session: Operation[
+        QuerySessionInput,
+        DescribeSessionOutput,
+    ] = Operation(name="DescribeSession")
+    """Return the agent workflow's own execution status (running/completed/failed/etc.),
+    independent of its application-level state. Used to show closed sessions in a
+    session list and to answer standalone workflow-status checks. executionStatus is
+    NOT_FOUND (closed=true) if no such workflow exists.
+    """
+
+    discover_sessions: Operation[
+        EmptyInput,
+        DiscoverSessionsOutput,
+    ] = Operation(name="DiscoverSessions")
+    """Return every currently-running workflow of this handler's own configured agent type
+    - i.e. sessions that exist in the namespace but weren't necessarily reached via
+    sendAgentMessage by this caller (e.g. started by another connector, or directly
+    against the worker). Scoped to this handler's own workflowName; never returns
+    workflows of other types.
     """

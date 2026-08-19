@@ -38,9 +38,15 @@ func derefOrZero[T any](p *T) T {
 // which are represented as pointer-typed fields in Go.
 func ptr[T any](v T) *T { return &v }
 
-// turnEvent matches harness/agent_client.py TurnEvent (json/plain, snake_case).
-// streamItem is the outer wrapper from WorkflowStream._log.
+// turnEvent matches harness/agent_client.py TurnEvent (json/plain, snake_case). It only
+// models the fields turnEventToDelta's text/tool-status rendering needs - the complete,
+// undecoded event JSON is preserved separately by decodeTurnEvent (as mergedPayload) so
+// no event type or field is lost just because this struct doesn't happen to model it.
+// streamItem is the outer wrapper from WorkflowStream._log. AgentID is the agent's own
+// short id, stamped by the harness on every event it publishes - genuinely part of the
+// wire bytes, not something attached separately downstream.
 type streamItem struct {
+	AgentID    string    `json:"agent_id"`
 	TurnID     string    `json:"turn_id"`
 	TurnNumber int       `json:"turn_number"`
 	Timestamp  float64   `json:"timestamp"`
@@ -58,62 +64,101 @@ type turnEvent struct {
 	Delta      map[string]any `json:"delta"`
 }
 
-func decodeTurnEvent(item harnessgen.StreamItem) (int, *turnEvent, error) {
+// decodeTurnEvent decodes one poll item into its typed streamItem plus the fully merged
+// event payload: the raw "event" object's own fields (type, text, tool_id, ... whatever
+// this particular event type carries, verbatim) plus agent_id/turn_id/turn_number/
+// timestamp/resume_offset flattened in. This reconstructs exactly the shape the harness's
+// own AgentEvent wrapper produces, so a driver wanting full fidelity (e.g. an SSE-based
+// UI) can forward mergedPayload as-is with no further assembly - resume_offset in
+// particular is what such a driver's client must echo back as the next from_offset to
+// resume a dropped connection.
+func decodeTurnEvent(item harnessgen.StreamItem) (si streamItem, mergedPayload json.RawMessage, err error) {
 	b, err := base64.StdEncoding.DecodeString(item.Data)
 	if err != nil {
 		b, err = base64.URLEncoding.DecodeString(item.Data)
 		if err != nil {
-			return 0, nil, fmt.Errorf("base64: %w", err)
+			return streamItem{}, nil, fmt.Errorf("base64: %w", err)
 		}
 	}
 	var payload commonpb.Payload
 	if err := proto.Unmarshal(b, &payload); err != nil {
-		return 0, nil, fmt.Errorf("unmarshal Payload: %w", err)
+		return streamItem{}, nil, fmt.Errorf("unmarshal Payload: %w", err)
 	}
-	var si streamItem
 	if err := json.Unmarshal(payload.Data, &si); err != nil {
-		return 0, nil, fmt.Errorf("unmarshal streamItem: %w", err)
+		return streamItem{}, nil, fmt.Errorf("unmarshal streamItem: %w", err)
 	}
-	return si.TurnNumber, &si.Event, nil
+	var raw struct {
+		Event json.RawMessage `json:"event"`
+	}
+	if err := json.Unmarshal(payload.Data, &raw); err != nil {
+		return streamItem{}, nil, fmt.Errorf("unmarshal raw event: %w", err)
+	}
+	merged, err := mergeEventEnvelope(si, raw.Event, item.Offset)
+	if err != nil {
+		return streamItem{}, nil, fmt.Errorf("merge event envelope: %w", err)
+	}
+	return si, merged, nil
 }
 
-// turnEventToDelta maps one decoded turn event to a generic router.Delta, or nil if
-// the event type carries no deliverable content.
+// mergeEventEnvelope flattens streamItem's wrapper fields (plus the poll item's own
+// stream offset) into the inner event object, so mergedPayload alone carries everything
+// a full-fidelity driver needs.
+func mergeEventEnvelope(si streamItem, event json.RawMessage, offset int64) (json.RawMessage, error) {
+	var fields map[string]any
+	if err := json.Unmarshal(event, &fields); err != nil {
+		return nil, err
+	}
+	if fields == nil {
+		fields = map[string]any{}
+	}
+	fields["agent_id"] = si.AgentID
+	fields["turn_id"] = si.TurnID
+	fields["turn_number"] = si.TurnNumber
+	fields["timestamp"] = si.Timestamp
+	fields["resume_offset"] = offset
+	return json.Marshal(fields)
+}
+
+// turnEventToDelta maps one decoded turn event to a router.Delta, populating EventType
+// and a best-effort text/tool-status/citation rendering. It never returns nil: event
+// types with no rendering below (e.g. subagent or model-usage events) still produce a
+// Delta with only EventType set, so the caller can forward Payload/EventType downstream
+// to a full-fidelity outbound driver instead of silently dropping the event.
 func turnEventToDelta(e turnEvent) *router.Delta {
+	d := &router.Delta{EventType: e.Type}
 	switch e.Type {
 	case "reply_delta":
-		return &router.Delta{Text: e.Text}
+		d.Text = e.Text
 	case "thought_summary":
-		if text, ok := e.Delta["text"].(string); ok && text != "" {
-			return &router.Delta{ThoughtSummary: text}
+		if text, ok := e.Delta["text"].(string); ok {
+			d.ThoughtSummary = text
 		}
 	case "tool_start":
-		return &router.Delta{ToolStatus: &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolStarted}}
+		d.ToolStatus = &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolStarted}
 	case "tool_end":
-		return &router.Delta{ToolStatus: &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolCompleted}}
+		d.ToolStatus = &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolCompleted}
 	case "tool_error":
-		return &router.Delta{ToolStatus: &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolErrored, Message: e.Message}}
+		d.ToolStatus = &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolErrored, Message: e.Message}
 	case "text_annotation":
-		if citations := extractCitations(e.Delta); len(citations) > 0 {
-			return &router.Delta{Citations: citations}
-		}
+		d.Citations = extractCitations(e.Delta)
 	case "reply":
 		// Text was already fully streamed via reply_delta events; this just signals completion.
-		return &router.Delta{IsFinal: true}
+		d.IsFinal = true
 	case "error":
-		return &router.Delta{Text: "[error] " + e.Message, IsFinal: true}
+		d.Text = "[error] " + e.Message
+		d.IsFinal = true
 	case "tool_approval_requested":
 		// Tool approval gates surface as a delta with no text; the approval workflow
 		// (started by the interaction webhook) later calls approveToolCall, which
 		// StartTurn's Approval case resolves.
 		inputJSON, _ := json.Marshal(e.ToolInput)
-		return &router.Delta{ApprovalRequested: &router.ApprovalRequest{
+		d.ApprovalRequested = &router.ApprovalRequest{
 			ToolID:        e.ToolID,
 			ToolName:      e.ToolName,
 			ToolInputJSON: string(inputJSON),
-		}}
+		}
 	}
-	return nil
+	return d
 }
 
 // extractCitations decodes a text_annotation event's annotations into router.Citations.
@@ -203,6 +248,7 @@ func (d *Driver) StartTurn(ctx workflow.Context, input router.Input) (router.Sta
 			TurnID:           sendOut.TurnId,
 			TurnNumber:       sendOut.TurnNumber,
 			StreamHeadOffset: derefOrZero(sendOut.StreamHeadOffset),
+			Pending:          derefOrZero(sendOut.Pending),
 		}}, nil
 
 	case input.Slash != nil:
@@ -269,6 +315,7 @@ func startSlashTurn(ctx workflow.Context, agentClient workflow.NexusClient, sess
 		TurnID:           sendOut.TurnId,
 		TurnNumber:       sendOut.TurnNumber,
 		StreamHeadOffset: derefOrZero(sendOut.StreamHeadOffset),
+		Pending:          derefOrZero(sendOut.Pending),
 	}}, nil
 }
 
@@ -310,18 +357,65 @@ func (d *Driver) PollTurn(ctx workflow.Context, handle router.TurnHandle, cursor
 		if item.Topic != turnEventsTopic {
 			continue
 		}
-		turnNumber, event, err := decodeTurnEvent(item)
+		si, merged, err := decodeTurnEvent(item)
 		if err != nil {
 			workflow.GetLogger(ctx).Warn("PollTurn: decodeTurnEvent failed", "error", err)
 			continue
 		}
-		if turnNumber < int(handle.TurnNumber) {
+		if si.TurnNumber < int(handle.TurnNumber) {
 			continue
 		}
-		if delta := turnEventToDelta(*event); delta != nil {
-			deltas = append(deltas, *delta)
-		}
+		delta := turnEventToDelta(si.Event)
+		delta.Payload = merged
+		deltas = append(deltas, *delta)
 	}
 
 	return router.PollResult{Deltas: deltas, NextCursor: pollOut.NextOffset}, nil
+}
+
+// PollSession polls the Nexus agent response stream starting from cursor like PollTurn,
+// but session-scoped rather than turn-scoped: it has no handle and applies no turn-number
+// floor, replaying every turn's events from cursor onward. Exported for a driver whose UI
+// wants whole-session replay/tail (e.g. an attach-style connection), not just one turn's
+// stream - Slack/Teams have no such use and only ever call PollTurn.
+func PollSession(ctx workflow.Context, nexusEndpoint, sessionID string, cursor int64) (events []router.Delta, nextCursor int64, closed bool, err error) {
+	agentClient := workflow.NewNexusClient(nexusEndpoint, harnessgen.AgentService.ServiceName)
+
+	var pollOut harnessgen.PollMessagesOutput
+	if err := agentClient.ExecuteOperation(ctx, harnessgen.AgentService.PollMessages,
+		harnessgen.PollMessagesInput{
+			SessionId:      sessionID,
+			Cursor:         cursor,
+			TimeoutSeconds: ptr(5.0),
+		},
+		workflow.NexusOperationOptions{ScheduleToCloseTimeout: 120 * time.Second},
+	).Get(ctx, &pollOut); err != nil {
+		return nil, cursor, false, err
+	}
+
+	if derefOrZero(pollOut.Closed) {
+		return nil, pollOut.NextOffset, true, nil
+	}
+
+	var deltas []router.Delta
+	for _, item := range pollOut.Items {
+		if item.Topic != turnEventsTopic {
+			continue
+		}
+		_, merged, decodeErr := decodeTurnEvent(item)
+		if decodeErr != nil {
+			workflow.GetLogger(ctx).Warn("PollSession: decodeTurnEvent failed", "error", decodeErr)
+			continue
+		}
+		var e turnEvent
+		if decodeErr := json.Unmarshal(merged, &e); decodeErr != nil {
+			workflow.GetLogger(ctx).Warn("PollSession: unmarshal merged event failed", "error", decodeErr)
+			continue
+		}
+		delta := turnEventToDelta(e)
+		delta.Payload = merged
+		deltas = append(deltas, *delta)
+	}
+
+	return deltas, pollOut.NextOffset, false, nil
 }
