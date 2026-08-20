@@ -81,6 +81,11 @@ def _is_workflow_already_completed(exc: Exception) -> bool:
     return "already completed" in str(exc).lower()
 
 
+def _is_workflow_not_found(exc: Exception) -> bool:
+    """True when the target session has no workflow yet (not started, no message sent)."""
+    return isinstance(exc, RPCError) and exc.status == RPCStatusCode.NOT_FOUND
+
+
 def _nexus_operator_command(cmd: OperatorCommand) -> NexusOperatorCommand:
     # nex-gen models reject an optional field set to None — omit the kwarg instead.
     argument_kwargs: dict[str, object] = {}
@@ -256,7 +261,13 @@ class AgentServiceHandler:
     async def query_operator_interface(
         self, ctx: StartOperationContext, input: QuerySessionInput
     ) -> QueryOperatorInterfaceOutput:
-        commands = await self._agent_client(input.session_id).get_operator_interface()
+        try:
+            commands = await self._agent_client(input.session_id).get_operator_interface()
+        except RPCError as e:
+            if not _is_workflow_not_found(e):
+                raise
+            # No session started yet (no message sent) - nothing to report, not an error.
+            return QueryOperatorInterfaceOutput(commands=[])
         return QueryOperatorInterfaceOutput(
             commands=[_nexus_operator_command(cmd) for cmd in commands]
         )
@@ -269,7 +280,13 @@ class AgentServiceHandler:
     async def query_agent_interface(
         self, ctx: StartOperationContext, input: QuerySessionInput
     ) -> AgentInterfaceOutput:
-        functions = await self._agent_client(input.session_id).get_agent_interface()
+        try:
+            functions = await self._agent_client(input.session_id).get_agent_interface()
+        except RPCError as e:
+            if not _is_workflow_not_found(e):
+                raise
+            # No session started yet (no message sent) - nothing to report, not an error.
+            return AgentInterfaceOutput(handlers=[])
         return AgentInterfaceOutput(
             handlers=[
                 NexusAcceptedFunction(
@@ -290,7 +307,28 @@ class AgentServiceHandler:
     async def query_agent_status(
         self, ctx: StartOperationContext, input: QuerySessionInput
     ) -> AgentStatusOutput:
-        status = await self._agent_client(input.session_id).get_status()
+        try:
+            status = await self._agent_client(input.session_id).get_status()
+        except RPCError as e:
+            if not _is_workflow_not_found(e):
+                raise
+            # No session started yet (no message sent) - idle, empty status, not an error.
+            return AgentStatusOutput(
+                agent_id="",
+                current_turn=0,
+                turn_active=False,
+                is_message_queuing_enabled=self._config.is_message_queuing_enabled,
+                pending_turns=[],
+                pending_approvals=[],
+                pending_callbacks=[],
+                subagents=[],
+                approval_policy=NexusApprovalPolicy(
+                    dangerously_skip_all_approvals=False,
+                    auto_approve_inherently_safe=False,
+                    auto_approve_tools=[],
+                ),
+                has_custom_approval_fallback=False,
+            )
         return AgentStatusOutput(
             agent_id=status.agent_id,
             current_turn=status.current_turn,

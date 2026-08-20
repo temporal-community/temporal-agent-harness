@@ -598,6 +598,86 @@ async def test_describe_session_not_found_for_unknown_session(
         assert result.closed
 
 
+class QueriesOutput(BaseModel):
+    agent_interface_handler_count: int
+    operator_interface_command_count: int
+    current_turn: int
+    turn_active: bool
+
+
+@workflow.defn
+class QueriesForUnstartedSessionCallerWorkflow:
+    """Exercises queryAgentInterface/queryOperatorInterface/queryAgentStatus against a
+    session that never received a message - these must return an empty/idle result, not
+    error, since a UI queries them right after creating a session, before the first
+    message starts the underlying agent workflow."""
+
+    @workflow.run
+    async def run(self, input: CallerInput) -> QueriesOutput:
+        client = workflow.create_nexus_client(
+            service=AgentServiceDefinition, endpoint=input.endpoint
+        )
+        iface = await client.execute_operation(
+            AgentServiceDefinition.query_agent_interface,
+            QuerySessionInput(session_id=input.session_id),
+        )
+        ops_iface = await client.execute_operation(
+            AgentServiceDefinition.query_operator_interface,
+            QuerySessionInput(session_id=input.session_id),
+        )
+        status = await client.execute_operation(
+            AgentServiceDefinition.query_agent_status,
+            QuerySessionInput(session_id=input.session_id),
+        )
+        return QueriesOutput(
+            agent_interface_handler_count=len(iface.handlers),
+            operator_interface_command_count=len(ops_iface.commands),
+            current_turn=status.current_turn,
+            turn_active=status.turn_active,
+        )
+
+
+async def test_queries_do_not_error_for_unstarted_session(
+    env: WorkflowEnvironment,
+) -> None:
+    client = env.client
+    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
+    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
+    caller_task_queue = f"caller-{uuid.uuid4()}"
+
+    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
+
+    config = Config(
+        agent_task_queue=f"agent-{uuid.uuid4()}",
+        workflow_name="ProbeAgent",
+        workflow_id_prefix="probe-",
+        is_message_queuing_enabled=False,
+    )
+
+    async with Worker(
+        client,
+        task_queue=nexus_task_queue,
+        nexus_service_handlers=[AgentServiceHandler(client, config)],
+    ), Worker(
+        client,
+        task_queue=caller_task_queue,
+        workflows=[QueriesForUnstartedSessionCallerWorkflow],
+    ):
+        session_id = str(uuid.uuid4())
+        handle = await client.start_workflow(
+            QueriesForUnstartedSessionCallerWorkflow.run,
+            CallerInput(endpoint=endpoint_name, session_id=session_id),
+            id=f"queries-caller-{session_id}",
+            task_queue=caller_task_queue,
+        )
+        result = await handle.result()
+
+        assert result.agent_interface_handler_count == 0
+        assert result.operator_interface_command_count == 0
+        assert result.current_turn == 0
+        assert not result.turn_active
+
+
 class LifecycleOutput(BaseModel):
     running_status: str
     running_closed: bool
