@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import AsyncIterator, Callable
+from contextlib import suppress
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -451,7 +453,9 @@ async def test_unknown_operator_command_publishes_failed_event(client_and_queue)
     assert failed.event.message == "Unknown operator command: `not-real`."
 
 
-async def test_attach_replays_operator_only_history_and_stops(client_and_queue):
+async def test_attach_replays_operator_only_history_then_follows_the_session(
+    client_and_queue,
+):
     client, task_queue = client_and_queue
     handle = await _start(client, task_queue, TypedProbeAgent)
     await _operator(handle, "status")
@@ -461,16 +465,54 @@ async def test_attach_replays_operator_only_history_and_stops(client_and_queue):
         from_offset=0,
         on_item=lambda item, _resume_offset: item,
     )
+    items, draining = _drain_in_background(stream)
 
-    items: list[AgentEvent] = []
-    async with asyncio.timeout(5):
-        async for item in stream:
-            assert isinstance(item, AgentEvent)
-            items.append(item)
+    # The replay drains the out-of-band operator command rather than waiting on a turn that will
+    # never come, then keeps the stream open on the still-running workflow.
+    await _wait_until(lambda: len(items) == 2)
+    assert not draining.done()
+
+    # Stopping the agent completes the workflow, which ends its event stream and this attach.
+    await _operator(handle, "stop-agent")
+    async with asyncio.timeout(15):
+        await draining
 
     assert [item.event.type for item in items] == [
         AgentEventType.OPERATOR_COMMAND_STARTED,
         AgentEventType.OPERATOR_COMMAND_COMPLETED,
+        AgentEventType.OPERATOR_COMMAND_STARTED,
+        AgentEventType.OPERATOR_COMMAND_COMPLETED,
+    ]
+
+
+async def test_attach_while_idle_delivers_a_turn_that_starts_later(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+    agent_client = AgentClient(client, handle.id)
+
+    # Attach with the session live, idle, and its stream still empty — the window a UI lands in
+    # when it opens on an agent that has not been messaged yet.
+    stream = await agent_client.attach(
+        from_offset=0,
+        on_item=lambda item, _resume_offset: item,
+    )
+    items, draining = _drain_in_background(stream)
+    try:
+        await _send(handle, "greet", {"name": "Ada"})
+        await _wait_until(
+            lambda: any(
+                item.event.type == AgentEventType.TURN_END for item in items
+            )
+        )
+    finally:
+        draining.cancel()
+        with suppress(asyncio.CancelledError):
+            await draining
+
+    assert [item.event.type for item in items] == [
+        AgentEventType.TURN_STARTED,
+        AgentEventType.REPLY,
+        AgentEventType.TURN_END,
     ]
 
 
@@ -545,6 +587,26 @@ async def _collect_until_turn_end(client: Client, workflow_id: str) -> list[Agen
             if item.data.event.type == AgentEventType.TURN_END:
                 break
     return events
+
+
+def _drain_in_background(
+    stream: AsyncIterator[AgentEvent],
+) -> tuple[list[AgentEvent], asyncio.Task[None]]:
+    """Consume ``stream`` in the background; the returned list fills as events arrive."""
+    items: list[AgentEvent] = []
+
+    async def drain() -> None:
+        async for item in stream:
+            assert isinstance(item, AgentEvent)
+            items.append(item)
+
+    return items, asyncio.create_task(drain())
+
+
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 15.0) -> None:
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.05)
 
 
 async def _collect_until_operator_terminal(

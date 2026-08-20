@@ -131,8 +131,8 @@ hands it back to `attach(from_offset=...)`. Two consequences a consumer must und
 stall_grace_seconds)` yields `(AgentEvent, resume_offset)` pairs. `AgentClient` wraps it:
 - **send_message** → `root_from_offset = reply.accepted_offset`, `skip_until_turn_id = reply.turn_id`,
   `select_live`, stop at the root's `turn_end` for that turn.
-- **attach (full replay)** → `from_offset = 0`, no skip, `select_replay`, stop via status re-query
-  (root idle and all turns through `current_turn` ended).
+- **attach (full replay)** → `from_offset = 0`, no skip, `select_replay`, no stop — it follows the
+  root stream, and so ends only when that stream does (when the workflow closes).
 - **attach (resume)** → `from_offset = <any resume offset the previous stream handed back>`, no skip,
   `select_replay`; streams only events after it (a subagent whose turn began earlier is omitted; its
   `reply_received` released by the unmounted-stuck give-up).

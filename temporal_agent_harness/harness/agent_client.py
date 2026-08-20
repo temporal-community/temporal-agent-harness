@@ -12,7 +12,6 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any, TypeVar
 
 from temporalio.client import Client, WithStartWorkflowOperation, WorkflowUpdateFailedError
-from temporalio.contrib.workflow_streams import WorkflowStreamClient
 
 from temporalio.common import WorkflowIDConflictPolicy
 
@@ -77,6 +76,15 @@ class StaleTurnError(Exception):
 
 class AgentBusyError(Exception):
     """A turn is already in progress and message queuing is disabled."""
+
+
+class UnknownFunctionError(Exception):
+    """The message named an ``@agent.accepts`` handler this agent does not have.
+
+    Raised when the workflow's update validator rejects the message with ``UnknownFunction`` —
+    e.g. plain chat text, which is addressed to ``ask``, sent to an agent whose only handler is
+    ``check``. :meth:`AgentClient.get_agent_interface` lists the handlers it does have.
+    """
 
 
 class ToolApprovalError(Exception):
@@ -329,6 +337,7 @@ class AgentClient:
         Raises:
             StaleTurnError: The client is behind the workflow.
             AgentBusyError: The agent is busy and does not support enqueuing.
+            UnknownFunctionError: The agent has no handler named ``msg_type``.
         """
         handle = self._temporal.get_workflow_handle(self._workflow_id)
         try:
@@ -346,6 +355,8 @@ class AgentClient:
                 raise StaleTurnError(str(cause)) from e
             if error_type == "AgentBusy":
                 raise AgentBusyError(str(cause)) from e
+            if error_type == "UnknownFunction":
+                raise UnknownFunctionError(str(cause)) from e
             raise
 
     async def submit_message(
@@ -384,6 +395,7 @@ class AgentClient:
         Raises:
             StaleTurnError: The client is behind the workflow.
             AgentBusyError: The agent is busy and does not support enqueuing.
+            UnknownFunctionError: The agent has no handler named ``msg_type``.
         """
         start_op = WithStartWorkflowOperation(
             workflow_name,
@@ -407,6 +419,8 @@ class AgentClient:
                 raise StaleTurnError(str(cause)) from e
             if error_type == "AgentBusy":
                 raise AgentBusyError(str(cause)) from e
+            if error_type == "UnknownFunction":
+                raise UnknownFunctionError(str(cause)) from e
             raise
 
     async def send_message(
@@ -455,6 +469,7 @@ class AgentClient:
         Raises:
             StaleTurnError: The client is behind the workflow.
             AgentBusyError: The agent is busy and does not support enqueuing.
+            UnknownFunctionError: The agent has no handler named ``msg_type``.
         """
         reply = await self._submit_message(msg_type, payload, expected_turn)
         return self._merged_turn(
@@ -541,7 +556,7 @@ class AgentClient:
 
         * **0 (default)** — full replay from the beginning, for a blank-slate consumer (a freshly
           loaded tab) that has no prior state. Replays past events deterministically (mount-order
-          interleaving), then follows live until the agent is idle.
+          interleaving), then follows live.
         * **any prior resume offset** — resume: stream from exactly that ROOT offset onward, so
           already-seen events are not re-sent. The one consequence of resuming *inside* a subagent's
           turn (an offset after that subagent's ``subagent_message_sent`` but before its
@@ -567,79 +582,55 @@ class AgentClient:
           at root-event granularity. A consumer that needs every subagent event across a mid-turn
           reconnect should re-attach from 0.
 
-        Returns immediately (yields nothing) if there's nothing new to stream.
-
         ``subagent_stall_grace_seconds`` — see :meth:`send_message`; same liveness backstop, applied
         to the merge that backs this attach.
 
-        Termination mirrors the per-turn close, with one addition for operator-only events:
-        on each ROOT terminal event (``turn_end`` or an operator command terminal event) we
-        re-query status and stop once the workflow is idle and this attach has emitted every
-        root event that existed when it started. This lets a replay that ends with
-        out-of-band operator commands drain them without waiting for a nonexistent turn.
+        The stream stays open for as long as the agent's workflow is running — an attach made
+        while the agent is idle goes on to deliver every later turn, so a consumer never has to
+        re-attach to keep seeing the session. It ends when the workflow closes (its event stream
+        ends with it), or when the consumer stops reading.
+
+        A session that cannot be reached at all fails here, before any streaming begins, so the
+        caller reports the cause rather than handing its own consumer a stream that never
+        produces anything.
+
+        Raises:
+            RPCError: No worker polls the session's task queue, or there is no such workflow.
+            WorkflowQueryFailedError: The workflow cannot answer — e.g. it is wedged on a
+                nondeterminism error.
         """
-        stream = WorkflowStreamClient.create(self._temporal, self._workflow_id)
-        status = await self.get_status()
-        head = await stream.get_offset()
-        # Already caught up (no events past from_offset) and the agent is idle — nothing to stream.
-        if head <= from_offset and not status.turn_active and not status.pending_turns:
-            return self._empty()
+        # The reachability probe: its value is not wanted, only its failure.
+        await self.get_status()
         return self._merged_attach(
             on_item=on_item,
             from_offset=from_offset,
-            stop_at_root_offset=head,
             stall_grace_seconds=subagent_stall_grace_seconds,
         )
-
-    async def _empty(self) -> AsyncIterator[T]:
-        """An async iterator that yields nothing (the no-history, idle ``attach`` case)."""
-        return
-        yield  # pragma: no cover — unreachable; makes this an async generator
 
     async def _merged_attach(
         self,
         *,
         on_item: OnItemCallback[T],
         from_offset: int,
-        stop_at_root_offset: int,
         stall_grace_seconds: float,
     ) -> AsyncIterator[T]:
-        """Phase 2 of :meth:`attach`: drive the merge from ``from_offset`` to the next idle point.
+        """Phase 2 of :meth:`attach`: drive the merge from ``from_offset`` and follow it live.
 
         No skip at any offset: the merge starts the root exactly at ``from_offset`` (0 = replay
         everything). Resuming mid-stream is safe — a subagent whose turn began before ``from_offset``
         is never mounted (its detail is absent, its ``reply_received`` released by the merge's
-        unmounted-stuck give-up), while subagents dispatched at/after it merge normally."""
-        root_id = self._workflow_id
-        highest_completed_turn = 0
+        unmounted-stuck give-up), while subagents dispatched at/after it merge normally.
 
-        async def should_stop(cursor: Cursor, ev: AgentEvent) -> bool:
-            nonlocal highest_completed_turn
-            if cursor.is_child:
-                return False
-            terminal_operator_event = ev.event.type in {
-                AgentEventType.OPERATOR_COMMAND_COMPLETED,
-                AgentEventType.OPERATOR_COMMAND_FAILED,
-            }
-            if ev.event.type != AgentEventType.TURN_END and not terminal_operator_event:
-                return False
-            if ev.event.type == AgentEventType.TURN_END:
-                highest_completed_turn = max(highest_completed_turn, ev.turn_number)
-            if cursor.head_offset + 1 < stop_at_root_offset:
-                return False
-            try:
-                status = await self.get_status()
-            except Exception:  # noqa: BLE001 — workflow gone (e.g. failed after an errored turn)
-                return True
-            return (
-                not status.turn_active
-                and not status.pending_turns
-                and highest_completed_turn >= status.current_turn
-            )
+        Nothing ends this merge early: an idle agent is one that has yet to be asked for more,
+        not one that is finished. The root cursor live-tails, so the merge ends only when the
+        root's own stream ends, which is when its workflow closes."""
+
+        async def should_stop(_cursor: Cursor, _ev: AgentEvent) -> bool:
+            return False
 
         merged = merge_stream(
             client=self._temporal,
-            root_workflow_id=root_id,
+            root_workflow_id=self._workflow_id,
             root_from_offset=from_offset,
             skip_until_turn_id=None,
             select=select_replay,

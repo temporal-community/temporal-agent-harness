@@ -16,10 +16,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from temporalio.api.enums.v1 import EventType
 from temporalio.api.history.v1 import HistoryEvent
-from temporalio.client import WorkflowExecutionStatus
+from temporalio.client import (
+    WorkflowExecutionStatus,
+    WorkflowQueryFailedError,
+    WorkflowUpdateFailedError,
+)
 from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.exceptions import WorkflowAlreadyStartedError
+from temporalio.exceptions import ApplicationError, WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_harness.harness.agent_protocol import (
@@ -155,6 +159,111 @@ def test_operator_command_request_rejects_client_supplied_from_offset() -> None:
     assert any("from_offset" in item.get("loc", []) for item in detail)
 
 
+def _client_against_failing_temporal(error: Exception) -> TestClient:
+    """A test client for an app whose every Temporal call raises ``error``."""
+    app = create_agent_harness_app(registry=AgentRegistry())
+    handle = _FakeWorkflowHandle(error=error)
+    app.state.temporal = _FakeTemporalClient(handle)
+    app.state.manager_handle = handle
+    return TestClient(app)
+
+
+def test_status_reports_a_wedged_session_rather_than_a_bare_500() -> None:
+    client = _client_against_failing_temporal(
+        WorkflowQueryFailedError(
+            "[TMPRL1100] Nondeterminism error: Activity type of scheduled event "
+            "'setup_step' does not match activity type of activity command 'teardown'"
+        )
+    )
+
+    response = client.get("/api/status/agent-session-wedged")
+
+    assert response.status_code == 502
+    body = response.json()
+    assert body["error"] == "workflow_query_failed"
+    assert "Nondeterminism error" in body["message"]
+
+
+def test_status_reports_a_session_no_worker_answers_as_a_gateway_timeout() -> None:
+    # A status query against a task queue nobody polls is ended by the server as CANCELLED.
+    client = _client_against_failing_temporal(
+        RPCError("Timeout expired", RPCStatusCode.CANCELLED, b"")
+    )
+
+    response = client.get("/api/status/agent-session-unworked")
+
+    assert response.status_code == 504
+    assert response.json() == {
+        "error": "workflow_unreachable",
+        "message": "Timeout expired",
+    }
+
+
+def test_status_reports_an_unknown_session_as_not_found() -> None:
+    client = _client_against_failing_temporal(
+        RPCError(
+            "workflow not found for ID: agent-session-gone",
+            RPCStatusCode.NOT_FOUND,
+            b"",
+        )
+    )
+
+    response = client.get("/api/status/agent-session-gone")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": "workflow_not_found",
+        "message": "workflow not found for ID: agent-session-gone",
+    }
+
+
+def test_create_session_reports_which_agent_types_are_known() -> None:
+    client = _client_against_failing_temporal(
+        WorkflowUpdateFailedError(
+            ApplicationError(
+                "Unknown agent type 'NoSuchAgent'. Known agents: ['CompatCheckAgent']",
+                type="UnknownAgentType",
+                non_retryable=True,
+            )
+        )
+    )
+
+    response = client.post("/api/sessions", json={"agent_workflow_type": "NoSuchAgent"})
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "UnknownAgentType"
+    assert "Known agents: ['CompatCheckAgent']" in body["message"]
+
+
+def test_submit_message_reports_a_handler_the_agent_does_not_have() -> None:
+    # Plain chat text is addressed to ``ask``; an agent whose only handler is ``check`` rejects
+    # it at the update validator.
+    client = _client_against_failing_temporal(
+        WorkflowUpdateFailedError(
+            ApplicationError(
+                "Unknown function 'ask'. Known functions: ['check'].",
+                type="UnknownFunction",
+                non_retryable=True,
+            )
+        )
+    )
+
+    response = client.post(
+        "/api/messages",
+        json={
+            "session_id": "agent-session-check-only",
+            "message": "hello",
+            "expected_turn": 1,
+        },
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "unknown_function"
+    assert "Known functions: ['check']" in body["message"]
+
+
 def test_legacy_session_manager_example_folder_is_removed() -> None:
     legacy_example = ROOT / "examples" / "session_manager"
 
@@ -210,6 +319,35 @@ async def test_session_manager_startup_attaches_to_running_workflow() -> None:
 
     assert result is handle
     assert temporal.start_calls == []
+
+
+async def test_session_manager_startup_announces_the_registry_it_discards(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    handle = _FakeWorkflowHandle(status=WorkflowExecutionStatus.RUNNING)
+    temporal = _FakeTemporalClient(handle)
+    registry = AgentRegistry(
+        agents=[
+            AgentDescriptor(
+                key="just-added",
+                workflow_type="JustAddedAgent",
+                task_queue="just-added",
+                label="Just Added",
+                description="An agent added to the registry file after the manager started.",
+            )
+        ]
+    )
+
+    await _ensure_session_manager_workflow(
+        temporal,
+        registry=registry,
+        manager_workflow_id="session-manager",
+        manager_task_queue="session-manager",
+    )
+
+    announced = capsys.readouterr().out
+    assert "NOT" in announced
+    assert "'just-added'" in announced
 
 
 async def test_workflow_execution_state_reports_running_workflow_open() -> None:
@@ -561,6 +699,14 @@ class _FakeWorkflowHandle:
     async def fetch_history_events(self, **_kwargs):
         for event in self.history_events:
             yield event
+
+    async def query(self, *_args, **_kwargs):
+        if self.error is not None:
+            raise self.error
+
+    async def execute_update(self, *_args, **_kwargs):
+        if self.error is not None:
+            raise self.error
 
 
 class _FakeTemporalClient:

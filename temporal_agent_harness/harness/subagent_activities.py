@@ -48,6 +48,7 @@ from temporal_agent_harness.harness.agent_client import (
     AgentBusyError,
     AgentClient,
     StaleTurnError,
+    UnknownFunctionError,
 )
 from temporal_agent_harness.harness.agent_protocol import (
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
@@ -262,6 +263,10 @@ class SubagentActivities:
             raise ApplicationError(str(e), type="StaleTurn", non_retryable=True) from e
         except AgentBusyError as e:
             raise ApplicationError(str(e), type="AgentBusy", non_retryable=True) from e
+        except UnknownFunctionError as e:
+            raise ApplicationError(
+                str(e), type="UnknownFunction", non_retryable=True
+            ) from e
         except WorkflowUpdateFailedError as e:
             cause = e.cause
             raise ApplicationError(

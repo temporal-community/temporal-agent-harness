@@ -17,7 +17,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 from temporalio.api.enums.v1 import EventType
 from temporalio.api.history.v1 import HistoryEvent
-from temporalio.client import Client, WorkflowExecutionStatus, WorkflowHandle
+from temporalio.client import (
+    Client,
+    WorkflowExecutionStatus,
+    WorkflowHandle,
+    WorkflowQueryFailedError,
+    WorkflowUpdateFailedError,
+)
 from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
@@ -33,6 +39,7 @@ from temporal_agent_harness.harness.agent_client import (
     CallbackResultError,
     StaleTurnError,
     ToolApprovalError,
+    UnknownFunctionError,
 )
 from temporal_agent_harness.harness.agent_protocol import (
     AgentConfig,
@@ -57,6 +64,13 @@ from temporal_agent_harness.web.session_manager import (
 )
 
 RegistrySource = AgentRegistry | Callable[[], AgentRegistry]
+# (HTTP status, error code) per failed-RPC status. A long poll the server ends — a status query
+# against a session whose task queue has no worker — arrives as CANCELLED "Timeout expired".
+_RPC_ERROR_RESPONSES = {
+    RPCStatusCode.NOT_FOUND: (404, "workflow_not_found"),
+    RPCStatusCode.CANCELLED: (504, "workflow_unreachable"),
+    RPCStatusCode.DEADLINE_EXCEEDED: (504, "workflow_unreachable"),
+}
 _SESSION_PREVIEW_HISTORY_PAGE_SIZE = 16
 _SESSION_PREVIEW_HISTORY_MAX_EVENTS = 96
 _SESSION_PREVIEW_HISTORY_RPC_TIMEOUT = timedelta(seconds=1)
@@ -355,6 +369,41 @@ def create_agent_harness_app(
             },
         )
 
+    @app.exception_handler(UnknownFunctionError)
+    async def unknown_function_handler(request, exc):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "unknown_function", "message": str(exc)},
+        )
+
+    @app.exception_handler(WorkflowUpdateFailedError)
+    async def workflow_update_failed_handler(request, exc):
+        cause = exc.cause
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": getattr(cause, "type", None) or "workflow_update_failed",
+                "message": str(cause),
+            },
+        )
+
+    @app.exception_handler(WorkflowQueryFailedError)
+    async def workflow_query_failed_handler(request, exc):
+        return JSONResponse(
+            status_code=502,
+            content={"error": "workflow_query_failed", "message": str(exc)},
+        )
+
+    @app.exception_handler(RPCError)
+    async def rpc_error_handler(request, exc):
+        status_code, error = _RPC_ERROR_RESPONSES.get(
+            exc.status, (502, "temporal_rpc_failed")
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content={"error": error, "message": exc.message},
+        )
+
     return app
 
 
@@ -560,7 +609,12 @@ async def _ensure_session_manager_workflow(
             raise
     else:
         if desc.status == WorkflowExecutionStatus.RUNNING:
-            print(f"Connected to existing session manager: {manager_workflow_id}")
+            print(
+                f"Connected to existing session manager: {manager_workflow_id}. It keeps the "
+                "agent registry it was started with, so the registry parsed now is NOT "
+                f"applied: {[agent.key for agent in registry.agents]}. Terminate that "
+                "workflow to pick it up."
+            )
             return handle
         print(
             "Existing session manager "

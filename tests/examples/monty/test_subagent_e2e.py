@@ -367,11 +367,22 @@ async def test_attach_after_stopped_subagent_degrades_gracefully(client_and_queu
     # Reattach from the start: the parent's backlog still references the now-completed subagent.
     agent_client = AgentClient(client, parent_id)
     attached: list[AgentEvent] = []
+    subagent_ids: set[str] = set()
     async for item in await agent_client.attach(
         on_item=lambda it, _o: it, from_offset=0, subagent_stall_grace_seconds=2.0
     ):
-        if isinstance(item, AgentEvent):
-            attached.append(item)
+        if not isinstance(item, AgentEvent):
+            continue
+        attached.append(item)
+        if item.event.type == AgentEventType.SUBAGENT_STARTED:
+            subagent_ids.add(item.event.subagent_id)
+        # An attach follows the session for as long as its workflow runs, and the parent is
+        # still running — so this replay reads to the end of the parent's turn and stops there.
+        if (
+            item.event.type == AgentEventType.TURN_END
+            and item.agent_id not in subagent_ids
+        ):
+            break
 
     # The subagent the parent drove (and stopped) — identified off the replayed subagent_started.
     child_ids = {
