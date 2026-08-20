@@ -598,7 +598,7 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	_, innerID, _ := strings.Cut(req.SessionID, "/")
 
 	input := router.Input{
-		SessionID: req.SessionID,
+		SessionID: innerID,
 		Identity:  s.identity,
 		Approval: &router.ApprovalDecision{
 			ToolID: req.ToolID, Approved: req.Approved, ActivityID: req.ToolID,
@@ -706,8 +706,9 @@ func (s *Server) handleSubmitMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "invalid_session", err.Error())
 		return
 	}
+	_, innerID, _ := strings.Cut(req.SessionID, "/")
 	msgType, payload := splitMessage(req.Message)
-	input := messageInput(req.SessionID, s.identity, msgType, payload)
+	input := messageInput(innerID, s.identity, msgType, payload)
 
 	var result router.StartResult
 	if err := s.executeWorkflow(r, debuguiadmin.SubmitMessageWorkflowName,
@@ -745,10 +746,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "invalid_session", err.Error())
 		return
 	}
+	_, innerID, _ := strings.Cut(req.SessionID, "/")
 	msgType, payload := splitMessage(req.Message)
-	input := messageInput(req.SessionID, s.identity, msgType, payload)
+	input := messageInput(innerID, s.identity, msgType, payload)
 
-	frames, unsubscribe := s.broker.Subscribe(req.SessionID)
+	// Broker key is always the bare backend session id (innerID), matching what
+	// the outbound driver publishes under (StreamHandle.SessionID derives from
+	// router.Input.SessionID, which must stay bare for the Nexus calls agent.Driver
+	// makes) and what AttachWorkflow publishes under. Subscribing under the full
+	// frontend-facing id (with the agentKey/ prefix) here would never see a frame.
+	frames, unsubscribe := s.broker.Subscribe(innerID)
 	defer unsubscribe()
 
 	if _, err := s.tc.ExecuteWorkflow(r.Context(),
@@ -782,7 +789,10 @@ func (s *Server) handleAttach(w http.ResponseWriter, r *http.Request) {
 		fmt.Sscanf(v, "%d", &fromOffset)
 	}
 
-	frames, unsubscribe := s.broker.Subscribe(sessionID)
+	// Broker key is the bare backend session id - see handleChat's matching comment.
+	// AttachWorkflow publishes under AttachInput.SessionID (innerID), so subscribing
+	// under the full frontend-facing sessionID here would never see a frame.
+	frames, unsubscribe := s.broker.Subscribe(innerID)
 	defer unsubscribe()
 
 	_, err = s.tc.ExecuteWorkflow(r.Context(),
