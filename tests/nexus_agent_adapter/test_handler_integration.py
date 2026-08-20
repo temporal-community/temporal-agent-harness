@@ -365,6 +365,67 @@ async def test_poll_messages_closed_when_workflow_already_completed(
         assert result.poll_item_count == 0
 
 
+@workflow.defn
+class PollOnlyShortTimeoutCallerWorkflow:
+    """Same as PollOnlyCallerWorkflow but with a short timeout, for a target session
+    that was never started at all (as opposed to completed)."""
+
+    @workflow.run
+    async def run(self, input: CallerInput) -> PollOnlyOutput:
+        client = workflow.create_nexus_client(
+            service=AgentServiceDefinition, endpoint=input.endpoint
+        )
+        poll_out = await client.execute_operation(
+            AgentServiceDefinition.poll_messages,
+            PollMessagesInput(session_id=input.session_id, cursor=0, timeout_seconds=0.1),
+        )
+        return PollOnlyOutput(
+            poll_closed=bool(poll_out.closed), poll_item_count=len(poll_out.items)
+        )
+
+
+async def test_poll_messages_not_closed_when_workflow_never_started(
+    env: WorkflowEnvironment,
+) -> None:
+    """A session with no message sent yet has no workflow at all - pollMessages must
+    return closed=False (not started, not error, not terminal) so AttachWorkflow keeps
+    waiting instead of tearing down the attach stream."""
+    client = env.client
+    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
+    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
+    caller_task_queue = f"caller-{uuid.uuid4()}"
+
+    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
+
+    config = Config(
+        agent_task_queue=f"agent-{uuid.uuid4()}",
+        workflow_name="ProbeAgent",
+        workflow_id_prefix="probe-",
+        is_message_queuing_enabled=False,
+    )
+
+    async with Worker(
+        client,
+        task_queue=nexus_task_queue,
+        nexus_service_handlers=[AgentServiceHandler(client, config)],
+    ), Worker(
+        client,
+        task_queue=caller_task_queue,
+        workflows=[PollOnlyShortTimeoutCallerWorkflow],
+    ):
+        session_id = str(uuid.uuid4())
+        handle = await client.start_workflow(
+            PollOnlyShortTimeoutCallerWorkflow.run,
+            CallerInput(endpoint=endpoint_name, session_id=session_id),
+            id=f"poll-only-short-caller-{session_id}",
+            task_queue=caller_task_queue,
+        )
+        result = await handle.result()
+
+        assert not result.poll_closed
+        assert result.poll_item_count == 0
+
+
 # ---------------------------------------------------------------------------
 # Full operation surface — approveToolCall, executeOperatorCommand,
 # queryAgentInterface, queryOperatorInterface, queryAgentStatus.

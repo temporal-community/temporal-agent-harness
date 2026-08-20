@@ -82,8 +82,13 @@ def _is_workflow_already_completed(exc: Exception) -> bool:
 
 
 def _is_workflow_not_found(exc: Exception) -> bool:
-    """True when the target session has no workflow yet (not started, no message sent)."""
-    return isinstance(exc, RPCError) and exc.status == RPCStatusCode.NOT_FOUND
+    """True when the target session has no workflow yet (not started, no message sent).
+    Checked both ways: describe/query-style calls fail with a clean RPCStatusCode.NOT_FOUND;
+    start_workflow_update (see poll_messages) surfaces it as a message string instead, same
+    as _is_workflow_already_completed does for that same call."""
+    if isinstance(exc, RPCError) and exc.status == RPCStatusCode.NOT_FOUND:
+        return True
+    return "workflow not found" in str(exc).lower()
 
 
 def _nexus_operator_command(cmd: OperatorCommand) -> NexusOperatorCommand:
@@ -468,6 +473,19 @@ class AgentServiceHandler:
                 return nexus.TemporalOperationResult.sync(
                     PollMessagesOutput(
                         items=[], more_ready=False, next_offset=input.cursor, closed=True
+                    )
+                )
+            if _is_workflow_not_found(e):
+                # No message sent yet - not started, not closed, just nothing to report.
+                # The caller (e.g. AttachWorkflow) should keep polling, not tear down.
+                # Sleep out the same timeout a real long-poll would take - this fails
+                # immediately (no workflow to attach an update-with-callback to), and
+                # without the sleep a tight retry loop would hammer this operation until
+                # the session's first message finally starts the workflow.
+                await asyncio.sleep(timeout_seconds)
+                return nexus.TemporalOperationResult.sync(
+                    PollMessagesOutput(
+                        items=[], more_ready=False, next_offset=input.cursor, closed=False
                     )
                 )
             raise
