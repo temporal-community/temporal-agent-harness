@@ -13,8 +13,10 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-nexus-mcp = { path = "nexus_mcp", editable = true } 
-temporal-agent-harness = { git = "https://github.com/temporal-community/temporal-agent-harness.git", branch = "main" }
+nexus-mcp = { path = "nexus_mcp", editable = true }
+# Same-repo path, not a remote pin. A hardcoded branch here breaks any
+# consumer pinning temporal-agent-harness to a different branch.
+temporal-agent-harness = { path = "../..", editable = true }
 
 [tool.setuptools.packages.find]
 where = ["."]
