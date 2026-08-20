@@ -294,7 +294,14 @@ func (s *Server) handleWorkflowStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "describe_failed", err.Error())
 		return
 	}
-	closed := out.ExecutionStatus != "RUNNING"
+	// NOT_FOUND means "no message sent yet" here, not "terminated" - sessions
+	// materialize their workflow lazily on first message (see handleSubmitMessage/
+	// handleChat), unlike the direct-Temporal SessionManagerWorkflow path this
+	// frontend was originally built against, which always has a workflow by the
+	// time a session exists. The frontend takes closed=true as terminal and
+	// refuses to attach, so treating NOT_FOUND as "not closed" is required for a
+	// freshly created session to be usable at all.
+	closed := out.ExecutionStatus != "RUNNING" && out.ExecutionStatus != "NOT_FOUND"
 	writeJSON(w, http.StatusOK, map[string]any{
 		"workflow_id":      sessionID,
 		"execution_status": out.ExecutionStatus,
