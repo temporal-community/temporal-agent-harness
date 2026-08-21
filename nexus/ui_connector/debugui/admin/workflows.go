@@ -237,12 +237,21 @@ type AttachInput struct {
 	FromOffset int64
 }
 
-// AttachWorkflow replays a session's full event history from an offset and then tails it
-// live, publishing every event to Broker via BrokerActivities.Publish. This is session-
-// scoped, not turn-scoped like RouterWorkflow: a debug UI's attach connection wants every
-// turn's events from cursor onward, not just the one turn RouterWorkflow happened to be
-// routing. It has no natural end (until the underlying agent session closes) and so
-// periodically continues-as-new to bound its own history.
+// AttachWorkflow replays a session's event history from an offset, delivering everything
+// currently available, then closes once the agent is idle and caught up - it is a
+// bounded catch-up, not a persistent tail. This mirrors the harness's own
+// AgentClient.attach() contract exactly: "returns immediately (yields nothing) if
+// there's nothing new to stream", stopping once the workflow is idle. The frontend
+// depends on this - it calls attach() again itself at every point that matters (after
+// sending a message, on session select, ...; see agentRun.svelte.ts), and its own
+// creatingSession/composerDisabled gates only clear once the *current* attach call
+// resolves. Left as a persistent poll loop (the original design here), a fresh session
+// with no messages yet would hold the connection open for the full
+// MaxAttachIterationsBeforeContinueAsNew bound (many minutes) before ever returning,
+// during which the composer stays disabled and the UI reads as permanently "Starting."
+// A single very long-running turn is still handled correctly: the loop keeps polling
+// (and continues-as-new past MaxAttachIterationsBeforeContinueAsNew) for as long as
+// isSessionIdle keeps reporting the agent as active.
 type AttachWorkflow struct{}
 
 func (w *AttachWorkflow) Run(ctx workflow.Context, input AttachInput) error {
@@ -268,6 +277,13 @@ func (w *AttachWorkflow) Run(ctx workflow.Context, input AttachInput) error {
 				workflow.GetLogger(ctx).Warn("AttachWorkflow: publish failed", "error", err)
 			}
 		}
+
+		idle, err := isSessionIdle(ctx, input.Config, input.SessionID)
+		if err != nil {
+			workflow.GetLogger(ctx).Warn("AttachWorkflow: status check failed", "error", err)
+		} else if idle {
+			return endStream(ctx, input.SessionID)
+		}
 	}
 
 	if err := endStream(ctx, input.SessionID); err != nil {
@@ -276,6 +292,19 @@ func (w *AttachWorkflow) Run(ctx workflow.Context, input AttachInput) error {
 	return workflow.NewContinueAsNewError(ctx, w.Run, AttachInput{
 		Config: input.Config, SessionID: input.SessionID, FromOffset: cursor,
 	})
+}
+
+// isSessionIdle reports whether the session has no active or queued turn - i.e. nothing
+// more is coming right now. queryAgentStatus already treats a session with no workflow
+// yet (no message ever sent) as idle (see the Python handler's not-found handling), so
+// this is safe to call for a brand-new session too.
+func isSessionIdle(ctx workflow.Context, cfg Config, sessionID string) (bool, error) {
+	out, err := proxyOperation[harnessgen.AgentStatusOutput](ctx, cfg, harnessgen.AgentService.QueryAgentStatus,
+		harnessgen.QuerySessionInput{SessionId: sessionID})
+	if err != nil {
+		return false, err
+	}
+	return !out.TurnActive && len(out.PendingTurns) == 0, nil
 }
 
 // endStream signals debuguiinbound.streamSSE (via the broker) to close the SSE
