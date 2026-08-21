@@ -834,15 +834,21 @@ func streamSSE(w http.ResponseWriter, r *http.Request, frames <-chan debuguioutb
 				return
 			}
 			if frame.Event == "stream_end" {
-				fmt.Fprintf(w, "event: %s\ndata: {}\n\n", frame.Event)
-				flusher.Flush()
+				// Go-internal control signal (see AttachWorkflow's endStream) - close
+				// the connection, never write it out. The frontend has no
+				// "stream_end" event type and treats any frame whose data lacks a
+				// "type" field as a client-side error.
 				return
 			}
-			data := frame.Data
-			if len(data) == 0 {
-				data = []byte("{}")
+			if len(frame.Data) == 0 {
+				// Same reasoning: a payload-less frame has no "type" field and would
+				// be misread as an error. A real BackendDriver always populates
+				// Payload (see router.Delta's doc comment), so this only guards
+				// against a future bug upstream of here - drop it rather than send
+				// something the frontend will misinterpret.
+				continue
 			}
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", frame.Event, data)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", frame.Event, frame.Data)
 			flusher.Flush()
 		}
 	}

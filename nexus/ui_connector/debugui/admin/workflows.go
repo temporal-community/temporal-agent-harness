@@ -248,10 +248,6 @@ type AttachWorkflow struct{}
 func (w *AttachWorkflow) Run(ctx workflow.Context, input AttachInput) error {
 	cursor := input.FromOffset
 
-	if err := publish(ctx, input.SessionID, "stream_start", nil); err != nil {
-		workflow.GetLogger(ctx).Warn("AttachWorkflow: publish stream_start failed", "error", err)
-	}
-
 	for range MaxAttachIterationsBeforeContinueAsNew {
 		events, next, closed, err := agent.PollSession(ctx, input.endpoint(), input.SessionID, cursor)
 		if err != nil {
@@ -282,6 +278,12 @@ func (w *AttachWorkflow) Run(ctx workflow.Context, input AttachInput) error {
 	})
 }
 
+// endStream signals debuguiinbound.streamSSE (via the broker) to close the SSE
+// connection. This is a Go-internal control signal, not a real agent event - the
+// frontend has no "stream_end" event type and misinterprets any frame whose data
+// lacks a "type" field as a client-side error, so streamSSE must consume this and
+// never write it out to the browser (see its own handling of Frame.Event ==
+// "stream_end").
 func endStream(ctx workflow.Context, sessionID string) error {
 	return publish(ctx, sessionID, "stream_end", nil)
 }
