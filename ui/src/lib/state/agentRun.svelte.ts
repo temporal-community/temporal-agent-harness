@@ -812,7 +812,16 @@ export class AgentRunController {
       await this.#refreshWorkflowExecutionState(session.workflow_id);
       if (!this.#isCurrentConnection(connectionVersion)) return;
       if (this.#isWorkflowClosed(session.workflow_id)) return;
-      await this.attach(0);
+      // Fire-and-forget: a brand-new session has nothing to catch up on, so don't
+      // block the composer on this. sendMessage() opens its own attach() for the
+      // actual reply stream; this one only matters for the rare case of activity
+      // already queued against this session id before this tab sends anything.
+      void this.attach(0).catch((error: unknown) => {
+        if (!isAbortError(error) && this.#isCurrentConnection(connectionVersion)) {
+          this.connectionError =
+            error instanceof Error ? error.message : "Failed to stream messages.";
+        }
+      });
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
