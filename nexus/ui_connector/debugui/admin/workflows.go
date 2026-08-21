@@ -282,16 +282,11 @@ func (w *AttachWorkflow) Run(ctx workflow.Context, input AttachInput) error {
 			}
 		}
 
-		// Only even consider stopping right after this batch has delivered a turn's own
-		// terminal event, and only once nothing else is immediately available - checking
-		// queryAgentStatus on every iteration regardless would race the harness's own
-		// turn loop: it flips turn_active to false (agent_workflow.py's finally block)
-		// BEFORE publishing turn_end, so a status check with no regard for what this
-		// batch actually delivered could see "idle" and close the stream before the
-		// reply's own trailing deltas/turn_end were ever polled - cutting a reply off
-		// mid-sentence. moreReady means the batch was capped: there is more to fetch
-		// immediately, so stopping now would drop it regardless of status.
-		if sawTerminalEvent && !moreReady {
+		// Check idle status only when safe: batch was empty (nothing in flight), or a
+		// turn's terminal event just arrived and nothing else is queued. Checking status
+		// on every iteration would race the harness's turn loop, which flips turn_active
+		// false before publishing turn_end - closing the stream mid-reply.
+		if len(events) == 0 || (sawTerminalEvent && !moreReady) {
 			idle, err := isSessionIdle(ctx, input.Config, input.SessionID)
 			if err != nil {
 				workflow.GetLogger(ctx).Warn("AttachWorkflow: status check failed", "error", err)
