@@ -2,6 +2,7 @@ package router
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,7 +36,8 @@ func (f *fakeBackend) PollTurn(ctx workflow.Context, handle TurnHandle, cursor i
 	return res, nil
 }
 
-// fakeOutbound is a minimal OutboundDriver test double that records calls in order.
+// fakeOutbound is a minimal OutboundDriver+Streamer test double that records calls in
+// order. pollInterval is 0 by default (unpaced); set it to test the paced path.
 type fakeOutbound struct {
 	calls             []string
 	supportsStreaming *bool
@@ -47,6 +49,13 @@ type fakeOutbound struct {
 	finishInputs      []FinishStreamInput
 	postMessageInputs []TextMetadata
 	approvalInputs    []ApprovalAcknowledgementInput
+	pollInterval      time.Duration
+}
+
+var _ OutboundDriver = (*fakeOutbound)(nil)
+
+func (f *fakeOutbound) StreamPollInterval(Input) time.Duration {
+	return f.pollInterval
 }
 
 func (f *fakeOutbound) SupportsStreaming(Input) bool {
@@ -127,6 +136,28 @@ func teamsMessageInput(conversationType string) Input {
 func nonStreamingOutbound() *fakeOutbound {
 	supportsStreaming := false
 	return &fakeOutbound{supportsStreaming: &supportsStreaming}
+}
+
+// minimalOutbound is how a driver that never streams looks in practice: embed
+// NoStreaming, then implement only the three OutboundDriver methods that matter.
+type minimalOutbound struct {
+	NoStreaming
+	postMessageInputs []TextMetadata
+}
+
+var _ OutboundDriver = (*minimalOutbound)(nil)
+
+func (m *minimalOutbound) PostMessage(ctx workflow.Context, input TextMetadata) error {
+	m.postMessageInputs = append(m.postMessageInputs, input)
+	return nil
+}
+
+func (m *minimalOutbound) PostApprovalPrompt(ctx workflow.Context, input ApprovalPromptInput) error {
+	return nil
+}
+
+func (m *minimalOutbound) AcknowledgeApproval(ctx workflow.Context, input ApprovalAcknowledgementInput) error {
+	return nil
 }
 
 func newTestEnv(t *testing.T, w *RouterWorkflow) *testsuite.TestWorkflowEnvironment {
@@ -303,6 +334,26 @@ func TestRouterWorkflow_ApprovalBoundary_ResetsSegmentCitations(t *testing.T) {
 	for _, seg := range in.finishInputs[1].Segments {
 		assert.NotEqual(t, "before", seg.Text)
 	}
+}
+
+func TestRouterWorkflow_NoStreamingEmbed_PostsCompleteResponse(t *testing.T) {
+	handle := TurnHandle{}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{{Text: "partial "}, {Text: "answer", IsFinal: true}}},
+		},
+	}
+	in := &minimalOutbound{}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	require.Len(t, in.postMessageInputs, 1)
+	assert.Equal(t, "partial answer", in.postMessageInputs[0].Text)
 }
 
 func TestRouterWorkflow_TeamsSharedConversationPostsCompleteResponse(t *testing.T) {
@@ -657,6 +708,105 @@ func TestRouterWorkflow_ContinuesLiveUpdatesAfterFailureAndFinishes(t *testing.T
 	assert.Equal(t, []string{"Start", "Append:first ", "Append:second ", "Append:third", "End"}, in.calls)
 	require.Len(t, in.updateInputs, 3)
 	require.Len(t, in.finishInputs, 1)
+}
+
+// --- Streamer pacing tests. These cover the paced path (fakeOutbound.pollInterval > 0).
+
+func TestRouterWorkflow_PacedDriver_CoalescesTextDeltasWithinABatch(t *testing.T) {
+	handle := TurnHandle{TurnNumber: 1}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{{Text: "a"}, {Text: "b"}, {Text: "c", IsFinal: true}}},
+		},
+	}
+	in := &fakeOutbound{pollInterval: 300 * time.Millisecond}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// Three deltas in one batch become one Append call.
+	assert.Equal(t, []string{"Start", "Append:abc", "End"}, in.calls)
+	// FinishStream still gets all three raw deltas. Citation math needs them separate.
+	require.Len(t, in.finishInputs, 1)
+	require.Len(t, in.finishInputs[0].Segments, 3)
+	assert.Equal(t, "a", in.finishInputs[0].Segments[0].Text)
+	assert.Equal(t, "b", in.finishInputs[0].Segments[1].Text)
+	assert.Equal(t, "c", in.finishInputs[0].Segments[2].Text)
+}
+
+func TestRouterWorkflow_PacedDriver_FlushesPendingTextBeforeToolStatus(t *testing.T) {
+	handle := TurnHandle{TurnNumber: 1}
+	toolStatus := &ToolStatus{ToolID: "t1", ToolName: "search", Status: ToolStarted}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{
+				{Text: "partial "},
+				{ToolStatus: toolStatus},
+				{Text: "answer", IsFinal: true},
+			}},
+		},
+	}
+	in := &fakeOutbound{pollInterval: 300 * time.Millisecond}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// ToolStatus is never merged with text. It keeps its place in order.
+	require.Len(t, in.updateInputs, 3)
+	assert.Equal(t, "partial ", in.updateInputs[0].Delta)
+	assert.Same(t, toolStatus, in.updateInputs[1].ToolStatus)
+	assert.Empty(t, in.updateInputs[1].Delta)
+	assert.Equal(t, "answer", in.updateInputs[2].Delta)
+}
+
+func TestRouterWorkflow_PacedDriver_FlushesAtEndOfEachPollBatch(t *testing.T) {
+	handle := TurnHandle{TurnNumber: 1}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{{Text: "he"}, {Text: "llo "}}},
+			{Deltas: []Delta{{Text: "world", IsFinal: true}}},
+		},
+	}
+	in := &fakeOutbound{pollInterval: 300 * time.Millisecond}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	// Each poll batch sends its own merged update. The user sees it right away.
+	assert.Equal(t, []string{"Start", "Append:hello ", "Append:world", "End"}, in.calls)
+	assert.Equal(t, 2, out.pollCalls)
+}
+
+func TestRouterWorkflow_UnpacedDriver_StillForwardsPerDelta(t *testing.T) {
+	// A driver without StreamPacer is unaffected. Compare to the paced tests above.
+	handle := TurnHandle{TurnNumber: 1}
+	out := &fakeBackend{
+		startResult: StartResult{Handle: &handle},
+		pollResults: []PollResult{
+			{Deltas: []Delta{{Text: "a"}, {Text: "b"}, {Text: "c", IsFinal: true}}},
+		},
+	}
+	in := &fakeOutbound{}
+
+	w := NewRouterWorkflow(in, out)
+	env := newTestEnv(t, w)
+	env.ExecuteWorkflow(w.Run, defaultInput())
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	assert.Equal(t, []string{"Start", "Append:a", "Append:b", "Append:c", "End"}, in.calls)
 }
 
 func TestRouterWorkflow_TeamsClosesStreamAtApprovalBoundary(t *testing.T) {

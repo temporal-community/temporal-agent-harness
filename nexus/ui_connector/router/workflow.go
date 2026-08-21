@@ -69,14 +69,14 @@ func (w *RouterWorkflow) Run(ctx workflow.Context, input Input) error {
 		// An immediate, synchronous answer - no turn was created, nothing to poll.
 		return w.outbound.PostMessage(ctx, textMetadata(input, result.Reply))
 
-	case result.Handle != nil && !w.outbound.SupportsStreaming(input):
+	case result.Handle != nil && w.outbound.SupportsStreaming(input):
+		// A turn was created; consume its response stream and deliver it outbound.
+		return w.streamResp(ctx, *result.Handle, input)
+
+	case result.Handle != nil:
 		// Collect the complete response when the outbound conversation does not
 		// support native streaming, then post it as a single message.
 		return w.postResp(ctx, *result.Handle, input)
-
-	case result.Handle != nil:
-		// A turn was created; consume its response stream and deliver it outbound.
-		return w.streamResp(ctx, *result.Handle, input)
 
 	default:
 		// Fire-and-forget (e.g. an approval decision was resolved) - nothing further.
@@ -172,6 +172,7 @@ func (w *RouterWorkflow) postResp(ctx workflow.Context, handle TurnHandle, input
 // backend/outbound pairing: it only deals in Delta and OutboundDriver calls.
 func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, input Input) error {
 	cursor := handle.StreamHeadOffset
+	pollInterval := w.outbound.StreamPollInterval(input)
 
 	// Start the initial outbound stream before polling. If the outbound driver can't
 	// open a stream (e.g. its activity worker died mid-attempt with no retries left),
@@ -193,10 +194,34 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, inp
 	var segmentCitations []Citation
 	var segments []Delta
 
-	for {
+	// pendingText holds text not yet sent. flushPendingText sends it as one UpdateStream
+	// call. This only fills when pollInterval > 0. When pacing is off, it stays empty
+	// and flushPendingText does nothing.
+	var pendingText string
+	flushPendingText := func() {
+		if pendingText == "" {
+			return
+		}
+		text := pendingText
+		pendingText = ""
+		w.updateStream(ctx, input, streamHandle, Delta{Text: text})
+	}
+
+	for iteration := 0; ; iteration++ {
+		if pollInterval > 0 && iteration > 0 {
+			// Wait before polling again. The backend keeps buffering deltas during the
+			// wait, so nothing is lost. This lets text build up for one batched update.
+			if err := workflow.Sleep(ctx, pollInterval); err != nil {
+				flushPendingText()
+				w.endStream(ctx, input, streamHandle, segmentText, segmentCitations, segments)
+				return nil
+			}
+		}
+
 		res, err := w.backend.PollTurn(ctx, handle, cursor)
 		if err != nil {
 			workflow.GetLogger(ctx).Warn("streamResp: PollTurn failed", "error", err)
+			flushPendingText()
 			w.endStream(ctx, input, streamHandle, segmentText, segmentCitations, segments)
 			return nil
 		}
@@ -204,6 +229,7 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, inp
 
 		// A turn may close without an explicit final delta.
 		if res.Closed {
+			flushPendingText()
 			w.endStream(ctx, input, streamHandle, segmentText, segmentCitations, segments)
 			return nil
 		}
@@ -215,6 +241,7 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, inp
 				// approval card so the messages appear in order. Clearing the handle makes
 				// the next text delta start a new stream.
 				if streamHandle != nil && streamHandle.CloseBeforeApproval {
+					flushPendingText()
 					w.endStream(ctx, input, streamHandle, segmentText, segmentCitations, segments)
 					streamHandle = nil
 					segmentText = ""
@@ -246,14 +273,27 @@ func (w *RouterWorkflow) streamResp(ctx workflow.Context, handle TurnHandle, inp
 					}
 				}
 				segmentText += delta.Text
-				w.updateStream(ctx, input, streamHandle, delta)
+
+				isPureText := delta.Text != "" && delta.ToolStatus == nil && delta.ThoughtSummary == ""
+				if pollInterval > 0 && isPureText {
+					pendingText += delta.Text
+				} else {
+					// This is a tool status or thought summary. Send any queued text first,
+					// then send this delta on its own, to keep the order correct.
+					flushPendingText()
+					w.updateStream(ctx, input, streamHandle, delta)
+				}
 			}
 
 			if delta.IsFinal {
+				flushPendingText()
 				w.endStream(ctx, input, streamHandle, segmentText, segmentCitations, segments)
 				return nil
 			}
 		}
+
+		// Batch done. Send any queued text now, before the next wait.
+		flushPendingText()
 	}
 }
 

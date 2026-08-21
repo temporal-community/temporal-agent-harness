@@ -23,9 +23,9 @@ entirely the job of `backend` (interpreting input) and `outbound` (rendering del
 One folder per platform. Contracts + orchestration live in `router/`.
 
 ```
-router/            core: workflow + the two ports + shared request type
+router/            core: workflow + the ports + shared request type
   workflow.go        RouterWorkflow.Run, WorkflowName, RouterWorkflowID
-  interfaces.go       OutboundDriver, BackendDriver (the two ports)
+  interfaces.go       OutboundDriver, Streamer, BackendDriver (the ports)
   wire.go             Input (the RouterWorkflow argument type)
 
 slack/             everything Slack
@@ -53,24 +53,47 @@ imports nothing platform-specific. Never add a `router` -> platform import.
 
 ## Writing a new driver (e.g. Discord)
 
-You're implementing one or both ports in `router/interfaces.go`.
+You're implementing `OutboundDriver` in `router/interfaces.go`, and `BackendDriver` too
+if you're also adding a new agent backend.
 
 ### 1. `OutboundDriver` - deliver replies to the platform
 
+One interface, fully required - the compiler checks all of it at once:
+
 ```go
 type OutboundDriver interface {
-    SupportsStreaming(input Input) bool
-    BeginStream(ctx workflow.Context, input BeginStreamInput) (StreamHandle, error)
-    UpdateStream(ctx workflow.Context, input UpdateStreamInput) error
-    FinishStream(ctx workflow.Context, input FinishStreamInput) error
+    Streamer // SupportsStreaming, BeginStream, UpdateStream, FinishStream, StreamPollInterval
+
     PostMessage(ctx workflow.Context, input TextMetadata) error
     PostApprovalPrompt(ctx workflow.Context, input ApprovalPromptInput) error
     AcknowledgeApproval(ctx workflow.Context, input ApprovalAcknowledgementInput) error
 }
 ```
 
-- `SupportsStreaming` = false -> router calls `PostMessage` once with the full text
-  instead of streaming. Use this if the platform can't do incremental edits.
+Can your platform do incremental message edits?
+
+- **Yes** - implement `Streamer`'s five methods yourself (see `slack/outbound/driver.go`).
+  `SupportsStreaming` can vary per input: Teams returns `true` for a personal chat,
+  `false` for a shared channel/group one, and falls back to `PostMessage` for the
+  latter. `StreamPollInterval` sets how long router waits between poll calls so text
+  can build up into fewer, larger `UpdateStream` calls - return 0 if you don't need
+  this (most don't; only Slack does today, since `chat.appendStream` is a
+  rate-limited call per delta).
+- **No** - embed `router.NoStreaming` in your `Driver` struct instead of writing those
+  five methods:
+
+  ```go
+  type Driver struct {
+      router.NoStreaming
+      // ... your fields
+  }
+  ```
+
+Either way, add `var _ router.OutboundDriver = (*Driver)(nil)` in your package. That's
+what actually catches a missing method - the compiler flags it right there, at the
+point your `Driver` is supposed to satisfy the whole interface.
+
+Other notes:
 - Real platform I/O is non-deterministic -> **must run as Activities**, not directly in
   the interface methods. Pattern (see `slack/outbound/driver.go`):
   - `Driver` struct: thin dispatcher, only calls `workflow.ExecuteActivity`.
