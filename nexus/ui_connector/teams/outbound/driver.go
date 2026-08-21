@@ -56,6 +56,12 @@ func (Driver) SupportsStreaming(input router.Input) bool {
 	}
 }
 
+// StreamPollInterval implements router.Streamer. Teams doesn't batch updates yet:
+// always forward each delta right away.
+func (Driver) StreamPollInterval(router.Input) time.Duration {
+	return 0
+}
+
 func (d Driver) streamActivityContext(ctx workflow.Context, handle router.StreamHandle) workflow.Context {
 	if handle.TaskQueue == "" {
 		return d.activityContext(ctx)

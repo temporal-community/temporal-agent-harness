@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	slackapi "github.com/slack-go/slack"
 
@@ -34,11 +35,18 @@ const (
 // I/O.
 type Driver struct {
 	ActivityOptions workflow.ActivityOptions
+
+	// PollInterval sets the wait between poll calls (see router.Streamer). Zero
+	// (default) means no wait: one chat.appendStream call per delta, as today. Set a
+	// few hundred milliseconds to merge deltas into fewer calls. Tune against Slack's
+	// rate limit for chat.appendStream.
+	PollInterval time.Duration
 }
 
 var _ router.OutboundDriver = (*Driver)(nil)
 
 // NewDriver returns a Driver that calls the Slack activities with the given options.
+// PollInterval defaults to zero. Set it on the returned Driver to enable batching.
 func NewDriver(opts workflow.ActivityOptions) Driver {
 	return Driver{ActivityOptions: opts}
 }
@@ -46,6 +54,11 @@ func NewDriver(opts workflow.ActivityOptions) Driver {
 // SupportsStreaming reports that Slack supports incremental response updates.
 func (Driver) SupportsStreaming(router.Input) bool {
 	return true
+}
+
+// StreamPollInterval implements router.Streamer.
+func (d Driver) StreamPollInterval(router.Input) time.Duration {
+	return d.PollInterval
 }
 
 func (d Driver) BeginStream(ctx workflow.Context, input router.BeginStreamInput) (router.StreamHandle, error) {
