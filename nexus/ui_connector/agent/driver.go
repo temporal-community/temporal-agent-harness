@@ -378,7 +378,7 @@ func (d *Driver) PollTurn(ctx workflow.Context, handle router.TurnHandle, cursor
 // floor, replaying every turn's events from cursor onward. Exported for a driver whose UI
 // wants whole-session replay/tail (e.g. an attach-style connection), not just one turn's
 // stream - Slack/Teams have no such use and only ever call PollTurn.
-func PollSession(ctx workflow.Context, nexusEndpoint, sessionID string, cursor int64) (events []router.Delta, nextCursor int64, closed bool, err error) {
+func PollSession(ctx workflow.Context, nexusEndpoint, sessionID string, cursor int64) (events []router.Delta, nextCursor int64, closed bool, moreReady bool, err error) {
 	agentClient := workflow.NewNexusClient(nexusEndpoint, harnessgen.AgentService.ServiceName)
 
 	var pollOut harnessgen.PollMessagesOutput
@@ -390,11 +390,11 @@ func PollSession(ctx workflow.Context, nexusEndpoint, sessionID string, cursor i
 		},
 		workflow.NexusOperationOptions{ScheduleToCloseTimeout: 120 * time.Second},
 	).Get(ctx, &pollOut); err != nil {
-		return nil, cursor, false, err
+		return nil, cursor, false, false, err
 	}
 
 	if derefOrZero(pollOut.Closed) {
-		return nil, pollOut.NextOffset, true, nil
+		return nil, pollOut.NextOffset, true, false, nil
 	}
 
 	var deltas []router.Delta
@@ -417,5 +417,5 @@ func PollSession(ctx workflow.Context, nexusEndpoint, sessionID string, cursor i
 		deltas = append(deltas, *delta)
 	}
 
-	return deltas, pollOut.NextOffset, false, nil
+	return deltas, pollOut.NextOffset, false, pollOut.MoreReady, nil
 }
