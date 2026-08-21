@@ -3,6 +3,7 @@ package slackinbound
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -41,6 +42,35 @@ func expectRouterWorkflowStart(t *testing.T, tc *mocks.Client, wfID string, requ
 	).Return(nil, nil).Once()
 }
 
+// postSlashCommand sends a slash-command form body to handleSlashCommands.
+// It skips signature verification, like postEvent does.
+func postSlashCommand(t *testing.T, s *webhookServer, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, routeCommands, strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response := httptest.NewRecorder()
+	s.handleSlashCommands(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", response.Code)
+	}
+	return response
+}
+
+// expectSlashWorkflowStart mocks the workflow start for a slash command.
+// It checks the final command name and arg, after prefix stripping.
+func expectSlashWorkflowStart(t *testing.T, tc *mocks.Client, name, arg string) {
+	t.Helper()
+	tc.On(
+		"ExecuteWorkflow",
+		mock.Anything,
+		mock.Anything,
+		router.WorkflowName,
+		mock.MatchedBy(func(input router.Input) bool {
+			return input.Slash != nil && input.Slash.Name == name && input.Slash.Arg == arg
+		}),
+	).Return(nil, nil).Once()
+}
+
 // expectThreadSessionLookup mocks the ListWorkflow prefix search threadHasBotSession
 // issues for a given thread, returning `found` executions.
 func expectThreadSessionLookup(t *testing.T, tc *mocks.Client, wfIDPrefix string, found bool) {
@@ -75,7 +105,7 @@ func TestHandleEventsForwardsMention(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mockClient := mocks.NewClient(t)
 			expectRouterWorkflowStart(t, mockClient, tc.wfID, false)
-			server := NewServer(mockClient, "task-queue", "", testBotUserID)
+			server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "")
 
 			postEvent(t, server, `{
 				"type":"event_callback",
@@ -96,7 +126,7 @@ func TestHandleEventsForwardsUnmentionedReplyWhenThreadWasEverMentioned(t *testi
 	mockClient := mocks.NewClient(t)
 	expectThreadSessionLookup(t, mockClient, "connector-default-slack:C1:100.000-", true)
 	expectRouterWorkflowStart(t, mockClient, "connector-default-slack:C1:100.000-300.000", true)
-	server := NewServer(mockClient, "task-queue", "", testBotUserID)
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "")
 
 	postEvent(t, server, `{
 		"type":"event_callback",
@@ -107,7 +137,7 @@ func TestHandleEventsForwardsUnmentionedReplyWhenThreadWasEverMentioned(t *testi
 func TestHandleEventsDropsUnmentionedReplyWhenThreadWasNeverMentioned(t *testing.T) {
 	mockClient := mocks.NewClient(t)
 	expectThreadSessionLookup(t, mockClient, "connector-default-slack:C1:100.000-", false)
-	server := NewServer(mockClient, "task-queue", "", testBotUserID)
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "")
 
 	postEvent(t, server, `{
 		"type":"event_callback",
@@ -119,7 +149,7 @@ func TestHandleEventsDropsUnmentionedReplyWhenThreadWasNeverMentioned(t *testing
 
 func TestHandleEventsDropsUnmentionedTopLevelMessage(t *testing.T) {
 	mockClient := mocks.NewClient(t)
-	server := NewServer(mockClient, "task-queue", "", testBotUserID)
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "")
 
 	postEvent(t, server, `{
 		"type":"event_callback",
@@ -128,4 +158,49 @@ func TestHandleEventsDropsUnmentionedTopLevelMessage(t *testing.T) {
 
 	mockClient.AssertNotCalled(t, "ListWorkflow", mock.Anything, mock.Anything)
 	mockClient.AssertNotCalled(t, "ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestHandleSlashCommandsStripsConfiguredPrefix checks that a prefixed
+// command, like "/bot-build-name-cmd", resolves to "cmd".
+func TestHandleSlashCommandsStripsConfiguredPrefix(t *testing.T) {
+	mockClient := mocks.NewClient(t)
+	expectSlashWorkflowStart(t, mockClient, "scope", "docs")
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "bot-build-name")
+
+	postSlashCommand(t, server, url.Values{
+		"command":    {"/bot-build-name-scope"},
+		"channel_id": {"C1"},
+		"trigger_id": {"T1"},
+		"text":       {"docs"},
+	})
+}
+
+// TestHandleSlashCommandsLeavesCommandUnchangedWhenNoPrefixConfigured checks
+// that with no prefix set, the command name does not change.
+func TestHandleSlashCommandsLeavesCommandUnchangedWhenNoPrefixConfigured(t *testing.T) {
+	mockClient := mocks.NewClient(t)
+	expectSlashWorkflowStart(t, mockClient, "scope", "docs")
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "")
+
+	postSlashCommand(t, server, url.Values{
+		"command":    {"/scope"},
+		"channel_id": {"C1"},
+		"trigger_id": {"T1"},
+		"text":       {"docs"},
+	})
+}
+
+// TestHandleSlashCommandsLeavesMismatchedPrefixUnstripped checks that a
+// command missing the expected prefix does not change. It is forwarded as-is.
+func TestHandleSlashCommandsLeavesMismatchedPrefixUnstripped(t *testing.T) {
+	mockClient := mocks.NewClient(t)
+	expectSlashWorkflowStart(t, mockClient, "scope", "docs")
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "bot-build-id")
+
+	postSlashCommand(t, server, url.Values{
+		"command":    {"/scope"},
+		"channel_id": {"C1"},
+		"trigger_id": {"T1"},
+		"text":       {"docs"},
+	})
 }

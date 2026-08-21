@@ -18,6 +18,7 @@ type flags struct {
 	taskQueue          string
 	identity           string
 	webhookPort        string
+	slashCommandPrefix string
 }
 
 func ensureFlags() *flags {
@@ -51,6 +52,9 @@ func ensureFlags() *flags {
 	if webhookPort == "" {
 		webhookPort = "8080"
 	}
+	// Prefix for slash commands. Set this when other bots share the same
+	// Slack workspace. Leave empty if not.
+	slashCommandPrefix := os.Getenv("SLASH_CMD_PREFIX")
 	return &flags{
 		slackBotToken:      slackBotToken,
 		slackSigningSecret: slackSigningSecret,
@@ -59,6 +63,7 @@ func ensureFlags() *flags {
 		taskQueue:          taskQueue,
 		identity:           identity,
 		webhookPort:        webhookPort,
+		slashCommandPrefix: slashCommandPrefix,
 	}
 }
 
@@ -82,7 +87,7 @@ func main() {
 		log.Printf("Slack bot user ID: %s (forwarding mentions, plus replies in threads the bot was mentioned in)", bot.UserID)
 	}
 
-	handler := slackinbound.NewServer(tc, flags.taskQueue, flags.identity, flags.slackSigningSecret, bot.UserID)
+	handler := slackinbound.NewServer(tc, flags.taskQueue, flags.identity, flags.slackSigningSecret, bot.UserID, flags.slashCommandPrefix)
 	addr := ":" + flags.webhookPort
 	log.Printf("Slack webhook server listening on %s", addr)
 	if err := http.ListenAndServe(addr, handler); err != nil {

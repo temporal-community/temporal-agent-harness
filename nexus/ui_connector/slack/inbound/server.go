@@ -26,12 +26,13 @@ const (
 )
 
 type webhookServer struct {
-	tc            client.Client
-	taskQueue     string
-	identity      string
-	signingSecret string
-	botUserID     string
-	mux           *http.ServeMux
+	tc                 client.Client
+	taskQueue          string
+	identity           string
+	signingSecret      string
+	botUserID          string
+	slashCommandPrefix string
+	mux                *http.ServeMux
 }
 
 // NewServer wires up a Slack webhook handler. identity distinguishes this
@@ -39,17 +40,25 @@ type webhookServer struct {
 // Temporal namespace (e.g. running prod/staging/ondemand environments
 // against one "connector" namespace) — it's baked into every router
 // workflow ID this server starts. Pass "" to use defaultIdentity.
-func NewServer(tc client.Client, taskQueue, identity, signingSecret, botUserID string) *webhookServer {
+//
+// slashCommandPrefix removes a "<prefix>-" prefix from the command name.
+// Use this when several bots share one Slack workspace. Slack requires
+// unique command names per workspace, so each bot's manifest can register
+// prefixed commands, like "/bot-dev-cmd". This strips the prefix so the
+// command matches a known name, like "cmd". Pass "" if this bot has no
+// prefix.
+func NewServer(tc client.Client, taskQueue, identity, signingSecret, botUserID, slashCommandPrefix string) *webhookServer {
 	if identity == "" {
 		identity = defaultIdentity
 	}
 	s := &webhookServer{
-		tc:            tc,
-		taskQueue:     taskQueue,
-		identity:      identity,
-		signingSecret: signingSecret,
-		botUserID:     botUserID,
-		mux:           http.NewServeMux(),
+		tc:                 tc,
+		taskQueue:          taskQueue,
+		identity:           identity,
+		signingSecret:      signingSecret,
+		botUserID:          botUserID,
+		slashCommandPrefix: slashCommandPrefix,
+		mux:                http.NewServeMux(),
 	}
 	s.mux.HandleFunc(routeEvents, s.handleEvents)
 	s.mux.HandleFunc(routeInteractions, s.handleInteractions)
@@ -198,6 +207,11 @@ func (s *webhookServer) handleSlashCommands(w http.ResponseWriter, r *http.Reque
 	}
 
 	command := strings.TrimPrefix(r.FormValue("command"), "/")
+	if s.slashCommandPrefix != "" {
+		// Strip the prefix if present. If not present, leave the command
+		// as-is. It will not match a known command later.
+		command = strings.TrimPrefix(command, s.slashCommandPrefix+"-")
+	}
 	channelID := r.FormValue("channel_id")
 	triggerID := r.FormValue("trigger_id")
 	userID := r.FormValue("user_id")
