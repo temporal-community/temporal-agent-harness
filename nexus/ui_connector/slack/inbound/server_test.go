@@ -105,7 +105,7 @@ func TestHandleEventsForwardsMention(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mockClient := mocks.NewClient(t)
 			expectRouterWorkflowStart(t, mockClient, tc.wfID, false)
-			server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "")
+			server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", nil)
 
 			postEvent(t, server, `{
 				"type":"event_callback",
@@ -126,7 +126,7 @@ func TestHandleEventsForwardsUnmentionedReplyWhenThreadWasEverMentioned(t *testi
 	mockClient := mocks.NewClient(t)
 	expectThreadSessionLookup(t, mockClient, "connector-default-slack:C1:100.000-", true)
 	expectRouterWorkflowStart(t, mockClient, "connector-default-slack:C1:100.000-300.000", true)
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "")
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", nil)
 
 	postEvent(t, server, `{
 		"type":"event_callback",
@@ -137,7 +137,7 @@ func TestHandleEventsForwardsUnmentionedReplyWhenThreadWasEverMentioned(t *testi
 func TestHandleEventsDropsUnmentionedReplyWhenThreadWasNeverMentioned(t *testing.T) {
 	mockClient := mocks.NewClient(t)
 	expectThreadSessionLookup(t, mockClient, "connector-default-slack:C1:100.000-", false)
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "")
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", nil)
 
 	postEvent(t, server, `{
 		"type":"event_callback",
@@ -149,7 +149,7 @@ func TestHandleEventsDropsUnmentionedReplyWhenThreadWasNeverMentioned(t *testing
 
 func TestHandleEventsDropsUnmentionedTopLevelMessage(t *testing.T) {
 	mockClient := mocks.NewClient(t)
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "")
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", nil)
 
 	postEvent(t, server, `{
 		"type":"event_callback",
@@ -160,12 +160,44 @@ func TestHandleEventsDropsUnmentionedTopLevelMessage(t *testing.T) {
 	mockClient.AssertNotCalled(t, "ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
+// TestHandleEventsForwardsAllowedBotMention checks that a mention from any
+// bot in allowedBotIDs is forwarded, same as a human mention - covers both
+// entries in a multi-bot allowlist, not just a single configured ID.
+func TestHandleEventsForwardsAllowedBotMention(t *testing.T) {
+	for _, botID := range []string{"HCBOT1", "HCBOT2"} {
+		t.Run(botID, func(t *testing.T) {
+			mockClient := mocks.NewClient(t)
+			expectRouterWorkflowStart(t, mockClient, "connector-default-slack:C1:100.000-100.000", false)
+			server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", []string{"HCBOT1", "HCBOT2"})
+
+			postEvent(t, server, `{
+				"type":"event_callback",
+				"event":{"type":"message","channel":"C1","user":"U1","bot_id":"`+botID+`","ts":"100.000","text":"<@BOT123> hi"}
+			}`)
+		})
+	}
+}
+
+// TestHandleEventsDropsOtherBotMentionEvenWhenSomeBotsAreAllowed checks the
+// allowlist doesn't open the door to every bot, only the configured ones.
+func TestHandleEventsDropsOtherBotMentionEvenWhenSomeBotsAreAllowed(t *testing.T) {
+	mockClient := mocks.NewClient(t)
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", []string{"HCBOT1", "HCBOT2"})
+
+	postEvent(t, server, `{
+		"type":"event_callback",
+		"event":{"type":"message","channel":"C1","user":"U1","bot_id":"OTHERBOT","ts":"100.000","text":"<@BOT123> hi"}
+	}`)
+
+	mockClient.AssertNotCalled(t, "ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 // TestHandleSlashCommandsStripsConfiguredPrefix checks that a prefixed
 // command, like "/bot-build-name-cmd", resolves to "cmd".
 func TestHandleSlashCommandsStripsConfiguredPrefix(t *testing.T) {
 	mockClient := mocks.NewClient(t)
 	expectSlashWorkflowStart(t, mockClient, "scope", "docs")
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "bot-build-name")
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "bot-build-name", nil)
 
 	postSlashCommand(t, server, url.Values{
 		"command":    {"/bot-build-name-scope"},
@@ -180,7 +212,7 @@ func TestHandleSlashCommandsStripsConfiguredPrefix(t *testing.T) {
 func TestHandleSlashCommandsLeavesCommandUnchangedWhenNoPrefixConfigured(t *testing.T) {
 	mockClient := mocks.NewClient(t)
 	expectSlashWorkflowStart(t, mockClient, "scope", "docs")
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "")
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "", nil)
 
 	postSlashCommand(t, server, url.Values{
 		"command":    {"/scope"},
@@ -195,7 +227,7 @@ func TestHandleSlashCommandsLeavesCommandUnchangedWhenNoPrefixConfigured(t *test
 func TestHandleSlashCommandsLeavesMismatchedPrefixUnstripped(t *testing.T) {
 	mockClient := mocks.NewClient(t)
 	expectSlashWorkflowStart(t, mockClient, "scope", "docs")
-	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "bot-build-id")
+	server := NewServer(mockClient, "task-queue", "", "", testBotUserID, "bot-build-id", nil)
 
 	postSlashCommand(t, server, url.Values{
 		"command":    {"/scope"},

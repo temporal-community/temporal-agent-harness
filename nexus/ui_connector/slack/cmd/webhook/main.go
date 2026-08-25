@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack/inbound"
@@ -19,6 +20,19 @@ type flags struct {
 	identity           string
 	webhookPort        string
 	slashCommandPrefix string
+	allowedBotIDs      []string
+}
+
+// splitCommaList splits a comma-separated env var into trimmed, non-empty
+// values. Returns nil for an empty or blank input.
+func splitCommaList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func ensureFlags() *flags {
@@ -55,6 +69,9 @@ func ensureFlags() *flags {
 	// Prefix for slash commands. Set this when other bots share the same
 	// Slack workspace. Leave empty if not.
 	slashCommandPrefix := os.Getenv("SLASH_CMD_PREFIX")
+	// Other bot IDs allowed to trigger this server (e.g. a load-test bot),
+	// comma-separated. Leave empty to allow none.
+	allowedBotIDs := splitCommaList(os.Getenv("ALLOWED_INBOUND_BOT_IDS"))
 	return &flags{
 		slackBotToken:      slackBotToken,
 		slackSigningSecret: slackSigningSecret,
@@ -64,6 +81,7 @@ func ensureFlags() *flags {
 		identity:           identity,
 		webhookPort:        webhookPort,
 		slashCommandPrefix: slashCommandPrefix,
+		allowedBotIDs:      allowedBotIDs,
 	}
 }
 
@@ -87,7 +105,7 @@ func main() {
 		log.Printf("Slack bot user ID: %s (forwarding mentions, plus replies in threads the bot was mentioned in)", bot.UserID)
 	}
 
-	handler := slackinbound.NewServer(tc, flags.taskQueue, flags.identity, flags.slackSigningSecret, bot.UserID, flags.slashCommandPrefix)
+	handler := slackinbound.NewServer(tc, flags.taskQueue, flags.identity, flags.slackSigningSecret, bot.UserID, flags.slashCommandPrefix, flags.allowedBotIDs)
 	addr := ":" + flags.webhookPort
 	log.Printf("Slack webhook server listening on %s", addr)
 	if err := http.ListenAndServe(addr, handler); err != nil {

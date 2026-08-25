@@ -32,6 +32,7 @@ type webhookServer struct {
 	signingSecret      string
 	botUserID          string
 	slashCommandPrefix string
+	allowedBotIDs      map[string]struct{}
 	mux                *http.ServeMux
 }
 
@@ -47,9 +48,17 @@ type webhookServer struct {
 // prefixed commands, like "/bot-dev-cmd". This strips the prefix so the
 // command matches a known name, like "cmd". Pass "" if this bot has no
 // prefix.
-func NewServer(tc client.Client, taskQueue, identity, signingSecret, botUserID, slashCommandPrefix string) *webhookServer {
+//
+// allowedBotIDs are other bots allowed to trigger this server. Every other
+// bot message is still ignored, including this bot's own echoes. Pass nil
+// or empty to allow none (today's behavior).
+func NewServer(tc client.Client, taskQueue, identity, signingSecret, botUserID, slashCommandPrefix string, allowedBotIDs []string) *webhookServer {
 	if identity == "" {
 		identity = defaultIdentity
+	}
+	allowedBotIDSet := make(map[string]struct{}, len(allowedBotIDs))
+	for _, id := range allowedBotIDs {
+		allowedBotIDSet[id] = struct{}{}
 	}
 	s := &webhookServer{
 		tc:                 tc,
@@ -58,6 +67,7 @@ func NewServer(tc client.Client, taskQueue, identity, signingSecret, botUserID, 
 		signingSecret:      signingSecret,
 		botUserID:          botUserID,
 		slashCommandPrefix: slashCommandPrefix,
+		allowedBotIDs:      allowedBotIDSet,
 		mux:                http.NewServeMux(),
 	}
 	s.mux.HandleFunc(routeEvents, s.handleEvents)
@@ -121,10 +131,10 @@ func (s *webhookServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	case slackevents.CallbackEvent:
 		if ev, ok := evt.InnerEvent.Data.(*slackevents.MessageEvent); ok {
-			// Ignore the bot's own messages (including its streamed replies, which
-			// Slack echoes back as events). Always fall through to WriteHeader(200)
-			// below - a bare return reads as a 5xx to the Lambda proxy and Slack retries.
-			if ev.BotID == "" {
+			// Ignore bot messages, including this bot's own echoes, except
+			// allowedBotIDs. Always fall through to WriteHeader(200) below -
+			// a bare return reads as a 5xx to the Lambda proxy and Slack retries.
+			if ev.BotID == "" || s.isAllowedBot(ev.BotID) {
 				mentioned := s.isMentioned(ev)
 				switch {
 				case mentioned:
@@ -140,6 +150,11 @@ func (s *webhookServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *webhookServer) isMentioned(ev *slackevents.MessageEvent) bool {
 	return s.botUserID == "" || strings.Contains(ev.Text, "<@"+s.botUserID+">")
+}
+
+func (s *webhookServer) isAllowedBot(botID string) bool {
+	_, ok := s.allowedBotIDs[botID]
+	return ok
 }
 
 // threadSessionID scopes an agent session to one Slack thread: the channel plus
