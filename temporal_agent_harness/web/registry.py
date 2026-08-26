@@ -41,6 +41,7 @@ def load_agent_registry(path: Path | str) -> AgentRegistry:
                 task_queue=entry["task_queue"],
                 label=entry["label"],
                 description=" ".join(str(entry["description"]).split()),
+                launchable=entry.get("launchable", True),
             )
         )
 

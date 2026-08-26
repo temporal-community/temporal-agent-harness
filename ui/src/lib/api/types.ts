@@ -20,6 +20,7 @@ export interface AgentDescriptor {
   task_queue: string;
   label: string;
   description: string;
+  launchable?: boolean;
 }
 
 export interface AgentRegistryResponse {

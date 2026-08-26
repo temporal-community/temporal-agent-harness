@@ -27,18 +27,21 @@ from temporalio.exceptions import ApplicationError, WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_harness.harness.agent_protocol import (
-    AgentMessage,
     SEND_AGENT_MESSAGE_UPDATE,
+    AgentConfig,
+    AgentMessage,
 )
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.web import (
     SESSION_MANAGER_TASK_QUEUE,
     AgentDescriptor,
     AgentRegistry,
+    CreateSessionRequest,
     Session,
     SessionManagerWorkflow,
     create_agent_harness_app,
     create_session_manager_worker,
+    load_agent_registry,
 )
 from temporal_agent_harness.web.app import (
     _discover_untracked_sessions,
@@ -234,6 +237,52 @@ def test_create_session_reports_which_agent_types_are_known() -> None:
     body = response.json()
     assert body["error"] == "UnknownAgentType"
     assert "Known agents: ['CompatCheckAgent']" in body["message"]
+
+
+def test_registry_can_mark_an_agent_as_discovery_only(tmp_path: Path) -> None:
+    registry_path = tmp_path / "agents.toml"
+    registry_path.write_text(
+        """
+[[agents]]
+key = "compat"
+workflow_type = "CompatCheckAgent"
+task_queue = "compat"
+label = "Compat"
+description = "Started by its watcher."
+launchable = false
+"""
+    )
+
+    registry = load_agent_registry(registry_path)
+
+    assert registry.agents[0].launchable is False
+
+
+async def test_session_manager_refuses_to_launch_a_discovery_only_agent() -> None:
+    workflow = SessionManagerWorkflow(
+        AgentRegistry(
+            agents=[
+                AgentDescriptor(
+                    key="compat",
+                    workflow_type="CompatCheckAgent",
+                    task_queue="compat",
+                    label="Compat",
+                    description="Started by its watcher.",
+                    launchable=False,
+                )
+            ]
+        )
+    )
+
+    with pytest.raises(ApplicationError) as excinfo:
+        await workflow.create_session(
+            CreateSessionRequest(
+                agent_workflow_type="CompatCheckAgent",
+                config=AgentConfig(),
+            )
+        )
+
+    assert excinfo.value.type == "AgentNotLaunchable"
 
 
 def test_submit_message_reports_a_handler_the_agent_does_not_have() -> None:

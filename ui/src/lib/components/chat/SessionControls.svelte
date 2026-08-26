@@ -51,8 +51,11 @@
       ? sessionItems.filter((session) => sessionMatchesSearch(session, sessionSearchTerm))
       : sessionItems
   );
+  const launchableAgents = $derived(
+    agents.filter((agent) => agent.launchable !== false)
+  );
   const canCreateSession = $derived(
-    Boolean(onNewSession) && agents.length > 0 && !creatingSession
+    Boolean(onNewSession) && launchableAgents.length > 0 && !creatingSession
   );
   const activeSession = $derived(
     sessionItems.find((session) => session.workflow_id === sessionId) ?? null
@@ -242,7 +245,7 @@
         </header>
 
         <div class="agent-list" role="menu">
-          {#each agents as agent}
+          {#each launchableAgents as agent}
             <button
               type="button"
               class="agent-row"

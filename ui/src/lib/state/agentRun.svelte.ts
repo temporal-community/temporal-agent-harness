@@ -735,8 +735,13 @@ export class AgentRunController {
       } else if (existing) {
         this.session = existing;
       } else {
+        const launchableAgent = agents.find((agent) => agent.launchable !== false);
+        if (!launchableAgent) {
+          removeStoredActiveSessionId();
+          return;
+        }
         this.session = await this.#api.createSession({
-          agent_workflow_type: defaultAgent.workflow_type,
+          agent_workflow_type: launchableAgent.workflow_type,
           is_message_queuing_enabled: true
         });
         this.sessions = [...this.sessions, this.session];
@@ -767,6 +772,11 @@ export class AgentRunController {
       const sessions = await this.#api.listSessions();
       this.sessions = sessions;
       this.#applySessionExecutionStates(sessions);
+      if (!this.session && sessions.length > 0) {
+        await this.selectSession(
+          [...sessions].sort((a, b) => b.created_at - a.created_at)[0].workflow_id
+        );
+      }
     } catch (error) {
       this.connectionError =
         error instanceof Error ? error.message : "Failed to refresh sessions.";
@@ -788,10 +798,15 @@ export class AgentRunController {
       const agents = await this.#loadAgents();
       const currentWorkflowType = this.session?.agent_workflow_type;
       const agent =
-        agents.find((item) => item.workflow_type === workflowType) ??
-        agents.find((item) => item.workflow_type === currentWorkflowType) ??
-        agents.find((item) => item.key === "qa") ??
-        agents[0];
+        agents.find(
+          (item) => item.workflow_type === workflowType && item.launchable !== false
+        ) ??
+        agents.find(
+          (item) =>
+            item.workflow_type === currentWorkflowType && item.launchable !== false
+        ) ??
+        agents.find((item) => item.key === "qa" && item.launchable !== false) ??
+        agents.find((item) => item.launchable !== false);
 
       if (!agent) throw new Error("No agent is registered.");
 

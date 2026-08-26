@@ -21,13 +21,14 @@ SESSION_MANAGER_TASK_QUEUE = "session-manager"
 
 @dataclass
 class AgentDescriptor:
-    """One launchable agent in the web session registry."""
+    """One agent the web session registry can display and discover."""
 
     key: str
     workflow_type: str
     task_queue: str
     label: str
     description: str
+    launchable: bool = True
 
 
 @dataclass
@@ -92,6 +93,13 @@ class SessionManagerWorkflow:
                 f"Unknown agent type {request.agent_workflow_type!r}. "
                 f"Known agents: {known}",
                 type="UnknownAgentType",
+                non_retryable=True,
+            )
+        if not descriptor.launchable:
+            raise ApplicationError(
+                f"Agent type {request.agent_workflow_type!r} is discovery-only and must "
+                "be started outside the session manager.",
+                type="AgentNotLaunchable",
                 non_retryable=True,
             )
 
