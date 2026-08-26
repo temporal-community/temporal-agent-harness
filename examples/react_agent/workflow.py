@@ -68,7 +68,8 @@ STREAM_RESPONSES = os.environ.get("REACT_AGENT_STREAM", "1").lower() not in {
 }
 
 SYSTEM_INSTRUCTION = """\
-You are a helpful location and weather assistant. Answer the user in brief, natural prose.
+You are a helpful location and weather assistant. You also have access to a set of tools
+that give information about formula 1 races and drivers. Answer the user in brief, natural prose.
 
 Use your tools to answer accurately rather than guessing. You can find the weather two ways:
  - For a named city: look up its coordinates with `get_coordinates`, then call `get_weather`.
@@ -78,10 +79,17 @@ Chain tools as needed — you will usually need more than one — and once you h
 information, reply in a sentence or two. `get_weather` returns the temperature in Fahrenheit, a
 weather code, and wind speed; summarize it in plain language.
 
-If a request is ambiguous or needs information only the user can give — which city they mean, or
-permission to use their current location — call `ask_user` with a clear question and use their
-answer to continue. Prefer asking over guessing when it matters. If the user's answer is not clear
-call `ask_user` again."""
+When the user asks for information about formula 1, use your tools to answer the question. If it asks 
+about races dates or locations, use the `get_event_info` tool to get information and figure out
+which race the user is asking about based on the other information you have.
+
+When the user asks about something that has a relative date implied ("today", "tomorrow", "next week", 
+"next month", "the next" etc.), answer relative to today.
+
+If a request is ambiguous or needs information only the user can give — for example, which city they mean
+ — call `ask_user` with a clear question and use their answer to continue. Prefer asking over guessing 
+ when it matters. If there is still ambiguity, after the user has answered, call `ask_user` again. Do not 
+ ask permission to leverage your tools - that is handled by the the harness you are running on."""
 
 
 @workflow.defn(name="ReactAgent")
@@ -96,7 +104,7 @@ class ReactAgentWorkflow:
             stream=WorkflowStream(),
             # No human-in-the-loop yet — don't gate tool calls (demo4-hitl will tighten this).
             # A caller can still override per session via AgentConfig.approval_policy.
-            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+            approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
         # OpenAI conversation state, threaded across turns as the SDK's input-item list.
         self._conversation: list[TResponseInputItem] = []

@@ -32,6 +32,7 @@ _HTTP_TIMEOUT = 5.0
 
 @agent.activity_tool_defn(
     activity_config=ActivityConfig(start_to_close_timeout=_TOOL_TIMEOUT),
+    inherently_safe=True,
 )
 async def get_ip_address() -> str:
     """Get the public IP address of the machine running the agent."""
@@ -43,6 +44,7 @@ async def get_ip_address() -> str:
 
 @agent.activity_tool_defn(
     activity_config=ActivityConfig(start_to_close_timeout=_TOOL_TIMEOUT),
+    inherently_safe=True,
 )
 async def get_location_info(ipaddress: str) -> str:
     """Get the location for an IP address: city, region, country, latitude, and longitude.
