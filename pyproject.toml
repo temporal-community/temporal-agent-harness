@@ -51,6 +51,18 @@ ui = [
 code-mode = [
     "pydantic-monty>=0.0.18",
 ]
+# Nexus-brokered MCP servers: temporal_agent_harness.ai_sdks.openai_agents.workflow.
+# nexus_brokered_mcp_server. Lets an Agent reach an MCP tool over a Temporal Nexus endpoint,
+# one server per Nexus service, passed directly via Agent(mcp_servers=[...]). Needs the
+# `openai-agents` extra's deps too (restated here so this extra is self-sufficient), and
+# Python >=3.13 (nexus-mcp's own floor). Only resolvable from an editable checkout of this
+# repo — nexus-mcp isn't published to PyPI.
+nexus-mcp = [
+    "nexus-mcp; python_version >= '3.13'",
+    "openai-agents>=0.17.5",
+    "mcp>=1.13.0,<2",
+    "temporalio[opentelemetry]>=1.30.0",
+]
 
 [dependency-groups]
 # Everything needed to RUN the bundled Monty example from a checkout. Not part of the
@@ -81,6 +93,9 @@ dev = [
     "temporalio[opentelemetry]>=1.30.0",
     # Pydantic AI integration (the ai_sdks glue + its tests) — mirrors the `pydantic-ai` extra.
     "pydantic-ai-slim[temporal]>=2.13",
+    # Nexus-brokered MCP server tests — only on Python >=3.13, nexus-mcp's own floor, so
+    # `uv sync`/`pytest` on older Pythons just skip it.
+    "nexus-mcp; python_version >= '3.13'",
     { include-group = "examples" },
 ]
 
@@ -98,7 +113,16 @@ include = ["temporal_agent_harness*"]
     "dist/assets/*",
 ]
 
+[tool.uv]
+# nexus-mcp declares multiple top-level packages (transport, durable_tools_gateway,
+# authoring -- see its own pyproject.toml). Setuptools' default editable install for that
+# shape uses a PEP 660 custom MetaPathFinder that pyright can't follow. "compat" mode
+# emits a plain .pth file instead, which pyright (and any tool that reads .pth files) can
+# follow directly. No import paths change.
+config-settings-package = { "nexus-mcp" = { "editable_mode" = "compat" } }
+
 [tool.uv.sources]
+nexus-mcp = { path = "nexus/mcp", editable = true }
 # For now we need to pin to an unreleased Python SDK version that has update-with-callback over Nexus.
 # TODO(long-nt-tran): Remove this commit pin and use a released version once the release is bumped.
 temporalio = { git = "https://github.com/temporalio/sdk-python", rev = "29e0c51b0f832e0c9148f28ebba4000ab183d42f" }

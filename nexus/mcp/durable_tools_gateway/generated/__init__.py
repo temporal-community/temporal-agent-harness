@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 from .models import (
+    CallToolInput,
+    CallToolOutput,
     DeregisterInput,
+    ListAgentEntriesInput,
+    ListAgentEntriesOutput,
     RegisterExternalInput,
-    RegisterNexusInput,
 )
 from .services import RegistryService
 
 __all__ = [
+    "CallToolInput",
+    "CallToolOutput",
     "DeregisterInput",
+    "ListAgentEntriesInput",
+    "ListAgentEntriesOutput",
     "RegisterExternalInput",
-    "RegisterNexusInput",
     "RegistryService",
 ]
