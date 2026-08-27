@@ -9,9 +9,11 @@ Streaming is a toggle (``REACT_AGENT_STREAM``, default on — see ``STREAM_RESPO
 runs the model with ``Runner.run_streamed(..., context=self._runner)`` — passing the harness runner
 as the SDK run context is what lets the streaming seam resolve the in-flight turn — so model calls
 route through the streaming activity and the harness observer translates raw OpenAI events into the
-live turn stream. Non-streaming uses ``Runner.run(...)``: the turn runs to completion and returns
-one reply, with tool lifecycle / ``ask_user`` / the final reply still on the turn stream but no
-``reply_delta`` or ``model_interaction_*``. The
+live turn stream. Non-streaming uses ``Runner.run(..., context=self._runner)``: the turn runs to
+completion and returns one reply, and the run context is still threaded because the model-invocation
+bracket (``model_interaction_started`` / ``…_ended`` with token usage) and ``tool_requested`` are
+facts about the turn either way — only the token-by-token deltas (``reply_delta``,
+``thought_summary``, ``text_annotation``) go missing. The
 local tools are durable harness activity tools adapted onto the SDK with ``as_openai_agent_tools``
 (so the harness owns the approval policy and each tool's ``tool_start`` / ``tool_end`` /
 ``tool_error`` events); the F1 tools come from a durable, activity-backed MCP server registered on
@@ -139,10 +141,13 @@ class ReactAgentWorkflow:
             async for _event in result.stream_events():
                 pass
         else:
-            # Non-streaming: run the whole turn to completion, then return one reply. No context
-            # and no stream seam. Tool cards, ask_user, and the final reply still appear on the turn
-            # stream; token-by-token reply_delta and model_interaction_* do not.
-            result = await Runner.run(sdk_agent, input=input_items)
+            # Non-streaming: run the whole turn to completion, then return one reply.
+            # context=self._runner is needed HERE TOO — the non-streaming seam
+            # (model_call_observer_provider) reads the in-flight turn off it, so the
+            # model-invocation bracket and its token usage still land on the turn stream.
+            # Only the token-by-token deltas (reply_delta / thought_summary /
+            # text_annotation) are absent on this path.
+            result = await Runner.run(sdk_agent, input=input_items, context=self._runner)
 
         self._conversation = result.to_input_list()
         return TextReply(text=str(result.final_output))

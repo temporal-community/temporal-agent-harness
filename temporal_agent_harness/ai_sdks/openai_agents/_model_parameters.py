@@ -118,3 +118,27 @@ class ModelActivityParameters:
     .. warning::
         Streaming support is experimental and may change in future
         versions."""
+
+    model_call_observer_provider: Callable[[str | None, Any], Any] | None = None
+    """Optional per-call provider of a workflow-side observer for NON-streamed
+    model calls (``Runner.run``). Called once (in workflow context) with
+    ``(requested_model_id, run_context)`` — the same pair
+    :attr:`stream_to_provider` gets, where ``run_context`` is exactly the object
+    the caller passed as ``Runner.run(..., context=...)``.
+
+    It must return a
+    :class:`~temporal_agent_harness.ai_sdks.integration_helpers.ModelCallObserver`
+    (or ``None`` to skip observing this call). The stub enters it immediately
+    before dispatching the model activity, calls ``on_response(model_response)``
+    on success, and exits it once the call settles — so an embedding runtime can
+    record the model-invocation bracket, its latency, its token usage, and the
+    tool calls the model requested even when nothing is token-streamed.
+
+    This is deliberately SEPARATE from :attr:`stream_to_provider`: what a model
+    call *is and costs* is not a streaming artifact, so observing it must not
+    require streaming. The streamed path (``Runner.run_streamed``) reports the
+    same facts through its observer, inside the streaming activity — this hook is
+    the non-streamed counterpart, and the two never both fire for one call.
+
+    Runs in workflow code, so the returned observer must be deterministic and
+    non-blocking (publishing onto a ``WorkflowStream`` is fine; I/O is not)."""

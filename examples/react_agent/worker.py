@@ -19,6 +19,13 @@ Drop either hook, or omit the ``context=self._runner`` on ``run_streamed``, and 
 stream target — the streamed call raises unless you also set ``model_params.streaming_topic``
 (the plugin's plain raw-topic fallback, not wired here).
 
+and for the NON-STREAMING PATH (``REACT_AGENT_STREAM=0``):
+  * ``model_params.model_call_observer_provider=model_call_observer_provider`` — brackets each
+    ``Runner.run`` model call in workflow code, publishing ``model_interaction_started`` /
+    ``…_ended`` (with token usage) and ``tool_requested``. Those are facts about the turn, not
+    streaming artifacts, so turning tokens off must not turn them off. It reads the same run
+    context, so the workflow passes ``context=self._runner`` on ``Runner.run`` too.
+
 Env vars (set in the repo-root .env.local — see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile
     OPENAI_API_KEY                            required — the agent calls the OpenAI API
@@ -45,6 +52,7 @@ from temporal_agent_harness.ai_sdks.openai_agents import (
 )
 from temporal_agent_harness.ai_sdks.openai_agents_harness import (
     harness_observer_factory,
+    model_call_observer_provider,
     stream_to_provider,
 )
 
@@ -93,6 +101,10 @@ async def main() -> None:
             heartbeat_timeout=timedelta(seconds=30),
             # The harness streaming seam: route streamed events to the in-flight turn.
             stream_to_provider=stream_to_provider,
+            # Its non-streaming counterpart: bracket every `Runner.run` model call
+            # workflow-side, so model_interaction_started/ended (with token usage) and
+            # tool_requested land on the turn stream whether or not tokens streamed.
+            model_call_observer_provider=model_call_observer_provider,
         ),
         mcp_server_providers=[
             StatelessMCPServerProvider(

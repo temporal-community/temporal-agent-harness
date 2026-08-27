@@ -111,7 +111,10 @@ stream, not the resurrected entries.
   `agent_protocol/events.py`.
 - **Two publish paths onto the same topic:**
   - *In-workflow* — `_pub` → `WorkflowTopicHandle.publish` (`agent_workflow.py`): lifecycle events,
-    the approval cascade, inline-tool `tool_start`/`tool_end`, subagent parent-side markers.
+    the approval cascade, inline-tool `tool_start`/`tool_end`, subagent parent-side markers, and a
+    **non-streamed** model call's `model_interaction_*` + `tool_requested` (published by the
+    OpenAI integration's workflow-side `ModelCallObserver` around the model activity, since a
+    non-streamed call has no activity-side event stream to observe).
   - *Out-of-workflow* — `AgentWorkflowRunner.publisher_from_activity` → `WorkflowStreamClient`
     (delivered as the publish Signal): Gemini/OpenAI streamed `reply_delta`, `model_interaction_*`,
     and activity-tool `tool_start`/`tool_end`. Raw provider tokens are folded into semantic

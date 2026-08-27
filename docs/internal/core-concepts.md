@@ -72,8 +72,9 @@ above (`turn_started`, `reply_delta`, `tool_*`, …).
   in `agent_protocol/events.py`.)
 - **One topic, two producers.** All events publish to the single `turn_events` topic on the agent's
   `WorkflowStream`: **in-workflow** via `_pub` (lifecycle, the approval cascade, inline-tool
-  brackets) and **from inside activities** via `publisher_from_activity` (streamed `reply_delta`,
-  `model_interaction_*`, activity-tool brackets). Raw provider tokens are folded into `AgentEvent`s
+  brackets, and — for a non-streamed model call — its `model_interaction_*` bracket) and **from
+  inside activities** via `publisher_from_activity` (streamed `reply_delta`, `model_interaction_*`,
+  activity-tool brackets). Raw provider tokens are folded into `AgentEvent`s
   *inside* the activity — the lowest-level thing that crosses the activity→workflow→client boundary
   is already a semantic event, never raw bytes.
 - **It's a durable, replayable stream, not a fire-and-forget feed.** Each event is a Temporal Signal
@@ -211,13 +212,26 @@ the visible one, but not the only one):
    still apply. (For a framework with its own tool loop, this is the hardest part — interpose
    `run_tool` into the framework's loop.)
 
+**Streaming is not the seam — the model call is.** Only `reply_delta` / `thought_summary` /
+`text_annotation` are streaming artifacts. `model_interaction_started` / `…_ended` (with
+`TokenUsage`) and `tool_requested` are *facts about the turn* — the model was invoked, here is its
+span, what it cost, what it asked for — equally true of a non-streamed call. So an integration must
+emit them at the **model-invocation boundary for every model call**, not from inside its streaming
+observer, or the event stream silently degrades (losing cost visibility) for anyone who doesn't
+stream. Concretely: the OpenAI integration publishes them from the activity-side observer when
+streaming and from a workflow-side `ModelCallObserver` (`model_call_observer_provider`) when not;
+Pydantic AI streams internally whenever an `event_stream_handler` is set, so `run()` and
+`run_stream()` are already identical; Gemini's Interactions path is streaming-only.
+
 Two integrations, two provenances:
 - **Gemini** (`ai_sdks/google_genai_plugin/`) — **harness-authored**; the harness wrote the
   activity-wrapping itself (not an official Temporal SDK integration).
 - **OpenAI Agents SDK** (`ai_sdks/openai_agents/` + `ai_sdks/openai_agents_harness.py`) — a
-  **vendored copy** of `temporalio.contrib.openai_agents` + generic streaming seams
-  (`stream_to_provider` / `observer_factory`), with harness specifics in the sibling module. (See
-  `python-idioms-for-java-spring-devs.md` for decorator mechanics and the re-vendoring note.)
+  **vendored copy** of `temporalio.contrib.openai_agents` + generic seams
+  (`stream_to_provider` / `observer_factory` for the streamed path,
+  `model_call_observer_provider` for the non-streamed one), with harness specifics in the sibling
+  module. (See `python-idioms-for-java-spring-devs.md` for decorator mechanics and the re-vendoring
+  note.)
 
 ## Model output is not one blob — it's typed parts
 

@@ -32,6 +32,9 @@ from agents.tool import (
 from openai.types.responses.response_prompt_param import ResponsePromptParam
 
 from temporalio import workflow
+from temporal_agent_harness.ai_sdks.integration_helpers import (
+    select_model_call_observer,
+)
 from temporal_agent_harness.ai_sdks.openai_agents._invoke_model_activity import (
     ActivityModelInput,
     AgentOutputSchemaInput,
@@ -207,6 +210,26 @@ class _TemporalModelStub(Model):  # type:ignore[reportUnusedClass]
             prompt=prompt,
         )
 
+        # Bracket the dispatch with the configured workflow-side observer. The
+        # streamed path reports the model-invocation facts (span, usage, requested
+        # tool calls) from inside the streaming activity; a non-streamed call has no
+        # such activity-side seam, so it reports them from here — the one point every
+        # non-streamed model call passes through. Resolving to a null observer when
+        # nothing is configured keeps this a plain `with`.
+        observer = select_model_call_observer(
+            provider=self.model_params.model_call_observer_provider,
+            model=self.model_name,
+            run_context=self._run_context,
+        )
+        with observer:
+            response = await self._dispatch_model_activity(activity_input, summary)
+            observer.on_response(response)
+            return response
+
+    async def _dispatch_model_activity(
+        self, activity_input: ActivityModelInput, summary: str | None
+    ) -> ModelResponse:
+        """Run one non-streamed model call as its (local or normal) activity."""
         if self.model_params.use_local_activity:
             return await workflow.execute_local_activity_method(
                 ModelActivity.invoke_model_activity,

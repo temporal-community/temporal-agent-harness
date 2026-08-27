@@ -34,6 +34,12 @@ model call publishes ``reply_delta`` / ``thought_summary`` / ``tool_requested`` 
 ``model_interaction_started`` / ``…_ended`` onto the harness turn stream live — the same vocabulary
 the Gemini and OpenAI integrations produce.
 
+Note there is no streamed/non-streamed split to worry about here: setting an
+``event_stream_handler`` makes Pydantic AI iterate the model response as a stream even for a plain
+``agent.run(...)``, so a caller gets the identical turn-stream vocabulary either way. (The OpenAI
+integration has to close that gap explicitly — see ``model_call_observer_provider`` in
+:mod:`~temporal_agent_harness.ai_sdks.openai_agents_harness`.)
+
 .. warning::
     Streaming support is experimental and may change in future versions.
 """
