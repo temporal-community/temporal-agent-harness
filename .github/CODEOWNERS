@@ -1,6 +1,6 @@
 # Global code owners for this repository.
-* @Alex-Tideman @JasonSteving99 @donald-pinckney @long-nt-tran @JoshuaFrenchwood
+* @Alex-Tideman @JasonSteving99 @long-nt-tran @JoshuaFrenchwood
 
-/temporal_agent_harness/ @JasonSteving99 @donald-pinckney
+/temporal_agent_harness/ @JasonSteving99
 /ui/ @Alex-Tideman @shphrd
 /nexus/ @long-nt-tran @JoshuaFrenchwood
