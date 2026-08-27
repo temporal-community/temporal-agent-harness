@@ -21,6 +21,10 @@ const (
 	// AgentNexusEndpoint is the Nexus endpoint name the driver targets.
 	AgentNexusEndpoint = "support-agent-nexus"
 	turnEventsTopic    = "turn_events"
+
+	// DefaultExistingSessionQueryTimeout is used when
+	// Driver.ExistingSessionQueryTimeout is unset.
+	DefaultExistingSessionQueryTimeout = 30 * time.Second
 )
 
 // derefOrZero returns *p, or the zero value of T if p is nil. This utility
@@ -164,6 +168,11 @@ type Driver struct {
 	// Cloud account — Nexus endpoint names must be unique account-wide, not
 	// just namespace-wide, so each environment needs its own.
 	NexusEndpoint string
+
+	// ExistingSessionQueryTimeout bounds the QueryAgentStatus probe in
+	// StartTurn's RequiresExistingSession branch. Leave zero to use
+	// DefaultExistingSessionQueryTimeout.
+	ExistingSessionQueryTimeout time.Duration
 }
 
 // nexusEndpoint returns d.NexusEndpoint, or AgentNexusEndpoint if unset.
@@ -172,6 +181,15 @@ func (d *Driver) nexusEndpoint() string {
 		return AgentNexusEndpoint
 	}
 	return d.NexusEndpoint
+}
+
+// existingSessionQueryTimeout returns d.ExistingSessionQueryTimeout, or
+// DefaultExistingSessionQueryTimeout if unset.
+func (d *Driver) existingSessionQueryTimeout() time.Duration {
+	if d.ExistingSessionQueryTimeout == 0 {
+		return DefaultExistingSessionQueryTimeout
+	}
+	return d.ExistingSessionQueryTimeout
 }
 
 // StartTurn dispatches a message, slash command, or approval decision to the agent
@@ -187,7 +205,7 @@ func (d *Driver) StartTurn(ctx workflow.Context, input router.Input) (router.Sta
 			var statusOut harnessgen.AgentStatusOutput
 			if err := agentClient.ExecuteOperation(ctx, harnessgen.AgentService.QueryAgentStatus,
 				harnessgen.QuerySessionInput{SessionId: input.SessionID},
-				workflow.NexusOperationOptions{ScheduleToCloseTimeout: 10 * time.Second},
+				workflow.NexusOperationOptions{ScheduleToCloseTimeout: d.existingSessionQueryTimeout()},
 			).Get(ctx, &statusOut); err != nil {
 				return router.StartResult{}, nil
 			}
