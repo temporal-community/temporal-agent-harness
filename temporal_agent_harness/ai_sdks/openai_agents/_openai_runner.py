@@ -134,6 +134,10 @@ class TemporalOpenAIRunner(AgentRunner):
                 _StatefulMCPServerReference,
                 _StatelessMCPServerReference,
             )
+            from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
+                _NexusGatewayMCPServer,
+                _NexusTransportMCPServer,
+            )
 
             for s in starting_agent.mcp_servers:
                 if not isinstance(
@@ -141,6 +145,8 @@ class TemporalOpenAIRunner(AgentRunner):
                     (
                         _StatelessMCPServerReference,
                         _StatefulMCPServerReference,
+                        _NexusTransportMCPServer,
+                        _NexusGatewayMCPServer,
                     ),
                 ):
                     raise ValueError(

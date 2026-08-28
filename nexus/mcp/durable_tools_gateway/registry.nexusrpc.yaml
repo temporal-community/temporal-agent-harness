@@ -1,0 +1,94 @@
+# NOTE: nex-gen 0.2.1+ emits Python dataclasses + TransferTypeConverter instead of
+# pydantic models. That needs temporalio>=1.31.0 (TransferTypeConverter, experimental),
+# newer than this repo's current pin. Until that SDK bump lands, regenerate with
+# nex-gen 0.2.0 (`just generate-registry-contract` from the repo root) to keep the
+# pydantic style in generated/.
+nexusrpc: "1.0.0"
+
+services:
+  RegistryService:
+    fqn: RegistryService
+    description: >
+      Durable Tools Gateway. Registers 3rd-party MCP servers under an agent_id, and
+      proxies calls to them. Native Nexus services are reached directly by the agent
+      and never go through this gateway.
+    operations:
+      registerExternal:
+        description: Register a 3rd-party MCP server under one agent_id.
+        input: { $ref: "#/$defs/RegisterExternalInput" }
+      deregister:
+        description: Remove one registration under one agent_id.
+        input: { $ref: "#/$defs/DeregisterInput" }
+      listAgentEntries:
+        description: All registered 3rd-party tools for one agent_id.
+        input: { $ref: "#/$defs/ListAgentEntriesInput" }
+        output: { $ref: "#/$defs/ListAgentEntriesOutput" }
+      callTool:
+        fqn: call_tool
+        description: Invoke one tool on a registered 3rd-party MCP server.
+        input: { $ref: "#/$defs/CallToolInput" }
+        output: { $ref: "#/$defs/CallToolOutput" }
+
+$defs:
+  RegisterExternalInput:
+    type: object
+    description: Input for registering a 3rd-party MCP server.
+    properties:
+      agent_id:
+        type: string
+      name:
+        type: string
+      url:
+        type: string
+
+  DeregisterInput:
+    type: object
+    description: Input for removing one registration.
+    properties:
+      agent_id:
+        type: string
+      name:
+        type: string
+
+  ListAgentEntriesInput:
+    type: object
+    description: Input for looking up one agent_id's registrations.
+    properties:
+      agent_id:
+        type: string
+
+  ListAgentEntriesOutput:
+    type: object
+    description: All registered 3rd-party tools for one agent_id.
+    properties:
+      remote_tools:
+        type: object
+        description: "{alias: [tool dicts]}"
+        additionalProperties:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+  CallToolInput:
+    type: object
+    description: Input for invoking one tool on a registered 3rd-party MCP server.
+    properties:
+      agent_id:
+        type: string
+      alias:
+        type: string
+      name:
+        type: string
+        description: Full prefixed tool name, e.g. "weather_get_forecast".
+      arguments:
+        type: object
+        additionalProperties: true
+
+  CallToolOutput:
+    type: object
+    description: Serialised mcp.types.CallToolResult.
+    properties:
+      result:
+        type: object
+        additionalProperties: true
