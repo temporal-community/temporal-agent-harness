@@ -34,25 +34,22 @@ from ._code_mode_e2e_parent import CODE_MODE_TOOLS, CodeModeE2EParentWorkflow
 
 @pytest_asyncio.fixture
 async def client_and_queue():
-    env = await WorkflowEnvironment.start_time_skipping(
+    async with await WorkflowEnvironment.start_time_skipping(
         data_converter=pydantic_data_converter
-    )
-    task_queue = f"code-mode-e2e-{uuid.uuid4()}"
-    async with Worker(
-        env.client,
-        task_queue=task_queue,
-        workflows=[CodeModeE2EParentWorkflow],
-        # The generic Code Mode stepping activities + the durable bodies of the host tools
-        # (registered the normal way, like any @agent.activity_tool_defn).
-        activities=[
-            *CODE_MODE_ACTIVITIES,
-            *(agent.tool_activity(t) for t in CODE_MODE_TOOLS),
-        ],
-    ):
-        try:
+    ) as env:
+        task_queue = f"code-mode-e2e-{uuid.uuid4()}"
+        async with Worker(
+            env.client,
+            task_queue=task_queue,
+            workflows=[CodeModeE2EParentWorkflow],
+            # The generic Code Mode stepping activities + the durable bodies of the host tools
+            # (registered the normal way, like any @agent.activity_tool_defn).
+            activities=[
+                *CODE_MODE_ACTIVITIES,
+                *(agent.tool_activity(t) for t in CODE_MODE_TOOLS),
+            ],
+        ):
             yield env.client, task_queue
-        finally:
-            await env.shutdown()
 
 
 async def _run(

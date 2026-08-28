@@ -101,21 +101,18 @@ class ToolProbeAgent:
 
 @pytest_asyncio.fixture
 async def client_and_queue():
-    env = await WorkflowEnvironment.start_time_skipping(
+    async with await WorkflowEnvironment.start_time_skipping(
         data_converter=pydantic_data_converter
-    )
-    task_queue = f"agent-tool-test-{uuid.uuid4()}"
-    async with Worker(
-        env.client,
-        task_queue=task_queue,
-        workflows=[ToolProbeAgent],
-        activities=[agent.tool_activity(echo_activity_tool)],
-        workflow_runner=UnsandboxedWorkflowRunner(),
-    ):
-        try:
+    ) as env:
+        task_queue = f"agent-tool-test-{uuid.uuid4()}"
+        async with Worker(
+            env.client,
+            task_queue=task_queue,
+            workflows=[ToolProbeAgent],
+            activities=[agent.tool_activity(echo_activity_tool)],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
             yield env.client, task_queue
-        finally:
-            await env.shutdown()
 
 
 async def _collect_until_turn_end(

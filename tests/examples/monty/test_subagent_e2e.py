@@ -47,32 +47,29 @@ from ._subagent_e2e_parent import (
 
 @pytest_asyncio.fixture
 async def client_and_queue():
-    env = await WorkflowEnvironment.start_time_skipping(
+    async with await WorkflowEnvironment.start_time_skipping(
         data_converter=pydantic_data_converter
-    )
-    task_queue = f"subagent-e2e-{uuid.uuid4()}"
-    # One worker hosts BOTH the parent and the child agent (the parent starts the child on this
-    # same queue), the Monty batch + host activities the child needs, and the subagent-turn
-    # activity the parent's runner dispatches — closed over the env client so it can talk to the
-    # child workflow.
-    async with Worker(
-        env.client,
-        task_queue=task_queue,
-        workflows=[
-            SubagentE2EParentWorkflow,
-            ApprovalGatedSubagentParentWorkflow,
-            MontyDynamicAgentWorkflow,
-        ],
-        activities=[
-            *activities.ALL_ACTIVITIES,
-            *CODE_MODE_ACTIVITIES,
-            SubagentActivities(env.client).run_subagent_turn,
-        ],
-    ):
-        try:
+    ) as env:
+        task_queue = f"subagent-e2e-{uuid.uuid4()}"
+        # One worker hosts BOTH the parent and the child agent (the parent starts the child on this
+        # same queue), the Monty batch + host activities the child needs, and the subagent-turn
+        # activity the parent's runner dispatches — closed over the env client so it can talk to the
+        # child workflow.
+        async with Worker(
+            env.client,
+            task_queue=task_queue,
+            workflows=[
+                SubagentE2EParentWorkflow,
+                ApprovalGatedSubagentParentWorkflow,
+                MontyDynamicAgentWorkflow,
+            ],
+            activities=[
+                *activities.ALL_ACTIVITIES,
+                *CODE_MODE_ACTIVITIES,
+                SubagentActivities(env.client).run_subagent_turn,
+            ],
+        ):
             yield env.client, task_queue
-        finally:
-            await env.shutdown()
 
 
 async def _drive(

@@ -137,21 +137,18 @@ class CallbackProbeAgent:
 
 @pytest_asyncio.fixture
 async def env_and_client():
-    env = await WorkflowEnvironment.start_time_skipping(
+    async with await WorkflowEnvironment.start_time_skipping(
         data_converter=pydantic_data_converter
-    )
-    task_queue = f"callback-test-{uuid.uuid4()}"
-    # Callback tools are inline (tool_defn) — no activities to register.
-    async with Worker(
-        env.client,
-        task_queue=task_queue,
-        workflows=[CallbackProbeAgent],
-        workflow_runner=UnsandboxedWorkflowRunner(),
-    ):
-        try:
+    ) as env:
+        task_queue = f"callback-test-{uuid.uuid4()}"
+        # Callback tools are inline (tool_defn) — no activities to register.
+        async with Worker(
+            env.client,
+            task_queue=task_queue,
+            workflows=[CallbackProbeAgent],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
             yield env.client, task_queue
-        finally:
-            await env.shutdown()
 
 
 async def _start(

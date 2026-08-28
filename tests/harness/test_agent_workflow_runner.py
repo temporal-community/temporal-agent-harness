@@ -185,22 +185,19 @@ class SlashExtensionProbeAgent:
 @pytest_asyncio.fixture
 async def client_and_queue():
     """A time-skipping env (pydantic converter) with a worker hosting the probe."""
-    env = await WorkflowEnvironment.start_time_skipping(
+    async with await WorkflowEnvironment.start_time_skipping(
         data_converter=pydantic_data_converter
-    )
-    task_queue = f"agent-workflow-runner-test-{uuid.uuid4()}"
-    async with Worker(
-        env.client,
-        task_queue=task_queue,
-        workflows=[TypedProbeAgent, SlashExtensionProbeAgent],
-        # Unsandboxed so the test module's imports (pydantic, harness, pytest) don't
-        # trip the workflow sandbox; the runner logic under test is unaffected.
-        workflow_runner=UnsandboxedWorkflowRunner(),
-    ):
-        try:
+    ) as env:
+        task_queue = f"agent-workflow-runner-test-{uuid.uuid4()}"
+        async with Worker(
+            env.client,
+            task_queue=task_queue,
+            workflows=[TypedProbeAgent, SlashExtensionProbeAgent],
+            # Unsandboxed so the test module's imports (pydantic, harness, pytest) don't
+            # trip the workflow sandbox; the runner logic under test is unaffected.
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
             yield env.client, task_queue
-        finally:
-            await env.shutdown()
 
 
 async def _start(client: Client, task_queue: str, wf: Any) -> WorkflowHandle:
