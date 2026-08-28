@@ -22,7 +22,6 @@ install-nexgen:
 	echo "Installing nex-gen $$TAG ($$TARGET) to $$BINDIR..."; \
 	mkdir -p "$$BINDIR" && curl -sL "$$URL" | tar xz -C "$$BINDIR" nexgen && chmod +x "$$BINDIR/nexgen"
 
-# Regenerates the RegistryService Python bindings. generated/ contains only generated
-# code (safe to overwrite wholesale — nex-gen clears its --output directory on every run).
+# Regenerates the RegistryService Python bindings.
 generate: install-nexgen
 	"$$HOME/.local/bin/nexgen" python registry.nexusrpc.yaml --output generated
