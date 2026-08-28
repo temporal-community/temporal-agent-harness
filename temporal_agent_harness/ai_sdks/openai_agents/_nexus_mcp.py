@@ -25,7 +25,12 @@ _INSTALL_MESSAGE = (
 try:
     with workflow.unsafe.imports_passed_through():
         from transport.workflow_transport import WorkflowTransport, _coerce_call_tool_result
-        from durable_tools_gateway.generated import CallToolInput, ListAgentEntriesInput, RegistryService
+        from durable_tools_gateway.generated import (
+            CallToolInput,
+            CallToolInputArguments,
+            ListAgentEntriesInput,
+            RegistryService,
+        )
 except ModuleNotFoundError as exc:
     raise RuntimeError(_INSTALL_MESSAGE) from exc
 
@@ -161,12 +166,19 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
         entries = await gateway_client.execute_operation(
             RegistryService.list_agent_entries, ListAgentEntriesInput(agent_id=self._agent_id)
         )
-        remote_tools_by_alias = entries.remote_tools or {}
+        # nex-gen wraps map-shaped (additionalProperties) fields in a named type instead
+        # of a plain dict.
+        remote_tools_by_alias = (
+            entries.remote_tools.additional_properties
+            if entries.remote_tools is not None
+            else {}
+        )
 
         remote_routes: dict[str, str] = {}
         tool_dicts: list[dict[str, Any]] = []
         for alias in self._aliases:
-            for tool_dict in remote_tools_by_alias.get(alias, []):
+            for tool_item in remote_tools_by_alias.get(alias, []):
+                tool_dict = tool_item.additional_properties
                 remote_routes[tool_dict["name"]] = alias
                 tool_dicts.append(tool_dict)
 
@@ -194,9 +206,17 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
             call_result = await gateway_client.execute_operation(
                 RegistryService.call_tool,
                 CallToolInput(
-                    agent_id=self._agent_id, alias=alias, name=tool_name, arguments=arguments or {}
+                    agent_id=self._agent_id,
+                    alias=alias,
+                    name=tool_name,
+                    arguments=CallToolInputArguments(additional_properties=arguments or {}),
                 ),
             )
-            return _coerce_call_tool_result(call_result.result)
+            result = (
+                call_result.result.additional_properties
+                if call_result.result is not None
+                else None
+            )
+            return _coerce_call_tool_result(result)
         except Exception as exc:
             return _error_result(exc)

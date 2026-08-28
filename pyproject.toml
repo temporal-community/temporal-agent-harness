@@ -8,7 +8,7 @@ requires-python = ">=3.11"
 # pydantic. AI-SDK and external-storage needs are opt-in extras below, so installing the
 # harness doesn't drag in Gemini or boto3.
 dependencies = [
-    "temporalio>=1.30.0",  # provides temporalio.contrib.workflow_streams (experimental)
+    "temporalio>=1.31.0",  # provides temporalio.contrib.workflow_streams (experimental)
     "pydantic>=2.0",
 ]
 
@@ -24,7 +24,7 @@ s3 = [
     # temporalio's bundled S3 storage driver (temporalio.contrib.aws.s3driver) imports
     # aioboto3 AND types_aiobotocore_s3 at runtime; the [aioboto3] extra pulls both. Bare
     # aioboto3 is not enough to load the driver.
-    "temporalio[aioboto3]>=1.30.0",
+    "temporalio[aioboto3]>=1.31.0",
 ]
 # The OpenAI Agents SDK integration: temporal_agent_harness.ai_sdks.openai_agents
 # (vendored from temporalio.contrib.openai_agents @ sdk-python main). The trace interceptor
@@ -32,7 +32,7 @@ s3 = [
 openai-agents = [
     "openai-agents>=0.17.5",
     "mcp>=1.9.4,<2",
-    "temporalio[opentelemetry]>=1.30.0",
+    "temporalio[opentelemetry]>=1.31.0",
 ]
 # The Pydantic AI integration: temporal_agent_harness.ai_sdks.pydantic_ai_harness. Unlike the
 # openai-agents/genai integrations, the upstream plugin (pydantic_ai.durable_exec.temporal, shipped
@@ -61,7 +61,7 @@ nexus-mcp = [
     "nexus-mcp; python_version >= '3.13'",
     "openai-agents>=0.17.5",
     "mcp>=1.13.0,<2",
-    "temporalio[opentelemetry]>=1.30.0",
+    "temporalio[opentelemetry]>=1.31.0",
 ]
 
 [dependency-groups]
@@ -85,12 +85,12 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "setuptools>=83.0.0",  # package artifact tests call the build backend directly
     "moto[server]>=5.2.1",  # threaded S3 mock for the utils/large_payload S3-driver test
-    "temporalio[aioboto3]>=1.30.0",  # S3 storage driver under test (mirrors the `s3` extra)
+    "temporalio[aioboto3]>=1.31.0",  # S3 storage driver under test (mirrors the `s3` extra)
     # OpenAI Agents integration + its opentelemetry/mcp deps, so the vendored plugin and its
     # tests import under a plain `uv run pytest` (mirrors the `openai-agents` extra).
     "openai-agents>=0.17.5",
     "mcp>=1.9.4,<2",
-    "temporalio[opentelemetry]>=1.30.0",
+    "temporalio[opentelemetry]>=1.31.0",
     # Pydantic AI integration (the ai_sdks glue + its tests) — mirrors the `pydantic-ai` extra.
     "pydantic-ai-slim[temporal]>=2.13",
     # Nexus-brokered MCP server tests — only on Python >=3.13, nexus-mcp's own floor, so
@@ -123,9 +123,6 @@ config-settings-package = { "nexus-mcp" = { "editable_mode" = "compat" } }
 
 [tool.uv.sources]
 nexus-mcp = { path = "nexus/mcp", editable = true }
-# For now we need to pin to an unreleased Python SDK version that has update-with-callback over Nexus.
-# TODO(long-nt-tran): Remove this commit pin and use a released version once the release is bumped.
-temporalio = { git = "https://github.com/temporalio/sdk-python", rev = "29e0c51b0f832e0c9148f28ebba4000ab183d42f" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
