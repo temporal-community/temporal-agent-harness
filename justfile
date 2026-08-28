@@ -279,28 +279,7 @@ nexus-agent-generate: install-nexgen
     "$HOME/.local/bin/nexgen" python temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml \
         --output temporal_agent_harness/nexus_agent_adapter/generated
 
-# Installs nex-gen v0.2.0 specifically, into its own binary path (not ~/.local/bin/nexgen).
-# v0.2.1+ switched Python output to dataclasses + TransferTypeConverter, which needs
-# temporalio>=1.31.0 (experimental) -- newer than this repo's current pin. Pinned here on
-# purpose until that SDK bump happens; see registry.nexusrpc.yaml.
-install-nexgen-v0-2-0:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    BINDIR="$HOME/.local/bin"
-    OS=$(uname -s); ARCH=$(uname -m)
-    case "$OS-$ARCH" in
-        Darwin-arm64) TARGET=aarch64-apple-darwin ;;
-        Darwin-x86_64) TARGET=x86_64-apple-darwin ;;
-        Linux-aarch64) TARGET=aarch64-unknown-linux-gnu ;;
-        Linux-x86_64) TARGET=x86_64-unknown-linux-gnu ;;
-        *) echo "error: unsupported platform $OS-$ARCH for nex-gen"; exit 1 ;;
-    esac
-    if [ -x "$BINDIR/nexgen-v0.2.0" ]; then exit 0; fi
-    URL="https://github.com/temporalio/nex-gen/releases/download/v0.2.0/nexgen-v0.2.0-$TARGET.tar.gz"
-    echo "Installing nex-gen v0.2.0 ($TARGET) to $BINDIR..."
-    mkdir -p "$BINDIR" && curl -sL "$URL" | tar xz -C "$BINDIR" nexgen && mv "$BINDIR/nexgen" "$BINDIR/nexgen-v0.2.0" && chmod +x "$BINDIR/nexgen-v0.2.0"
-
-# Regenerates the Durable Tools Gateway's Python bindings, pinned to nex-gen v0.2.0.
-generate-registry-contract: install-nexgen-v0-2-0
-    "$HOME/.local/bin/nexgen-v0.2.0" python nexus/mcp/durable_tools_gateway/registry.nexusrpc.yaml \
+# Gets the contract from local and regenerates the Durable Tools Gateway's Python bindings.
+generate-registry-contract: install-nexgen
+    "$HOME/.local/bin/nexgen" python nexus/mcp/durable_tools_gateway/registry.nexusrpc.yaml \
         --output nexus/mcp/durable_tools_gateway/generated

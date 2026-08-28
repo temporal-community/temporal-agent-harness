@@ -48,12 +48,15 @@ from .registry import (
 from .generated import (
     CallToolInput,
     CallToolOutput,
+    CallToolOutputResult,
     DeregisterInput,
     DeregisterSubagentInput,
     DispatchSubagentTurnInput,
     DispatchSubagentTurnOutput,
     ListAgentEntriesInput,
     ListAgentEntriesOutput,
+    ListAgentEntriesOutputRemoteTools,
+    ListAgentEntriesOutputRemoteToolsValueItem,
     RegisterExternalInput,
     RegisterSubagentInput,
     RegistryService,
@@ -238,7 +241,19 @@ class RegistryServiceHandler:
         handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
         entries = await handle.query(ToolRegistryWorkflow.list_agent_entries, agent_id)
         remote_tools = await _fetch_tools_grouped(self._client, entries.remote_servers)
-        return ListAgentEntriesOutput(remote_tools=remote_tools)
+        # nex-gen wraps map-shaped (additionalProperties) fields in a named type instead
+        # of a plain dict -- wrap _fetch_tools_grouped's plain dict/list-of-dicts here.
+        return ListAgentEntriesOutput(
+            remote_tools=ListAgentEntriesOutputRemoteTools(
+                additional_properties={
+                    alias: [
+                        ListAgentEntriesOutputRemoteToolsValueItem(additional_properties=tool)
+                        for tool in tools
+                    ]
+                    for alias, tools in remote_tools.items()
+                }
+            )
+        )
 
     @nexusrpc.handler.sync_operation
     async def call_tool(
@@ -269,10 +284,13 @@ class RegistryServiceHandler:
                 type=nexusrpc.HandlerErrorType.NOT_FOUND,
             )
 
+        # nex-gen wraps map-shaped (additionalProperties) fields in a named type instead
+        # of a plain dict.
+        arguments = input.arguments.additional_properties if input.arguments is not None else {}
         try:
             result = await self._client.execute_activity(
                 mcp_proxy_activity,
-                ExternalMCPCallInput(server_url=url, tool_name=operation, arguments=input.arguments or {}),
+                ExternalMCPCallInput(server_url=url, tool_name=operation, arguments=arguments),
                 id=f"mcp-proxy-{uuid.uuid4()}",
                 task_queue=temporalio.nexus.info().task_queue,
                 start_to_close_timeout=timedelta(minutes=5),
@@ -285,7 +303,9 @@ class RegistryServiceHandler:
             raise nexusrpc.HandlerError(
                 str(exc.cause or exc), type=nexusrpc.HandlerErrorType.INTERNAL, retryable_override=False
             ) from exc
-        return CallToolOutput(result=result.model_dump(mode="json"))
+        return CallToolOutput(
+            result=CallToolOutputResult(additional_properties=result.model_dump(mode="json"))
+        )
 
     @nexusrpc.handler.sync_operation
     async def register_subagent(

@@ -1,8 +1,3 @@
-# NOTE: nex-gen 0.2.1+ emits Python dataclasses + TransferTypeConverter instead of
-# pydantic models. That needs temporalio>=1.31.0 (TransferTypeConverter, experimental),
-# newer than this repo's current pin. Until that SDK bump lands, regenerate with
-# nex-gen 0.2.0 (`just generate-registry-contract` from the repo root) to keep the
-# pydantic style in generated/.
 nexusrpc: "1.0.0"
 
 services:
