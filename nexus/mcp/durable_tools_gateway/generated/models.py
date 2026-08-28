@@ -11,6 +11,7 @@ from ._definitions import (
     ValidationError,
     Violation,
     _collect,
+    _parse_spec_integer,
     _transfer_type_convertible,
 )
 
@@ -24,6 +25,15 @@ _CALL_TOOL_OUTPUT_DECLARED: frozenset[str] = frozenset({"result"})
 _DEREGISTER_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id", "name"})
 
 
+_DEREGISTER_SUBAGENT_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id", "alias"})
+
+
+_DISPATCH_SUBAGENT_TURN_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id", "alias", "msg_type", "payload", "expected_turn"})
+
+
+_DISPATCH_SUBAGENT_TURN_OUTPUT_DECLARED: frozenset[str] = frozenset({"output", "turn_id", "turn_number"})
+
+
 _LIST_AGENT_ENTRIES_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id"})
 
 
@@ -31,6 +41,12 @@ _LIST_AGENT_ENTRIES_OUTPUT_DECLARED: frozenset[str] = frozenset({"remote_tools"}
 
 
 _REGISTER_EXTERNAL_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id", "name", "url"})
+
+
+_REGISTER_SUBAGENT_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id", "alias", "url"})
+
+
+_STOP_SUBAGENT_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id", "alias"})
 
 
 class _CallToolInputTransferTypeConverter(
@@ -350,6 +366,302 @@ class DeregisterInput:
     additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
 
 
+class _DeregisterSubagentInputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["DeregisterSubagentInput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["DeregisterSubagentInput"]
+    ) -> "DeregisterSubagentInput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        agent_id_value: str | None = None
+        if "agent_id" in raw:
+            agent_id_value_raw = raw["agent_id"]
+            if agent_id_value_raw is None:
+                violations.append(Violation(path="agent_id", reason="explicit null not allowed"))
+            else:
+                if not isinstance(agent_id_value_raw, str):
+                    violations.append(Violation(path="agent_id", reason="expected string"))
+                else:
+                    agent_id_value = agent_id_value_raw
+
+        alias_value: str | None = None
+        if "alias" in raw:
+            alias_value_raw = raw["alias"]
+            if alias_value_raw is None:
+                violations.append(Violation(path="alias", reason="explicit null not allowed"))
+            else:
+                if not isinstance(alias_value_raw, str):
+                    violations.append(Violation(path="alias", reason="expected string"))
+                else:
+                    alias_value = alias_value_raw
+
+        additional_properties: dict[str, typing.Any] = {}
+        for key in raw:
+            if key not in _DEREGISTER_SUBAGENT_INPUT_DECLARED:
+                additional_properties[key] = raw[key]
+        if violations:
+            raise ValidationError(violations)
+        return DeregisterSubagentInput(
+            agent_id=agent_id_value,
+            alias=alias_value,
+            additional_properties=additional_properties,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "DeregisterSubagentInput") -> typing.Any:
+        violations: list[Violation] = []
+        out: dict[str, typing.Any] = {}
+        if value.agent_id is not None:
+            out["agent_id"] = value.agent_id
+        if value.alias is not None:
+            out["alias"] = value.alias
+        for key, entry in value.additional_properties.items():
+            if key in _DEREGISTER_SUBAGENT_INPUT_DECLARED:
+                violations.append(Violation(path=key, reason="additional property collides with declared property"))
+            else:
+                out[key] = entry
+        if violations:
+            raise ValidationError(violations)
+        return out
+
+
+@_transfer_type_convertible(_DeregisterSubagentInputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class DeregisterSubagentInput:
+    """Input for removing one subagent registration."""
+
+    agent_id: str | None = None
+
+    alias: str | None = None
+
+    additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+
+
+class _DispatchSubagentTurnInputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["DispatchSubagentTurnInput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["DispatchSubagentTurnInput"]
+    ) -> "DispatchSubagentTurnInput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        agent_id_value: str | None = None
+        if "agent_id" in raw:
+            agent_id_value_raw = raw["agent_id"]
+            if agent_id_value_raw is None:
+                violations.append(Violation(path="agent_id", reason="explicit null not allowed"))
+            else:
+                if not isinstance(agent_id_value_raw, str):
+                    violations.append(Violation(path="agent_id", reason="expected string"))
+                else:
+                    agent_id_value = agent_id_value_raw
+
+        alias_value: str | None = None
+        if "alias" in raw:
+            alias_value_raw = raw["alias"]
+            if alias_value_raw is None:
+                violations.append(Violation(path="alias", reason="explicit null not allowed"))
+            else:
+                if not isinstance(alias_value_raw, str):
+                    violations.append(Violation(path="alias", reason="expected string"))
+                else:
+                    alias_value = alias_value_raw
+
+        msg_type_value: str | None = None
+        if "msg_type" in raw:
+            msg_type_value_raw = raw["msg_type"]
+            if msg_type_value_raw is None:
+                violations.append(Violation(path="msg_type", reason="explicit null not allowed"))
+            else:
+                if not isinstance(msg_type_value_raw, str):
+                    violations.append(Violation(path="msg_type", reason="expected string"))
+                else:
+                    msg_type_value = msg_type_value_raw
+
+        payload_value: str | None = None
+        if "payload" in raw:
+            payload_value_raw = raw["payload"]
+            if payload_value_raw is None:
+                violations.append(Violation(path="payload", reason="explicit null not allowed"))
+            else:
+                if not isinstance(payload_value_raw, str):
+                    violations.append(Violation(path="payload", reason="expected string"))
+                else:
+                    payload_value = payload_value_raw
+
+        expected_turn_value: int | None = None
+        if "expected_turn" in raw:
+            expected_turn_value_raw = raw["expected_turn"]
+            if expected_turn_value_raw is None:
+                violations.append(Violation(path="expected_turn", reason="explicit null not allowed"))
+            else:
+                expected_turn_value_parsed = _parse_spec_integer(expected_turn_value_raw, "expected_turn", violations)
+                if expected_turn_value_parsed is not None:
+                    expected_turn_value = expected_turn_value_parsed
+
+        additional_properties: dict[str, typing.Any] = {}
+        for key in raw:
+            if key not in _DISPATCH_SUBAGENT_TURN_INPUT_DECLARED:
+                additional_properties[key] = raw[key]
+        if violations:
+            raise ValidationError(violations)
+        return DispatchSubagentTurnInput(
+            agent_id=agent_id_value,
+            alias=alias_value,
+            msg_type=msg_type_value,
+            payload=payload_value,
+            expected_turn=expected_turn_value,
+            additional_properties=additional_properties,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "DispatchSubagentTurnInput") -> typing.Any:
+        violations: list[Violation] = []
+        out: dict[str, typing.Any] = {}
+        if value.agent_id is not None:
+            out["agent_id"] = value.agent_id
+        if value.alias is not None:
+            out["alias"] = value.alias
+        if value.msg_type is not None:
+            out["msg_type"] = value.msg_type
+        if value.payload is not None:
+            out["payload"] = value.payload
+        if value.expected_turn is not None:
+            out["expected_turn"] = value.expected_turn
+        for key, entry in value.additional_properties.items():
+            if key in _DISPATCH_SUBAGENT_TURN_INPUT_DECLARED:
+                violations.append(Violation(path=key, reason="additional property collides with declared property"))
+            else:
+                out[key] = entry
+        if violations:
+            raise ValidationError(violations)
+        return out
+
+
+@_transfer_type_convertible(_DispatchSubagentTurnInputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class DispatchSubagentTurnInput:
+    """Input for sending one turn to a registered subagent."""
+
+    agent_id: str | None = None
+
+    alias: str | None = None
+
+    msg_type: str | None = None
+    """Name of the target handler on the subagent."""
+
+    payload: str | None = None
+    """JSON-encoded input for msg_type."""
+
+    expected_turn: int | None = None
+    """Caller-known next turn number. Doubles as the idempotency key (with agent_id/alias)
+    for the proxy activity's retries.
+    """
+
+    additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+
+
+class _DispatchSubagentTurnOutputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["DispatchSubagentTurnOutput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["DispatchSubagentTurnOutput"]
+    ) -> "DispatchSubagentTurnOutput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        output_value: str | None = None
+        if "output" in raw:
+            output_value_raw = raw["output"]
+            if output_value_raw is None:
+                violations.append(Violation(path="output", reason="explicit null not allowed"))
+            else:
+                if not isinstance(output_value_raw, str):
+                    violations.append(Violation(path="output", reason="expected string"))
+                else:
+                    output_value = output_value_raw
+
+        turn_id_value: str | None = None
+        if "turn_id" in raw:
+            turn_id_value_raw = raw["turn_id"]
+            if turn_id_value_raw is None:
+                violations.append(Violation(path="turn_id", reason="explicit null not allowed"))
+            else:
+                if not isinstance(turn_id_value_raw, str):
+                    violations.append(Violation(path="turn_id", reason="expected string"))
+                else:
+                    turn_id_value = turn_id_value_raw
+
+        turn_number_value: int | None = None
+        if "turn_number" in raw:
+            turn_number_value_raw = raw["turn_number"]
+            if turn_number_value_raw is None:
+                violations.append(Violation(path="turn_number", reason="explicit null not allowed"))
+            else:
+                turn_number_value_parsed = _parse_spec_integer(turn_number_value_raw, "turn_number", violations)
+                if turn_number_value_parsed is not None:
+                    turn_number_value = turn_number_value_parsed
+
+        additional_properties: dict[str, typing.Any] = {}
+        for key in raw:
+            if key not in _DISPATCH_SUBAGENT_TURN_OUTPUT_DECLARED:
+                additional_properties[key] = raw[key]
+        if violations:
+            raise ValidationError(violations)
+        return DispatchSubagentTurnOutput(
+            output=output_value,
+            turn_id=turn_id_value,
+            turn_number=turn_number_value,
+            additional_properties=additional_properties,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "DispatchSubagentTurnOutput") -> typing.Any:
+        violations: list[Violation] = []
+        out: dict[str, typing.Any] = {}
+        if value.output is not None:
+            out["output"] = value.output
+        if value.turn_id is not None:
+            out["turn_id"] = value.turn_id
+        if value.turn_number is not None:
+            out["turn_number"] = value.turn_number
+        for key, entry in value.additional_properties.items():
+            if key in _DISPATCH_SUBAGENT_TURN_OUTPUT_DECLARED:
+                violations.append(Violation(path=key, reason="additional property collides with declared property"))
+            else:
+                out[key] = entry
+        if violations:
+            raise ValidationError(violations)
+        return out
+
+
+@_transfer_type_convertible(_DispatchSubagentTurnOutputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class DispatchSubagentTurnOutput:
+    """The subagent's reply to one turn."""
+
+    output: str | None = None
+    """JSON-encoded reply."""
+
+    turn_id: str | None = None
+
+    turn_number: int | None = None
+
+    additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+
+
 class _ListAgentEntriesInputTransferTypeConverter(
     temporalio.converter.TransferTypeConverter["ListAgentEntriesInput", typing.Any]
 ):
@@ -654,5 +966,173 @@ class RegisterExternalInput:
     name: str | None = None
 
     url: str | None = None
+
+    additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+
+
+class _RegisterSubagentInputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["RegisterSubagentInput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["RegisterSubagentInput"]
+    ) -> "RegisterSubagentInput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        agent_id_value: str | None = None
+        if "agent_id" in raw:
+            agent_id_value_raw = raw["agent_id"]
+            if agent_id_value_raw is None:
+                violations.append(Violation(path="agent_id", reason="explicit null not allowed"))
+            else:
+                if not isinstance(agent_id_value_raw, str):
+                    violations.append(Violation(path="agent_id", reason="expected string"))
+                else:
+                    agent_id_value = agent_id_value_raw
+
+        alias_value: str | None = None
+        if "alias" in raw:
+            alias_value_raw = raw["alias"]
+            if alias_value_raw is None:
+                violations.append(Violation(path="alias", reason="explicit null not allowed"))
+            else:
+                if not isinstance(alias_value_raw, str):
+                    violations.append(Violation(path="alias", reason="expected string"))
+                else:
+                    alias_value = alias_value_raw
+
+        url_value: str | None = None
+        if "url" in raw:
+            url_value_raw = raw["url"]
+            if url_value_raw is None:
+                violations.append(Violation(path="url", reason="explicit null not allowed"))
+            else:
+                if not isinstance(url_value_raw, str):
+                    violations.append(Violation(path="url", reason="expected string"))
+                else:
+                    url_value = url_value_raw
+
+        additional_properties: dict[str, typing.Any] = {}
+        for key in raw:
+            if key not in _REGISTER_SUBAGENT_INPUT_DECLARED:
+                additional_properties[key] = raw[key]
+        if violations:
+            raise ValidationError(violations)
+        return RegisterSubagentInput(
+            agent_id=agent_id_value,
+            alias=alias_value,
+            url=url_value,
+            additional_properties=additional_properties,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "RegisterSubagentInput") -> typing.Any:
+        violations: list[Violation] = []
+        out: dict[str, typing.Any] = {}
+        if value.agent_id is not None:
+            out["agent_id"] = value.agent_id
+        if value.alias is not None:
+            out["alias"] = value.alias
+        if value.url is not None:
+            out["url"] = value.url
+        for key, entry in value.additional_properties.items():
+            if key in _REGISTER_SUBAGENT_INPUT_DECLARED:
+                violations.append(Violation(path=key, reason="additional property collides with declared property"))
+            else:
+                out[key] = entry
+        if violations:
+            raise ValidationError(violations)
+        return out
+
+
+@_transfer_type_convertible(_RegisterSubagentInputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class RegisterSubagentInput:
+    """Input for registering a non-Nexus subagent's URL."""
+
+    agent_id: str | None = None
+
+    alias: str | None = None
+
+    url: str | None = None
+
+    additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+
+
+class _StopSubagentInputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["StopSubagentInput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["StopSubagentInput"]
+    ) -> "StopSubagentInput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        agent_id_value: str | None = None
+        if "agent_id" in raw:
+            agent_id_value_raw = raw["agent_id"]
+            if agent_id_value_raw is None:
+                violations.append(Violation(path="agent_id", reason="explicit null not allowed"))
+            else:
+                if not isinstance(agent_id_value_raw, str):
+                    violations.append(Violation(path="agent_id", reason="expected string"))
+                else:
+                    agent_id_value = agent_id_value_raw
+
+        alias_value: str | None = None
+        if "alias" in raw:
+            alias_value_raw = raw["alias"]
+            if alias_value_raw is None:
+                violations.append(Violation(path="alias", reason="explicit null not allowed"))
+            else:
+                if not isinstance(alias_value_raw, str):
+                    violations.append(Violation(path="alias", reason="expected string"))
+                else:
+                    alias_value = alias_value_raw
+
+        additional_properties: dict[str, typing.Any] = {}
+        for key in raw:
+            if key not in _STOP_SUBAGENT_INPUT_DECLARED:
+                additional_properties[key] = raw[key]
+        if violations:
+            raise ValidationError(violations)
+        return StopSubagentInput(
+            agent_id=agent_id_value,
+            alias=alias_value,
+            additional_properties=additional_properties,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "StopSubagentInput") -> typing.Any:
+        violations: list[Violation] = []
+        out: dict[str, typing.Any] = {}
+        if value.agent_id is not None:
+            out["agent_id"] = value.agent_id
+        if value.alias is not None:
+            out["alias"] = value.alias
+        for key, entry in value.additional_properties.items():
+            if key in _STOP_SUBAGENT_INPUT_DECLARED:
+                violations.append(Violation(path=key, reason="additional property collides with declared property"))
+            else:
+                out[key] = entry
+        if violations:
+            raise ValidationError(violations)
+        return out
+
+
+@_transfer_type_convertible(_StopSubagentInputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class StopSubagentInput:
+    """Input for closing a registered subagent instance."""
+
+    agent_id: str | None = None
+
+    alias: str | None = None
 
     additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
