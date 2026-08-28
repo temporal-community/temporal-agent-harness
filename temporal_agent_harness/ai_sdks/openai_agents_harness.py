@@ -40,7 +40,8 @@ import json
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack
-from typing import TYPE_CHECKING, Any
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, Self
 
 from pydantic import BaseModel
 
@@ -134,7 +135,13 @@ class OpenAIStreamObserver:
     off the terminal ``response.completed``.
     """
 
-    def __init__(self, context: TurnStreamContext, *, model: str | None = None) -> None:
+    def __init__(
+        self,
+        context: TurnStreamContext,
+        *,
+        model: str | None = None,
+        batch_interval: timedelta | None = None,
+    ) -> None:
         self._context = context
         # The requested model id, known at dispatch (from the streaming activity input),
         # so BOTH brackets name it — matching how the Gemini plugin reads the model from
@@ -150,11 +157,18 @@ class OpenAIStreamObserver:
         self._arg_buffers: dict[str, str] = {}
         # Token usage, captured off the terminal response.completed for the ended bracket.
         self._usage: TokenUsage | None = None
+        # Publish-flush cadence for this call's publisher — the plugin's configured
+        # ``ModelActivityParameters.streaming_batch_interval``, threaded in by
+        # ``harness_observer_factory``. ``None`` defers to the harness default in
+        # ``publisher_from_activity``.
+        self._batch_interval = batch_interval
 
-    async def __aenter__(self) -> OpenAIStreamObserver:
+    async def __aenter__(self) -> Self:
         self._stack = AsyncExitStack()
         self._publisher = await self._stack.enter_async_context(
-            AgentWorkflowRunner.publisher_from_activity(self._context)
+            AgentWorkflowRunner.publisher_from_activity(
+                self._context, batch_interval=self._batch_interval
+            )
         )
         # Open the model-interaction span at dispatch, before awaiting any event, so the
         # span duration is the real call latency.
@@ -304,20 +318,29 @@ def stream_to_provider(model: str | None, run_context: Any) -> _HarnessStreamTok
     return _HarnessStreamToken(context=context, model=model)
 
 
-def harness_observer_factory(token: Any) -> StreamObserver[Any]:
+def harness_observer_factory(
+    token: Any, *, batch_interval: timedelta | None = None
+) -> StreamObserver[Any]:
     """Turn a streamed call's opaque routing token into a fresh observer.
 
     The token is the :class:`_HarnessStreamToken` produced by :func:`stream_to_provider`;
     it arrives here rehydrated as a plain dict (it rides the activity input as an untyped
     ``Any`` field), so we validate it back into the model. Wired onto the plugin as
     ``observer_factory=...``.
+
+    ``batch_interval`` is the plugin's configured
+    ``ModelActivityParameters.streaming_batch_interval``, handed to every factory by
+    ``select_observer`` and forwarded to the observer's publisher — so raising that one
+    field genuinely coarsens this path's flush cadence (one Signal per flush) instead of
+    being ignored the moment a factory is wired. Defaulted so the factory stays callable
+    by hand (e.g. in tests), where ``None`` means "use the harness default".
     """
     tok = (
         token
         if isinstance(token, _HarnessStreamToken)
         else _HarnessStreamToken.model_validate(token)
     )
-    return OpenAIStreamObserver(tok.context, model=tok.model)
+    return OpenAIStreamObserver(tok.context, model=tok.model, batch_interval=batch_interval)
 
 
 # ---------------------------------------------------------------------------

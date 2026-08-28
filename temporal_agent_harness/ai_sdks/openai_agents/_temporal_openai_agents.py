@@ -251,6 +251,10 @@ class OpenAIAgentsPlugin(SimplePlugin):
                 Use with caution in production environments.
             observer_factory: Optional factory turning each streamed model call's
                 opaque routing token into a fresh live :class:`StreamObserver`.
+                Called as ``factory(token, batch_interval=...)``, where the interval
+                is ``model_params.streaming_batch_interval`` — so the configured
+                flush cadence applies to a custom observer's publisher too, not just
+                to the built-in raw-topic one.
                 Pair with ``model_params.stream_to_provider`` to route streamed
                 events into an embedding runtime (e.g. the agent harness turn
                 stream). If ``None``, streaming publishes raw events to
