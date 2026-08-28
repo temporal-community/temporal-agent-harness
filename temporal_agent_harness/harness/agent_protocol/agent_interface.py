@@ -196,6 +196,17 @@ class AgentConfig(BaseModel):
     The developer's separate *custom fallback* predicate is not part of this contract and
     is never overridable from the config (it is non-serializable).
 
+    ``labels`` — free-form key/value metadata the harness NEVER interprets. It does not read
+    them, branch on them, or validate their contents; it only makes them visible, by surfacing
+    them on ``agent_status`` and stamping them on the session's traces. That is what makes them
+    belong here despite the "universal knobs only" rule above: they are universal precisely
+    *because* no agent gives them meaning. Use them to attribute a session to whatever the
+    outside world cares about — ``user_id``, ``tenant``, ``experiment_id``, ``dataset_item_id``,
+    ``env``. Like ``agent_id`` (and unlike every other field) there is no agent-side default to
+    fall back to: unset simply means no labels. For labels that vary per message rather than
+    per session, use :attr:`AgentMessage.labels`. NOTE: labels are forwarded verbatim to
+    whatever observability backend is configured, so do not put secrets in them.
+
     ``agent_id`` — the short, tree-unique id this agent stamps on every event it publishes (and
     reports on its ``agent_status`` query); see :data:`AgentId` for the segment shape. A PARENT sets
     this when starting a subagent — pushing down the same ``handle`` it uses to reference the child
@@ -208,6 +219,7 @@ class AgentConfig(BaseModel):
     is_message_queuing_enabled: bool | None = None
     approval_policy: ToolApprovalPolicy | None = None
     agent_id: AgentId | None = None
+    labels: dict[str, str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -235,11 +247,19 @@ class AgentMessage(BaseModel):
     update validator rejects it if the workflow is already past that turn (stale client).
     It is carried on the envelope itself — the ``send_agent_message`` update takes a bare
     :class:`AgentMessage`, with no separate wrapper.
+
+    ``labels`` are per-TURN observability metadata, echoed onto this turn's
+    :class:`~temporal_agent_harness.harness.agent_protocol.events.TurnStarted` and its trace.
+    Same never-interpreted contract as :attr:`AgentConfig.labels`, but scoped to one message —
+    which is what a long-lived production session needs, where each turn may belong to a
+    different request, user context, or prompt variant, and a session-scoped bag cannot say so.
+    Merged over the session's labels (per-turn wins) wherever both apply.
     """
 
     type: str
     payload: dict[str, Any] = Field(default_factory=dict)
     expected_turn: int
+    labels: dict[str, str] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +547,11 @@ class AgentStatus:
         default_factory=ToolApprovalPolicy.always_require_approvals
     )
     has_custom_approval_fallback: bool = False
+    # The session-scoped observability labels this agent was started with
+    # (``AgentConfig.labels``). Surfaced here rather than as an event so an out-of-band
+    # consumer — a trace exporter, a scorer — can read them with ONE status query instead of
+    # scanning the stream, and so a late-attaching client sees them at all.
+    labels: dict[str, str] = field(default_factory=dict)
 
 
 class AcceptedFunction(BaseModel):

@@ -113,6 +113,11 @@ from temporal_agent_harness.harness.slash_commands import (
 # it without a circular import back through this module.
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
+# The OpenTelemetry seam. A leaf module with no harness imports, and a no-op when
+# ``opentelemetry`` is absent or no replay-safe tracer provider is configured — so importing it
+# here costs nothing for agents that never enable tracing.
+from temporal_agent_harness.harness import tracing
+
 # ParamSpec/return-type vars for the tool decorators. They let each be typed as an
 # identity over the wrapped callable (``Callable[P, Awaitable[R]] -> Callable[P,
 # Awaitable[R]]``), so a decorated tool's call signature stays byte-for-byte the
@@ -335,25 +340,30 @@ async def _apply_approval_policy(
             f"gated tool {tool_name!r} has no active turn to publish its approval against"
         )
 
-    runner._status.register_pending_approval(
-        tool_id,
-        tool_name,
-        tool_input,
-        ctx.turn_number,
-        ctx.turn_id,
-        inherently_safe=inherently_safe,
-    )
-    runner._pub(
-        ctx.turn_id,
-        ctx.turn_number,
-        ToolApprovalRequested(
-            tool_id=tool_id, tool_name=tool_name, tool_input=tool_input
-        ),
-    )
+    # Only the GATED path opens a span: an auto-approved call returned above, and emitting a
+    # zero-duration "approval" span for it would drown the interesting ones. This span's
+    # duration is how long the agent waited on a person — the human-in-the-loop latency that is
+    # otherwise invisible, and the reason the enclosing tool span opens before this gate.
+    with tracing.approval_span(tool_name=tool_name, tool_id=tool_id) as approval:
+        runner._status.register_pending_approval(
+            tool_id,
+            tool_name,
+            tool_input,
+            ctx.turn_number,
+            ctx.turn_id,
+            inherently_safe=inherently_safe,
+        )
+        runner._pub(
+            ctx.turn_id,
+            ctx.turn_number,
+            ToolApprovalRequested(
+                tool_id=tool_id, tool_name=tool_name, tool_input=tool_input
+            ),
+        )
 
-    await workflow.wait_condition(
-        lambda: runner._status.is_approval_resolved(tool_id) or runner._closed
-    )
+        await workflow.wait_condition(
+            lambda: runner._status.is_approval_resolved(tool_id) or runner._closed
+        )
 
     # CAUSAL ORDERING: the ToolApprovalResolved event is published at the RESOLUTION SITE
     # (the ``tool_approval`` handler and the policy-update cascade), in the synchronous
@@ -364,12 +374,17 @@ async def _apply_approval_policy(
     # order, which need not match causal order. The ONE case the resolution site can't
     # cover is waking on agent close while still PENDING (no decision resolved it) — only
     # then does the gate finalize the auto-deny and publish it.
-    if not runner._status.is_approval_resolved(tool_id):
-        outcome = runner._status.finalize_approval(tool_id, closed=runner._closed)
-        runner._publish_approval_resolved(tool_id)
-    else:
-        outcome = runner._status.finalize_approval(tool_id, closed=runner._closed)
+        if not runner._status.is_approval_resolved(tool_id):
+            outcome = runner._status.finalize_approval(tool_id, closed=runner._closed)
+            runner._publish_approval_resolved(tool_id)
+        else:
+            outcome = runner._status.finalize_approval(tool_id, closed=runner._closed)
+        approval.set(tracing.GenAI.APPROVAL_GRANTED, outcome.approved)
+        approval.set(tracing.GenAI.APPROVAL_REASON, outcome.reason)
+
     if not outcome.approved:
+        # Raised OUTSIDE the approval span: the denial is the approval's outcome, not a
+        # failure of the gate itself, and the exception belongs to the enclosing tool span.
         raise ToolApprovalDenied(tool_name, outcome.reason)
 
 
@@ -879,6 +894,7 @@ class _WorkflowStatus:
         is_message_queuing_enabled: bool,
         approval_policy: ToolApprovalPolicy,
         has_custom_approval_fallback: bool = False,
+        labels: dict[str, str] | None = None,
     ) -> None:
         # This agent's own short id — stamped on every event (via current_stream_context for
         # activity publishes, and _pub for in-workflow ones) and surfaced on the status query.
@@ -890,6 +906,9 @@ class _WorkflowStatus:
         self._is_message_queuing_enabled: bool = is_message_queuing_enabled
         self._approval_policy: ToolApprovalPolicy = approval_policy
         self._has_custom_approval_fallback: bool = has_custom_approval_fallback
+        # Session-scoped observability labels, immutable for the workflow's lifetime (a caller
+        # set them at start; the harness only ever reads them out again).
+        self._labels: dict[str, str] = dict(labels or {})
         # Gated tool calls awaiting a human decision, keyed by per-call tool id.
         # Entries are retained after resolution (status flips) for idempotency.
         self._approvals: dict[str, _ApprovalEntry] = {}
@@ -1200,7 +1219,13 @@ class _WorkflowStatus:
             subagents=self.active_subagents(),
             approval_policy=self._approval_policy,
             has_custom_approval_fallback=self._has_custom_approval_fallback,
+            labels=dict(self._labels),
         )
+
+    @property
+    def labels(self) -> dict[str, str]:
+        """The session-scoped labels, as a copy (callers must not mutate session state)."""
+        return dict(self._labels)
 
 
 # ---------------------------------------------------------------------------
@@ -1297,6 +1322,9 @@ class AgentWorkflowRunner:
             is_message_queuing_enabled=is_message_queuing_enabled,
             approval_policy=approval_policy,
             has_custom_approval_fallback=custom_approval_fallback is not None,
+            # No agent-side default to resolve against: unlike the other knobs, "the agent's
+            # own labels" is not a meaningful concept — labels describe the caller's world.
+            labels=config.labels,
         )
         self._closed = False
 
@@ -1800,46 +1828,56 @@ class AgentWorkflowRunner:
             raise RuntimeError(
                 f"callback tool {tool_name!r} has no active turn to await a result against"
             )
-        self._status.register_pending_callback(
-            tool_id,
-            tool_name,
-            tool_input,
-            output_schema,
-            ctx.turn_number,
-            ctx.turn_id,
-            output_adapter,
-        )
-        self._pub(
-            ctx.turn_id,
-            ctx.turn_number,
-            CallbackRequested(
-                tool_id=tool_id,
-                tool_name=tool_name,
-                tool_input=tool_input,
-                output_schema=output_schema,
-            ),
-        )
-        timed_out = False
-        try:
-            await workflow.wait_condition(
-                lambda: self._status.is_callback_resolved(tool_id) or self._closed,
-                timeout=timeout,
+        # Its own span inside the enclosing tool span, so "waiting on the client" is
+        # distinguishable from "waiting on a human approval" — both are long waits on something
+        # off-worker, but they mean different things.
+        with tracing.callback_span(tool_name=tool_name, tool_id=tool_id) as span:
+            self._status.register_pending_callback(
+                tool_id,
+                tool_name,
+                tool_input,
+                output_schema,
+                ctx.turn_number,
+                ctx.turn_id,
+                output_adapter,
             )
-        except TimeoutError:
-            # ``workflow.wait_condition(timeout=...)`` raises asyncio.TimeoutError (== builtin
-            # TimeoutError on 3.11+) when the deadline elapses with the condition still false.
-            timed_out = True
+            self._pub(
+                ctx.turn_id,
+                ctx.turn_number,
+                CallbackRequested(
+                    tool_id=tool_id,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                    output_schema=output_schema,
+                ),
+            )
+            timed_out = False
+            try:
+                await workflow.wait_condition(
+                    lambda: self._status.is_callback_resolved(tool_id) or self._closed,
+                    timeout=timeout,
+                )
+            except TimeoutError:
+                # ``workflow.wait_condition(timeout=...)`` raises asyncio.TimeoutError (== builtin
+                # TimeoutError on 3.11+) when the deadline elapses with the condition still false.
+                timed_out = True
 
-        # CAUSAL ORDERING (mirrors the approval gate): the ok/error CallbackResolved is published
-        # at the resolution site (the update handler), in the order results arrive. The gate
-        # publishes ONLY the timeout/close case — the one no update resolved.
-        if not self._status.is_callback_resolved(tool_id):
-            outcome = self._status.finalize_callback(
-                tool_id, closed=self._closed, timed_out=timed_out
-            )
-            self._publish_callback_resolved(tool_id)
-        else:
-            outcome = self._status.finalize_callback(tool_id, closed=self._closed)
+            # CAUSAL ORDERING (mirrors the approval gate): the ok/error CallbackResolved is published
+            # at the resolution site (the update handler), in the order results arrive. The gate
+            # publishes ONLY the timeout/close case — the one no update resolved.
+            if not self._status.is_callback_resolved(tool_id):
+                outcome = self._status.finalize_callback(
+                    tool_id, closed=self._closed, timed_out=timed_out
+                )
+                self._publish_callback_resolved(tool_id)
+            else:
+                outcome = self._status.finalize_callback(tool_id, closed=self._closed)
+
+            span.set("tnh.callback.outcome", outcome.outcome)
+            if outcome.outcome == "ok":
+                span.set_output(outcome.result)
+            else:
+                span.record_error(outcome.error or outcome.outcome)
 
         if outcome.outcome == "ok":
             return outcome.result
@@ -1939,24 +1977,52 @@ class AgentWorkflowRunner:
                 break
             envelope, turn_id = self._status.start_next_turn()
             turn_number = self._status.current_turn
-            self._pub(
-                turn_id, turn_number, TurnStarted(user_message=_render_message(envelope))
-            )
-            try:
-                result = await self._dispatch_turn(agent, envelope)
+            user_message = _render_message(envelope)
+            # Per-turn labels win over the session's: a long-lived session's labels describe
+            # the session, and a message that says otherwise is describing this turn.
+            turn_labels = {**self._status.labels, **envelope.labels}
+            # The turn span is the root of this turn's trace, and it wraps the WHOLE turn so
+            # that every model call, tool call and subagent turn — including the ones that run
+            # in other processes — nests underneath it (Temporal's OTel plugin propagates the
+            # current span through activity and child-workflow headers). A no-op unless tracing
+            # is configured; see ``harness/tracing.py``.
+            with tracing.turn_span(
+                agent_id=self._agent_id,
+                turn_id=turn_id,
+                turn_number=turn_number,
+                user_message=user_message,
+                labels=turn_labels,
+            ) as span:
+                # Stamp the trace ids onto turn_started: this is the only place the two
+                # observability surfaces are joined, and the ids are not derivable after the
+                # fact (they come from the workflow's deterministic RNG).
                 self._pub(
                     turn_id,
                     turn_number,
-                    AgentReply(output=result.model_dump(mode="json")),
+                    TurnStarted(
+                        user_message=user_message,
+                        otel_trace_id=span.trace_id,
+                        otel_span_id=span.span_id,
+                        labels=turn_labels,
+                    ),
                 )
-            except Exception as e:  # noqa: BLE001 — surface ANY turn failure, keep the loop alive
-                self._pub(turn_id, turn_number, AgentError(message=str(e)))
-            finally:
-                # The turn is over and the agent is idle again — whether the handler
-                # returned or raised. Mark idle, then announce turn_end (the definitive
-                # end-of-turn signal) before looping back to wait for the next message.
-                self._status.complete_turn()
-                self._pub(turn_id, turn_number, TurnEnded())
+                try:
+                    result = await self._dispatch_turn(agent, envelope)
+                    output = result.model_dump(mode="json")
+                    span.set_output(output)
+                    self._pub(turn_id, turn_number, AgentReply(output=output))
+                except Exception as e:  # noqa: BLE001 — surface ANY turn failure, keep the loop alive
+                    # Recorded on the span explicitly rather than left to propagate: the runner
+                    # deliberately swallows handler failures to keep the session alive, so
+                    # nothing escapes this block for the span to notice on its own.
+                    span.record_error(str(e), exception=e)
+                    self._pub(turn_id, turn_number, AgentError(message=str(e)))
+                finally:
+                    # The turn is over and the agent is idle again — whether the handler
+                    # returned or raised. Mark idle, then announce turn_end (the definitive
+                    # end-of-turn signal) before looping back to wait for the next message.
+                    self._status.complete_turn()
+                    self._pub(turn_id, turn_number, TurnEnded())
 
     async def _dispatch_turn(self, agent: object, envelope: AgentMessage) -> BaseModel:
         """Dispatch one already-validated turn envelope and return its reply model."""
@@ -2115,86 +2181,96 @@ class AgentWorkflowRunner:
         (the tool layer renders them as an ``is_error`` result); the turn counter still advances
         for a turn the child accepted-but-errored, so the next send isn't spuriously stale."""
         inst = self._status.subagent(handle)  # raises UnknownSubagent
-        ticket = inst.take_ticket()  # synchronous → FIFO admission in call order
-        await workflow.wait_condition(
-            lambda: inst.is_serving(ticket) or self._closed
-        )
-        if not inst.is_serving(ticket):
-            # Woke on agent close while still queued behind an earlier turn.
-            raise ApplicationError(
-                f"agent closed before subagent {handle!r} turn {ticket} could run",
-                type="AgentClosed",
-                non_retryable=True,
+        # Opened before the FIFO gate so time spent queued behind an earlier turn to the SAME
+        # subagent shows up as latency here rather than disappearing. The child runs as its own
+        # workflow, so its ``agent.turn`` span nests under this one automatically via
+        # child-workflow context propagation — the whole agent tree becomes one trace.
+        with tracing.subagent_span(
+            subagent_id=inst.handle, function=msg_type, payload=payload
+        ) as span:
+            span.set("tnh.subagent.agent_key", inst.agent_key)
+            ticket = inst.take_ticket()  # synchronous → FIFO admission in call order
+            await workflow.wait_condition(
+                lambda: inst.is_serving(ticket) or self._closed
             )
-        try:
-            expected = inst.next_expected_turn
-            # The dispatch marker (SubagentMessageSent) is published by the activity itself,
-            # WHEN it actually sends the message to the child — not here at execute_activity
-            # dispatch time (there's a real gap before the activity runs). Mirrors how tool
-            # activities publish tool_start from inside the activity. We pass the parent's turn
-            # context + handle/agent_key so the activity can publish onto THIS agent's stream;
-            # the activity's heartbeat memo dedupes the publish across retries (it only fires on
-            # a fresh send, never on a heartbeat-resume).
-            stream_context = self.current_stream_context
-            if stream_context is None:
+            if not inst.is_serving(ticket):
+                # Woke on agent close while still queued behind an earlier turn.
                 raise ApplicationError(
-                    "run_subagent_turn called with no active turn to publish against",
-                    type="NoActiveTurn",
+                    f"agent closed before subagent {handle!r} turn {ticket} could run",
+                    type="AgentClosed",
                     non_retryable=True,
                 )
             try:
-                result = await workflow.execute_activity(
-                    RUN_SUBAGENT_TURN_ACTIVITY,
-                    RunSubagentTurnInput(
-                        child_workflow_id=inst.workflow_id,
-                        type=msg_type,
-                        payload=payload,
-                        expected_turn=expected,
-                        from_offset=inst.last_consumed_offset,
-                        handle=inst.handle,
-                        agent_key=inst.agent_key,
-                        parent_stream_context=stream_context,
-                    ),
-                    start_to_close_timeout=DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
-                    heartbeat_timeout=DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
-                    result_type=SubagentTurnResult,
-                )
-            except ApplicationError as e:
-                # A turn the child ACCEPTED but that then errored (or produced no reply) still
-                # advanced the child's turn counter, so keep ours in lockstep — otherwise the
-                # next send would be a spurious StaleTurn. A pre-acceptance rejection (abnormal
-                # under the gate) advanced nothing, so leave the counter untouched.
-                if e.type in ("SubagentTurnError", "SubagentNoReply"):
-                    # Close the bracket on the child's ACTUAL accepted turn number — which the
-                    # activity threads through the error details — NOT a re-derived ``expected``.
-                    # The opening ``subagent_message_sent`` was published with that real number
-                    # (``progress.turn_number``), and the close gate keys on
-                    # ``(workflow_id, subagent_turn)``; using the same source on both sides makes
-                    # the key match by construction rather than by an implicit
-                    # validator+enqueue invariant. (They are equal today, but this can't drift.)
-                    accepted_turn = self._accepted_turn_from_error(e, default=expected)
-                    inst.next_expected_turn = accepted_turn + 1
-                    # The child ran (and errored on) that turn — it still emitted its own
-                    # turn_end — so we MUST close the [message_sent … reply_received] bracket on
-                    # OUR stream, or a client merge would wedge waiting on a reply that never
-                    # comes. (A pre-acceptance rejection ran no child turn → no bracket → no
-                    # publish.) outcome="error" since this turn produced no usable reply.
-                    self._publish_subagent_reply_received(
-                        inst, msg_type, accepted_turn, outcome="error"
+                expected = inst.next_expected_turn
+                # The dispatch marker (SubagentMessageSent) is published by the activity itself,
+                # WHEN it actually sends the message to the child — not here at execute_activity
+                # dispatch time (there's a real gap before the activity runs). Mirrors how tool
+                # activities publish tool_start from inside the activity. We pass the parent's turn
+                # context + handle/agent_key so the activity can publish onto THIS agent's stream;
+                # the activity's heartbeat memo dedupes the publish across retries (it only fires on
+                # a fresh send, never on a heartbeat-resume).
+                stream_context = self.current_stream_context
+                if stream_context is None:
+                    raise ApplicationError(
+                        "run_subagent_turn called with no active turn to publish against",
+                        type="NoActiveTurn",
+                        non_retryable=True,
                     )
-                raise
-            inst.next_expected_turn = result.turn_number + 1
-            inst.last_consumed_offset = result.consumed_offset
-            # Close the bracket on OUR stream now that the agent (this workflow) actually holds
-            # the reply — BEFORE ``release_gate()`` in the finally, so this turn's reply_received
-            # is published ahead of the next gathered turn's message_sent (the merge relies on
-            # per-subagent brackets never overlapping; see run_subagent_turn's FIFO gate).
-            self._publish_subagent_reply_received(
-                inst, msg_type, result.turn_number, outcome="ok"
-            )
-            return result.output
-        finally:
-            inst.release_gate()
+                try:
+                    result = await workflow.execute_activity(
+                        RUN_SUBAGENT_TURN_ACTIVITY,
+                        RunSubagentTurnInput(
+                            child_workflow_id=inst.workflow_id,
+                            type=msg_type,
+                            payload=payload,
+                            expected_turn=expected,
+                            from_offset=inst.last_consumed_offset,
+                            handle=inst.handle,
+                            agent_key=inst.agent_key,
+                            parent_stream_context=stream_context,
+                        ),
+                        start_to_close_timeout=DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
+                        heartbeat_timeout=DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
+                        result_type=SubagentTurnResult,
+                    )
+                except ApplicationError as e:
+                    # A turn the child ACCEPTED but that then errored (or produced no reply) still
+                    # advanced the child's turn counter, so keep ours in lockstep — otherwise the
+                    # next send would be a spurious StaleTurn. A pre-acceptance rejection (abnormal
+                    # under the gate) advanced nothing, so leave the counter untouched.
+                    if e.type in ("SubagentTurnError", "SubagentNoReply"):
+                        # Close the bracket on the child's ACTUAL accepted turn number — which the
+                        # activity threads through the error details — NOT a re-derived ``expected``.
+                        # The opening ``subagent_message_sent`` was published with that real number
+                        # (``progress.turn_number``), and the close gate keys on
+                        # ``(workflow_id, subagent_turn)``; using the same source on both sides makes
+                        # the key match by construction rather than by an implicit
+                        # validator+enqueue invariant. (They are equal today, but this can't drift.)
+                        accepted_turn = self._accepted_turn_from_error(e, default=expected)
+                        inst.next_expected_turn = accepted_turn + 1
+                        # The child ran (and errored on) that turn — it still emitted its own
+                        # turn_end — so we MUST close the [message_sent … reply_received] bracket on
+                        # OUR stream, or a client merge would wedge waiting on a reply that never
+                        # comes. (A pre-acceptance rejection ran no child turn → no bracket → no
+                        # publish.) outcome="error" since this turn produced no usable reply.
+                        self._publish_subagent_reply_received(
+                            inst, msg_type, accepted_turn, outcome="error"
+                        )
+                    raise
+                inst.next_expected_turn = result.turn_number + 1
+                inst.last_consumed_offset = result.consumed_offset
+                # Close the bracket on OUR stream now that the agent (this workflow) actually holds
+                # the reply — BEFORE ``release_gate()`` in the finally, so this turn's reply_received
+                # is published ahead of the next gathered turn's message_sent (the merge relies on
+                # per-subagent brackets never overlapping; see run_subagent_turn's FIFO gate).
+                self._publish_subagent_reply_received(
+                    inst, msg_type, result.turn_number, outcome="ok"
+                )
+                span.set("tnh.subagent.turn_number", result.turn_number)
+                span.set_output(result.output)
+                return result.output
+            finally:
+                inst.release_gate()
 
     @staticmethod
     def _accepted_turn_from_error(e: ApplicationError, *, default: int) -> int:
@@ -2597,36 +2673,46 @@ def activity_tool_defn(
             bound = sig.model_sig.bind(*args, **kwargs)
             bound.apply_defaults()
             model_input = dict(bound.arguments)
-            await _apply_approval_policy(
-                tool_name, model_input, inherently_safe=inherently_safe
-            )
+            # The span opens BEFORE the approval gate, so a human's think-time is charged to
+            # the tool call rather than falling into a gap between spans, and stays current
+            # across execute_activity so the activity's own spans nest underneath it.
+            with tracing.tool_span(
+                tool_name=tool_name,
+                tool_id=_CURRENT_TOOL_ID.get() or "",
+                tool_input=model_input,
+            ) as span:
+                await _apply_approval_policy(
+                    tool_name, model_input, inherently_safe=inherently_safe
+                )
 
-            injections = _current_tool_injections() if sig.inject_names else {}
-            activity_args: list[Any] = []
-            for p in sig.user_params:
-                if sig.has_self and p.name == "self":
-                    continue
-                if p.name in sig.inject_names:
-                    if p.name not in injections:
-                        raise ApplicationError(
-                            f"tool {tool_name!r} requires injected argument "
-                            f"{p.name!r}, but run_tool was called without it",
-                            type="MissingInjection",
-                            non_retryable=True,
-                        )
-                    activity_args.append(injections[p.name])
-                else:
-                    activity_args.append(bound.arguments[p.name])
-            activity_args.append(AgentToolContext.for_current_tool_id())
-            # Dispatch by activity NAME, so pass result_type explicitly — otherwise a
-            # model/dataclass return comes back as a raw dict (Temporal can't infer the
-            # type from a name the way it would from a function reference).
-            return await workflow.execute_activity(
-                tool_name,
-                args=activity_args,
-                result_type=sig.return_type,
-                **config,
-            )
+                injections = _current_tool_injections() if sig.inject_names else {}
+                activity_args: list[Any] = []
+                for p in sig.user_params:
+                    if sig.has_self and p.name == "self":
+                        continue
+                    if p.name in sig.inject_names:
+                        if p.name not in injections:
+                            raise ApplicationError(
+                                f"tool {tool_name!r} requires injected argument "
+                                f"{p.name!r}, but run_tool was called without it",
+                                type="MissingInjection",
+                                non_retryable=True,
+                            )
+                        activity_args.append(injections[p.name])
+                    else:
+                        activity_args.append(bound.arguments[p.name])
+                activity_args.append(AgentToolContext.for_current_tool_id())
+                # Dispatch by activity NAME, so pass result_type explicitly — otherwise a
+                # model/dataclass return comes back as a raw dict (Temporal can't infer the
+                # type from a name the way it would from a function reference).
+                result = await workflow.execute_activity(
+                    tool_name,
+                    args=activity_args,
+                    result_type=sig.return_type,
+                    **config,
+                )
+                span.set_output(result)
+                return result
 
         _apply_model_facing_views(dispatch, user_fn, sig, tool_name)
         dispatch.activity = the_activity  # type: ignore[attr-defined]
@@ -2709,36 +2795,44 @@ def tool_defn(
                 ) from None
 
             model_input = _tool_input(sig.model_sig, args, kwargs)
-            await _apply_approval_policy(
-                tool_name, model_input, inherently_safe=inherently_safe
-            )
+            # Opens before the approval gate — see the matching span in activity_tool_defn's
+            # dispatcher. Callback tools route through THIS wrapper (callback_tool_defn wraps
+            # its generic impl in tool_defn), so all three tool flavors are covered by the two
+            # dispatcher spans.
+            with tracing.tool_span(
+                tool_name=tool_name, tool_id=tool_id, tool_input=model_input
+            ) as span:
+                await _apply_approval_policy(
+                    tool_name, model_input, inherently_safe=inherently_safe
+                )
 
-            runner._pub(
-                ctx.turn_id,
-                ctx.turn_number,
-                ToolStartEvent(
-                    tool_id=tool_id, tool_name=tool_name, tool_input=model_input
-                ),
-            )
-            try:
-                result = await user_fn(*args, **inject_kwargs, **kwargs)
-            except Exception as e:
                 runner._pub(
                     ctx.turn_id,
                     ctx.turn_number,
-                    ToolErrorEvent(
-                        tool_id=tool_id, tool_name=tool_name, message=str(e)
+                    ToolStartEvent(
+                        tool_id=tool_id, tool_name=tool_name, tool_input=model_input
                     ),
                 )
-                raise
-            runner._pub(
-                ctx.turn_id,
-                ctx.turn_number,
-                ToolEndEvent(
-                    tool_id=tool_id, tool_name=tool_name, tool_output=str(result)
-                ),
-            )
-            return result
+                try:
+                    result = await user_fn(*args, **inject_kwargs, **kwargs)
+                except Exception as e:
+                    runner._pub(
+                        ctx.turn_id,
+                        ctx.turn_number,
+                        ToolErrorEvent(
+                            tool_id=tool_id, tool_name=tool_name, message=str(e)
+                        ),
+                    )
+                    raise
+                runner._pub(
+                    ctx.turn_id,
+                    ctx.turn_number,
+                    ToolEndEvent(
+                        tool_id=tool_id, tool_name=tool_name, tool_output=str(result)
+                    ),
+                )
+                span.set_output(result)
+                return result
 
         _apply_model_facing_views(wrapper, user_fn, sig, tool_name)
         wrapper.__agent_tool__ = True  # type: ignore[attr-defined]

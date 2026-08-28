@@ -67,8 +67,11 @@ _MONTY_ACTIVITY_TIMEOUT = timedelta(seconds=30)
 _bookings: dict[str, dict] = {}
 
 
-def _make_ref(prefix: str, *parts: str) -> str:
-    """Deterministic but realistic-looking confirmation code."""
+def make_booking_ref(prefix: str, *parts: str) -> str:
+    """Deterministic but realistic-looking confirmation code.
+
+    Public because it is deterministic: the evals recompute the code a booking SHOULD have
+    produced and check the agent actually reported that one, rather than a hallucinated code."""
     digest = hashlib.sha256("|".join(parts).encode()).hexdigest()[:6].upper()
     return f"{prefix}-{digest}"
 
@@ -78,19 +81,15 @@ def _make_ref(prefix: str, *parts: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@agent.activity_tool_defn(
-    name="search_flights",
-    activity_config=ActivityConfig(start_to_close_timeout=_MONTY_ACTIVITY_TIMEOUT),
-)
-async def search_flights_activity(request: FlightSearchRequest) -> FlightSearchResponse:
-    """Search for available flights between two airports on a given date."""
-    activity.logger.info(
-        "Searching flights %s -> %s on %s", request.origin, request.destination, request.date
-    )
+def generate_flights(request: FlightSearchRequest) -> list[Flight]:
+    """The flights this simulated backend returns for ``request`` — pure and deterministic.
 
-    # Simulate the latency of querying an external flight-search API.
-    await asyncio.sleep(random.uniform(3.0, 5.0))
-
+    Seeded off the request, so the same search always yields the same flights. Split out of the
+    activity (which adds only logging and simulated latency) so anything that needs to know what
+    the agent WOULD have seen can compute it exactly instead of parsing it back out of a log.
+    The evals use this as ground truth: with the world fixed and the agent free, "did it book
+    the cheapest available flight?" becomes a decidable question rather than a judgement call.
+    """
     rng = random.Random(f"{request.origin}{request.destination}{request.date}")
     num_results = rng.randint(2, 5)
     flights = []
@@ -112,23 +111,28 @@ async def search_flights_activity(request: FlightSearchRequest) -> FlightSearchR
                 stops=stops,
             )
         )
-
-    return FlightSearchResponse(flights=flights)
+    return flights
 
 
 @agent.activity_tool_defn(
-    name="search_hotels",
+    name="search_flights",
     activity_config=ActivityConfig(start_to_close_timeout=_MONTY_ACTIVITY_TIMEOUT),
 )
-async def search_hotels_activity(request: HotelSearchRequest) -> HotelSearchResponse:
-    """Search for available hotels in a city for the given date range."""
+async def search_flights_activity(request: FlightSearchRequest) -> FlightSearchResponse:
+    """Search for available flights between two airports on a given date."""
     activity.logger.info(
-        "Searching hotels in %s (%s to %s)", request.city, request.check_in, request.check_out
+        "Searching flights %s -> %s on %s", request.origin, request.destination, request.date
     )
 
-    # Simulate the latency of querying an external hotel-search API.
+    # Simulate the latency of querying an external flight-search API.
     await asyncio.sleep(random.uniform(3.0, 5.0))
 
+    return FlightSearchResponse(flights=generate_flights(request))
+
+
+def generate_hotels(request: HotelSearchRequest) -> list[Hotel]:
+    """The hotels this simulated backend returns for ``request`` — pure and deterministic.
+    See :func:`generate_flights` for why this is split out of the activity."""
     rng = random.Random(f"{request.city}{request.check_in}{request.check_out}")
     neighborhoods = NEIGHBORHOODS.get(request.city, DEFAULT_NEIGHBORHOODS)
     num_results = rng.randint(2, 5)
@@ -148,8 +152,23 @@ async def search_hotels_activity(request: HotelSearchRequest) -> HotelSearchResp
                 neighborhood=neighborhood,
             )
         )
+    return hotels
 
-    return HotelSearchResponse(hotels=hotels)
+
+@agent.activity_tool_defn(
+    name="search_hotels",
+    activity_config=ActivityConfig(start_to_close_timeout=_MONTY_ACTIVITY_TIMEOUT),
+)
+async def search_hotels_activity(request: HotelSearchRequest) -> HotelSearchResponse:
+    """Search for available hotels in a city for the given date range."""
+    activity.logger.info(
+        "Searching hotels in %s (%s to %s)", request.city, request.check_in, request.check_out
+    )
+
+    # Simulate the latency of querying an external hotel-search API.
+    await asyncio.sleep(random.uniform(3.0, 5.0))
+
+    return HotelSearchResponse(hotels=generate_hotels(request))
 
 
 @agent.activity_tool_defn(
@@ -163,7 +182,7 @@ async def book_flight_activity(request: FlightBookingRequest) -> FlightBookingRe
     # Simulate the latency of confirming the booking with the airline.
     await asyncio.sleep(random.uniform(4.0, 6.0))
 
-    ref = _make_ref("AIR", request.flight_id, request.passenger_name)
+    ref = make_booking_ref("AIR", request.flight_id, request.passenger_name)
     _bookings[ref] = {
         "type": "flight",
         "flight_id": request.flight_id,
@@ -189,7 +208,7 @@ async def book_hotel_activity(request: HotelBookingRequest) -> HotelBookingRespo
     # Simulate the latency of confirming the booking with the hotel.
     await asyncio.sleep(random.uniform(4.0, 6.0))
 
-    ref = _make_ref("HTL", request.hotel_id, request.guest_name)
+    ref = make_booking_ref("HTL", request.hotel_id, request.guest_name)
     _bookings[ref] = {
         "type": "hotel",
         "hotel_id": request.hotel_id,

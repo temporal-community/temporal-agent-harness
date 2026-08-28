@@ -278,3 +278,23 @@ install-nexgen:
 nexus-agent-generate: install-nexgen
     "$HOME/.local/bin/nexgen" python temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml \
         --output temporal_agent_harness/nexus_agent_adapter/generated
+
+# --- Evals (Monty) -----------------------------------------------------------------------
+# Delegates into examples/monty. Traces and scores go to Langfuse; see that justfile's notes.
+
+evals-seed:
+    cd "{{monty}}" && just evals-seed
+
+evals-run NAME:
+    cd "{{monty}}" && just evals-run "{{NAME}}"
+
+evals-case NAME CASE:
+    cd "{{monty}}" && just evals-case "{{NAME}}" "{{CASE}}"
+
+# The same eval loop against the OpenAI Agents SDK example — same dataset format, same scorer
+# shape, different AI SDK. Needs `just worker-openai-hello` running.
+evals-seed-openai:
+    cd "{{justfile_directory()}}/examples/openai_hello" && just evals-seed
+
+evals-run-openai NAME:
+    cd "{{justfile_directory()}}/examples/openai_hello" && just evals-run "{{NAME}}"

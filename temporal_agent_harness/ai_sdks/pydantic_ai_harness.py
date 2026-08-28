@@ -84,6 +84,7 @@ from temporal_agent_harness.harness.agent_workflow import (
     TurnEventPublisher,
 )
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
+from temporal_agent_harness.harness import tracing
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import AgentStreamEvent
@@ -145,6 +146,7 @@ class PydanticAIStreamObserver:
         self._model = model
         self._stack: AsyncExitStack | None = None
         self._publisher: TurnEventPublisher | None = None
+        self._span: tracing.AgentSpan = tracing.AgentSpan(None)
         # Part index -> the tool-call part seen at PartStart, flushed on the matching PartEnd (or,
         # defensively, on close if the stream ended without one).
         self._pending_tool_calls: dict[int, BaseToolCallPart] = {}
@@ -156,12 +158,32 @@ class PydanticAIStreamObserver:
         self._publisher = await self._stack.enter_async_context(
             AgentWorkflowRunner.publisher_from_activity(self._context)
         )
+        # The OTel counterpart of the model_interaction bracket, on the same stack so it spans
+        # the same window. Runs inside the model activity, where Temporal's OTel plugin has
+        # already made the enclosing turn span current — so this nests under the turn.
+        attempt, activity_type = tracing.activity_context()
+        self._span = self._stack.enter_context(
+            tracing.model_span(
+                model=self._model,
+                sdk=tracing.SDK_PYDANTIC_AI,
+                attempt=attempt,
+                activity_type=activity_type,
+            )
+        )
         # Open the model-interaction span at dispatch, before awaiting any event.
         self._publisher.publish(ModelInteractionStarted(model=self._model))
         return self
 
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool | None:
         try:
+            if self._usage is not None:
+                self._span.set_usage(
+                    input_tokens=self._usage.input_tokens,
+                    output_tokens=self._usage.output_tokens,
+                    total_tokens=self._usage.total_tokens,
+                )
+            if exc is not None:
+                self._span.record_error(str(exc) or type(exc).__name__)
             if self._publisher is not None:
                 # Flush any tool call whose PartEnd never arrived (defensive — Pydantic AI
                 # synthesizes PartEnd for tool-call parts), then always close the started bracket
@@ -177,6 +199,7 @@ class PydanticAIStreamObserver:
                 await self._stack.aclose()
                 self._stack = None
             self._publisher = None
+            self._span = tracing.AgentSpan(None)
         # Never swallow a stream error: the batched-collect path owns failures.
         return False
 

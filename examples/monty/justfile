@@ -66,3 +66,22 @@ ui-dev:
 # Run the Monty example agent worker (MontyDynamicAgent + the two conversational agents).
 worker:
     cd "{{root}}" && uv run --group examples python -m examples.monty.worker
+
+# --- Evals -------------------------------------------------------------------------------
+# Traces + dataset scoring go to Langfuse. Set LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY in
+# .env.local (and LANGFUSE_HOST when self-hosting; unset means Langfuse Cloud). The agent needs
+# no changes and no eval-specific mode — `just worker` as usual, then seed and run.
+
+# Push the eval dataset (examples/monty/evals/dataset.py) to Langfuse. Re-run after editing it:
+# items upsert on their case id, so cases update in place rather than duplicating.
+evals-seed:
+    cd "{{root}}" && uv run --group examples --extra evals python -m examples.monty.evals.run seed
+
+# Run the whole dataset as an experiment. Needs `just worker` running. e.g. `just evals-run v1`.
+evals-run NAME:
+    cd "{{root}}" && uv run --group examples --extra evals python -m examples.monty.evals.run run --name "{{NAME}}"
+
+# Run ONE case — the tight loop while chasing a single failure.
+# e.g. `just evals-case v1-debug book-cheapest-sfo-jfk`
+evals-case NAME CASE:
+    cd "{{root}}" && uv run --group examples --extra evals python -m examples.monty.evals.run run --name "{{NAME}}" --case "{{CASE}}"

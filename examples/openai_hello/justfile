@@ -61,3 +61,18 @@ ui-dev:
 # Run the OpenAIHelloAgent worker.
 worker:
     cd "{{root}}" && uv run --group examples python -m examples.openai_hello.worker
+
+# --- Evals -------------------------------------------------------------------------------
+# Same recipes as examples/monty, against a different AI SDK. Needs LANGFUSE_PUBLIC_KEY /
+# LANGFUSE_SECRET_KEY in .env.local; the worker picks them up and turns tracing on itself.
+# Optional: set OPENAI_HELLO_SDK_TRACING=1 to also capture prompts/completions via the Agents
+# SDK's own OpenInference instrumentation (needs openinference-instrumentation-openai-agents).
+
+evals-seed:
+    cd "{{root}}" && uv run --group examples --extra evals python -m examples.openai_hello.evals.run seed
+
+evals-run NAME:
+    cd "{{root}}" && uv run --group examples --extra evals python -m examples.openai_hello.evals.run run --name "{{NAME}}"
+
+evals-case NAME CASE:
+    cd "{{root}}" && uv run --group examples --extra evals python -m examples.openai_hello.evals.run run --name "{{NAME}}" --case "{{CASE}}"

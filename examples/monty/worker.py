@@ -74,12 +74,30 @@ async def main() -> None:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         sys.exit("error: GEMINI_API_KEY env var not set")
-    plugin = GoogleGenAIPlugin(GeminiClient(api_key=api_key))
+    plugins: list[object] = [GoogleGenAIPlugin(GeminiClient(api_key=api_key))]
+
+    # Tracing is enabled HERE, in the worker — not in whatever drives the agent. Turn spans are
+    # created in the workflow and model/tool spans in its activities, all of which run in THIS
+    # process, so this is the only place installing a replay-safe tracer provider has any
+    # effect. Doing it in the eval runner or the web server would look like it was working and
+    # produce nothing at all.
+    #
+    # Opt-in on the presence of Langfuse credentials, so the plain `just worker` path is
+    # unchanged and the OTel exporter is imported only when it is actually wanted.
+    if os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY"):
+        from temporal_agent_harness.evals import setup_tracing
+
+        plugins.append(setup_tracing(service_name="monty"))
+        tracing_status = (
+            f"ON -> {os.environ.get('LANGFUSE_HOST', 'https://cloud.langfuse.com')}"
+        )
+    else:
+        tracing_status = "OFF (set LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY to enable)"
 
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
         **connect_config,
-        plugins=[plugin],
+        plugins=plugins,
         data_converter=await with_large_payload_offload(pydantic_data_converter),
     )
 
@@ -117,7 +135,8 @@ async def main() -> None:
         f"profile={os.environ.get('TEMPORAL_PROFILE', 'default')!r} "
         f"address={connect_config.get('target_host')} "
         f"namespace={connect_config.get('namespace')} "
-        f"taskQueue={task_queue}",
+        f"taskQueue={task_queue} "
+        f"tracing={tracing_status}",
         flush=True,
     )
     await worker.run()
