@@ -42,6 +42,7 @@ from .generated import (
     AgentStatusOutput,
     ApproveToolCallInput,
     ApproveToolCallOutput,
+    CloseSessionOutput,
     ExecuteOperatorCommandInput,
     ExecuteOperatorCommandOutput,
     OperatorCommand as NexusOperatorCommand,
@@ -177,6 +178,30 @@ class AgentServiceHandler:
             is_message_queuing_enabled=self._config.is_message_queuing_enabled
         )
         client = self._agent_client(input.session_id)
+
+        if input.expected_turn is not None:
+            # Caller already tracks turn state (e.g. a subagent-driving parent). Skip the
+            # guess loop and fail fast on a mismatch, same as a same-cluster child workflow.
+            # update_id is keyed on ctx.request_id: a retried Nexus call reuses the same
+            # request_id, so it resolves the same update instead of double-submitting.
+            try:
+                reply = await client.start_and_submit_message(
+                    input.msg_type,
+                    payload,
+                    input.expected_turn,
+                    workflow_name=self._config.workflow_name,
+                    task_queue=self._config.agent_task_queue,
+                    start_config=start_config,
+                    update_id=f"send-{ctx.request_id}",
+                )
+            except StaleTurnError as e:
+                raise HandlerError(f"StaleTurn: {e}", type=HandlerErrorType.BAD_REQUEST) from e
+            return SendMessageOutput(
+                turn_number=reply.turn_number,
+                turn_id=reply.turn_id,
+                stream_head_offset=reply.accepted_offset,
+                pending=reply.pending,
+            )
 
         # Nexus callers don't know expected_turn; guess 1, then re-derive from status on retry.
         expected_turn = 1
@@ -327,6 +352,17 @@ class AgentServiceHandler:
         return ProvideCallbackResultOutput(
             tool_id=result.tool_id, accepted=result.accepted
         )
+
+    # -----------------------------------------------------------------------
+    # closeSession — signal the target agent workflow to close
+    # -----------------------------------------------------------------------
+
+    @sync_operation
+    async def close_session(
+        self, ctx: StartOperationContext, input: QuerySessionInput
+    ) -> CloseSessionOutput:
+        await self._agent_client(input.session_id).close()
+        return CloseSessionOutput(closed=True)
 
     # -----------------------------------------------------------------------
     # pollMessages — async operation backed by WorkflowStream's poll update

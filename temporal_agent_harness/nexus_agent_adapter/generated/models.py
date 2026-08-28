@@ -202,6 +202,20 @@ class ApproveToolCallOutput(pydantic.BaseModel):
         return _emit_set_fields(self, handler)
 
 
+class CloseSessionOutput(pydantic.BaseModel):
+    model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="forbid")
+
+    closed: bool = pydantic.Field()
+    """Always true on success"""
+
+    @pydantic.model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: typing.Callable[[pydantic.BaseModel], typing.Any],
+    ) -> dict[str, object]:
+        return _emit_set_fields(self, handler)
+
+
 class ExecuteOperatorCommandInput(pydantic.BaseModel):
     model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="forbid")
 
@@ -560,6 +574,24 @@ class SendAgentMessageInput(pydantic.BaseModel):
     """JSON-encoded input matching the target handler's input model (e.g.
     '{"text":"hello"}' for the 'ask' handler)
     """
+
+    expected_turn: SpecInt | None = pydantic.Field(default=None, alias="expectedTurn")
+    """Caller-known next turn number. Set this when the caller already tracks turn state
+    (e.g. a subagent-driving parent) - the send fails fast with StaleTurn on a mismatch
+    instead of guessing. Omit to fall back to guess-and-retry (e.g. Slack, which has no
+    local turn state).
+    """
+
+    _OPTIONAL_NON_NULLABLE_FIELDS: typing.ClassVar[frozenset[str]] = frozenset({"expectedTurn", "expected_turn"})
+
+    @pydantic.model_validator(mode="wrap")
+    @classmethod
+    def _reject_null(
+        cls,
+        data: object,
+        handler: typing.Callable[[object], typing.Any],
+    ) -> typing.Any:
+        return _reject_explicit_null(cls, data, handler)
 
     @pydantic.model_serializer(mode="wrap")
     def _serialize(

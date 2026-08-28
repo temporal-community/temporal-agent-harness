@@ -9,10 +9,11 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from temporal_agent_harness.harness.agent_protocol.agent_interface import AgentConfig
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
 # The registered name of the subagent-turn activity. Used by the activity's ``@activity.defn``
@@ -101,3 +102,42 @@ class SubagentTurnResult(BaseModel):
         "stores it and threads it back as the next turn's from_offset, so each turn streams "
         "from where the last one ended (cheap resume, no full-history replay)."
     )
+
+
+class SubagentTransport(Protocol):
+    """How a parent agent reaches one subagent instance: start it, run one turn end to end
+    (send + wait for the reply), and stop it.
+
+    AgentWorkflowRunner calls these three methods only. It does not care how a transport
+    reaches the subagent - same-cluster child workflow (ChildWorkflowTransport, the
+    default), a harness agent reached directly over Nexus (NexusTransport), or a
+    non-harness subagent brokered through the Durable Tools Gateway (GatewayTransport).
+    """
+
+    async def start(self, *, agent_key: str, config: AgentConfig) -> str:
+        """Bring one subagent instance online. Return its target id - opaque to the
+        caller, threaded back into dispatch/stop unchanged."""
+        ...
+
+    async def dispatch(
+        self,
+        *,
+        target: str,
+        msg_type: str,
+        payload: dict[str, Any],
+        expected_turn: int,
+        from_offset: int,
+        handle: str,
+        agent_key: str,
+        parent_stream_context: TurnStreamContext,
+    ) -> SubagentTurnResult:
+        """Send one message to `target` and return once its reply is captured.
+
+        `handle` / `agent_key` / `parent_stream_context` are for publishing the
+        SubagentMessageSent marker onto the PARENT's stream, at the moment the message is
+        actually sent (not at dispatch time - there can be a real gap between the two)."""
+        ...
+
+    async def stop(self, *, target: str) -> None:
+        """Close the subagent instance."""
+        ...

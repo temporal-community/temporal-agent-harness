@@ -53,9 +53,6 @@ from temporal_agent_harness.harness.agent_protocol import (
     EXECUTE_OPERATOR_COMMAND_UPDATE,
     OPERATOR_INTERFACE_QUERY,
     PROVIDE_CALLBACK_RESULT_UPDATE,
-    DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
-    DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
-    RUN_SUBAGENT_TURN_ACTIVITY,
     SEND_AGENT_MESSAGE_UPDATE,
     TOOL_APPROVAL_UPDATE,
     TURN_EVENTS_TOPIC,
@@ -81,13 +78,12 @@ from temporal_agent_harness.harness.agent_protocol import (
     PendingApproval,
     PendingCallback,
     PendingTurn,
-    RunSubagentTurnInput,
     SlashCommand,
     SubagentInfo,
     SubagentReplyReceived,
     SubagentStarted,
     SubagentStopped,
-    SubagentTurnResult,
+    SubagentTransport,
     ToolApprovalContext,
     ToolApprovalDecision,
     ToolApprovalPolicy,
@@ -840,6 +836,7 @@ class _SubagentInstance:
     handle: str
     workflow_id: str
     agent_key: str
+    transport: SubagentTransport
     next_expected_turn: int = 1
     last_consumed_offset: int = 0
     # FIFO gate: tickets handed out in call order; the holder whose ticket == _serving runs.
@@ -1144,11 +1141,11 @@ class _WorkflowStatus:
         return handle in self._subagents
 
     def register_subagent(
-        self, handle: str, workflow_id: str, agent_key: str
+        self, handle: str, workflow_id: str, agent_key: str, transport: SubagentTransport
     ) -> _SubagentInstance:
         """Record a freshly-started subagent under its short ``handle`` and return its entry."""
         inst = _SubagentInstance(
-            handle=handle, workflow_id=workflow_id, agent_key=agent_key
+            handle=handle, workflow_id=workflow_id, agent_key=agent_key, transport=transport
         )
         self._subagents[handle] = inst
         return inst
@@ -2027,63 +2024,33 @@ class AgentWorkflowRunner:
     async def start_subagent(
         self,
         agent_key: str,
-        workflow_type: str,
-        task_queue: str,
+        transport: SubagentTransport,
         config: AgentConfig | None = None,
     ) -> str:
-        """Start a child agent workflow as a subagent and register it; return its short handle.
+        """Start a subagent through ``transport`` and register it; return its short handle.
 
-        Mirrors ``session_manager.create_session`` — launches the registered ``workflow_type``
-        on ``task_queue`` with a standardized :class:`AgentConfig` — but tracks the child in
-        this runner's subagent registry instead. Returns a short ``handle`` (not the long child
-        ``workflow_id``) for the model to address THIS instance in later ``send_<function>`` /
-        ``stop_<key>`` calls (a parent may run several instances of one ``agent_key``); the
-        workflow-side resolves ``handle`` → ``workflow_id`` internally."""
+        ``transport`` decides how the subagent is reached — a same-cluster child workflow
+        (:class:`ChildWorkflowTransport`, the harness default), a harness agent reached
+        directly over Nexus (:class:`NexusTransport`), or a subagent brokered through the
+        Durable Tools Gateway (:class:`GatewayTransport`). Returns a short ``handle`` (not
+        the transport's own target id) for the model to address THIS instance in later
+        ``send_<function>`` / ``stop_<key>`` calls (a parent may run several instances of one
+        ``agent_key``); the workflow-side resolves ``handle`` → target internally."""
         handle = self._fresh_subagent_handle()
-        workflow_id = f"{agent_key}-subagent-{workflow.uuid4()}"
-        # Push the handle down as the child's own agent_id so the child stamps it on every event
-        # it publishes — unifying "the id the parent references this subagent by" with "the id on
-        # the subagent's own stream", which is what lets a client merge the two streams coherently
-        # (and, since the handle is tree-unique, group by agent_id without collisions). This is the
-        # one config field the parent overrides per-child (everything else passes through
-        # unchanged); a caller-supplied agent_id would not match the parent's handle.
+        # Push the handle down as the child's own agent_id so a same-cluster child stamps it
+        # on every event it publishes — unifying "the id the parent references this subagent
+        # by" with "the id on the subagent's own stream". Only ChildWorkflowTransport honors
+        # this (see NexusTransport's docstring for the cross-namespace limitation).
         child_config = (config if config is not None else AgentConfig()).model_copy(
             update={"agent_id": handle}
         )
-        await workflow.start_child_workflow(
-            workflow_type,
-            child_config,
-            id=workflow_id,
-            task_queue=task_queue,
-            # EXPLICIT: a subagent is owned by its parent and must never outlive it. If the
-            # parent closes for ANY reason (its own `close` signal, completion, failure,
-            # cancellation, or termination) before `stop_subagent` was called, the Temporal
-            # server terminates this child. We pin TERMINATE rather than rely on the SDK
-            # default so the guarantee can't silently change. (Graceful shutdown of a still-
-            # wanted subagent is the explicit `stop_subagent` path, which sends `close`.)
-            #
-            # TODO: we may prefer to handle parent shutdown more gracefully than a hard
-            # TERMINATE (which kills the child mid-turn with no cleanup — no `close` handling,
-            # no chance to finalize in-flight work). Two candidate approaches:
-            #   1. REQUEST_CANCEL — the server requests cancellation of the child on parent
-            #      close, letting a child that handles cancellation tear down gracefully
-            #      (requires the harness agent loop to treat cancellation as a clean stop).
-            #   2. A workflow finalization/cleanup hook on the parent that, before it exits,
-            #      stops every still-registered subagent through the SAME "front door" a
-            #      human/UI uses — i.e. `stop_subagent` → the `close` signal — so children
-            #      shut down via their normal graceful path rather than being killed by the
-            #      server. (This keeps shutdown semantics uniform with manual stops, but must
-            #      run on every parent-exit path, including failure/cancellation.)
-            parent_close_policy=workflow.ParentClosePolicy.TERMINATE,
-        )
-        self._status.register_subagent(handle, workflow_id, agent_key)
+        target = await transport.start(agent_key=agent_key, config=child_config)
+        self._status.register_subagent(handle, target, agent_key, transport)
         # Announce the subagent on this agent's stream (against the in-flight turn). The
         # ``workflow_id`` lets a consumer dynamically mount the subagent's own stream for a
         # consolidated view — subagent streams are never mirrored onto this one.
         self.publish(
-            SubagentStarted(
-                subagent_id=handle, agent_key=agent_key, workflow_id=workflow_id
-            )
+            SubagentStarted(subagent_id=handle, agent_key=agent_key, workflow_id=target)
         )
         return handle
 
@@ -2095,7 +2062,7 @@ class AgentWorkflowRunner:
         a human/UI uses), publishes :class:`SubagentStopped` (so a consumer can unmount its
         stream), then deregisters so a later ``send_<function>`` to ``handle`` is rejected."""
         inst = self._status.subagent(handle)  # validate ownership (raises UnknownSubagent)
-        await workflow.get_external_workflow_handle(inst.workflow_id).signal("close")
+        await inst.transport.stop(target=inst.workflow_id)
         self.publish(
             SubagentStopped(
                 subagent_id=inst.handle,
@@ -2150,21 +2117,15 @@ class AgentWorkflowRunner:
                     non_retryable=True,
                 )
             try:
-                result = await workflow.execute_activity(
-                    RUN_SUBAGENT_TURN_ACTIVITY,
-                    RunSubagentTurnInput(
-                        child_workflow_id=inst.workflow_id,
-                        type=msg_type,
-                        payload=payload,
-                        expected_turn=expected,
-                        from_offset=inst.last_consumed_offset,
-                        handle=inst.handle,
-                        agent_key=inst.agent_key,
-                        parent_stream_context=stream_context,
-                    ),
-                    start_to_close_timeout=DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
-                    heartbeat_timeout=DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
-                    result_type=SubagentTurnResult,
+                result = await inst.transport.dispatch(
+                    target=inst.workflow_id,
+                    msg_type=msg_type,
+                    payload=payload,
+                    expected_turn=expected,
+                    from_offset=inst.last_consumed_offset,
+                    handle=inst.handle,
+                    agent_key=inst.agent_key,
+                    parent_stream_context=stream_context,
                 )
             except ApplicationError as e:
                 # A turn the child ACCEPTED but that then errored (or produced no reply) still

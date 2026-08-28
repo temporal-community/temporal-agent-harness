@@ -29,6 +29,7 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_protocol import AgentConfig, TextReply, ToolApprovalPolicy
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
     from temporal_agent_harness.harness.subagent_toolset import _resolve_workflow_type
+    from temporal_agent_harness.harness.subagent_transport import ChildWorkflowTransport
 
     from examples.monty.workflow import MontyDynamicAgentWorkflow
 
@@ -82,7 +83,10 @@ class SubagentE2EParentWorkflow:
         """Start a MontyDynamicAgent subagent, run the given scripts on it, then stop it, and
         reply with the concatenated per-turn outputs."""
         handle = await self._runner.start_subagent(
-            "monty", _resolve_workflow_type(MontyDynamicAgentWorkflow), msg.task_queue
+            "monty",
+            ChildWorkflowTransport(
+                _resolve_workflow_type(MontyDynamicAgentWorkflow), msg.task_queue
+            ),
         )
         try:
             if msg.concurrent:
@@ -140,7 +144,10 @@ class ApprovalGatedSubagentParentWorkflow:
         }
         send = tools["monty_run_script"]
         handle = await self._runner.start_subagent(
-            "monty", _resolve_workflow_type(MontyDynamicAgentWorkflow), msg.task_queue
+            "monty",
+            ChildWorkflowTransport(
+                _resolve_workflow_type(MontyDynamicAgentWorkflow), msg.task_queue
+            ),
         )
         replies = await asyncio.gather(
             *(

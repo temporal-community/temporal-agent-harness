@@ -153,6 +153,12 @@ class AgentClient:
         handle = self._temporal.get_workflow_handle(self._workflow_id)
         return await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
 
+    async def close(self) -> None:
+        """Signal the agent workflow to close gracefully. Same "close" signal a human/UI
+        or AgentWorkflowRunner.stop_subagent uses."""
+        handle = self._temporal.get_workflow_handle(self._workflow_id)
+        await handle.signal("close")
+
     async def get_pending_approvals(self) -> list[PendingApproval]:
         """The gated tool calls currently awaiting a human decision.
 

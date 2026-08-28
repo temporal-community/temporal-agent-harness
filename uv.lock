@@ -1700,6 +1700,7 @@ version = "0.1.0"
 source = { editable = "nexus/mcp" }
 dependencies = [
     { name = "anyio", marker = "python_full_version >= '3.13'" },
+    { name = "httpx", marker = "python_full_version >= '3.13'" },
     { name = "mcp", marker = "python_full_version >= '3.13'" },
     { name = "nexus-rpc", marker = "python_full_version >= '3.13'" },
     { name = "pydantic", marker = "python_full_version >= '3.13'" },
@@ -1709,6 +1710,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.0.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "mcp", specifier = ">=1.28.1" },
     { name = "nexus-rpc", specifier = ">=1.1.0" },
     { name = "pydantic", specifier = ">=2.0" },

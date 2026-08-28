@@ -6,9 +6,14 @@ from .models import (
     CallToolInput,
     CallToolOutput,
     DeregisterInput,
+    DeregisterSubagentInput,
+    DispatchSubagentTurnInput,
+    DispatchSubagentTurnOutput,
     ListAgentEntriesInput,
     ListAgentEntriesOutput,
     RegisterExternalInput,
+    RegisterSubagentInput,
+    StopSubagentInput,
 )
 from .services import RegistryService
 
@@ -16,8 +21,13 @@ __all__ = [
     "CallToolInput",
     "CallToolOutput",
     "DeregisterInput",
+    "DeregisterSubagentInput",
+    "DispatchSubagentTurnInput",
+    "DispatchSubagentTurnOutput",
     "ListAgentEntriesInput",
     "ListAgentEntriesOutput",
     "RegisterExternalInput",
+    "RegisterSubagentInput",
+    "StopSubagentInput",
     "RegistryService",
 ]

@@ -28,6 +28,23 @@ services:
         description: Invoke one tool on a registered 3rd-party MCP server.
         input: { $ref: "#/$defs/CallToolInput" }
         output: { $ref: "#/$defs/CallToolOutput" }
+      registerSubagent:
+        fqn: register_subagent
+        description: Register a non-Nexus subagent's URL under one agent_id.
+        input: { $ref: "#/$defs/RegisterSubagentInput" }
+      deregisterSubagent:
+        fqn: deregister_subagent
+        description: Remove one subagent registration under one agent_id.
+        input: { $ref: "#/$defs/DeregisterSubagentInput" }
+      dispatchSubagentTurn:
+        fqn: dispatch_subagent_turn
+        description: Send one turn to a registered subagent and return its reply.
+        input: { $ref: "#/$defs/DispatchSubagentTurnInput" }
+        output: { $ref: "#/$defs/DispatchSubagentTurnOutput" }
+      stopSubagent:
+        fqn: stop_subagent
+        description: Close a registered subagent instance.
+        input: { $ref: "#/$defs/StopSubagentInput" }
 
 $defs:
   RegisterExternalInput:
@@ -92,3 +109,62 @@ $defs:
       result:
         type: object
         additionalProperties: true
+
+  RegisterSubagentInput:
+    type: object
+    description: Input for registering a non-Nexus subagent's URL.
+    properties:
+      agent_id:
+        type: string
+      alias:
+        type: string
+      url:
+        type: string
+
+  DeregisterSubagentInput:
+    type: object
+    description: Input for removing one subagent registration.
+    properties:
+      agent_id:
+        type: string
+      alias:
+        type: string
+
+  DispatchSubagentTurnInput:
+    type: object
+    description: Input for sending one turn to a registered subagent.
+    properties:
+      agent_id:
+        type: string
+      alias:
+        type: string
+      msg_type:
+        type: string
+        description: Name of the target handler on the subagent.
+      payload:
+        type: string
+        description: JSON-encoded input for msg_type.
+      expected_turn:
+        type: integer
+        description: Caller-known next turn number. Doubles as the idempotency key (with agent_id/alias) for the proxy activity's retries.
+
+  DispatchSubagentTurnOutput:
+    type: object
+    description: The subagent's reply to one turn.
+    properties:
+      output:
+        type: string
+        description: JSON-encoded reply.
+      turn_id:
+        type: string
+      turn_number:
+        type: integer
+
+  StopSubagentInput:
+    type: object
+    description: Input for closing a registered subagent instance.
+    properties:
+      agent_id:
+        type: string
+      alias:
+        type: string

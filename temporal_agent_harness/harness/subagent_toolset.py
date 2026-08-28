@@ -23,12 +23,13 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from pydantic import BaseModel
 from temporalio import workflow
 
+from temporal_agent_harness.harness.agent_protocol import SubagentTransport
 from temporal_agent_harness.harness.agent_workflow import (
     _AcceptedHandler,
     _SLASH_MESSAGE_TYPE,
@@ -36,6 +37,8 @@ from temporal_agent_harness.harness.agent_workflow import (
     agent_handlers,
     tool_defn,
 )
+from temporal_agent_harness.harness.subagent_nexus_transport import NexusTransport
+from temporal_agent_harness.harness.subagent_transport import ChildWorkflowTransport
 
 
 def _resolve_workflow_type(agent_cls: type) -> str:
@@ -57,13 +60,50 @@ def _handler_param_name(handler: _AcceptedHandler) -> str:
     )
 
 
+def declared_handler(
+    name: str,
+    description: str,
+    input_type: type[BaseModel],
+    output_type: type[BaseModel],
+    *,
+    param_name: str = "input",
+) -> _AcceptedHandler:
+    """Describe one handler's name + schema for :func:`subagent_toolset`, without a local
+    class to reflect on. Use this for a subagent not implemented via this harness (e.g. one
+    reached through the Durable Tools Gateway) — there is no ``@agent.accepts`` method to
+    read, so build the handler description by hand instead.
+
+    The returned ``method`` is never called; only its signature is read (for the model-facing
+    schema), so it is a stub.
+    """
+
+    async def _stub(self: Any, **_: Any) -> BaseModel: ...
+
+    _stub.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
+        [
+            inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+            inspect.Parameter(
+                param_name, inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=input_type
+            ),
+        ],
+        return_annotation=output_type,
+    )
+    return _AcceptedHandler(
+        name=name,
+        input_type=input_type,
+        output_type=output_type,
+        description=description,
+        method=_stub,
+    )
+
+
 def _make_start_tool(
-    *, key: str, workflow_type: str, task_queue: str
+    *, key: str, transport: SubagentTransport
 ) -> Callable[..., Awaitable[str]]:
-    """Build the ``start_<key>`` tool: start a child instance and return its short handle."""
+    """Build the ``start_<key>`` tool: start a subagent instance and return its short handle."""
 
     async def _start() -> str:
-        return await _current_runner().start_subagent(key, workflow_type, task_queue)
+        return await _current_runner().start_subagent(key, transport)
 
     _start.__name__ = f"start_{key}"
     _start.__qualname__ = _start.__name__
@@ -158,46 +198,137 @@ def _make_send_tool(
 
 
 def subagent_toolset(
-    agent_cls: type,
+    agent_cls_or_handlers: type | Sequence[_AcceptedHandler],
     *,
     key: str,
-    task_queue: str,
+    transport: SubagentTransport | None = None,
+    task_queue: str | None = None,
     workflow_type: str | None = None,
 ) -> list[Callable[..., Awaitable[Any]]]:
-    """Convert a harness agent into a toolset a parent agent can use to drive it as a subagent.
+    """Convert a subagent into a toolset a parent agent can use to drive it.
 
-    Reads ``agent_cls``'s ``@agent.accepts`` handlers **statically** (no workflow started — pure
-    reflection via :func:`agent_handlers`) and returns inline ``tool_defn`` callables:
-    ``start_<key>``, one ``<key>_<fn>`` per handler, and ``stop_<key>``. Fold the returned list
-    into the parent agent's tool set exactly like any other tools (declare each via
-    ``function_param`` and dispatch via ``runner.run_tool``); they reach the runner — and its
-    subagent registry — through the ambient ``_CURRENT_RUNNER`` at call time.
+    Returns inline ``tool_defn`` callables: ``start_<key>``, one ``<key>_<fn>`` per handler,
+    and ``stop_<key>``. Fold the returned list into the parent agent's tool set exactly like
+    any other tools (declare each via ``function_param`` and dispatch via ``runner.run_tool``);
+    they reach the runner — and its subagent registry — through the ambient ``_CURRENT_RUNNER``
+    at call time.
 
     Args:
-        agent_cls: the child agent's ``@workflow.defn`` + ``@agent.defn`` class.
+        agent_cls_or_handlers: the child's ``@workflow.defn`` + ``@agent.defn`` class (its
+            ``@agent.accepts`` handlers are read statically, no workflow started), OR a list
+            of :func:`declared_handler` entries for a subagent with no local class to reflect
+            on (e.g. one reached through the Durable Tools Gateway).
         key: short, stable namespace for this wired agent (a parent may wire several). Tool
             names are ``start_<key>`` / ``<key>_<fn>`` / ``stop_<key>``.
-        task_queue: the task queue the child agent's worker polls (where instances are started).
-        workflow_type: the child's registered workflow type name; defaults to its ``@workflow.defn``
-            name.
+        transport: how ``start_<key>`` reaches the subagent. Omit to default to
+            :class:`ChildWorkflowTransport` (needs ``task_queue``, a same-cluster child
+            workflow) — pass :class:`NexusTransport` / :class:`GatewayTransport` for a
+            cross-namespace subagent instead. Required when ``agent_cls_or_handlers`` is a
+            declared handler list (there is no local workflow to start).
+        task_queue: the task queue the child agent's worker polls. Only used to build the
+            default :class:`ChildWorkflowTransport`; ignored when ``transport`` is given.
+        workflow_type: the child's registered workflow type name; defaults to its
+            ``@workflow.defn`` name. Only used to build the default
+            :class:`ChildWorkflowTransport`.
     """
-    resolved_type = workflow_type or _resolve_workflow_type(agent_cls)
-    handlers = {
-        name: handler
-        for name, handler in agent_handlers(agent_cls).items()
-        if name != _SLASH_MESSAGE_TYPE
-    }
+    if transport is None:
+        if not isinstance(agent_cls_or_handlers, type):
+            raise TypeError(
+                "subagent_toolset needs an explicit transport when agent_cls_or_handlers is "
+                "a declared handler list, not a class — there is no local workflow to start."
+            )
+        if task_queue is None:
+            raise TypeError(
+                "subagent_toolset needs task_queue (to build the default "
+                "ChildWorkflowTransport) or an explicit transport."
+            )
+        resolved_type = workflow_type or _resolve_workflow_type(agent_cls_or_handlers)
+        transport = ChildWorkflowTransport(resolved_type, task_queue)
+
+    if isinstance(agent_cls_or_handlers, type):
+        handlers = {
+            name: handler
+            for name, handler in agent_handlers(agent_cls_or_handlers).items()
+            if name != _SLASH_MESSAGE_TYPE
+        }
+        label = agent_cls_or_handlers.__name__
+    else:
+        handlers = {handler.name: handler for handler in agent_cls_or_handlers}
+        label = key
     if not handlers:
         raise TypeError(
-            f"{agent_cls.__name__} declares no @agent.accepts handlers that are "
-            f"model-callable, so it has no callable surface to wire as a subagent toolset."
+            f"{label} declares no callable handlers, so it has no callable surface to wire "
+            f"as a subagent toolset."
         )
 
-    tools: list[Callable[..., Awaitable[Any]]] = [
-        _make_start_tool(key=key, workflow_type=resolved_type, task_queue=task_queue)
-    ]
+    tools: list[Callable[..., Awaitable[Any]]] = [_make_start_tool(key=key, transport=transport)]
     tools.extend(
         _make_send_tool(key=key, handler=handler) for handler in handlers.values()
     )
     tools.append(_make_stop_tool(key=key))
     return tools
+
+
+def nexus_native_subagent(
+    agent_cls: type, endpoint: str, *, key: str
+) -> list[Callable[..., Awaitable[Any]]]:
+    """Toolset for a harness agent reached directly over Nexus (its own AgentService
+    endpoint) — no gateway, no registration. Mirrors ``nexus_native_mcp_server``.
+
+    Example:
+        tools = nexus_native_subagent(ResearchAgentWorkflow, "research-agent-endpoint", key="research")
+    """
+    return subagent_toolset(agent_cls, key=key, transport=NexusTransport(endpoint))
+
+
+class SubagentGateway:
+    """Handle on the Durable Tools Gateway's registered subagents for one ``agent_id``.
+    Mirrors ``NexusGateway`` (the MCP-tool counterpart) — not a toolset itself; call
+    :meth:`subagent` to get one.
+    """
+
+    def __init__(
+        self,
+        agent_id: str,
+        gateway_name: str = "RegistryService",
+        gateway_endpoint: str = "mcp-registry-endpoint",
+    ) -> None:
+        self._agent_id = agent_id
+        self._gateway_name = gateway_name
+        self._gateway_endpoint = gateway_endpoint
+
+    def subagent(
+        self,
+        agent_cls_or_handlers: type | Sequence[_AcceptedHandler],
+        alias: str,
+        *,
+        key: str,
+    ) -> list[Callable[..., Awaitable[Any]]]:
+        """Toolset for the subagent registered under ``alias`` (see the gateway's
+        ``register_subagent`` signal). Requires the `nexus-mcp` package."""
+        from temporal_agent_harness.harness.subagent_gateway_transport import (
+            GatewayTransport,
+        )
+
+        transport = GatewayTransport(
+            self._agent_id, alias, self._gateway_name, self._gateway_endpoint
+        )
+        return subagent_toolset(agent_cls_or_handlers, key=key, transport=transport)
+
+
+def nexus_subagent_gateway(
+    agent_id: str | None = None,
+    *,
+    gateway_name: str = "RegistryService",
+    gateway_endpoint: str = "mcp-registry-endpoint",
+) -> SubagentGateway:
+    """A handle on the Durable Tools Gateway's registered subagents, for one ``agent_id``
+    (defaults to the calling workflow's own ``workflow_type``). Mirrors ``nexus_tools_gateway``.
+
+    Example:
+        gateway = nexus_subagent_gateway()
+        tools = gateway.subagent([declared_handler(...)], "writer", key="writer")
+    """
+    return SubagentGateway(
+        agent_id or workflow.info().workflow_type, gateway_name, gateway_endpoint
+    )

@@ -341,11 +341,17 @@ def _emit_set_fields(
     model: pydantic.BaseModel,
     handler: typing.Callable[[pydantic.BaseModel], typing.Any],
 ) -> dict[str, object]:
+    # HAND-PATCHED (upstream nex-gen codegen bug, not caller-specific -- see
+    # https://github.com/temporalio/nex-gen). `handler(model)` (the wrapped default
+    # serializer) returns FIELD-NAME keys, not aliases, since `by_alias` isn't set here.
+    # The original code computed `keep` as ALIASES, so a model with any `Field(alias=...)`
+    # dropped every aliased field except ones with no alias (only `keep` and `dumped` used
+    # different key spaces). No field here has an alias yet, so this is currently dormant --
+    # keep it patched for whenever one is added. Regenerating (nex-gen 0.2.0/0.2.1)
+    # reproduces the original bug -- reapply this patch, or check for an upstream fix,
+    # after regenerating.
     dumped = typing.cast(dict[str, object], handler(model))
-    alias_of = {
-        name: (field.alias or name) for name, field in type(model).model_fields.items()
-    }
-    keep = {alias_of.get(name, name) for name in model.model_fields_set}
+    keep = set(model.model_fields_set)
     out = {key: value for key, value in dumped.items() if key in keep}
     if model.model_extra:
         out.update(typing.cast(dict[str, object], model.model_extra))

@@ -19,11 +19,13 @@ gateway.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from datetime import timedelta
 from typing import Any
 
+import httpx
 import nexusrpc
 import nexusrpc.handler
 import temporalio.nexus
@@ -47,10 +49,15 @@ from .generated import (
     CallToolInput,
     CallToolOutput,
     DeregisterInput,
+    DeregisterSubagentInput,
+    DispatchSubagentTurnInput,
+    DispatchSubagentTurnOutput,
     ListAgentEntriesInput,
     ListAgentEntriesOutput,
     RegisterExternalInput,
+    RegisterSubagentInput,
     RegistryService,
+    StopSubagentInput,
 )
 
 REGISTRY_NEXUS_ENDPOINT = "mcp-registry-endpoint"
@@ -95,6 +102,66 @@ async def mcp_proxy_activity(input: ExternalMCPCallInput) -> CallToolResult:
             pass
     activity.logger.info("[proxy-activity] %r completed  is_error=%s", input.tool_name, result.isError)
     return result
+
+
+class SubagentDispatchInput(BaseModel):
+    """Input for one HTTP call to a non-Nexus subagent's turn endpoint."""
+
+    url: str
+    msg_type: str
+    payload: str  # JSON-encoded, mirrors AgentService's payload convention
+    expected_turn: int
+    idempotency_key: str
+
+
+class SubagentDispatchOutput(BaseModel):
+    output: str
+    turn_id: str
+    turn_number: int
+
+
+@activity.defn
+async def subagent_proxy_activity(input: SubagentDispatchInput) -> SubagentDispatchOutput:
+    """POST one turn to a non-Nexus subagent's HTTP endpoint.
+
+    `idempotency_key` is (agent_id, alias, expected_turn) -- a well-behaved subagent dedupes
+    on it, so retries are safe here (unlike mcp_proxy_activity, which forbids retries since
+    an arbitrary MCP tool has no such contract).
+    """
+    activity.logger.info(
+        "[subagent-proxy] dispatching turn %d to %s", input.expected_turn, input.url
+    )
+    heartbeat_task = asyncio.create_task(_heartbeat_every(15))
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as http:
+            resp = await http.post(
+                f"{input.url}/turns",
+                json={
+                    "idempotency_key": input.idempotency_key,
+                    "msg_type": input.msg_type,
+                    "payload": input.payload,
+                    "expected_turn": input.expected_turn,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    finally:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
+    activity.logger.info("[subagent-proxy] turn %d completed", input.expected_turn)
+    return SubagentDispatchOutput(
+        output=json.dumps(data["output"]), turn_id=data["turn_id"], turn_number=data["turn_number"]
+    )
+
+
+@activity.defn
+async def subagent_stop_activity(url: str) -> None:
+    """Best-effort POST closing a non-Nexus subagent's HTTP session."""
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        await http.post(f"{url}/close")
 
 
 async def _fetch_tools_grouped(client: Client, servers: dict[str, str]) -> dict[str, list[dict[str, Any]]]:
@@ -219,3 +286,103 @@ class RegistryServiceHandler:
                 str(exc.cause or exc), type=nexusrpc.HandlerErrorType.INTERNAL, retryable_override=False
             ) from exc
         return CallToolOutput(result=result.model_dump(mode="json"))
+
+    @nexusrpc.handler.sync_operation
+    async def register_subagent(
+        self, ctx: StartOperationContext, input: RegisterSubagentInput
+    ) -> None:
+        """Register a non-Nexus subagent's URL under one agent_id."""
+        agent_id = input.agent_id or ""
+        alias = input.alias or ""
+        if not agent_id or not alias:
+            raise nexusrpc.HandlerError(
+                "agent_id and alias are required", type=nexusrpc.HandlerErrorType.BAD_REQUEST
+            )
+        if not input.url:
+            raise nexusrpc.HandlerError("url is required", type=nexusrpc.HandlerErrorType.BAD_REQUEST)
+
+        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        await handle.signal(ToolRegistryWorkflow.register_subagent, args=[agent_id, alias, input.url])
+
+    @nexusrpc.handler.sync_operation
+    async def deregister_subagent(
+        self, ctx: StartOperationContext, input: DeregisterSubagentInput
+    ) -> None:
+        """Remove one subagent registration under one agent_id."""
+        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        await handle.signal(
+            ToolRegistryWorkflow.deregister_subagent, args=[input.agent_id, input.alias]
+        )
+
+    @nexusrpc.handler.sync_operation
+    async def dispatch_subagent_turn(
+        self, ctx: StartOperationContext, input: DispatchSubagentTurnInput
+    ) -> DispatchSubagentTurnOutput:
+        """Send one turn to a registered subagent via a standalone activity (Nexus + SAA).
+
+        Retries are enabled (unlike call_tool's maximum_attempts=1): the idempotency_key
+        (agent_id, alias, expected_turn) is threaded through to the subagent's HTTP endpoint,
+        so a well-behaved subagent dedupes a retried delivery instead of double-applying it.
+        """
+        agent_id = input.agent_id or ""
+        alias = input.alias or ""
+        if not agent_id or not alias:
+            raise nexusrpc.HandlerError(
+                "agent_id and alias are required", type=nexusrpc.HandlerErrorType.BAD_REQUEST
+            )
+
+        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        url: str | None = await handle.query(
+            ToolRegistryWorkflow.find_subagent, args=[agent_id, alias]
+        )
+        if url is None:
+            raise nexusrpc.HandlerError(
+                f"subagent {alias!r} is not registered for agent {agent_id!r}.",
+                type=nexusrpc.HandlerErrorType.NOT_FOUND,
+            )
+
+        idempotency_key = f"{agent_id}:{alias}:{input.expected_turn}"
+        try:
+            result = await self._client.execute_activity(
+                subagent_proxy_activity,
+                SubagentDispatchInput(
+                    url=url,
+                    msg_type=input.msg_type or "",
+                    payload=input.payload or "{}",
+                    expected_turn=input.expected_turn or 0,
+                    idempotency_key=idempotency_key,
+                ),
+                id=f"subagent-dispatch-{idempotency_key}",
+                task_queue=temporalio.nexus.info().task_queue,
+                start_to_close_timeout=timedelta(minutes=5),
+                heartbeat_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=5),
+            )
+        except ActivityFailureError as exc:
+            raise nexusrpc.HandlerError(
+                str(exc.cause or exc), type=nexusrpc.HandlerErrorType.INTERNAL, retryable_override=False
+            ) from exc
+        return DispatchSubagentTurnOutput(
+            output=result.output, turn_id=result.turn_id, turn_number=result.turn_number
+        )
+
+    @nexusrpc.handler.sync_operation
+    async def stop_subagent(
+        self, ctx: StartOperationContext, input: StopSubagentInput
+    ) -> None:
+        """Close a registered subagent instance."""
+        agent_id = input.agent_id or ""
+        alias = input.alias or ""
+        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        url: str | None = await handle.query(
+            ToolRegistryWorkflow.find_subagent, args=[agent_id, alias]
+        )
+        if url is None:
+            return  # already gone -- stop is idempotent
+        await self._client.execute_activity(
+            subagent_stop_activity,
+            url,
+            id=f"subagent-stop-{agent_id}-{alias}-{uuid.uuid4()}",
+            task_queue=temporalio.nexus.info().task_queue,
+            start_to_close_timeout=timedelta(seconds=30),
+        )

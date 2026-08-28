@@ -6,6 +6,7 @@ import typing
 import pydantic
 
 from ._definitions import (
+    SpecInt,
     _emit_set_fields,
     _reject_explicit_null,
 )
@@ -95,6 +96,101 @@ class DeregisterInput(pydantic.BaseModel):
         return _emit_set_fields(self, handler)
 
 
+class DeregisterSubagentInput(pydantic.BaseModel):
+    """Input for removing one subagent registration."""
+    model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="allow")
+
+    agent_id: str | None = pydantic.Field(default=None)
+
+    alias: str | None = pydantic.Field(default=None)
+
+    _OPTIONAL_NON_NULLABLE_FIELDS: typing.ClassVar[frozenset[str]] = frozenset({"agent_id", "alias"})
+
+    @pydantic.model_validator(mode="wrap")
+    @classmethod
+    def _reject_null(
+        cls,
+        data: object,
+        handler: typing.Callable[[object], typing.Any],
+    ) -> typing.Any:
+        return _reject_explicit_null(cls, data, handler)
+
+    @pydantic.model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: typing.Callable[[pydantic.BaseModel], typing.Any],
+    ) -> dict[str, object]:
+        return _emit_set_fields(self, handler)
+
+
+class DispatchSubagentTurnInput(pydantic.BaseModel):
+    """Input for sending one turn to a registered subagent."""
+    model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="allow")
+
+    agent_id: str | None = pydantic.Field(default=None)
+
+    alias: str | None = pydantic.Field(default=None)
+
+    msg_type: str | None = pydantic.Field(default=None)
+    """Name of the target handler on the subagent."""
+
+    payload: str | None = pydantic.Field(default=None)
+    """JSON-encoded input for msg_type."""
+
+    expected_turn: SpecInt | None = pydantic.Field(default=None)
+    """Caller-known next turn number. Doubles as the idempotency key (with agent_id/alias)
+    for the proxy activity's retries.
+    """
+
+    _OPTIONAL_NON_NULLABLE_FIELDS: typing.ClassVar[frozenset[str]] = frozenset({"agent_id", "alias", "expected_turn", "msg_type", "payload"})
+
+    @pydantic.model_validator(mode="wrap")
+    @classmethod
+    def _reject_null(
+        cls,
+        data: object,
+        handler: typing.Callable[[object], typing.Any],
+    ) -> typing.Any:
+        return _reject_explicit_null(cls, data, handler)
+
+    @pydantic.model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: typing.Callable[[pydantic.BaseModel], typing.Any],
+    ) -> dict[str, object]:
+        return _emit_set_fields(self, handler)
+
+
+class DispatchSubagentTurnOutput(pydantic.BaseModel):
+    """The subagent's reply to one turn."""
+    model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="allow")
+
+    output: str | None = pydantic.Field(default=None)
+    """JSON-encoded reply."""
+
+    turn_id: str | None = pydantic.Field(default=None)
+
+    turn_number: SpecInt | None = pydantic.Field(default=None)
+
+    _OPTIONAL_NON_NULLABLE_FIELDS: typing.ClassVar[frozenset[str]] = frozenset({"output", "turn_id", "turn_number"})
+
+    @pydantic.model_validator(mode="wrap")
+    @classmethod
+    def _reject_null(
+        cls,
+        data: object,
+        handler: typing.Callable[[object], typing.Any],
+    ) -> typing.Any:
+        return _reject_explicit_null(cls, data, handler)
+
+    @pydantic.model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: typing.Callable[[pydantic.BaseModel], typing.Any],
+    ) -> dict[str, object]:
+        return _emit_set_fields(self, handler)
+
+
 class ListAgentEntriesInput(pydantic.BaseModel):
     """Input for looking up one agent_id's registrations."""
     model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="allow")
@@ -157,6 +253,62 @@ class RegisterExternalInput(pydantic.BaseModel):
     url: str | None = pydantic.Field(default=None)
 
     _OPTIONAL_NON_NULLABLE_FIELDS: typing.ClassVar[frozenset[str]] = frozenset({"agent_id", "name", "url"})
+
+    @pydantic.model_validator(mode="wrap")
+    @classmethod
+    def _reject_null(
+        cls,
+        data: object,
+        handler: typing.Callable[[object], typing.Any],
+    ) -> typing.Any:
+        return _reject_explicit_null(cls, data, handler)
+
+    @pydantic.model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: typing.Callable[[pydantic.BaseModel], typing.Any],
+    ) -> dict[str, object]:
+        return _emit_set_fields(self, handler)
+
+
+class RegisterSubagentInput(pydantic.BaseModel):
+    """Input for registering a non-Nexus subagent's URL."""
+    model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="allow")
+
+    agent_id: str | None = pydantic.Field(default=None)
+
+    alias: str | None = pydantic.Field(default=None)
+
+    url: str | None = pydantic.Field(default=None)
+
+    _OPTIONAL_NON_NULLABLE_FIELDS: typing.ClassVar[frozenset[str]] = frozenset({"agent_id", "alias", "url"})
+
+    @pydantic.model_validator(mode="wrap")
+    @classmethod
+    def _reject_null(
+        cls,
+        data: object,
+        handler: typing.Callable[[object], typing.Any],
+    ) -> typing.Any:
+        return _reject_explicit_null(cls, data, handler)
+
+    @pydantic.model_serializer(mode="wrap")
+    def _serialize(
+        self,
+        handler: typing.Callable[[pydantic.BaseModel], typing.Any],
+    ) -> dict[str, object]:
+        return _emit_set_fields(self, handler)
+
+
+class StopSubagentInput(pydantic.BaseModel):
+    """Input for closing a registered subagent instance."""
+    model_config: typing.ClassVar[pydantic.ConfigDict] = pydantic.ConfigDict(strict=True, populate_by_name=True, extra="allow")
+
+    agent_id: str | None = pydantic.Field(default=None)
+
+    alias: str | None = pydantic.Field(default=None)
+
+    _OPTIONAL_NON_NULLABLE_FIELDS: typing.ClassVar[frozenset[str]] = frozenset({"agent_id", "alias"})
 
     @pydantic.model_validator(mode="wrap")
     @classmethod

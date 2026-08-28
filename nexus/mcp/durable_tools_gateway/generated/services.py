@@ -7,9 +7,14 @@ from .models import (
     CallToolInput,
     CallToolOutput,
     DeregisterInput,
+    DeregisterSubagentInput,
+    DispatchSubagentTurnInput,
+    DispatchSubagentTurnOutput,
     ListAgentEntriesInput,
     ListAgentEntriesOutput,
     RegisterExternalInput,
+    RegisterSubagentInput,
+    StopSubagentInput,
 )
 
 
@@ -42,3 +47,27 @@ class RegistryService:
         CallToolOutput,
     ] = Operation(name="call_tool")
     """Invoke one tool on a registered 3rd-party MCP server."""
+
+    register_subagent: Operation[
+        RegisterSubagentInput,
+        None,
+    ] = Operation(name="register_subagent")
+    """Register a non-Nexus subagent's URL under one agent_id."""
+
+    deregister_subagent: Operation[
+        DeregisterSubagentInput,
+        None,
+    ] = Operation(name="deregister_subagent")
+    """Remove one subagent registration under one agent_id."""
+
+    dispatch_subagent_turn: Operation[
+        DispatchSubagentTurnInput,
+        DispatchSubagentTurnOutput,
+    ] = Operation(name="dispatch_subagent_turn")
+    """Send one turn to a registered subagent and return its reply."""
+
+    stop_subagent: Operation[
+        StopSubagentInput,
+        None,
+    ] = Operation(name="stop_subagent")
+    """Close a registered subagent instance."""
