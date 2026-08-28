@@ -147,6 +147,13 @@ CustomApprovalFallback = Callable[[ToolApprovalContext], bool]
 
 _SLASH_MESSAGE_TYPE = "slash"
 
+# Harness default publish-flush cadence for activity-side stream publishers (see
+# ``AgentWorkflowRunner.publisher_from_activity``). Each flush is one Signal into the
+# workflow, so this is the knob that trades UI snappiness against workflow-history
+# volume. It is only the fallback: a caller that has its own configured cadence — an SDK
+# plugin threading ``streaming_batch_interval``, say — passes that instead.
+DEFAULT_PUBLISH_BATCH_INTERVAL = timedelta(milliseconds=50)
+
 _InjectedT = TypeVar("_InjectedT")
 
 # Annotate a tool parameter ``x: Injected[Foo]`` to have the *workflow* supply it per
@@ -2260,7 +2267,7 @@ class AgentWorkflowRunner:
     async def publisher_from_activity(
         context: TurnStreamContext,
         *,
-        batch_interval: timedelta = timedelta(milliseconds=50),
+        batch_interval: timedelta | None = None,
     ) -> AsyncIterator[TurnEventPublisher]:
         """Open a :class:`TurnEventPublisher` from inside a Temporal activity.
 
@@ -2279,14 +2286,21 @@ class AgentWorkflowRunner:
                 :attr:`AgentWorkflowRunner.current_stream_context` and
                 forwarded opaquely through activity inputs.
             batch_interval: Background flush cadence on the underlying
-                stream client. Default 50ms keeps the UI feel snappy.
+                stream client — each flush is one Signal, so a longer interval
+                trades UI snappiness for fewer workflow-history events. ``None``
+                takes :data:`DEFAULT_PUBLISH_BATCH_INTERVAL` (50ms), which keeps
+                the UI feel snappy. An SDK integration should pass its own
+                configured cadence (e.g. the OpenAI plugin's
+                ``ModelActivityParameters.streaming_batch_interval``).
 
         Yields:
             A :class:`TurnEventPublisher` bound to the active workflow
             (resolved from the activity context) and the given turn.
         """
         client = WorkflowStreamClient.from_within_activity(
-            batch_interval=batch_interval,
+            batch_interval=(
+                DEFAULT_PUBLISH_BATCH_INTERVAL if batch_interval is None else batch_interval
+            ),
         )
         # ``from_within_activity`` targets the workflow that SCHEDULED this activity (always the
         # publishing agent), so events land on the right stream. The agent's SHORT id to stamp them

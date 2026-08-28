@@ -92,6 +92,13 @@ class ModelActivityParameters:
     """Interval between automatic flushes for the stream publisher used
     by the streaming activity.
 
+    Each flush is one Signal to the workflow, so this trades how promptly
+    consumers see events against how many workflow-history events a streamed
+    turn costs; it does not change how many events are published. Applies on
+    both streaming paths: the built-in raw-topic publisher, and any observer
+    built by the plugin's ``observer_factory`` (the interval is handed to that
+    factory as ``batch_interval``).
+
     .. warning::
         Streaming support is experimental and may change in future
         versions."""

@@ -400,6 +400,8 @@ class ModelActivity:
         runtime's own vocabulary, while the default (no factory, ``str``
         token) republishes raw events to a ``WorkflowStream`` topic so
         external consumers (UIs, tracing, etc.) observe them as they arrive.
+        Either way the request's ``streaming_batch_interval`` is handed to the
+        observer, so the configured publish-flush cadence applies on both paths.
         The collected-and-returned list is unaffected either way.
 
         Heartbeats run on a background task via ``auto_heartbeater`` so
@@ -421,7 +423,7 @@ class ModelActivity:
         observer_cm = select_observer(
             factory=self._observer_factory,
             token=input["stream_to"],
-            batch_ms=int(batch_interval / timedelta(milliseconds=1)),
+            batch_interval=batch_interval,
         )
         async with observer_cm as obs:
             try:

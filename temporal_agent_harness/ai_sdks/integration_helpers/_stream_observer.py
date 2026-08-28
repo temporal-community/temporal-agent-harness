@@ -8,7 +8,7 @@ see the output live.
 This contract is deliberately SDK-agnostic: ``RawEvent`` is a type variable and
 the per-call routing token is opaque (``Any``).  An SDK plugin's streamed
 activity never type-switches on the token — it always hands the token to a
-configured :data:`ObserverFactory`, which returns a fresh observer per call.
+configured :class:`ObserverFactory`, which returns a fresh observer per call.
 The same contract serves the Gemini, OpenAI-agents, and any future plugin, so
 each plugin's "publish raw events to a workflow stream" path is one shared
 abstraction rather than N divergent re-implementations.
@@ -22,7 +22,7 @@ from contextlib import (
     asynccontextmanager,
 )
 from datetime import timedelta
-from typing import Any, AsyncIterator, Callable, Optional, Protocol, TypeVar
+from typing import Any, AsyncIterator, Optional, Protocol, TypeVar
 
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
 
@@ -34,6 +34,12 @@ __all__ = [
 ]
 
 RawEvent = TypeVar("RawEvent", contravariant=True)
+
+# Fallback publish-flush cadence, used only when a caller does not pass one. Every
+# plugin-driven call DOES pass one (the OpenAI plugin threads
+# ``ModelActivityParameters.streaming_batch_interval``), so this governs only direct
+# construction; it mirrors that field's own default so the two never disagree.
+_DEFAULT_BATCH_INTERVAL = timedelta(milliseconds=100)
 
 
 class StreamObserver(Protocol[RawEvent]):
@@ -52,11 +58,24 @@ class StreamObserver(Protocol[RawEvent]):
     async def on_event(self, event: RawEvent) -> None: ...
 
 
-# Per-call factory: an opaque routing token -> a fresh observer context manager.
-# Per-call state (arg buffers, tool brackets, the WorkflowStream publisher) lives
-# inside the returned observer, so concurrent streamed calls on a shared worker
-# never bleed state into one another.
-ObserverFactory = Callable[[Any], AbstractAsyncContextManager["StreamObserver[Any]"]]
+class ObserverFactory(Protocol):
+    """Per-call factory: an opaque routing token -> a fresh observer context manager.
+
+    Per-call state (arg buffers, tool brackets, the WorkflowStream publisher) lives
+    inside the returned observer, so concurrent streamed calls on a shared worker
+    never bleed state into one another.
+
+    ``batch_interval`` is the publish-flush cadence the *plugin* was configured with
+    (``ModelActivityParameters.streaming_batch_interval``), handed to every factory so
+    a custom observer's own publisher honors the same setting as the built-in
+    :class:`RawTopicObserver` — the alternative being a configured interval that
+    silently does nothing whenever a factory is wired. Keyword-only, so a factory
+    that ignores cadence can still declare it as ``**_kw``.
+    """
+
+    def __call__(
+        self, token: Any, *, batch_interval: timedelta
+    ) -> AbstractAsyncContextManager["StreamObserver[Any]"]: ...
 
 
 class RawTopicObserver:
@@ -75,18 +94,18 @@ class RawTopicObserver:
         topic_name: str,
         *,
         event_type: type | None = None,
-        batch_ms: int = 100,
+        batch_interval: timedelta = _DEFAULT_BATCH_INTERVAL,
     ) -> None:
         self._topic_name = topic_name
         self._event_type = event_type
-        self._batch_ms = batch_ms
+        self._batch_interval = batch_interval
         self._stack: AsyncExitStack | None = None
         self._topic: Any = None
 
     async def __aenter__(self) -> RawTopicObserver:
         self._stack = AsyncExitStack()
         publisher = WorkflowStreamClient.from_within_activity(
-            batch_interval=timedelta(milliseconds=self._batch_ms),
+            batch_interval=self._batch_interval,
         )
         await self._stack.enter_async_context(publisher)
         self._topic = publisher.topic(self._topic_name, type=self._event_type)
@@ -127,13 +146,14 @@ def select_observer(
     factory: Optional[ObserverFactory],
     token: Any,
     event_type: type | None = None,
-    batch_ms: int = 100,
+    batch_interval: timedelta = _DEFAULT_BATCH_INTERVAL,
 ) -> AbstractAsyncContextManager[Optional[StreamObserver[Any]]]:
     """Resolve the per-call live observer from the routing token.
 
     - ``token is None`` → no observer (the factory is never called).
-    - a ``factory`` is configured → ``factory(token)`` (the plugin hands the
-      opaque token straight through; it never type-switches on it).
+    - a ``factory`` is configured → ``factory(token, batch_interval=...)`` (the plugin
+      hands the opaque token straight through; it never type-switches on it, and passes
+      the configured flush cadence so a custom observer's publisher can honor it).
     - no factory but a ``str`` token → the default :class:`RawTopicObserver`,
       treating the token as a ``WorkflowStream`` topic name.
     - no factory and a non-``str`` token → no observer (a non-default token with
@@ -142,7 +162,9 @@ def select_observer(
     if token is None:
         return _null_observer()
     if factory is not None:
-        return factory(token)
+        return factory(token, batch_interval=batch_interval)
     if isinstance(token, str):
-        return RawTopicObserver(token, event_type=event_type, batch_ms=batch_ms)
+        return RawTopicObserver(
+            token, event_type=event_type, batch_interval=batch_interval
+        )
     return _null_observer()
