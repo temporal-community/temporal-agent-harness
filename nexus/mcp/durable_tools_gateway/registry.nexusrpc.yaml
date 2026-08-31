@@ -31,14 +31,19 @@ services:
         fqn: deregister_subagent
         description: Remove one subagent registration under one agent_id.
         input: { $ref: "#/$defs/DeregisterSubagentInput" }
+      startSubagent:
+        fqn: start_subagent
+        description: Start one instance from a registered subagent provider.
+        input: { $ref: "#/$defs/StartSubagentInput" }
+        output: { $ref: "#/$defs/StartSubagentOutput" }
       dispatchSubagentTurn:
         fqn: dispatch_subagent_turn
-        description: Send one turn to a registered subagent and return its reply.
+        description: Send one turn to a subagent instance and return its reply.
         input: { $ref: "#/$defs/DispatchSubagentTurnInput" }
         output: { $ref: "#/$defs/DispatchSubagentTurnOutput" }
       stopSubagent:
         fqn: stop_subagent
-        description: Close a registered subagent instance.
+        description: Close a subagent instance.
         input: { $ref: "#/$defs/StopSubagentInput" }
 
 $defs:
@@ -115,6 +120,8 @@ $defs:
         type: string
       url:
         type: string
+    required: [agent_id, alias, url]
+    additionalProperties: false
 
   DeregisterSubagentInput:
     type: object
@@ -124,15 +131,38 @@ $defs:
         type: string
       alias:
         type: string
+    required: [agent_id, alias]
+    additionalProperties: false
 
-  DispatchSubagentTurnInput:
+  StartSubagentInput:
     type: object
-    description: Input for sending one turn to a registered subagent.
+    description: Input for starting one subagent instance.
     properties:
       agent_id:
         type: string
       alias:
         type: string
+    required: [agent_id, alias]
+    additionalProperties: false
+
+  StartSubagentOutput:
+    type: object
+    description: A new subagent instance.
+    properties:
+      instance_id:
+        type: string
+    required: [instance_id]
+    additionalProperties: false
+
+  DispatchSubagentTurnInput:
+    type: object
+    description: Input for sending one turn to a subagent instance.
+    properties:
+      agent_id:
+        type: string
+      instance_id:
+        type: string
+        description: Instance returned by startSubagent.
       msg_type:
         type: string
         description: Name of the target handler on the subagent.
@@ -141,7 +171,9 @@ $defs:
         description: JSON-encoded input for msg_type.
       expected_turn:
         type: integer
-        description: Caller-known next turn number. Doubles as the idempotency key (with agent_id/alias) for the proxy activity's retries.
+        description: Caller-known next turn number.
+    required: [agent_id, instance_id, msg_type, payload, expected_turn]
+    additionalProperties: false
 
   DispatchSubagentTurnOutput:
     type: object
@@ -154,12 +186,17 @@ $defs:
         type: string
       turn_number:
         type: integer
+    required: [output, turn_id, turn_number]
+    additionalProperties: false
 
   StopSubagentInput:
     type: object
-    description: Input for closing a registered subagent instance.
+    description: Input for closing a subagent instance.
     properties:
       agent_id:
         type: string
-      alias:
+      instance_id:
         type: string
+        description: Instance returned by startSubagent.
+    required: [agent_id, instance_id]
+    additionalProperties: false

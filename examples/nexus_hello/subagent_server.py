@@ -1,16 +1,14 @@
-"""Demo 3rd-party subagent for the Nexus-hello example.
+"""Run the HTTP subagent for the Nexus hello example.
 
-Stands in for a real, non-harness agent -- plain HTTP, no Nexus, no Temporal client of its
-own. Registered with the same Durable Tools Gateway ToolRegistryWorkflow tool_server.py's
-"demo" is registered with (see register-third-party-subagent in the justfile) and reached
-at call time through subagent_proxy_activity -- the gateway brokers both resource kinds.
+The Durable Tools Gateway sends turns to this server. The server has no Nexus or Temporal
+client.
 
 Wire protocol (see nexus/mcp/durable_tools_gateway/registry_service_handler.py):
-    POST /turns {idempotency_key, msg_type, payload, expected_turn} -> {output, turn_id, turn_number}
-    POST /close -> {}
+    POST /sessions {idempotency_key} -> {instance_id}
+    POST /sessions/{instance_id}/turns -> {output, turn_id, turn_number}
+    POST /sessions/{instance_id}/close -> {}
 
-Dedupes on idempotency_key so a retried delivery (the gateway's proxy activity allows
-retries, unlike the MCP proxy) returns the same reply instead of running the turn twice.
+The server deduplicates retried requests by idempotency key.
 
 Run with (from the repo root):
     uv run --extra nexus-mcp --group examples python -m examples.nexus_hello.subagent_server
@@ -18,17 +16,26 @@ Run with (from the repo root):
 
 from __future__ import annotations
 
-import itertools
 import json
+import uuid
+from dataclasses import dataclass, field
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 PORT = 8766
 
 app = FastAPI()
-_turn_counter = itertools.count(1)
-_seen: dict[str, "TurnResponse"] = {}
+_start_keys: dict[str, str] = {}
+_sessions: dict[str, "SessionState"] = {}
+
+
+class StartRequest(BaseModel):
+    idempotency_key: str
+
+
+class StartResponse(BaseModel):
+    instance_id: str
 
 
 class TurnRequest(BaseModel):
@@ -44,24 +51,59 @@ class TurnResponse(BaseModel):
     turn_number: int
 
 
-@app.post("/turns")
-def turns(req: TurnRequest) -> TurnResponse:
-    if req.idempotency_key in _seen:
-        return _seen[req.idempotency_key]  # retried delivery -- same reply, not a new turn
-    payload = json.loads(req.payload)
+@dataclass
+class SessionState:
+    next_turn: int = 1
+    seen: dict[str, tuple[TurnRequest, TurnResponse]] = field(default_factory=dict)
+
+
+@app.post("/sessions")
+def start(req: StartRequest) -> StartResponse:
+    instance_id = _start_keys.get(req.idempotency_key)
+    if instance_id is None:
+        instance_id = uuid.uuid4().hex
+        _start_keys[req.idempotency_key] = instance_id
+        _sessions[instance_id] = SessionState()
+    return StartResponse(instance_id=instance_id)
+
+
+@app.post("/sessions/{instance_id}/turns")
+def turns(instance_id: str, req: TurnRequest) -> TurnResponse:
+    session = _sessions.get(instance_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="unknown subagent instance")
+    prior = session.seen.get(req.idempotency_key)
+    if prior is not None:
+        prior_request, prior_response = prior
+        if prior_request != req:
+            raise HTTPException(status_code=409, detail="idempotency key reused")
+        return prior_response
+    if req.expected_turn != session.next_turn:
+        raise HTTPException(
+            status_code=409,
+            detail=f"expected turn {session.next_turn}, got {req.expected_turn}",
+        )
+    if req.msg_type != "ask":
+        raise HTTPException(status_code=400, detail=f"unknown handler {req.msg_type!r}")
+    try:
+        payload = json.loads(req.payload)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="invalid payload JSON") from exc
     text = payload.get("text", "")
-    turn_number = next(_turn_counter)
+    turn_number = session.next_turn
     resp = TurnResponse(
         output={"text": f"[3rd-party subagent] you asked {text!r} -- here is a canned answer."},
-        turn_id=f"turn-{turn_number}",
+        turn_id=f"{instance_id}-turn-{turn_number}",
         turn_number=turn_number,
     )
-    _seen[req.idempotency_key] = resp
+    session.seen[req.idempotency_key] = (req, resp)
+    session.next_turn += 1
     return resp
 
 
-@app.post("/close")
-def close() -> dict:
+@app.post("/sessions/{instance_id}/close")
+def close(instance_id: str) -> dict:
+    _sessions.pop(instance_id, None)
     return {}
 
 

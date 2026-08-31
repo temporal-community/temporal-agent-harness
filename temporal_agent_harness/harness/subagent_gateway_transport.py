@@ -1,10 +1,9 @@
-# ABOUTME: GatewayTransport -- SubagentTransport for a non-Nexus subagent, brokered through
-# the Durable Tools Gateway (the same deployable that brokers 3rd-party MCP servers).
-# Requires the `nexus-mcp` extra.
+# ABOUTME: Transport for an HTTP subagent reached through the Durable Tools Gateway.
 
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any
 
 from temporalio import workflow
@@ -28,6 +27,7 @@ try:
         from durable_tools_gateway.generated import (
             DispatchSubagentTurnInput,
             RegistryService,
+            StartSubagentInput,
             StopSubagentInput,
         )
 except ModuleNotFoundError as exc:
@@ -35,11 +35,9 @@ except ModuleNotFoundError as exc:
 
 
 class GatewayTransport:
-    """A non-Nexus subagent, brokered through the Durable Tools Gateway.
+    """Reach a registered HTTP subagent through the Durable Tools Gateway.
 
-    `agent_id` / `alias` identify the registration (see
-    RegistryServiceHandler.register_subagent) - there is no separate "instance" concept, the
-    registered alias IS the instance. `start` does not create anything remotely.
+    The alias identifies a provider. Each ``start`` call creates an instance.
     """
 
     def __init__(
@@ -60,7 +58,12 @@ class GatewayTransport:
         )
 
     async def start(self, *, agent_key: str, config: AgentConfig) -> str:
-        return self._alias
+        out = await self._client().execute_operation(
+            RegistryService.start_subagent,
+            StartSubagentInput(agent_id=self._agent_id, alias=self._alias),
+            schedule_to_close_timeout=timedelta(minutes=1),
+        )
+        return out.instance_id
 
     async def dispatch(
         self,
@@ -78,16 +81,14 @@ class GatewayTransport:
             RegistryService.dispatch_subagent_turn,
             DispatchSubagentTurnInput(
                 agent_id=self._agent_id,
-                alias=target,
+                instance_id=target,
                 msg_type=msg_type,
                 payload=json.dumps(payload),
                 expected_turn=expected_turn,
             ),
+            schedule_to_close_timeout=timedelta(minutes=6),
         )
-        # No activity backs this call on the caller side either - publish the dispatch
-        # marker here, right after the send succeeds (see NexusTransport for the same
-        # reasoning). A failed dispatch_subagent_turn call raises before this line, so no
-        # marker is published for a rejected send.
+        # Publish only after the gateway returns a reply.
         _current_runner().publish(
             SubagentMessageSent(
                 subagent_id=handle,
@@ -102,12 +103,16 @@ class GatewayTransport:
             output=json.loads(out.output),
             turn_id=out.turn_id,
             turn_number=out.turn_number,
-            # No remote stream to resume from for this transport - unchanged, vestigial.
+            # This transport has no remote stream cursor.
             consumed_offset=from_offset,
         )
 
     async def stop(self, *, target: str) -> None:
         await self._client().execute_operation(
             RegistryService.stop_subagent,
-            StopSubagentInput(agent_id=self._agent_id, alias=target),
+            StopSubagentInput(
+                agent_id=self._agent_id,
+                instance_id=target,
+            ),
+            schedule_to_close_timeout=timedelta(minutes=1),
         )

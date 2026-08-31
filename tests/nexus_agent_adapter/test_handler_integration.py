@@ -105,6 +105,27 @@ class CallerOutput(BaseModel):
 
 
 @workflow.defn
+class TimeoutPollCallerWorkflow:
+    """Poll an idle agent and return after the requested timeout."""
+
+    @workflow.run
+    async def run(self, input: CallerInput) -> int:
+        client = workflow.create_nexus_client(
+            service=AgentServiceDefinition, endpoint=input.endpoint
+        )
+        result = await client.execute_operation(
+            AgentServiceDefinition.poll_messages,
+            PollMessagesInput(
+                session_id=input.session_id,
+                cursor=0,
+                timeout_seconds=0.1,
+            ),
+        )
+        assert not result.closed
+        return len(result.items)
+
+
+@workflow.defn
 class CallerWorkflow:
     """Stands in for ui_connector — calls AgentService purely over the Nexus wire."""
 
@@ -197,6 +218,48 @@ async def test_poll_messages_delivers_via_async_callback(env: WorkflowEnvironmen
         op_types = {e.event_type for e in history.events}
         assert EventType.EVENT_TYPE_NEXUS_OPERATION_STARTED in op_types
         assert EventType.EVENT_TYPE_NEXUS_OPERATION_COMPLETED in op_types
+
+
+async def test_poll_messages_honors_timeout(env: WorkflowEnvironment) -> None:
+    client = env.client
+    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
+    agent_task_queue = f"agent-{uuid.uuid4()}"
+    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
+    caller_task_queue = f"caller-{uuid.uuid4()}"
+    session_id = str(uuid.uuid4())
+
+    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
+    config = Config(
+        agent_task_queue=agent_task_queue,
+        workflow_name="ProbeAgent",
+        workflow_id_prefix="probe-",
+        is_message_queuing_enabled=False,
+    )
+
+    async with Worker(
+        client, task_queue=agent_task_queue, workflows=[ProbeAgent]
+    ), Worker(
+        client,
+        task_queue=nexus_task_queue,
+        nexus_service_handlers=[AgentServiceHandler(client, config)],
+    ), Worker(
+        client, task_queue=caller_task_queue, workflows=[TimeoutPollCallerWorkflow]
+    ):
+        agent_handle = await client.start_workflow(
+            ProbeAgent.run,
+            AgentConfig(),
+            id=f"probe-{session_id}",
+            task_queue=agent_task_queue,
+        )
+        caller_handle = await client.start_workflow(
+            TimeoutPollCallerWorkflow.run,
+            CallerInput(endpoint=endpoint_name, session_id=session_id),
+            id=f"caller-{session_id}",
+            task_queue=caller_task_queue,
+        )
+
+        assert await caller_handle.result() == 0
+        await agent_handle.signal("close")
 
 
 class SendOnlyOutput(BaseModel):

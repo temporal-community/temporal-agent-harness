@@ -1,7 +1,4 @@
-# ABOUTME: NexusTransport -- SubagentTransport for a harness agent reached directly over
-# Nexus (its own AgentService endpoint, the same contract the Slack connector uses). No
-# gateway, no activity: send_agent_message / poll_messages / close_session are plain Nexus
-# operations awaited straight from workflow code, mirroring nexus_native_mcp_server.
+# ABOUTME: Transport for a harness subagent reached directly through Nexus.
 
 from __future__ import annotations
 
@@ -29,27 +26,22 @@ from temporal_agent_harness.nexus_agent_adapter.generated import (
     SendAgentMessageInput,
 )
 
-# Each poll_messages call is its own bounded long-poll (waits up to this many seconds for
-# new events before returning empty) - the caller just calls again for the next batch.
+# Requested wait for one poll request.
 POLL_TIMEOUT_SECONDS = 25.0
 
 
 def _decode_stream_item(data: str) -> AgentEvent:
-    """StreamItem.data is base64(proto Payload{encoding, TurnEvent JSON}). Decode it the
-    same way WorkflowStream's own subscribe() does internally."""
+    """Decode an event from a base64-encoded Temporal payload."""
     payload = Payload()
     payload.ParseFromString(base64.b64decode(data))
     return workflow.payload_converter().from_payload(payload, AgentEvent)
 
 
 class NexusTransport:
-    """A harness agent reached over Nexus. `endpoint` is the Nexus endpoint pointing at the
-    target's AgentServiceHandler.
+    """Reach a harness subagent through its Nexus AgentService endpoint.
 
-    Known limitation: sendAgentMessage's start_config is decided by the target deployment's
-    own AgentServiceHandler.Config, not by the caller. So unlike ChildWorkflowTransport, the
-    remote subagent's own agent_id is NOT stamped to match the parent's handle - a client
-    merging both streams by agent_id will not unify them for this transport.
+    The target service creates its own ``AgentConfig``. It cannot use the parent handle as
+    the remote agent ID. A client therefore cannot join the two streams by agent ID.
     """
 
     def __init__(self, endpoint: str) -> None:
@@ -59,7 +51,7 @@ class NexusTransport:
         return workflow.create_nexus_client(service=AgentService, endpoint=self._endpoint)
 
     async def start(self, *, agent_key: str, config: AgentConfig) -> str:
-        # Lazy: send_agent_message starts-or-reuses the target workflow on first dispatch.
+        # The first message starts or reuses the target workflow.
         return f"{agent_key}-subagent-{workflow.uuid4()}"
 
     async def dispatch(
@@ -87,9 +79,7 @@ class NexusTransport:
         except Exception as exc:
             raise _rejection_error(exc) from exc
 
-        # No activity backs this call - it's plain workflow code - so publish the dispatch
-        # marker here, right after the send is confirmed, instead of from inside an activity
-        # (see ChildWorkflowTransport / subagent_activities.py's _publish_dispatch).
+        # Publish after Nexus accepts the message.
         _current_runner().publish(
             SubagentMessageSent(
                 subagent_id=handle,
@@ -147,10 +137,7 @@ class NexusTransport:
 
 
 def _rejection_error(exc: Exception) -> ApplicationError:
-    """Turn a send_agent_message rejection into the same ApplicationError type/shape
-    ChildWorkflowTransport raises for a pre-acceptance rejection (see handler.py's
-    "StaleTurn: "/"AgentBusy: " prefixes) - so AgentWorkflowRunner's error handling doesn't
-    need to know which transport is in play."""
+    """Map a Nexus rejection to the transport-independent error type."""
     message = str(exc)
     if message.startswith("StaleTurn: "):
         return ApplicationError(message, type="StaleTurn", non_retryable=True)

@@ -24,8 +24,7 @@ from temporal_agent_harness.harness.agent_protocol import (
 from temporal_agent_harness.harness.agent_workflow import _SubagentInstance, _WorkflowStatus
 from temporal_agent_harness.harness.subagent_transport import ChildWorkflowTransport
 
-# These tests exercise the FIFO gate + registry bookkeeping only, never actual dispatch, so
-# a transport that's never called is fine here.
+# These tests do not dispatch through the transport.
 _FAKE_TRANSPORT = ChildWorkflowTransport("unused-workflow-type", "unused-task-queue")
 
 

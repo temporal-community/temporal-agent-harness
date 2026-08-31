@@ -14,6 +14,8 @@ from .models import (
     ListAgentEntriesOutput,
     RegisterExternalInput,
     RegisterSubagentInput,
+    StartSubagentInput,
+    StartSubagentOutput,
     StopSubagentInput,
 )
 
@@ -60,14 +62,20 @@ class RegistryService:
     ] = Operation(name="deregister_subagent")
     """Remove one subagent registration under one agent_id."""
 
+    start_subagent: Operation[
+        StartSubagentInput,
+        StartSubagentOutput,
+    ] = Operation(name="start_subagent")
+    """Start one instance from a registered subagent provider."""
+
     dispatch_subagent_turn: Operation[
         DispatchSubagentTurnInput,
         DispatchSubagentTurnOutput,
     ] = Operation(name="dispatch_subagent_turn")
-    """Send one turn to a registered subagent and return its reply."""
+    """Send one turn to a subagent instance and return its reply."""
 
     stop_subagent: Operation[
         StopSubagentInput,
         None,
     ] = Operation(name="stop_subagent")
-    """Close a registered subagent instance."""
+    """Close a subagent instance."""

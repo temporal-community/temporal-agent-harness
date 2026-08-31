@@ -1,17 +1,7 @@
-"""Demo native subagent for the Nexus-hello example: a harness agent exposed directly over
-Nexus through its own AgentServiceHandler -- the same contract that fronts the Slack
-connector. No gateway, no registration. The orchestrator reaches it directly through
-agent.nexus_native_subagent() / NexusTransport.
+"""Run the native subagent for the Nexus hello example.
 
-Parallels nexus_tool_service.py's role (a Nexus-native resource, no gateway) for a
-different resource kind: a whole subagent, not a tool.
-
-The workflow and its Nexus front door run in ONE worker, ONE task queue here -- proving
-that's possible (nexus_agent_adapter/worker.py's own docstring calls this out as a valid
-alternative to a standalone Nexus worker; the Slack connector uses the standalone form
-instead, to scale Nexus traffic independently of workflow execution).
-
-No model here -- a canned reply, so this demo needs no API key.
+One worker hosts the agent workflow and its Nexus service. The subagent returns a fixed
+reply and does not call a model.
 
 Run with (from the repo root):
     uv run --group examples python -m examples.nexus_hello.native_subagent worker
@@ -74,7 +64,7 @@ async def _run_worker() -> None:
     config = Config(
         agent_task_queue=TASK_QUEUE,
         workflow_name="NativeResearchSubagent",
-        workflow_id_prefix="",  # NexusTransport's session_id IS the workflow id already
+        workflow_id_prefix="",  # The Nexus session ID is the workflow ID.
         is_message_queuing_enabled=True,
     )
     worker = Worker(

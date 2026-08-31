@@ -154,8 +154,7 @@ class AgentClient:
         return await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
 
     async def close(self) -> None:
-        """Signal the agent workflow to close gracefully. Same "close" signal a human/UI
-        or AgentWorkflowRunner.stop_subagent uses."""
+        """Signal the agent workflow to close."""
         handle = self._temporal.get_workflow_handle(self._workflow_id)
         await handle.signal("close")
 

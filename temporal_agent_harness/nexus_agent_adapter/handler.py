@@ -14,7 +14,6 @@ from nexusrpc import HandlerError, HandlerErrorType
 from nexusrpc.handler import StartOperationContext, service_handler, sync_operation
 from temporalio import nexus
 from temporalio.client import Client
-from temporalio.contrib.workflow_streams import PollInput, PollResult
 from temporalio.service import RPCError
 
 from temporal_agent_harness.harness.agent_client import (
@@ -31,6 +30,11 @@ from temporal_agent_harness.harness.agent_protocol import (
     PendingTurn,
     SubagentInfo,
     ToolApprovalPolicy,
+)
+from temporal_agent_harness.harness.stream_poll import (
+    AGENT_STREAM_POLL_UPDATE,
+    AgentStreamPollInput,
+    AgentStreamPollResult,
 )
 
 # Aliased with a Nexus* prefix where the name collides with an agent_protocol type of the
@@ -63,9 +67,6 @@ from .generated import (
 )
 from .generated import AgentService as AgentServiceDefinition
 
-# WorkflowStream's private poll-update name (not part of its public API), hardcoded since
-# pollMessages must attach to it for any agent without importing that agent's workflow code.
-_WORKFLOW_STREAM_POLL_UPDATE = "__temporal_workflow_stream_poll"
 DEFAULT_POLL_TIMEOUT_SECONDS = 30.0
 _MAX_SEND_RETRIES = 5
 
@@ -180,10 +181,7 @@ class AgentServiceHandler:
         client = self._agent_client(input.session_id)
 
         if input.expected_turn is not None:
-            # Caller already tracks turn state (e.g. a subagent-driving parent). Skip the
-            # guess loop and fail fast on a mismatch, same as a same-cluster child workflow.
-            # update_id is keyed on ctx.request_id: a retried Nexus call reuses the same
-            # request_id, so it resolves the same update instead of double-submitting.
+            # Use the caller's turn number. Reuse the update ID on a Nexus retry.
             try:
                 reply = await client.start_and_submit_message(
                     input.msg_type,
@@ -358,7 +356,7 @@ class AgentServiceHandler:
         )
 
     # -----------------------------------------------------------------------
-    # closeSession — signal the target agent workflow to close
+    # closeSession: close the target agent workflow
     # -----------------------------------------------------------------------
 
     @sync_operation
@@ -382,14 +380,27 @@ class AgentServiceHandler:
         """Long-polls WorkflowStream via update-with-callback. Returns closed=True
         synchronously if the target workflow has already completed."""
         workflow_id = self._workflow_id(input.session_id)
-        timeout_seconds = input.timeout_seconds or DEFAULT_POLL_TIMEOUT_SECONDS
+        timeout_seconds = (
+            input.timeout_seconds
+            if input.timeout_seconds is not None
+            else DEFAULT_POLL_TIMEOUT_SECONDS
+        )
+        if timeout_seconds <= 0:
+            raise HandlerError(
+                "timeout_seconds must be positive",
+                type=HandlerErrorType.BAD_REQUEST,
+            )
 
         try:
             result = await client.start_workflow_update(
                 workflow_id,
-                _WORKFLOW_STREAM_POLL_UPDATE,
-                PollInput(from_offset=input.cursor, topics=[TURN_EVENTS_TOPIC]),
-                result_type=PollResult,
+                AGENT_STREAM_POLL_UPDATE,
+                AgentStreamPollInput(
+                    from_offset=input.cursor,
+                    topics=[TURN_EVENTS_TOPIC],
+                    timeout_seconds=timeout_seconds,
+                ),
+                result_type=AgentStreamPollResult,
             )
         except RPCError as e:
             if _is_workflow_already_completed(e):
@@ -403,15 +414,15 @@ class AgentServiceHandler:
         if result.token is not None:
             return nexus.TemporalOperationResult.async_token(result.token)
 
-        poll_result: PollResult = result.value
+        bounded_result: AgentStreamPollResult = result.value
         return nexus.TemporalOperationResult.sync(
             PollMessagesOutput(
                 items=[
                     StreamItem(topic=item.topic, data=item.data, offset=item.offset)
-                    for item in poll_result.items
+                    for item in bounded_result.items
                 ],
-                more_ready=poll_result.more_ready,
-                next_offset=poll_result.next_offset,
-                closed=False,
+                more_ready=bounded_result.more_ready,
+                next_offset=bounded_result.next_offset,
+                closed=bounded_result.closed,
             )
         )

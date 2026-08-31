@@ -21,6 +21,8 @@ from .models import (
     ListAgentEntriesOutputRemoteToolsValueItem,
     RegisterExternalInput,
     RegisterSubagentInput,
+    StartSubagentInput,
+    StartSubagentOutput,
     StopSubagentInput,
 )
 from .services import RegistryService
@@ -42,6 +44,8 @@ __all__ = [
     "ListAgentEntriesOutputRemoteToolsValueItem",
     "RegisterExternalInput",
     "RegisterSubagentInput",
+    "StartSubagentInput",
+    "StartSubagentOutput",
     "StopSubagentInput",
     "RegistryService",
 ]

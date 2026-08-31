@@ -105,18 +105,10 @@ class SubagentTurnResult(BaseModel):
 
 
 class SubagentTransport(Protocol):
-    """How a parent agent reaches one subagent instance: start it, run one turn end to end
-    (send + wait for the reply), and stop it.
-
-    AgentWorkflowRunner calls these three methods only. It does not care how a transport
-    reaches the subagent - same-cluster child workflow (ChildWorkflowTransport, the
-    default), a harness agent reached directly over Nexus (NexusTransport), or a
-    non-harness subagent brokered through the Durable Tools Gateway (GatewayTransport).
-    """
+    """Start a subagent, dispatch one turn, and stop the subagent."""
 
     async def start(self, *, agent_key: str, config: AgentConfig) -> str:
-        """Bring one subagent instance online. Return its target id - opaque to the
-        caller, threaded back into dispatch/stop unchanged."""
+        """Start a subagent and return its transport target ID."""
         ...
 
     async def dispatch(
@@ -131,11 +123,7 @@ class SubagentTransport(Protocol):
         agent_key: str,
         parent_stream_context: TurnStreamContext,
     ) -> SubagentTurnResult:
-        """Send one message to `target` and return once its reply is captured.
-
-        `handle` / `agent_key` / `parent_stream_context` are for publishing the
-        SubagentMessageSent marker onto the PARENT's stream, at the moment the message is
-        actually sent (not at dispatch time - there can be a real gap between the two)."""
+        """Send one message and wait for its reply."""
         ...
 
     async def stop(self, *, target: str) -> None:

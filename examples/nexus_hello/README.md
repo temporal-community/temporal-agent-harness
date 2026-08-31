@@ -1,32 +1,37 @@
 # Nexus-hello agent
 
-Demonstrates two ways to reach a resource over Nexus, side by side in one
-`Agent(mcp_servers=[...])` plus two direct subagent calls -- for **two different resource
-kinds** (a tool, and a whole subagent), proving the same gateway and the same native-Nexus
-path both generalize beyond MCP:
+This example shows two things reached over Nexus: a tool, and a subagent. Both use the
+same two paths. A **native** path calls the resource directly. A **gateway** path calls a
+3rd-party resource through the Durable Tools Gateway. The same gateway brokers both kinds.
+
+The model decides when to use each resource. It never gets called directly by the
+workflow. The two MCP tools are plain `Agent(mcp_servers=[...])` entries. The two
+subagents are bridged into plain `Agent(tools=[...])` function tools, via
+`harness_tool_as_openai_tool`.
 
 - `nexus_native_mcp_server(name, endpoint)` / `agent.nexus_native_subagent(cls, endpoint, key=...)`
-  -- one hard-coded native Nexus service, called directly. No registry, no registration, ever.
+  -- one hard-coded native Nexus service, called directly. No registry. No registration.
 - `nexus_tools_gateway().mcp_servers(...)` / `agent.nexus_subagent_gateway().subagent([...], alias, key=...)`
-  -- an explicit resource registered ahead of time with the Durable Tools Gateway, proxied
-  through it. `agent_id` is inferred from this workflow's own type (`workflow_type`), not
-  chosen by hand.
+  -- a resource registered ahead of time with the Durable Tools Gateway, called through it.
+  `agent_id` comes from this workflow's own type (`workflow_type`). You never set it by hand.
 
-Native and 3rd-party resources never mix inside the gateway's routing -- but MCP tools and
-subagents now share the same gateway deployable, same registry workflow, different proxy
-activity. Tool lists are never cached: they're fetched live, from the real MCP server, on
-every `list_tools()` call. The subagents run no real model -- both give canned replies, so
-that half of the demo needs no API key; only the MCP-tool half talks to a live model.
+Native and 3rd-party resources never mix inside the gateway's routing. MCP tools and
+subagents share one gateway and one registry workflow. Each HTTP operation uses a
+standalone activity.
+Tool lists are never cached. They are fetched live from the real MCP server on every
+`list_tools()` call. The subagents run no real model. Both give a canned reply. Calling
+them proves the transport works, not that they can hold a conversation. But the model
+decides whether to call them at all, the same way it decides for the MCP tools.
 
 Resources (registered under agent_id `"NexusHelloAgent"`, this workflow's `workflow_type`):
 - `demo_get_fun_fact` - a 3rd-party (non-Nexus) MCP server, reached through the
   **Durable Tools Gateway** ("demo" -> `http://127.0.0.1:8765/mcp`).
-- `demo-nexus_get_lucky_number` - a **Nexus-native** MCP server, called directly - no
-  gateway, no registration.
-- `research` - a **Nexus-native** SUBAGENT (a real harness agent), called directly - no
-  gateway, no registration.
-- `writer` - a **3rd-party** SUBAGENT (plain HTTP, no Nexus, no Temporal client of its
-  own), reached through the SAME **Durable Tools Gateway** as `demo_get_fun_fact`.
+- `demo-nexus_get_lucky_number` - a **native** MCP server, called directly. No gateway.
+  No registration.
+- `research` - a **native** SUBAGENT (a real harness agent), called directly. No
+  gateway. No registration.
+- `writer` - a **3rd-party** SUBAGENT factory (plain HTTP, no Nexus, no Temporal client),
+  reached through the same **Durable Tools Gateway** as `demo_get_fun_fact`.
 
 ## Architecture
 
@@ -35,8 +40,8 @@ Resources (registered under agent_id `"NexusHelloAgent"`, this workflow's `workf
                   ┌────────────────────────────────────┐
                   │            NexusHelloAgent          │
                   │       (orchestrator, worker.py)      │
-                  │  ask(): model calls the 2 MCP tools; │
-                  │  then drives the 2 subagents directly│
+                  │  ask(): model decides whether to use │
+                  │  any of the 2 MCP tools / 2 subagents│
                   └───┬────────────────┬──────────────┬──┘
                       │                │              │
           native tool │    native subagent│   gateway (both kinds)
@@ -52,16 +57,14 @@ Resources (registered under agent_id `"NexusHelloAgent"`, this workflow's `workf
         │  a tool has no       ││  -> NativeResearchSub- ││                       │
         │  backing agent)      ││  agentWorkflow          ││                       │
         └──────────┬──────────┘└──────────┬────────────┘└───────────┬───────────┘
-                   ▼                      ▼                standalone activity,
-        demo-nexus_get_lucky_        (the agent's own            one per kind
-        number (tool)                canned reply)             ┌──────┴──────┐
-                                                                 ▼             ▼
-                                                       mcp_proxy_    subagent_proxy_
-                                                       activity       activity
-                                                            │              │
-                                                            ▼              ▼
-                                                    tool_server.py  subagent_server.py
-                                                    (3rd-party MCP) (3rd-party subagent)
+                   ▼                      ▼                         ▼
+        demo-nexus_get_lucky_        (the agent's own       standalone activities
+        number (tool)                canned reply)          for MCP and subagents
+                                                                  │
+                                                          ┌───────┴────────┐
+                                                          ▼                ▼
+                                                   tool_server.py  subagent_server.py
+                                                   (3rd-party MCP) (subagent factory)
 ```
 
 ## How it works
@@ -82,17 +85,34 @@ writer = subagent_gateway.subagent(
     "writer",
     key="writer",
 )
+
+sdk_agent = OpenAIAgent(
+    ...,
+    mcp_servers=[nexus_gateway.mcp_servers("demo"), nexus_native_mcp_server(...)],
+    tools=[harness_tool_as_openai_tool(fn) for fn in [*research, *writer]],
+)
+Runner.run_streamed(sdk_agent, input=..., context=self._runner)  # required: run_tool lives on it
 ```
 
-Four ways to reach a resource over Nexus. This demo uses all four.
+`harness_tool_as_openai_tool` turns each subagent function into a plain OpenAI-agents
+tool. It dispatches through `AgentWorkflowRunner.run_tool`. Approval gating and
+tool-lifecycle events fire the same way they do for any other harness tool. The model
+sees the subagent tools the same way it sees the MCP tools. The model decides when to
+start a subagent, ask it something, and stop it. The workflow never calls a subagent
+directly.
 
-**1. Nexus-native tool** (`demo-nexus_get_lucky_number`). The tool server IS a Nexus
-operation handler. No gateway, no registry, no discovery call -- the agent always
-knows `name` + `endpoint` statically, from `nexus_native_mcp_server(...)` itself. Both
-listing and calling are one direct Nexus hop each.
+There are two paths to a resource over Nexus: **native**, and **gateway-brokered**. This
+example uses both paths, for two resource kinds: MCP tools, and subagents.
+
+### MCP tools
+
+**1. Native tool** (`demo-nexus_get_lucky_number`). The tool server is itself a Nexus
+operation handler. There is no gateway and no registry. The agent already knows the
+service name and endpoint, from `nexus_native_mcp_server(...)`. Listing tools and calling
+a tool are each one Nexus call.
 
 ```
-Nexus-native tool -- demo-nexus_get_lucky_number
+Native tool -- demo-nexus_get_lucky_number
 ("MCPServerStdio"-shaped, but the transport is Nexus, not a process or HTTP)
 
 ┌───────┐
@@ -107,17 +127,17 @@ Nexus-native tool -- demo-nexus_get_lucky_number
 └───────────────────────────┘
 ```
 
-**2. Gateway-proxied tool** (`demo_get_fun_fact`). The real MCP server only speaks
-HTTP. The gateway holds the URL and dispatches for it, so the agent never has to.
-`.mcp_servers("demo")` asks the gateway for exactly those aliases' tools, once per
-turn, in a single Nexus call -- an alias that isn't actually registered is silently
-skipped (no error yet; this is a prototype). `just register-third-party-mcp-server` (`temporal
-workflow signal`) only validates the URL — the actual tool list is fetched live at
-discovery time, every turn, as a standalone activity (Nexus + SAA). Needs the dynamic
-config `just temporal` sets: `nexusoperation.enableStandalone`/`activity.enableStandalone`.
+**2. Gateway tool** (`demo_get_fun_fact`). The real MCP server only speaks HTTP. The
+gateway holds its URL. The gateway calls it on the agent's behalf. `.mcp_servers("demo")`
+asks the gateway for that alias's tools, once per turn, in one Nexus call. An alias that
+isn't registered is skipped silently for now (this is a prototype). `just
+register-third-party-mcp-server` registers the URL and then checks it. The gateway fetches
+the real tool list on every discovery call. Discovery retries up to three times and then
+skips an unavailable server. This needs the dynamic config `just temporal` sets:
+`nexusoperation.enableStandalone` and `activity.enableStandalone`.
 
 ```
-Gateway-proxied tool -- demo_get_fun_fact
+Gateway tool -- demo_get_fun_fact
 
 ┌───────┐
 │ Agent │
@@ -138,68 +158,9 @@ Gateway-proxied tool -- demo_get_fun_fact
        └──────────────────┘
 ```
 
-**3. Nexus-native subagent** (`research`). Same shape as #1, but the resource is a whole
-harness agent (`native_subagent.py`), not a tool. `sendAgentMessage` (dispatch) and
-`pollMessages` (the reply, a bounded long-poll, looped) are two Nexus operations awaited
-directly from workflow code -- no gateway, no standalone activity, same cost profile as a
-native MCP tool. It's the same `AgentService` contract that fronts the Slack connector --
-but here it runs in the SAME worker as the agent workflow it fronts (one process, one task
-queue), rather than as a separate front-door process the way the Slack connector deploys
-it. Both are valid (`nexus_agent_adapter/worker.py`'s own docstring documents same-worker
-as an explicit alternative); this demo picks the simpler one.
-
-```
-Nexus-native subagent -- research
-┌───────┐
-│ Agent │
-└───┬───┘
-    │  Nexus: AgentService.sendAgentMessage(session_id, "ask", payload)
-    │  Nexus: AgentService.pollMessages(session_id, cursor)  -- bounded long-poll, looped
-    │  Nexus: AgentService.closeSession(session_id)          -- on stop
-    ▼
-┌─────────────────────────────────────────┐
-│      nexus-subagent-server worker       │
-│  ┌────────────────────────────────────┐ │
-│  │         AgentServiceHandler        │ │   the SAME contract fronting
-│  │        (nexus_agent_adapter)       │ │   the Slack connector
-│  └──────────────────┬─────────────────┘ │
-│                      ▼                  │
-│    NativeResearchSubagentWorkflow       │
-│         (native_subagent.py)            │
-└─────────────────────────────────────────┘
-```
-
-**4. Gateway-brokered subagent** (`writer`). Same shape as #2, but the resource is a whole
-subagent that only speaks plain HTTP, not an MCP tool. `dispatch_subagent_turn` proxies
-each turn as a standalone activity (Nexus + SAA) -- the SAME gateway deployable as #2, a
-different resource kind (`subagent`, not `mcp_tool`), same registry, a different proxy
-activity. Unlike the MCP proxy's tool calls (arbitrary, no idempotency contract), a
-subagent turn carries a caller-known idempotency key (`agent_id:alias:expected_turn`), so
-retries are enabled here instead of forbidden.
-
-```
-Gateway-brokered subagent -- writer
-┌───────┐
-│ Agent │
-└───┬───┘
-    │  Nexus: RegistryService.dispatchSubagentTurn(agent_id, alias, msg_type, payload, expected_turn)
-    │  Nexus: RegistryService.stopSubagent(agent_id, alias)   -- on stop
-    ▼
-┌───────────────────────────┐
-│  Nexus Operation Handler  │   the SAME "Durable Tools Gateway" as #2 --
-│  (durable_tools_gateway)  │   extended with a "subagent" resource kind alongside "mcp_tool"
-└─────────────┬─────────────┘
-              │  standalone activity: subagent_proxy_activity
-              │  (Nexus + SAA -- retries enabled, idempotency key = agent_id:alias:turn)
-              ▼
-       ┌──────────────────────┐
-       │  3rd-party subagent  │
-       │  subagent_server.py  │   HTTP: POST /turns, POST /close
-       └──────────────────────┘
-```
-
-**5. Traditional MCP with Temporal plugin** (not used by this demo — shown for contrast). HTTP wrapped in activities.
-This is what `stateless_mcp_server`/`MCPServerStreamableHttp` give you.
+**3. Traditional MCP** (not used by this demo -- shown for contrast). Plain HTTP,
+wrapped in an activity. This is what `stateless_mcp_server`/`MCPServerStreamableHttp`
+give you.
 
 ```
 Traditional MCP -- for contrast, not used by this demo
@@ -216,29 +177,132 @@ Traditional MCP -- for contrast, not used by this demo
 └────────────────────────────┘
 ```
 
-Four Temporal namespaces to demonstrate cross-namespace Nexus calls:
+### Subagents
+
+Subagents use the same two paths as MCP tools. The resource is a whole subagent, not a
+tool.
+
+**1. Native subagent** (`research`). Same shape as the native tool above, but the
+resource is a whole harness agent (`native_subagent.py`), not a tool. `sendAgentMessage`
+sends one turn. `pollMessages` uses the requested long-poll timeout. Both are Nexus
+operations, called directly from workflow code. There is no
+gateway and no standalone activity. The cost is the same as a native MCP tool. This is
+the same `AgentService` contract that fronts the Slack connector. Here it runs in the
+same worker as the agent workflow it fronts -- one process, one task queue. The Slack
+connector instead runs the two as separate processes, to scale Nexus traffic on its own.
+Both are valid (`nexus_agent_adapter/worker.py`'s own docstring documents same-worker as
+an explicit alternative). This demo picks the simpler one.
+
+```
+Native subagent -- research
+┌───────┐
+│ Agent │
+└───┬───┘
+    │  Nexus: AgentService.sendAgentMessage(session_id, "ask", payload)
+    │  Nexus: AgentService.pollMessages(session_id, cursor)  -- bounded long-poll
+    │  Nexus: AgentService.closeSession(session_id)          -- on stop
+    ▼
+┌─────────────────────────────────────────┐
+│      nexus-subagent-server worker       │
+│  ┌────────────────────────────────────┐ │
+│  │         AgentServiceHandler        │ │   the SAME contract fronting
+│  │        (nexus_agent_adapter)       │ │   the Slack connector
+│  └──────────────────┬─────────────────┘ │
+│                      ▼                  │
+│    NativeResearchSubagentWorkflow       │
+│         (native_subagent.py)            │
+└─────────────────────────────────────────┘
+```
+
+**2. Gateway subagent** (`writer`). The registered alias identifies an HTTP factory.
+`startSubagent` creates an instance and returns a gateway-owned ID. Turn and stop calls
+use only that ID, so a factory registration change cannot redirect a running instance.
+Two instances of `writer` have separate state. Start and turn requests use
+idempotency keys. Their activities can retry up to five times. The MCP tool-call activity
+does not retry because an MCP tool may have side effects.
+
+```
+Gateway subagent -- writer
+┌───────┐
+│ Agent │
+└───┬───┘
+    │  Nexus: RegistryService.startSubagent(agent_id, alias) -> instance_id
+    │  Nexus: RegistryService.dispatchSubagentTurn(agent_id, instance_id, expected_turn, ...)
+    │  Nexus: RegistryService.stopSubagent(agent_id, instance_id)
+    ▼
+┌───────────────────────────┐
+│  Nexus Operation Handler  │   the SAME "Durable Tools Gateway" as above --
+│  (durable_tools_gateway)  │   extended with a "subagent" resource kind alongside "mcp_tool"
+└─────────────┬─────────────┘
+              │  standalone activities: start, turn, stop
+              │  turn key = agent_id:instance_id:expected_turn
+              ▼
+       ┌──────────────────────┐
+       │  subagent factory    │
+       │  subagent_server.py  │   HTTP: /sessions/{instance_id}/...
+       └──────────────────────┘
+```
+
+### One gateway, two resource kinds
+
+The Durable Tools Gateway is one Nexus service in one namespace. One registry workflow
+stores MCP server URLs and subagent factory URLs. The HTTP operations use separate
+activities and retry rules.
+
+```
+                        gateway namespace
+              ┌───────────────────────────────────────┐
+              │            RegistryService              │
+              │         (durable_tools_gateway)          │
+              │                                          │
+              │  ToolRegistryWorkflow -- one registry     │
+              │  one entry per resource:                  │
+              │    agent_id + alias -> kind + url         │
+              │    kind = mcp_tool | subagent             │
+              └────────────────┬─────────────────────────┘
+                               │
+                  ┌────────────┴──────────────┐
+                  ▼                           ▼
+          MCP activities              subagent activities
+          list: 3 attempts             start: 5 attempts
+          call: 1 attempt              turn: 5 attempts
+                                       stop: 5 attempts
+                  │                           │
+                  ▼                           ▼
+          tool_server.py               subagent_server.py
+          (3rd-party MCP)              (subagent factory)
+```
+
+Four Temporal namespaces show cross-namespace Nexus calls:
 
 | Namespace | Hosts |
 |---|---|
 | `default` | The agent (`worker.py`), session-manager, FastAPI/UI. |
-| `gateway` | The Durable Tools Gateway -- brokers BOTH `demo` (tool) and `writer` (subagent). |
-| `nexus-mcp-server` | The demo Nexus-native tool service. |
-| `nexus-subagent-server` | The demo Nexus-native subagent's own agent workflow. |
+| `gateway` | The Durable Tools Gateway. Brokers both `demo` (tool) and `writer` (subagent). |
+| `nexus-mcp-server` | The demo native tool service. |
+| `nexus-subagent-server` | The demo native subagent's own agent workflow. |
 
-Note two different identifiers are in play: `agents.toml`'s `key` (`"nexus-hello"`) is
-just how the web UI routes to this agent; the gateway's `agent_id` (`"NexusHelloAgent"`)
-is this workflow's `workflow_type`, used only for gateway registration/lookup. They
-don't have to match, and here they don't.
+## Demo limits
+
+- The HTTP factory stores sessions and idempotency keys in memory. A production provider
+  must store them durably.
+- A graceful parent close stops its active instances. A forced workflow termination cannot
+  run cleanup. A production provider should also expire inactive instances.
+
+Two different IDs are in play here. `agents.toml`'s `key` (`"nexus-hello"`) is how the
+web UI finds this agent. The gateway's `agent_id` (`"NexusHelloAgent"`) is this
+workflow's `workflow_type`. The gateway uses it only to register and look up resources.
+The two IDs don't have to match. Here, they don't.
 
 ## Layout
 
 | File | Role |
 |---|---|
-| `workflow.py` | `NexusHelloAgentWorkflow` - `ask` handler: model uses `mcp_servers=[...]`, then drives both subagents directly via `_ask_subagents`. |
+| `workflow.py` | `NexusHelloAgentWorkflow` - `ask` handler: model decides whether to use any of `mcp_servers=[...]` or the two bridged subagent tools (`tools=[...]`). |
 | `worker.py` | Worker on `default`. No Nexus-related plugin config. |
 | `tool_server.py` | Demo 3rd-party MCP server (`get_fun_fact`). |
-| `nexus_tool_service.py` | Demo Nexus-native MCP server (`get_lucky_number`), built on `authoring.MCPOverNexusServiceHandler`. |
-| `native_subagent.py` | Demo Nexus-native SUBAGENT (`NativeResearchSubagentWorkflow`) + its worker entrypoint -- one worker running the workflow AND its `AgentServiceHandler` Nexus front door. |
+| `nexus_tool_service.py` | Demo native MCP server (`get_lucky_number`), built on `authoring.MCPOverNexusServiceHandler`. |
+| `native_subagent.py` | Demo native SUBAGENT (`NativeResearchSubagentWorkflow`) + its worker entrypoint -- one worker running the workflow AND its `AgentServiceHandler` Nexus front door. |
 | `subagent_server.py` | Demo 3rd-party SUBAGENT -- plain FastAPI HTTP server, proxied through the same gateway as `tool_server.py`. |
 
 ## Run it
@@ -256,8 +320,8 @@ just setup-nexus                     # 2. ONE-SHOT: 4 namespaces + 3 Nexus endpo
 just third-party-mcp-server          # 3. demo 3rd-party MCP tool server
 just third-party-subagent            # 4. demo 3rd-party subagent
 just registry                        # 5. durable tools gateway (no seed config -- starts empty)
-just nexus-tool-service               # 6. demo Nexus-native tool service
-just nexus-subagent                  # 7. demo Nexus-native subagent -- agent workflow AND
+just nexus-tool-service               # 6. demo native tool service
+just nexus-subagent                  # 7. demo native subagent -- agent workflow AND
                                       #    its Nexus front door, one worker
 just register-third-party-mcp-server # 8. ONE-SHOT: registers "demo" under agent_id
                                       #    "NexusHelloAgent"
@@ -267,15 +331,17 @@ just server                          # 11. builds UI, serves API + UI on :8000
 just worker                          # 12. this example's agent worker
 ```
 
-Open http://localhost:8000, pick **Nexus Hello**, start a chat. All four resources work
-immediately.
+Open http://localhost:8000, pick **Nexus Hello**, start a chat. Ask something that calls
+for research and writing (e.g. "research X and write a short summary") and the model
+will use both subagents alongside the two MCP tools. All four resources work
+immediately. The model decides whether each one is relevant to what you asked.
 
 ```
-(every turn)                 default -> RegistryService.list_agent_entries("NexusHelloAgent")  (gateway-proxied tool only)
+(every turn)                 default -> RegistryService.list_agent_entries("NexusHelloAgent")  (gateway tool only)
 demo_get_fun_fact:            default -> RegistryService (gateway) -> mcp_proxy_activity (standalone activity) -> tool_server.py (HTTP)
 demo-nexus_get_lucky_number:  default -> nexus_tool_service.py (nexus-mcp-server namespace), no gateway hop
 research (subagent):          default -> AgentServiceHandler (nexus-subagent-server namespace), no gateway hop
-writer (subagent):             default -> RegistryService (gateway) -> subagent_proxy_activity (standalone activity) -> subagent_server.py (HTTP)
+writer (subagent):             default -> RegistryService (gateway) -> start/turn/stop activities -> subagent_server.py (HTTP)
 ```
 
 Without `just` (from the repo root):
@@ -300,9 +366,9 @@ for the raw `temporal operator ...` commands if running without `just`.)
 
 ## If the UI doesn't show "Nexus Hello"
 
-The web UI's `SessionManagerWorkflow` is a singleton set once from whichever `agents.toml`
-first started it - restarting `just server` doesn't refresh it. Terminate and let a fresh one
-start:
+The web UI's `SessionManagerWorkflow` is a singleton. It is set once, from whichever
+`agents.toml` first started it. Restarting `just server` does not refresh it. Terminate it
+and let a fresh one start:
 
 ```sh
 temporal workflow terminate --workflow-id session-manager

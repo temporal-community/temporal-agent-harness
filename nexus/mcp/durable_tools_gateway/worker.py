@@ -1,5 +1,6 @@
-"""Durable Tool Call Gateway Temporal worker: registers 3rd-party MCP servers and non-Nexus
-subagents, and proxies calls to them as standalone activities (Nexus + SAA).
+"""Run the Durable Tools Gateway worker.
+
+The gateway proxies HTTP MCP servers and subagents with standalone activities.
 
 Requires server-side dynamic config: `activity.enableStandalone`,
 `nexusoperation.enableStandalone`. See examples/nexus_hello/justfile's `temporal` recipe.
@@ -37,6 +38,7 @@ from .registry import (
 from .registry_service_handler import (
     RegistryServiceHandler,
     mcp_proxy_activity,
+    subagent_start_activity,
     subagent_proxy_activity,
     subagent_stop_activity,
 )
@@ -85,6 +87,7 @@ async def main(
         activities=[
             mcp_proxy_activity,
             fetch_external_tools,
+            subagent_start_activity,
             subagent_proxy_activity,
             subagent_stop_activity,
         ],
