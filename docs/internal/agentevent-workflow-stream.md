@@ -117,6 +117,13 @@ stream, not the resurrected entries.
     and activity-tool `tool_start`/`tool_end`. Raw provider tokens are folded into semantic
     `AgentEvent`s *inside* the model-call activity — the lowest-level thing that ever crosses the
     activity→workflow→client boundary is already an `AgentEvent`, never raw bytes.
+- **Flush cadence is the out-of-workflow cost knob.** Activity-side publishes buffer and flush on
+  an interval; each flush is *one* Signal, so a longer interval means fewer history events for the
+  same stream content (it does not reduce the number of events published). Default is
+  `DEFAULT_PUBLISH_BATCH_INTERVAL` (50ms) in `publisher_from_activity`; an SDK plugin passes its own
+  configured value instead — for OpenAI that is `ModelActivityParameters.streaming_batch_interval`
+  (100ms), threaded to `harness_observer_factory` by `select_observer` and on into the observer's
+  publisher. In-workflow publishes are unbuffered (they ride the workflow's own history).
 - **Consumers** subscribe by `workflow_id` (`WorkflowStreamClient.create(...).subscribe(...)`); the
   UI-facing "stream" is a client-side merge of the whole agent tree — see
   [`event-stream-and-storage.md`](event-stream-and-storage.md).

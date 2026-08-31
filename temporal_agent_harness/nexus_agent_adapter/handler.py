@@ -315,10 +315,14 @@ class AgentServiceHandler:
     async def provide_callback_result(
         self, ctx: StartOperationContext, input: ProvideCallbackResultInput
     ) -> ProvideCallbackResultOutput:
+        # nex-gen wraps the object-shaped result in a named type instead of a plain dict.
+        callback_result = (
+            input.result.additional_properties if input.result is not None else None
+        )
         try:
             result = await self._agent_client(input.session_id).provide_callback_result(
                 input.tool_id,
-                result=input.result,
+                result=callback_result,
                 error=input.error,
                 update_id=f"callback-{ctx.request_id}",
             )

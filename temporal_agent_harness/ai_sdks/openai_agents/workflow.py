@@ -4,7 +4,7 @@ import functools
 import inspect
 import json
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any
@@ -34,6 +34,8 @@ from temporalio.workflow import (
 
 if typing.TYPE_CHECKING:
     from agents.mcp import MCPServer
+
+    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import NexusGateway
 
 
 def activity_as_tool(
@@ -341,6 +343,69 @@ def stateful_mcp_server(
     return _StatefulMCPServerReference(
         name, config, server_session_config, factory_argument
     )
+
+
+def nexus_native_mcp_server(
+    name: str,
+    endpoint: str,
+    **kwargs: Any,
+) -> "MCPServer":
+    """MCP server for ONE Nexus-native service. Pass directly to Agent(mcp_servers=[...]).
+
+    The service identified by `name` and `endpoint` must be an MCP server that is reachable
+    by Nexus with the provided `name` + `endpoint`.
+
+    Requires the `nexus-mcp` package.
+
+    Args:
+        name: The service's real Nexus service name.
+        endpoint: The Nexus endpoint name that reaches it.
+        **kwargs: Forwarded to agents.mcp.MCPServer.__init__.
+
+    Example:
+        # Using an MCP server "demo-nexus" hosted at the Nexus endpoint "nexus-hello-demo-endpoint"
+        Agent(mcp_servers=[
+            nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
+        ])
+    """
+    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
+        _NexusTransportMCPServer,
+    )
+
+    return _NexusTransportMCPServer({name: endpoint}, name=name, **kwargs)
+
+
+def nexus_tools_gateway(
+    agent_id: str | None = None,
+    *,
+    gateway_name: str = "RegistryService",
+    gateway_endpoint: str = "mcp-registry-endpoint",
+) -> "NexusGateway":
+    """A handle on the Durable Tools Gateway's 3rd-party servers registered for one
+    agent_id. This gateway will proxy calls between the agent and the registered servers.
+
+    Not an MCPServer itself. Call .mcp_servers(*aliases) to get one, scoped to whichever
+    registered aliases you pick -- see example usage.
+
+    Requires the `nexus-mcp` package and a Durable Tools Gateway worker running at
+    gateway_endpoint.
+
+    Args:
+        agent_id: The agent identity to look up. If omitted, inferred from the
+                  workflow_type of the current workflow in the agents.toml file.
+        gateway_name: The gateway's Nexus service name.
+        gateway_endpoint: The Nexus endpoint name that reaches the gateway.
+
+    Example:
+        nexus_gateway = nexus_tools_gateway()
+        Agent(mcp_servers=[
+            nexus_gateway.mcp_servers("foo-mcp", "bar-mcp"),
+        ])
+    """
+    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import NexusGateway
+
+    resolved_agent_id = agent_id or temporal_workflow.info().workflow_type
+    return NexusGateway(resolved_agent_id, gateway_name=gateway_name, gateway_endpoint=gateway_endpoint)
 
 
 class ToolSerializationError(TemporalError):

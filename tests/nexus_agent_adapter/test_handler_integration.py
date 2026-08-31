@@ -483,6 +483,91 @@ class FullSurfaceCallerWorkflow:
         )
 
 
+class MalformedCallOutput(BaseModel):
+    error_type: str
+    error_message: str
+
+
+@workflow.defn
+class MalformedInputCallerWorkflow:
+    """Sends session_id=None for a required str field. The generated dataclass has no
+    constructor-time validation (unlike the old pydantic models), so this only gets
+    caught by TransferTypeConverter.from_transfer_type on the handler side, once the
+    value crosses the wire. Proves that boundary still rejects malformed input."""
+
+    @workflow.run
+    async def run(self, input: CallerInput) -> MalformedCallOutput:
+        client = workflow.create_nexus_client(
+            service=AgentServiceDefinition, endpoint=input.endpoint
+        )
+        try:
+            await client.execute_operation(
+                AgentServiceDefinition.send_agent_message,
+                SendAgentMessageInput(
+                    session_id=None,  # type: ignore[arg-type]
+                    msg_type="ask",
+                    payload=json.dumps({"text": "hi"}),
+                ),
+            )
+        except Exception as e:
+            chain = [f"{type(e).__name__}: {e}"]
+            # Protobuf singular message fields are never None when unset (they return
+            # an empty message), so walk with HasField instead of an is-None check.
+            failure = getattr(e, "failure", None)
+            while failure is not None and failure.HasField("cause"):
+                failure = failure.cause
+                chain.append(f"failure.cause: {failure.message}")
+            return MalformedCallOutput(
+                error_type=type(e).__name__, error_message=" | ".join(chain)
+            )
+        raise AssertionError("malformed input should not have succeeded")
+
+
+async def test_send_agent_message_rejects_malformed_input(
+    env: WorkflowEnvironment,
+) -> None:
+    """A required field sent as null over the wire must fail the Nexus call, not crash
+    the handler worker or silently proceed with a bad value."""
+    client = env.client
+    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
+    agent_task_queue = f"agent-{uuid.uuid4()}"
+    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
+    caller_task_queue = f"caller-{uuid.uuid4()}"
+
+    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
+
+    # No agent workflow worker needed: input conversion fails before the handler's
+    # send_agent_message body (and therefore AgentClient) ever runs.
+    config = Config(
+        agent_task_queue=agent_task_queue,
+        workflow_name="ProbeAgent",
+        workflow_id_prefix="probe-",
+        is_message_queuing_enabled=False,
+    )
+
+    async with Worker(
+        client,
+        task_queue=nexus_task_queue,
+        nexus_service_handlers=[AgentServiceHandler(client, config)],
+    ), Worker(
+        client,
+        task_queue=caller_task_queue,
+        workflows=[MalformedInputCallerWorkflow],
+    ):
+        session_id = str(uuid.uuid4())
+        handle = await client.start_workflow(
+            MalformedInputCallerWorkflow.run,
+            CallerInput(endpoint=endpoint_name, session_id=session_id),
+            id=f"malformed-caller-{session_id}",
+            task_queue=caller_task_queue,
+        )
+        result = await handle.result()
+
+        assert result.error_type == "NexusOperationError"
+        assert "sessionId" in result.error_message
+        assert "required" in result.error_message
+
+
 async def test_full_operation_surface(env: WorkflowEnvironment) -> None:
     client = env.client
     endpoint_name = f"agent-endpoint-{uuid.uuid4()}"

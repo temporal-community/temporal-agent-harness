@@ -278,3 +278,8 @@ install-nexgen:
 nexus-agent-generate: install-nexgen
     "$HOME/.local/bin/nexgen" python temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml \
         --output temporal_agent_harness/nexus_agent_adapter/generated
+
+# Gets the contract from local and regenerates the Durable Tools Gateway's Python bindings.
+generate-registry-contract: install-nexgen
+    "$HOME/.local/bin/nexgen" python nexus/mcp/durable_tools_gateway/registry.nexusrpc.yaml \
+        --output nexus/mcp/durable_tools_gateway/generated

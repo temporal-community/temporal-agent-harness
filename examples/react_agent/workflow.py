@@ -53,7 +53,7 @@ with workflow.unsafe.imports_passed_through():
 
 
 TASK_QUEUE = "react-agent"
-DEFAULT_MODEL = "gpt-5.1"
+DEFAULT_MODEL = "gpt-5.6-luna"
 MCP_SERVER_NAME = "f1-data"
 
 # Streaming vs non-streaming is chosen here, at the SDK call site (see `ask`). Toggle it with the

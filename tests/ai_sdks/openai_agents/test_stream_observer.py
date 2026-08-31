@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -46,10 +47,15 @@ from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
 
 class _FakePublisher:
-    """Stands in for TurnEventPublisher: records every published payload."""
+    """Stands in for TurnEventPublisher: records every published payload.
+
+    Also records the kwargs each ``publisher_from_activity`` open was given, so a test
+    can assert the flush cadence the observer asked for (see ``opened_with``).
+    """
 
     def __init__(self) -> None:
         self.events: list[Any] = []
+        self.opened_with: list[dict[str, Any]] = []
 
     def publish(self, event: Any) -> None:
         self.events.append(event)
@@ -62,7 +68,8 @@ def fake_publisher(monkeypatch: pytest.MonkeyPatch) -> _FakePublisher:
     pub = _FakePublisher()
 
     @asynccontextmanager
-    async def _fake_publisher_from_activity(context: Any, **_kw: Any):
+    async def _fake_publisher_from_activity(context: Any, **kw: Any):
+        pub.opened_with.append(kw)
         yield pub
 
     monkeypatch.setattr(
@@ -247,3 +254,43 @@ async def test_bracket_closes_even_with_no_content(fake_publisher: _FakePublishe
     ended = fake_publisher.events[-1]
     # No response.completed seen -> usage stays None (e.g. stream errored early).
     assert ended.usage is None and ended.model is None
+
+
+# ---------------------------------------------------------------------------
+# Flush cadence: the plugin's streaming_batch_interval reaches the publisher
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_factory_threads_batch_interval_to_the_publisher(
+    fake_publisher: _FakePublisher,
+):
+    # ModelActivityParameters.streaming_batch_interval is handed to the factory by
+    # select_observer; it must reach the turn publisher, or configuring the field would
+    # silently do nothing on the harness path (each flush is one Signal, so this is the
+    # knob that trades UI snappiness for workflow-history volume).
+    ctx = TurnStreamContext(turn_id="t-5", turn_number=1, agent_id="agent-abc")
+    token = h._HarnessStreamToken(context=ctx, model="gpt-5.1")
+
+    observer = h.harness_observer_factory(
+        token.model_dump(mode="json"), batch_interval=timedelta(milliseconds=750)
+    )
+    async with observer:
+        pass
+
+    assert fake_publisher.opened_with == [{"batch_interval": timedelta(milliseconds=750)}]
+
+
+@pytest.mark.asyncio
+async def test_factory_without_interval_defers_to_the_harness_default(
+    fake_publisher: _FakePublisher,
+):
+    # Called by hand (no cadence): pass None through, so publisher_from_activity applies
+    # DEFAULT_PUBLISH_BATCH_INTERVAL rather than the observer duplicating that value.
+    ctx = TurnStreamContext(turn_id="t-6", turn_number=1, agent_id="agent-abc")
+    token = h._HarnessStreamToken(context=ctx, model="gpt-5.1")
+
+    async with h.harness_observer_factory(token):
+        pass
+
+    assert fake_publisher.opened_with == [{"batch_interval": None}]

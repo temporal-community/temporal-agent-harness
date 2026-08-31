@@ -93,6 +93,12 @@ async def main() -> None:
             heartbeat_timeout=timedelta(seconds=30),
             # The harness streaming seam: route streamed events to the in-flight turn.
             stream_to_provider=stream_to_provider,
+            # Streaming granularity. Each flush is one publish Signal, so a longer interval
+            # means fewer workflow-history events for the same stream content (it does not
+            # change how many events are published). The field's default is 100ms; 50ms here
+            # buys the richest stream at the highest history cost — raise it (250-500ms) if
+            # history volume matters more than token-by-token smoothness.
+            streaming_batch_interval=timedelta(milliseconds=50),
         ),
         mcp_server_providers=[
             StatelessMCPServerProvider(
