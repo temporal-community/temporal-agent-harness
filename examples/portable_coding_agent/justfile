@@ -1,0 +1,56 @@
+# Scoped justfile for the portable coding agent example.
+# Run from this directory: `just <recipe>`.
+#
+# Durable stack (each in its own terminal):
+#   just temporal          # 1. local Temporal dev server (or bring your own)
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API + UI on :8000
+#   just worker            # 4. this example's agent + model workers
+# Then open http://localhost:8000, pick "Portable Coding Agent", and chat.
+#
+# No-server mode (one command, no Temporal at all):
+#   just local "add a docstring to the top function in main.py"
+#
+# First-time setup: `cp .env.example .env.local` from the repo root and fill it in
+# (Temporal connection + OPENAI_API_KEY). The agent's shell + file tools run in a sandbox:
+# CODING_AGENT_SANDBOX=docker (default, needs a Docker daemon) or =local (no isolation). See
+# README.md.
+
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+ui := root / "ui"
+
+# List available recipes.
+default:
+    @just --list
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Run the shared session-manager worker.
+session-manager:
+    cd "{{root}}" && uv run --group examples python -m examples.session_manager_worker
+
+# Serve the packaged FastAPI API + UI, pointed at this example's registry.
+server: app-build
+    cd "{{root}}" && uv run --group examples python -m examples.app "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Build the shared Svelte UI into temporal_agent_harness/ui/dist for the server to serve.
+app-build:
+    cd "{{ui}}" && pnpm run build
+
+# Run this example's agent + model workers.
+worker:
+    cd "{{root}}" && uv run --group examples python -m examples.portable_coding_agent.worker
+
+# No-server mode: run one coding request locally with no Temporal, in a sandbox.
+# e.g. `just local "write a script that prints the first 10 fibonacci numbers and run it"`.
+local task:
+    cd "{{root}}" && uv run --group examples python -m examples.portable_coding_agent.local_runner "{{task}}"
+
+# Delete offloaded large payloads older than 7 days (see temporal_agent_harness.utils.large_payload_gc).
+sweep-payloads:
+    cd "{{root}}" && uv run python -m temporal_agent_harness.utils.large_payload_gc --days 7
