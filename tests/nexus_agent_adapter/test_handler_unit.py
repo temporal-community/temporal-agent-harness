@@ -9,6 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from temporalio.converter import DataConverter
 
 from temporal_agent_harness.harness.agent_protocol.agent_interface import CallbackResultAck
+from temporal_agent_harness.harness.stream_poll import (
+    AgentStreamPollItem,
+    AgentStreamPollResult,
+)
 from temporal_agent_harness.nexus_agent_adapter.generated import (
     ProvideCallbackResultInput,
     ProvideCallbackResultInputResult,
@@ -16,6 +20,7 @@ from temporal_agent_harness.nexus_agent_adapter.generated import (
 from temporal_agent_harness.nexus_agent_adapter.handler import (
     AgentServiceHandler,
     _is_workflow_already_completed,
+    _is_workflow_not_found,
 )
 
 _payload_converter = DataConverter.default.payload_converter
@@ -40,6 +45,21 @@ def test_provide_callback_result_input_result_round_trips() -> None:
     )
     decoded = _round_trip(inp, ProvideCallbackResultInput)
     assert decoded.result.additional_properties == {"ok": True}
+
+
+def test_agent_stream_poll_result_round_trips() -> None:
+    result = AgentStreamPollResult(
+        items=[
+            AgentStreamPollItem(topic="turn_events", data='{"type":"reply"}', offset=7)
+        ],
+        more_ready=False,
+        next_offset=8,
+        closed=True,
+    )
+
+    decoded = _round_trip(result, AgentStreamPollResult)
+
+    assert decoded == result
 
 
 @patch("temporal_agent_harness.nexus_agent_adapter.handler.AgentClient")
@@ -87,3 +107,15 @@ def test_is_workflow_already_completed_false_for_unrelated_error() -> None:
     err = MagicMock()
     err.__str__.return_value = "deadline exceeded"
     assert _is_workflow_already_completed(err) is False
+
+
+def test_is_workflow_not_found_recognizes_temporal_error() -> None:
+    err = MagicMock()
+    err.__str__.return_value = "workflow not found for ID: missing-agent"
+    assert _is_workflow_not_found(err) is True
+
+
+def test_is_workflow_not_found_false_for_unrelated_error() -> None:
+    err = MagicMock()
+    err.__str__.return_value = "deadline exceeded"
+    assert _is_workflow_not_found(err) is False

@@ -368,36 +368,29 @@ class PollOnlyCallerWorkflow:
         )
 
 
-@workflow.defn
-class ImmediatelyDoneWorkflow:
-    @workflow.run
-    async def run(self) -> None:
-        return None
-
-
 async def test_poll_messages_closed_when_workflow_already_completed(
     env: WorkflowEnvironment,
 ) -> None:
-    """A completed target workflow must produce closed=True synchronously, not an error."""
+    """A completed harness workflow with no events returns an empty closed page."""
     client = env.client
     endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
     nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
-    completed_task_queue = f"completed-{uuid.uuid4()}"
+    agent_task_queue = f"agent-{uuid.uuid4()}"
     caller_task_queue = f"caller-{uuid.uuid4()}"
 
     await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
 
     config = Config(
-        agent_task_queue=completed_task_queue,
-        workflow_name="ImmediatelyDoneWorkflow",
-        workflow_id_prefix="done-",
+        agent_task_queue=agent_task_queue,
+        workflow_name="ProbeAgent",
+        workflow_id_prefix="probe-",
         is_message_queuing_enabled=False,
     )
 
     async with Worker(
         client,
-        task_queue=completed_task_queue,
-        workflows=[ImmediatelyDoneWorkflow],
+        task_queue=agent_task_queue,
+        workflows=[ProbeAgent],
     ), Worker(
         client,
         task_queue=nexus_task_queue,
@@ -408,12 +401,14 @@ async def test_poll_messages_closed_when_workflow_already_completed(
         workflows=[PollOnlyCallerWorkflow],
     ):
         session_id = str(uuid.uuid4())
-        workflow_id = "done-" + session_id
-        await client.execute_workflow(
-            ImmediatelyDoneWorkflow.run,
-            id=workflow_id,
-            task_queue=completed_task_queue,
+        agent_handle = await client.start_workflow(
+            ProbeAgent.run,
+            AgentConfig(),
+            id=f"probe-{session_id}",
+            task_queue=agent_task_queue,
         )
+        await agent_handle.signal("close")
+        await agent_handle.result()
 
         handle = await client.start_workflow(
             PollOnlyCallerWorkflow.run,
@@ -425,6 +420,61 @@ async def test_poll_messages_closed_when_workflow_already_completed(
 
         assert result.poll_closed
         assert result.poll_item_count == 0
+
+
+async def test_poll_messages_replays_completed_agent_history(
+    env: WorkflowEnvironment,
+) -> None:
+    client = env.client
+    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
+    agent_task_queue = f"agent-{uuid.uuid4()}"
+    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
+    caller_task_queue = f"caller-{uuid.uuid4()}"
+    session_id = str(uuid.uuid4())
+
+    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
+    config = Config(
+        agent_task_queue=agent_task_queue,
+        workflow_name="ProbeAgent",
+        workflow_id_prefix="probe-",
+        is_message_queuing_enabled=False,
+    )
+
+    async with (
+        Worker(client, task_queue=agent_task_queue, workflows=[ProbeAgent]),
+        Worker(
+            client,
+            task_queue=nexus_task_queue,
+            nexus_service_handlers=[AgentServiceHandler(client, config)],
+        ),
+        Worker(
+            client,
+            task_queue=caller_task_queue,
+            workflows=[CallerWorkflow, PollOnlyCallerWorkflow],
+        ),
+    ):
+        live_caller = await client.start_workflow(
+            CallerWorkflow.run,
+            CallerInput(endpoint=endpoint_name, session_id=session_id),
+            id=f"live-caller-{session_id}",
+            task_queue=caller_task_queue,
+        )
+        assert (await live_caller.result()).poll_item_count > 0
+
+        agent_handle = client.get_workflow_handle(f"probe-{session_id}")
+        await agent_handle.signal("close")
+        await agent_handle.result()
+
+        replay_caller = await client.start_workflow(
+            PollOnlyCallerWorkflow.run,
+            CallerInput(endpoint=endpoint_name, session_id=session_id),
+            id=f"replay-caller-{session_id}",
+            task_queue=caller_task_queue,
+        )
+        replay = await replay_caller.result()
+
+        assert replay.poll_closed
+        assert replay.poll_item_count > 0
 
 
 # ---------------------------------------------------------------------------

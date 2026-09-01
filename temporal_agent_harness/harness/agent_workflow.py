@@ -113,8 +113,11 @@ from temporal_agent_harness.harness.slash_commands import (
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 from temporal_agent_harness.harness.stream_poll import (
     AGENT_STREAM_POLL_UPDATE,
+    AGENT_STREAM_REPLAY_QUERY,
     AgentStreamPollInput,
+    AgentStreamPollItem,
     AgentStreamPollResult,
+    replay_stream_state,
 )
 
 # ParamSpec/return-type vars for the tool decorators. They let each be typed as an
@@ -1425,6 +1428,10 @@ class AgentWorkflowRunner:
             AGENT_STREAM_POLL_UPDATE,
             self._handle_stream_poll,
         )
+        workflow.set_query_handler(
+            AGENT_STREAM_REPLAY_QUERY,
+            self._handle_stream_replay,
+        )
         workflow.set_query_handler(AGENT_STATUS_QUERY, self._handle_agent_status)
         workflow.set_query_handler(AGENT_INTERFACE_QUERY, self._handle_agent_interface)
         workflow.set_query_handler(
@@ -2040,11 +2047,22 @@ class AgentWorkflowRunner:
             PollInput(topics=input.topics, from_offset=input.from_offset)
         )
         return AgentStreamPollResult(
-            items=result.items,
+            items=[
+                AgentStreamPollItem(
+                    topic=item.topic,
+                    data=item.data,
+                    offset=item.offset,
+                )
+                for item in result.items
+            ],
             more_ready=result.more_ready,
             next_offset=result.next_offset,
             closed=self._closed,
         )
+
+    def _handle_stream_replay(self, input: AgentStreamPollInput) -> AgentStreamPollResult:
+        """Read a bounded stream page through a query, including after completion."""
+        return replay_stream_state(self._stream.get_state(), input)
 
     # -- Turn loop ----------------------------------------------------------
 

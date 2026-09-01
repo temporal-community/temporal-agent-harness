@@ -17,6 +17,7 @@ import httpx
 import nexusrpc
 import nexusrpc.handler
 import temporalio.nexus
+from authoring import validate_service_name
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult
@@ -24,18 +25,13 @@ from nexusrpc.handler import StartOperationContext
 from pydantic import BaseModel, Field, ValidationError
 from temporalio import activity
 from temporalio.client import ActivityFailureError, Client
-from temporalio.common import RetryPolicy, WorkflowIDConflictPolicy
+from temporalio.common import (
+    ActivityIDConflictPolicy,
+    RetryPolicy,
+    WorkflowIDConflictPolicy,
+)
 from temporalio.exceptions import ApplicationError
 
-from authoring import validate_service_name
-
-from .registry import (
-    REGISTRY_TASK_QUEUE,
-    SubagentInstanceRoute,
-    ToolRegistryWorkflow,
-    account_registry_workflow_id,
-    fetch_external_tools,
-)
 from .generated import (
     CallToolInput,
     CallToolOutput,
@@ -55,11 +51,23 @@ from .generated import (
     StartSubagentOutput,
     StopSubagentInput,
 )
+from .registry import (
+    REGISTRY_TASK_QUEUE,
+    SubagentInstanceRoute,
+    ToolRegistryWorkflow,
+    account_registry_workflow_id,
+    fetch_external_tools,
+)
 
 REGISTRY_NEXUS_ENDPOINT = "mcp-registry-endpoint"
 
 logger = logging.getLogger(__name__)
 _ResponseModel = TypeVar("_ResponseModel", bound=BaseModel)
+
+
+def subagent_dispatch_activity_id(instance_id: str, turn_number: int) -> str:
+    """Address one third-party subagent turn without a Visibility lookup."""
+    return f"subagent-dispatch-{instance_id}-{turn_number}"
 
 
 class ExternalMCPCallInput(BaseModel):
@@ -512,7 +520,8 @@ class RegistryServiceHandler:
                     expected_turn=input.expected_turn,
                     idempotency_key=idempotency_key,
                 ),
-                id=f"subagent-dispatch-{ctx.request_id}",
+                id=subagent_dispatch_activity_id(instance_id, input.expected_turn),
+                id_conflict_policy=ActivityIDConflictPolicy.USE_EXISTING,
                 task_queue=temporalio.nexus.info().task_queue,
                 schedule_to_close_timeout=timedelta(minutes=5),
                 start_to_close_timeout=timedelta(seconds=75),

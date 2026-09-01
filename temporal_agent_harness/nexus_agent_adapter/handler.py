@@ -33,6 +33,7 @@ from temporal_agent_harness.harness.agent_protocol import (
 )
 from temporal_agent_harness.harness.stream_poll import (
     AGENT_STREAM_POLL_UPDATE,
+    AGENT_STREAM_REPLAY_QUERY,
     AgentStreamPollInput,
     AgentStreamPollResult,
 )
@@ -90,6 +91,12 @@ _MAX_SEND_RETRIES = 5
 def _is_workflow_already_completed(exc: Exception) -> bool:
     """True when the target agent workflow has already finished (see poll_messages)."""
     return "already completed" in str(exc).lower()
+
+
+def _is_workflow_not_found(exc: Exception) -> bool:
+    """True when a registry entry outlives its backing Temporal workflow."""
+    message = str(exc).lower()
+    return "workflow not found" in message or "not found for id" in message
 
 
 def _nexus_operator_command(cmd: OperatorCommand) -> NexusOperatorCommand:
@@ -292,7 +299,14 @@ class AgentServiceHandler:
     async def query_operator_interface(
         self, ctx: StartOperationContext, input: QuerySessionInput
     ) -> QueryOperatorInterfaceOutput:
-        commands = await self._agent_client(input.session_id).get_operator_interface()
+        try:
+            commands = await self._agent_client(
+                input.session_id
+            ).get_operator_interface()
+        except RPCError as e:
+            if _is_workflow_not_found(e):
+                return QueryOperatorInterfaceOutput(commands=[])
+            raise
         return QueryOperatorInterfaceOutput(
             commands=[_nexus_operator_command(cmd) for cmd in commands]
         )
@@ -305,7 +319,12 @@ class AgentServiceHandler:
     async def query_agent_interface(
         self, ctx: StartOperationContext, input: QuerySessionInput
     ) -> AgentInterfaceOutput:
-        functions = await self._agent_client(input.session_id).get_agent_interface()
+        try:
+            functions = await self._agent_client(input.session_id).get_agent_interface()
+        except RPCError as e:
+            if _is_workflow_not_found(e):
+                return AgentInterfaceOutput(handlers=[])
+            raise
         return AgentInterfaceOutput(
             handlers=[
                 NexusAcceptedFunction(
@@ -391,7 +410,7 @@ class AgentServiceHandler:
         return CloseSessionOutput(closed=True)
 
     # -----------------------------------------------------------------------
-    # pollMessages — async operation backed by WorkflowStream's poll update
+    # pollMessages — live update-with-callback plus completed-workflow replay
     # -----------------------------------------------------------------------
 
     @nexus.temporal_operation
@@ -401,8 +420,7 @@ class AgentServiceHandler:
         client: nexus.TemporalNexusClient,
         input: PollMessagesInput,
     ) -> nexus.TemporalOperationResult[PollMessagesOutput]:
-        """Long-polls WorkflowStream via update-with-callback. Returns closed=True
-        synchronously if the target workflow has already completed."""
+        """Long-poll a live stream, or query its retained state after completion."""
         workflow_id = self._workflow_id(input.session_id)
         timeout_seconds = (
             input.timeout_seconds
@@ -428,6 +446,19 @@ class AgentServiceHandler:
             )
         except RPCError as e:
             if _is_workflow_already_completed(e):
+                replay = await self._client.get_workflow_handle(workflow_id).query(
+                    AGENT_STREAM_REPLAY_QUERY,
+                    AgentStreamPollInput(
+                        from_offset=input.cursor,
+                        topics=[TURN_EVENTS_TOPIC],
+                        timeout_seconds=timeout_seconds,
+                    ),
+                    result_type=AgentStreamPollResult,
+                )
+                return nexus.TemporalOperationResult.sync(
+                    self._poll_messages_output(replay, closed=True)
+                )
+            if _is_workflow_not_found(e):
                 return nexus.TemporalOperationResult.sync(
                     PollMessagesOutput(
                         items=[],
@@ -443,13 +474,21 @@ class AgentServiceHandler:
 
         bounded_result: AgentStreamPollResult = result.value
         return nexus.TemporalOperationResult.sync(
-            PollMessagesOutput(
-                items=[
-                    StreamItem(topic=item.topic, data=item.data, offset=item.offset)
-                    for item in bounded_result.items
-                ],
-                more_ready=bounded_result.more_ready,
-                next_offset=bounded_result.next_offset,
-                closed=bounded_result.closed,
-            )
+            self._poll_messages_output(bounded_result)
+        )
+
+    @staticmethod
+    def _poll_messages_output(
+        result: AgentStreamPollResult,
+        *,
+        closed: bool | None = None,
+    ) -> PollMessagesOutput:
+        return PollMessagesOutput(
+            items=[
+                StreamItem(topic=item.topic, data=item.data, offset=item.offset)
+                for item in result.items
+            ],
+            more_ready=result.more_ready,
+            next_offset=result.next_offset,
+            closed=result.closed if closed is None else closed,
         )

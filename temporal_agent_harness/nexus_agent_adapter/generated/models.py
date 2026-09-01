@@ -1610,7 +1610,9 @@ class PollMessagesOutput:
     """True when more items are immediately available (batch was capped)"""
 
     closed: bool | None = None
-    """True only in the sync error path when the agent workflow has already completed"""
+    """True when the agent workflow has completed; the final response can still contain
+    replayed items
+    """
 
 
 class _ProvideCallbackResultInputTransferTypeConverter(

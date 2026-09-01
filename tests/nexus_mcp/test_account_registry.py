@@ -4,6 +4,9 @@ from unittest.mock import patch
 
 from durable_tools_gateway.registry import (
     AgentRegistration,
+    PendingSessionEvent,
+    SpawnedAgentObservation,
+    SubagentInstanceRoute,
     ToolRegistryWorkflow,
     account_registry_workflow_id,
 )
@@ -69,3 +72,190 @@ def test_closing_session_keeps_it_in_account_history() -> None:
 
     assert closed.closed
     assert registry.get_session(session.session_id) == closed
+
+
+def test_external_session_events_are_offset_and_replay_based() -> None:
+    registry = ToolRegistryWorkflow("account-1")
+    registry.register_agent(
+        AgentRegistration(
+            agent_id="external",
+            kind="external_http",
+            label="External",
+            description="HTTP proof",
+            provider_url="http://external",
+        )
+    )
+    with (
+        patch("durable_tools_gateway.registry.workflow.uuid4", return_value="one"),
+        patch("durable_tools_gateway.registry.workflow.time", return_value=123.0),
+    ):
+        session = registry.create_session("external", "provider-1")
+
+    registry.append_session_events(
+        session.session_id,
+        [
+            PendingSessionEvent("reply_delta", {"type": "reply_delta", "text": "hi"}),
+            PendingSessionEvent("turn_end", {"type": "turn_end"}),
+        ],
+    )
+
+    assert [
+        event.offset for event in registry.poll_session_events(session.session_id, 0)
+    ] == [
+        1,
+        2,
+    ]
+    assert [
+        event.event_type
+        for event in registry.poll_session_events(session.session_id, 1)
+    ] == ["turn_end"]
+
+
+def test_registered_spawned_agents_become_account_sessions() -> None:
+    registry = ToolRegistryWorkflow("account-1")
+    registry.register_agent(
+        AgentRegistration(
+            agent_id="parent",
+            kind="harness_nexus",
+            label="Parent",
+            description="Parent agent",
+            nexus_endpoint="parent-endpoint",
+        )
+    )
+    registry.register_agent(
+        AgentRegistration(
+            agent_id="research",
+            kind="harness_nexus",
+            label="Research",
+            description="Research child",
+            nexus_endpoint="research-endpoint",
+        )
+    )
+    with (
+        patch(
+            "durable_tools_gateway.registry.workflow.uuid4",
+            side_effect=["parent-session", "child-session"],
+        ),
+        patch("durable_tools_gateway.registry.workflow.time", return_value=123.0),
+        patch("durable_tools_gateway.registry.workflow.logger"),
+    ):
+        parent = registry.create_session("parent", is_message_queuing_enabled=True)
+        children = registry.sync_spawned_agents(
+            parent.session_id,
+            [
+                SpawnedAgentObservation(
+                    subagent_id="research-a1b2c3",
+                    agent_key="research",
+                    provider_session_id="research-workflow",
+                    next_expected_turn=3,
+                )
+            ],
+        )
+
+    assert len(children) == 1
+    child = children[0]
+    assert child.parent_session_id == parent.session_id
+    assert child.provider_session_id == "research-workflow"
+    assert child.source_session_id == "research-workflow"
+    assert child.agent_id == "research"
+    assert child.is_spawned
+    assert child.has_started
+    assert child.current_turn == 2
+    assert child.is_message_queuing_enabled
+
+    registry.record_spawned_agent_batch(
+        parent.session_id, [], ["research-workflow"], 12
+    )
+    assert registry.get_session(child.session_id).closed
+    assert registry.get_session(parent.session_id).discovery_offset == 12
+
+
+def test_gateway_spawned_agent_resolves_to_the_provider_instance() -> None:
+    registry = ToolRegistryWorkflow("account-1")
+    registry.register_agent(
+        AgentRegistration(
+            agent_id="parent",
+            kind="harness_nexus",
+            label="Parent",
+            description="Parent agent",
+            nexus_endpoint="parent-endpoint",
+        )
+    )
+    registry.register_agent(
+        AgentRegistration(
+            agent_id="writer",
+            kind="external_http",
+            label="Writer",
+            description="HTTP child",
+            provider_url="http://writer",
+        )
+    )
+    registry.bind_subagent_instance(
+        "gateway-instance",
+        SubagentInstanceRoute(
+            alias="writer",
+            url="http://writer",
+            provider_instance_id="provider-instance",
+        ),
+    )
+    with (
+        patch(
+            "durable_tools_gateway.registry.workflow.uuid4",
+            side_effect=["parent-session", "child-session"],
+        ),
+        patch("durable_tools_gateway.registry.workflow.time", return_value=123.0),
+        patch("durable_tools_gateway.registry.workflow.logger"),
+    ):
+        parent = registry.create_session("parent")
+        child = registry.sync_spawned_agents(
+            parent.session_id,
+            [
+                SpawnedAgentObservation(
+                    subagent_id="writer-a1b2c3",
+                    agent_key="writer",
+                    provider_session_id="gateway-instance",
+                    next_expected_turn=2,
+                )
+            ],
+        )[0]
+
+    assert child.source_session_id == "gateway-instance"
+    assert child.provider_session_id == "provider-instance"
+    assert child.current_turn == 1
+
+    assert registry.resolve_session(child.session_id) == child
+    assert registry.resolve_session("gateway-instance") == child
+    assert registry.resolve_session("provider-instance") == child
+    assert registry.resolve_session("missing-instance") is None
+
+
+def test_unregistered_spawned_agents_are_not_added_to_account() -> None:
+    registry = ToolRegistryWorkflow("account-1")
+    registry.register_agent(
+        AgentRegistration(
+            agent_id="parent",
+            kind="harness_nexus",
+            label="Parent",
+            description="Parent agent",
+            nexus_endpoint="parent-endpoint",
+        )
+    )
+    with (
+        patch("durable_tools_gateway.registry.workflow.logger"),
+        patch("durable_tools_gateway.registry.workflow.uuid4", return_value="parent"),
+        patch("durable_tools_gateway.registry.workflow.time", return_value=123.0),
+    ):
+        parent = registry.create_session("parent")
+        children = registry.sync_spawned_agents(
+            parent.session_id,
+            [
+                SpawnedAgentObservation(
+                    subagent_id="unknown-1",
+                    agent_key="unknown",
+                    provider_session_id="unknown-workflow",
+                )
+            ],
+        )
+
+    assert children == []
+    assert registry.list_sessions() == [parent]
