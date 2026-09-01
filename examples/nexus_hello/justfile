@@ -18,9 +18,9 @@
 #   just registry                        # 5. durable tools gateway (no seed config -- starts empty)
 #   just nexus-tool-service              # 6. the demo Nexus-native tool service, on "nexus-mcp-server"
 #   just nexus-subagent                  # 7. native subagent workflow and Nexus service
-#   just register-third-party-mcp-server # 8. ONE-SHOT: tags demo under agent_id "NexusHelloAgent"
+#   just register-third-party-mcp-server # 8. ONE-SHOT: tags demo under account_id "NexusHelloAccount"
 #                                        #    (needs third-party-mcp-server up -- the gateway fetches its tools)
-#   just register-third-party-subagent   # 9. ONE-SHOT: tags writer under agent_id "NexusHelloAgent"
+#   just register-third-party-subagent   # 9. ONE-SHOT: tags writer under account_id "NexusHelloAccount"
 #   just session-manager                 # 10. packaged session-manager worker
 #   just server                          # 11. FastAPI API + UI on :8000
 #   just worker                          # 12. this example's agent worker, on "default"
@@ -52,8 +52,9 @@ demo_nexus_endpoint := "nexus-hello-demo-endpoint"
 subagent_nexus_endpoint := "nexus-hello-subagent-endpoint"
 # The native subagent workflow and Nexus service share this task queue.
 subagent_task_queue := "nexus-hello-subagent"
-# This must match the workflow type because the gateway infers the agent ID from it.
-agent_id := "NexusHelloAgent"
+account_id := "NexusHelloAccount"
+# sha256("NexusHelloAccount"); see account_registry_workflow_id().
+registry_workflow_id := "account-registry-cf700a56bafc7c6f1417b0fda1135aedd0298c6266fb173b325d69db81b09a8f"
 
 # List available recipes (bare `just`).
 default:
@@ -111,7 +112,7 @@ setup-nexus:
 
 # Run the gateway for both HTTP resource types.
 registry:
-    cd "{{root}}" && TEMPORAL_NAMESPACE={{gateway_namespace}} uv run --extra nexus-mcp --group examples python -m durable_tools_gateway.worker
+    cd "{{root}}" && TEMPORAL_NAMESPACE={{gateway_namespace}} GATEWAY_SEED_ACCOUNT_ID={{account_id}} uv run --extra nexus-mcp --group examples python -m durable_tools_gateway.worker
 
 # The demo 3rd-party MCP tool server this example's agent calls through the gateway.
 third-party-mcp-server:
@@ -131,16 +132,15 @@ nexus-tool-service:
 nexus-subagent:
     cd "{{root}}" && TEMPORAL_NAMESPACE={{nexus_subagent_server_namespace}} uv run --group examples python -m examples.nexus_hello.native_subagent worker
 
-# ONE-SHOT: registers "demo" under agent_id "NexusHelloAgent" with the gateway. Plain
+# ONE-SHOT: registers "demo" under account_id "NexusHelloAccount" with the gateway. Plain
 # signal straight to ToolRegistryWorkflow, no SDK code needed. Validates third-party-mcp-server is
 # reachable; tools are fetched live later. Run after setup-nexus, registry, and
 # third-party-mcp-server are up. Safe to re-run.
 register-third-party-mcp-server:
     temporal workflow signal \
         --namespace {{gateway_namespace}} \
-        --workflow-id mcp-tool-registry \
+        --workflow-id {{registry_workflow_id}} \
         --name register_external \
-        --input '"{{agent_id}}"' \
         --input '"demo"' \
         --input '"http://127.0.0.1:8765/mcp"'
 
@@ -148,9 +148,8 @@ register-third-party-mcp-server:
 register-third-party-subagent:
     temporal workflow signal \
         --namespace {{gateway_namespace}} \
-        --workflow-id mcp-tool-registry \
+        --workflow-id {{registry_workflow_id}} \
         --name register_subagent \
-        --input '"{{agent_id}}"' \
         --input '"writer"' \
         --input '"http://127.0.0.1:8766"'
 

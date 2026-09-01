@@ -42,12 +42,12 @@ class GatewayTransport:
 
     def __init__(
         self,
-        agent_id: str,
+        account_id: str,
         alias: str,
         gateway_name: str = "RegistryService",
         gateway_endpoint: str = "mcp-registry-endpoint",
     ) -> None:
-        self._agent_id = agent_id
+        self._account_id = account_id
         self._alias = alias
         self._gateway_name = gateway_name
         self._gateway_endpoint = gateway_endpoint
@@ -60,7 +60,7 @@ class GatewayTransport:
     async def start(self, *, agent_key: str, config: AgentConfig) -> str:
         out = await self._client().execute_operation(
             RegistryService.start_subagent,
-            StartSubagentInput(agent_id=self._agent_id, alias=self._alias),
+            StartSubagentInput(account_id=self._account_id, alias=self._alias),
             schedule_to_close_timeout=timedelta(minutes=1),
         )
         return out.instance_id
@@ -80,7 +80,7 @@ class GatewayTransport:
         out = await self._client().execute_operation(
             RegistryService.dispatch_subagent_turn,
             DispatchSubagentTurnInput(
-                agent_id=self._agent_id,
+                account_id=self._account_id,
                 instance_id=target,
                 msg_type=msg_type,
                 payload=json.dumps(payload),
@@ -111,7 +111,7 @@ class GatewayTransport:
         await self._client().execute_operation(
             RegistryService.stop_subagent,
             StopSubagentInput(
-                agent_id=self._agent_id,
+                account_id=self._account_id,
                 instance_id=target,
             ),
             schedule_to_close_timeout=timedelta(minutes=1),
