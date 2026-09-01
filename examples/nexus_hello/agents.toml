@@ -11,17 +11,17 @@ workflow_type = "NexusHelloAgent"
 task_queue = "nexus-hello"
 label = "Nexus Hello"
 description = """
-A hello-world OpenAI Agents SDK agent using nexus_tools_gateway() / nexus_native_mcp_server()
-for tools, and agent.nexus_subagent_gateway() / agent.nexus_native_subagent() for subagents
-(agent_id inferred from this workflow_type, "NexusHelloAgent"):
+A hello-world OpenAI Agents SDK agent using nexus_gateway(account_id) /
+nexus_native_mcp_server() for tools, and agent.nexus_subagent_gateway(account_id) /
+agent.nexus_native_subagent() for subagents (account_id "NexusHelloAccount"):
 
 - demo_get_fun_fact (a 3rd-party MCP server, proxied through the Durable Tools Gateway
-  -- registered ahead of time under agent_id "NexusHelloAgent")
+  -- registered ahead of time under account_id "NexusHelloAccount")
 - demo-nexus_get_lucky_number (a native Nexus tool service, reached directly -- no
   gateway, no registration)
 - research (a Nexus-native SUBAGENT, reached directly -- no gateway, no registration)
 - writer (a 3rd-party SUBAGENT, proxied through the SAME Durable Tools Gateway as
-  demo_get_fun_fact -- registered ahead of time under agent_id "NexusHelloAgent")
+  demo_get_fun_fact -- registered ahead of time under account_id "NexusHelloAccount")
 - demo-nexus_get_delayed_lucky_number (a workflow-backed Nexus operation, reached
   through the same direct service route)
 

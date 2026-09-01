@@ -37,7 +37,7 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
         harness_tool_as_openai_tool,
         nexus_native_mcp_server,
-        nexus_tools_gateway,
+        nexus_gateway,
     )
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
@@ -53,6 +53,7 @@ with workflow.unsafe.imports_passed_through():
 TASK_QUEUE = "nexus-hello"
 WORKFLOW_NAME = "NexusHelloAgent"
 DEFAULT_MODEL = "gpt-5.1"
+ACCOUNT_ID = "NexusHelloAccount"
 
 SYSTEM_INSTRUCTION = """\
 You are a friendly assistant. Answer the user in brief, natural prose.
@@ -92,8 +93,8 @@ class NexusHelloAgentWorkflow:
 
         The model may also delegate parts of the question to its A2A subagents.
         """
-        nexus_gateway = nexus_tools_gateway()
-        subagent_gateway = agent.nexus_subagent_gateway()
+        account_gateway = nexus_gateway(ACCOUNT_ID)
+        subagent_gateway = agent.nexus_subagent_gateway(ACCOUNT_ID)
 
         research_tools = agent.nexus_native_subagent(
             NativeResearchSubagentWorkflow, RESEARCH_SUBAGENT_ENDPOINT, key=RESEARCH_KEY
@@ -117,7 +118,7 @@ class NexusHelloAgentWorkflow:
             instructions=SYSTEM_INSTRUCTION,
             model=DEFAULT_MODEL,
             mcp_servers=[
-                nexus_gateway.mcp_servers("demo"),
+                account_gateway.mcp_servers("demo"),
                 nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
             ],
             tools=[
