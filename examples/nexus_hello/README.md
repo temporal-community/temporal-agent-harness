@@ -11,9 +11,10 @@ subagents are bridged into plain `Agent(tools=[...])` function tools, via
 
 - `nexus_native_mcp_server(name, endpoint)` / `agent.nexus_native_subagent(cls, endpoint, key=...)`
   -- one hard-coded native Nexus service, called directly. No registry. No registration.
-- `nexus_tools_gateway().mcp_servers(...)` / `agent.nexus_subagent_gateway().subagent([...], alias, key=...)`
+- `nexus_gateway(account_id).mcp_servers(...)` /
+  `agent.nexus_subagent_gateway(account_id).subagent([...], alias, key=...)`
   -- a resource registered ahead of time with the Durable Tools Gateway, called through it.
-  `agent_id` comes from this workflow's own type (`workflow_type`). You never set it by hand.
+  The explicit `account_id` selects the account-owned registry.
 
 Native and 3rd-party resources never mix inside the gateway's routing. MCP tools and
 subagents share one gateway and one registry workflow. Each HTTP operation uses a
@@ -23,7 +24,7 @@ Tool lists are never cached. They are fetched live from the real MCP server on e
 them proves the transport works, not that they can hold a conversation. But the model
 decides whether to call them at all, the same way it decides for the MCP tools.
 
-Resources (registered under agent_id `"NexusHelloAgent"`, this workflow's `workflow_type`):
+Resources (registered under account_id `"NexusHelloAccount"`):
 - `demo_get_fun_fact` - a 3rd-party (non-Nexus) MCP server, reached through the
   **Durable Tools Gateway** ("demo" -> `http://127.0.0.1:8765/mcp`).
 - `demo-nexus_get_lucky_number` - a **native** MCP server, called directly. No gateway.
@@ -54,16 +55,16 @@ flowchart LR
 ## How it works
 
 ```python
-nexus_gateway = nexus_tools_gateway()  # agent_id inferred from workflow_type
+account_gateway = nexus_gateway("NexusHelloAccount")
 mcp_servers=[
-    nexus_gateway.mcp_servers("demo"),
+    account_gateway.mcp_servers("demo"),
     nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
 ]
 
 research = agent.nexus_native_subagent(
     NativeResearchSubagentWorkflow, "nexus-hello-subagent-endpoint", key="research"
 )
-subagent_gateway = agent.nexus_subagent_gateway()  # agent_id inferred from workflow_type
+subagent_gateway = agent.nexus_subagent_gateway("NexusHelloAccount")
 writer = subagent_gateway.subagent(
     [agent.declared_handler("ask", "...", TextMessage, TextReply, param_name="message")],
     "writer",
@@ -230,10 +231,9 @@ Four Temporal namespaces show cross-namespace Nexus calls:
 - A graceful parent close stops its active instances. A forced workflow termination cannot
   run cleanup. A production provider should also expire inactive instances.
 
-Two different IDs are in play here. `agents.toml`'s `key` (`"nexus-hello"`) is how the
-web UI finds this agent. The gateway's `agent_id` (`"NexusHelloAgent"`) is this
-workflow's `workflow_type`. The gateway uses it only to register and look up resources.
-The two IDs don't have to match. Here, they don't.
+Three different IDs are in play here. `agents.toml`'s key (`"nexus-hello"`) identifies
+the UI entry, `NexusHelloAgent` is the Temporal workflow type, and
+`NexusHelloAccount` owns the gateway resources. They are deliberately independent.
 
 ## Layout
 
@@ -264,9 +264,9 @@ just registry                        # 5. durable tools gateway (no seed config 
 just nexus-tool-service               # 6. demo native tool service
 just nexus-subagent                  # 7. demo native subagent -- agent workflow AND
                                       #    its Nexus front door, one worker
-just register-third-party-mcp-server # 8. ONE-SHOT: registers "demo" under agent_id
-                                      #    "NexusHelloAgent"
-just register-third-party-subagent   # 9. ONE-SHOT: registers "writer" under the same agent_id
+just register-third-party-mcp-server # 8. ONE-SHOT: registers "demo" under account_id
+                                      #    "NexusHelloAccount"
+just register-third-party-subagent   # 9. ONE-SHOT: registers "writer" under the same account_id
 just session-manager                 # 10. session-manager + Nexus A2A/control front door
 just ui-tunnel                       # 11. durable UI connector tunnel
 just server                          # 12. builds UI, serves API + UI on :8000 through Nexus
@@ -279,7 +279,7 @@ will use both subagents alongside the two MCP tools. All four resources work
 immediately. The model decides whether each one is relevant to what you asked.
 
 ```
-(every turn)                 default -> RegistryService.list_agent_entries("NexusHelloAgent")  (gateway tool only)
+(every turn)                 default -> RegistryService.list_account_entries("NexusHelloAccount")  (gateway tool only)
 demo_get_fun_fact:            default -> RegistryService (gateway) -> mcp_proxy_activity (standalone activity) -> tool_server.py (HTTP)
 demo-nexus_get_lucky_number:  default -> nexus_tool_service.py (nexus-mcp-server namespace), no gateway hop
 research (subagent):          default -> A2AServiceHandler (nexus-subagent-server namespace), no gateway hop
@@ -291,14 +291,16 @@ Without `just` (from the repo root):
 ```sh
 uv run --extra nexus-mcp python -m examples.nexus_hello.tool_server
 uv run --extra nexus-mcp --group examples python -m examples.nexus_hello.subagent_server
-TEMPORAL_NAMESPACE=gateway uv run --extra nexus-mcp --group examples python -m nexus_mcp.durable_tools_gateway.worker
+TEMPORAL_NAMESPACE=gateway GATEWAY_SEED_ACCOUNT_ID=NexusHelloAccount uv run --extra nexus-mcp --group examples python -m nexus_mcp.durable_tools_gateway.worker
 TEMPORAL_NAMESPACE=nexus-mcp-server uv run --extra nexus-mcp python -m examples.nexus_hello.nexus_tool_service
 TEMPORAL_NAMESPACE=nexus-subagent-server uv run --group examples python -m examples.nexus_hello.native_subagent worker
 (cd nexus/ui_connector && CONNECTOR_NAMESPACE=gateway CONNECTOR_TASK_QUEUE=nexus-ui-tunnel go run ./cmd/tunnel/)
-temporal workflow signal --namespace gateway --workflow-id mcp-tool-registry --name register_external \
-    --input '"NexusHelloAgent"' --input '"demo"' --input '"http://127.0.0.1:8765/mcp"'
-temporal workflow signal --namespace gateway --workflow-id mcp-tool-registry --name register_subagent \
-    --input '"NexusHelloAgent"' --input '"writer"' --input '"http://127.0.0.1:8766"'
+temporal workflow signal --namespace gateway \
+    --workflow-id account-registry-cf700a56bafc7c6f1417b0fda1135aedd0298c6266fb173b325d69db81b09a8f \
+    --name register_external --input '"demo"' --input '"http://127.0.0.1:8765/mcp"'
+temporal workflow signal --namespace gateway \
+    --workflow-id account-registry-cf700a56bafc7c6f1417b0fda1135aedd0298c6266fb173b325d69db81b09a8f \
+    --name register_subagent --input '"writer"' --input '"http://127.0.0.1:8766"'
 NEXUS_UI_ENDPOINT=nexus-hello-agent-ui-endpoint uv run --group examples python -m examples.session_manager_worker
 NEXUS_UI_ENDPOINT=nexus-hello-agent-ui-endpoint CONNECTOR_NAMESPACE=gateway CONNECTOR_TASK_QUEUE=nexus-ui-tunnel \
     uv run --group examples python -m examples.app examples/nexus_hello/agents.toml --host 0.0.0.0 --port 8000

@@ -23,12 +23,13 @@ from nexus_mcp.durable_tools_gateway.generated import (
     CallToolInput,
     CallToolInputArguments,
     CallToolOutput,
-    ListAgentEntriesInput,
-    ListAgentEntriesOutput,
+    ListAccountEntriesInput,
+    ListAccountEntriesOutput,
 )
 from nexus_mcp.durable_tools_gateway.registry import (
-    AgentEntries,
+    AccountEntries,
     ToolRegistryWorkflow,
+    account_registry_workflow_id,
     fetch_external_tools,
 )
 from nexus_mcp.durable_tools_gateway.registry_service_handler import (
@@ -55,14 +56,14 @@ def _mock_client(*, remote_servers=None, fetched_tools=None, find_url=None, call
     handle = MagicMock()
 
     async def query(method, *args, **kwargs):
-        if method is ToolRegistryWorkflow.list_agent_entries:
-            return AgentEntries(remote_servers=remote_servers or {})
+        if method is ToolRegistryWorkflow.list_account_entries:
+            return AccountEntries(remote_servers=remote_servers or {})
         if method is ToolRegistryWorkflow.find:
             return find_url
         raise AssertionError(f"unexpected query: {method}")
 
     handle.query = AsyncMock(side_effect=query)
-    client.get_workflow_handle.return_value = handle
+    client.start_workflow = AsyncMock(return_value=handle)
 
     async def execute_activity(activity, *args, **kwargs):
         if activity is fetch_external_tools:
@@ -76,23 +77,26 @@ def _mock_client(*, remote_servers=None, fetched_tools=None, find_url=None, call
 
 
 @patch("temporalio.nexus.info", return_value=_FAKE_NEXUS_INFO)
-async def test_list_agent_entries_output_serializes_over_the_wire(_mock_info: MagicMock) -> None:
+async def test_list_account_entries_output_serializes_over_the_wire(_mock_info: MagicMock) -> None:
     client = _mock_client(
         remote_servers={"weather": "http://fake"},
         fetched_tools=[{"name": "weather_get_forecast", "description": "fake"}],
     )
     handler = RegistryServiceHandler(client)
 
-    output = await handler.list_agent_entries(
-        MagicMock(), ListAgentEntriesInput(agent_id="agent-1")
+    output = await handler.list_account_entries(
+        MagicMock(), ListAccountEntriesInput(account_id="account-1")
     )
 
-    decoded = _round_trip(output, ListAgentEntriesOutput)
+    decoded = _round_trip(output, ListAccountEntriesOutput)
     tools = decoded.remote_tools.additional_properties["weather"]
     assert tools[0].additional_properties["name"] == "weather_get_forecast"
     options = client.execute_activity.await_args.kwargs
     assert options["schedule_to_close_timeout"].total_seconds() == 60
     assert options["retry_policy"].maximum_attempts == 3
+    assert client.start_workflow.await_args.kwargs["id"] == account_registry_workflow_id(
+        "account-1"
+    )
 
 
 @patch("temporalio.nexus.info", return_value=_FAKE_NEXUS_INFO)
@@ -104,7 +108,7 @@ async def test_call_tool_forwards_arguments_and_serializes_result(_mock_info: Ma
     output = await handler.call_tool(
         MagicMock(),
         CallToolInput(
-            agent_id="agent-1",
+            account_id="account-1",
             alias="weather",
             name="weather_get_forecast",
             arguments=CallToolInputArguments(additional_properties={"city": "NYC"}),

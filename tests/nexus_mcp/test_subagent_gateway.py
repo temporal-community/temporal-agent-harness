@@ -72,32 +72,32 @@ def _client(
 
     handle.query = AsyncMock(side_effect=query)
     handle.execute_update = AsyncMock()
-    client.get_workflow_handle.return_value = handle
+    client.start_workflow = AsyncMock(return_value=handle)
     client.execute_activity = AsyncMock(side_effect=execute_activity)
     return client
 
 
 def test_instance_route_survives_factory_reregistration() -> None:
-    registry = ToolRegistryWorkflow()
+    registry = ToolRegistryWorkflow("account-1")
     route = SubagentInstanceRoute(
         alias="writer",
         url="http://provider-v1",
         provider_instance_id="provider-instance-1",
     )
     with patch("nexus_mcp.durable_tools_gateway.registry.workflow.logger"):
-        registry.register_subagent("agent-1", "writer", "http://provider-v1")
-        registry.bind_subagent_instance("agent-1", "gateway-instance-1", route)
-        registry.register_subagent("agent-1", "writer", "http://provider-v2")
+        registry.register_subagent("writer", "http://provider-v1")
+        registry.bind_subagent_instance("gateway-instance-1", route)
+        registry.register_subagent("writer", "http://provider-v2")
 
     assert (
-        registry.find_subagent_instance("agent-1", "gateway-instance-1") == route
+        registry.find_subagent_instance("gateway-instance-1") == route
     )
-    registry.unbind_subagent_instance("agent-1", "gateway-instance-1")
-    assert registry.find_subagent_instance("agent-1", "gateway-instance-1") is None
+    registry.unbind_subagent_instance("gateway-instance-1")
+    assert registry.find_subagent_instance("gateway-instance-1") is None
 
 
 def test_lazy_a2a_route_promotes_provider_instance_once() -> None:
-    registry = ToolRegistryWorkflow()
+    registry = ToolRegistryWorkflow("account-1")
     provisional = SubagentInstanceRoute(
         alias="writer", url="http://provider", provider_instance_id=""
     )
@@ -105,18 +105,17 @@ def test_lazy_a2a_route_promotes_provider_instance_once() -> None:
         alias="writer", url="http://provider", provider_instance_id="provider-1"
     )
 
-    registry.bind_subagent_instance("agent-1", "gateway-task-1", provisional)
-    registry.bind_subagent_instance("agent-1", "gateway-task-1", resolved)
+    registry.bind_subagent_instance("gateway-task-1", provisional)
+    registry.bind_subagent_instance("gateway-task-1", resolved)
     # A retried lazy-start request must not erase the resolved provider task ID.
-    registry.bind_subagent_instance("agent-1", "gateway-task-1", provisional)
+    registry.bind_subagent_instance("gateway-task-1", provisional)
 
-    assert registry.find_subagent_instance("agent-1", "gateway-task-1") == resolved
+    assert registry.find_subagent_instance("gateway-task-1") == resolved
 
 
 def test_lazy_a2a_route_rejects_provider_replacement() -> None:
-    registry = ToolRegistryWorkflow()
+    registry = ToolRegistryWorkflow("account-1")
     registry.bind_subagent_instance(
-        "agent-1",
         "gateway-task-1",
         SubagentInstanceRoute(
             alias="writer", url="http://provider", provider_instance_id="provider-1"
@@ -125,7 +124,6 @@ def test_lazy_a2a_route_rejects_provider_replacement() -> None:
 
     with pytest.raises(ApplicationError, match="different route"):
         registry.bind_subagent_instance(
-            "agent-1",
             "gateway-task-1",
             SubagentInstanceRoute(
                 alias="writer",
@@ -152,7 +150,7 @@ async def test_gateway_routes_a2a_message_to_registered_agent(
                 metadata={"temporal.io/message-type": "ask"},
             ),
             metadata={
-                "owner_id": "agent-1",
+                "account_id": "agent-1",
                 "agent_id": "writer",
                 "expected_turn": 1,
             },
@@ -171,15 +169,15 @@ async def test_start_binds_a_gateway_instance(_mock_info: MagicMock) -> None:
     client = _client(provider_instance_id="provider-instance-7")
     output = await RegistryServiceHandler(client).start_subagent(
         _context("start-request"),
-        StartSubagentInput(agent_id="agent-1", alias="writer"),
+        StartSubagentInput(account_id="agent-1", alias="writer"),
     )
 
     activity_input = client.execute_activity.await_args.args[1]
-    bind_args = client.get_workflow_handle.return_value.execute_update.await_args.kwargs[
+    bind_args = client.start_workflow.return_value.execute_update.await_args.kwargs[
         "args"
     ]
-    assert output.instance_id == bind_args[1]
-    assert bind_args[2] == SubagentInstanceRoute(
+    assert output.instance_id == bind_args[0]
+    assert bind_args[1] == SubagentInstanceRoute(
         alias="writer",
         url="http://provider",
         provider_instance_id="provider-instance-7",
@@ -196,7 +194,7 @@ async def test_dispatch_key_includes_instance_id(_mock_info: MagicMock) -> None:
     output = await RegistryServiceHandler(client).dispatch_subagent_turn(
         _context("turn-request"),
         DispatchSubagentTurnInput(
-            agent_id="agent-1",
+            account_id="agent-1",
             instance_id="gateway-instance-1",
             msg_type="ask",
             payload='{"text":"hello"}',
@@ -221,7 +219,7 @@ async def test_dispatch_rejects_wrong_remote_turn(_mock_info: MagicMock) -> None
         await RegistryServiceHandler(client).dispatch_subagent_turn(
             _context(),
             DispatchSubagentTurnInput(
-                agent_id="agent-1",
+                account_id="agent-1",
                 instance_id="gateway-instance-1",
                 msg_type="ask",
                 payload="{}",
@@ -236,15 +234,15 @@ async def test_stop_targets_one_instance(_mock_info: MagicMock) -> None:
     await RegistryServiceHandler(client).stop_subagent(
         _context("stop-request"),
         StopSubagentInput(
-            agent_id="agent-1", instance_id="gateway-instance-1"
+            account_id="agent-1", instance_id="gateway-instance-1"
         ),
     )
 
     activity_input = client.execute_activity.await_args.args[1]
     assert activity_input.instance_id == "provider-instance-1"
-    update = client.get_workflow_handle.return_value.execute_update
+    update = client.start_workflow.return_value.execute_update
     assert update.await_args.args[0] is ToolRegistryWorkflow.unbind_subagent_instance
-    assert update.await_args.kwargs["args"] == ["agent-1", "gateway-instance-1"]
+    assert update.await_args.args[1] == "gateway-instance-1"
     assert client.execute_activity.await_args.kwargs[
         "schedule_to_close_timeout"
     ].total_seconds() == 50
