@@ -27,6 +27,10 @@ from temporalio.api.common.v1 import Payload
 from temporalio.contrib.workflow_streams import PollInput
 
 from temporal_agent_harness.harness.agent_protocol import TURN_EVENTS_TOPIC
+from temporal_agent_harness.harness.stream_poll import (
+    AgentStreamPollItem,
+    bounded_poll_result,
+)
 
 HARNESS_EVENT_METADATA_KEY = "temporal.io/agent-event-payload"
 A2A_STREAM_POLL_UPDATE = "__temporal_a2a_subscribe_to_task"
@@ -150,4 +154,17 @@ async def poll_subscription_page(
     result = await stream._on_poll(
         PollInput(topics=[TURN_EVENTS_TOPIC], from_offset=input.cursor)
     )
-    return subscription_page(result, closed=is_closed())
+    bounded = bounded_poll_result(
+        [
+            AgentStreamPollItem(
+                topic=item.topic,
+                data=item.data,
+                offset=item.offset,
+            )
+            for item in result.items
+        ],
+        next_offset=result.next_offset,
+        more_ready=result.more_ready,
+        closed=is_closed(),
+    )
+    return subscription_page(bounded)

@@ -109,7 +109,7 @@ in that mode, omit both `just setup-nexus` and `just ui-tunnel`.
 ## Slack and Teams
 
 Both webhooks use the same tunnel task queue (`nexus-ui-tunnel`). Set
-`NEXUS_AGENT_ENDPOINT` to an endpoint backed by an `A2AServiceHandler` configured to
+`NEXUS_AGENT_ENDPOINT` to an endpoint backed by a `NexusA2AServiceHandler` configured to
 start the selected agent workflow: a Slack thread or Teams conversation becomes the
 A2A task ID, so these drivers do not rely on a browser-created session.
 
