@@ -10,7 +10,7 @@ Usage (from repo root):
 
 Env vars:
     GATEWAY_SEED_EXTERNAL_SERVERS   JSON {"name": "url", ...} to register on startup.
-    GATEWAY_SEED_AGENT_ID           agent_id to register seeded servers under. Required
+    GATEWAY_SEED_ACCOUNT_ID         account_id to register seeded servers under. Required
                                      if GATEWAY_SEED_EXTERNAL_SERVERS is set.
 """
 
@@ -31,8 +31,8 @@ from temporal_agent_harness.utils.large_payload import with_large_payload_offloa
 
 from .registry import (
     REGISTRY_TASK_QUEUE,
-    REGISTRY_WORKFLOW_ID,
     ToolRegistryWorkflow,
+    account_registry_workflow_id,
     fetch_external_tools,
 )
 from .registry_service_handler import (
@@ -46,38 +46,43 @@ from .registry_service_handler import (
 logger = logging.getLogger(__name__)
 
 
-async def _seed_external_servers(client: Client, seed: dict[str, str], agent_id: str) -> None:
-    """Signal each {name: url} pair to ToolRegistryWorkflow.register_external, under
-    one agent_id."""
-    registry_handle = client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+async def _ensure_account(client: Client, account_id: str):
+    return await client.start_workflow(
+        ToolRegistryWorkflow.run,
+        account_id,
+        id=account_registry_workflow_id(account_id),
+        task_queue=REGISTRY_TASK_QUEUE,
+        id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+    )
+
+
+async def _seed_external_servers(client: Client, seed: dict[str, str], account_id: str) -> None:
+    """Seed one account's external MCP registrations."""
+    registry_handle = await _ensure_account(client, account_id)
     for name, url in seed.items():
         await registry_handle.signal(
-            ToolRegistryWorkflow.register_external, args=[agent_id, name, url]
+            ToolRegistryWorkflow.register_external, args=[name, url]
         )
-        logger.info("Seeded external server %r -> %s (agent_id=%r)", name, url, agent_id)
+        logger.info("Seeded external server %r -> %s (account_id=%r)", name, url, account_id)
 
 
 async def main(
-    seed_external_servers: dict[str, str] | None = None, seed_agent_id: str | None = None
+    seed_external_servers: dict[str, str] | None = None, seed_account_id: str | None = None
 ) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
-    if seed_external_servers and not seed_agent_id:
-        raise SystemExit("GATEWAY_SEED_AGENT_ID is required when GATEWAY_SEED_EXTERNAL_SERVERS is set")
+    if seed_external_servers and not seed_account_id:
+        raise SystemExit(
+            "GATEWAY_SEED_ACCOUNT_ID is required when "
+            "GATEWAY_SEED_EXTERNAL_SERVERS is set"
+        )
 
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
         **connect_config,
         data_converter=await with_large_payload_offload(pydantic_data_converter),
-    )
-
-    await client.start_workflow(
-        ToolRegistryWorkflow.run,
-        id=REGISTRY_WORKFLOW_ID,
-        task_queue=REGISTRY_TASK_QUEUE,
-        id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
     )
 
     worker = Worker(
@@ -95,9 +100,11 @@ async def main(
     )
     async with worker:
         logger.info("Durable Tool Call Gateway ready — task_queue=%r", REGISTRY_TASK_QUEUE)
+        if seed_account_id:
+            await _ensure_account(client, seed_account_id)
         if seed_external_servers:
-            assert seed_agent_id is not None
-            await _seed_external_servers(client, seed_external_servers, seed_agent_id)
+            assert seed_account_id is not None
+            await _seed_external_servers(client, seed_external_servers, seed_account_id)
         await asyncio.Event().wait()
 
 
@@ -106,6 +113,6 @@ if __name__ == "__main__":
     asyncio.run(
         main(
             json.loads(seed_json) if seed_json else None,
-            os.environ.get("GATEWAY_SEED_AGENT_ID"),
+            os.environ.get("GATEWAY_SEED_ACCOUNT_ID"),
         )
     )

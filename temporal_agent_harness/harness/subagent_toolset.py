@@ -243,15 +243,15 @@ def nexus_native_subagent(
 
 
 class SubagentGateway:
-    """Access gateway subagents registered for one ``agent_id``."""
+    """Access gateway subagents registered for one ``account_id``."""
 
     def __init__(
         self,
-        agent_id: str,
+        account_id: str,
         gateway_name: str = "RegistryService",
         gateway_endpoint: str = "mcp-registry-endpoint",
     ) -> None:
-        self._agent_id = agent_id
+        self._account_id = account_id
         self._gateway_name = gateway_name
         self._gateway_endpoint = gateway_endpoint
 
@@ -268,25 +268,25 @@ class SubagentGateway:
         )
 
         transport = GatewayTransport(
-            self._agent_id, alias, self._gateway_name, self._gateway_endpoint
+            self._account_id, alias, self._gateway_name, self._gateway_endpoint
         )
         return subagent_toolset(agent_cls_or_handlers, key=key, transport=transport)
 
 
 def nexus_subagent_gateway(
-    agent_id: str | None = None,
+    account_id: str,
     *,
     gateway_name: str = "RegistryService",
     gateway_endpoint: str = "mcp-registry-endpoint",
 ) -> SubagentGateway:
-    """Access registered subagents for an agent ID.
-
-    The default agent ID is the current workflow type.
+    """Access registered subagents for an account ID.
 
     Example:
-        gateway = nexus_subagent_gateway()
+        gateway = nexus_subagent_gateway("account-123")
         tools = gateway.subagent([declared_handler(...)], "writer", key="writer")
     """
+    if not account_id.strip():
+        raise ValueError("account_id is required")
     return SubagentGateway(
-        agent_id or workflow.info().workflow_type, gateway_name, gateway_endpoint
+        account_id, gateway_name, gateway_endpoint
     )
