@@ -1,10 +1,12 @@
 import type {
+  AccountOverview,
   AgentInboundMessage,
   AgentInterfaceFunction,
   AgentMessageObject,
   AgentSseFrame,
   OperatorCommand,
   OperatorCommandResponse,
+  SubagentCloseResolution,
   WorkflowExecutionState
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
@@ -59,6 +61,7 @@ interface ReplayTimelineEntry extends StepTimelineFrame {
 }
 
 const basePlaybackDelayMs = 700;
+const agentRegistrationRetryMs = 2_000;
 const activeSessionStorageKey = "temporal-agent-ui.active-session.v1";
 const frameCacheStorageKeyPrefix = "temporal-agent-ui.frames.v1:";
 
@@ -227,6 +230,7 @@ export class AgentRunController {
   playbackSpeed = $state<PlaybackSpeed>(1);
   agents = $state<AgentDescriptor[]>([]);
   sessions = $state<Session[]>([]);
+  account = $state<AccountOverview | null>(null);
   session = $state<Session | null>(null);
   expectedTurn = $state(1);
   lastResumeOffset = $state(0);
@@ -240,6 +244,7 @@ export class AgentRunController {
   #workflowAttachAbort = new Map<string, AbortController>();
   #frameKeys = new Set<string>();
   #frameCacheTimer: number | null = null;
+  #agentRegistrationTimer: number | null = null;
   #submitQueue: Promise<void> = Promise.resolve();
   #timer: number | null = null;
 
@@ -713,11 +718,19 @@ export class AgentRunController {
     const connectionVersion = this.#beginConnection();
     this.connecting = true;
     this.connectionError = null;
+    const accountMode = await this.refreshAccountOverview();
 
     try {
       const agents = await this.#loadAgents();
       const defaultAgent = agents.find((agent) => agent.key === "qa") ?? agents[0];
-      if (!defaultAgent) throw new Error("No agent is registered.");
+      if (!defaultAgent) {
+        if (accountMode) {
+          this.connectionError = null;
+          this.#scheduleAgentRegistrationRetry();
+          return;
+        }
+        throw new Error("No agent is registered.");
+      }
 
       const sessions = await this.#api.listSessions();
       this.sessions = sessions;
@@ -740,6 +753,7 @@ export class AgentRunController {
           is_message_queuing_enabled: true
         });
         this.sessions = [...this.sessions, this.session];
+        void this.refreshAccountOverview();
       }
       writeStoredActiveSessionId(this.session.workflow_id);
       void this.#fetchAgentInterface(this.session.workflow_id);
@@ -767,9 +781,10 @@ export class AgentRunController {
     if (this.refreshingSessions) return;
     this.refreshingSessions = true;
     try {
-      const sessions = await this.#api.listSessions();
+      const sessions = await this.#api.refreshSessions();
       this.sessions = sessions;
       this.#applySessionExecutionStates(sessions);
+      void this.refreshAccountOverview();
     } catch (error) {
       this.connectionError =
         error instanceof Error ? error.message : "Failed to refresh sessions.";
@@ -778,7 +793,45 @@ export class AgentRunController {
     }
   }
 
+  async refreshAccountOverview(): Promise<boolean> {
+    try {
+      this.account = await this.#api.accountOverview();
+      this.agents = this.account.agents.map((agent) => ({
+        key: agent.agent_id,
+        workflow_type: agent.agent_id,
+        task_queue: "",
+        label: agent.label,
+        description: agent.description
+      }));
+      return true;
+    } catch {
+      // The packaged UI is also served by the legacy direct-Temporal app, which has no
+      // account endpoint. In that mode the account pane simply remains hidden.
+      this.account = null;
+      return false;
+    }
+  }
+
+  #scheduleAgentRegistrationRetry(): void {
+    if (typeof window === "undefined" || this.#agentRegistrationTimer != null) return;
+    this.#agentRegistrationTimer = window.setTimeout(async () => {
+      this.#agentRegistrationTimer = null;
+      try {
+        const agents = await this.#loadAgents();
+        if (!this.session && agents.length > 0 && !this.creatingSession) {
+          await this.refreshAccountOverview();
+          await this.startNewSession(agents[0].workflow_type);
+          return;
+        }
+      } catch {
+        // Keep retrying while an account UI has no usable registration.
+      }
+      this.#scheduleAgentRegistrationRetry();
+    }, agentRegistrationRetryMs);
+  }
+
   async startNewSession(workflowType?: string): Promise<void> {
+    if (this.creatingSession) return;
     const connectionVersion = this.#beginConnection();
     this.#sendVersion += 1;
     this.#stopStream();
@@ -804,6 +857,7 @@ export class AgentRunController {
       });
 
       this.sessions = [...this.sessions.filter((item) => item.workflow_id !== session.workflow_id), session];
+      void this.refreshAccountOverview();
       if (!this.#isCurrentConnection(connectionVersion)) return;
 
       this.#initialized = true;
@@ -865,6 +919,27 @@ export class AgentRunController {
       }
     } finally {
       if (this.#isCurrentConnection(connectionVersion)) this.connecting = false;
+    }
+  }
+
+  async closeSession(
+    sessionId: string,
+    resolution?: SubagentCloseResolution
+  ): Promise<void> {
+    if (this.#isWorkflowClosed(sessionId)) return;
+    this.connectionError = null;
+    try {
+      await this.#api.closeSession(sessionId, resolution);
+      this.#markWorkflowClosed(sessionId);
+      if (this.session?.workflow_id === sessionId) {
+        this.sending = false;
+        this.connecting = false;
+      }
+      await this.refreshAccountOverview();
+    } catch (error) {
+      this.connectionError =
+        error instanceof Error ? error.message : "Failed to close session.";
+      throw error;
     }
   }
 
@@ -1353,6 +1428,20 @@ export class AgentRunController {
   reset(): void {
     this.pause();
     this.goTo(0);
+  }
+
+  dispose(): void {
+    this.pause();
+    this.#stopStream();
+    this.#stopWorkflowAttachStreams();
+    if (this.#frameCacheTimer != null) {
+      window.clearTimeout(this.#frameCacheTimer);
+      this.#frameCacheTimer = null;
+    }
+    if (this.#agentRegistrationTimer != null) {
+      window.clearTimeout(this.#agentRegistrationTimer);
+      this.#agentRegistrationTimer = null;
+    }
   }
 }
 

@@ -26,11 +26,39 @@ export interface AgentRegistryResponse {
   agents: AgentDescriptor[];
 }
 
+export interface AccountAgent {
+  agent_id: string;
+  kind: "harness_nexus" | "external_http";
+  label: string;
+  description: string;
+  nexus_endpoint?: string | null;
+  provider_url?: string | null;
+  session_count: number;
+  active_session_count: number;
+}
+
+export interface AccountResource {
+  name: string;
+  endpoint: string;
+}
+
+export interface AccountOverview {
+  account_id: string;
+  agents: AccountAgent[];
+  mcp_servers: AccountResource[];
+  subagent_providers: AccountResource[];
+  session_count: number;
+  active_session_count: number;
+}
+
 export interface Session {
   workflow_id: WorkflowId;
   created_at: UnixEpochSeconds;
   label: string;
   agent_workflow_type: AgentWorkflowType;
+  parent_session_id?: WorkflowId | null;
+  subagent_id?: string | null;
+  is_spawned?: boolean;
   is_message_queuing_enabled: boolean;
   is_discovered?: boolean;
   initial_user_message?: string | null;
@@ -195,6 +223,8 @@ export interface SubagentInfo {
   next_expected_turn: number;
 }
 
+export type SubagentCloseResolution = "keep-open" | "close";
+
 export interface AgentStatusResponse {
   current_turn: number;
   turn_active: boolean;
@@ -204,6 +234,8 @@ export interface AgentStatusResponse {
   subagents: SubagentInfo[];
   approval_policy: ToolApprovalPolicy;
   has_custom_approval_fallback: boolean;
+  subagent_close_policy: "keep-open" | "close" | "ask-user";
+  subagent_reuse_policy: "use-existing" | "always-new";
 }
 
 export interface ApiErrorResponse {
