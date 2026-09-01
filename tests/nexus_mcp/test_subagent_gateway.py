@@ -24,10 +24,12 @@ from nexus_mcp.durable_tools_gateway.registry_service_handler import (
     SubagentStartResult,
     SubagentStopInput,
     _check_subagent_response,
+    subagent_dispatch_activity_id,
     subagent_proxy_activity,
     subagent_start_activity,
     subagent_stop_activity,
 )
+from temporalio.common import ActivityIDConflictPolicy
 from temporalio.exceptions import ApplicationError
 
 _FAKE_NEXUS_INFO = temporalio.nexus.Info(
@@ -214,6 +216,15 @@ async def test_dispatch_key_includes_instance_id(_mock_info: MagicMock) -> None:
     assert activity_input.instance_id == "provider-instance-1"
     assert activity_input.url == "http://provider-v1"
     assert output.turn_number == 1
+    assert subagent_dispatch_activity_id("gateway-instance-1", 1) == (
+        "subagent-dispatch-gateway-instance-1-1"
+    )
+    assert client.execute_activity.await_args.kwargs["id"] == (
+        "subagent-dispatch-gateway-instance-1-1"
+    )
+    assert client.execute_activity.await_args.kwargs["id_conflict_policy"] == (
+        ActivityIDConflictPolicy.USE_EXISTING
+    )
     assert client.execute_activity.await_args.kwargs[
         "schedule_to_close_timeout"
     ].total_seconds() == 300
