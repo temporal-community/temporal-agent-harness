@@ -67,6 +67,34 @@ def test_agent_stream_poll_result_round_trips() -> None:
     assert decoded == result
 
 
+def test_poll_messages_does_not_close_before_retained_pages_are_drained() -> None:
+    result = AgentStreamPollResult(
+        items=[AgentStreamPollItem(topic="turn_events", data="first", offset=0)],
+        more_ready=True,
+        next_offset=1,
+        closed=True,
+    )
+
+    output = AgentServiceHandler._poll_messages_output(result)
+
+    assert output.more_ready
+    assert not output.closed
+
+
+def test_poll_messages_closes_on_the_final_retained_page() -> None:
+    result = AgentStreamPollResult(
+        items=[AgentStreamPollItem(topic="turn_events", data="last", offset=1)],
+        more_ready=False,
+        next_offset=2,
+        closed=True,
+    )
+
+    output = AgentServiceHandler._poll_messages_output(result)
+
+    assert not output.more_ready
+    assert output.closed
+
+
 @patch("temporal_agent_harness.nexus_agent_adapter.handler.AgentClient")
 async def test_provide_callback_result_unwraps_result_before_forwarding(
     mock_agent_client_cls: MagicMock,

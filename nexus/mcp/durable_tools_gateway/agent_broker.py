@@ -141,6 +141,40 @@ def _sse(event_type: str, data: dict[str, Any]) -> bytes:
     return f"event: {event_type}\ndata: {json.dumps(data)}\n\n".encode()
 
 
+def _coalesced_ui_frames(
+    items: list[StreamItem],
+) -> list[tuple[str, dict[str, Any]]]:
+    """Decode a poll page and join adjacent text deltas from the same turn.
+
+    Provider token boundaries are not meaningful UI events. Keeping the last offset makes the
+    joined frame an exact resume checkpoint while avoiding thousands of browser frames for one
+    response. Non-text events retain their original one-to-one shape.
+    """
+    frames: list[tuple[str, dict[str, Any]]] = []
+    for item in items:
+        event_type, data = _decode_stream_item(item)
+        if event_type == "reply_delta" and frames and frames[-1][0] == event_type:
+            prior = frames[-1][1]
+            if (
+                prior.get("agent_id") == data.get("agent_id")
+                and prior.get("turn_id") == data.get("turn_id")
+                and isinstance(prior.get("text"), str)
+                and isinstance(data.get("text"), str)
+            ):
+                frames[-1] = (
+                    event_type,
+                    {
+                        **prior,
+                        "text": prior["text"] + data["text"],
+                        "timestamp": data["timestamp"],
+                        "resume_offset": data["resume_offset"],
+                    },
+                )
+                continue
+        frames.append((event_type, data))
+    return frames
+
+
 def _spawned_lifecycle(
     items: list[StreamItem],
 ) -> tuple[list[SpawnedAgentObservation], list[str]]:
@@ -188,8 +222,7 @@ async def publish_agent_events(input: PublishBatchInput) -> PublishBatchResult:
             input.stream_id,
             _sse("error", {"type": "error", "kind": "broker", "message": input.error}),
         )
-    for item in input.items:
-        event_type, data = _decode_stream_item(item)
+    for event_type, data in _coalesced_ui_frames(input.items):
         event_broker.publish(input.stream_id, _sse(event_type, data))
         saw_terminal = saw_terminal or event_type in _TERMINAL_EVENT_TYPES
     if input.close:

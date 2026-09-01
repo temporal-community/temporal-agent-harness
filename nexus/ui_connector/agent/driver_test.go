@@ -405,6 +405,34 @@ func TestPollTurn_Closed(t *testing.T) {
 	assert.Equal(t, int64(3), result.NextCursor)
 }
 
+func TestPollTurn_DeliversFinalItemsBeforeClosing(t *testing.T) {
+	items := []harnessgen.StreamItem{
+		makeTestStreamItem(t, streamItem{TurnID: "t1", TurnNumber: 1, Event: turnEvent{Type: "reply_delta", Text: "final"}}, 3, turnEventsTopic),
+	}
+	svc := nexus.NewService(harnessgen.AgentService.ServiceName)
+	svc.MustRegister(nexus.NewSyncOperation(
+		harnessgen.AgentService.PollMessages.Name(),
+		func(ctx context.Context, input harnessgen.PollMessagesInput, opts nexus.StartOperationOptions) (harnessgen.PollMessagesOutput, error) {
+			return harnessgen.PollMessagesOutput{Closed: ptr(true), NextOffset: 4, Items: items}, nil
+		},
+	))
+
+	env := newTestEnv(t, svc)
+	env.ExecuteWorkflow(runPollTurnWorkflow, pollTurnWorkflowInput{
+		Handle: router.TurnHandle{SessionID: "slack:C1", TurnNumber: 1},
+		Cursor: 3,
+	})
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	var result router.PollResult
+	require.NoError(t, env.GetWorkflowResult(&result))
+	require.Len(t, result.Deltas, 1)
+	assert.Equal(t, "final", result.Deltas[0].Text)
+	assert.Equal(t, int64(4), result.NextCursor)
+	assert.True(t, result.Closed)
+}
+
 // -- Test helpers ------------------------------------------------------------
 
 // makeTestStreamItem encodes a streamItem into the wire format expected by decodeTurnEvent:
