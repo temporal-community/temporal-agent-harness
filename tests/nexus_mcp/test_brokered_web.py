@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from durable_tools_gateway.registry import (
+    AccountEntries,
     AgentRegistration,
     SessionEvent,
     SessionRecord,
@@ -56,6 +57,11 @@ def _app_client(
             return session
         if method is ToolRegistryWorkflow.list_sessions:
             return [session]
+        if method is ToolRegistryWorkflow.list_account_entries:
+            return AccountEntries(
+                remote_servers={"weather": "http://weather"},
+                subagent_providers={"writer": "http://writer"},
+            )
         if method is ToolRegistryWorkflow.poll_session_events:
             return session_events or []
         raise AssertionError(f"unexpected query {method}")
@@ -70,6 +76,8 @@ def _app_client(
             return replace(session, has_started=True, current_turn=update_args[1])
         if method is ToolRegistryWorkflow.reconcile_spawned_agents:
             return []
+        if method is ToolRegistryWorkflow.close_session:
+            return replace(session, closed=True)
         raise AssertionError(f"unexpected update {method}")
 
     handle.query = AsyncMock(side_effect=query)
@@ -88,12 +96,17 @@ def test_account_agents_and_sessions_come_from_the_registry() -> None:
     with client:
         agents = client.get("/api/agents")
         sessions = client.get("/api/sessions")
+        account = client.get("/api/account")
 
     assert agents.status_code == 200
     assert agents.json()["agents"][0]["workflow_type"] == "assistant"
     assert sessions.status_code == 200
     assert sessions.json()[0]["workflow_id"] == "session-1"
     assert sessions.json()[0]["execution_status"] == "NOT_STARTED"
+    assert account.status_code == 200
+    assert account.json()["account_id"] == "account-1"
+    assert account.json()["agents"][0]["active_session_count"] == 1
+    assert account.json()["mcp_servers"][0]["name"] == "weather"
 
 
 def test_fresh_native_session_is_created_without_a_provider_workflow() -> None:
@@ -222,6 +235,75 @@ def test_native_send_defers_stale_turn_reconciliation_to_agent_service() -> None
     assert action.values["expected_turn"] is None
     assert any(
         call.args[0] is ToolRegistryWorkflow.mark_session_started
+        for call in handle.execute_update.await_args_list
+    )
+
+
+def test_close_requires_a_decision_when_active_subagents_are_running() -> None:
+    started = SessionRecord(
+        account_id="account-1",
+        session_id="session-1",
+        agent_id="assistant",
+        provider_session_id="provider-parent",
+        created_at=123.0,
+        label="Session 1",
+        has_started=True,
+    )
+    client, handle, temporal = _app_client(session_override=started)
+    temporal.execute_workflow.return_value = {
+        "subagent_close_policy": "ask-user",
+        "subagents": [
+            {
+                "subagent_id": "research-a1b2c3",
+                "agent_key": "research",
+                "workflow_id": "research-workflow",
+                "next_expected_turn": 2,
+            }
+        ],
+    }
+
+    with client:
+        response = client.post("/api/sessions/session-1/close", json={})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "subagent_close_decision_required"
+    assert response.json()["detail"]["subagents"][0]["agent_key"] == "research"
+    assert temporal.execute_workflow.await_count == 1
+    assert temporal.execute_workflow.await_args.args[1].action == "status"
+    assert not any(
+        call.args[0] is ToolRegistryWorkflow.close_session
+        for call in handle.execute_update.await_args_list
+    )
+
+
+def test_close_applies_the_users_subagent_decision_before_closing() -> None:
+    started = SessionRecord(
+        account_id="account-1",
+        session_id="session-1",
+        agent_id="assistant",
+        provider_session_id="provider-parent",
+        created_at=123.0,
+        label="Session 1",
+        has_started=True,
+    )
+    client, handle, temporal = _app_client(session_override=started)
+    temporal.execute_workflow.side_effect = [{"reply": "updated"}, {"closed": True}]
+
+    with client:
+        response = client.post(
+            "/api/sessions/session-1/close",
+            json={"subagent_close_policy": "close"},
+        )
+
+    assert response.status_code == 200
+    actions = [call.args[1] for call in temporal.execute_workflow.await_args_list]
+    assert [action.action for action in actions] == ["operator_command", "close"]
+    assert actions[0].values == {
+        "name": "subagent-close-policy",
+        "arg": "close",
+    }
+    assert any(
+        call.args[0] is ToolRegistryWorkflow.close_session
         for call in handle.execute_update.await_args_list
     )
 

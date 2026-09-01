@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -39,6 +39,7 @@ from .agent_broker import (
 )
 from .registry import (
     REGISTRY_TASK_QUEUE,
+    AccountEntries,
     AgentRegistration,
     PendingSessionEvent,
     SessionEvent,
@@ -75,6 +76,12 @@ class RegisterAgentRequest(BaseModel):
 class CreateSessionRequest(BaseModel):
     agent_workflow_type: str
     is_message_queuing_enabled: bool = False
+
+
+class CloseSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subagent_close_policy: Literal["keep-open", "close"] | None = None
 
 
 class MessageRequest(BaseModel):
@@ -157,6 +164,8 @@ def _empty_status(session: SessionRecord) -> dict[str, Any]:
             "auto_approve_tools": [],
         },
         "has_custom_approval_fallback": False,
+        "subagent_close_policy": "ask-user",
+        "subagent_reuse_policy": "use-existing",
     }
 
 
@@ -497,6 +506,47 @@ def create_account_agent_app(
                 }
                 for agent in agents
             ]
+        }
+
+    @app.get("/api/account")
+    async def account_overview():
+        agents: list[AgentRegistration] = await app.state.registry.query(
+            ToolRegistryWorkflow.list_agents,
+            result_type=list[AgentRegistration],
+        )
+        sessions: list[SessionRecord] = await app.state.registry.query(
+            ToolRegistryWorkflow.list_sessions,
+            result_type=list[SessionRecord],
+        )
+        entries: AccountEntries = await app.state.registry.query(
+            ToolRegistryWorkflow.list_account_entries,
+            result_type=AccountEntries,
+        )
+        return {
+            "account_id": account_id,
+            "agents": [
+                {
+                    **asdict(agent),
+                    "session_count": sum(
+                        session.agent_id == agent.agent_id for session in sessions
+                    ),
+                    "active_session_count": sum(
+                        session.agent_id == agent.agent_id and not session.closed
+                        for session in sessions
+                    ),
+                }
+                for agent in agents
+            ],
+            "mcp_servers": [
+                {"name": name, "endpoint": endpoint}
+                for name, endpoint in entries.remote_servers.items()
+            ],
+            "subagent_providers": [
+                {"name": name, "endpoint": endpoint}
+                for name, endpoint in entries.subagent_providers.items()
+            ],
+            "session_count": len(sessions),
+            "active_session_count": sum(not session.closed for session in sessions),
         }
 
     @app.post("/api/account/agents")
@@ -909,9 +959,45 @@ def create_account_agent_app(
         return {"text": result["reply"]}
 
     @app.post("/api/sessions/{session_id}/close")
-    async def close(session_id: str):
+    async def close(session_id: str, req: CloseSessionRequest | None = None):
         session, agent = await resolve_session(session_id)
         if session.has_started:
+            resolution = req.subagent_close_policy if req is not None else None
+            if agent.kind == "harness_nexus":
+                if resolution is None:
+                    status = _normalize_status(
+                        await execute_action(
+                            AgentActionInput(
+                                action="status",
+                                session_id=session.provider_session_id,
+                                nexus_endpoint=agent.nexus_endpoint,
+                            )
+                        )
+                    )
+                    if (
+                        status.get("subagent_close_policy") == "ask-user"
+                        and status.get("subagents")
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                "code": "subagent_close_decision_required",
+                                "session_id": session.session_id,
+                                "subagents": status["subagents"],
+                            },
+                        )
+                else:
+                    await execute_action(
+                        AgentActionInput(
+                            action="operator_command",
+                            session_id=session.provider_session_id,
+                            nexus_endpoint=agent.nexus_endpoint,
+                            values={
+                                "name": "subagent-close-policy",
+                                "arg": resolution,
+                            },
+                        )
+                    )
             await execute_action(
                 AgentActionInput(
                     action="close",
