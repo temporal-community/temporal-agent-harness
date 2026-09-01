@@ -86,10 +86,9 @@ class AgentService:
         PollMessagesInput,
         PollMessagesOutput,
     ] = Operation(name="PollMessages")
-    """Async operation - attaches a completion callback to WorkflowStream's built-in poll
-    update so reply_delta events published from the agent workflow are delivered.
-    Returns a batch of stream items (WorkflowStream PollResult wire format) plus the
-    next cursor.
+    """Returns a bounded batch of agent stream items plus the next cursor. While the
+    workflow is running it attaches a completion callback to the harness stream-poll
+    update; after completion it replays the same retained stream through a query.
     """
 
     provide_callback_result: Operation[

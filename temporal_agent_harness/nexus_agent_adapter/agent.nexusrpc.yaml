@@ -30,7 +30,7 @@ services:
         input: { $ref: "#/$defs/QuerySessionInput" }
         output: { $ref: "#/$defs/AgentStatusOutput" }
       pollMessages:
-        description: "Async operation - attaches a completion callback to WorkflowStream's built-in poll update so reply_delta events published from the agent workflow are delivered. Returns a batch of stream items (WorkflowStream PollResult wire format) plus the next cursor."
+        description: "Returns a bounded batch of agent stream items plus the next cursor. While the workflow is running it attaches a completion callback to the harness stream-poll update; after completion it replays the same retained stream through a query."
         input: { $ref: "#/$defs/PollMessagesInput" }
         output: { $ref: "#/$defs/PollMessagesOutput" }
       provideCallbackResult:
@@ -471,7 +471,7 @@ $defs:
         description: "True when more items are immediately available (batch was capped)"
       closed:
         type: boolean
-        description: "True only in the sync error path when the agent workflow has already completed"
+        description: "True when the agent workflow has completed; the final response can still contain replayed items"
     required:
       - items
       - next_offset

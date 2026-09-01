@@ -4,10 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import nexusrpc
-import temporalio.nexus
 import pytest
-from temporalio.exceptions import ApplicationError
-
+import temporalio.nexus
 from durable_tools_gateway.generated import (
     DispatchSubagentTurnInput,
     StartSubagentInput,
@@ -17,14 +15,19 @@ from durable_tools_gateway.registry import SubagentInstanceRoute, ToolRegistryWo
 from durable_tools_gateway.registry_service_handler import (
     RegistryServiceHandler,
     SubagentDispatchOutput,
-    SubagentStartInput as ActivityStartInput,
     SubagentStartResult,
     SubagentStopInput,
     _check_subagent_response,
+    subagent_dispatch_activity_id,
     subagent_proxy_activity,
     subagent_start_activity,
     subagent_stop_activity,
 )
+from durable_tools_gateway.registry_service_handler import (
+    SubagentStartInput as ActivityStartInput,
+)
+from temporalio.common import ActivityIDConflictPolicy
+from temporalio.exceptions import ApplicationError
 
 _FAKE_NEXUS_INFO = temporalio.nexus.Info(
     endpoint="test-endpoint", namespace="test-namespace", task_queue="test-task-queue"
@@ -133,6 +136,15 @@ async def test_dispatch_key_includes_instance_id(_mock_info: MagicMock) -> None:
     assert activity_input.instance_id == "provider-instance-1"
     assert activity_input.url == "http://provider-v1"
     assert output.turn_number == 1
+    assert subagent_dispatch_activity_id("gateway-instance-1", 1) == (
+        "subagent-dispatch-gateway-instance-1-1"
+    )
+    assert client.execute_activity.await_args.kwargs["id"] == (
+        "subagent-dispatch-gateway-instance-1-1"
+    )
+    assert client.execute_activity.await_args.kwargs["id_conflict_policy"] == (
+        ActivityIDConflictPolicy.USE_EXISTING
+    )
     assert client.execute_activity.await_args.kwargs[
         "schedule_to_close_timeout"
     ].total_seconds() == 300
