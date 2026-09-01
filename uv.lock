@@ -3190,24 +3190,28 @@ source = { editable = "nexus/mcp" }
 dependencies = [
     { name = "a2a-sdk", extra = ["http-server"], marker = "python_full_version >= '3.13'" },
     { name = "anyio", marker = "python_full_version >= '3.13'" },
+    { name = "fastapi", marker = "python_full_version >= '3.13'" },
     { name = "httpx", marker = "python_full_version >= '3.13'" },
     { name = "mcp", marker = "python_full_version >= '3.13'" },
     { name = "nexus-a2a", marker = "python_full_version >= '3.13'" },
     { name = "nexus-rpc", marker = "python_full_version >= '3.13'" },
     { name = "pydantic", marker = "python_full_version >= '3.13'" },
     { name = "temporalio", marker = "python_full_version >= '3.13'" },
+    { name = "uvicorn", marker = "python_full_version >= '3.13'" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=1.1.2" },
     { name = "anyio", specifier = ">=4.0.0" },
+    { name = "fastapi", specifier = ">=0.136.3" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "mcp", specifier = ">=1.28.1" },
     { name = "nexus-a2a", editable = "nexus/a2a" },
     { name = "nexus-rpc", specifier = ">=1.1.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "temporalio", specifier = ">=1.15.0" },
+    { name = "uvicorn", specifier = ">=0.41.0" },
 ]
 
 [package.metadata.requires-dev]

@@ -113,8 +113,11 @@ from temporal_agent_harness.harness.slash_commands import (
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 from temporal_agent_harness.harness.stream_poll import (
     AGENT_STREAM_POLL_UPDATE,
+    AGENT_STREAM_REPLAY_QUERY,
     AgentStreamPollInput,
+    AgentStreamPollItem,
     AgentStreamPollResult,
+    replay_stream_state,
 )
 
 with workflow.unsafe.imports_passed_through():
@@ -122,6 +125,7 @@ with workflow.unsafe.imports_passed_through():
 
     from temporal_agent_harness.a2a.stream import (
         A2A_STREAM_POLL_UPDATE,
+        A2A_STREAM_REPLAY_QUERY,
         subscription_page,
     )
 
@@ -1437,6 +1441,14 @@ class AgentWorkflowRunner:
             A2A_STREAM_POLL_UPDATE,
             self._handle_a2a_stream_poll,
         )
+        workflow.set_query_handler(
+            AGENT_STREAM_REPLAY_QUERY,
+            self._handle_stream_replay,
+        )
+        workflow.set_query_handler(
+            A2A_STREAM_REPLAY_QUERY,
+            self._handle_a2a_stream_replay,
+        )
         workflow.set_query_handler(AGENT_STATUS_QUERY, self._handle_agent_status)
         workflow.set_query_handler(AGENT_INTERFACE_QUERY, self._handle_agent_interface)
         workflow.set_query_handler(
@@ -2052,7 +2064,14 @@ class AgentWorkflowRunner:
             PollInput(topics=input.topics, from_offset=input.from_offset)
         )
         return AgentStreamPollResult(
-            items=result.items,
+            items=[
+                AgentStreamPollItem(
+                    topic=item.topic,
+                    data=item.data,
+                    offset=item.offset,
+                )
+                for item in result.items
+            ],
             more_ready=result.more_ready,
             next_offset=result.next_offset,
             closed=self._closed,
@@ -2070,6 +2089,23 @@ class AgentWorkflowRunner:
             )
         )
         return subscription_page(result)
+
+    def _handle_stream_replay(self, input: AgentStreamPollInput) -> AgentStreamPollResult:
+        """Read a bounded stream page through a query, including after completion."""
+        return replay_stream_state(self._stream.get_state(), input)
+
+    def _handle_a2a_stream_replay(
+        self, input: SubscribeToTaskInput
+    ) -> SubscribeToTaskOutput:
+        """Replay retained workflow events as a bounded A2A subscription page."""
+        result = self._handle_stream_replay(
+            AgentStreamPollInput(
+                from_offset=input.cursor,
+                topics=[TURN_EVENTS_TOPIC],
+                timeout_seconds=input.timeout_seconds,
+            )
+        )
+        return subscription_page(result, closed=True)
 
     # -- Turn loop ----------------------------------------------------------
 
