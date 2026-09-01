@@ -1,13 +1,13 @@
-"""ToolRegistryWorkflow -- routing table for 3rd-party MCP servers, per agent_id.
+"""Durable account registry for tools, agents, and agent sessions.
 
-The same workflow now also records 3rd-party A2A subagents and their bound instances.
+Each account gets one workflow whose stable, hashed ID is returned by
+``account_registry_workflow_id``. It records third-party MCP and A2A routes, bound subagent
+instances, registered agents, and their sessions.
 
-Native Nexus services never register here -- they're reached directly by the agent
-(see nexus_native_mcp_server and nexus_native_subagent). This workflow only tracks
-3rd-party server URLs and their bound subagent instances. No tool content cached:
-RegistryServiceHandler fetches MCP tools live, on every list_agent_entries/call_tool call.
+No MCP tool content is cached: ``RegistryServiceHandler`` fetches tools live on every listing
+and call.
 
-Workflow ID:  REGISTRY_WORKFLOW_ID  (singleton per namespace)
+Workflow ID:  ``account-registry-<sha256(account_id)>``
 Task queue:   "mcp-registry"
 """
 
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
+from hashlib import sha256
 from typing import Any
 
 from mcp.client import Client as MCPClient
@@ -22,8 +23,16 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 
-REGISTRY_WORKFLOW_ID = "mcp-tool-registry"
+REGISTRY_WORKFLOW_ID_PREFIX = "account-registry"
 REGISTRY_TASK_QUEUE = "mcp-registry"
+
+
+def account_registry_workflow_id(account_id: str) -> str:
+    """Return the stable workflow ID for one account without exposing account PII."""
+    if not account_id.strip():
+        raise ValueError("account_id is required")
+    digest = sha256(account_id.encode()).hexdigest()
+    return f"{REGISTRY_WORKFLOW_ID_PREFIX}-{digest}"
 
 
 @activity.defn
@@ -47,10 +56,38 @@ async def fetch_external_tools(name: str, url: str) -> list[dict[str, Any]]:
 
 
 @dataclass
-class AgentEntries:
-    """All registered 3rd-party servers for one agent_id. Routing only, no tool content."""
+class AccountEntries:
+    """Account-owned external routes. MCP tool definitions are fetched live."""
 
     remote_servers: dict[str, str] = field(default_factory=dict)
+    subagent_providers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class AgentRegistration:
+    """One account-owned agent definition."""
+
+    agent_id: str
+    kind: str
+    label: str
+    description: str
+    nexus_endpoint: str | None = None
+    nexus_service: str = "A2AService"
+    provider_url: str | None = None
+
+
+@dataclass(frozen=True)
+class SessionRecord:
+    """A registry session mapped to its provider-specific instance."""
+
+    account_id: str
+    session_id: str
+    agent_id: str
+    provider_session_id: str
+    created_at: float
+    label: str
+    is_message_queuing_enabled: bool = False
+    closed: bool = False
 
 
 @dataclass(frozen=True)
@@ -64,28 +101,38 @@ class SubagentInstanceRoute:
 
 @workflow.defn(sandboxed=False, name="ToolRegistry")
 class ToolRegistryWorkflow:
-    """Perpetual routing-table workflow for the Durable MCP and A2A Gateway."""
+    """One durable MCP/A2A control-plane aggregate for a single account."""
 
-    def __init__(self) -> None:
-        self._remote_entries: dict[str, dict[str, str]] = {}  # agent_id -> {alias: url}
-        self._subagent_entries: dict[str, dict[str, str]] = {}  # agent_id -> {alias: url}
-        self._subagent_instances: dict[
-            str, dict[str, SubagentInstanceRoute]
-        ] = {}
+    @workflow.init
+    def __init__(self, account_id: str) -> None:
+        self._account_id = account_id
+        self._remote_entries: dict[str, str] = {}
+        self._subagent_entries: dict[str, str] = {}
+        self._subagent_instances: dict[str, SubagentInstanceRoute] = {}
+        self._agents: dict[str, AgentRegistration] = {}
+        self._sessions: dict[str, SessionRecord] = {}
+        self._next_session_number = 1
 
     @workflow.run
-    async def run(self) -> None:
+    async def run(self, account_id: str) -> None:
+        if account_id != self._account_id:
+            raise ApplicationError(
+                "workflow account does not match initialized account",
+                type="AccountMismatch",
+                non_retryable=True,
+            )
         await workflow.wait_condition(lambda: False)
 
     # -- registration ------------------------------------------------------------
 
     @workflow.signal
-    async def register_external(self, agent_id: str, name: str, url: str) -> None:
-        """Register a 3rd-party server's URL under one agent_id. Validates it's
-        reachable (fetch, result discarded) but registers either way -- tools are
-        fetched live later, not cached here.
+    async def register_external(self, name: str, url: str) -> None:
+        """Register a third-party MCP server for this account.
+
+        Validates that the URL is reachable (fetch, result discarded) but registers either way;
+        tools are fetched live later, never cached here.
         """
-        self._remote_entries.setdefault(agent_id, {})[name] = url
+        self._remote_entries[name] = url
         try:
             tools = await workflow.execute_activity(
                 fetch_external_tools,
@@ -102,48 +149,133 @@ class ToolRegistryWorkflow:
         workflow.logger.info("[registry] registered %r at %s (%d tools)", name, url, len(tools))
 
     @workflow.signal
-    def deregister(self, agent_id: str, name: str) -> None:
-        """Remove one registration under one agent_id."""
-        if self._remote_entries.get(agent_id, {}).pop(name, None) is not None:
-            workflow.logger.info("[registry] deregistered %r for agent %r", name, agent_id)
+    def deregister(self, name: str) -> None:
+        """Remove one account-owned MCP registration."""
+        if self._remote_entries.pop(name, None) is not None:
+            workflow.logger.info("[registry] deregistered %r", name)
 
     @workflow.signal
     def clear_all(self) -> None:
-        """Remove every registration, for every agent."""
+        """Remove every tool, subagent, agent, and session registration in this account."""
         self._remote_entries.clear()
         self._subagent_entries.clear()
+        self._subagent_instances.clear()
+        self._agents.clear()
+        self._sessions.clear()
         workflow.logger.info("[registry] cleared all entries")
 
     @workflow.signal
-    def register_subagent(self, agent_id: str, alias: str, url: str) -> None:
-        """Register a non-Nexus subagent's URL under one agent_id."""
-        self._subagent_entries.setdefault(agent_id, {})[alias] = url
+    def register_subagent(self, alias: str, url: str) -> None:
+        """Register a minimal HTTP subagent provider for this account."""
+        self._subagent_entries[alias] = url
         workflow.logger.info("[registry] registered subagent %r at %s", alias, url)
 
     @workflow.signal
-    def deregister_subagent(self, agent_id: str, alias: str) -> None:
-        """Remove one subagent registration under one agent_id."""
-        if self._subagent_entries.get(agent_id, {}).pop(alias, None) is not None:
-            workflow.logger.info(
-                "[registry] deregistered subagent %r for agent %r", alias, agent_id
+    def deregister_subagent(self, alias: str) -> None:
+        """Remove one account-owned subagent provider."""
+        if self._subagent_entries.pop(alias, None) is not None:
+            workflow.logger.info("[registry] deregistered subagent %r", alias)
+
+    @workflow.update
+    def register_agent(self, registration: AgentRegistration) -> AgentRegistration:
+        if registration.kind not in {"harness_nexus", "external_http"}:
+            raise ApplicationError(
+                f"unsupported agent kind {registration.kind!r}",
+                type="UnsupportedAgentKind",
+                non_retryable=True,
             )
+        if registration.kind == "harness_nexus" and not registration.nexus_endpoint:
+            raise ApplicationError(
+                "harness_nexus agents require nexus_endpoint",
+                type="InvalidAgentRegistration",
+                non_retryable=True,
+            )
+        if registration.kind == "external_http" and not registration.provider_url:
+            raise ApplicationError(
+                "external_http agents require provider_url",
+                type="InvalidAgentRegistration",
+                non_retryable=True,
+            )
+        self._agents[registration.agent_id] = registration
+        return registration
+
+    @workflow.update
+    def deregister_agent(self, agent_id: str) -> None:
+        if any(session.agent_id == agent_id for session in self._sessions.values()):
+            raise ApplicationError(
+                f"agent {agent_id!r} still has registered sessions",
+                type="AgentHasSessions",
+                non_retryable=True,
+            )
+        self._agents.pop(agent_id, None)
+
+    @workflow.update
+    def create_session(
+        self,
+        agent_id: str,
+        provider_session_id: str | None = None,
+        is_message_queuing_enabled: bool = False,
+    ) -> SessionRecord:
+        if agent_id not in self._agents:
+            raise ApplicationError(
+                f"unknown agent {agent_id!r}",
+                type="UnknownAgent",
+                non_retryable=True,
+            )
+        session_id = f"session-{workflow.uuid4()}"
+        session = SessionRecord(
+            account_id=self._account_id,
+            session_id=session_id,
+            agent_id=agent_id,
+            provider_session_id=provider_session_id or session_id,
+            created_at=workflow.time(),
+            label=f"Session {self._next_session_number}",
+            is_message_queuing_enabled=is_message_queuing_enabled,
+        )
+        self._next_session_number += 1
+        self._sessions[session_id] = session
+        return session
+
+    @workflow.update
+    def remove_session(self, session_id: str) -> None:
+        self._sessions.pop(session_id, None)
+
+    @workflow.update
+    def close_session(self, session_id: str) -> SessionRecord:
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise ApplicationError(
+                f"unknown session {session_id!r}",
+                type="UnknownSession",
+                non_retryable=True,
+            )
+        closed = SessionRecord(
+            account_id=session.account_id,
+            session_id=session.session_id,
+            agent_id=session.agent_id,
+            provider_session_id=session.provider_session_id,
+            created_at=session.created_at,
+            label=session.label,
+            is_message_queuing_enabled=session.is_message_queuing_enabled,
+            closed=True,
+        )
+        self._sessions[session_id] = closed
+        return closed
 
     @workflow.update
     def bind_subagent_instance(
         self,
-        agent_id: str,
         instance_id: str,
         route: SubagentInstanceRoute,
     ) -> None:
         """Bind a gateway task to one provider route.
 
         A2A starts third-party tasks lazily: the first binding knows the alias and
-        URL, while the provider task ID arrives with the first response.  Permit
+        URL, while the provider task ID arrives with the first response. Permit
         that one-way promotion, and make a retried provisional bind a no-op once
-        the provider ID is known.  Neither case may change the selected provider.
+        the provider ID is known. Neither case may change the selected provider.
         """
-        routes = self._subagent_instances.setdefault(agent_id, {})
-        existing = routes.get(instance_id)
+        existing = self._subagent_instances.get(instance_id)
         if existing is not None:
             same_provider = existing.alias == route.alias and existing.url == route.url
             provider_id_is_compatible = (
@@ -159,33 +291,51 @@ class ToolRegistryWorkflow:
                 )
             if existing.provider_instance_id and not route.provider_instance_id:
                 return
-        routes[instance_id] = route
+        self._subagent_instances[instance_id] = route
 
     @workflow.update
-    def unbind_subagent_instance(self, agent_id: str, instance_id: str) -> None:
+    def unbind_subagent_instance(self, instance_id: str) -> None:
         """Remove one gateway instance route."""
-        self._subagent_instances.get(agent_id, {}).pop(instance_id, None)
+        self._subagent_instances.pop(instance_id, None)
 
     # -- queries -----------------------------------------------------------------
 
     @workflow.query
-    def find(self, agent_id: str, name: str) -> str | None:
-        """The URL registered for one alias under one agent_id, or None."""
-        return self._remote_entries.get(agent_id, {}).get(name)
+    def find(self, name: str) -> str | None:
+        """The MCP URL registered for one account-owned alias, or ``None``."""
+        return self._remote_entries.get(name)
 
     @workflow.query
-    def find_subagent(self, agent_id: str, alias: str) -> str | None:
-        """The URL registered for one subagent alias under one agent_id, or None."""
-        return self._subagent_entries.get(agent_id, {}).get(alias)
+    def find_subagent(self, alias: str) -> str | None:
+        """The A2A URL registered for one account-owned subagent alias, or ``None``."""
+        return self._subagent_entries.get(alias)
 
     @workflow.query
     def find_subagent_instance(
-        self, agent_id: str, instance_id: str
+        self, instance_id: str
     ) -> SubagentInstanceRoute | None:
         """Return the provider route for one gateway instance."""
-        return self._subagent_instances.get(agent_id, {}).get(instance_id)
+        return self._subagent_instances.get(instance_id)
 
     @workflow.query
-    def list_agent_entries(self, agent_id: str) -> AgentEntries:
-        """Routing for one agent_id. No tool content -- fetched live by the caller."""
-        return AgentEntries(remote_servers=dict(self._remote_entries.get(agent_id, {})))
+    def list_account_entries(self) -> AccountEntries:
+        return AccountEntries(
+            remote_servers=dict(self._remote_entries),
+            subagent_providers=dict(self._subagent_entries),
+        )
+
+    @workflow.query
+    def list_agents(self) -> list[AgentRegistration]:
+        return list(self._agents.values())
+
+    @workflow.query
+    def get_agent(self, agent_id: str) -> AgentRegistration | None:
+        return self._agents.get(agent_id)
+
+    @workflow.query
+    def list_sessions(self) -> list[SessionRecord]:
+        return list(self._sessions.values())
+
+    @workflow.query
+    def get_session(self, session_id: str) -> SessionRecord | None:
+        return self._sessions.get(session_id)

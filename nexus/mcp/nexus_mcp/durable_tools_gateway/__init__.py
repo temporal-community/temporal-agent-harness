@@ -2,20 +2,24 @@ import nexusrpc
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
+    from .registry import (
+        REGISTRY_TASK_QUEUE,
+        REGISTRY_WORKFLOW_ID_PREFIX,
+        AccountEntries,
+        AgentRegistration,
+        SessionRecord,
+        ToolRegistryWorkflow,
+        account_registry_workflow_id,
+        fetch_external_tools,
+    )
     from .generated import (
         CallToolInput,
         CallToolOutput,
         DeregisterInput,
-        ListAgentEntriesInput,
-        ListAgentEntriesOutput,
+        ListAccountEntriesInput,
+        ListAccountEntriesOutput,
         RegisterExternalInput,
         RegistryService,
-    )
-    from .registry import (
-        REGISTRY_TASK_QUEUE,
-        REGISTRY_WORKFLOW_ID,
-        ToolRegistryWorkflow,
-        fetch_external_tools,
     )
     from .registry_service_handler import (
         REGISTRY_NEXUS_ENDPOINT,
@@ -35,18 +39,22 @@ __all__ = [
     "REGISTRY_NEXUS_ENDPOINT",
     "REGISTRY_SERVICE_NAME",
     "REGISTRY_TASK_QUEUE",
-    "REGISTRY_WORKFLOW_ID",
+    "REGISTRY_WORKFLOW_ID_PREFIX",
+    "AccountEntries",
+    "AgentRegistration",
     "CallToolInput",
     "CallToolOutput",
     "DeregisterInput",
     "ExternalMCPCallInput",
     "GatewayA2ABackend",
-    "ListAgentEntriesInput",
-    "ListAgentEntriesOutput",
+    "ListAccountEntriesInput",
+    "ListAccountEntriesOutput",
     "RegisterExternalInput",
     "RegistryService",
     "RegistryServiceHandler",
+    "SessionRecord",
     "ToolRegistryWorkflow",
+    "account_registry_workflow_id",
     "fetch_external_tools",
     "mcp_proxy_activity",
 ]

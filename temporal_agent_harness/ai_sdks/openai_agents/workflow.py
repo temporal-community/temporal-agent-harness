@@ -436,14 +436,14 @@ def nexus_native_mcp_server(
     return _NexusNativeMCPServer({name: endpoint}, name=name, **kwargs)
 
 
-def nexus_tools_gateway(
-    agent_id: str | None = None,
+def nexus_gateway(
+    account_id: str,
     *,
     gateway_name: str = "RegistryService",
     gateway_endpoint: str = "mcp-registry-endpoint",
 ) -> "NexusGateway":
     """A handle on the Durable Tools Gateway's 3rd-party servers registered for one
-    agent_id. This gateway will proxy calls between the agent and the registered servers.
+    account_id. This gateway will proxy calls between the agent and the registered servers.
 
     Not an MCPServer itself. Call .mcp_servers(*aliases) to get one, scoped to whichever
     registered aliases you pick -- see example usage.
@@ -452,21 +452,26 @@ def nexus_tools_gateway(
     gateway_endpoint.
 
     Args:
-        agent_id: The agent identity to look up. If omitted, inferred from the
-                  workflow_type of the current workflow in the agents.toml file.
+        account_id: The owning account. Authentication will eventually supply this;
+                    callers must pass it explicitly for now.
         gateway_name: The gateway's Nexus service name.
         gateway_endpoint: The Nexus endpoint name that reaches the gateway.
 
     Example:
-        nexus_gateway = nexus_tools_gateway()
+        gateway = nexus_gateway("account-123")
         Agent(mcp_servers=[
-            nexus_gateway.mcp_servers("foo-mcp", "bar-mcp"),
+            gateway.mcp_servers("foo-mcp", "bar-mcp"),
         ])
     """
     from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import NexusGateway
 
-    resolved_agent_id = agent_id or temporal_workflow.info().workflow_type
-    return NexusGateway(resolved_agent_id, gateway_name=gateway_name, gateway_endpoint=gateway_endpoint)
+    if not account_id.strip():
+        raise ValueError("account_id is required")
+    return NexusGateway(
+        account_id,
+        gateway_name=gateway_name,
+        gateway_endpoint=gateway_endpoint,
+    )
 
 
 class ToolSerializationError(TemporalError):
