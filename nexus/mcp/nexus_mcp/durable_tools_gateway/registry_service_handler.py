@@ -108,6 +108,11 @@ logger = logging.getLogger(__name__)
 _ResponseModel = TypeVar("_ResponseModel", bound=BaseModel)
 
 
+def subagent_dispatch_activity_id(instance_id: str, turn_number: int) -> str:
+    """Address one third-party subagent turn without a Visibility lookup."""
+    return f"subagent-dispatch-{instance_id}-{turn_number}"
+
+
 class ExternalMCPCallInput(BaseModel):
     """Input for an HTTP call to a 3rd-party MCP server."""
 
@@ -819,7 +824,8 @@ class RegistryServiceHandler:
                     expected_turn=input.expected_turn,
                     idempotency_key=idempotency_key,
                 ),
-                id=f"subagent-dispatch-{ctx.request_id}",
+                id=subagent_dispatch_activity_id(instance_id, input.expected_turn),
+                id_conflict_policy=ActivityIDConflictPolicy.USE_EXISTING,
                 task_queue=temporalio.nexus.info().task_queue,
                 schedule_to_close_timeout=timedelta(minutes=5),
                 start_to_close_timeout=timedelta(seconds=75),
