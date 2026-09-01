@@ -40,7 +40,7 @@ from openai import (
     APIStatusError,
     AsyncOpenAI,
 )
-from openai.types.responses import CustomToolParam
+from openai.types.responses import CustomToolParam, ResponseTextDeltaEvent
 from openai.types.responses.tool_param import Mcp
 from typing_extensions import Required, TypedDict
 
@@ -51,6 +51,8 @@ from temporal_agent_harness.ai_sdks.integration_helpers import (
 )
 from temporal_agent_harness.ai_sdks.openai_agents._heartbeat_decorator import auto_heartbeater
 from temporalio.exceptions import ApplicationError
+
+_MAX_COMPACTED_TEXT_DELTA_CHARS = 16_000
 
 
 @dataclass
@@ -231,6 +233,40 @@ async def _noop_shell_executor(*_a: Any, **_kw: Any) -> str:
     return ""
 
 
+def _append_compacted_stream_event(
+    events: list[TResponseStreamEvent], event: TResponseStreamEvent
+) -> None:
+    """Collect streamed results without preserving provider token boundaries.
+
+    The live observer receives every raw event before this function runs. The activity result is
+    consumed only after the call completes, where adjacent text deltas are semantically equivalent
+    to one larger delta. Compacting them keeps the durable activity result proportional to response
+    text rather than token count while retaining output/content identity and log probabilities.
+    """
+    if isinstance(event, ResponseTextDeltaEvent) and event.delta and events:
+        prior = events[-1]
+        if (
+            isinstance(prior, ResponseTextDeltaEvent)
+            and getattr(prior, "item_id", None) == getattr(event, "item_id", None)
+            and getattr(prior, "output_index", None)
+            == getattr(event, "output_index", None)
+            and getattr(prior, "content_index", None)
+            == getattr(event, "content_index", None)
+            and len(prior.delta) + len(event.delta) <= _MAX_COMPACTED_TEXT_DELTA_CHARS
+        ):
+            events[-1] = event.model_copy(
+                update={
+                    "delta": prior.delta + event.delta,
+                    "logprobs": [
+                        *(getattr(prior, "logprobs", None) or []),
+                        *(getattr(event, "logprobs", None) or []),
+                    ],
+                }
+            )
+            return
+    events.append(event)
+
+
 def _build_tool(tool: ToolInput) -> Tool:
     """Reconstruct a Tool from its data-conversion-friendly input form."""
     if isinstance(
@@ -388,8 +424,8 @@ class ModelActivity:
             Streaming support is experimental and may change in future
             versions.
 
-        Calls ``model.stream_response()`` and returns the collected list
-        of native OpenAI stream events. The workflow's
+        Calls ``model.stream_response()`` and returns the collected native OpenAI stream events,
+        coalescing adjacent text deltas that share one output/content item. The workflow's
         ``Model.stream_response`` stub yields these to the agents
         framework, which builds the final ``ModelResponse`` from the
         terminal ``ResponseCompletedEvent``.
@@ -402,7 +438,8 @@ class ModelActivity:
         external consumers (UIs, tracing, etc.) observe them as they arrive.
         Either way the request's ``streaming_batch_interval`` is handed to the
         observer, so the configured publish-flush cadence applies on both paths.
-        The collected-and-returned list is unaffected either way.
+        The observer still receives every provider event live; only the durable activity result
+        drops meaningless provider token boundaries.
 
         Heartbeats run on a background task via ``auto_heartbeater`` so
         long initial-token latency or long pauses between chunks do not
@@ -442,9 +479,9 @@ class ModelActivity:
                     # OpenAI models set defer_build=True, so an event's pydantic
                     # schema may still be an unbuilt placeholder.
                     type(event).model_rebuild()
-                    events.append(event)
                     if obs is not None:
                         await obs.on_event(event)
+                    _append_compacted_stream_event(events, event)
             except APIStatusError as e:
                 _raise_for_openai_status(e)
 

@@ -1754,6 +1754,10 @@ export function buildAgentTreeGraph(
     nextSeen.add(agent.workflowId);
     const childGraphs = (childrenByParent.get(agent.workflowId) ?? [])
       .filter((child) => !nextSeen.has(child.workflowId))
+      /* Focus is the live state of the run. A stopped child is settled in the
+         same sense as a completed tool call, so its whole nested branch leaves
+         the canvas. Accumulated/replay views still receive every child. */
+      .filter((child) => !options.focus || !child.stopped)
       .map((child) => buildNestedAgentGraph(child, nextSeen));
     const graph = buildAgentGraph(agent.frames, {
       inputPlacement: agent.role === "subagent" ? "runtime" : "external",

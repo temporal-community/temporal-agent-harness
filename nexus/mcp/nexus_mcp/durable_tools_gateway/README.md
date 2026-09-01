@@ -49,6 +49,10 @@ only while that task is live. It multicasts the untouched A2A records to every m
 Each browser has an independent cursor, and a lagging browser replays from another task
 snapshot. See `nexus/ui_connector/README.md` for the common tunnel and driver contract.
 
+Agent subscriptions page at roughly 256 KiB before crossing Nexus, leaving headroom below
+Temporal's payload warning threshold. The tunnel retains every rich record; adjacent provider
+text deltas are coalesced only when the browser driver renders SSE frames.
+
 Native sends enter through the shared tunnel's A2A path. One-shot status, interface,
 approval, callback, command, and close controls remain standalone Nexus operations.
 Third-party HTTP start, turn, and close requests run as standalone activities.

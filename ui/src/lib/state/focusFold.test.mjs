@@ -11,6 +11,7 @@ import { describe, it } from "vitest";
 import { kindFromState } from "$lib/components/flow/AgentStateNode.svelte";
 import {
   buildAgentGraph,
+  buildAgentTreeGraph,
   cursorHoldSteps,
   settledNearCursor,
   settledToolIdFromFrame
@@ -97,6 +98,61 @@ describe("focus view removes the tools that have finished", () => {
       activeOf(graph).map((node) => node.id),
       ["model"]
     );
+  });
+});
+
+describe("focus view removes subagents that have stopped", () => {
+  const parent = {
+    workflowId: "wf-parent",
+    role: "parent",
+    label: "parent",
+    frames: [started, modelStarted],
+    agentInterface: []
+  };
+  const child = (workflowId, stopped) => ({
+    workflowId,
+    role: "subagent",
+    label: workflowId,
+    parentWorkflowId: "wf-parent",
+    subagentId: workflowId,
+    agentKey: "research",
+    frames: [started, modelStarted],
+    agentInterface: [],
+    stopped
+  });
+
+  it("keeps stopped children in accumulated history and removes them from focus", () => {
+    const agents = [parent, child("wf-stopped", true)];
+    const accumulated = buildAgentTreeGraph(agents);
+    const focused = buildAgentTreeGraph(agents, { focus: true });
+
+    assert.ok(
+      accumulated.nodes.some((node) => node.id === "wf-parent::tool-container"),
+      "accumulated history keeps the delegation container"
+    );
+    assert.ok(
+      accumulated.nodes.some((node) => node.id === "wf-stopped::agent-runtime"),
+      "accumulated history keeps the stopped child"
+    );
+    assert.ok(
+      !focused.nodes.some((node) => node.id === "wf-parent::tool-container"),
+      "focus removes the empty delegation container"
+    );
+    assert.ok(
+      !focused.nodes.some((node) => node.id.startsWith("wf-stopped::")),
+      "focus removes the stopped child's whole branch"
+    );
+  });
+
+  it("keeps the delegation container while another child is still running", () => {
+    const focused = buildAgentTreeGraph(
+      [parent, child("wf-stopped", true), child("wf-running", false)],
+      { focus: true }
+    );
+
+    assert.ok(focused.nodes.some((node) => node.id === "wf-parent::tool-container"));
+    assert.ok(focused.nodes.some((node) => node.id === "wf-running::agent-runtime"));
+    assert.ok(!focused.nodes.some((node) => node.id.startsWith("wf-stopped::")));
   });
 });
 

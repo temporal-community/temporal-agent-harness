@@ -1,4 +1,4 @@
-"""Dependency-neutral constants shared by harness stream adapters."""
+"""Dependency-neutral stream contracts shared by harness adapters."""
 
 from __future__ import annotations
 
@@ -8,13 +8,21 @@ from dataclasses import dataclass
 # protocol adapters must be importable without initializing the harness authoring package.
 TURN_EVENTS_TOPIC = "turn_events"
 
-# Leave headroom for JSON/protobuf framing and the Nexus operation envelope.
+# Leave enough headroom for JSON/protobuf framing and the Nexus operation envelope. Temporal
+# warns at 512 KiB per payload; returning pages near the workflow-stream SDK's 1 MB default makes
+# every page cross that warning boundary more than once on its way through Nexus and the UI tunnel.
 _MAX_POLL_RESPONSE_BYTES = 256_000
 
 
 @dataclass
 class AgentStreamPollItem:
-    """Wire-safe copy of one SDK workflow-stream item."""
+    """Wire-safe copy of an SDK workflow-stream item.
+
+    ``WorkflowStreamItem`` is generic, which Temporal's JSON converter cannot rebuild
+    when a completed workflow query is decoded outside the workflow worker. Keep the
+    internal SDK type behind this transport boundary so live polls and replay queries
+    share a concrete, serializable result shape.
+    """
 
     topic: str
     data: str
@@ -36,8 +44,14 @@ def bounded_poll_result(
     more_ready: bool,
     closed: bool,
 ) -> AgentStreamPollResult:
-    """Page encoded stream items below the agent/Nexus payload budget."""
+    """Page already-encoded stream items below the agent/Nexus payload budget.
 
+    ``WorkflowStream`` currently pages at roughly 1 MB. Agent streams cross two additional
+    Temporal boundaries (the Nexus operation and shared UI tunnel), so impose the smaller
+    agent-service budget before the workflow update result is serialized. If one semantic event is
+    itself larger than the budget, return it alone so the cursor still advances; splitting its
+    encoded payload would corrupt the event contract.
+    """
     page: list[AgentStreamPollItem] = []
     size = 0
     for item in items:
