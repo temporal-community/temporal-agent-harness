@@ -69,6 +69,7 @@
     creatingSession?: boolean;
     closed?: boolean;
     error?: string | null;
+    awaitingRegistration?: boolean;
     onSend?: (message: AgentInboundMessage) => void | Promise<void>;
     onOperatorCommand?: (
       name: string,
@@ -115,6 +116,7 @@
     creatingSession = false,
     closed = false,
     error = null,
+    awaitingRegistration = false,
     onSend,
     onOperatorCommand,
     onApproveTool
@@ -195,6 +197,8 @@
   const composerPlaceholder = $derived(
     closed
       ? `${agentLabel} is closed`
+      : awaitingRegistration
+        ? "Register an agent to start chatting"
       : isMonty
         ? "Send a Python script to Monty"
         : `Ask ${agentLabel}`
@@ -204,7 +208,9 @@
   );
   const sendingBlocksInput = $derived(sending && !messageQueueingEnabled);
   const connectingBlocksInput = $derived(connecting && activeSession == null);
-  const composerDisabled = $derived(closed || connectingBlocksInput || creatingSession);
+  const composerDisabled = $derived(
+    closed || awaitingRegistration || connectingBlocksInput || creatingSession
+  );
   const slashDraft = $derived(parseSlashDraft(draft));
   const slashMenuOpen = $derived(
     acceptsSlashCommands &&
@@ -229,6 +235,7 @@
   const canSendDraft = $derived(
     Boolean(draft.trim()) &&
       !closed &&
+      !awaitingRegistration &&
       !sendingBlocksInput &&
       !connectingBlocksInput &&
       !creatingSession &&
@@ -1303,7 +1310,15 @@
 >
   <div class="chat-shell">
     <div class="message-list" bind:this={messageListElement}>
-      {#if connecting && messages.length === 0}
+      {#if awaitingRegistration && messages.length === 0}
+        <div class="empty-chat setup-empty">
+          <span class="setup-empty-icon" aria-hidden="true"><Cpu size={20} /></span>
+          <span class="setup-empty-copy">
+            <strong>Ready when your agents are</strong>
+            <span>Register an agent with this account. It will appear here automatically.</span>
+          </span>
+        </div>
+      {:else if connecting && messages.length === 0}
         <div class="empty-chat">
           <Sparkles size={18} />
           <span>Connecting to {agentLabel}...</span>
@@ -1761,6 +1776,44 @@
   .empty-chat.error {
     color: var(--error);
     border-color: color-mix(in srgb, var(--error) 35%, var(--border));
+  }
+
+  .empty-chat.setup-empty {
+    max-width: 360px;
+    gap: 12px;
+    padding: 16px 18px;
+    border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+    background: color-mix(in srgb, var(--accent) 5%, var(--surface-1));
+  }
+
+  .setup-empty-icon {
+    width: 36px;
+    height: 36px;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+    border-radius: 9px;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+  }
+
+  .setup-empty-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .setup-empty-copy strong {
+    color: var(--text-1);
+    font-size: 13px;
+  }
+
+  .setup-empty-copy > span {
+    color: var(--text-3);
+    line-height: 1.45;
   }
 
   .empty-chat.closed-empty {

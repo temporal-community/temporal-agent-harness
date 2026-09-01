@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from a2a.types import AgentCard, AgentSkill, SendMessageResponse, Task
 from nexus_mcp.durable_tools_gateway.registry import (
+    AccountEntries,
     AgentRegistration,
     SessionEvent,
     SessionRecord,
@@ -57,6 +58,11 @@ def _app_client(
             return session
         if method is ToolRegistryWorkflow.list_sessions:
             return [session]
+        if method is ToolRegistryWorkflow.list_account_entries:
+            return AccountEntries(
+                remote_servers={"weather": "http://weather"},
+                subagent_providers={"writer": "http://writer"},
+            )
         if method is ToolRegistryWorkflow.poll_session_events:
             return session_events or []
         raise AssertionError(f"unexpected query {method}")
@@ -71,6 +77,8 @@ def _app_client(
             return replace(session, has_started=True, current_turn=update_args[1])
         if method is ToolRegistryWorkflow.reconcile_spawned_agents:
             return []
+        if method is ToolRegistryWorkflow.close_session:
+            return replace(session, closed=True)
         raise AssertionError(f"unexpected update {method}")
 
     handle.query = AsyncMock(side_effect=query)
@@ -109,12 +117,17 @@ def test_account_agents_and_sessions_come_from_the_registry() -> None:
     with client:
         agents = client.get("/api/agents")
         sessions = client.get("/api/sessions")
+        account = client.get("/api/account")
 
     assert agents.status_code == 200
     assert agents.json()["agents"][0]["workflow_type"] == "assistant"
     assert sessions.status_code == 200
     assert sessions.json()[0]["workflow_id"] == "session-1"
     assert sessions.json()[0]["execution_status"] == "NOT_STARTED"
+    assert account.status_code == 200
+    assert account.json()["account_id"] == "account-1"
+    assert account.json()["agents"][0]["active_session_count"] == 1
+    assert account.json()["mcp_servers"][0]["name"] == "weather"
 
 
 def test_fresh_native_session_is_created_without_a_provider_workflow() -> None:
@@ -305,6 +318,81 @@ def test_native_attach_uses_shared_tunnel_and_records_child_lifecycle() -> None:
     assert signal.kwargs["args"][0] == "session-1"
     assert signal.kwargs["args"][1][0].provider_session_id == "research-workflow"
     assert signal.kwargs["args"][3] == 7
+
+
+def test_close_requires_a_decision_when_active_subagents_are_running() -> None:
+    started = SessionRecord(
+        account_id="account-1",
+        session_id="session-1",
+        agent_id="assistant",
+        provider_session_id="provider-parent",
+        created_at=123.0,
+        label="Session 1",
+        has_started=True,
+    )
+    client, handle, _ = _app_client(session_override=started)
+    controls = MagicMock()
+    controls.status = AsyncMock(
+        return_value={
+            "subagent_close_policy": "ask-user",
+            "subagents": [
+                {
+                    "subagent_id": "research-a1b2c3",
+                    "agent_key": "research",
+                    "workflow_id": "research-workflow",
+                    "next_expected_turn": 2,
+                }
+            ],
+        }
+    )
+    driver = MagicMock()
+    driver.controls.return_value = controls
+
+    with patch("nexus_mcp.durable_tools_gateway.web.WebTunnelDriver", return_value=driver), client:
+        response = client.post("/api/sessions/session-1/close", json={})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "subagent_close_decision_required"
+    assert response.json()["detail"]["subagents"][0]["agent_key"] == "research"
+    controls.status.assert_awaited_once_with("provider-parent")
+    assert not any(
+        call.args[0] is ToolRegistryWorkflow.close_session
+        for call in handle.execute_update.await_args_list
+    )
+
+
+def test_close_applies_the_users_subagent_decision_before_closing() -> None:
+    started = SessionRecord(
+        account_id="account-1",
+        session_id="session-1",
+        agent_id="assistant",
+        provider_session_id="provider-parent",
+        created_at=123.0,
+        label="Session 1",
+        has_started=True,
+    )
+    client, handle, _ = _app_client(session_override=started)
+    controls = MagicMock()
+    controls.operator_command = AsyncMock(return_value={"reply": "updated"})
+    controls.close = AsyncMock(return_value={"ok": True})
+    driver = MagicMock()
+    driver.controls.return_value = controls
+
+    with patch("nexus_mcp.durable_tools_gateway.web.WebTunnelDriver", return_value=driver), client:
+        response = client.post(
+            "/api/sessions/session-1/close",
+            json={"subagent_close_policy": "close"},
+    )
+
+    assert response.status_code == 200
+    controls.operator_command.assert_awaited_once_with(
+        "provider-parent", "subagent-close-policy", "close"
+    )
+    controls.close.assert_awaited_once_with("provider-parent")
+    assert any(
+        call.args[0] is ToolRegistryWorkflow.close_session
+        for call in handle.execute_update.await_args_list
+    )
 
 
 async def test_external_turn_replays_from_deterministic_activity_history() -> None:

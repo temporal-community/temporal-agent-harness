@@ -1,5 +1,6 @@
 import type {
   AcceptedMessageTypesResponse,
+  AccountOverview,
   AgentInterfaceFunction,
   AgentRegistryResponse,
   AgentSseFrame,
@@ -10,6 +11,7 @@ import type {
   OperatorCommandRequest,
   OperatorCommandResponse,
   Session,
+  SubagentCloseResolution,
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -134,11 +136,40 @@ const montyOperatorInterface: OperatorCommand[] = [
 export class MockAgentApi implements AgentApi {
   #sessions: Session[] = [...realisticQaScenario.sessions];
 
+  async accountOverview(): Promise<AccountOverview> {
+    return {
+      account_id: "demo-account",
+      agents: realisticQaScenario.agents.map((agent) => ({
+        agent_id: agent.workflow_type,
+        kind: "harness_nexus",
+        label: agent.label,
+        description: agent.description,
+        nexus_endpoint: `${agent.key}-endpoint`,
+        provider_url: null,
+        session_count: this.#sessions.filter(
+          (session) => session.agent_workflow_type === agent.workflow_type
+        ).length,
+        active_session_count: this.#sessions.filter(
+          (session) =>
+            session.agent_workflow_type === agent.workflow_type && !session.closed
+        ).length
+      })),
+      mcp_servers: [{ name: "demo", endpoint: "http://127.0.0.1:8765/mcp" }],
+      subagent_providers: [{ name: "writer", endpoint: "http://127.0.0.1:8766" }],
+      session_count: this.#sessions.length,
+      active_session_count: this.#sessions.filter((session) => !session.closed).length
+    };
+  }
+
   async listAgents(): Promise<AgentRegistryResponse> {
     return { agents: realisticQaScenario.agents };
   }
 
   async listSessions(): Promise<Session[]> {
+    return this.#sessions;
+  }
+
+  async refreshSessions(): Promise<Session[]> {
     return this.#sessions;
   }
 
@@ -158,6 +189,17 @@ export class MockAgentApi implements AgentApi {
     };
     this.#sessions = [...this.#sessions, session];
     return session;
+  }
+
+  async closeSession(
+    sessionId: WorkflowId,
+    _resolution?: SubagentCloseResolution
+  ): Promise<void> {
+    this.#sessions = this.#sessions.map((session) =>
+      session.workflow_id === sessionId
+        ? { ...session, execution_status: "COMPLETED", closed: true }
+        : session
+    );
   }
 
   async workflowStatus(workflowId: WorkflowId): Promise<WorkflowExecutionState> {
