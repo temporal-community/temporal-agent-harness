@@ -3,10 +3,9 @@
 Run from the repo root with:
     uv run --extra nexus-mcp --group examples python -m examples.nexus_hello.worker
 
-The worker hosts the agent workflow plus its A2A and harness-control Nexus services on
-the same task queue. The account gateway UI reaches that front door through the
-registered Nexus endpoint; the agent itself wires its tools and subagents in
-``workflow.py``.
+The worker hosts the agent workflow and its A2A and harness-control services on the same task
+queue. The account gateway UI reaches that front door through the registered Nexus
+endpoint; the agent itself wires its tools and subagents in ``workflow.py``.
 
 Env vars (set in .env.local - see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile (this worker's own
@@ -91,7 +90,7 @@ async def main() -> None:
                     is_message_queuing_enabled=True,
                     agent_card=make_agent_card(
                         name="Nexus Hello",
-                        description="OpenAI Agents SDK demo with Nexus tools and subagents.",
+                        description="OpenAI Agents SDK demo with an account toolbox.",
                         endpoint="nexus-hello-agent-endpoint",
                     ),
                 ),
@@ -100,7 +99,7 @@ async def main() -> None:
         ],
     )
     print(
-        f"Nexus hello agent worker + A2A Nexus front door ready: "
+        f"Nexus hello agent worker + Nexus front door ready: "
         f"profile={os.environ.get('TEMPORAL_PROFILE', 'default')!r} "
         f"address={connect_config.get('target_host')} "
         f"namespace={connect_config.get('namespace')} "

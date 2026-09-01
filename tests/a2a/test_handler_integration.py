@@ -242,3 +242,50 @@ async def test_a2a_send_and_subscription(env: WorkflowEnvironment) -> None:
 async def test_agent_card_is_discoverable_over_nexus(env: WorkflowEnvironment) -> None:
     result = await _run_stack(env, CardCallerWorkflow, lambda endpoint: endpoint)
     assert result == "Probe"
+
+
+async def test_completed_task_history_is_replayable(env: WorkflowEnvironment) -> None:
+    task_id = f"task-{uuid.uuid4()}"
+    # The first stack starts and completes one turn. A second endpoint would not route
+    # to that workflow, so exercise close/replay in one longer-lived worker stack here.
+    endpoint = f"a2a-agent-{uuid.uuid4()}"
+    agent_queue = f"agent-{uuid.uuid4()}"
+    nexus_queue = f"nexus-{uuid.uuid4()}"
+    caller_queue = f"caller-{uuid.uuid4()}"
+    await env.create_nexus_endpoint(endpoint, nexus_queue)
+    config = A2AHandlerConfig(
+        agent_task_queue=agent_queue,
+        workflow_name="ProbeAgent",
+        workflow_id_prefix="",
+        is_message_queuing_enabled=True,
+        agent_card=make_agent_card(
+            name="Probe", description="Probe", endpoint=endpoint
+        ),
+    )
+    async with (
+        Worker(env.client, task_queue=agent_queue, workflows=[ProbeAgent]),
+        Worker(
+            env.client,
+            task_queue=nexus_queue,
+            nexus_service_handlers=[A2AServiceHandler(env.client, config)],
+        ),
+        Worker(
+            env.client,
+            task_queue=caller_queue,
+            workflows=[A2ACallerWorkflow, ReplayCallerWorkflow],
+        ),
+    ):
+        await env.client.execute_workflow(
+            A2ACallerWorkflow.run,
+            CallerInput(endpoint=endpoint, task_id=task_id),
+            id=f"send-{uuid.uuid4()}",
+            task_queue=caller_queue,
+        )
+        replay = await env.client.execute_workflow(
+            ReplayCallerWorkflow.run,
+            CallerInput(endpoint=endpoint, task_id=task_id),
+            id=f"replay-{uuid.uuid4()}",
+            task_queue=caller_queue,
+        )
+    assert replay.item_count > 0
+    assert replay.closed

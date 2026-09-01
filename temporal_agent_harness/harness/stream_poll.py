@@ -9,7 +9,10 @@ from temporalio.exceptions import ApplicationError
 
 AGENT_STREAM_POLL_UPDATE = "__temporal_agent_stream_poll"
 AGENT_STREAM_REPLAY_QUERY = "__temporal_agent_stream_replay"
-_MAX_POLL_RESPONSE_BYTES = 1_000_000
+# Leave enough headroom for JSON/protobuf framing and the Nexus operation envelope. Temporal
+# warns at 512 KiB per payload; returning pages near the workflow-stream SDK's 1 MB default makes
+# every page cross that warning boundary more than once on its way through Nexus and the UI tunnel.
+_MAX_POLL_RESPONSE_BYTES = 256_000
 
 
 @dataclass
@@ -40,6 +43,43 @@ class AgentStreamPollResult:
     more_ready: bool
     next_offset: int
     closed: bool
+
+
+def bounded_poll_result(
+    items: list[AgentStreamPollItem],
+    *,
+    next_offset: int,
+    more_ready: bool,
+    closed: bool,
+) -> AgentStreamPollResult:
+    """Page already-encoded stream items below the agent/Nexus payload budget.
+
+    ``WorkflowStream`` currently pages at roughly 1 MB. Agent streams cross two additional
+    Temporal boundaries (the Nexus operation and shared UI tunnel), so impose the smaller
+    agent-service budget before the workflow update result is serialized. If one semantic event is
+    itself larger than the budget, return it alone so the cursor still advances; splitting its
+    encoded payload would corrupt the event contract.
+    """
+    page: list[AgentStreamPollItem] = []
+    size = 0
+    for item in items:
+        item_size = len(item.data) + len(item.topic)
+        if page and size + item_size > _MAX_POLL_RESPONSE_BYTES:
+            return AgentStreamPollResult(
+                items=page,
+                next_offset=item.offset,
+                more_ready=True,
+                closed=closed,
+            )
+        size += item_size
+        page.append(item)
+
+    return AgentStreamPollResult(
+        items=page,
+        next_offset=next_offset,
+        more_ready=more_ready,
+        closed=closed,
+    )
 
 
 def replay_stream_state(
@@ -73,24 +113,13 @@ def replay_stream_state(
         if not topic_set or item.topic in topic_set
     ]
 
-    items: list[AgentStreamPollItem] = []
-    size = 0
-    more_ready = False
-    next_offset = state.base_offset + len(state.log)
-    for offset, item in candidates:
-        item_size = len(item.data) + len(item.topic)
-        if size + item_size > _MAX_POLL_RESPONSE_BYTES and items:
-            next_offset = offset
-            more_ready = True
-            break
-        size += item_size
-        items.append(
-            AgentStreamPollItem(topic=item.topic, data=item.data, offset=offset)
-        )
-
-    return AgentStreamPollResult(
-        items=items,
-        more_ready=more_ready,
-        next_offset=next_offset,
+    items = [
+        AgentStreamPollItem(topic=item.topic, data=item.data, offset=offset)
+        for offset, item in candidates
+    ]
+    return bounded_poll_result(
+        items,
+        next_offset=state.base_offset + len(state.log),
+        more_ready=False,
         closed=True,
     )
