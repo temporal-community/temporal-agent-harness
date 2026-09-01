@@ -1025,8 +1025,10 @@ def create_account_agent_app(
         assert agent.nexus_endpoint is not None
         stream_id = uuid.uuid4().hex
         queue = event_broker.subscribe(stream_id)
+        attach_handle: WorkflowHandle[Any, None] | None = None
+        completed = False
         try:
-            await app.state.temporal.start_workflow(
+            attach_handle = await app.state.temporal.start_workflow(
                 AgentAttachWorkflow.run,
                 AgentAttachInput(
                     nexus_endpoint=agent.nexus_endpoint,
@@ -1042,10 +1044,22 @@ def create_account_agent_app(
             while True:
                 frame = await queue.get()
                 if frame is None:
+                    completed = True
                     return
                 yield frame
         finally:
             event_broker.unsubscribe(stream_id, queue)
+            if attach_handle is not None and not completed:
+                try:
+                    # An aborted fetch closes this async generator, but without canceling its
+                    # workflow the old broker keeps polling and replaying the same agent stream to
+                    # an abandoned in-memory queue. Cancellation also cancels the outstanding
+                    # Nexus long poll.
+                    await attach_handle.cancel()
+                except RPCError as exc:
+                    logger.debug(
+                        "Attach workflow %s was already closed: %s", stream_id, exc
+                    )
 
     @app.get("/api/attach")
     async def attach(session_id: str, from_offset: int = 0):

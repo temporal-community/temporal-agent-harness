@@ -45,7 +45,9 @@ One bounded workflow owns the loop for a browser attachment, publishes batches t
 local activity, and stops as soon as the agent is idle and caught up. It checks status only
 after an empty poll or a terminal event, avoiding both per-event status calls and the race
 where status becomes idle just before `turn_end` is published. Long-running attachments
-continue as new after 500 polls.
+continue as new after 500 polls. Agent-service responses are paged at about 256 KiB before
+crossing the Nexus and activity boundaries, and browser disconnects cancel their attach
+workflow so stale long polls cannot accumulate.
 
 The Nexus operation uses the harness's stream-poll update while the target workflow is
 running. If Temporal reports that the workflow has already completed, `pollMessages` reads

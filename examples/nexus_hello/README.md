@@ -121,7 +121,11 @@ Visibility scan.
 
 Nexus has no native `attach()` operation. `BrokeredAgentAttach` therefore owns a bounded
 loop around `pollMessages` using 30-second long polls. It publishes each returned batch
-through an in-process event broker to the browser's SSE connection.
+through an in-process event broker to the browser's SSE connection. Agent-service pages are
+capped at about 256 KiB so their Temporal update results, Nexus envelopes, and broker activity
+inputs stay below Temporal's 512 KiB payload warning threshold. Adjacent provider text deltas are
+also compacted in the completed model activity result and coalesced before SSE delivery; their
+token boundaries have no semantic meaning to the UI.
 
 While an agent is running, `pollMessages` uses a long-polling workflow update. Temporal
 rejects updates after workflow completion, so the same operation then falls back to a
@@ -133,7 +137,8 @@ This design avoids starting one Temporal workflow per poll. Status is checked on
 an empty poll or a terminal event, and a long attachment continues as new after 500
 polls. Because the event broker is in process, this prototype runs the gateway worker and
 UI server together. A multi-replica deployment would replace that broker with shared
-pub/sub.
+pub/sub. Closing or replacing a browser attachment cancels its broker workflow, which in turn
+cancels the outstanding Nexus long poll rather than leaving an orphan poller behind.
 
 ### Historical MCP calls
 

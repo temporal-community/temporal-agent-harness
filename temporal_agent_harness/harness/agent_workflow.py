@@ -117,6 +117,7 @@ from temporal_agent_harness.harness.stream_poll import (
     AgentStreamPollInput,
     AgentStreamPollItem,
     AgentStreamPollResult,
+    bounded_poll_result,
     replay_stream_state,
 )
 
@@ -2051,8 +2052,8 @@ class AgentWorkflowRunner:
         result = await self._stream._on_poll(
             PollInput(topics=input.topics, from_offset=input.from_offset)
         )
-        return AgentStreamPollResult(
-            items=[
+        return bounded_poll_result(
+            [
                 AgentStreamPollItem(
                     topic=item.topic,
                     data=item.data,
@@ -2060,8 +2061,8 @@ class AgentWorkflowRunner:
                 )
                 for item in result.items
             ],
-            more_ready=result.more_ready,
             next_offset=result.next_offset,
+            more_ready=result.more_ready,
             closed=self._closed,
         )
 

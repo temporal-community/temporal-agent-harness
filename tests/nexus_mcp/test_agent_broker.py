@@ -31,13 +31,13 @@ from temporal_agent_harness.nexus_agent_adapter.generated import (
 )
 
 
-def _stream_item(offset: int = 4) -> StreamItem:
+def _stream_item(offset: int = 4, text: str = "hello") -> StreamItem:
     envelope = {
         "agent_id": "agent-1",
         "turn_id": "turn-1",
         "turn_number": 1,
         "timestamp": 123.0,
-        "event": {"type": "reply_delta", "text": "hello"},
+        "event": {"type": "reply_delta", "text": text},
     }
     payload = Payload(data=json.dumps(envelope).encode())
     return StreamItem(
@@ -82,6 +82,25 @@ async def test_publish_activity_decodes_the_harness_stream_envelope() -> None:
     assert frame is not None
     assert b"event: reply_delta" in frame
     assert b'"resume_offset": 5' in frame
+
+
+async def test_publish_activity_coalesces_adjacent_reply_deltas() -> None:
+    queue = event_broker.subscribe("stream-coalesced")
+    try:
+        await publish_agent_events(
+            PublishBatchInput(
+                stream_id="stream-coalesced",
+                items=[_stream_item(4, "hel"), _stream_item(5, "lo")],
+            )
+        )
+        frame = await queue.get()
+    finally:
+        event_broker.unsubscribe("stream-coalesced", queue)
+
+    assert frame is not None
+    assert b'"text": "hello"' in frame
+    assert b'"resume_offset": 6' in frame
+    assert queue.empty()
 
 
 async def test_publish_activity_projects_spawned_agent_lifecycle() -> None:

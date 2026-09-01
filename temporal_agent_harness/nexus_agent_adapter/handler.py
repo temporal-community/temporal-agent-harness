@@ -492,6 +492,7 @@ class AgentServiceHandler:
         *,
         closed: bool | None = None,
     ) -> PollMessagesOutput:
+        source_closed = result.closed if closed is None else closed
         return PollMessagesOutput(
             items=[
                 StreamItem(topic=item.topic, data=item.data, offset=item.offset)
@@ -499,5 +500,7 @@ class AgentServiceHandler:
             ],
             more_ready=result.more_ready,
             next_offset=result.next_offset,
-            closed=result.closed if closed is None else closed,
+            # A closed source can still have additional retained pages. Report closure only
+            # after the caller has drained them; otherwise connectors terminate at page one.
+            closed=source_closed and not result.more_ready,
         )

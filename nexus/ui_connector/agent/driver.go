@@ -319,10 +319,6 @@ func (d *Driver) PollTurn(ctx workflow.Context, handle router.TurnHandle, cursor
 		return router.PollResult{}, err
 	}
 
-	if derefOrZero(pollOut.Closed) {
-		return router.PollResult{NextCursor: pollOut.NextOffset, Closed: true}, nil
-	}
-
 	var deltas []router.Delta
 	for _, item := range pollOut.Items {
 		if item.Topic != turnEventsTopic {
@@ -341,5 +337,9 @@ func (d *Driver) PollTurn(ctx workflow.Context, handle router.TurnHandle, cursor
 		}
 	}
 
-	return router.PollResult{Deltas: deltas, NextCursor: pollOut.NextOffset}, nil
+	return router.PollResult{
+		Deltas:     deltas,
+		NextCursor: pollOut.NextOffset,
+		Closed:     derefOrZero(pollOut.Closed),
+	}, nil
 }

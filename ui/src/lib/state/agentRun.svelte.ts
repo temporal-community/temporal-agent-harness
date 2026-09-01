@@ -20,7 +20,7 @@ import {
   buildAgentTreeGraph,
   type AgentGraphSource
 } from "./flowProjection";
-import { buildReplayLog, buildReplayMarkers } from "./replayLog";
+import { buildReplayLog, replayMarkersFromLog } from "./replayLog";
 import { buildStepTimeline, type StepTimelineFrame } from "./stepTimeline";
 import { buildTranscript } from "./transcript";
 
@@ -63,6 +63,8 @@ interface ReplayTimelineEntry extends StepTimelineFrame {
 }
 
 const basePlaybackDelayMs = 700;
+const frameCacheDebounceMs = 750;
+const maxFrameBatchSize = 128;
 const activeSessionStorageKey = "temporal-agent-ui.active-session.v1";
 const frameCacheStorageKeyPrefix = "temporal-agent-ui.frames.v1:";
 
@@ -190,6 +192,44 @@ function frameKey(frame: AgentSseFrame): string {
   return `${frame.event}|${JSON.stringify(identityData)}`;
 }
 
+interface FrameBatcher {
+  push(frame: AgentSseFrame): void;
+  flush(): void;
+}
+
+function createFrameBatcher(
+  onBatch: (frames: AgentSseFrame[]) => void
+): FrameBatcher {
+  let pending: AgentSseFrame[] = [];
+  let animationFrame: number | null = null;
+
+  const drain = (): void => {
+    if (animationFrame != null) {
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = null;
+    }
+    if (pending.length === 0) return;
+    const batch = pending;
+    pending = [];
+    onBatch(batch);
+  };
+
+  return {
+    push(frame) {
+      pending.push(frame);
+      if (pending.length >= maxFrameBatchSize) {
+        drain();
+      } else if (animationFrame == null) {
+        animationFrame = window.requestAnimationFrame(() => {
+          animationFrame = null;
+          drain();
+        });
+      }
+    },
+    flush: drain
+  };
+}
+
 function isAbortError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -272,8 +312,12 @@ export class AgentRunController {
   sessionClosed = $derived(
     this.session != null && this.#isWorkflowClosed(this.session.workflow_id)
   );
-  replayLog = $derived(buildReplayLog(this.visibleReplayTimeline));
   fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
+  replayLog = $derived(
+    this.viewIndex === this.replayTimeline.length
+      ? this.fullReplayLog
+      : buildReplayLog(this.visibleReplayTimeline)
+  );
   chatTranscript = $derived(
     buildTranscript(
       this.replayTimeline
@@ -282,12 +326,12 @@ export class AgentRunController {
     )
   );
   currentLogRow = $derived(
-    this.fullReplayLog.rows.find((row) => row.index === this.viewIndex) ?? null
+    this.fullReplayLog.rows.find((row) => row.index === this.viewIndex - 1) ?? null
   );
   usage = $derived(summarizeCost(this.visibleReplayFrames));
   usageTimeline = $derived(buildUsageTimeline(this.allReplayFrames));
   stepTimeline = $derived(buildStepTimeline(this.replayTimeline));
-  anomalyMarkers = $derived(buildReplayMarkers(this.replayTimeline));
+  anomalyMarkers = $derived(replayMarkersFromLog(this.fullReplayLog));
   turnMarkers = $derived(
     this.replayTimeline
       .map((entry, index) =>
@@ -948,16 +992,25 @@ export class AgentRunController {
     if (!session) return;
 
     const { controller, signal, streamVersion } = this.#beginStream();
+    const frames = createFrameBatcher((batch) => {
+      if (
+        streamVersion === this.#streamVersion &&
+        this.session?.workflow_id === session.workflow_id
+      ) {
+        this.#appendFrames(batch);
+      }
+    });
     try {
       for await (const frame of this.#api.attach(session.workflow_id, fromOffset, signal)) {
         if (streamVersion !== this.#streamVersion || this.session?.workflow_id !== session.workflow_id) {
           break;
         }
-        this.#appendFrame(frame);
+        frames.push(frame);
       }
     } catch (error) {
       if (!isAbortError(error)) throw error;
     } finally {
+      frames.flush();
       if (
         options.clearSendingOnIdle &&
         streamVersion === this.#streamVersion &&
@@ -979,6 +1032,15 @@ export class AgentRunController {
     this.#stopWorkflowAttach(workflowId);
     const controller = new AbortController();
     this.#workflowAttachAbort.set(workflowId, controller);
+    const frames = createFrameBatcher((batch) => {
+      if (
+        !controller.signal.aborted &&
+        this.session?.workflow_id === session.workflow_id &&
+        this.#isKnownWorkflowId(workflowId)
+      ) {
+        this.#appendFrames(batch, { sourceWorkflowId: workflowId });
+      }
+    });
     try {
       for await (const frame of this.#api.attach(
         workflowId,
@@ -992,11 +1054,12 @@ export class AgentRunController {
         ) {
           break;
         }
-        this.#appendFrame(frame, { sourceWorkflowId: workflowId });
+        frames.push(frame);
       }
     } catch (error) {
       if (!isAbortError(error)) throw error;
     } finally {
+      frames.flush();
       if (this.#workflowAttachAbort.get(workflowId) === controller) {
         this.#workflowAttachAbort.delete(workflowId);
       }
@@ -1192,20 +1255,20 @@ export class AgentRunController {
   #hydrateCachedFrames(sessionId: string): void {
     const cachedFrames = readCachedFrames(sessionId);
     if (cachedFrames.length === 0) return;
-    for (const frame of cachedFrames) {
-      this.#appendFrame(frame, { persist: false });
-    }
+    this.#appendFrames(cachedFrames, { persist: false });
   }
 
   #scheduleFrameCacheWrite(): void {
     const sessionId = this.session?.workflow_id;
     if (!sessionId || typeof window === "undefined") return;
-    if (this.#frameCacheTimer != null) return;
+    if (this.#frameCacheTimer != null) {
+      window.clearTimeout(this.#frameCacheTimer);
+    }
     this.#frameCacheTimer = window.setTimeout(() => {
       this.#frameCacheTimer = null;
       if (this.session?.workflow_id !== sessionId) return;
       writeCachedFrames(sessionId, this.frames);
-    }, 250);
+    }, frameCacheDebounceMs);
   }
 
   #resetSessionView(): void {
@@ -1222,68 +1285,77 @@ export class AgentRunController {
     this.lastResumeOffset = 0;
   }
 
-  #appendFrame(
-    frame: AgentSseFrame,
+  #appendFrames(
+    incoming: AgentSseFrame[],
     options: { persist?: boolean; sourceWorkflowId?: string } = {}
   ): void {
-    const key = frameKey(frame);
-    if (this.#frameKeys.has(key)) return;
-    this.#frameKeys.add(key);
+    const accepted: AgentSseFrame[] = [];
+    for (const frame of incoming) {
+      const key = frameKey(frame);
+      if (this.#frameKeys.has(key)) continue;
+      this.#frameKeys.add(key);
+      accepted.push(frame);
 
-    if (!("type" in frame.data)) {
-      this.connectionError = frame.data.message;
-    }
-    const publisherWorkflowId =
-      this.#publisherWorkflowId(frame) ?? options.sourceWorkflowId;
-    const isRootFrame = publisherWorkflowId === this.session?.workflow_id;
+      if (!("type" in frame.data)) {
+        this.connectionError = frame.data.message;
+      }
+      const publisherWorkflowId =
+        this.#publisherWorkflowId(frame) ?? options.sourceWorkflowId;
+      const isRootFrame = publisherWorkflowId === this.session?.workflow_id;
 
-    this.frames = [...this.frames, frame];
-    this.following = true;
-    this.viewIndex = this.total;
-
-    if (
-      "resume_offset" in frame.data &&
-      typeof frame.data.resume_offset === "number"
-    ) {
-      const resumeOffsetOwner =
-        options.sourceWorkflowId ?? (isRootFrame ? publisherWorkflowId : undefined);
-      if (resumeOffsetOwner) {
-        this.#workflowResumeOffsets.set(
-          resumeOffsetOwner,
-          Math.max(
-            this.#workflowResumeOffsets.get(resumeOffsetOwner) ?? 0,
+      if (
+        "resume_offset" in frame.data &&
+        typeof frame.data.resume_offset === "number"
+      ) {
+        const resumeOffsetOwner =
+          options.sourceWorkflowId ?? (isRootFrame ? publisherWorkflowId : undefined);
+        if (resumeOffsetOwner) {
+          this.#workflowResumeOffsets.set(
+            resumeOffsetOwner,
+            Math.max(
+              this.#workflowResumeOffsets.get(resumeOffsetOwner) ?? 0,
+              frame.data.resume_offset
+            )
+          );
+        }
+        if (isRootFrame) {
+          this.lastResumeOffset = Math.max(
+            this.lastResumeOffset,
             frame.data.resume_offset
-          )
-        );
+          );
+        }
       }
-      if (isRootFrame) {
-        this.lastResumeOffset = Math.max(
-          this.lastResumeOffset,
-          frame.data.resume_offset
-        );
+      if (
+        isRootFrame &&
+        "type" in frame.data &&
+        frame.data.turn_number >= this.expectedTurn
+      ) {
+        this.expectedTurn = frame.data.turn_number + 1;
       }
+      if (
+        isRootFrame &&
+        frame.event === "turn_started" &&
+        frame.data.turn_number === 1
+      ) {
+        this.#recordInitialUserMessage(renderUserMessage(frame.data.user_message));
+      }
+      if (
+        publisherWorkflowId &&
+        frame.event === "operator_command_completed" &&
+        "type" in frame.data &&
+        isStopOperatorCommandName(frame.data.command_name)
+      ) {
+        this.#markWorkflowClosed(publisherWorkflowId);
+        if (!isRootFrame) this.#markObservedSubagentStopped(publisherWorkflowId);
+        if (isRootFrame) this.sending = false;
+      }
+      this.#handleSubagentEvent(frame, publisherWorkflowId);
     }
-    if (
-      isRootFrame &&
-      "type" in frame.data &&
-      frame.data.turn_number >= this.expectedTurn
-    ) {
-      this.expectedTurn = frame.data.turn_number + 1;
-    }
-    if (isRootFrame && frame.event === "turn_started" && frame.data.turn_number === 1) {
-      this.#recordInitialUserMessage(renderUserMessage(frame.data.user_message));
-    }
-    if (
-      publisherWorkflowId &&
-      frame.event === "operator_command_completed" &&
-      "type" in frame.data &&
-      isStopOperatorCommandName(frame.data.command_name)
-    ) {
-      this.#markWorkflowClosed(publisherWorkflowId);
-      if (!isRootFrame) this.#markObservedSubagentStopped(publisherWorkflowId);
-      if (isRootFrame) this.sending = false;
-    }
-    this.#handleSubagentEvent(frame, publisherWorkflowId);
+
+    if (accepted.length === 0) return;
+    this.frames = [...this.frames, ...accepted];
+    this.following = true;
+    this.viewIndex = this.frames.length;
     if (options.persist !== false) this.#scheduleFrameCacheWrite();
   }
 
