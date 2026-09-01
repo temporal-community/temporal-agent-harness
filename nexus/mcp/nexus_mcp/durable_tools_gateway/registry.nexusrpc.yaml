@@ -4,20 +4,20 @@ services:
   RegistryService:
     fqn: RegistryService
     description: >
-      Durable Tools Gateway. Registers 3rd-party MCP servers under an agent_id, and
+      Durable Tools Gateway. Registers 3rd-party MCP servers under an account_id, and
       proxies calls to them. Native Nexus services are reached directly by the agent
       and never go through this gateway.
     operations:
       registerExternal:
-        description: Register a 3rd-party MCP server under one agent_id.
+        description: Register a 3rd-party MCP server under one account_id.
         input: { $ref: "#/$defs/RegisterExternalInput" }
       deregister:
-        description: Remove one registration under one agent_id.
+        description: Remove one registration under one account_id.
         input: { $ref: "#/$defs/DeregisterInput" }
-      listAgentEntries:
-        description: All registered 3rd-party tools for one agent_id.
-        input: { $ref: "#/$defs/ListAgentEntriesInput" }
-        output: { $ref: "#/$defs/ListAgentEntriesOutput" }
+      listAccountEntries:
+        description: All registered 3rd-party tools for one account_id.
+        input: { $ref: "#/$defs/ListAccountEntriesInput" }
+        output: { $ref: "#/$defs/ListAccountEntriesOutput" }
       callTool:
         fqn: call_tool
         description: Invoke one tool on a registered 3rd-party MCP server.
@@ -25,11 +25,11 @@ services:
         output: { $ref: "#/$defs/CallToolOutput" }
       registerSubagent:
         fqn: register_subagent
-        description: Register a non-Nexus subagent's URL under one agent_id.
+        description: Register a non-Nexus subagent's URL under one account_id.
         input: { $ref: "#/$defs/RegisterSubagentInput" }
       deregisterSubagent:
         fqn: deregister_subagent
-        description: Remove one subagent registration under one agent_id.
+        description: Remove one subagent registration under one account_id.
         input: { $ref: "#/$defs/DeregisterSubagentInput" }
       startSubagent:
         fqn: start_subagent
@@ -51,32 +51,38 @@ $defs:
     type: object
     description: Input for registering a 3rd-party MCP server.
     properties:
-      agent_id:
+      account_id:
         type: string
       name:
         type: string
       url:
         type: string
+    required: [account_id, name, url]
+    additionalProperties: false
 
   DeregisterInput:
     type: object
     description: Input for removing one registration.
     properties:
-      agent_id:
+      account_id:
         type: string
       name:
         type: string
+    required: [account_id, name]
+    additionalProperties: false
 
-  ListAgentEntriesInput:
+  ListAccountEntriesInput:
     type: object
-    description: Input for looking up one agent_id's registrations.
+    description: Input for looking up one account_id's registrations.
     properties:
-      agent_id:
+      account_id:
         type: string
+    required: [account_id]
+    additionalProperties: false
 
-  ListAgentEntriesOutput:
+  ListAccountEntriesOutput:
     type: object
-    description: All registered 3rd-party tools for one agent_id.
+    description: All registered 3rd-party tools for one account_id.
     properties:
       remote_tools:
         type: object
@@ -91,7 +97,7 @@ $defs:
     type: object
     description: Input for invoking one tool on a registered 3rd-party MCP server.
     properties:
-      agent_id:
+      account_id:
         type: string
       alias:
         type: string
@@ -101,6 +107,8 @@ $defs:
       arguments:
         type: object
         additionalProperties: true
+    required: [account_id, alias, name]
+    additionalProperties: false
 
   CallToolOutput:
     type: object
@@ -109,40 +117,42 @@ $defs:
       result:
         type: object
         additionalProperties: true
+    required: [result]
+    additionalProperties: false
 
   RegisterSubagentInput:
     type: object
     description: Input for registering a non-Nexus subagent's URL.
     properties:
-      agent_id:
+      account_id:
         type: string
       alias:
         type: string
       url:
         type: string
-    required: [agent_id, alias, url]
+    required: [account_id, alias, url]
     additionalProperties: false
 
   DeregisterSubagentInput:
     type: object
     description: Input for removing one subagent registration.
     properties:
-      agent_id:
+      account_id:
         type: string
       alias:
         type: string
-    required: [agent_id, alias]
+    required: [account_id, alias]
     additionalProperties: false
 
   StartSubagentInput:
     type: object
     description: Input for starting one subagent instance.
     properties:
-      agent_id:
+      account_id:
         type: string
       alias:
         type: string
-    required: [agent_id, alias]
+    required: [account_id, alias]
     additionalProperties: false
 
   StartSubagentOutput:
@@ -158,7 +168,7 @@ $defs:
     type: object
     description: Input for sending one turn to a subagent instance.
     properties:
-      agent_id:
+      account_id:
         type: string
       instance_id:
         type: string
@@ -172,7 +182,7 @@ $defs:
       expected_turn:
         type: integer
         description: Caller-known next turn number.
-    required: [agent_id, instance_id, msg_type, payload, expected_turn]
+    required: [account_id, instance_id, msg_type, payload, expected_turn]
     additionalProperties: false
 
   DispatchSubagentTurnOutput:
@@ -193,10 +203,10 @@ $defs:
     type: object
     description: Input for closing a subagent instance.
     properties:
-      agent_id:
+      account_id:
         type: string
       instance_id:
         type: string
         description: Instance returned by startSubagent.
-    required: [agent_id, instance_id]
+    required: [account_id, instance_id]
     additionalProperties: false

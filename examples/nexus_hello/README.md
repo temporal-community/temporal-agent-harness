@@ -9,21 +9,21 @@ The agent uses two access paths:
 
 - `nexus_native_mcp_server(name, endpoint)` connects the agent directly to a
   native Nexus tool service.
-- `nexus_tools_gateway().mcp_servers(...)` connects the agent to selected
-  external MCP servers through the Durable Tools Gateway.
+- `nexus_gateway(account_id).mcp_servers(...)` connects the agent to selected
+  account-owned external MCP servers through the Durable Tools Gateway.
 - `agent.nexus_native_subagent(...)` connects the agent directly to a
   harness-native A2A agent.
-- `agent.nexus_subagent_gateway().subagent(...)` connects the agent to an
-  external HTTP A2A agent through the Durable Tools Gateway.
+- `agent.nexus_subagent_gateway(account_id).subagent(...)` connects the agent
+  to an account-owned external HTTP A2A agent through the gateway.
 
 The complete agent workflow is in [`workflow.py`](workflow.py). It configures
 both paths in one `Agent`:
 
 ```python
-nexus_gateway = nexus_tools_gateway()
+account_gateway = nexus_gateway("NexusHelloAccount")
 mcp_servers = [
     nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
-    nexus_gateway.mcp_servers("demo"),
+    account_gateway.mcp_servers("demo"),
 ]
 
 research = agent.nexus_native_subagent(
@@ -31,7 +31,7 @@ research = agent.nexus_native_subagent(
     "nexus-hello-subagent-endpoint",
     key="research",
 )
-writer = agent.nexus_subagent_gateway().subagent(
+writer = agent.nexus_subagent_gateway("NexusHelloAccount").subagent(
     [agent.declared_handler("ask", "...", TextMessage, TextReply)],
     "writer",
     key="writer",
@@ -258,15 +258,15 @@ just standalone-a2a-caller "Ask Nexus Hello what it can do"
 
 ### Agent identifiers
 
-This example uses two agent identifiers:
+This example uses three independent identifiers:
 
 | Identifier | Value | Purpose |
 | --- | --- | --- |
 | `agents.toml` key | `nexus-hello` | Routes UI requests to the agent. |
-| Gateway `agent_id` | `NexusHelloAgent` | Selects gateway registrations for this workflow type. |
+| Workflow type | `NexusHelloAgent` | Identifies the Temporal agent workflow. |
+| Gateway `account_id` | `NexusHelloAccount` | Selects the account-owned gateway registry. |
 
-`nexus_tools_gateway()` gets `agent_id` from the current workflow type. The two
-identifiers do not have to match.
+The identifiers do not have to match.
 
 ## Files
 
@@ -350,10 +350,10 @@ just worker
 
 `just setup-nexus` creates the four namespaces and four Nexus endpoints. Run it
 once for each new Temporal development server.
-`just register-third-party-mcp-server` registers the `demo` MCP URL under agent
-ID `NexusHelloAgent`. `just register-third-party-subagent` registers the
-`writer` A2A URL under the same ID. You can run these setup commands again if
-necessary.
+`just register-third-party-mcp-server` registers the `demo` MCP URL under
+account ID `NexusHelloAccount`. `just register-third-party-subagent` registers
+the `writer` A2A URL under the same account. You can run these setup commands
+again if necessary.
 
 Open <http://localhost:8000>. Select **Nexus Hello**, and start a chat. Ask for
 research and writing to let the model use both subagents alongside the MCP

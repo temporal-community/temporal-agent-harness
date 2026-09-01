@@ -24,7 +24,7 @@ try:
         from nexus_mcp.durable_tools_gateway.generated import (
             CallToolInput,
             CallToolInputArguments,
-            ListAgentEntriesInput,
+            ListAccountEntriesInput,
             RegistryService,
         )
         from nexus_mcp.resolver import (
@@ -73,22 +73,20 @@ class _BaseNexusMCPServer(MCPServer):  # type: ignore[misc]
 
 class NexusGateway:
     """Handle on the Durable Tools Gateway's 3rd-party servers registered for one
-    agent_id. Not an MCPServer -- call .mcp_servers(*aliases) to get one.
+    account_id. Not an MCPServer -- call .mcp_servers(*aliases) to get one.
     """
 
     def __init__(
         self,
-        agent_id: str,
+        account_id: str,
         gateway_name: str = "RegistryService",
         gateway_endpoint: str = "mcp-registry-endpoint",
     ) -> None:
-        self._agent_id = agent_id
+        self._account_id = account_id
         self._gateway_name = gateway_name
         self._gateway_endpoint = gateway_endpoint
 
-    def mcp_servers(
-        self, *aliases: str, inherently_safe: bool = False
-    ) -> MCPServer:
+    def mcp_servers(self, *aliases: str, inherently_safe: bool = False) -> MCPServer:
         """One MCPServer exposing the given registered aliases' tools, fetched with a
         single Nexus call. An alias that isn't actually registered is silently skipped
         for now.
@@ -102,10 +100,12 @@ class NexusGateway:
             as_harness_mcp_server,
         )
 
-        display_name = f"{self._agent_id}-{self._gateway_name}-{self._gateway_endpoint}"
+        display_name = (
+            f"{self._account_id}-{self._gateway_name}-{self._gateway_endpoint}"
+        )
         return as_harness_mcp_server(
             _NexusGatewayMCPServer(
-                self._agent_id,
+                self._account_id,
                 frozenset(aliases),
                 self._gateway_name,
                 self._gateway_endpoint,
@@ -116,7 +116,7 @@ class NexusGateway:
 
 
 class _NexusGatewayMCPServer(_BaseNexusMCPServer):
-    """MCP server for a chosen set of 3rd-party aliases registered under one agent_id,
+    """MCP server for a chosen set of 3rd-party aliases registered under one account_id,
     proxied through the Durable Tools Gateway. Resolved fresh on every list_tools()
     call -- nothing is cached, and nothing is registered here (see
     durable_tools_gateway's register_external for that).
@@ -124,7 +124,7 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
 
     def __init__(
         self,
-        agent_id: str,
+        account_id: str,
         aliases: frozenset[str],
         gateway_name: str,
         gateway_endpoint: str,
@@ -132,7 +132,7 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
         **kwargs: Any,
     ) -> None:
         MCPServer.__init__(self, **kwargs)
-        self._agent_id = agent_id
+        self._account_id = account_id
         self._aliases = aliases
         self._gateway_name = gateway_name
         self._gateway_endpoint = gateway_endpoint
@@ -143,14 +143,17 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
     def name(self) -> str:
         return self._display_name
 
-    async def list_tools(self, run_context: Any = None, agent: Any = None) -> list[MCPTool]:
+    async def list_tools(
+        self, run_context: Any = None, agent: Any = None
+    ) -> list[MCPTool]:
         from mcp import types
 
         gateway_client = workflow.create_nexus_client(
             service=self._gateway_name, endpoint=self._gateway_endpoint
         )
         entries = await gateway_client.execute_operation(
-            RegistryService.list_agent_entries, ListAgentEntriesInput(agent_id=self._agent_id)
+            RegistryService.list_account_entries,
+            ListAccountEntriesInput(account_id=self._account_id),
         )
         # nex-gen wraps map-shaped (additionalProperties) fields in a named type instead
         # of a plain dict.
@@ -172,16 +175,22 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
         return [types.Tool(**d) for d in tool_dicts]
 
     async def call_tool(
-        self, tool_name: str, arguments: dict[str, Any] | None, meta: dict[str, Any] | None = None
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        meta: dict[str, Any] | None = None,
     ) -> CallToolResult:
         from mcp import types
 
         alias = self._remote_routes.get(tool_name)
         if alias is None:
             return types.CallToolResult(
-                content=[types.TextContent(
-                    type="text", text=f"Unknown tool {tool_name!r} for agent {self._agent_id!r}."
-                )],
+                content=[
+                    types.TextContent(
+                        type="text",
+                        text=f"Unknown tool {tool_name!r} for account {self._account_id!r}.",
+                    )
+                ],
                 is_error=True,
             )
 
@@ -192,10 +201,12 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
             call_result = await gateway_client.execute_operation(
                 RegistryService.call_tool,
                 CallToolInput(
-                    agent_id=self._agent_id,
+                    account_id=self._account_id,
                     alias=alias,
                     name=tool_name,
-                    arguments=CallToolInputArguments(additional_properties=arguments or {}),
+                    arguments=CallToolInputArguments(
+                        additional_properties=arguments or {}
+                    ),
                 ),
             )
             result = (

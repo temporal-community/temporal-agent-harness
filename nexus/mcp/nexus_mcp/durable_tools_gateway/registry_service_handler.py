@@ -66,7 +66,11 @@ from nexusrpc.handler import StartOperationContext
 from pydantic import BaseModel, Field, ValidationError
 from temporalio import activity
 from temporalio.client import ActivityFailureError, Client
-from temporalio.common import ActivityIDConflictPolicy, RetryPolicy
+from temporalio.common import (
+    ActivityIDConflictPolicy,
+    RetryPolicy,
+    WorkflowIDConflictPolicy,
+)
 from temporalio.exceptions import ApplicationError
 
 from nexus_mcp.authoring import validate_service_name
@@ -79,10 +83,10 @@ from .generated import (
     DeregisterSubagentInput,
     DispatchSubagentTurnInput,
     DispatchSubagentTurnOutput,
-    ListAgentEntriesInput,
-    ListAgentEntriesOutput,
-    ListAgentEntriesOutputRemoteTools,
-    ListAgentEntriesOutputRemoteToolsValueItem,
+    ListAccountEntriesInput,
+    ListAccountEntriesOutput,
+    ListAccountEntriesOutputRemoteTools,
+    ListAccountEntriesOutputRemoteToolsValueItem,
     RegisterExternalInput,
     RegisterSubagentInput,
     RegistryService,
@@ -91,9 +95,10 @@ from .generated import (
     StopSubagentInput,
 )
 from .registry import (
-    REGISTRY_WORKFLOW_ID,
+    REGISTRY_TASK_QUEUE,
     SubagentInstanceRoute,
     ToolRegistryWorkflow,
+    account_registry_workflow_id,
     fetch_external_tools,
 )
 
@@ -362,8 +367,19 @@ class GatewayA2ABackend:
     def __init__(self, client: Client) -> None:
         self._client = client
 
-    def _registry_handle(self):
-        return self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+    async def _account_handle(self, account_id: str):
+        if not account_id:
+            raise A2ABackendError(
+                "A2A request metadata requires account_id",
+                kind=BackendErrorKind.BAD_REQUEST,
+            )
+        return await self._client.start_workflow(
+            ToolRegistryWorkflow.run,
+            account_id,
+            id=account_registry_workflow_id(account_id),
+            task_queue=REGISTRY_TASK_QUEUE,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        )
 
     async def send_message(
         self, context: OperationContext, request: SendMessageRequest
@@ -372,29 +388,29 @@ class GatewayA2ABackend:
         message_metadata = MessageToDict(
             request.message.metadata, preserving_proto_field_name=True
         )
-        owner_id = str(metadata.get("owner_id", ""))
+        account_id = str(metadata.get("account_id", ""))
         alias = str(metadata.get("agent_id", ""))
         task_id = request.message.task_id
         expected_turn = int(metadata.get("expected_turn", 1))
-        if not owner_id or not alias or not task_id:
+        if not account_id or not alias or not task_id:
             raise A2ABackendError(
-                "A2A request requires owner_id, agent_id, and Message.task_id",
+                "A2A request requires account_id, agent_id, and Message.task_id",
                 kind=BackendErrorKind.BAD_REQUEST,
             )
 
-        registry = self._registry_handle()
+        registry = await self._account_handle(account_id)
         route: SubagentInstanceRoute | None = await registry.query(
             ToolRegistryWorkflow.find_subagent_instance,
-            args=[owner_id, task_id],
+            task_id,
         )
         if route is None:
             url: str | None = await registry.query(
                 ToolRegistryWorkflow.find_subagent,
-                args=[owner_id, alias],
+                alias,
             )
             if url is None:
                 raise A2ABackendError(
-                    f"A2A agent {alias!r} is not registered for {owner_id!r}",
+                    f"A2A agent {alias!r} is not registered for {account_id!r}",
                     kind=BackendErrorKind.NOT_FOUND,
                 )
             route = SubagentInstanceRoute(
@@ -402,7 +418,7 @@ class GatewayA2ABackend:
             )
             await registry.execute_update(
                 ToolRegistryWorkflow.bind_subagent_instance,
-                args=[owner_id, task_id, route],
+                args=[task_id, route],
                 id=f"a2a-bind-{task_id}",
             )
 
@@ -443,7 +459,7 @@ class GatewayA2ABackend:
             )
             await registry.execute_update(
                 ToolRegistryWorkflow.bind_subagent_instance,
-                args=[owner_id, task_id, route],
+                args=[task_id, route],
                 id=f"a2a-provider-bind-{task_id}-{result.provider_instance_id}",
             )
 
@@ -478,16 +494,16 @@ class GatewayA2ABackend:
         self, context: OperationContext, request: CancelTaskRequest
     ) -> Task:
         metadata = MessageToDict(request.metadata, preserving_proto_field_name=True)
-        owner_id = str(metadata.get("owner_id", ""))
-        if not owner_id:
+        account_id = str(metadata.get("account_id", ""))
+        if not account_id:
             raise A2ABackendError(
-                "A2A request metadata requires owner_id",
+                "A2A request metadata requires account_id",
                 kind=BackendErrorKind.BAD_REQUEST,
             )
-        registry = self._registry_handle()
+        registry = await self._account_handle(account_id)
         route: SubagentInstanceRoute | None = await registry.query(
             ToolRegistryWorkflow.find_subagent_instance,
-            args=[owner_id, request.id],
+            request.id,
         )
         if route is not None:
             if route.provider_instance_id:
@@ -503,7 +519,7 @@ class GatewayA2ABackend:
                 )
             await registry.execute_update(
                 ToolRegistryWorkflow.unbind_subagent_instance,
-                args=[owner_id, request.id],
+                request.id,
                 id=f"a2a-unbind-{context.request_id}",
             )
         return Task(
@@ -563,15 +579,29 @@ class RegistryServiceHandler:
     def __init__(self, client: Client) -> None:
         self._client = client
 
+    async def _account_handle(self, account_id: str):
+        if not account_id.strip():
+            raise nexusrpc.HandlerError(
+                "account_id is required",
+                type=nexusrpc.HandlerErrorType.BAD_REQUEST,
+            )
+        return await self._client.start_workflow(
+            ToolRegistryWorkflow.run,
+            account_id,
+            id=account_registry_workflow_id(account_id),
+            task_queue=REGISTRY_TASK_QUEUE,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        )
+
     @nexusrpc.handler.sync_operation
     async def register_external(
         self, ctx: StartOperationContext, input: RegisterExternalInput
     ) -> None:
-        """Register a 3rd-party MCP server under one agent_id."""
-        agent_id = input.agent_id or ""
+        """Register a 3rd-party MCP server under one account_id."""
+        account_id = input.account_id or ""
         name = input.name or ""
-        if not agent_id:
-            raise nexusrpc.HandlerError("agent_id is required", type=nexusrpc.HandlerErrorType.BAD_REQUEST)
+        if not account_id:
+            raise nexusrpc.HandlerError("account_id is required", type=nexusrpc.HandlerErrorType.BAD_REQUEST)
         try:
             validate_service_name(name)
         except ValueError as exc:
@@ -579,36 +609,36 @@ class RegistryServiceHandler:
         if not input.url:
             raise nexusrpc.HandlerError("url is required", type=nexusrpc.HandlerErrorType.BAD_REQUEST)
 
-        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
-        await handle.signal(ToolRegistryWorkflow.register_external, args=[agent_id, name, input.url])
+        handle = await self._account_handle(account_id)
+        await handle.signal(ToolRegistryWorkflow.register_external, args=[name, input.url])
 
     @nexusrpc.handler.sync_operation
     async def deregister(
         self, ctx: StartOperationContext, input: DeregisterInput
     ) -> None:
-        """Remove one registration under one agent_id."""
-        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
-        await handle.signal(ToolRegistryWorkflow.deregister, args=[input.agent_id, input.name])
+        """Remove one registration under one account_id."""
+        handle = await self._account_handle(input.account_id)
+        await handle.signal(ToolRegistryWorkflow.deregister, input.name)
 
     @nexusrpc.handler.sync_operation
-    async def list_agent_entries(
-        self, ctx: StartOperationContext, input: ListAgentEntriesInput
-    ) -> ListAgentEntriesOutput:
-        """Current 3rd-party tool lists (grouped by alias), for one agent_id. Tools are
+    async def list_account_entries(
+        self, ctx: StartOperationContext, input: ListAccountEntriesInput
+    ) -> ListAccountEntriesOutput:
+        """Current 3rd-party tool lists (grouped by alias), for one account_id. Tools are
         fetched live, every call."""
-        agent_id = input.agent_id or ""
-        if not agent_id:
-            raise nexusrpc.HandlerError("agent_id is required", type=nexusrpc.HandlerErrorType.BAD_REQUEST)
-        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
-        entries = await handle.query(ToolRegistryWorkflow.list_agent_entries, agent_id)
+        account_id = input.account_id or ""
+        if not account_id:
+            raise nexusrpc.HandlerError("account_id is required", type=nexusrpc.HandlerErrorType.BAD_REQUEST)
+        handle = await self._account_handle(account_id)
+        entries = await handle.query(ToolRegistryWorkflow.list_account_entries)
         remote_tools = await _fetch_tools_grouped(self._client, entries.remote_servers)
         # nex-gen wraps map-shaped (additionalProperties) fields in a named type instead
         # of a plain dict -- wrap _fetch_tools_grouped's plain dict/list-of-dicts here.
-        return ListAgentEntriesOutput(
-            remote_tools=ListAgentEntriesOutputRemoteTools(
+        return ListAccountEntriesOutput(
+            remote_tools=ListAccountEntriesOutputRemoteTools(
                 additional_properties={
                     alias: [
-                        ListAgentEntriesOutputRemoteToolsValueItem(additional_properties=tool)
+                        ListAccountEntriesOutputRemoteToolsValueItem(additional_properties=tool)
                         for tool in tools
                     ]
                     for alias, tools in remote_tools.items()
@@ -623,12 +653,12 @@ class RegistryServiceHandler:
         """Invoke one tool via a standalone activity (Nexus + SAA, no backing workflow).
         Raises nexusrpc.HandlerError explicitly -- a bare exception defaults to UNKNOWN,
         which retries forever instead of surfacing to the caller."""
-        agent_id = input.agent_id or ""
+        account_id = input.account_id or ""
         alias = input.alias or ""
         name = input.name or ""
-        if not agent_id or not alias:
+        if not account_id or not alias:
             raise nexusrpc.HandlerError(
-                "agent_id and alias are required", type=nexusrpc.HandlerErrorType.BAD_REQUEST
+                "account_id and alias are required", type=nexusrpc.HandlerErrorType.BAD_REQUEST
             )
         operation = name.removeprefix(f"{alias}_")
         if operation == name:
@@ -637,11 +667,11 @@ class RegistryServiceHandler:
                 type=nexusrpc.HandlerErrorType.BAD_REQUEST,
             )
 
-        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
-        url: str | None = await handle.query(ToolRegistryWorkflow.find, args=[agent_id, alias])
+        handle = await self._account_handle(account_id)
+        url: str | None = await handle.query(ToolRegistryWorkflow.find, alias)
         if url is None:
             raise nexusrpc.HandlerError(
-                f"{alias!r} is not registered for agent {agent_id!r}.",
+                f"{alias!r} is not registered for account {account_id!r}.",
                 type=nexusrpc.HandlerErrorType.NOT_FOUND,
             )
 
@@ -676,27 +706,27 @@ class RegistryServiceHandler:
     async def register_subagent(
         self, ctx: StartOperationContext, input: RegisterSubagentInput
     ) -> None:
-        """Register a non-Nexus subagent's URL under one agent_id."""
-        agent_id = input.agent_id or ""
+        """Register a non-Nexus subagent's URL under one account_id."""
+        account_id = input.account_id or ""
         alias = input.alias or ""
-        if not agent_id or not alias:
+        if not account_id or not alias:
             raise nexusrpc.HandlerError(
-                "agent_id and alias are required", type=nexusrpc.HandlerErrorType.BAD_REQUEST
+                "account_id and alias are required", type=nexusrpc.HandlerErrorType.BAD_REQUEST
             )
         if not input.url:
             raise nexusrpc.HandlerError("url is required", type=nexusrpc.HandlerErrorType.BAD_REQUEST)
 
-        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
-        await handle.signal(ToolRegistryWorkflow.register_subagent, args=[agent_id, alias, input.url])
+        handle = await self._account_handle(account_id)
+        await handle.signal(ToolRegistryWorkflow.register_subagent, args=[alias, input.url])
 
     @nexusrpc.handler.sync_operation
     async def deregister_subagent(
         self, ctx: StartOperationContext, input: DeregisterSubagentInput
     ) -> None:
-        """Remove one subagent registration under one agent_id."""
-        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        """Remove one subagent registration under one account_id."""
+        handle = await self._account_handle(input.account_id)
         await handle.signal(
-            ToolRegistryWorkflow.deregister_subagent, args=[input.agent_id, input.alias]
+            ToolRegistryWorkflow.deregister_subagent, input.alias
         )
 
     @nexusrpc.handler.sync_operation
@@ -704,24 +734,24 @@ class RegistryServiceHandler:
         self, ctx: StartOperationContext, input: StartSubagentInput
     ) -> StartSubagentOutput:
         """Start one instance from a registered provider."""
-        agent_id = input.agent_id
+        account_id = input.account_id
         alias = input.alias
-        if not agent_id or not alias:
+        if not account_id or not alias:
             raise nexusrpc.HandlerError(
-                "agent_id and alias are required", type=nexusrpc.HandlerErrorType.BAD_REQUEST
+                "account_id and alias are required", type=nexusrpc.HandlerErrorType.BAD_REQUEST
             )
 
-        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        handle = await self._account_handle(account_id)
         url: str | None = await handle.query(
-            ToolRegistryWorkflow.find_subagent, args=[agent_id, alias]
+            ToolRegistryWorkflow.find_subagent, alias
         )
         if url is None:
             raise nexusrpc.HandlerError(
-                f"subagent {alias!r} is not registered for agent {agent_id!r}.",
+                f"subagent {alias!r} is not registered for account {account_id!r}.",
                 type=nexusrpc.HandlerErrorType.NOT_FOUND,
             )
 
-        idempotency_key = f"{agent_id}:{alias}:start:{ctx.request_id}"
+        idempotency_key = f"{account_id}:{alias}:start:{ctx.request_id}"
         instance_id = uuid.uuid5(uuid.NAMESPACE_URL, idempotency_key).hex
         try:
             result = await self._client.execute_activity(
@@ -742,7 +772,6 @@ class RegistryServiceHandler:
         await handle.execute_update(
             ToolRegistryWorkflow.bind_subagent_instance,
             args=[
-                agent_id,
                 instance_id,
                 SubagentInstanceRoute(
                     alias=alias,
@@ -759,26 +788,26 @@ class RegistryServiceHandler:
         self, ctx: StartOperationContext, input: DispatchSubagentTurnInput
     ) -> DispatchSubagentTurnOutput:
         """Send one turn through a retryable standalone activity."""
-        agent_id = input.agent_id
+        account_id = input.account_id
         instance_id = input.instance_id
-        if not agent_id or not instance_id or input.expected_turn < 1:
+        if not account_id or not instance_id or input.expected_turn < 1:
             raise nexusrpc.HandlerError(
-                "agent_id, instance_id, and a positive expected_turn are required",
+                "account_id, instance_id, and a positive expected_turn are required",
                 type=nexusrpc.HandlerErrorType.BAD_REQUEST,
             )
 
-        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        handle = await self._account_handle(account_id)
         route: SubagentInstanceRoute | None = await handle.query(
             ToolRegistryWorkflow.find_subagent_instance,
-            args=[agent_id, instance_id],
+            instance_id,
         )
         if route is None:
             raise nexusrpc.HandlerError(
-                f"subagent instance {instance_id!r} was not found for agent {agent_id!r}.",
+                f"subagent instance {instance_id!r} was not found for account {account_id!r}.",
                 type=nexusrpc.HandlerErrorType.NOT_FOUND,
             )
 
-        idempotency_key = f"{agent_id}:{instance_id}:{input.expected_turn}"
+        idempotency_key = f"{account_id}:{instance_id}:{input.expected_turn}"
         try:
             result = await self._client.execute_activity(
                 subagent_proxy_activity,
@@ -817,17 +846,17 @@ class RegistryServiceHandler:
         self, ctx: StartOperationContext, input: StopSubagentInput
     ) -> None:
         """Close a subagent instance."""
-        agent_id = input.agent_id
+        account_id = input.account_id
         instance_id = input.instance_id
-        if not agent_id or not instance_id:
+        if not account_id or not instance_id:
             raise nexusrpc.HandlerError(
-                "agent_id and instance_id are required",
+                "account_id and instance_id are required",
                 type=nexusrpc.HandlerErrorType.BAD_REQUEST,
             )
-        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        handle = await self._account_handle(account_id)
         route: SubagentInstanceRoute | None = await handle.query(
             ToolRegistryWorkflow.find_subagent_instance,
-            args=[agent_id, instance_id],
+            instance_id,
         )
         if route is None:
             return  # Stop is idempotent.
@@ -852,6 +881,6 @@ class RegistryServiceHandler:
             ) from exc
         await handle.execute_update(
             ToolRegistryWorkflow.unbind_subagent_instance,
-            args=[agent_id, instance_id],
+            instance_id,
             id=f"subagent-unbind-{ctx.request_id}",
         )

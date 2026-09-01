@@ -26,17 +26,18 @@ _INSTALL_MESSAGE = (
     "and requires Python >=3.13. Install it with `uv sync --extra nexus-mcp`."
 )
 
+
 class GatewayTransport:
     """Route A2A over Nexus to a registered HTTP A2A agent."""
 
     def __init__(
         self,
-        agent_id: str,
+        account_id: str,
         alias: str,
         gateway_name: str = "A2AService",
         gateway_endpoint: str = "mcp-registry-endpoint",
     ) -> None:
-        self._agent_id = agent_id
+        self._account_id = account_id
         self._alias = alias
         self._gateway_name = gateway_name
         self._gateway_endpoint = gateway_endpoint
@@ -72,7 +73,7 @@ class GatewayTransport:
                     metadata={"temporal.io/message-type": msg_type},
                 ),
                 metadata={
-                    "owner_id": self._agent_id,
+                    "account_id": self._account_id,
                     "agent_id": self._alias,
                     "expected_turn": expected_turn,
                 },
@@ -110,7 +111,7 @@ class GatewayTransport:
             A2AService.cancel_task,
             CancelTaskRequest(
                 id=target,
-                metadata={"owner_id": self._agent_id},
+                metadata={"account_id": self._account_id},
             ),
             schedule_to_close_timeout=timedelta(minutes=1),
         )

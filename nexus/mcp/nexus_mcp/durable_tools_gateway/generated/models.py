@@ -16,22 +16,7 @@ from ._definitions import (
 )
 
 
-_CALL_TOOL_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id", "alias", "name", "arguments"})
-
-
-_CALL_TOOL_OUTPUT_DECLARED: frozenset[str] = frozenset({"result"})
-
-
-_DEREGISTER_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id", "name"})
-
-
-_LIST_AGENT_ENTRIES_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id"})
-
-
-_LIST_AGENT_ENTRIES_OUTPUT_DECLARED: frozenset[str] = frozenset({"remote_tools"})
-
-
-_REGISTER_EXTERNAL_INPUT_DECLARED: frozenset[str] = frozenset({"agent_id", "name", "url"})
+_LIST_ACCOUNT_ENTRIES_OUTPUT_DECLARED: frozenset[str] = frozenset({"remote_tools"})
 
 
 class _CallToolInputTransferTypeConverter(
@@ -46,38 +31,35 @@ class _CallToolInputTransferTypeConverter(
             raise ValidationError([Violation(path="", reason="expected object")])
         raw = typing.cast("dict[str, typing.Any]", value)
 
-        agent_id_value: str | None = None
-        if "agent_id" in raw:
-            agent_id_value_raw = raw["agent_id"]
-            if agent_id_value_raw is None:
-                violations.append(Violation(path="agent_id", reason="explicit null not allowed"))
+        account_id_value: str = typing.cast("typing.Any", None)
+        if "account_id" not in raw or raw["account_id"] is None:
+            violations.append(Violation(path="account_id", reason="required"))
+        else:
+            account_id_value_raw = raw["account_id"]
+            if not isinstance(account_id_value_raw, str):
+                violations.append(Violation(path="account_id", reason="expected string"))
             else:
-                if not isinstance(agent_id_value_raw, str):
-                    violations.append(Violation(path="agent_id", reason="expected string"))
-                else:
-                    agent_id_value = agent_id_value_raw
+                account_id_value = account_id_value_raw
 
-        alias_value: str | None = None
-        if "alias" in raw:
+        alias_value: str = typing.cast("typing.Any", None)
+        if "alias" not in raw or raw["alias"] is None:
+            violations.append(Violation(path="alias", reason="required"))
+        else:
             alias_value_raw = raw["alias"]
-            if alias_value_raw is None:
-                violations.append(Violation(path="alias", reason="explicit null not allowed"))
+            if not isinstance(alias_value_raw, str):
+                violations.append(Violation(path="alias", reason="expected string"))
             else:
-                if not isinstance(alias_value_raw, str):
-                    violations.append(Violation(path="alias", reason="expected string"))
-                else:
-                    alias_value = alias_value_raw
+                alias_value = alias_value_raw
 
-        name_value: str | None = None
-        if "name" in raw:
+        name_value: str = typing.cast("typing.Any", None)
+        if "name" not in raw or raw["name"] is None:
+            violations.append(Violation(path="name", reason="required"))
+        else:
             name_value_raw = raw["name"]
-            if name_value_raw is None:
-                violations.append(Violation(path="name", reason="explicit null not allowed"))
+            if not isinstance(name_value_raw, str):
+                violations.append(Violation(path="name", reason="expected string"))
             else:
-                if not isinstance(name_value_raw, str):
-                    violations.append(Violation(path="name", reason="expected string"))
-                else:
-                    name_value = name_value_raw
+                name_value = name_value_raw
 
         arguments_value: CallToolInputArguments | None = None
         if "arguments" in raw:
@@ -90,40 +72,30 @@ class _CallToolInputTransferTypeConverter(
                 except ValidationError as error:
                     _collect(violations, "arguments", error)
 
-        additional_properties: dict[str, typing.Any] = {}
         for key in raw:
-            if key not in _CALL_TOOL_INPUT_DECLARED:
-                additional_properties[key] = raw[key]
+            if key != "account_id" and key != "alias" and key != "name" and key != "arguments":
+                violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
         return CallToolInput(
-            agent_id=agent_id_value,
+            account_id=account_id_value,
             alias=alias_value,
             name=name_value,
             arguments=arguments_value,
-            additional_properties=additional_properties,
         )
 
     @typing_extensions.override
     def to_transfer_type(self, value: "CallToolInput") -> typing.Any:
         violations: list[Violation] = []
         out: dict[str, typing.Any] = {}
-        if value.agent_id is not None:
-            out["agent_id"] = value.agent_id
-        if value.alias is not None:
-            out["alias"] = value.alias
-        if value.name is not None:
-            out["name"] = value.name
+        out["account_id"] = value.account_id
+        out["alias"] = value.alias
+        out["name"] = value.name
         if value.arguments is not None:
             try:
                 out["arguments"] = _CallToolInputArgumentsTransferTypeConverter().to_transfer_type(value.arguments)
             except ValidationError as error:
                 _collect(violations, "arguments", error)
-        for key, entry in value.additional_properties.items():
-            if key in _CALL_TOOL_INPUT_DECLARED:
-                violations.append(Violation(path=key, reason="additional property collides with declared property"))
-            else:
-                out[key] = entry
         if violations:
             raise ValidationError(violations)
         return out
@@ -134,16 +106,14 @@ class _CallToolInputTransferTypeConverter(
 class CallToolInput:
     """Input for invoking one tool on a registered 3rd-party MCP server."""
 
-    agent_id: str | None = None
+    account_id: str
 
-    alias: str | None = None
+    alias: str
 
-    name: str | None = None
+    name: str
     """Full prefixed tool name, e.g. "weather_get_forecast"."""
 
     arguments: CallToolInputArguments | None = None
-
-    additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
 
 
 class _CallToolInputArgumentsTransferTypeConverter(
@@ -191,42 +161,33 @@ class _CallToolOutputTransferTypeConverter(
             raise ValidationError([Violation(path="", reason="expected object")])
         raw = typing.cast("dict[str, typing.Any]", value)
 
-        result_value: CallToolOutputResult | None = None
-        if "result" in raw:
+        result_value: CallToolOutputResult = typing.cast("typing.Any", None)
+        if "result" not in raw or raw["result"] is None:
+            violations.append(Violation(path="result", reason="required"))
+        else:
             result_value_raw = raw["result"]
-            if result_value_raw is None:
-                violations.append(Violation(path="result", reason="explicit null not allowed"))
-            else:
-                try:
-                    result_value = _CallToolOutputResultTransferTypeConverter().from_transfer_type(result_value_raw, CallToolOutputResult)
-                except ValidationError as error:
-                    _collect(violations, "result", error)
+            try:
+                result_value = _CallToolOutputResultTransferTypeConverter().from_transfer_type(result_value_raw, CallToolOutputResult)
+            except ValidationError as error:
+                _collect(violations, "result", error)
 
-        additional_properties: dict[str, typing.Any] = {}
         for key in raw:
-            if key not in _CALL_TOOL_OUTPUT_DECLARED:
-                additional_properties[key] = raw[key]
+            if key != "result":
+                violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
         return CallToolOutput(
             result=result_value,
-            additional_properties=additional_properties,
         )
 
     @typing_extensions.override
     def to_transfer_type(self, value: "CallToolOutput") -> typing.Any:
         violations: list[Violation] = []
         out: dict[str, typing.Any] = {}
-        if value.result is not None:
-            try:
-                out["result"] = _CallToolOutputResultTransferTypeConverter().to_transfer_type(value.result)
-            except ValidationError as error:
-                _collect(violations, "result", error)
-        for key, entry in value.additional_properties.items():
-            if key in _CALL_TOOL_OUTPUT_DECLARED:
-                violations.append(Violation(path=key, reason="additional property collides with declared property"))
-            else:
-                out[key] = entry
+        try:
+            out["result"] = _CallToolOutputResultTransferTypeConverter().to_transfer_type(value.result)
+        except ValidationError as error:
+            _collect(violations, "result", error)
         if violations:
             raise ValidationError(violations)
         return out
@@ -237,9 +198,7 @@ class _CallToolOutputTransferTypeConverter(
 class CallToolOutput:
     """Serialised mcp.types.CallToolResult."""
 
-    result: CallToolOutputResult | None = None
-
-    additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+    result: CallToolOutputResult
 
 
 class _CallToolOutputResultTransferTypeConverter(
@@ -287,55 +246,41 @@ class _DeregisterInputTransferTypeConverter(
             raise ValidationError([Violation(path="", reason="expected object")])
         raw = typing.cast("dict[str, typing.Any]", value)
 
-        agent_id_value: str | None = None
-        if "agent_id" in raw:
-            agent_id_value_raw = raw["agent_id"]
-            if agent_id_value_raw is None:
-                violations.append(Violation(path="agent_id", reason="explicit null not allowed"))
+        account_id_value: str = typing.cast("typing.Any", None)
+        if "account_id" not in raw or raw["account_id"] is None:
+            violations.append(Violation(path="account_id", reason="required"))
+        else:
+            account_id_value_raw = raw["account_id"]
+            if not isinstance(account_id_value_raw, str):
+                violations.append(Violation(path="account_id", reason="expected string"))
             else:
-                if not isinstance(agent_id_value_raw, str):
-                    violations.append(Violation(path="agent_id", reason="expected string"))
-                else:
-                    agent_id_value = agent_id_value_raw
+                account_id_value = account_id_value_raw
 
-        name_value: str | None = None
-        if "name" in raw:
+        name_value: str = typing.cast("typing.Any", None)
+        if "name" not in raw or raw["name"] is None:
+            violations.append(Violation(path="name", reason="required"))
+        else:
             name_value_raw = raw["name"]
-            if name_value_raw is None:
-                violations.append(Violation(path="name", reason="explicit null not allowed"))
+            if not isinstance(name_value_raw, str):
+                violations.append(Violation(path="name", reason="expected string"))
             else:
-                if not isinstance(name_value_raw, str):
-                    violations.append(Violation(path="name", reason="expected string"))
-                else:
-                    name_value = name_value_raw
+                name_value = name_value_raw
 
-        additional_properties: dict[str, typing.Any] = {}
         for key in raw:
-            if key not in _DEREGISTER_INPUT_DECLARED:
-                additional_properties[key] = raw[key]
+            if key != "account_id" and key != "name":
+                violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
         return DeregisterInput(
-            agent_id=agent_id_value,
+            account_id=account_id_value,
             name=name_value,
-            additional_properties=additional_properties,
         )
 
     @typing_extensions.override
     def to_transfer_type(self, value: "DeregisterInput") -> typing.Any:
-        violations: list[Violation] = []
         out: dict[str, typing.Any] = {}
-        if value.agent_id is not None:
-            out["agent_id"] = value.agent_id
-        if value.name is not None:
-            out["name"] = value.name
-        for key, entry in value.additional_properties.items():
-            if key in _DEREGISTER_INPUT_DECLARED:
-                violations.append(Violation(path=key, reason="additional property collides with declared property"))
-            else:
-                out[key] = entry
-        if violations:
-            raise ValidationError(violations)
+        out["account_id"] = value.account_id
+        out["name"] = value.name
         return out
 
 
@@ -344,11 +289,9 @@ class _DeregisterInputTransferTypeConverter(
 class DeregisterInput:
     """Input for removing one registration."""
 
-    agent_id: str | None = None
+    account_id: str
 
-    name: str | None = None
-
-    additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+    name: str
 
 
 class _DeregisterSubagentInputTransferTypeConverter(
@@ -363,15 +306,15 @@ class _DeregisterSubagentInputTransferTypeConverter(
             raise ValidationError([Violation(path="", reason="expected object")])
         raw = typing.cast("dict[str, typing.Any]", value)
 
-        agent_id_value: str = typing.cast("typing.Any", None)
-        if "agent_id" not in raw or raw["agent_id"] is None:
-            violations.append(Violation(path="agent_id", reason="required"))
+        account_id_value: str = typing.cast("typing.Any", None)
+        if "account_id" not in raw or raw["account_id"] is None:
+            violations.append(Violation(path="account_id", reason="required"))
         else:
-            agent_id_value_raw = raw["agent_id"]
-            if not isinstance(agent_id_value_raw, str):
-                violations.append(Violation(path="agent_id", reason="expected string"))
+            account_id_value_raw = raw["account_id"]
+            if not isinstance(account_id_value_raw, str):
+                violations.append(Violation(path="account_id", reason="expected string"))
             else:
-                agent_id_value = agent_id_value_raw
+                account_id_value = account_id_value_raw
 
         alias_value: str = typing.cast("typing.Any", None)
         if "alias" not in raw or raw["alias"] is None:
@@ -384,19 +327,19 @@ class _DeregisterSubagentInputTransferTypeConverter(
                 alias_value = alias_value_raw
 
         for key in raw:
-            if key != "agent_id" and key != "alias":
+            if key != "account_id" and key != "alias":
                 violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
         return DeregisterSubagentInput(
-            agent_id=agent_id_value,
+            account_id=account_id_value,
             alias=alias_value,
         )
 
     @typing_extensions.override
     def to_transfer_type(self, value: "DeregisterSubagentInput") -> typing.Any:
         out: dict[str, typing.Any] = {}
-        out["agent_id"] = value.agent_id
+        out["account_id"] = value.account_id
         out["alias"] = value.alias
         return out
 
@@ -406,7 +349,7 @@ class _DeregisterSubagentInputTransferTypeConverter(
 class DeregisterSubagentInput:
     """Input for removing one subagent registration."""
 
-    agent_id: str
+    account_id: str
 
     alias: str
 
@@ -423,15 +366,15 @@ class _DispatchSubagentTurnInputTransferTypeConverter(
             raise ValidationError([Violation(path="", reason="expected object")])
         raw = typing.cast("dict[str, typing.Any]", value)
 
-        agent_id_value: str = typing.cast("typing.Any", None)
-        if "agent_id" not in raw or raw["agent_id"] is None:
-            violations.append(Violation(path="agent_id", reason="required"))
+        account_id_value: str = typing.cast("typing.Any", None)
+        if "account_id" not in raw or raw["account_id"] is None:
+            violations.append(Violation(path="account_id", reason="required"))
         else:
-            agent_id_value_raw = raw["agent_id"]
-            if not isinstance(agent_id_value_raw, str):
-                violations.append(Violation(path="agent_id", reason="expected string"))
+            account_id_value_raw = raw["account_id"]
+            if not isinstance(account_id_value_raw, str):
+                violations.append(Violation(path="account_id", reason="expected string"))
             else:
-                agent_id_value = agent_id_value_raw
+                account_id_value = account_id_value_raw
 
         instance_id_value: str = typing.cast("typing.Any", None)
         if "instance_id" not in raw or raw["instance_id"] is None:
@@ -473,12 +416,12 @@ class _DispatchSubagentTurnInputTransferTypeConverter(
                 expected_turn_value = expected_turn_value_parsed
 
         for key in raw:
-            if key != "agent_id" and key != "instance_id" and key != "msg_type" and key != "payload" and key != "expected_turn":
+            if key != "account_id" and key != "instance_id" and key != "msg_type" and key != "payload" and key != "expected_turn":
                 violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
         return DispatchSubagentTurnInput(
-            agent_id=agent_id_value,
+            account_id=account_id_value,
             instance_id=instance_id_value,
             msg_type=msg_type_value,
             payload=payload_value,
@@ -488,7 +431,7 @@ class _DispatchSubagentTurnInputTransferTypeConverter(
     @typing_extensions.override
     def to_transfer_type(self, value: "DispatchSubagentTurnInput") -> typing.Any:
         out: dict[str, typing.Any] = {}
-        out["agent_id"] = value.agent_id
+        out["account_id"] = value.account_id
         out["instance_id"] = value.instance_id
         out["msg_type"] = value.msg_type
         out["payload"] = value.payload
@@ -501,7 +444,7 @@ class _DispatchSubagentTurnInputTransferTypeConverter(
 class DispatchSubagentTurnInput:
     """Input for sending one turn to a subagent instance."""
 
-    agent_id: str
+    account_id: str
 
     instance_id: str
     """Instance returned by startSubagent."""
@@ -590,111 +533,97 @@ class DispatchSubagentTurnOutput:
     turn_number: int
 
 
-class _ListAgentEntriesInputTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter["ListAgentEntriesInput", typing.Any]
+class _ListAccountEntriesInputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["ListAccountEntriesInput", typing.Any]
 ):
     @typing_extensions.override
     def from_transfer_type(
-        self, value: typing.Any, type_hint: type["ListAgentEntriesInput"]
-    ) -> "ListAgentEntriesInput":
+        self, value: typing.Any, type_hint: type["ListAccountEntriesInput"]
+    ) -> "ListAccountEntriesInput":
         violations: list[Violation] = []
         if not isinstance(value, dict):
             raise ValidationError([Violation(path="", reason="expected object")])
         raw = typing.cast("dict[str, typing.Any]", value)
 
-        agent_id_value: str | None = None
-        if "agent_id" in raw:
-            agent_id_value_raw = raw["agent_id"]
-            if agent_id_value_raw is None:
-                violations.append(Violation(path="agent_id", reason="explicit null not allowed"))
+        account_id_value: str = typing.cast("typing.Any", None)
+        if "account_id" not in raw or raw["account_id"] is None:
+            violations.append(Violation(path="account_id", reason="required"))
+        else:
+            account_id_value_raw = raw["account_id"]
+            if not isinstance(account_id_value_raw, str):
+                violations.append(Violation(path="account_id", reason="expected string"))
             else:
-                if not isinstance(agent_id_value_raw, str):
-                    violations.append(Violation(path="agent_id", reason="expected string"))
-                else:
-                    agent_id_value = agent_id_value_raw
+                account_id_value = account_id_value_raw
 
-        additional_properties: dict[str, typing.Any] = {}
         for key in raw:
-            if key not in _LIST_AGENT_ENTRIES_INPUT_DECLARED:
-                additional_properties[key] = raw[key]
+            if key != "account_id":
+                violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
-        return ListAgentEntriesInput(
-            agent_id=agent_id_value,
-            additional_properties=additional_properties,
+        return ListAccountEntriesInput(
+            account_id=account_id_value,
         )
 
     @typing_extensions.override
-    def to_transfer_type(self, value: "ListAgentEntriesInput") -> typing.Any:
-        violations: list[Violation] = []
+    def to_transfer_type(self, value: "ListAccountEntriesInput") -> typing.Any:
         out: dict[str, typing.Any] = {}
-        if value.agent_id is not None:
-            out["agent_id"] = value.agent_id
-        for key, entry in value.additional_properties.items():
-            if key in _LIST_AGENT_ENTRIES_INPUT_DECLARED:
-                violations.append(Violation(path=key, reason="additional property collides with declared property"))
-            else:
-                out[key] = entry
-        if violations:
-            raise ValidationError(violations)
+        out["account_id"] = value.account_id
         return out
 
 
-@_transfer_type_convertible(_ListAgentEntriesInputTransferTypeConverter)
+@_transfer_type_convertible(_ListAccountEntriesInputTransferTypeConverter)
 @dataclasses.dataclass(slots=True, kw_only=True)
-class ListAgentEntriesInput:
-    """Input for looking up one agent_id's registrations."""
+class ListAccountEntriesInput:
+    """Input for looking up one account_id's registrations."""
 
-    agent_id: str | None = None
-
-    additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+    account_id: str
 
 
-class _ListAgentEntriesOutputTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter["ListAgentEntriesOutput", typing.Any]
+class _ListAccountEntriesOutputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["ListAccountEntriesOutput", typing.Any]
 ):
     @typing_extensions.override
     def from_transfer_type(
-        self, value: typing.Any, type_hint: type["ListAgentEntriesOutput"]
-    ) -> "ListAgentEntriesOutput":
+        self, value: typing.Any, type_hint: type["ListAccountEntriesOutput"]
+    ) -> "ListAccountEntriesOutput":
         violations: list[Violation] = []
         if not isinstance(value, dict):
             raise ValidationError([Violation(path="", reason="expected object")])
         raw = typing.cast("dict[str, typing.Any]", value)
 
-        remote_tools_value: ListAgentEntriesOutputRemoteTools | None = None
+        remote_tools_value: ListAccountEntriesOutputRemoteTools | None = None
         if "remote_tools" in raw:
             remote_tools_value_raw = raw["remote_tools"]
             if remote_tools_value_raw is None:
                 violations.append(Violation(path="remote_tools", reason="explicit null not allowed"))
             else:
                 try:
-                    remote_tools_value = _ListAgentEntriesOutputRemoteToolsTransferTypeConverter().from_transfer_type(remote_tools_value_raw, ListAgentEntriesOutputRemoteTools)
+                    remote_tools_value = _ListAccountEntriesOutputRemoteToolsTransferTypeConverter().from_transfer_type(remote_tools_value_raw, ListAccountEntriesOutputRemoteTools)
                 except ValidationError as error:
                     _collect(violations, "remote_tools", error)
 
         additional_properties: dict[str, typing.Any] = {}
         for key in raw:
-            if key not in _LIST_AGENT_ENTRIES_OUTPUT_DECLARED:
+            if key not in _LIST_ACCOUNT_ENTRIES_OUTPUT_DECLARED:
                 additional_properties[key] = raw[key]
         if violations:
             raise ValidationError(violations)
-        return ListAgentEntriesOutput(
+        return ListAccountEntriesOutput(
             remote_tools=remote_tools_value,
             additional_properties=additional_properties,
         )
 
     @typing_extensions.override
-    def to_transfer_type(self, value: "ListAgentEntriesOutput") -> typing.Any:
+    def to_transfer_type(self, value: "ListAccountEntriesOutput") -> typing.Any:
         violations: list[Violation] = []
         out: dict[str, typing.Any] = {}
         if value.remote_tools is not None:
             try:
-                out["remote_tools"] = _ListAgentEntriesOutputRemoteToolsTransferTypeConverter().to_transfer_type(value.remote_tools)
+                out["remote_tools"] = _ListAccountEntriesOutputRemoteToolsTransferTypeConverter().to_transfer_type(value.remote_tools)
             except ValidationError as error:
                 _collect(violations, "remote_tools", error)
         for key, entry in value.additional_properties.items():
-            if key in _LIST_AGENT_ENTRIES_OUTPUT_DECLARED:
+            if key in _LIST_ACCOUNT_ENTRIES_OUTPUT_DECLARED:
                 violations.append(Violation(path=key, reason="additional property collides with declared property"))
             else:
                 out[key] = entry
@@ -703,41 +632,41 @@ class _ListAgentEntriesOutputTransferTypeConverter(
         return out
 
 
-@_transfer_type_convertible(_ListAgentEntriesOutputTransferTypeConverter)
+@_transfer_type_convertible(_ListAccountEntriesOutputTransferTypeConverter)
 @dataclasses.dataclass(slots=True, kw_only=True)
-class ListAgentEntriesOutput:
-    """All registered 3rd-party tools for one agent_id."""
+class ListAccountEntriesOutput:
+    """All registered 3rd-party tools for one account_id."""
 
-    remote_tools: ListAgentEntriesOutputRemoteTools | None = None
+    remote_tools: ListAccountEntriesOutputRemoteTools | None = None
 
     additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
 
 
-class _ListAgentEntriesOutputRemoteToolsTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter["ListAgentEntriesOutputRemoteTools", typing.Any]
+class _ListAccountEntriesOutputRemoteToolsTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["ListAccountEntriesOutputRemoteTools", typing.Any]
 ):
     @typing_extensions.override
     def from_transfer_type(
-        self, value: typing.Any, type_hint: type["ListAgentEntriesOutputRemoteTools"]
-    ) -> "ListAgentEntriesOutputRemoteTools":
+        self, value: typing.Any, type_hint: type["ListAccountEntriesOutputRemoteTools"]
+    ) -> "ListAccountEntriesOutputRemoteTools":
         violations: list[Violation] = []
         if not isinstance(value, dict):
             raise ValidationError([Violation(path="", reason="expected object")])
         raw = typing.cast("dict[str, typing.Any]", value)
-        additional_properties: dict[str, list[ListAgentEntriesOutputRemoteToolsValueItem]] = {}
+        additional_properties: dict[str, list[ListAccountEntriesOutputRemoteToolsValueItem]] = {}
         for key in raw:
-            member: list[ListAgentEntriesOutputRemoteToolsValueItem] = typing.cast("typing.Any", None)
+            member: list[ListAccountEntriesOutputRemoteToolsValueItem] = typing.cast("typing.Any", None)
             member_raw = raw[key]
             if not isinstance(member_raw, list):
                 violations.append(Violation(path=key, reason="expected array"))
             else:
-                member_list: list[ListAgentEntriesOutputRemoteToolsValueItem] = []
+                member_list: list[ListAccountEntriesOutputRemoteToolsValueItem] = []
                 for member_index, member_element in enumerate(typing.cast("list[typing.Any]", member_raw)):
                     member_item_path = key + f'[{member_index}]'
                     member_item_violation_count = len(violations)
-                    member_item: ListAgentEntriesOutputRemoteToolsValueItem = typing.cast("typing.Any", None)
+                    member_item: ListAccountEntriesOutputRemoteToolsValueItem = typing.cast("typing.Any", None)
                     try:
-                        member_item = _ListAgentEntriesOutputRemoteToolsValueItemTransferTypeConverter().from_transfer_type(member_element, ListAgentEntriesOutputRemoteToolsValueItem)
+                        member_item = _ListAccountEntriesOutputRemoteToolsValueItemTransferTypeConverter().from_transfer_type(member_element, ListAccountEntriesOutputRemoteToolsValueItem)
                     except ValidationError as error:
                         _collect(violations, member_item_path, error)
                     if len(violations) == member_item_violation_count:
@@ -746,17 +675,17 @@ class _ListAgentEntriesOutputRemoteToolsTransferTypeConverter(
             additional_properties[key] = member
         if violations:
             raise ValidationError(violations)
-        return ListAgentEntriesOutputRemoteTools(additional_properties=additional_properties)
+        return ListAccountEntriesOutputRemoteTools(additional_properties=additional_properties)
 
     @typing_extensions.override
-    def to_transfer_type(self, value: "ListAgentEntriesOutputRemoteTools") -> typing.Any:
+    def to_transfer_type(self, value: "ListAccountEntriesOutputRemoteTools") -> typing.Any:
         violations: list[Violation] = []
         out: dict[str, typing.Any] = {}
         for key, entry in value.additional_properties.items():
             entry_out: list[typing.Any] = []
             for entry_index, entry_element in enumerate(entry):
                 try:
-                    entry_out.append(_ListAgentEntriesOutputRemoteToolsValueItemTransferTypeConverter().to_transfer_type(entry_element))
+                    entry_out.append(_ListAccountEntriesOutputRemoteToolsValueItemTransferTypeConverter().to_transfer_type(entry_element))
                 except ValidationError as error:
                     _collect(violations, key + f'[{entry_index}]', error)
             out[key] = entry_out
@@ -765,21 +694,21 @@ class _ListAgentEntriesOutputRemoteToolsTransferTypeConverter(
         return out
 
 
-@_transfer_type_convertible(_ListAgentEntriesOutputRemoteToolsTransferTypeConverter)
+@_transfer_type_convertible(_ListAccountEntriesOutputRemoteToolsTransferTypeConverter)
 @dataclasses.dataclass(slots=True, kw_only=True)
-class ListAgentEntriesOutputRemoteTools:
+class ListAccountEntriesOutputRemoteTools:
     """{alias: [tool dicts]}"""
 
-    additional_properties: dict[str, list[ListAgentEntriesOutputRemoteToolsValueItem]] = dataclasses.field(default_factory=dict)
+    additional_properties: dict[str, list[ListAccountEntriesOutputRemoteToolsValueItem]] = dataclasses.field(default_factory=dict)
 
 
-class _ListAgentEntriesOutputRemoteToolsValueItemTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter["ListAgentEntriesOutputRemoteToolsValueItem", typing.Any]
+class _ListAccountEntriesOutputRemoteToolsValueItemTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["ListAccountEntriesOutputRemoteToolsValueItem", typing.Any]
 ):
     @typing_extensions.override
     def from_transfer_type(
-        self, value: typing.Any, type_hint: type["ListAgentEntriesOutputRemoteToolsValueItem"]
-    ) -> "ListAgentEntriesOutputRemoteToolsValueItem":
+        self, value: typing.Any, type_hint: type["ListAccountEntriesOutputRemoteToolsValueItem"]
+    ) -> "ListAccountEntriesOutputRemoteToolsValueItem":
         violations: list[Violation] = []
         if not isinstance(value, dict):
             raise ValidationError([Violation(path="", reason="expected object")])
@@ -789,19 +718,19 @@ class _ListAgentEntriesOutputRemoteToolsValueItemTransferTypeConverter(
             additional_properties[key] = raw[key]
         if violations:
             raise ValidationError(violations)
-        return ListAgentEntriesOutputRemoteToolsValueItem(additional_properties=additional_properties)
+        return ListAccountEntriesOutputRemoteToolsValueItem(additional_properties=additional_properties)
 
     @typing_extensions.override
-    def to_transfer_type(self, value: "ListAgentEntriesOutputRemoteToolsValueItem") -> typing.Any:
+    def to_transfer_type(self, value: "ListAccountEntriesOutputRemoteToolsValueItem") -> typing.Any:
         out: dict[str, typing.Any] = {}
         for key, entry in value.additional_properties.items():
             out[key] = entry
         return out
 
 
-@_transfer_type_convertible(_ListAgentEntriesOutputRemoteToolsValueItemTransferTypeConverter)
+@_transfer_type_convertible(_ListAccountEntriesOutputRemoteToolsValueItemTransferTypeConverter)
 @dataclasses.dataclass(slots=True, kw_only=True)
-class ListAgentEntriesOutputRemoteToolsValueItem:
+class ListAccountEntriesOutputRemoteToolsValueItem:
 
     additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
 
@@ -818,69 +747,53 @@ class _RegisterExternalInputTransferTypeConverter(
             raise ValidationError([Violation(path="", reason="expected object")])
         raw = typing.cast("dict[str, typing.Any]", value)
 
-        agent_id_value: str | None = None
-        if "agent_id" in raw:
-            agent_id_value_raw = raw["agent_id"]
-            if agent_id_value_raw is None:
-                violations.append(Violation(path="agent_id", reason="explicit null not allowed"))
+        account_id_value: str = typing.cast("typing.Any", None)
+        if "account_id" not in raw or raw["account_id"] is None:
+            violations.append(Violation(path="account_id", reason="required"))
+        else:
+            account_id_value_raw = raw["account_id"]
+            if not isinstance(account_id_value_raw, str):
+                violations.append(Violation(path="account_id", reason="expected string"))
             else:
-                if not isinstance(agent_id_value_raw, str):
-                    violations.append(Violation(path="agent_id", reason="expected string"))
-                else:
-                    agent_id_value = agent_id_value_raw
+                account_id_value = account_id_value_raw
 
-        name_value: str | None = None
-        if "name" in raw:
+        name_value: str = typing.cast("typing.Any", None)
+        if "name" not in raw or raw["name"] is None:
+            violations.append(Violation(path="name", reason="required"))
+        else:
             name_value_raw = raw["name"]
-            if name_value_raw is None:
-                violations.append(Violation(path="name", reason="explicit null not allowed"))
+            if not isinstance(name_value_raw, str):
+                violations.append(Violation(path="name", reason="expected string"))
             else:
-                if not isinstance(name_value_raw, str):
-                    violations.append(Violation(path="name", reason="expected string"))
-                else:
-                    name_value = name_value_raw
+                name_value = name_value_raw
 
-        url_value: str | None = None
-        if "url" in raw:
+        url_value: str = typing.cast("typing.Any", None)
+        if "url" not in raw or raw["url"] is None:
+            violations.append(Violation(path="url", reason="required"))
+        else:
             url_value_raw = raw["url"]
-            if url_value_raw is None:
-                violations.append(Violation(path="url", reason="explicit null not allowed"))
+            if not isinstance(url_value_raw, str):
+                violations.append(Violation(path="url", reason="expected string"))
             else:
-                if not isinstance(url_value_raw, str):
-                    violations.append(Violation(path="url", reason="expected string"))
-                else:
-                    url_value = url_value_raw
+                url_value = url_value_raw
 
-        additional_properties: dict[str, typing.Any] = {}
         for key in raw:
-            if key not in _REGISTER_EXTERNAL_INPUT_DECLARED:
-                additional_properties[key] = raw[key]
+            if key != "account_id" and key != "name" and key != "url":
+                violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
         return RegisterExternalInput(
-            agent_id=agent_id_value,
+            account_id=account_id_value,
             name=name_value,
             url=url_value,
-            additional_properties=additional_properties,
         )
 
     @typing_extensions.override
     def to_transfer_type(self, value: "RegisterExternalInput") -> typing.Any:
-        violations: list[Violation] = []
         out: dict[str, typing.Any] = {}
-        if value.agent_id is not None:
-            out["agent_id"] = value.agent_id
-        if value.name is not None:
-            out["name"] = value.name
-        if value.url is not None:
-            out["url"] = value.url
-        for key, entry in value.additional_properties.items():
-            if key in _REGISTER_EXTERNAL_INPUT_DECLARED:
-                violations.append(Violation(path=key, reason="additional property collides with declared property"))
-            else:
-                out[key] = entry
-        if violations:
-            raise ValidationError(violations)
+        out["account_id"] = value.account_id
+        out["name"] = value.name
+        out["url"] = value.url
         return out
 
 
@@ -889,13 +802,11 @@ class _RegisterExternalInputTransferTypeConverter(
 class RegisterExternalInput:
     """Input for registering a 3rd-party MCP server."""
 
-    agent_id: str | None = None
+    account_id: str
 
-    name: str | None = None
+    name: str
 
-    url: str | None = None
-
-    additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+    url: str
 
 
 class _RegisterSubagentInputTransferTypeConverter(
@@ -910,15 +821,15 @@ class _RegisterSubagentInputTransferTypeConverter(
             raise ValidationError([Violation(path="", reason="expected object")])
         raw = typing.cast("dict[str, typing.Any]", value)
 
-        agent_id_value: str = typing.cast("typing.Any", None)
-        if "agent_id" not in raw or raw["agent_id"] is None:
-            violations.append(Violation(path="agent_id", reason="required"))
+        account_id_value: str = typing.cast("typing.Any", None)
+        if "account_id" not in raw or raw["account_id"] is None:
+            violations.append(Violation(path="account_id", reason="required"))
         else:
-            agent_id_value_raw = raw["agent_id"]
-            if not isinstance(agent_id_value_raw, str):
-                violations.append(Violation(path="agent_id", reason="expected string"))
+            account_id_value_raw = raw["account_id"]
+            if not isinstance(account_id_value_raw, str):
+                violations.append(Violation(path="account_id", reason="expected string"))
             else:
-                agent_id_value = agent_id_value_raw
+                account_id_value = account_id_value_raw
 
         alias_value: str = typing.cast("typing.Any", None)
         if "alias" not in raw or raw["alias"] is None:
@@ -941,12 +852,12 @@ class _RegisterSubagentInputTransferTypeConverter(
                 url_value = url_value_raw
 
         for key in raw:
-            if key != "agent_id" and key != "alias" and key != "url":
+            if key != "account_id" and key != "alias" and key != "url":
                 violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
         return RegisterSubagentInput(
-            agent_id=agent_id_value,
+            account_id=account_id_value,
             alias=alias_value,
             url=url_value,
         )
@@ -954,7 +865,7 @@ class _RegisterSubagentInputTransferTypeConverter(
     @typing_extensions.override
     def to_transfer_type(self, value: "RegisterSubagentInput") -> typing.Any:
         out: dict[str, typing.Any] = {}
-        out["agent_id"] = value.agent_id
+        out["account_id"] = value.account_id
         out["alias"] = value.alias
         out["url"] = value.url
         return out
@@ -965,7 +876,7 @@ class _RegisterSubagentInputTransferTypeConverter(
 class RegisterSubagentInput:
     """Input for registering a non-Nexus subagent's URL."""
 
-    agent_id: str
+    account_id: str
 
     alias: str
 
@@ -984,15 +895,15 @@ class _StartSubagentInputTransferTypeConverter(
             raise ValidationError([Violation(path="", reason="expected object")])
         raw = typing.cast("dict[str, typing.Any]", value)
 
-        agent_id_value: str = typing.cast("typing.Any", None)
-        if "agent_id" not in raw or raw["agent_id"] is None:
-            violations.append(Violation(path="agent_id", reason="required"))
+        account_id_value: str = typing.cast("typing.Any", None)
+        if "account_id" not in raw or raw["account_id"] is None:
+            violations.append(Violation(path="account_id", reason="required"))
         else:
-            agent_id_value_raw = raw["agent_id"]
-            if not isinstance(agent_id_value_raw, str):
-                violations.append(Violation(path="agent_id", reason="expected string"))
+            account_id_value_raw = raw["account_id"]
+            if not isinstance(account_id_value_raw, str):
+                violations.append(Violation(path="account_id", reason="expected string"))
             else:
-                agent_id_value = agent_id_value_raw
+                account_id_value = account_id_value_raw
 
         alias_value: str = typing.cast("typing.Any", None)
         if "alias" not in raw or raw["alias"] is None:
@@ -1005,19 +916,19 @@ class _StartSubagentInputTransferTypeConverter(
                 alias_value = alias_value_raw
 
         for key in raw:
-            if key != "agent_id" and key != "alias":
+            if key != "account_id" and key != "alias":
                 violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
         return StartSubagentInput(
-            agent_id=agent_id_value,
+            account_id=account_id_value,
             alias=alias_value,
         )
 
     @typing_extensions.override
     def to_transfer_type(self, value: "StartSubagentInput") -> typing.Any:
         out: dict[str, typing.Any] = {}
-        out["agent_id"] = value.agent_id
+        out["account_id"] = value.account_id
         out["alias"] = value.alias
         return out
 
@@ -1027,7 +938,7 @@ class _StartSubagentInputTransferTypeConverter(
 class StartSubagentInput:
     """Input for starting one subagent instance."""
 
-    agent_id: str
+    account_id: str
 
     alias: str
 
@@ -1090,15 +1001,15 @@ class _StopSubagentInputTransferTypeConverter(
             raise ValidationError([Violation(path="", reason="expected object")])
         raw = typing.cast("dict[str, typing.Any]", value)
 
-        agent_id_value: str = typing.cast("typing.Any", None)
-        if "agent_id" not in raw or raw["agent_id"] is None:
-            violations.append(Violation(path="agent_id", reason="required"))
+        account_id_value: str = typing.cast("typing.Any", None)
+        if "account_id" not in raw or raw["account_id"] is None:
+            violations.append(Violation(path="account_id", reason="required"))
         else:
-            agent_id_value_raw = raw["agent_id"]
-            if not isinstance(agent_id_value_raw, str):
-                violations.append(Violation(path="agent_id", reason="expected string"))
+            account_id_value_raw = raw["account_id"]
+            if not isinstance(account_id_value_raw, str):
+                violations.append(Violation(path="account_id", reason="expected string"))
             else:
-                agent_id_value = agent_id_value_raw
+                account_id_value = account_id_value_raw
 
         instance_id_value: str = typing.cast("typing.Any", None)
         if "instance_id" not in raw or raw["instance_id"] is None:
@@ -1111,19 +1022,19 @@ class _StopSubagentInputTransferTypeConverter(
                 instance_id_value = instance_id_value_raw
 
         for key in raw:
-            if key != "agent_id" and key != "instance_id":
+            if key != "account_id" and key != "instance_id":
                 violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
         return StopSubagentInput(
-            agent_id=agent_id_value,
+            account_id=account_id_value,
             instance_id=instance_id_value,
         )
 
     @typing_extensions.override
     def to_transfer_type(self, value: "StopSubagentInput") -> typing.Any:
         out: dict[str, typing.Any] = {}
-        out["agent_id"] = value.agent_id
+        out["account_id"] = value.account_id
         out["instance_id"] = value.instance_id
         return out
 
@@ -1133,7 +1044,7 @@ class _StopSubagentInputTransferTypeConverter(
 class StopSubagentInput:
     """Input for closing a subagent instance."""
 
-    agent_id: str
+    account_id: str
 
     instance_id: str
     """Instance returned by startSubagent."""
