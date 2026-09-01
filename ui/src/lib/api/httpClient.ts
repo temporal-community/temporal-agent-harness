@@ -1,5 +1,6 @@
 import type {
   AcceptedMessageTypesResponse,
+  AccountOverview,
   AgentInterfaceFunction,
   AgentRegistryResponse,
   AgentSseFrame,
@@ -10,6 +11,8 @@ import type {
   OperatorCommandRequest,
   OperatorCommandResponse,
   Session,
+  SubagentCloseResolution,
+  SubagentInfo,
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -20,6 +23,16 @@ import type { AgentApi } from "./client";
 
 function apiPath(path: string): string {
   return `api/${path.replace(/^\/+/, "")}`;
+}
+
+export class SubagentCloseDecisionRequiredError extends Error {
+  constructor(
+    readonly sessionId: WorkflowId,
+    readonly subagents: SubagentInfo[]
+  ) {
+    super("Choose whether to keep the active subagents open or close them.");
+    this.name = "SubagentCloseDecisionRequiredError";
+  }
 }
 
 async function json<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
@@ -64,12 +77,28 @@ async function* readSse(response: Response): AsyncIterable<AgentSseFrame> {
 }
 
 export class HttpAgentApi implements AgentApi {
+  async accountOverview(): Promise<AccountOverview> {
+    return json<AccountOverview>(apiPath("account"));
+  }
+
   async listAgents(): Promise<AgentRegistryResponse> {
     return json<AgentRegistryResponse>(apiPath("agents"));
   }
 
   async listSessions(): Promise<Session[]> {
     return json<Session[]>(apiPath("sessions"));
+  }
+
+  async refreshSessions(): Promise<Session[]> {
+    const response = await fetch(apiPath("sessions/refresh"), { method: "POST" });
+    // The same UI is also packaged with the legacy direct-Temporal server.
+    if (response.status === 404 || response.status === 405) return this.listSessions();
+    if (!response.ok) {
+      throw new Error(
+        await responseErrorMessage(response, `Refresh failed (${response.status})`)
+      );
+    }
+    return response.json() as Promise<Session[]>;
   }
 
   async createSession(
@@ -80,6 +109,43 @@ export class HttpAgentApi implements AgentApi {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request)
     });
+  }
+
+  async closeSession(
+    sessionId: WorkflowId,
+    resolution?: SubagentCloseResolution
+  ): Promise<void> {
+    const response = await fetch(
+      apiPath(`sessions/${encodeURIComponent(sessionId)}/close`),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          resolution ? { subagent_close_policy: resolution } : {}
+        )
+      }
+    );
+    if (response.status === 409) {
+      const body = (await response.json()) as {
+        detail?: {
+          code?: string;
+          session_id?: string;
+          subagents?: SubagentInfo[];
+        };
+      };
+      if (body.detail?.code === "subagent_close_decision_required") {
+        throw new SubagentCloseDecisionRequiredError(
+          body.detail.session_id ?? sessionId,
+          body.detail.subagents ?? []
+        );
+      }
+      throw new Error(JSON.stringify(body));
+    }
+    if (!response.ok) {
+      throw new Error(
+        await responseErrorMessage(response, `Close failed (${response.status})`)
+      );
+    }
   }
 
   async workflowStatus(workflowId: WorkflowId): Promise<WorkflowExecutionState> {

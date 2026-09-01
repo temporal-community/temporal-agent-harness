@@ -35,6 +35,11 @@ namespace reachable by its Nexus endpoint. `external_http` registrations use the
 `/sessions`, `/sessions/{id}/turns`, and `/close` protocol as a feasibility proof; the
 harness-native Nexus path is the primary implementation.
 
+The account bar is the owner-facing pane of glass: it shows registered agents, live and
+historical session counts, MCP servers, and subagent providers. Selecting **Mount** creates
+an account-owned session for that agent and attaches the shared UI to its registered
+endpoint; no session-manager workflow or agent-namespace visibility access is involved.
+
 ## UI transport
 
 The gateway UI is another driver of the shared `UIAgentTunnelWorkflow`; it does not own a

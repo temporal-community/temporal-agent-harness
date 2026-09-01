@@ -34,11 +34,13 @@
     sending?: boolean;
     creatingSession?: boolean;
     refreshingSessions?: boolean;
+    showSessionPicker?: boolean;
     closed?: boolean;
     closedWorkflowIds?: string[];
     error?: string | null;
     /** List refresh failure — shown in the popover, not as stream "Needs attention". */
     sessionsError?: string | null;
+    awaitingRegistration?: boolean;
     pendingApprovalCount?: number;
     onNewSession?: (workflowType: string) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
@@ -55,10 +57,12 @@
     sending = false,
     creatingSession = false,
     refreshingSessions = false,
+    showSessionPicker = true,
     closed = false,
     closedWorkflowIds = [],
     error = null,
     sessionsError = null,
+    awaitingRegistration = false,
     pendingApprovalCount = 0,
     onNewSession,
     onSelectSession,
@@ -121,6 +125,8 @@
             ? "Thinking"
             : error
               ? "Needs attention"
+              : awaitingRegistration
+                ? "Waiting for agent"
               : "Available"
   );
   const agentTitle = $derived(
@@ -145,7 +151,10 @@
   }
 
   function sessionInitialMessage(session: Session): string {
-    return session.initial_user_message?.trim() || "No user message yet";
+    return (
+      session.initial_user_message?.trim() ||
+      (session.is_spawned ? session.label : "No user message yet")
+    );
   }
 
   function sessionAgentLabel(session: Session): string {
@@ -158,6 +167,7 @@
   function currentStatusKind(): StatusKind {
     if (closed) return "closed";
     if (error) return "error";
+    if (awaitingRegistration) return "idle";
     if (pendingApprovalCount > 0) return "approval";
     if (creatingSession) return "starting";
     if (connecting) return "connecting";
@@ -284,6 +294,19 @@
 </script>
 
 <div class="session-controls">
+  {#if onRefreshSessions}
+    <IconButton
+      class={refreshingSessions ? "session-refresh spinning" : "session-refresh"}
+      label="Refresh all sessions"
+      data-tip-below
+      data-tip-align="start"
+      disabled={refreshingSessions}
+      onclick={() => void refreshSessions()}
+    >
+      <RefreshCw size={14} />
+    </IconButton>
+  {/if}
+
   <!-- The pip is the Chip's own, tinted by the status tone, so the mark that
        says how the run is doing cannot drift from the spoken label beside it.
 
@@ -291,29 +314,31 @@
        view it opens rather than for the popover being up at all. A bare `menuOpen`
        on the anchor had it announce itself expanded while rendering collapsed, and
        a reader who pressed Enter to dismiss got the view swapped instead. -->
-  <Chip
-    class="session-anchor"
-    pip
-    tone={statusTone}
-    fill="quiet"
-    toned
-    active={menuOpen && menuTab === "sessions"}
-    aria-haspopup="dialog"
-    aria-expanded={menuOpen && menuTab === "sessions"}
-    aria-label={`${agentTitle} — ${statusLabel}. Switch session`}
-    data-tip={`${statusLabel} — switch session`}
-    data-tip-align="start"
-    data-tip-below
-    onclick={toggleMenu}
-  >
-    <span class="session-name">{agentTitle}</span>
-    {#if spokenStatus}
-      <span class="session-state">{spokenStatus}</span>
-    {/if}
-    <span class="control-chevron" aria-hidden="true">
-      <ChevronDown size={13} />
-    </span>
-  </Chip>
+  {#if showSessionPicker}
+    <Chip
+      class="session-anchor"
+      pip
+      tone={statusTone}
+      fill="quiet"
+      toned
+      active={menuOpen && menuTab === "sessions"}
+      aria-haspopup="dialog"
+      aria-expanded={menuOpen && menuTab === "sessions"}
+      aria-label={`${agentTitle} — ${statusLabel}. Switch session`}
+      data-tip={`${statusLabel} — switch session`}
+      data-tip-align="start"
+      data-tip-below
+      onclick={toggleMenu}
+    >
+      <span class="session-name">{agentTitle}</span>
+      {#if spokenStatus}
+        <span class="session-state">{spokenStatus}</span>
+      {/if}
+      <span class="control-chevron" aria-hidden="true">
+        <ChevronDown size={13} />
+      </span>
+    </Chip>
+  {/if}
 
   <Chip
     class="session-new"
@@ -430,7 +455,7 @@
                 <span class="session-copy">
                   <time>{sessionCreatedAt(item.created_at)}</time>
                   <strong>{sessionInitialMessage(item)}</strong>
-                  <small>{sessionAgentLabel(item)}{item.is_discovered ? " · discovered" : ""}</small>
+                  <small>{sessionAgentLabel(item)}{item.is_spawned ? " · spawned" : ""}</small>
                 </span>
                 <StatusChip
                   label={sessionStatusLabel(item)}
