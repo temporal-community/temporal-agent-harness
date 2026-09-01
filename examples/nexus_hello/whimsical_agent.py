@@ -1,18 +1,12 @@
-"""Worker and Nexus front door for the Nexus-hello agent.
+"""Worker entry point for the whimsical Nexus Hello agent.
 
-Run from the repo root with:
-    uv run --extra nexus-mcp --group examples python -m examples.nexus_hello.worker
+The same harness-native agent can be spawned by Nexus Hello or mounted directly from
+the account UI. In either role it uses the account's HTTP MCP toolbox plus the native
+Nexus MCP service, but answers in a deliberately whimsical voice.
 
-The worker hosts the agent workflow plus its A2A and harness-control Nexus services on
-the same task queue. The account gateway UI reaches that front door through the
-registered Nexus endpoint; the agent itself wires its tools and subagents in
-``workflow.py``.
-
-Env vars (set in .env.local - see .env.example):
-    TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile (this worker's own
-                                               namespace, e.g. "default")
-    OPENAI_API_KEY                            required - the agent calls the OpenAI API
-    NEXUS_HELLO_TASK_QUEUE                    task queue to poll (default: nexus-hello)
+Run from the repository root with:
+    uv run --extra nexus-mcp --group examples \
+        python -m examples.nexus_hello.whimsical_agent worker
 """
 
 from __future__ import annotations
@@ -23,7 +17,6 @@ import os
 import sys
 from datetime import timedelta
 
-from nexus_a2a import a2a_nexus_data_converter
 from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
@@ -46,17 +39,17 @@ from temporal_agent_harness.ai_sdks.openai_agents_harness import (
     stream_to_provider,
 )
 
-from .workflow import TASK_QUEUE, WORKFLOW_NAME, NexusHelloAgentWorkflow
+from .whimsical_workflow import WORKFLOW_NAME, WhimsicalAgentWorkflow
+
+TASK_QUEUE = "nexus-hello-whimsical-agent"
 
 
-async def main() -> None:
+async def _run_worker() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
         force=True,
     )
-    task_queue = os.environ.get("NEXUS_HELLO_TASK_QUEUE", TASK_QUEUE)
-
     if not os.environ.get("OPENAI_API_KEY"):
         sys.exit("error: OPENAI_API_KEY env var not set")
 
@@ -68,31 +61,25 @@ async def main() -> None:
         ),
         observer_factory=harness_observer_factory,
     )
-
     connect_config = ClientConfig.load_client_connect_config()
-    client = await Client.connect(
-        **connect_config,
-        plugins=[plugin],
-        data_converter=a2a_nexus_data_converter,
-    )
+    client = await Client.connect(**connect_config, plugins=[plugin])
     control_config = HarnessControlConfig()
-
     worker = Worker(
         client,
-        task_queue=task_queue,
-        workflows=[NexusHelloAgentWorkflow],
+        task_queue=TASK_QUEUE,
+        workflows=[WhimsicalAgentWorkflow],
         nexus_service_handlers=[
             A2AServiceHandler(
                 client,
                 A2AHandlerConfig(
-                    agent_task_queue=task_queue,
+                    agent_task_queue=TASK_QUEUE,
                     workflow_name=WORKFLOW_NAME,
                     workflow_id_prefix="",
                     is_message_queuing_enabled=True,
                     agent_card=make_agent_card(
-                        name="Nexus Hello",
-                        description="OpenAI Agents SDK demo with Nexus tools and subagents.",
-                        endpoint="nexus-hello-agent-endpoint",
+                        name="Whimsical Agent",
+                        description="An OpenAI Agents SDK agent with a playful voice.",
+                        endpoint="nexus-hello-whimsical-agent-endpoint",
                     ),
                 ),
             ),
@@ -100,15 +87,17 @@ async def main() -> None:
         ],
     )
     print(
-        f"Nexus hello agent worker + A2A Nexus front door ready: "
+        "Whimsical agent worker + Nexus front door ready: "
         f"profile={os.environ.get('TEMPORAL_PROFILE', 'default')!r} "
         f"address={connect_config.get('target_host')} "
         f"namespace={connect_config.get('namespace')} "
-        f"taskQueue={task_queue}",
+        f"taskQueue={TASK_QUEUE}",
         flush=True,
     )
     await worker.run()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    if len(sys.argv) != 2 or sys.argv[1] != "worker":
+        sys.exit("usage: python -m examples.nexus_hello.whimsical_agent worker")
+    asyncio.run(_run_worker())
