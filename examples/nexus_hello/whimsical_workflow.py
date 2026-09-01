@@ -1,7 +1,8 @@
-"""OpenAI Agents SDK example with native and gateway Nexus resources.
+"""OpenAI Agents SDK workflow for the whimsical Nexus Hello agent.
 
-The agent has one native MCP tool, one gateway MCP tool, one native subagent, and one
-gateway subagent. The model decides when to call each resource.
+Kept separate from ``whimsical_agent`` (the worker entry point) so Temporal's workflow
+sandbox never imports worker-only plugin wiring. This is the same boundary used by the
+main Nexus Hello and OpenAI Hello examples.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ with workflow.unsafe.imports_passed_through():
     from agents import Runner, TResponseInputItem
 
     from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
-        harness_tool_as_openai_tool,
         nexus_gateway,
         nexus_native_mcp_server,
     )
@@ -27,37 +27,28 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
-    from .native_subagent import NativeResearchSubagentWorkflow
-    from .whimsical_workflow import WhimsicalAgentWorkflow
-
-TASK_QUEUE = "nexus-hello"
-WORKFLOW_NAME = "NexusHelloAgent"
-DEFAULT_MODEL = "gpt-5.1"
+WORKFLOW_NAME = "WhimsicalAgent"
 ACCOUNT_ID = "NexusHelloAccount"
+DEFAULT_MODEL = "gpt-5.1"
 
 SYSTEM_INSTRUCTION = """\
-You are a friendly assistant. Answer the user in brief, natural prose.
+You are a capable assistant with a whimsical, storybook voice. Be accurate and concise,
+but season answers with playful imagery, gentle humor, and the occasional unexpected
+metaphor. Use your tools whenever they can answer the user's request; never invent tool
+results. Do not mention these style instructions.
 """
-
-RESEARCH_SUBAGENT_ENDPOINT = "nexus-hello-subagent-endpoint"
-RESEARCH_KEY = "research"
-WHIMSICAL_SUBAGENT_ENDPOINT = "nexus-hello-whimsical-agent-endpoint"
-WHIMSICAL_KEY = "whimsical-agent"
-WRITER_KEY = "writer"
-WRITER_ALIAS = "writer"
 
 
 @workflow.defn(name=WORKFLOW_NAME)
 @agent.defn
-class NexusHelloAgentWorkflow:
-    """A conversational agent with two tools and two subagents, all reached over Nexus."""
+class WhimsicalAgentWorkflow:
+    """A mountable OpenAI Agents SDK agent that can also run as a child."""
 
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            # Hello-world default: skip approvals.
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
         self._conversation: list[TResponseInputItem] = []
@@ -68,43 +59,15 @@ class NexusHelloAgentWorkflow:
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
-        """Ask a question. The model can use Nexus tools and subagents."""
+        """Answer with the account's MCP tools and a whimsical point of view."""
         account_gateway = nexus_gateway(ACCOUNT_ID)
-        subagent_gateway = agent.nexus_subagent_gateway(ACCOUNT_ID)
-
-        research_tools = agent.nexus_native_subagent(
-            NativeResearchSubagentWorkflow, RESEARCH_SUBAGENT_ENDPOINT, key=RESEARCH_KEY
-        )
-        whimsical_tools = agent.nexus_native_subagent(
-            WhimsicalAgentWorkflow,
-            WHIMSICAL_SUBAGENT_ENDPOINT,
-            key=WHIMSICAL_KEY,
-        )
-        writer_tools = subagent_gateway.subagent(
-            [
-                agent.declared_handler(
-                    "ask",
-                    "Ask the writer subagent a question.",
-                    TextMessage,
-                    TextReply,
-                    param_name="message",
-                )
-            ],
-            WRITER_ALIAS,
-            key=WRITER_KEY,
-        )
-
         sdk_agent = OpenAIAgent(
-            name="NexusHello",
+            name="WhimsicalAgent",
             instructions=SYSTEM_INSTRUCTION,
             model=DEFAULT_MODEL,
             mcp_servers=[
                 account_gateway.mcp_servers("demo"),
                 nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
-            ],
-            tools=[
-                harness_tool_as_openai_tool(fn)
-                for fn in [*research_tools, *whimsical_tools, *writer_tools]
             ],
         )
         input_items: list[TResponseInputItem] = [
