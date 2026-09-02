@@ -21,6 +21,11 @@
  *    which is commit 6277f16 reappearing.
  *  - Removing the #armCatchUpFlush call: "stays open" never publishes and the
  *    case times out — the live-session gap, back again.
+ *  - Emptying reattachBackoffMs, or otherwise not re-attaching a RUNNING
+ *    workflow: "dropped stream" times out waiting for the second attach.
+ *  - Resuming a reconnect from 0 rather than the last offset the server sent:
+ *    the from_offset assertion fails. Replaying from zero is not harmless — it
+ *    re-sends the whole history on every blip.
  *  - Removing the per-frame "is this still the current stream" check in
  *    attach(): "session switch" sees 11 frames instead of 7, the extra four
  *    being the abandoned session's, landed in the session now on screen.
@@ -380,6 +385,53 @@ assert.ok(underAChunk < chunkSize, "the whole point is a backlog too short to fi
   );
   assert.equal(controller.viewIndex, 7, "the scrubber must follow the new session's live edge");
   streams["wf-old"].end();
+}
+
+// --- case: a dropped stream against a RUNNING workflow -----------------------
+// /api/attach ends the same way whether the run finished or the connection
+// died, so only the workflow's status distinguishes them. A RUNNING one has to
+// be re-attached, from the offset the server already proved it holds.
+{
+  const stream = controllableStream();
+  const { controller, attachCalls, finish } = boot({
+    sessions: [session("wf-drop")],
+    streamFor: () => stream
+  });
+
+  void controller.selectSession("wf-drop");
+  await waitFor("the first attach", () => attachCalls.length === 1);
+  assert.equal(attachCalls[0].fromOffset, 0, "a first attach starts from the beginning");
+
+  stream.push(...Array.from({ length: 3 }, (_, i) => frame("root", i)));
+  await sleep(80);
+  stream.drop(); // a server restart or a network blip, indistinguishable on the wire
+
+  await waitFor("a re-attach after the drop", () => attachCalls.length === 2, 6_000);
+  assert.equal(
+    attachCalls[1].fromOffset,
+    3,
+    "a reconnect must resume from the last offset the server sent, not replay from 0"
+  );
+
+  stream.push(...Array.from({ length: 2 }, (_, i) => frame("root", 3 + i)));
+  await waitFor(
+    "the resumed backlog to reach the view",
+    () => controller.frames.length === 5
+  );
+  assert.equal(
+    controller.viewIndex,
+    5,
+    "the scrubber must follow the live edge across a reconnect"
+  );
+
+  finish();
+  stream.end();
+  await sleep(400);
+  assert.equal(
+    attachCalls.length,
+    2,
+    "once the workflow closes, the stream ending must not start another attach"
+  );
 }
 
 await vite.close();

@@ -108,6 +108,34 @@ function now(): number {
 }
 
 /**
+ * Backoff before re-opening a stream that dropped mid-run, and the cap on how
+ * many times to try.
+ *
+ * Capped because an unbounded loop against a server that is genuinely down is
+ * worse than going quiet: it never stops, never surfaces the error, and buries
+ * the real one under retries.
+ */
+const reattachBackoffMs = [500, 1_000, 2_000, 4_000, 8_000];
+
+/** Sleep, unless the stream is abandoned first. */
+function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout>;
+    const settle = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", settle);
+      resolve();
+    };
+    timer = setTimeout(settle, ms);
+    signal.addEventListener("abort", settle, { once: true });
+  });
+}
+
+/**
  * Hand the main thread back so the browser can paint and answer input.
  *
  * A rAF rather than a bare timeout, because the point is to let a paint happen:
@@ -983,6 +1011,30 @@ export class AgentRunController {
     }
   }
 
+  /**
+   * Whether a stream that just stopped carrying frames was dropped rather than
+   * finished.
+   *
+   * The generator ends cleanly either way, so the stream ending is evidence of
+   * neither — /api/attach has no marker for the root workflow dying. Temporal is
+   * the thing that knows: a workflow still running has more to say, so a stream
+   * that stopped carrying it was dropped. When an in-band error frame does start
+   * arriving it needs no special case here, because a root that died reports as
+   * closed and stops the retry on its own; the frame supplies the message.
+   *
+   * A status call that fails is the transient case this exists for, so it counts
+   * as worth retrying. The retry budget is what keeps an outage bounded.
+   */
+  async #streamDroppedMidRun(workflowId: string): Promise<boolean> {
+    if (this.#isWorkflowClosed(workflowId)) return false;
+    try {
+      await this.#refreshWorkflowExecutionState(workflowId);
+    } catch {
+      return true;
+    }
+    return !this.#isWorkflowClosed(workflowId);
+  }
+
   async attach(
     fromOffset = this.lastResumeOffset,
     options: { clearSendingOnIdle?: boolean } = {}
@@ -990,13 +1042,53 @@ export class AgentRunController {
     const session = this.session;
     if (!session) return;
 
+    /* One #beginStream for the whole attachment, retries included, so every
+       attempt shares its abort controller and stream version. A session switch
+       then aborts the in-flight read and the backoff sleep together, and no
+       retry can outlive the stream it belongs to. */
     const { controller, signal, streamVersion } = this.#beginStream();
+    const isCurrentStream = (): boolean =>
+      streamVersion === this.#streamVersion &&
+      this.session?.workflow_id === session.workflow_id;
+    let offset = Math.max(0, fromOffset);
+    let attempt = 0;
     try {
-      for await (const frame of this.#api.attach(session.workflow_id, fromOffset, signal)) {
-        if (streamVersion !== this.#streamVersion || this.session?.workflow_id !== session.workflow_id) {
-          break;
+      while (isCurrentStream()) {
+        let delivered = false;
+        try {
+          for await (const frame of this.#api.attach(session.workflow_id, offset, signal)) {
+            if (!isCurrentStream()) break;
+            delivered = true;
+            this.#appendFrame(frame);
+          }
+        } catch (error) {
+          if (isAbortError(error) || !isCurrentStream()) break;
+          /* Out of retries: surface the transport error the way an un-retried
+             attach always did, rather than ending quietly. */
+          if (attempt >= reattachBackoffMs.length) throw error;
         }
-        this.#appendFrame(frame);
+        /* Publish before asking why the stream stopped. Finding out costs a
+           status call, and learning the workflow closed stops the stream
+           (#markWorkflowClosed -> #stopStream), which bumps the stream version
+           and makes the flush below skip its own guard — stranding exactly the
+           tail it exists to commit.
+
+           Keyed on the session rather than the stream version, because a bumped
+           version is the condition being worked around. A switched session is
+           not: its buffer belongs to someone else now. */
+        if (this.session?.workflow_id === session.workflow_id) this.#flushStreamTail();
+        /* A stream that carried something earned a fresh budget, so hours of
+           occasional blips do not add up to an exhausted one. */
+        if (delivered) attempt = 0;
+        if (attempt >= reattachBackoffMs.length) break;
+        if (!(await this.#streamDroppedMidRun(session.workflow_id))) break;
+        await sleepUnlessAborted(reattachBackoffMs[attempt], signal);
+        attempt += 1;
+        /* Resume only from an offset the server already proved it holds, by
+           having sent it. An offset past the end answers 200 and then hangs
+           open forever, so inventing one trades a quiet console for a wedged
+           one. */
+        offset = Math.max(offset, this.lastResumeOffset);
       }
     } catch (error) {
       if (!isAbortError(error)) throw error;
@@ -1006,18 +1098,30 @@ export class AgentRunController {
         this.session?.workflow_id === session.workflow_id
       ) {
         if (options.clearSendingOnIdle) this.sending = false;
-        /* A stream can end mid-catch-up. #schedulePublish only commits at a chunk
-           boundary past the ceiling, so a replay that ends short of one strands
-           its tail with nothing left to flush it, and an idle session — whose
-           whole history is replay and which never crosses to live — shows an
-           empty console. Commit on the error path too: partial history beats
-           nothing. */
-        this.#catchingUp = false;
-        this.#sinceCatchUpPublish = 0;
-        this.#publishFrames();
+        this.#flushStreamTail();
       }
       this.#finishStream(controller);
     }
+  }
+
+  /**
+   * Commit whatever the stream staged but never published.
+   *
+   * A stream can stop mid-catch-up. #schedulePublish only commits at a chunk
+   * boundary past the ceiling, so a replay that stops short of one strands its
+   * tail with nothing left to flush it, and an idle session — whose whole
+   * history is replay and which never crosses to live — shows an empty console.
+   * Worth doing on the error path too: partial history beats nothing.
+   */
+  #flushStreamTail(): void {
+    this.#catchingUp = false;
+    this.#sinceCatchUpPublish = 0;
+    /* Same invariant #armCatchUpFlush relies on: `frames` is a whole copy of the
+       buffer and the buffer only grows, so equal lengths mean nothing new is
+       staged, and committing would rebuild every projection to reproduce the
+       array already on screen. */
+    if (this.#frameBuffer.length === this.frames.length) return;
+    this.#publishFrames();
   }
 
   async #attachWorkflow(
@@ -1055,9 +1159,7 @@ export class AgentRunController {
            while this is still the stream that owns the buffer, and still the
            session it was opened for. */
         if (this.session?.workflow_id === session.workflow_id) {
-          this.#catchingUp = false;
-          this.#sinceCatchUpPublish = 0;
-          this.#publishFrames();
+          this.#flushStreamTail();
         }
       }
     }
