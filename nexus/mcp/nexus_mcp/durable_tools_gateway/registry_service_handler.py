@@ -116,6 +116,9 @@ def subagent_dispatch_activity_id(instance_id: str, turn_number: int) -> str:
 class ExternalMCPCallInput(BaseModel):
     """Input for an HTTP call to a 3rd-party MCP server."""
 
+    account_id: str = ""
+    server_name: str = ""
+    caller_workflow_id: str | None = None
     server_url: str
     tool_name: str
     arguments: dict[str, Any]
@@ -686,7 +689,14 @@ class RegistryServiceHandler:
         try:
             result = await self._client.execute_activity(
                 mcp_proxy_activity,
-                ExternalMCPCallInput(server_url=url, tool_name=operation, arguments=arguments),
+                ExternalMCPCallInput(
+                    account_id=account_id,
+                    server_name=alias,
+                    caller_workflow_id=input.caller_workflow_id,
+                    server_url=url,
+                    tool_name=operation,
+                    arguments=arguments,
+                ),
                 id=f"mcp-proxy-{uuid.uuid4()}",
                 task_queue=temporalio.nexus.info().task_queue,
                 start_to_close_timeout=timedelta(minutes=5),

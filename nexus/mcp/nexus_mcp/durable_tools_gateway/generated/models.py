@@ -61,6 +61,17 @@ class _CallToolInputTransferTypeConverter(
             else:
                 name_value = name_value_raw
 
+        caller_workflow_id_value: str | None = None
+        if "caller_workflow_id" in raw:
+            caller_workflow_id_value_raw = raw["caller_workflow_id"]
+            if caller_workflow_id_value_raw is None:
+                violations.append(Violation(path="caller_workflow_id", reason="explicit null not allowed"))
+            else:
+                if not isinstance(caller_workflow_id_value_raw, str):
+                    violations.append(Violation(path="caller_workflow_id", reason="expected string"))
+                else:
+                    caller_workflow_id_value = caller_workflow_id_value_raw
+
         arguments_value: CallToolInputArguments | None = None
         if "arguments" in raw:
             arguments_value_raw = raw["arguments"]
@@ -73,7 +84,7 @@ class _CallToolInputTransferTypeConverter(
                     _collect(violations, "arguments", error)
 
         for key in raw:
-            if key != "account_id" and key != "alias" and key != "name" and key != "arguments":
+            if key != "account_id" and key != "alias" and key != "name" and key != "caller_workflow_id" and key != "arguments":
                 violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
@@ -81,6 +92,7 @@ class _CallToolInputTransferTypeConverter(
             account_id=account_id_value,
             alias=alias_value,
             name=name_value,
+            caller_workflow_id=caller_workflow_id_value,
             arguments=arguments_value,
         )
 
@@ -91,6 +103,8 @@ class _CallToolInputTransferTypeConverter(
         out["account_id"] = value.account_id
         out["alias"] = value.alias
         out["name"] = value.name
+        if value.caller_workflow_id is not None:
+            out["caller_workflow_id"] = value.caller_workflow_id
         if value.arguments is not None:
             try:
                 out["arguments"] = _CallToolInputArgumentsTransferTypeConverter().to_transfer_type(value.arguments)
@@ -112,6 +126,9 @@ class CallToolInput:
 
     name: str
     """Full prefixed tool name, e.g. "weather_get_forecast"."""
+
+    caller_workflow_id: str | None = None
+    """Harness workflow that initiated this call, when known."""
 
     arguments: CallToolInputArguments | None = None
 
