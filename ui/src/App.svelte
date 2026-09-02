@@ -310,10 +310,19 @@
     usageTimeline={run.usageTimeline}
     turnMarkers={run.turnMarkers}
     anomalyMarkers={run.anomalyMarkers}
+    eventRows={run.fullReplayLog.rows}
     onPlay={() => run.play()}
     onPause={() => run.pause()}
     onStepBack={() => run.stepBack()}
     onStepForward={() => run.stepForward()}
+    onPreviousTurn={() => {
+      run.pause();
+      run.previousTurn();
+    }}
+    onNextTurn={() => {
+      run.pause();
+      run.nextTurn();
+    }}
     onSpeedChange={(speed) => run.setPlaybackSpeed(speed)}
     onJumpToLive={() => run.jumpToLive()}
     onReset={() => run.reset()}
