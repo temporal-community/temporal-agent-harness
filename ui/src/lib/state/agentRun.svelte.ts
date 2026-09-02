@@ -1178,15 +1178,27 @@ export class AgentRunController {
         if (this.session?.workflow_id === session.workflow_id) this.#flushStreamTail();
         /* The transcript is on screen, so the reader is no longer waiting on us
            — whatever the retries do from here is background liveness. Held
-           across the whole loop, this reported "connecting" for the full 31.5s
+           across the whole loop, these reported "connecting" for the full 31.5s
            of backoff on a session that had finished loading in ten
            milliseconds, which is what "sessions load slowly" was.
 
+           `sending` is the same flag one step later, and it is the one that
+           bites: it gates the composer (`sendingBlocksInput`), so a reply that
+           had fully arrived left the input locked for 31.5s while the budget
+           drained behind it. "Idle" means this attach went idle, which is the
+           moment below, not the moment the retries give up. Measured at
+           31,536ms before this.
+
            Cleared here rather than by the callers, because they await this
            method: selectSession's own `finally` cannot run until the last retry
-           has. Guarded on the stream, so a session switched away from mid-retry
-           does not clear the flag the new session just set. */
-        if (isCurrentStream()) this.connecting = false;
+           has. The `finally` still clears `sending` as well, for the paths that
+           break or throw before completing an iteration. Guarded on the stream,
+           so a session switched away from mid-retry does not clear a flag the
+           new session just set. */
+        if (isCurrentStream()) {
+          this.connecting = false;
+          if (options.clearSendingOnIdle) this.sending = false;
+        }
         /* A stream that carried something earned a fresh budget, so hours of
            occasional blips do not add up to an exhausted one. */
         if (delivered) attempt = 0;

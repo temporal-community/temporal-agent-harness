@@ -24,6 +24,10 @@
  *  - Letting an in-band `error` frame count as delivery: "error frame" sees the
  *    backoff stall at 500ms instead of walking 500/1000/2000, which on a real
  *    server is an unbounded re-attach loop.
+ *  - Clearing `sending` only in attach()'s `finally`: "whole budget" sees the
+ *    composer held for 31.5s after the reply already arrived.
+ *  - Making an exhausted budget raise on a clean end: "whole budget" sees a
+ *    banner on a session that is fine.
  *
  * What does NOT break it, checked rather than assumed: dropping the
  * `isCurrentStream()` guard on the clear. The loop re-tests it at the top and
@@ -116,6 +120,12 @@ function boot({ sessions, streamFor, statusFor }) {
   const attachCalls = [];
   const statusCalls = [];
   const api = {
+    async listAgents() {
+      return [{ key: "qa", label: "QA", workflow_type: "X", task_queue: "q", description: "" }];
+    },
+    async submitMessage() {
+      return { ok: true };
+    },
     async listSessions() {
       return [];
     },
@@ -289,6 +299,69 @@ const { AgentRunController } = await vite.ssrLoadModule(
     gaps[1] >= 900,
     `an error frame must not renew the retry budget — backoff stalled at ${gaps.join("/")}ms`
   );
+}
+
+// --- case: the whole budget, on a session that is perfectly healthy ----------
+// The slow one, and the only case that reaches the end of the backoff. Two
+// things are only observable there.
+//
+// `sending` gates the composer, and it was cleared in attach()'s `finally` —
+// after every retry. So a reply that had fully arrived left the input locked
+// for the whole budget: measured at 31,536ms, against a run that finished in
+// under a second.
+//
+// And a budget that runs out must stay silent. It does today, because a
+// caught-up stream ends cleanly and only the `catch` branch rethrows, so
+// exhaustion is a `break`. That is worth pinning rather than trusting: a false
+// banner on a healthy session is worse than the stall it replaced, because it
+// teaches people to disbelieve real ones.
+{
+  const { controller, attachCalls } = boot({
+    sessions: [session("wf-budget")],
+    streamFor: (_id, call) =>
+      (async function* () {
+        // The reply lands on the first attach; every later one is caught up.
+        if (call === 1) for (let i = 0; i < 4; i += 1) yield frame(i);
+      })(),
+    statusFor: () => "RUNNING"
+  });
+
+  await controller.initialize();
+  controller.sessions = [session("wf-budget")];
+  controller.session = controller.sessions[0];
+  attachCalls.length = 0;
+
+  let firstError = null;
+  const watch = setInterval(() => {
+    if (controller.connectionError && !firstError) firstError = controller.connectionError;
+  }, 20);
+
+  const started = Date.now();
+  void controller.sendMessage({ text: "hello" });
+  await waitFor("the reply to arrive", () => controller.frames.length === 4);
+  await waitFor("the composer to be released", () => !controller.sending, 2_000);
+  const releasedAt = Date.now() - started;
+  assert.ok(
+    releasedAt < 2_000,
+    `a reply that has arrived must release the composer (took ${releasedAt}ms)`
+  );
+
+  /* Out past the last backoff step, so the loop has given up and anything it
+     says on the way out has been said. */
+  await waitFor(
+    "the retry budget to run out",
+    () => Date.now() - started > 34_000,
+    40_000
+  );
+  clearInterval(watch);
+
+  assert.equal(firstError, null, `a healthy session must never raise a banner (saw ${firstError})`);
+  assert.equal(controller.connectionError, null, "and must not be left showing one");
+  assert.equal(controller.sending, false, "the composer must still be released");
+
+  const settled = attachCalls.length;
+  await sleep(1_000);
+  assert.equal(attachCalls.length, settled, "the budget must actually stop the loop");
 }
 
 await vite.close();
