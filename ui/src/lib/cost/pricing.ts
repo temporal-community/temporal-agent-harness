@@ -169,7 +169,20 @@ export function buildUsageTimeline(frames: AgentSseFrame[]): UsageTimelinePoint[
       addUsage(cumulative, frame.data.usage);
       const estimatedCostUsd = estimate(frame.data.model ?? "unknown", tokens);
       if (estimatedCostUsd == null) {
-        hasUnknownCost = true;
+        /* The latch is deliberate and stays: this series is CUMULATIVE, so once a
+           term is missing every later sum is a lower bound rather than a value,
+           and reporting the known part as if it were the whole is a quieter lie
+           than reporting nothing. What is not deliberate is tripping on an
+           interaction that spent nothing — zero tokens cost zero at any price, so
+           it cannot make the running total unknown. Summed field-wise rather than
+           via tokens.total because a provider that reports no grand total of its
+           own still leaves thought and tool-use counts outside that fallback. */
+        if (
+          tokens.input + tokens.output + tokens.thought + tokens.cached + tokens.toolUse >
+          0
+        ) {
+          hasUnknownCost = true;
+        }
       } else {
         cumulativeCost += estimatedCostUsd;
       }
