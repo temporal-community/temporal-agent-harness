@@ -46,19 +46,36 @@
 
   const costNote = $derived(unpricedNote(unpricedModels(usage)) ?? undefined);
 
-  const metrics: Metric[] = $derived([
+  /* What the run cost and how many tokens it took, which is the whole reading
+     for most openings of this panel. */
+  const headline: Metric[] = $derived([
     {
       label: "cost",
       value: formatCost(usage.estimatedCostUsd),
       tone: "cost",
       note: costNote
     },
-    { label: "total", value: formatTokens(usage.tokens.total), tone: "strong" },
+    { label: "total", value: formatTokens(usage.tokens.total), tone: "strong" }
+  ]);
+
+  /* Split off from the total rather than listed beside it, because these four
+     OVERLAP each other and so cannot be added up — cached is a slice of input,
+     and for most producers thought is a slice of output. Presented as a fifth
+     peer of the total they read as addends, the sum comes to more than the
+     total, and the total looks broken. It is not: it is the provider's own
+     figure, and check-usage-totals.mjs pins it against exactly the arithmetic
+     this separation is here to stop a reader attempting. */
+  const breakdown: Metric[] = $derived([
     { label: "input", value: formatTokens(usage.tokens.input) },
     { label: "output", value: formatTokens(usage.tokens.output) },
     { label: "thought", value: formatTokens(usage.tokens.thought) },
     { label: "cached", value: formatTokens(usage.tokens.cached) }
   ]);
+
+  const breakdownTip =
+    "Each is part of the total, and they overlap: cached tokens are already inside " +
+    "input, and reasoning tokens usually inside output. The total is the provider's " +
+    "own figure, not the sum of these rows.";
 
   function toggle(): void {
     open = !open;
@@ -116,7 +133,11 @@
       </header>
       <div class="usage-popover-body">
         <div class="usage-metrics">
-          <MetricStrip {metrics} dense />
+          <MetricStrip metrics={headline} dense />
+          <p class="kicker usage-breakdown-label" data-tip={breakdownTip} data-tip-align="start">
+            overlapping parts
+          </p>
+          <MetricStrip metrics={breakdown} dense />
         </div>
         <ModelBreakdown {usage} />
         <UsageLineChart points={usageTimeline} {viewIndex} />
@@ -222,6 +243,18 @@
     padding: var(--gutter);
     border: 1px solid var(--border);
     background: var(--surface-2);
+  }
+
+  /* Sits between the two strips and does the separating: a rule the eye stops at
+     before it reaches figures it must not add. Dotted underline because the rest
+     of the sentence is on hover. */
+  .usage-breakdown-label {
+    margin: 0;
+    padding-top: var(--gutter-tight);
+    border-top: 1px solid var(--border);
+    text-decoration: underline dotted var(--text-3);
+    text-underline-offset: 3px;
+    cursor: help;
   }
 
   @media (max-width: 760px) {
