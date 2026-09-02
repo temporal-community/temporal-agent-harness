@@ -389,19 +389,19 @@
     gap: 7px;
     padding: 0 10px;
     border: 1px solid color-mix(in srgb, var(--control-accent) 18%, var(--border));
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--control-bg);
     color: var(--text-2);
     cursor: pointer;
     font: inherit;
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 650;
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    box-shadow: var(--shadow-inset-soft);
     transition:
-      border-color 140ms ease,
-      background 140ms ease,
-      color 140ms ease,
-      box-shadow 140ms ease;
+      border-color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui),
+      color var(--duration-fast) var(--ease-ui),
+      box-shadow var(--duration-fast) var(--ease-ui);
   }
 
   .session-add {
@@ -422,7 +422,7 @@
     color: var(--text-1);
     background: color-mix(in srgb, var(--control-accent) 10%, var(--control-hover));
     box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.06),
+      var(--shadow-inset-strong),
       0 0 0 3px color-mix(in srgb, var(--control-accent) 16%, transparent);
     outline: 0;
   }
@@ -432,7 +432,7 @@
     align-items: center;
     justify-content: center;
     color: var(--text-3);
-    transition: transform 140ms ease, color 140ms ease;
+    transition: transform var(--duration-fast) var(--ease-ui), color var(--duration-fast) var(--ease-ui);
   }
 
   .session-add.active .control-chevron,
@@ -476,7 +476,7 @@
     gap: 10px;
     padding: 14px 12px;
     border: 1px solid var(--border-strong);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--surface-1);
     box-shadow: var(--shadow-popover);
   }
@@ -493,7 +493,7 @@
     gap: 10px;
     padding: 14px 12px;
     border: 1px solid var(--border-strong);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--surface-1);
     box-shadow: var(--shadow-popover);
   }
@@ -514,7 +514,7 @@
     align-items: center;
     gap: 7px;
     color: var(--text-1);
-    font-size: 13px;
+    font-size: var(--font-lg);
     font-weight: 700;
   }
 
@@ -533,7 +533,7 @@
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--control-bg);
     color: var(--text-3);
     cursor: pointer;
@@ -577,7 +577,7 @@
     align-items: center;
     padding: 0 10px;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--control-bg);
     color: var(--text-3);
   }
@@ -595,7 +595,7 @@
     background: transparent;
     color: var(--text-1);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .session-search input::placeholder {
@@ -616,16 +616,16 @@
     align-items: center;
     padding: 10px;
     border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-2) 42%, var(--surface-1));
     color: inherit;
     cursor: pointer;
     font: inherit;
     text-align: left;
     transition:
-      border-color 140ms ease,
-      background 140ms ease,
-      transform 140ms ease;
+      border-color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui),
+      transform var(--duration-fast) var(--ease-ui);
   }
 
   .agent-row:hover,
@@ -646,7 +646,7 @@
     min-width: 0;
     overflow: hidden;
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 650;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -656,7 +656,7 @@
     min-width: 0;
     overflow: hidden;
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -677,16 +677,16 @@
     align-items: start;
     padding: 10px;
     border: 1px solid color-mix(in srgb, var(--reasoning) 10%, var(--border));
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-2) 42%, var(--surface-1));
     color: inherit;
     cursor: pointer;
     font: inherit;
     text-align: left;
     transition:
-      border-color 140ms ease,
-      background 140ms ease,
-      transform 140ms ease;
+      border-color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui),
+      transform var(--duration-fast) var(--ease-ui);
   }
 
   .session-row:hover,
@@ -711,14 +711,14 @@
 
   .session-copy time {
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .session-copy strong {
     min-width: 0;
     overflow: hidden;
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 650;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -728,7 +728,7 @@
     min-width: 0;
     overflow: hidden;
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -736,7 +736,7 @@
   .session-empty {
     margin: 6px 0;
     color: var(--text-3);
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .agent-row :global(.status-chip),

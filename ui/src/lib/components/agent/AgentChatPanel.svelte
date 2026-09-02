@@ -2201,7 +2201,7 @@
   h2 {
     margin: 0;
     color: var(--text-1);
-    font-size: 15px;
+    font-size: var(--font-2xl);
     line-height: 1.2;
   }
 
@@ -2209,7 +2209,7 @@
     margin: 3px 0 0;
     overflow: hidden;
     color: var(--text-3);
-    font-size: 12px;
+    font-size: var(--font-md);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -2242,18 +2242,18 @@
     gap: 6px;
     padding: 0 8px;
     border: 1px solid color-mix(in srgb, var(--control-accent) 18%, var(--border));
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--control-bg);
     color: var(--text-2);
     cursor: pointer;
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-weight: 600;
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    box-shadow: var(--shadow-inset-soft);
     transition:
-      border-color 140ms ease,
-      background 140ms ease,
-      color 140ms ease,
-      box-shadow 140ms ease;
+      border-color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui),
+      color var(--duration-fast) var(--ease-ui),
+      box-shadow var(--duration-fast) var(--ease-ui);
   }
 
   .header-session-drawer {
@@ -2274,7 +2274,7 @@
     color: var(--text-1);
     background: color-mix(in srgb, var(--control-accent) 10%, var(--control-hover));
     box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.06),
+      var(--shadow-inset-strong),
       0 0 0 3px color-mix(in srgb, var(--control-accent) 16%, transparent);
     outline: 0;
   }
@@ -2284,7 +2284,7 @@
     align-items: center;
     justify-content: center;
     color: var(--text-3);
-    transition: transform 140ms ease, color 140ms ease;
+    transition: transform var(--duration-fast) var(--ease-ui), color var(--duration-fast) var(--ease-ui);
   }
 
   .header-session-add.active .control-chevron,
@@ -2327,7 +2327,7 @@
     gap: 8px;
     padding: 10px;
     border: 1px solid var(--border-strong);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--surface-1);
     box-shadow: var(--shadow-popover);
   }
@@ -2348,7 +2348,7 @@
     align-items: center;
     padding: 9px;
     border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-2) 44%, var(--surface-1));
     color: inherit;
     cursor: pointer;
@@ -2379,13 +2379,13 @@
 
   .agent-command-copy strong {
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 700;
   }
 
   .agent-command-copy small {
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .session-drawer {
@@ -2413,7 +2413,7 @@
     align-items: center;
     gap: 7px;
     color: var(--text-1);
-    font-size: 13px;
+    font-size: var(--font-lg);
     font-weight: 700;
   }
 
@@ -2424,7 +2424,7 @@
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--control-bg);
     color: var(--text-3);
     cursor: pointer;
@@ -2446,7 +2446,7 @@
     align-items: center;
     padding: 0 10px;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--control-bg);
     color: var(--text-3);
   }
@@ -2464,7 +2464,7 @@
     background: transparent;
     color: var(--text-1);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .session-drawer-search input::placeholder {
@@ -2487,16 +2487,16 @@
     align-items: center;
     padding: 10px;
     border: 1px solid color-mix(in srgb, var(--reasoning) 10%, var(--border));
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-2) 42%, var(--surface-1));
     color: inherit;
     cursor: pointer;
     font: inherit;
     text-align: left;
     transition:
-      border-color 140ms ease,
-      background 140ms ease,
-      transform 140ms ease;
+      border-color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui),
+      transform var(--duration-fast) var(--ease-ui);
   }
 
   .drawer-session-row:hover,
@@ -2536,10 +2536,10 @@
     margin-top: 12vh;
     padding: 10px 12px;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     color: var(--text-2);
     background: var(--surface-1);
-    font-size: 13px;
+    font-size: var(--font-lg);
   }
 
   .empty-chat.error {
@@ -2581,7 +2581,7 @@
     margin-top: 2px;
     flex: 0 0 auto;
     border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
     color: var(--accent);
   }
@@ -2590,8 +2590,8 @@
     border-color: color-mix(in srgb, var(--model) 34%, transparent);
     background: color-mix(in srgb, var(--model) 16%, var(--surface-2));
     color: color-mix(in srgb, var(--model) 85%, white);
-    font-family: SFMono-Regular, Consolas, "Liberation Mono", monospace;
-    font-size: 17px;
+    font-family: var(--font-mono);
+    font-size: var(--font-display);
     font-weight: 750;
     line-height: 1;
   }
@@ -2601,15 +2601,14 @@
     min-width: 0;
     padding: 12px 14px;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--surface-1);
     color: var(--text-1);
     line-height: 1.5;
   }
 
   .message.assistant .bubble {
-    --markdown-font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI",
-      Roboto, "Helvetica Neue", Arial, sans-serif;
+    --markdown-font-family: var(--font-sans);
     --markdown-body-size: 14px;
     --markdown-body-line-height: 1.6;
     --markdown-heading-size: 14.5px;
@@ -2624,14 +2623,13 @@
     border-color: color-mix(in srgb, var(--model) 44%, var(--border));
     background: color-mix(in srgb, var(--model) 20%, var(--surface-2));
     color: var(--text-1);
-    font-family: SFMono-Regular, Consolas, "Liberation Mono", monospace;
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: var(--font-lg);
     font-weight: 650;
   }
 
   .message.operator-assistant .bubble {
-    --markdown-font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI",
-      Roboto, "Helvetica Neue", Arial, sans-serif;
+    --markdown-font-family: var(--font-sans);
     --markdown-body-size: 14px;
     --markdown-body-line-height: 1.6;
     --markdown-heading-size: 14.5px;
@@ -2667,9 +2665,9 @@
     margin-left: 40px;
     padding: 8px 10px;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-1) 78%, transparent);
-    transition: border-color 160ms ease, background 160ms ease;
+    transition: border-color var(--duration-fast) var(--ease-ui), background var(--duration-fast) var(--ease-ui);
   }
 
   .agent-chat.embedded .activity-feed {
@@ -2706,7 +2704,7 @@
     width: 100%;
     padding: 0;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: transparent;
     cursor: pointer;
     font: inherit;
@@ -2720,7 +2718,7 @@
     gap: 8px;
     align-items: center;
     color: var(--text-3);
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .activity-line.highlight-error,
@@ -2728,7 +2726,7 @@
     margin: -4px -6px;
     padding: 4px 6px;
     border: 1px solid transparent;
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     color: var(--text-2);
   }
 
@@ -2774,7 +2772,7 @@
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--surface-0);
   }
 
@@ -2834,7 +2832,7 @@
     min-width: 0;
     overflow: hidden;
     color: var(--text-2);
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 600;
     line-height: 1.35;
     text-overflow: ellipsis;
@@ -2844,7 +2842,7 @@
   .activity-duration {
     min-width: 38px;
     color: color-mix(in srgb, var(--text-3) 78%, transparent);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-variant-numeric: tabular-nums;
     text-align: right;
     white-space: nowrap;
@@ -2852,7 +2850,7 @@
 
   .activity-line time {
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
@@ -2860,7 +2858,7 @@
   .activity-chevron,
   .activity-row-chevron {
     color: var(--text-3);
-    transition: transform 160ms ease, color 160ms ease;
+    transition: transform var(--duration-fast) var(--ease-ui), color var(--duration-fast) var(--ease-ui);
   }
 
   .activity-summary:hover .activity-chevron,
@@ -2880,10 +2878,12 @@
     margin: 0 0 0 30px;
     padding: 8px 10px;
     border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-0);
     color: var(--text-2);
-    font: 11px/1.45 ui-monospace, SFMono-Regular, SFMono, Menlo, Consolas, "Liberation Mono", monospace;
+    font-family: var(--font-mono);
+    font-size: var(--font-sm);
+    line-height: 1.45;
     overflow-wrap: anywhere;
     white-space: pre-wrap;
   }
@@ -2896,16 +2896,12 @@
     margin: 0 0 0 30px;
     padding: 34px 12px 12px;
     border: 1px solid var(--code-block-border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--code-block-bg);
     color: var(--code-block-text);
     box-shadow: var(--code-block-shadow);
-    font-family:
-      SFMono-Regular,
-      Consolas,
-      "Liberation Mono",
-      monospace;
-    font-size: 12px;
+    font-family: var(--font-mono);
+    font-size: var(--font-md);
     line-height: 1.55;
     tab-size: 2;
     white-space: pre;
@@ -2918,11 +2914,11 @@
     right: 10px;
     padding: 2px 7px;
     border: 1px solid var(--code-label-border);
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     background: var(--code-label-bg);
     color: var(--code-label-text);
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-    font-size: 10px;
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
     font-weight: 750;
     line-height: 1.2;
     letter-spacing: 0;
@@ -2953,12 +2949,12 @@
     min-height: 26px;
     padding: 4px 8px;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--surface-0);
     color: var(--text-2);
     cursor: pointer;
     font: inherit;
-    font-size: 12px;
+    font-size: var(--font-md);
     line-height: 1;
   }
 
@@ -2991,7 +2987,7 @@
   .approval-error {
     min-width: 0;
     color: var(--error);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .pending-approvals {
@@ -3000,7 +2996,7 @@
     margin: 0 clamp(18px, 5vw, 72px) 10px;
     padding: 10px;
     border: 1px solid color-mix(in srgb, var(--queue) 42%, var(--border));
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--queue) 9%, var(--surface-1));
   }
 
@@ -3027,7 +3023,7 @@
     gap: 8px;
     padding: 8px;
     border: 1px solid color-mix(in srgb, var(--queue) 26%, var(--border));
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-0);
   }
 
@@ -3041,12 +3037,12 @@
 
   .pending-approval-copy strong {
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .pending-approval-copy span {
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .thinking {
@@ -3059,7 +3055,7 @@
   .thinking span {
     width: 6px;
     height: 6px;
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     background: var(--text-3);
     animation: pulse 900ms ease-in-out infinite;
   }
@@ -3081,10 +3077,10 @@
     margin: 0 clamp(18px, 5vw, 72px) 10px;
     padding: 8px 10px;
     border: 1px solid color-mix(in srgb, var(--error) 35%, var(--border));
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     color: var(--error);
     background: color-mix(in srgb, var(--error) 9%, var(--surface-1));
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .agent-chat.embedded .error-banner {
@@ -3099,10 +3095,10 @@
     margin: 0 clamp(18px, 5vw, 72px) 10px;
     padding: 8px 10px;
     border: 1px solid color-mix(in srgb, var(--success) 30%, var(--border));
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     color: var(--text-2);
     background: color-mix(in srgb, var(--success) 8%, var(--surface-1));
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 600;
   }
 
@@ -3134,9 +3130,9 @@
     gap: 6px;
     padding: 8px;
     border: 1px solid var(--border-strong);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-1) 96%, black);
-    box-shadow: 0 12px 30px rgb(0 0 0 / 0.3);
+    box-shadow: var(--shadow-dropdown);
   }
 
   .slash-target {
@@ -3148,10 +3144,10 @@
     max-width: 100%;
     padding: 5px 8px;
     border: 1px solid color-mix(in srgb, var(--model) 36%, var(--border));
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--model) 13%, var(--surface-2));
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .slash-target span {
@@ -3161,11 +3157,11 @@
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--model) 28%, var(--surface-1));
     color: color-mix(in srgb, var(--model) 88%, white);
-    font-family: SFMono-Regular, Consolas, "Liberation Mono", monospace;
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: var(--font-lg);
     font-weight: 750;
   }
 
@@ -3192,7 +3188,7 @@
     align-items: center;
     padding: 8px 10px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-2);
     color: var(--text-1);
     text-align: left;
@@ -3240,11 +3236,9 @@
     width: 11px;
     height: 11px;
     justify-self: center;
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     background: var(--success);
-    box-shadow:
-      0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent),
-      0 0 13px color-mix(in srgb, var(--success) 82%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
   }
 
   .slash-command-summary {
@@ -3265,13 +3259,13 @@
   }
 
   .slash-row strong {
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 700;
   }
 
   .slash-row small {
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .composer {
@@ -3281,7 +3275,7 @@
     align-items: center;
     padding: 8px 8px 8px 12px;
     border: 1px solid var(--border-strong);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--surface-1);
     color: var(--text-3);
   }
@@ -3293,7 +3287,7 @@
     outline: none;
     background: transparent;
     color: var(--text-1);
-    font-size: 13px;
+    font-size: var(--font-lg);
   }
 
   .composer input::placeholder {
@@ -3316,7 +3310,7 @@
     align-items: center;
     justify-content: center;
     border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
     color: var(--accent);
     cursor: pointer;
@@ -3343,7 +3337,7 @@
     justify-content: space-between;
     gap: 10px;
     color: var(--text-2);
-    font-size: 13px;
+    font-size: var(--font-lg);
     font-weight: 650;
   }
 
@@ -3364,19 +3358,19 @@
     gap: 6px;
     padding: 0 8px;
     border: 1px solid color-mix(in srgb, var(--control-accent) 18%, var(--border));
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--control-bg);
     color: var(--text-2);
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 600;
     white-space: nowrap;
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    box-shadow: var(--shadow-inset-soft);
     transition:
-      border-color 140ms ease,
-      background 140ms ease,
-      color 140ms ease,
-      box-shadow 140ms ease;
+      border-color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui),
+      color var(--duration-fast) var(--ease-ui),
+      box-shadow var(--duration-fast) var(--ease-ui);
   }
 
   .session-add-label {
@@ -3393,7 +3387,7 @@
     color: var(--text-1);
     background: color-mix(in srgb, var(--control-accent) 10%, var(--control-hover));
     box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.06),
+      var(--shadow-inset-strong),
       0 0 0 3px color-mix(in srgb, var(--control-accent) 16%, transparent);
   }
 
@@ -3423,7 +3417,7 @@
   .session-empty {
     margin: 0;
     color: var(--text-3);
-    font-size: 12px;
+    font-size: var(--font-md);
     line-height: 1.4;
   }
 
@@ -3435,13 +3429,13 @@
     align-items: center;
     padding: 6px;
     border: 1px solid color-mix(in srgb, var(--reasoning) 10%, var(--border));
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     color: inherit;
     background: color-mix(in srgb, var(--surface-2) 72%, var(--surface-1));
     transition:
-      border-color 140ms ease,
-      background 140ms ease,
-      transform 140ms ease;
+      border-color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui),
+      transform var(--duration-fast) var(--ease-ui);
   }
 
   .session-card.active {
@@ -3466,7 +3460,7 @@
     align-items: center;
     padding: 4px;
     border: 0;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: transparent;
     color: inherit;
     cursor: pointer;
@@ -3487,7 +3481,7 @@
     align-items: center;
     justify-content: center;
     border: 1px solid transparent;
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--text-3);
     cursor: pointer;
@@ -3517,7 +3511,7 @@
 
   .session-copy time {
     color: var(--text-1);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-variant-numeric: tabular-nums;
   }
 
@@ -3525,7 +3519,7 @@
     display: -webkit-box;
     overflow: hidden;
     color: var(--text-2);
-    font-size: 12px;
+    font-size: var(--font-md);
     line-height: 1.35;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
@@ -3535,7 +3529,7 @@
   .session-copy small {
     overflow: hidden;
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     line-height: 1.35;
     text-overflow: ellipsis;
     white-space: nowrap;

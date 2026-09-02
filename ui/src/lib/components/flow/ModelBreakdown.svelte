@@ -57,7 +57,7 @@
     gap: 7px;
     padding: 10px 12px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-2);
   }
 
@@ -66,7 +66,7 @@
     align-items: center;
     gap: 6px;
     color: var(--text-2);
-    font-size: 12px;
+    font-size: var(--font-md);
     white-space: nowrap;
   }
 
@@ -107,14 +107,14 @@
   .name {
     overflow: hidden;
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .cost {
     color: var(--success);
-    font-size: 12px;
+    font-size: var(--font-md);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
@@ -122,7 +122,7 @@
   .bar-track {
     height: 5px;
     margin: 5px 0 4px;
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     background: color-mix(in srgb, var(--surface-0) 70%, transparent);
     overflow: hidden;
   }
@@ -130,7 +130,7 @@
   .bar {
     display: block;
     height: 100%;
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     background: var(--model);
   }
 
@@ -140,7 +140,7 @@
     gap: 10px;
     overflow: hidden;
     color: var(--text-3);
-    font-size: 10px;
+    font-size: var(--font-xs);
     font-variant-numeric: tabular-nums;
   }
 
@@ -159,6 +159,6 @@
   .empty {
     margin: 0;
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 </style>
