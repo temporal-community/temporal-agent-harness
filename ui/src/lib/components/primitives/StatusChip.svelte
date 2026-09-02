@@ -1,20 +1,5 @@
-<script lang="ts">
-  import {
-    AlertTriangle,
-    BrainCircuit,
-    CheckCircle2,
-    CircleDot,
-    Clock3,
-    GitBranch,
-    Hourglass,
-    LoaderCircle,
-    Network,
-    Radio,
-    ShieldAlert,
-    Sparkles,
-    Wrench,
-    XCircle
-  } from "@lucide/svelte";
+<script lang="ts" module>
+  import type { ChipTone } from "$lib/components/primitives/Chip.svelte";
 
   export type StatusKind =
     | "idle"
@@ -27,6 +12,8 @@
     | "model"
     | "tool"
     | "approval"
+    | "retrying"
+    | "stuck"
     | "delegating"
     | "queued"
     | "blocked"
@@ -34,12 +21,71 @@
     | "complete"
     | "error";
 
+  /**
+   * One status, one hue, wherever it is drawn. Exported because a status is not
+   * always a chip: the session anchor spends it on a single pip, and a second
+   * hand-written mapping would be one drift away from a green pip beside a red
+   * chip describing the same run.
+   */
+  export const STATUS_TONES: Record<StatusKind, ChipTone> = {
+    idle: "neutral",
+    available: "success",
+    starting: "accent",
+    connecting: "accent",
+    thinking: "accent",
+    planning: "accent",
+    reasoning: "model",
+    model: "model",
+    tool: "tool",
+    /* Waiting on a person, not on a slot. --live is reserved for "this needs
+       you" and an approval is the purest case of it — the run is stopped until
+       someone answers — so it cannot sit in --queue beside a queued turn, which
+       is waiting on capacity and needs nobody. The rest of the app already
+       reads it this way: the pane accent, the pane headline pip, and the chat
+       pane's "needs you" indicator all put approvals in --live. */
+    approval: "live",
+    retrying: "retry",
+    /* Joins approvals in the "a person should look at this" register. */
+    stuck: "live",
+    delegating: "reasoning",
+    queued: "queue",
+    blocked: "error",
+    closed: "neutral",
+    complete: "success",
+    error: "error"
+  };
+</script>
+
+<script lang="ts">
+  import {
+    AlertTriangle,
+    RotateCcw,
+    BrainCircuit,
+    CheckCircle2,
+    CircleDot,
+    GitBranch,
+    Hourglass,
+    Network,
+    Radio,
+    ShieldAlert,
+    Sparkles,
+    Wrench,
+    XCircle
+  } from "@lucide/svelte";
+  import Chip, { type ChipSize } from "$lib/components/primitives/Chip.svelte";
+
   interface Props {
     label: string;
     kind?: StatusKind;
     detail?: string | null;
     active?: boolean;
+    /** Tightens padding and the icon without leaving the control row. */
     compact?: boolean;
+    /**
+     * Defaults to the content row. Chip height says where you are: 22px inside a
+     * pane, 28px in the app chrome. Only the topbar passes "sm".
+     */
+    size?: ChipSize;
     pulse?: boolean;
   }
 
@@ -49,181 +95,96 @@
     detail = null,
     active = false,
     compact = false,
+    size = "xs",
     pulse = false
   }: Props = $props();
 
-  const animated = $derived(
-    pulse ||
-      active ||
-      kind === "connecting" ||
-      kind === "thinking" ||
-      kind === "reasoning" ||
-      kind === "tool" ||
-      kind === "delegating"
-  );
+  const ICONS: Record<StatusKind, typeof CircleDot> = {
+    idle: CircleDot,
+    available: CheckCircle2,
+    starting: Hourglass,
+    connecting: Radio,
+    thinking: Sparkles,
+    planning: Sparkles,
+    reasoning: BrainCircuit,
+    model: BrainCircuit,
+    tool: Wrench,
+    approval: ShieldAlert,
+    retrying: RotateCcw,
+    stuck: AlertTriangle,
+    delegating: Network,
+    queued: GitBranch,
+    blocked: AlertTriangle,
+    closed: XCircle,
+    complete: CheckCircle2,
+    error: XCircle
+  };
+
+  const ANIMATED_KINDS: StatusKind[] = [
+    "connecting",
+    "thinking",
+    "reasoning",
+    "tool",
+    "delegating",
+    /* A retry is in motion by definition; a stuck one has stopped being news. */
+    "retrying"
+  ];
+
+  const Icon = $derived(ICONS[kind]);
+  const animated = $derived(pulse || active || ANIMATED_KINDS.includes(kind));
+  const iconSize = $derived(compact || size === "xs" ? 12 : 13);
 </script>
 
-<span class={`status-chip ${kind} ${active ? "active" : ""} ${compact ? "compact" : ""}`}>
-  <span class={`status-icon ${animated ? "animated" : ""}`} aria-hidden="true">
-    {#if kind === "available"}
-      <CheckCircle2 size={compact ? 12 : 13} />
-    {:else if kind === "starting"}
-      <Hourglass size={compact ? 12 : 13} />
-    {:else if kind === "connecting"}
-      <Radio size={compact ? 12 : 13} />
-    {:else if kind === "thinking" || kind === "planning"}
-      <Sparkles size={compact ? 12 : 13} />
-    {:else if kind === "reasoning" || kind === "model"}
-      <BrainCircuit size={compact ? 12 : 13} />
-    {:else if kind === "tool"}
-      <Wrench size={compact ? 12 : 13} />
-    {:else if kind === "approval"}
-      <ShieldAlert size={compact ? 12 : 13} />
-    {:else if kind === "delegating"}
-      <Network size={compact ? 12 : 13} />
-    {:else if kind === "queued"}
-      <GitBranch size={compact ? 12 : 13} />
-    {:else if kind === "blocked"}
-      <AlertTriangle size={compact ? 12 : 13} />
-    {:else if kind === "closed"}
-      <XCircle size={compact ? 12 : 13} />
-    {:else if kind === "complete"}
-      <CheckCircle2 size={compact ? 12 : 13} />
-    {:else if kind === "error"}
-      <XCircle size={compact ? 12 : 13} />
-    {:else}
-      <CircleDot size={compact ? 12 : 13} />
-    {/if}
-  </span>
+<Chip tone={STATUS_TONES[kind]} {size} {active} ring={active} dense={compact}>
+  {#snippet lead()}
+    <span class={`status-icon ${animated ? "animated" : ""}`}>
+      <Icon size={iconSize} />
+    </span>
+  {/snippet}
   <span class="status-text">{label}</span>
   {#if detail && !compact}
     <span class="status-detail">{detail}</span>
   {/if}
-</span>
+</Chip>
 
 <style>
-  .status-chip {
-    --status-color: var(--text-3);
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    min-height: 24px;
-    padding: 2px 8px;
-    border: 1px solid color-mix(in srgb, var(--status-color) 30%, var(--border));
-    border-radius: 6px;
-    color: color-mix(in srgb, var(--status-color) 82%, white);
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--status-color) 10%, var(--surface-2)),
-        color-mix(in srgb, var(--surface-1) 92%, black)
-      );
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
-    font-size: 11px;
-    font-weight: 750;
-    line-height: 1.2;
-    white-space: nowrap;
-  }
-
-  .status-chip.compact {
-    min-height: 20px;
-    gap: 5px;
-    padding: 1px 6px;
-    font-size: 10px;
-  }
-
-  .status-chip.active::after {
-    content: "";
-    position: absolute;
-    inset: -1px;
-    border-radius: inherit;
-    border: 1px solid color-mix(in srgb, var(--status-color) 38%, transparent);
-    opacity: 0.7;
-    pointer-events: none;
-  }
-
-  .status-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: 0 0 auto;
-  }
-
-  .status-icon.animated {
-    animation: status-breathe 1.3s ease-in-out infinite;
-  }
-
   .status-text {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    flex: none;
+    overflow: visible;
   }
 
   .status-detail {
     max-width: 120px;
     overflow: hidden;
     color: var(--text-3);
-    font-size: 10px;
+    font-size: inherit;
     font-weight: 700;
     text-overflow: ellipsis;
   }
 
-  .status-chip.available,
-  .status-chip.complete {
-    --status-color: var(--success);
+  .status-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 
-  .status-chip.starting,
-  .status-chip.connecting,
-  .status-chip.thinking,
-  .status-chip.planning {
-    --status-color: var(--accent);
-  }
-
-  .status-chip.reasoning,
-  .status-chip.model {
-    --status-color: var(--model);
-  }
-
-  .status-chip.tool {
-    --status-color: var(--warning);
-  }
-
-  .status-chip.approval,
-  .status-chip.queued {
-    --status-color: var(--queue);
-  }
-
-  .status-chip.delegating {
-    --status-color: var(--reasoning);
-  }
-
-  .status-chip.blocked,
-  .status-chip.error {
-    --status-color: var(--error);
-  }
-
-  .status-chip.closed {
-    --status-color: var(--text-3);
-    color: var(--text-2);
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--text-3) 7%, var(--surface-2)),
-        color-mix(in srgb, var(--surface-1) 94%, black)
-      );
+  .status-icon.animated {
+    animation: status-breathe 900ms var(--ease-in-out, ease-in-out) infinite;
   }
 
   @keyframes status-breathe {
     0%, 100% {
-      opacity: 0.68;
-      transform: scale(1);
+      opacity: 0.55;
     }
     50% {
       opacity: 1;
-      transform: scale(1.08);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .status-icon.animated {
+      animation: none;
+      opacity: 0.85;
     }
   }
 </style>

@@ -123,7 +123,7 @@
           </button>
         {/each}
       </div>
-      <IconButton label="Jump to latest step" tone="live" pressed={following} onclick={onJumpToLive}>
+      <IconButton label="Jump to latest step" tone="follow" pressed={following} onclick={onJumpToLive}>
         <SkipForward size={16} />
       </IconButton>
     </div>
