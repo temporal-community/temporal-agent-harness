@@ -17,6 +17,7 @@ from __future__ import annotations
 import ast
 import contextvars
 import inspect
+import json
 import textwrap
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
@@ -28,6 +29,7 @@ from typing import (
     Annotated,
     Any,
     Literal,
+    NoReturn,
     ParamSpec,
     TypeVar,
     cast,
@@ -65,6 +67,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
     AgentMessage,
     AgentReply,
+    AgentResumeState,
     AgentStatus,
     AgentStreamItem,
     CallbackRequested,
@@ -81,8 +84,10 @@ from temporal_agent_harness.harness.agent_protocol import (
     PendingApproval,
     PendingCallback,
     PendingTurn,
+    QueuedTurn,
     RunSubagentTurnInput,
     SlashCommand,
+    SubagentHandoff,
     SubagentInfo,
     SubagentReplyReceived,
     SubagentStarted,
@@ -591,6 +596,239 @@ def agent_handlers(cls: type) -> dict[str, _AcceptedHandler]:
     return discovered
 
 
+# ---------------------------------------------------------------------------
+# @agent.snapshot / @agent.restore — carrying the conversation across a rollover
+# ---------------------------------------------------------------------------
+#
+# A session that has talked for long enough hands itself to a fresh workflow run rather than
+# growing its history until Temporal refuses it (see ``AgentWorkflowRunner._continue_as_new``).
+# The one thing the harness cannot carry on its own is the conversation: every agent holds its
+# message history privately (``self._conversation``, ``self._previous_interaction_id``, whatever
+# the SDK wants), and no amount of introspection would tell the harness which attributes those
+# are or how to serialize them.
+#
+# So the agent is asked. ``@agent.snapshot`` hands the harness a JSON-serializable blob at the
+# quiescent point between turns; ``@agent.restore`` receives that same blob, unexamined, in the
+# successor run before its first turn. The harness never looks inside.
+#
+# Both hooks or neither. An agent that declares neither still works exactly as it does today —
+# it simply never rolls over, and its history grows until Temporal's limits are the problem
+# again. That is the right way round: a session that eventually fails loudly is better than one
+# that silently forgets what the user told it.
+
+_SNAPSHOT_MARKER = "__agent_snapshot__"
+_RESTORE_MARKER = "__agent_restore__"
+_RESUMPTION_ATTR = "__agent_resumption__"
+
+
+def snapshot(fn: Callable[[Any], dict[str, Any]]) -> Callable[[Any], dict[str, Any]]:
+    """Mark the method that captures this agent's conversation state (returned unchanged).
+
+    ``def snapshot(self) -> dict[str, Any]``, synchronous, paired with :func:`restore`. The
+    harness calls it at the one point in a session where no turn is in flight, and hands what it
+    returns to the successor run's ``@agent.restore``::
+
+        @agent.snapshot
+        def snapshot(self) -> dict[str, Any]:
+            return {"conversation": self._conversation}
+
+        @agent.restore
+        def restore(self, state: dict[str, Any]) -> None:
+            self._conversation = state["conversation"]
+
+    Return JSON-native data — dicts, lists, strings, numbers. That is not a limitation of the
+    carrier so much as of the contract around it: there is one ``AgentConfig`` for every agent,
+    so there is nowhere to declare a per-agent type the data converter could reconstruct. An
+    agent whose state is not natively JSON converts it here and back in ``restore`` (Pydantic AI,
+    for instance, has ``ModelMessagesTypeAdapter`` for exactly this). This is checked rather than
+    trusted — see :func:`_assert_json_native_snapshot` for why a naive round-trip test passes
+    without it.
+
+    **Name each key after the attribute it carries.** The keys are the only coupling between the
+    two halves — ``snapshot`` writes ``{"conversation": ...}`` and ``restore`` reads
+    ``state["conversation"]`` — and nothing checks that they agree, because the one shared
+    ``AgentConfig`` leaves nowhere to declare a type that could. A typo in either half is a
+    ``KeyError`` at the first rollover, which is hours into a conversation.
+
+    Keep it synchronous and keep it cheap. It runs at a moment the harness has proven is
+    quiescent, and an ``await`` there would reopen the window the rollover point exists to close.
+    """
+    setattr(fn, _SNAPSHOT_MARKER, True)
+    return fn
+
+
+def restore(fn: Callable[[Any, dict[str, Any]], None]) -> Callable[[Any, dict[str, Any]], None]:
+    """Mark the method that reinstates conversation state after a rollover (returned unchanged).
+
+    ``def restore(self, state: dict[str, Any]) -> None``, synchronous, paired with
+    :func:`snapshot` — see there for the example and the key-naming convention.
+
+    It runs first thing inside ``runner.run``, which places it after **everything** the author
+    writes on the way in: ``@workflow.init``, so it overwrites whatever empty default the
+    constructor set rather than racing it, and also any prologue in the author's own
+    ``@workflow.run`` before ``await self._runner.run(self)``. So a hook may rely on anything the
+    agent sets up in either place; there is no ordering hazard to design around.
+    """
+    setattr(fn, _RESTORE_MARKER, True)
+    return fn
+
+
+@dataclass(frozen=True)
+class ResumptionHooks:
+    """An agent's discovered ``@agent.snapshot`` / ``@agent.restore`` pair.
+
+    Public because :func:`agent_resumption_hooks` returns it, and a caller that holds one has to
+    be able to name its type.
+    """
+
+    snapshot: Callable[[Any], dict[str, Any]]
+    restore: Callable[[Any, dict[str, Any]], None]
+
+
+def _marked_methods(cls: type, marker: str) -> list[tuple[str, Callable[..., Any]]]:
+    return [
+        (name, fn)
+        for name, fn in inspect.getmembers(cls, inspect.isfunction)
+        if getattr(fn, marker, False)
+    ]
+
+
+def _discover_resumption_hooks(cls: type) -> ResumptionHooks | None:
+    """Find + validate ``cls``'s snapshot/restore pair, or ``None`` if it declares neither.
+
+    Raises ``TypeError`` on a half-declared or malformed pair so the mistake lands at import
+    (worker startup) rather than at the first rollover, which is hours into a conversation and
+    the worst possible moment to discover that state cannot be carried.
+    """
+    snapshots = _marked_methods(cls, _SNAPSHOT_MARKER)
+    restores = _marked_methods(cls, _RESTORE_MARKER)
+    if not snapshots and not restores:
+        return None
+    for label, found, arity in (
+        ("@agent.snapshot", snapshots, 1),
+        ("@agent.restore", restores, 2),
+    ):
+        if len(found) != 1:
+            raise TypeError(
+                f"{cls.__name__} declares {len(found)} {label} methods; it must declare "
+                f"exactly one, paired with the other. The pair is what carries the agent's "
+                f"conversation across a continue-as-new; half of it carries nothing."
+            )
+        name, fn = found[0]
+        if inspect.iscoroutinefunction(fn):
+            raise TypeError(
+                f"{cls.__name__}.{name} is {label} and must be synchronous. It runs at the "
+                f"quiescent point between turns, and an await there would reopen the window "
+                f"the rollover point exists to close."
+            )
+        params = list(inspect.signature(fn).parameters)
+        if len(params) != arity:
+            expected = "(self)" if arity == 1 else "(self, state)"
+            raise TypeError(
+                f"{cls.__name__}.{name} is {label} and must take {expected}; got "
+                f"({', '.join(params)})."
+            )
+    return ResumptionHooks(snapshot=snapshots[0][1], restore=restores[0][1])
+
+
+def agent_resumption_hooks(cls: type) -> ResumptionHooks | None:
+    """The discovered snapshot/restore pair for an agent class (``None`` if it declares neither).
+
+    Reads the attribute ``defn`` stamps at import; falls back to discovering on the fly, so a
+    bare ``@workflow.defn`` agent and an offline call both work."""
+    if _RESUMPTION_ATTR in vars(cls):
+        return cast("ResumptionHooks | None", vars(cls)[_RESUMPTION_ATTR])
+    return _discover_resumption_hooks(cls)
+
+
+class _NotJsonNative(Exception):
+    """Carries the offending object out of ``json.dumps``'s ``default`` hook."""
+
+    def __init__(self, value: object) -> None:
+        super().__init__(type(value).__name__)
+        self.value = value
+
+
+def _refuse_to_encode(value: object) -> NoReturn:
+    raise _NotJsonNative(value)
+
+
+def _first_non_json_native(value: object, path: str) -> tuple[str, object] | None:
+    """Where the first thing JSON cannot carry lives, and what it is.
+
+    Only ever called on a blob :func:`_assert_json_native_snapshot` has already established is
+    bad, so it can afford to be a plain recursive walk: naming the offending key precisely is
+    worth more than speed on a path that ends in a raised exception either way.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return None
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                return f"a key of {path}", key
+            found = _first_non_json_native(item, f"{path}[{key!r}]")
+            if found is not None:
+                return found
+        return None
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            found = _first_non_json_native(item, f"{path}[{index}]")
+            if found is not None:
+                return found
+        return None
+    return path, value
+
+
+def _assert_json_native_snapshot(cls_name: str, state: object) -> dict[str, Any]:
+    """Refuse a ``@agent.snapshot`` blob that only *looks* like it survives a rollover.
+
+    The hook's contract is JSON-native data, and nothing about a broken one is visible where an
+    author would look. The data converter beneath continue-as-new is the pydantic one, which
+    encodes a ``TodoItem`` or a Pydantic AI ``ModelMessage`` perfectly happily — so a snapshot
+    that forgot its ``.model_dump()`` passes ``restore(snapshot(agent))`` in one process, passes
+    review, and then arrives in the successor run as a plain dict. The next turn hands the SDK
+    dicts where it wanted objects, one run and some hours after the mistake was made. So the
+    contract is enforced here rather than documented and hoped for.
+
+    It runs *at most once per workflow run*, because
+    :meth:`AgentWorkflowRunner._continue_as_new` never returns — a run spans a hundred turns or
+    more, and the same blob is about to be serialized to JSON again by the data converter and
+    sent to the server. That is small enough that hiding it behind a debug flag would only mean
+    the check was off in production, where the mistake actually surfaces. It is unconditional.
+    """
+    if not isinstance(state, dict):
+        raise TypeError(
+            f"{cls_name}'s @agent.snapshot returned a {type(state).__name__}, not a dict. The "
+            f"blob is carried as a JSON object keyed by what it holds — return "
+            f'{{"conversation": ...}} rather than the conversation itself.'
+        )
+    try:
+        # One pass through the C encoder on the happy path. The walk that names the culprit is
+        # only paid for once this has already established there is one.
+        json.dumps(state, default=_refuse_to_encode)
+    except (_NotJsonNative, TypeError, ValueError) as encode_error:
+        try:
+            found = _first_non_json_native(state, "state")
+        except RecursionError:
+            # A snapshot that contains itself. The encoder's own "circular reference" is a better
+            # answer than the walk could give, and it has already been raised.
+            found = None
+        detail = (
+            f"{found[0]} is a {type(found[1]).__name__}"
+            if found is not None
+            else str(encode_error)
+        )
+        raise TypeError(
+            f"{cls_name}'s @agent.snapshot returned state that is not JSON-native: {detail}. "
+            f"The blob is carried to the successor run as plain JSON data, and the pydantic "
+            f"data converter beneath it will encode this without complaint — so the successor "
+            f"would receive a dict where the agent expects an object, one run after the "
+            f"mistake. Convert it in the hook (``.model_dump()``, a type adapter, or your "
+            f"SDK's own serializer) and convert it back in @agent.restore."
+        ) from encode_error
+    return state
+
+
 @overload
 def defn(cls: _WorkflowClass, /) -> _WorkflowClass: ...
 @overload
@@ -626,6 +864,9 @@ def defn(cls: type | None = None, /) -> Any:
         # so the runner / agent_interface query / subagent generator read them without
         # re-introspecting (and a malformed handler fails fast at import).
         setattr(c, _HANDLERS_ATTR, _discover_handlers(c))
+        # Same deal for the continue-as-new hooks: a half-declared pair is a TypeError at import
+        # rather than a surprise the first time a long conversation tries to roll over.
+        setattr(c, _RESUMPTION_ATTR, _discover_resumption_hooks(c))
         return c
 
     return decorate(cls) if cls is not None else decorate

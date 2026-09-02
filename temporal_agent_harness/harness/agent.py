@@ -53,6 +53,8 @@ from temporal_agent_harness.harness.agent_workflow import (
     activity_tool_defn,
     callback_tool_defn,
     defn,
+    restore,
+    snapshot,
     tool_activity,
     tool_defn,
 )
@@ -72,6 +74,8 @@ __all__ = [
     "callback_tool_defn",
     "code_mode_tool",
     "defn",
+    "restore",
+    "snapshot",
     "subagent_toolset",
     "tool_activity",
     "tool_defn",
