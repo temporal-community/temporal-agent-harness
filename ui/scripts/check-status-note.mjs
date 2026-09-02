@@ -22,7 +22,8 @@ const IMPLIED_STATUS_STEMS = {
   complete: ["complet", "final"],
   idle: ["end"],
   dispatched: ["sent"],
-  approved: ["grant"]
+  approved: ["grant"],
+  degraded: ["unavailable"]
 };
 
 // Kept in step with statusNote() in ui/src/lib/state/replayLog.ts.
@@ -62,7 +63,7 @@ const ROWS = [
   ["Subagent reply received", "ok", "ok"],
   ["Subagent reply received", "error", "error"],
   ["Subagent stopped", "stopped", null],
-  ["Subagent stream unavailable", "degraded", "degraded"],
+  ["Subagent stream unavailable", "degraded", null],
   ["Reply streaming", "streaming", null],
   ["Final reply", "complete", null],
   ["Turn ended", "idle", null]
@@ -81,7 +82,7 @@ for (const [label, status, expected] of ROWS) {
 const suppressed = ROWS.filter(([, , expected]) => expected === null).length;
 assert.equal(
   suppressed,
-  18,
+  19,
   "the count is part of the claim: if a row moved between suppressed and surviving, say so here"
 );
 

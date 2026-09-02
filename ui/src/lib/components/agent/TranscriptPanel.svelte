@@ -390,7 +390,6 @@
                   >
                     <span class="line-toggle-main">
                       <span class="line-meta">
-                        <time>{time(row.timestamp)}</time>
                         <Badge label={row.label} tone={row.tone} />
                         {#if tool}
                           <span class="line-tool">{tool}</span>
@@ -408,6 +407,7 @@
                             subagent turn {row.sourceTurnNumber}
                           </span>
                         {/if}
+                        <time>{time(row.timestamp)}</time>
                       </span>
                     </span>
                     <span class="row-toggle-icon" aria-hidden="true">
@@ -820,8 +820,16 @@
     font-size: var(--font-xs);
   }
 
+  /* Pushed to the right edge, where a run of events that really did happen in
+     the same second reads as a column rather than as the same word repeated
+     down the middle of every row. */
   .line-meta time {
     flex: 0 0 auto;
+    margin-left: auto;
+    color: var(--text-4);
+    font-family: var(--font-mono);
+    font-size: var(--figure-size);
+    font-variant-numeric: tabular-nums;
   }
 
   .line-meta :global(.badge) {

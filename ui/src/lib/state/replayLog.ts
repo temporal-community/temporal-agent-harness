@@ -629,7 +629,8 @@ const IMPLIED_STATUS_STEMS: Record<string, string[]> = {
   complete: ["complet", "final"],
   idle: ["end"],
   dispatched: ["sent"],
-  approved: ["grant"]
+  approved: ["grant"],
+  degraded: ["unavailable"]
 };
 
 /** The row's status, or null when the row's label already carries it. */
