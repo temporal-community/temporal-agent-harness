@@ -36,8 +36,10 @@ from temporal_agent_harness.harness.agent_protocol import (
     TurnStarted,
 )
 from temporal_agent_harness.harness.stream_merge import (
+    SYNTHESIZED,
     Gates,
     MountChild,
+    StreamPosition,
     UnmountChild,
     merge_stream,
     select_live,
@@ -241,7 +243,7 @@ async def _run_merge(
     live_tail_workflows: set[str] | None = None,
     drip_workflows: dict[str, float] | None = None,
     stall_grace_seconds: float = 5.0,
-    resume_offsets: list[int] | None = None,
+    positions: list[StreamPosition] | None = None,
 ) -> list[AgentEvent]:
     """Drive the merge over scripted streams to exhaustion (or should_stop), returning the output.
 
@@ -251,8 +253,8 @@ async def _run_merge(
     idle workflow) so unmount-on-stop — and the stall backstop on a never-delivering child — can be
     exercised without the backlog naturally ending. ``stall_grace_seconds`` is the liveness backstop
     (tests pass a tiny value so a simulated hang resolves fast). ``root_from_offset`` (with no
-    ``skip_until_turn_id``) exercises the no-skip resume path. ``resume_offsets`` (if given) collects
-    the per-event root resume offset the merge yields."""
+    ``skip_until_turn_id``) exercises the no-skip resume path. ``positions`` (if given) collects the
+    :class:`StreamPosition` the merge yields alongside each event."""
     fake = _FakeStreams(
         streams,
         closes=closes,
@@ -262,7 +264,7 @@ async def _run_merge(
     )
     out: list[AgentEvent] = []
     with patch.object(cursor_mod, "WorkflowStreamClient", fake):
-        async for ev, resume_offset in merge_stream(
+        async for ev, position in merge_stream(
             client=None,
             root_workflow_id=root,
             root_from_offset=root_from_offset,
@@ -272,8 +274,8 @@ async def _run_merge(
             stall_grace_seconds=stall_grace_seconds,
         ):
             out.append(ev)
-            if resume_offsets is not None:
-                resume_offsets.append(resume_offset)
+            if positions is not None:
+                positions.append(position)
     return out
 
 
@@ -857,13 +859,66 @@ async def test_resume_offset_advances_past_each_root_event():
     # every event is a root event and the cursor advances on each — any offset is a safe resume point
     # under the no-skip policy). A subagent's own events would instead repeat the prior root value.
     streams = _three_turn_root()
-    offsets: list[int] = []
+    positions: list[StreamPosition] = []
     merged = await _run_merge(
-        streams, root="P", select=select_replay, resume_offsets=offsets
+        streams, root="P", select=select_replay, positions=positions
     )
     assert len(merged) == 9
     # Each root event at offset i hands back resume offset i+1.
-    assert offsets == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    assert [p.resume_offset for p in positions] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    # And reports its own offset in its own log, which is i.
+    assert [p.event_offset for p in positions] == [0, 1, 2, 3, 4, 5, 6, 7, 8]
+
+
+async def test_subagent_events_share_a_resume_offset_but_not_an_event_offset():
+    # The distinction StreamPosition exists for. The resume cursor is root-granular, so it stands
+    # still for the whole of a subagent's turn and every event in that turn reports the SAME value.
+    # That makes it unusable as an identity: keyed on it, a subagent's events all look like one
+    # event. event_offset is the child's own coordinate and separates them.
+    positions: list[StreamPosition] = []
+    merged = await _run_merge(
+        _parent_one_child_turn(), root="P", select=select_replay, positions=positions
+    )
+    child_positions = [
+        p for ev, p in zip(merged, positions, strict=True) if ev.agent_id == "C"
+    ]
+    assert len(child_positions) == 5
+    assert len({p.resume_offset for p in child_positions}) == 1, (
+        "the resume cursor must not move during a subagent turn"
+    )
+    assert [p.event_offset for p in child_positions] == [0, 1, 2, 3, 4], (
+        "each child event must report its own offset in the child's own log"
+    )
+
+
+async def test_synthesized_marker_reports_no_event_offset():
+    # A ``subagent_stream_unavailable`` marker is made up by the merge, not read off any log, so it
+    # has no durable coordinate to report.
+    streams = {
+        "P": [
+            _ts("P", 1),
+            _ms("P", 1, child="C", child_turn=1),
+            _rr("P", 1, child="C", child_turn=1),
+            _te("P", 1),
+        ],
+        # Opens its turn and never ends it, so the merge gives up and synthesizes a marker.
+        "C": [_ts("C", 1)],
+    }
+    positions: list[StreamPosition] = []
+    merged = await _run_merge(
+        streams,
+        root="P",
+        select=select_replay,
+        positions=positions,
+        stall_grace_seconds=0.01,
+    )
+    synthetic = [
+        p
+        for ev, p in zip(merged, positions, strict=True)
+        if ev.event.type == AgentEventType.SUBAGENT_STREAM_UNAVAILABLE
+    ]
+    assert len(synthetic) == 1, "the abandoned child turn should synthesize one marker"
+    assert synthetic[0].event_offset == SYNTHESIZED
 
 
 async def test_resume_from_offset_streams_only_events_after_it():

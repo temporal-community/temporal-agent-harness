@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import NamedTuple
 
 from temporalio.client import Client
 
@@ -45,15 +46,37 @@ SelectPolicy = Callable[[list[Cursor]], Cursor]
 # (a single turn vs. a full attach) differ only in this and in the select policy + start offset.
 ShouldStop = Callable[[Cursor, AgentEvent], Awaitable[bool]]
 
-# What the merge yields per step: the event plus the **resume offset** — a ROOT-stream resume CURSOR
-# (NOT a per-event coordinate) that a consumer records and hands back to ``attach(from_offset=...)``
-# to resume without re-replaying already-seen root events. It advances past EVERY root event emitted
-# (to ``ev_offset + 1``) and does NOT move on a subagent's own events — so every event within one
-# subagent turn's bracket carries the SAME value: the cursor as of that turn's
-# ``subagent_message_sent`` (the root offset, not the child's own offset). Any root offset is a safe
-# resume point (see ``merge_stream``); it is neither the event's own per-stream offset nor a merged
-# display ordinal (the cross-stream interleaving itself is never a resumable position).
-MergedItem = tuple[AgentEvent, int]
+# An event the merge SYNTHESIZED rather than read off a stream (a ``subagent_stream_unavailable``
+# marker) has no offset in anyone's log, so it has no durable coordinate to report.
+SYNTHESIZED = -1
+
+
+class StreamPosition(NamedTuple):
+    """Where one merged event sits. Two offsets, and they are emphatically not the same number.
+
+    ``resume_offset`` is a ROOT-stream resume CURSOR that a consumer records and hands back to
+    ``attach(from_offset=...)`` to resume without re-replaying already-seen root events. It
+    advances past EVERY root event emitted (to ``event_offset + 1``) and does NOT move on a
+    subagent's own events — so every event within one subagent turn's bracket carries the SAME
+    value: the cursor as of that turn's ``subagent_message_sent``. Any root offset is a safe
+    resume point (see :func:`merge_stream`); it is not a merged display ordinal, since the
+    cross-stream interleaving itself is never a resumable position.
+
+    ``event_offset`` is THIS event's own offset in the log of the agent that PUBLISHED it — the
+    event's durable coordinate, the same on every delivery of it and different for every other
+    event of that agent. Together with the envelope's tree-unique ``agent_id`` it is what
+    IDENTIFIES an event, which is the job ``resume_offset`` cannot do: standing still for the
+    length of a subagent's turn is the whole point of a resume cursor and fatal in an identity,
+    because it makes every event of that turn look like the same event. :data:`SYNTHESIZED` when
+    the merge made the event up rather than reading it.
+    """
+
+    resume_offset: int
+    event_offset: int
+
+
+# What the merge yields per step: the event plus its :class:`StreamPosition`.
+MergedItem = tuple[AgentEvent, StreamPosition]
 
 
 def select_replay(candidates: list[Cursor]) -> Cursor:
@@ -192,7 +215,8 @@ class _Merge:
             # Drain any synthetic ``subagent_stream_unavailable`` markers queued by a give-up first, so a
             # consumer learns a subagent's detail was dropped right where it happened.
             while self._pending_markers:
-                yield (self._pending_markers.pop(0), self._root_resume_offset)
+                marker = self._pending_markers.pop(0)
+                yield (marker, StreamPosition(self._root_resume_offset, SYNTHESIZED))
             self._ensure_pulls()
             candidates = [
                 c
@@ -217,7 +241,7 @@ class _Merge:
                 # only at root-event granularity; see ``merge_stream``).
                 if not cur.is_child:
                     self._root_resume_offset = ev_offset + 1
-                yield (ev, self._root_resume_offset)
+                yield (ev, StreamPosition(self._root_resume_offset, ev_offset))
                 action = self._gates.on_emit(
                     is_child=cur.is_child, source_workflow_id=cur.workflow_id, ev=ev
                 )
@@ -461,7 +485,7 @@ async def merge_stream(
     should_stop: ShouldStop,
     stall_grace_seconds: float = DEFAULT_STALL_GRACE_SECONDS,
 ) -> AsyncIterator[MergedItem]:
-    """Drive one gated k-way merge, yielding ``(event, resume_offset)`` pairs (see :data:`MergedItem`).
+    """Drive one gated k-way merge, yielding ``(event, position)`` pairs (see :data:`MergedItem`).
 
     Mounts ``root_workflow_id`` at ``root_from_offset``, then interleaves the root with every subagent
     stream it mounts on a ``subagent_message_sent``, recursively. ``skip_until_turn_id`` skips the root

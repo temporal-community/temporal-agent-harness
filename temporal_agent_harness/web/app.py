@@ -44,6 +44,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     OperatorCommandResult,
     SEND_AGENT_MESSAGE_UPDATE,
 )
+from temporal_agent_harness.harness.stream_merge import StreamPosition
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
 from temporal_agent_harness.web.registry import load_agent_registry
@@ -287,22 +288,22 @@ def create_agent_harness_app(
 
     @app.post("/api/chat")
     async def chat(req: ChatRequestBody):
-        def on_item(item: AgentStreamOutput, resume_offset: int) -> bytes:
+        def on_item(item: AgentStreamOutput, position: StreamPosition) -> bytes:
             match item:
                 case AgentTurnTimeout():
                     return _sse(
                         AgentEventType.ERROR,
                         {"kind": "timeout", "message": str(item)},
-                        resume_offset,
+                        position,
                     )
                 case AgentTurnError():
                     return _sse(
                         AgentEventType.ERROR,
                         {"kind": "agent", "message": str(item)},
-                        resume_offset,
+                        position,
                     )
                 case _:
-                    return _yield_item(item, resume_offset)
+                    return _yield_item(item, position)
 
         client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
         if isinstance(req.message, str):
@@ -619,14 +620,14 @@ def _mount_static_ui(
         raise HTTPException(status_code=404)
 
 
-def _sse(event: str, data: dict, resume_offset: int | None = None) -> bytes:
+def _sse(event: str, data: dict, position: StreamPosition | None = None) -> bytes:
     payload = {**data}
-    if resume_offset is not None:
-        payload["resume_offset"] = resume_offset
+    if position is not None:
+        payload["resume_offset"] = position.resume_offset
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
 
 
-def _yield_item(item, resume_offset: int | None = None) -> bytes:
+def _yield_item(item, position: StreamPosition | None = None) -> bytes:
     if isinstance(item, AgentEvent):
         payload = item.event
         data = {
@@ -636,7 +637,7 @@ def _yield_item(item, resume_offset: int | None = None) -> bytes:
             "turn_number": item.turn_number,
             "timestamp": item.timestamp,
         }
-        return _sse(payload.type, data, resume_offset)
+        return _sse(payload.type, data, position)
     return b""
 
 
