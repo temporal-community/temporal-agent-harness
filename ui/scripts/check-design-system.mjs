@@ -17,6 +17,43 @@ const PRIMITIVES = /\/components\/primitives\//;
 
 const CONTROL_HEIGHTS = new Set(["20px", "22px", "28px", "34px"]);
 
+/* Classes worn by an <input>, <textarea> or <select> in this file's markup, so
+   that a height on `.composer-input` is read the same way as one on
+   `.composer input`. */
+function formElementClasses(text) {
+  const names = new Set();
+  for (const tag of text.matchAll(/<(?:input|textarea|select)\b[^>]*>/g)) {
+    for (const attr of tag[0].matchAll(/class=(?:"([^"]*)"|\{([^}]*)\})/g)) {
+      for (const name of (attr[1] ?? attr[2]).matchAll(/[a-zA-Z][\w-]*/g)) names.add(name[0]);
+    }
+  }
+  return names;
+}
+
+/* The selector of the rule a declaration sits in: back up to the `{` that
+   opened it, then keep collecting the lines above it while they end in a comma. */
+function enclosingSelector(lines, i) {
+  for (let j = i; j >= 0 && i - j < 20; j -= 1) {
+    const brace = lines[j].indexOf("{");
+    if (brace === -1) continue;
+    let selector = lines[j].slice(0, brace);
+    for (let k = j - 1; k >= 0 && /,\s*$/.test(lines[k]); k -= 1) selector = `${lines[k]} ${selector}`;
+    return selector;
+  }
+  return "";
+}
+
+/* A rule that dresses a form element. `cursor: pointer` finds buttons, and a
+   text field has none — which is how the composer's literal 32px sat beside a
+   28px send button unseen. A pseudo-element is exempt: a range input's
+   ::-webkit-slider-thumb is 18px because the lane is, not because it missed
+   the control scale. */
+function formTarget(selector, formClasses) {
+  if (selector.includes("::")) return false;
+  if (/(?:^|[\s>+~(])(?:input|textarea|select)\b/.test(selector)) return true;
+  return [...selector.matchAll(/\.([a-zA-Z][\w-]*)/g)].some((m) => formClasses.has(m[1]));
+}
+
 async function collect(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   const files = [];
@@ -33,8 +70,16 @@ const findings = { focus: [], height: [], hover: [], opacity: [], dead: [] };
 
 for (const file of files.filter((f) => f.endsWith(".svelte"))) {
   const text = await readFile(file, "utf8");
-  const lines = text.split("\n");
+  /* Comments blanked, newlines kept, for the same reason the dead-selector pass
+     strips them: prose may not vouch for a rule. These heuristics all read a
+     window of lines around a declaration, and the comment explaining that the
+     height rule only looks near a `cursor: pointer` was itself enough to make
+     the height rule think it had found a `cursor: pointer`. */
+  const lines = text
+    .replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, " "))
+    .split("\n");
   const short = file.slice(file.indexOf("/src/") + 5);
+  const formClasses = formElementClasses(text);
 
   lines.forEach((line, i) => {
     const at = `${short}:${i + 1}`;
@@ -51,12 +96,18 @@ for (const file of files.filter((f) => f.endsWith(".svelte"))) {
 
     /* A control height off the 22/28/34 scale. Only sizes in control range are
        considered: a 9px pip and a 180px chart are not controls that missed the
-       scale, they are something else measured in pixels. */
+       scale, they are something else measured in pixels. Two ways to be a
+       control: a pointer cursor, or being a form element — app.css says nothing
+       hard-codes a height outside the scale, and a text field is bound by that
+       sentence even though nothing about it is clickable. */
     const height = line.match(/^\s*(?:min-)?height:\s*(\d+)px\s*;/);
     const px = height ? Number(height[1]) : 0;
     if (height && px >= 18 && px <= 40 && !CONTROL_HEIGHTS.has(`${px}px`) && !PRIMITIVES.test(file)) {
       const block = lines.slice(Math.max(0, i - 14), i + 14).join("\n");
-      if (/cursor: pointer/.test(block)) findings.height.push(`${at}  ${px}px`);
+      const selector = enclosingSelector(lines, i);
+      if (/cursor: pointer/.test(block) || formTarget(selector, formClasses)) {
+        findings.height.push(`${at}  ${px}px`);
+      }
     }
 
     /* A disabled state with its own opacity instead of the token. */
@@ -68,13 +119,32 @@ for (const file of files.filter((f) => f.endsWith(".svelte"))) {
   });
 
   /* Hover styling with no pointer guard: on a touch screen the hover state
-     sticks to whatever was tapped last. */
-  const styleStart = text.indexOf("<style");
-  if (styleStart !== -1) {
-    const style = text.slice(styleStart);
-    const hovers = (style.match(/:hover\b/g) ?? []).length;
-    if (hovers > 0 && !style.includes("@media (hover: hover)")) {
-      findings.hover.push(`${short}  ${hovers} :hover rule(s)`);
+     sticks to whatever was tapped last.
+
+     One finding per rule, at its line. It used to be one per file, which made a
+     file with seven of them read as one thing to fix, and it took the file's
+     first guard as vouching for every rule in it — so the number was smaller
+     than the work in two different directions. Nesting is tracked instead: a
+     rule is guarded only if a `hover: hover` at-rule is actually above it. */
+  for (const block of text.match(/<style[\s\S]*?<\/style>/g) ?? []) {
+    const offset = text.indexOf(block);
+    /* Comments blanked but their newlines kept, so a `:hover` written in prose
+       is not a rule and the reported lines still land. */
+    const clean = block.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, " "));
+    const open = [];
+    let from = 0;
+    for (const brace of clean.matchAll(/[{}]/g)) {
+      if (brace[0] === "}") open.pop();
+      else {
+        const prelude = clean.slice(from, brace.index);
+        open.push(prelude);
+        if (/:hover\b/.test(prelude) && !open.some((p) => /@media[^{]*hover:\s*hover/.test(p))) {
+          const start = offset + from + (prelude.length - prelude.trimStart().length);
+          const line = text.slice(0, start).split("\n").length;
+          findings.hover.push(`${short}:${line}  ${prelude.trim().replace(/\s+/g, " ")}`);
+        }
+      }
+      from = brace.index + 1;
     }
   }
 }
@@ -100,7 +170,17 @@ const producible = (await Promise.all(files.map((f) => readFile(f, "utf8"))))
 
 /* A class is alive if it is written out whole, or if it is the tail of a
    template literal: `md-syntax-${kind}` produces .md-syntax-string, and
-   `edge-${kind}` produces .edge-main, neither of which appears literally. */
+   `edge-${kind}` produces .edge-main, neither of which appears literally.
+
+   Where this stops: a name assembled the other way round — `${prefix}-row`, or
+   two variables joined — is invisible to both passes, and working out what such
+   an expression can evaluate to is constant propagation across functions, not a
+   regex. Nothing in this tree needs it. The one class attribute that opens with
+   an interpolation is `${activityLineClass(row)} activity-row-button`, and that
+   function returns literals ("activity-line", "highlight-error") which the
+   whole-word pass already sees. Left undone on purpose: a guess here shows up
+   as a confident "delete this" on a live rule, which is the one way this check
+   can do damage. */
 const alive = (name) => {
   if (THIRD_PARTY.test(name)) return true;
   if (new RegExp(`["\`\\s.{(]${name}(?=["\`\\s.})])`).test(producible)) return true;
