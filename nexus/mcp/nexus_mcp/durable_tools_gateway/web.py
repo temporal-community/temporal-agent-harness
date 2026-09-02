@@ -39,6 +39,7 @@ from .registry import (
     REGISTRY_TASK_QUEUE,
     AccountEntries,
     AgentRegistration,
+    NexusMCPServerRegistration,
     PendingSessionEvent,
     SessionEvent,
     SessionRecord,
@@ -51,6 +52,7 @@ from .registry_service_handler import (
     SubagentDispatchOutput,
     subagent_dispatch_activity_id,
 )
+from .tool_history import scan_external_tool_calls, scan_native_tool_calls
 
 logger = logging.getLogger(__name__)
 _EXTERNAL_EVENTS_PER_TURN = 4
@@ -70,6 +72,14 @@ class RegisterAgentRequest(BaseModel):
     description: str = ""
     nexus_endpoint: str | None = None
     provider_url: str | None = None
+
+
+class RegisterNexusMCPServerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    endpoint: str
+    service: str
 
 
 class CreateSessionRequest(BaseModel):
@@ -550,7 +560,21 @@ def create_account_agent_app(
                 for agent in agents
             ],
             "mcp_servers": [
-                {"name": name, "endpoint": endpoint}
+                {
+                    "name": registration.name,
+                    "endpoint": registration.endpoint,
+                    "kind": "nexus",
+                    "service": registration.service,
+                }
+                for registration in entries.nexus_servers.values()
+            ]
+            + [
+                {
+                    "name": name,
+                    "endpoint": endpoint,
+                    "kind": "external_http",
+                    "service": None,
+                }
                 for name, endpoint in entries.remote_servers.items()
             ],
             "subagent_providers": [
@@ -570,6 +594,50 @@ def create_account_agent_app(
             result_type=AgentRegistration,
         )
         return asdict(result)
+
+    @app.post("/api/account/mcp-servers")
+    async def register_nexus_mcp_server(req: RegisterNexusMCPServerRequest):
+        registration = NexusMCPServerRegistration(**req.model_dump())
+        result: NexusMCPServerRegistration = (
+            await app.state.registry.execute_update(
+                ToolRegistryWorkflow.register_nexus_mcp_server,
+                registration,
+                result_type=NexusMCPServerRegistration,
+            )
+        )
+        return asdict(result)
+
+    @app.get("/api/mcp-servers/{server_name}/tool-calls")
+    async def tool_calls(server_name: str):
+        entries: AccountEntries = await app.state.registry.query(
+            ToolRegistryWorkflow.list_account_entries,
+            result_type=AccountEntries,
+        )
+        native = entries.nexus_servers.get(server_name)
+        if native is not None:
+            agents: list[AgentRegistration] = await app.state.registry.query(
+                ToolRegistryWorkflow.list_agents,
+                result_type=list[AgentRegistration],
+            )
+            sessions: list[SessionRecord] = await app.state.registry.query(
+                ToolRegistryWorkflow.list_sessions,
+                result_type=list[SessionRecord],
+            )
+            calls = await scan_native_tool_calls(
+                app.state.temporal,
+                server=native,
+                agents=agents,
+                sessions=sessions,
+            )
+        elif server_name in entries.remote_servers:
+            calls = await scan_external_tool_calls(
+                app.state.temporal,
+                account_id=account_id,
+                server_name=server_name,
+            )
+        else:
+            raise HTTPException(status_code=404, detail="unknown registered MCP server")
+        return [call.model_dump(mode="json") for call in calls]
 
     @app.get("/api/sessions")
     async def list_sessions():

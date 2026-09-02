@@ -7,6 +7,7 @@ import type {
   OperatorCommandResponse,
   ToolId,
   SubagentCloseResolution,
+  ToolCallRecord,
   WorkflowExecutionState
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
@@ -1045,6 +1046,10 @@ export class AgentRunController {
       this.account = null;
       return false;
     }
+  }
+
+  async loadToolCalls(serverName: string): Promise<ToolCallRecord[]> {
+    return this.#api.listToolCalls(serverName);
   }
 
   #scheduleAgentRegistrationRetry(): void {
