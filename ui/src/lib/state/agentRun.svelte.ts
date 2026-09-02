@@ -1165,6 +1165,17 @@ export class AgentRunController {
            version is the condition being worked around. A switched session is
            not: its buffer belongs to someone else now. */
         if (this.session?.workflow_id === session.workflow_id) this.#flushStreamTail();
+        /* The transcript is on screen, so the reader is no longer waiting on us
+           — whatever the retries do from here is background liveness. Held
+           across the whole loop, this reported "connecting" for the full 31.5s
+           of backoff on a session that had finished loading in ten
+           milliseconds, which is what "sessions load slowly" was.
+
+           Cleared here rather than by the callers, because they await this
+           method: selectSession's own `finally` cannot run until the last retry
+           has. Guarded on the stream, so a session switched away from mid-retry
+           does not clear the flag the new session just set. */
+        if (isCurrentStream()) this.connecting = false;
         /* A stream that carried something earned a fresh budget, so hours of
            occasional blips do not add up to an exhausted one. */
         if (delivered) attempt = 0;

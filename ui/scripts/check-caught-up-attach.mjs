@@ -1,0 +1,256 @@
+/**
+ * A caught-up session must not look like a broken one.
+ *
+ * /api/attach ends its response as soon as it has nothing further to send, so a
+ * RUNNING session the reader has already caught up with answers `200` with an
+ * empty body in about ten milliseconds — measured against the dev stack, three
+ * times, at the offset the previous attach ended on. That is the steady state of
+ * every live session anyone leaves open, not an error.
+ *
+ * The reconnect cannot tell it apart from a dropped stream: the generator ends
+ * the same way and the workflow is still RUNNING, so #streamDroppedMidRun says
+ * "keep trying" and the loop spends its whole budget — seven attaches and seven
+ * status probes over 31.5s of backoff. selectSession() awaits that loop, so
+ * `connecting` stayed true the entire time and the console showed "connecting"
+ * on a session whose transcript was already fully loaded. Measured at 31,513ms
+ * against this controller; the endpoint people blamed answers in 104ms.
+ *
+ * What breaks this check. Each was applied to the source and the failure
+ * observed, so the list is measured rather than hoped for:
+ *  - Holding `connecting` across the retry loop: "caught up" times out waiting
+ *    for it to clear, which is the 31.5s stall back again.
+ *  - Not retrying a stream that dropped after delivering: "real drop" fails,
+ *    which would be commit 1737027 undone.
+ *
+ * What does NOT break it, checked rather than assumed: dropping the
+ * `isCurrentStream()` guard on the clear. The loop re-tests it at the top and
+ * nothing awaits between the stream ending and the clear, so an abandoned loop
+ * cannot reach that line — "session switch" passes either way. The guard is
+ * kept as a guard-rail, matching the session-keyed one on the flush above it,
+ * and that case pins the behaviour rather than the guard producing it.
+ *
+ * Run: node ui/scripts/check-caught-up-attach.mjs
+ */
+import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
+import { createServer } from "vite";
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitFor(label, predicate, timeoutMs = 6_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await sleep(25);
+  }
+  assert.fail(`timed out after ${timeoutMs}ms waiting for ${label}`);
+}
+
+function memoryStorage() {
+  const map = new Map();
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => map.set(k, String(v)),
+    removeItem: (k) => map.delete(k),
+    clear: () => map.clear(),
+    key: (i) => [...map.keys()][i] ?? null,
+    get length() {
+      return map.size;
+    }
+  };
+}
+
+const storage = { local: memoryStorage(), session: memoryStorage() };
+const freshStorage = () => {
+  storage.local = memoryStorage();
+  storage.session = memoryStorage();
+};
+
+globalThis.window = {
+  get localStorage() {
+    return storage.local;
+  },
+  get sessionStorage() {
+    return storage.session;
+  },
+  setTimeout: (...args) => setTimeout(...args),
+  clearTimeout: (...args) => clearTimeout(...args),
+  setInterval: (...args) => setInterval(...args),
+  clearInterval: (...args) => clearInterval(...args),
+  addEventListener: () => {},
+  removeEventListener: () => {}
+};
+globalThis.localStorage = new Proxy({}, { get: (_, p) => storage.local[p] });
+globalThis.sessionStorage = new Proxy({}, { get: (_, p) => storage.session[p] });
+globalThis.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 0);
+globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+
+const session = (id) => ({
+  workflow_id: id,
+  agent_workflow_type: "IncidentCommander",
+  run_id: `${id}-run`,
+  execution_status: "RUNNING",
+  closed: false
+});
+
+const frame = (offset) => ({
+  event: "reply_delta",
+  data: {
+    type: "reply_delta",
+    agent_id: "root",
+    turn_id: "t1",
+    turn_number: 1,
+    timestamp: offset,
+    resume_offset: offset + 1,
+    event_offset: offset,
+    delta: `#${offset} `,
+    replay: true
+  }
+});
+
+function boot({ sessions, streamFor, statusFor }) {
+  freshStorage();
+  const attachCalls = [];
+  const statusCalls = [];
+  const api = {
+    async listSessions() {
+      return [];
+    },
+    async agentInterface() {
+      return [];
+    },
+    async operatorInterface() {
+      return [];
+    },
+    async workflowStatus(workflowId) {
+      statusCalls.push(workflowId);
+      const status = statusFor(workflowId);
+      return {
+        workflow_id: workflowId,
+        execution_status: status,
+        closed: status !== "RUNNING"
+      };
+    },
+    attach(sessionId, fromOffset) {
+      attachCalls.push({ sessionId, fromOffset, at: Date.now() });
+      return streamFor(sessionId, attachCalls.length);
+    }
+  };
+  const controller = new AgentRunController(api);
+  controller.sessions = sessions;
+  return { controller, attachCalls, statusCalls };
+}
+
+/** A stream that ends immediately having said nothing, the way a caught-up attach does. */
+// eslint-disable-next-line require-yield
+async function* silent() {
+  return;
+}
+
+const vite = await createServer({
+  root: fileURLToPath(new URL("..", import.meta.url)),
+  server: { middlewareMode: true },
+  appType: "custom",
+  logLevel: "silent"
+});
+const { AgentRunController } = await vite.ssrLoadModule(
+  "/src/lib/state/agentRun.svelte.ts"
+);
+
+// --- case: caught up on a RUNNING session ------------------------------------
+// Every attach answers empty and ends, which is what the dev server does at an
+// offset the reader already holds. The retries that follow are background
+// liveness and must not present as loading.
+{
+  const { controller, attachCalls, statusCalls } = boot({
+    sessions: [session("wf-caught-up")],
+    streamFor: () => silent(),
+    statusFor: () => "RUNNING"
+  });
+
+  const started = Date.now();
+  void controller.selectSession("wf-caught-up");
+  await waitFor("the first attach", () => attachCalls.length === 1);
+  await waitFor("connecting to clear", () => !controller.connecting, 3_000);
+  const elapsed = Date.now() - started;
+
+  assert.ok(
+    elapsed < 2_000,
+    `a caught-up session must present as loaded promptly (took ${elapsed}ms)`
+  );
+
+  /* The re-attach itself is left alone on purpose: it is the only thing that
+     carries a new event to a reader who is already caught up, because
+     /api/attach does not hold the connection open. Making it unnecessary is a
+     server-side fix, so what is asserted here is only that it stays silent. */
+  await sleep(1_200);
+  assert.equal(
+    controller.connecting,
+    false,
+    "background re-attaches must never put the console back into 'connecting'"
+  );
+  assert.ok(statusCalls.length >= 1, "a stream that ended is still worth a status probe");
+}
+
+// --- case: a session switched away from mid-retry ----------------------------
+// The clear lives inside the retry loop, so an abandoned loop is still running
+// while the next session connects. Whatever provides it, the flag the new
+// session set has to survive.
+{
+  const { controller, attachCalls } = boot({
+    sessions: [session("wf-left"), session("wf-joined")],
+    streamFor: (id) => (id === "wf-left" ? silent() : (async function* () {
+      await sleep(50_000);
+    })()),
+    statusFor: () => "RUNNING"
+  });
+
+  void controller.selectSession("wf-left");
+  await waitFor("the abandoned session to attach", () => attachCalls.length === 1);
+
+  void controller.selectSession("wf-joined");
+  await waitFor(
+    "the new session to attach",
+    () => attachCalls.some((call) => call.sessionId === "wf-joined")
+  );
+  /* Long enough for the abandoned loop's first backoff (500ms) to elapse, which
+     is when an unguarded clear would fire against the wrong session. */
+  await sleep(900);
+  assert.equal(
+    controller.connecting,
+    true,
+    "a retry loop left behind must not clear the flag the current session set"
+  );
+}
+
+// --- case: a stream that really did drop must still be retried ---------------
+// The regression guard for commit 1737027. Frames arrived, then the transport
+// failed, and the workflow is still RUNNING: that is a drop, and it must resume
+// from the offset the server already proved it holds.
+{
+  const { controller, attachCalls } = boot({
+    sessions: [session("wf-drop")],
+    streamFor: (_id, call) =>
+      (async function* () {
+        if (call === 1) {
+          for (let i = 0; i < 3; i += 1) yield frame(i);
+          throw new Error("Failed to fetch");
+        }
+        await sleep(50_000);
+      })(),
+    statusFor: () => "RUNNING"
+  });
+
+  void controller.selectSession("wf-drop");
+  await waitFor("a re-attach after a genuine drop", () => attachCalls.length === 2, 6_000);
+  assert.equal(
+    attachCalls[1].fromOffset,
+    3,
+    "a reconnect must resume from the last offset the server sent"
+  );
+  assert.equal(controller.frames.length, 3, "the delivered frames must reach the view");
+}
+
+await vite.close();
+console.log("caught-up attach: ok");
+process.exit(0);
