@@ -294,6 +294,7 @@ export class AgentRunController {
   #streamVersion = 0;
   #connectionVersion = 0;
   #sendVersion = 0;
+  #syncingSessions = false;
   #streamAbort: AbortController | null = null;
   #interfaceRequests = new Set<string>();
   #operatorInterfaceRequests = new Set<string>();
@@ -867,13 +868,22 @@ export class AgentRunController {
    * created is only ever part of the picture. Quiet on purpose: a tick nobody
    * asked for must not spin the refresh control or raise the connection banner
    * over a blip the next tick would have covered.
+   *
+   * A tick is skipped while either read is still in flight. `/api/sessions` costs
+   * a describe plus a history scan per session and has been measured at twelve
+   * seconds against a registry of twenty stale entries, so a sync outlasting the
+   * ten-second interval is the expected case, not the pathological one; without
+   * this the ticks would overlap and pile up on a server already struggling.
    */
   async syncSessions(): Promise<void> {
-    if (this.refreshingSessions) return;
+    if (this.refreshingSessions || this.#syncingSessions) return;
+    this.#syncingSessions = true;
     try {
       await this.#loadSessions();
     } catch {
       // The list stays as it was until a later tick answers.
+    } finally {
+      this.#syncingSessions = false;
     }
   }
 
