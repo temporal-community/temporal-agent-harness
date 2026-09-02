@@ -17,6 +17,11 @@ import {
   buildAgentTreeGraph,
   type AgentGraphSource
 } from "./flowProjection";
+import {
+  cursorAfterPublish,
+  framePublishChunkSize,
+  publishAtChunkBoundary
+} from "./hydration";
 import { buildReplayLog, buildReplayMarkers } from "./replayLog";
 import { buildStepTimeline, type StepTimelineFrame } from "./stepTimeline";
 import { buildTranscript } from "./transcript";
@@ -93,6 +98,27 @@ function removeStoredActiveSessionId(): void {
   } catch {
     // Ignore storage failures.
   }
+}
+
+function now(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+/**
+ * Hand the main thread back so the browser can paint and answer input.
+ *
+ * A rAF rather than a bare timeout, because the point is to let a paint happen:
+ * resuming before one has means the work was interleaved without the page ever
+ * catching up.
+ */
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
 }
 
 function readCachedFrames(sessionId: string): AgentSseFrame[] {
@@ -219,7 +245,12 @@ export class AgentRunController {
   closedWorkflowIds = $state<string[]>([]);
   viewIndex = $state(0);
   playing = $state(false);
-  following = $state(false);
+  /**
+   * Tail the live edge. Load-bearing now that the cursor only advances while it
+   * is set: starting false would leave a fresh session parked at event zero
+   * while frames streamed in behind it.
+   */
+  following = $state(true);
   connecting = $state(false);
   sending = $state(false);
   creatingSession = $state(false);
@@ -241,6 +272,14 @@ export class AgentRunController {
   #workflowAttachAbort = new Map<string, AbortController>();
   #frameKeys = new Set<string>();
   #frameCacheTimer: number | null = null;
+  /** Frames staged but not yet committed. Plain array: writing it must not react. */
+  #frameBuffer: AgentSseFrame[] = [];
+  #flushQueued = false;
+  /** Bumped on session change, to strand a flush queued against the old session. */
+  #publishGeneration = 0;
+  /** A bounded backlog is being replayed in, so hold off on per-paint commits. */
+  #catchingUp = false;
+  #catchUpStartedAt = 0;
   #submitQueue: Promise<void> = Promise.resolve();
   #timer: number | null = null;
 
@@ -753,7 +792,9 @@ export class AgentRunController {
       writeStoredActiveSessionId(this.session.workflow_id);
       void this.#fetchAgentInterface(this.session.workflow_id);
       void this.#fetchOperatorInterface(this.session.workflow_id);
-      this.#hydrateCachedFrames(this.session.workflow_id);
+      /* Awaited so the cache lands before the live stream opens: interleaving
+         the two would order the buffer by arrival rather than by event. */
+      await this.#hydrateCachedFrames(this.session.workflow_id);
       await this.#refreshWorkflowExecutionState(this.session.workflow_id);
 
       if (!this.#isCurrentConnection(connectionVersion)) return;
@@ -854,7 +895,7 @@ export class AgentRunController {
     writeStoredActiveSessionId(session.workflow_id);
     void this.#fetchAgentInterface(session.workflow_id);
     void this.#fetchOperatorInterface(session.workflow_id);
-    this.#hydrateCachedFrames(session.workflow_id);
+    await this.#hydrateCachedFrames(session.workflow_id);
 
     try {
       await this.#refreshWorkflowExecutionState(session.workflow_id);
@@ -1120,11 +1161,36 @@ export class AgentRunController {
     }
   }
 
-  #hydrateCachedFrames(sessionId: string): void {
+  /**
+   * Replay the cached frames for a session back into the buffer.
+   *
+   * The one place the pipeline does its own chunking. Everywhere else frames
+   * arrive from an await, so the event loop breathes between them by itself;
+   * here the whole cache is already in hand and a tight loop over it would hold
+   * the main thread for the length of the session.
+   */
+  async #hydrateCachedFrames(sessionId: string): Promise<void> {
     const cachedFrames = readCachedFrames(sessionId);
     if (cachedFrames.length === 0) return;
-    for (const frame of cachedFrames) {
-      this.#appendFrame(frame, { persist: false });
+    this.#catchingUp = true;
+    this.#catchUpStartedAt = now();
+    try {
+      for (let index = 0; index < cachedFrames.length; index += 1) {
+        if (this.session?.workflow_id !== sessionId) return;
+        this.#ingestFrame(cachedFrames[index], { persist: false });
+        if ((index + 1) % framePublishChunkSize !== 0) continue;
+        if (publishAtChunkBoundary(this.#catchingUp, now() - this.#catchUpStartedAt)) {
+          this.#publishFrames();
+          /* Restarting the clock is what makes the ceiling a rate limit rather
+             than just a delay: without it, every chunk past the first second
+             commits, and chunks can pass far faster than the page can paint. */
+          this.#catchUpStartedAt = now();
+        }
+        await yieldToMain();
+      }
+    } finally {
+      this.#catchingUp = false;
+      this.#publishFrames();
     }
   }
 
@@ -1146,14 +1212,26 @@ export class AgentRunController {
     this.frames = [];
     this.observedSubagents = [];
     this.#frameKeys = new Set<string>();
+    this.#frameBuffer = [];
+    /* Strand any flush already queued: it would republish the old session's
+       buffer over the new session's empty one. */
+    this.#publishGeneration += 1;
+    this.#flushQueued = false;
+    this.#catchingUp = false;
     this.#workflowResumeOffsets = new Map<string, number>();
     this.viewIndex = 0;
-    this.following = false;
+    this.following = true;
     this.expectedTurn = 1;
     this.lastResumeOffset = 0;
   }
 
-  #appendFrame(
+  /**
+   * Stage one frame: dedup it, record its bookkeeping, and buffer it.
+   *
+   * Deliberately does not touch `frames`. Committing is what costs — it re-runs
+   * every derived projection — so it happens per batch in #publishFrames().
+   */
+  #ingestFrame(
     frame: AgentSseFrame,
     options: { persist?: boolean; sourceWorkflowId?: string } = {}
   ): void {
@@ -1168,9 +1246,7 @@ export class AgentRunController {
       this.#publisherWorkflowId(frame) ?? options.sourceWorkflowId;
     const isRootFrame = publisherWorkflowId === this.session?.workflow_id;
 
-    this.frames = [...this.frames, frame];
-    this.following = true;
-    this.viewIndex = this.total;
+    this.#frameBuffer.push(frame);
 
     if (
       "resume_offset" in frame.data &&
@@ -1216,6 +1292,45 @@ export class AgentRunController {
     }
     this.#handleSubagentEvent(frame, publisherWorkflowId);
     if (options.persist !== false) this.#scheduleFrameCacheWrite();
+  }
+
+  /** Commit everything staged so far, in one reactive write. */
+  #publishFrames(): void {
+    this.frames = this.#frameBuffer.slice();
+    this.viewIndex = cursorAfterPublish(this.following, this.viewIndex, this.total);
+  }
+
+  /**
+   * Commit on the next frame the browser paints, coalescing whatever arrives in
+   * between. A burst of thirty events becomes one commit rather than thirty.
+   *
+   * Silent during a catch-up: #hydrateCachedFrames commits on its own chunk
+   * schedule, and a rAF racing that would undo the batching it exists to give.
+   */
+  #schedulePublish(): void {
+    if (this.#catchingUp || this.#flushQueued) return;
+    this.#flushQueued = true;
+    const generation = this.#publishGeneration;
+    const flush = () => {
+      this.#flushQueued = false;
+      /* Switching sessions bumps the generation, so a flush queued against the
+         old one must not resurrect its frames into the new session's view. */
+      if (generation !== this.#publishGeneration) return;
+      this.#publishFrames();
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(flush);
+      return;
+    }
+    setTimeout(flush, 0);
+  }
+
+  #appendFrame(
+    frame: AgentSseFrame,
+    options: { persist?: boolean; sourceWorkflowId?: string } = {}
+  ): void {
+    this.#ingestFrame(frame, options);
+    this.#schedulePublish();
   }
 
   #publisherWorkflowId(frame: AgentSseFrame): string | undefined {
