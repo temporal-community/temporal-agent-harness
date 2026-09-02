@@ -15,6 +15,7 @@ import type {
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
+  ToolCallRecord,
   WorkflowExecutionState,
   WorkflowId
 } from "./types";
@@ -154,11 +155,46 @@ export class MockAgentApi implements AgentApi {
             session.agent_workflow_type === agent.workflow_type && !session.closed
         ).length
       })),
-      mcp_servers: [{ name: "demo", endpoint: "http://127.0.0.1:8765/mcp" }],
+      mcp_servers: [
+        {
+          name: "demo-nexus",
+          endpoint: "nexus-hello-demo-endpoint",
+          kind: "nexus",
+          service: "demo-nexus"
+        },
+        {
+          name: "demo",
+          endpoint: "http://127.0.0.1:8765/mcp",
+          kind: "external_http",
+          service: null
+        }
+      ],
       subagent_providers: [{ name: "writer", endpoint: "http://127.0.0.1:8766" }],
       session_count: this.#sessions.length,
       active_session_count: this.#sessions.filter((session) => !session.closed).length
     };
+  }
+
+  async listToolCalls(serverName: string): Promise<ToolCallRecord[]> {
+    return [
+      {
+        call_id: `${serverName}:mock-call-1`,
+        server_name: serverName,
+        transport: serverName.includes("nexus") ? "nexus" : "external_http",
+        tool_name: serverName.includes("nexus") ? "get_lucky_number" : "get_fun_fact",
+        status: "completed",
+        scheduled_at: Date.now() / 1000 - 2,
+        completed_at: Date.now() / 1000 - 1,
+        duration_ms: 1000,
+        namespace: serverName.includes("nexus") ? "default" : "gateway",
+        execution_id: "mock-call-1",
+        workflow_id: "agent-session-mock-qa",
+        agent_id: "qa-agent",
+        input: { topic: "Temporal" },
+        output: { text: "A retained MCP result" },
+        error: null
+      }
+    ];
   }
 
   async listAgents(): Promise<AgentRegistryResponse> {

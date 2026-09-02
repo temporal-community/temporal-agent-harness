@@ -199,6 +199,7 @@
         onSelectSession={(sessionId) => run.selectSession(sessionId)}
         onRefreshSessions={() => run.refreshSessions()}
         onCloseSession={(sessionId, resolution) => run.closeSession(sessionId, resolution)}
+        onLoadToolCalls={(serverName) => run.loadToolCalls(serverName)}
       />
     {/if}
 

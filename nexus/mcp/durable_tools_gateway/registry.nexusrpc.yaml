@@ -104,6 +104,9 @@ $defs:
       name:
         type: string
         description: Full prefixed tool name, e.g. "weather_get_forecast".
+      caller_workflow_id:
+        type: string
+        description: Harness workflow that initiated this call, when known.
       arguments:
         type: object
         additionalProperties: true

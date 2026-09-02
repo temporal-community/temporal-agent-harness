@@ -112,6 +112,7 @@ async def test_call_tool_forwards_arguments_and_serializes_result(_mock_info: Ma
             account_id="account-1",
             alias="weather",
             name="weather_get_forecast",
+            caller_workflow_id="session-1",
             arguments=CallToolInputArguments(additional_properties={"city": "NYC"}),
         ),
     )
@@ -119,6 +120,9 @@ async def test_call_tool_forwards_arguments_and_serializes_result(_mock_info: Ma
     # Proves the wrapper got unwrapped before reaching the (mocked) activity, not just
     # that construction didn't crash.
     activity_input = client.execute_activity.await_args.args[1]
+    assert activity_input.account_id == "account-1"
+    assert activity_input.server_name == "weather"
+    assert activity_input.caller_workflow_id == "session-1"
     assert activity_input.arguments == {"city": "NYC"}
 
     decoded = _round_trip(output, CallToolOutput)
