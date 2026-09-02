@@ -741,7 +741,6 @@
   .log-line.tool .actor-icon { color: var(--warning); }
   .log-line.approval .actor-icon,
   .log-line.queue .actor-icon { color: var(--queue); }
-  .log-line.operator .actor-icon { color: var(--accent); }
   .log-line.done .actor-icon { color: var(--success); }
   .log-line.error .actor-icon { color: var(--error); }
 
