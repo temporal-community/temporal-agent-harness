@@ -12,6 +12,7 @@ import type { AgentDescriptor, Session } from "$lib/api/types";
 import { HttpAgentApi } from "$lib/api/httpClient";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
+import { chooseBootSession } from "./bootSession";
 import {
   buildAgentTreeGraph,
   type AgentGraphSource
@@ -734,17 +735,14 @@ export class AgentRunController {
       this.sessions = sessions;
       this.#applySessionExecutionStates(sessions);
       const storedSessionId = readStoredActiveSessionId();
-      const storedSession = storedSessionId
-        ? sessions.find((item) => item.workflow_id === storedSessionId)
-        : null;
-      const existing = [...sessions]
-        .reverse()
-        .find((item) => item.agent_workflow_type === defaultAgent.workflow_type);
+      const openable = chooseBootSession(
+        sessions,
+        storedSessionId,
+        defaultAgent.workflow_type
+      );
 
-      if (storedSession) {
-        this.session = storedSession;
-      } else if (existing) {
-        this.session = existing;
+      if (openable) {
+        this.session = openable;
       } else {
         this.session = await this.#api.createSession({
           agent_workflow_type: defaultAgent.workflow_type,
