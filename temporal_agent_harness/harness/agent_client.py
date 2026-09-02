@@ -43,6 +43,7 @@ from temporal_agent_harness.harness.agent_protocol import (
 )
 from temporal_agent_harness.harness.stream_merge import (
     DEFAULT_STALL_GRACE_SECONDS,
+    StreamPosition,
     merge_stream,
     select_live,
     select_replay,
@@ -111,13 +112,14 @@ class CallbackResultError(Exception):
 # Must be defined after the exception classes since it references them at runtime.
 AgentStreamOutput = AgentEvent | AgentTurnError | AgentTurnTimeout
 
-# The callback signature: (item, resume_offset) -> T
-# ``resume_offset`` is the merge's ROOT-stream resume CURSOR as of this item — a value the consumer
-# records and hands back as ``attach(from_offset=...)`` to resume. It is NOT the event's own
+# The callback signature: (item, position) -> T
+# ``position.resume_offset`` is the merge's ROOT-stream resume CURSOR as of this item — a value the
+# consumer records and hands back as ``attach(from_offset=...)`` to resume. It is NOT the event's own
 # per-stream offset and NOT a merged display ordinal: it advances only on ROOT events, so every event
-# within one subagent turn carries the same value (the cursor as of that turn's dispatch). See
-# ``stream_merge.merge.MergedItem``.
-OnItemCallback = Callable[[AgentStreamOutput, int], T]
+# within one subagent turn carries the same value (the cursor as of that turn's dispatch).
+# ``position.event_offset`` is that per-event coordinate, which with ``agent_id`` identifies the
+# event. See :class:`~temporal_agent_harness.harness.stream_merge.StreamPosition`.
+OnItemCallback = Callable[[AgentStreamOutput, StreamPosition], T]
 
 
 # ---------------------------------------------------------------------------
@@ -434,11 +436,11 @@ class AgentClient:
             msg_type: Name of the target ``@agent.accepts`` handler.
             payload: JSON of that handler's input model.
             expected_turn: The turn number the client expects this message to be.
-            on_item: Callback ``(AgentStreamOutput, resume_offset) -> T`` applied to each output.
-                ``resume_offset`` is the merge's ROOT-stream resume cursor as of this item (see
-                :meth:`attach`); the per-turn path doesn't resume on it (the chat path reattaches via
-                :meth:`attach`), but it is passed through uniformly so a caller's bookkeeping is
-                consistent across both entry points.
+            on_item: Callback ``(AgentStreamOutput, StreamPosition) -> T`` applied to each output.
+                ``position.resume_offset`` is the merge's ROOT-stream resume cursor as of this item
+                (see :meth:`attach`); the per-turn path doesn't resume on it (the chat path
+                reattaches via :meth:`attach`), but it is passed through uniformly so a caller's
+                bookkeeping is consistent across both entry points.
             timeout: Max seconds to wait for the turn to complete (``None`` = no limit).
             subagent_stall_grace_seconds: Liveness backstop (seconds) for the stream merge — how
                 long a subagent whose reply the parent is already waiting on may stay silent on its
@@ -500,10 +502,10 @@ class AgentClient:
         )
         try:
             async with asyncio.timeout(timeout):
-                # ``resume_offset`` is the merge's ROOT-stream resume cursor; for a single
+                # ``position`` carries the merge's ROOT-stream resume cursor; for a single
                 # send_message turn it isn't used to resume (the chat path reattaches via ``attach``),
                 # but we pass it through uniformly so the consumer's bookkeeping stays consistent.
-                async for ev, resume_offset in merged:
+                async for ev, position in merged:
                     # ``turn_id`` is a globally-unique uuid, so it alone identifies OUR turn's
                     # terminal error (a subagent's error carries a different turn_id) — no need to
                     # also match on agent_id.
@@ -516,10 +518,10 @@ class AgentClient:
                         # subtree; turn_end still follows as the real terminal).
                         yield on_item(
                             AgentTurnError(ev.event.message or "agent turn failed"),
-                            resume_offset,
+                            position,
                         )
                     else:
-                        yield on_item(ev, resume_offset)
+                        yield on_item(ev, position)
         except TimeoutError:
             yield on_item(
                 AgentTurnTimeout(
@@ -550,14 +552,14 @@ class AgentClient:
           ``subagent_reply_received`` and everything after it still flow. Subagents dispatched at or
           after ``from_offset`` merge normally.
 
-        ``on_item`` receives ``(item, resume_offset)``. **``resume_offset`` is a ROOT-stream offset
-        and advances ONLY on root events** — record the latest and pass it back as ``from_offset`` to
-        resume. Two consequences a caller must not miss:
+        ``on_item`` receives ``(item, position)``. **``position.resume_offset`` is a ROOT-stream
+        offset and advances ONLY on root events** — record the latest and pass it back as
+        ``from_offset`` to resume. Two consequences a caller must not miss:
 
         * It is the root-stream position, NOT the merge's display ordinal — the cross-stream
           interleaving itself is not a resumable position.
         * Resume granularity is therefore **per-root-event, not per-subagent-event**. Every subagent
-          event between two root events carries the SAME ``resume_offset`` (the position just past
+          event between two root events carries the SAME ``resume_offset`` (the offset just past
           the preceding root event). So a consumer that disconnects *mid a subagent's turn* and
           resumes will NOT re-receive the rest of that subagent's turn detail — on resume the merge
           starts past that subagent's ``subagent_message_sent`` and so never re-mounts it (and emits
@@ -646,5 +648,18 @@ class AgentClient:
             should_stop=should_stop,
             stall_grace_seconds=stall_grace_seconds,
         )
-        async for ev, resume_offset in merged:
-            yield on_item(ev, resume_offset)
+        # ``stop_at_root_offset`` is where the root's log had got when this attach opened, which is
+        # exactly the seam: at or below it the event was already durable and this delivery is
+        # catching up, past it the consumer is following along live. A consumer batches its commits
+        # while catching up, so the two need telling apart.
+        #
+        # A subagent's ``resume_offset`` stands still for the length of its turn (it is the parent's
+        # cursor as of the dispatch), so a child event published live inside a turn that was
+        # dispatched before the seam is stamped replay. That errs toward "still catching up", which
+        # a consumer must survive anyway for an arbitrarily long history — it is why its batching
+        # needs a ceiling — whereas the opposite error would flash the canvas, which is the thing
+        # this distinction exists to prevent.
+        async for ev, position in merged:
+            yield on_item(
+                ev, position._replace(replay=position.resume_offset <= stop_at_root_offset)
+            )

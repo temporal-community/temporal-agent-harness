@@ -44,6 +44,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     OperatorCommandResult,
     SEND_AGENT_MESSAGE_UPDATE,
 )
+from temporal_agent_harness.harness.stream_merge import StreamPosition
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
 from temporal_agent_harness.web.registry import load_agent_registry
@@ -287,22 +288,22 @@ def create_agent_harness_app(
 
     @app.post("/api/chat")
     async def chat(req: ChatRequestBody):
-        def on_item(item: AgentStreamOutput, resume_offset: int) -> bytes:
+        def on_item(item: AgentStreamOutput, position: StreamPosition) -> bytes:
             match item:
                 case AgentTurnTimeout():
                     return _sse(
                         AgentEventType.ERROR,
                         {"kind": "timeout", "message": str(item)},
-                        resume_offset,
+                        position,
                     )
                 case AgentTurnError():
                     return _sse(
                         AgentEventType.ERROR,
                         {"kind": "agent", "message": str(item)},
-                        resume_offset,
+                        position,
                     )
                 case _:
-                    return _yield_item(item, resume_offset)
+                    return _yield_item(item, position)
 
         client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
         if isinstance(req.message, str):
@@ -353,6 +354,27 @@ def create_agent_harness_app(
                 "error": exc.error_type or "callback_result_error",
                 "message": str(exc),
             },
+        )
+
+    @app.exception_handler(RPCError)
+    async def rpc_error_handler(request, exc: RPCError):
+        """A workflow that is gone is a missing resource, not a server fault.
+
+        The session registry outlives the workflows it lists, and Temporal
+        retention eventually drops closed ones, so any endpoint that takes a
+        workflow id can be handed a dead one. Answering 500 with a traceback
+        made an expected condition look like a bug and buried real ones. Handled
+        here rather than per-endpoint so every route that queries a workflow
+        agrees, including ones added later.
+
+        Anything other than NOT_FOUND is a genuine fault and is left to
+        propagate, keeping its 500 and its traceback.
+        """
+        if exc.status != RPCStatusCode.NOT_FOUND:
+            raise exc
+        return JSONResponse(
+            status_code=404,
+            content={"error": "workflow_not_found", "message": str(exc)},
         )
 
     return app
@@ -619,14 +641,28 @@ def _mount_static_ui(
         raise HTTPException(status_code=404)
 
 
-def _sse(event: str, data: dict, resume_offset: int | None = None) -> bytes:
+def _sse(event: str, data: dict, position: StreamPosition | None = None) -> bytes:
+    """Frame one SSE event, stamping both of the position's offsets when there is one.
+
+    The two are for different jobs and a client needs both: ``resume_offset`` is what it hands back
+    to ``attach(from_offset=...)`` to resume, while ``event_offset`` with the envelope's ``agent_id``
+    is what IDENTIFIES this event — stable across redeliveries and distinct between the events of a
+    single subagent turn, which the resume cursor is not (see
+    :class:`~temporal_agent_harness.harness.stream_merge.StreamPosition`).
+
+    ``replay`` goes on the wire only when true, so its absence means live — which is also what an
+    older server means by not sending it at all, and what the per-turn ``/api/chat`` path means by
+    never being a catch-up in the first place."""
     payload = {**data}
-    if resume_offset is not None:
-        payload["resume_offset"] = resume_offset
+    if position is not None:
+        payload["resume_offset"] = position.resume_offset
+        payload["event_offset"] = position.event_offset
+        if position.replay:
+            payload["replay"] = True
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
 
 
-def _yield_item(item, resume_offset: int | None = None) -> bytes:
+def _yield_item(item, position: StreamPosition | None = None) -> bytes:
     if isinstance(item, AgentEvent):
         payload = item.event
         data = {
@@ -636,7 +672,7 @@ def _yield_item(item, resume_offset: int | None = None) -> bytes:
             "turn_number": item.turn_number,
             "timestamp": item.timestamp,
         }
-        return _sse(payload.type, data, resume_offset)
+        return _sse(payload.type, data, position)
     return b""
 
 

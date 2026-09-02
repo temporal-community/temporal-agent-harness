@@ -12,8 +12,10 @@ from temporal_agent_harness.harness.stream_merge.gates import (
 )
 from temporal_agent_harness.harness.stream_merge.merge import (
     DEFAULT_STALL_GRACE_SECONDS,
+    SYNTHESIZED,
     SelectPolicy,
     ShouldStop,
+    StreamPosition,
     merge_stream,
     select_live,
     select_replay,
@@ -25,6 +27,8 @@ __all__ = [
     "select_replay",
     "SelectPolicy",
     "ShouldStop",
+    "StreamPosition",
+    "SYNTHESIZED",
     "DEFAULT_STALL_GRACE_SECONDS",
     "Gates",
     "MountChild",
