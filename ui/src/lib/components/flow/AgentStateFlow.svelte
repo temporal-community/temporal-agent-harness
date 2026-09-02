@@ -330,9 +330,11 @@
     cursor: pointer;
   }
 
-  .close-button:hover {
-    color: var(--text-1);
-    border-color: var(--border-strong);
+  @media (hover: hover) and (pointer: fine) {
+    .close-button:hover {
+      color: var(--text-1);
+      border-color: var(--border-strong);
+    }
   }
 
   .inspector-metrics {

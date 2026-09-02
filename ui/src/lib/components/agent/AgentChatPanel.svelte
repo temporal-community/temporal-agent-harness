@@ -2280,11 +2280,16 @@
     transform: rotate(180deg);
   }
 
-  :global(.header-session-add:hover:not(:disabled)) .control-chevron,
   :global(.header-session-add:focus-visible:not(:disabled)) .control-chevron,
-  :global(.header-session-drawer:hover) .control-chevron,
   :global(.header-session-drawer:focus-visible) .control-chevron {
     color: color-mix(in srgb, var(--chip-color) 78%, white);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    :global(.header-session-add:hover:not(:disabled)) .control-chevron,
+    :global(.header-session-drawer:hover) .control-chevron {
+      color: color-mix(in srgb, var(--chip-color) 78%, white);
+    }
   }
 
   .control-label {
@@ -2349,11 +2354,11 @@
     text-align: left;
   }
 
-  .agent-command-row:hover,
-  .agent-command-row:focus-visible {
-    border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
-    background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
-    outline: 0;
+  @media (hover: hover) and (pointer: fine) {
+    .agent-command-row:hover {
+      border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
+      background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
+    }
   }
 
   .agent-command-copy {
@@ -2423,11 +2428,16 @@
     cursor: pointer;
   }
 
-  .session-drawer-close:hover,
   .session-drawer-close:focus-visible {
     color: var(--text-1);
     border-color: var(--border-strong);
-    outline: 0;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .session-drawer-close:hover {
+      color: var(--text-1);
+      border-color: var(--border-strong);
+    }
   }
 
   .session-drawer-search {
@@ -2492,12 +2502,20 @@
       transform var(--duration-fast) var(--ease-ui);
   }
 
-  .drawer-session-row:hover,
+  /* Inward, unlike the baseline ring in app.css: .session-drawer-list scrolls,
+     so an outline drawn outside a full-width row is clipped away by the
+     container and only its top edge survives. */
   .drawer-session-row:focus-visible {
-    border-color: color-mix(in srgb, var(--reasoning) 38%, var(--border-strong));
-    background: color-mix(in srgb, var(--reasoning) 5%, var(--surface-2));
-    transform: translateY(-1px);
-    outline: 0;
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .drawer-session-row:hover {
+      border-color: color-mix(in srgb, var(--reasoning) 38%, var(--border-strong));
+      background: color-mix(in srgb, var(--reasoning) 5%, var(--surface-2));
+      transform: translateY(-1px);
+    }
   }
 
   .drawer-session-row.active {
@@ -2668,11 +2686,16 @@
     margin-left: 0;
   }
 
-  .activity-feed:hover,
   .activity-feed:focus-visible {
     border-color: var(--border-strong);
     background: color-mix(in srgb, var(--surface-2) 78%, transparent);
-    outline: 0;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .activity-feed:hover {
+      border-color: var(--border-strong);
+      background: color-mix(in srgb, var(--surface-2) 78%, transparent);
+    }
   }
 
   .activity-feed.expanded {
@@ -2733,19 +2756,21 @@
     background: color-mix(in srgb, var(--success) 14%, transparent);
   }
 
-  .activity-summary:hover,
-  .activity-row-button:hover {
-    color: var(--text-2);
-  }
+  @media (hover: hover) and (pointer: fine) {
+    .activity-summary:hover,
+    .activity-row-button:hover {
+      color: var(--text-2);
+    }
 
-  .activity-line.highlight-error:hover {
-    border-color: color-mix(in srgb, var(--error) 42%, transparent);
-    background: color-mix(in srgb, var(--error) 19%, transparent);
-  }
+    .activity-line.highlight-error:hover {
+      border-color: color-mix(in srgb, var(--error) 42%, transparent);
+      background: color-mix(in srgb, var(--error) 19%, transparent);
+    }
 
-  .activity-line.highlight-success:hover {
-    border-color: color-mix(in srgb, var(--success) 38%, transparent);
-    background: color-mix(in srgb, var(--success) 18%, transparent);
+    .activity-line.highlight-success:hover {
+      border-color: color-mix(in srgb, var(--success) 38%, transparent);
+      background: color-mix(in srgb, var(--success) 18%, transparent);
+    }
   }
 
   .activity-summary:focus-visible,
@@ -2854,9 +2879,11 @@
     transition: transform var(--duration-fast) var(--ease-ui), color var(--duration-fast) var(--ease-ui);
   }
 
-  .activity-summary:hover .activity-chevron,
-  .activity-row-button:hover .activity-row-chevron {
-    color: var(--text-2);
+  @media (hover: hover) and (pointer: fine) {
+    .activity-summary:hover .activity-chevron,
+    .activity-row-button:hover .activity-row-chevron {
+      color: var(--text-2);
+    }
   }
 
   .activity-summary.expanded .activity-chevron,
@@ -3149,24 +3176,31 @@
     font: inherit;
   }
 
-  .slash-row:hover:not(.slash-command-summary),
   .slash-row:focus-visible,
   .slash-row.active {
     border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
     background: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
-    outline: 0;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .slash-row:hover:not(.slash-command-summary) {
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+      background: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
+    }
+
+    /* Still inside the guard: it exists to take the hover styling back off a
+       row that cannot be chosen, so it is only needed where hover happens. */
+    .slash-row:disabled:hover,
+    .slash-row.closed:hover {
+      border-color: var(--border);
+      background: var(--surface-2);
+    }
   }
 
   .slash-row:disabled,
   .slash-row.closed {
     cursor: default;
     opacity: var(--disabled-opacity);
-  }
-
-  .slash-row:disabled:hover,
-  .slash-row.closed:hover {
-    border-color: var(--border);
-    background: var(--surface-2);
   }
 
   .slash-row :global(svg) {
@@ -3297,9 +3331,14 @@
   }
 
   :global(.session-add-select.active) .control-chevron,
-  :global(.session-add-select:hover:not(:disabled)) .control-chevron,
   :global(.session-add-select:focus-visible:not(:disabled)) .control-chevron {
     color: color-mix(in srgb, var(--chip-color) 78%, white);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    :global(.session-add-select:hover:not(:disabled)) .control-chevron {
+      color: color-mix(in srgb, var(--chip-color) 78%, white);
+    }
   }
 
   :global(.session-add-select.active) .control-chevron {
@@ -3345,11 +3384,18 @@
     cursor: default;
   }
 
-  .session-card:hover,
   .session-card:focus-within {
     border-color: color-mix(in srgb, var(--reasoning) 38%, var(--border-strong));
     background: color-mix(in srgb, var(--reasoning) 5%, var(--surface-2));
     transform: translateY(-1px);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .session-card:hover {
+      border-color: color-mix(in srgb, var(--reasoning) 38%, var(--border-strong));
+      background: color-mix(in srgb, var(--reasoning) 5%, var(--surface-2));
+      transform: translateY(-1px);
+    }
   }
 
   .session-select {
@@ -3387,10 +3433,12 @@
     cursor: pointer;
   }
 
-  .session-delete:hover:not(:disabled) {
-    border-color: color-mix(in srgb, var(--error) 30%, var(--border));
-    color: var(--error);
-    background: color-mix(in srgb, var(--error) 9%, transparent);
+  @media (hover: hover) and (pointer: fine) {
+    .session-delete:hover:not(:disabled) {
+      border-color: color-mix(in srgb, var(--error) 30%, var(--border));
+      color: var(--error);
+      background: color-mix(in srgb, var(--error) 9%, transparent);
+    }
   }
 
   .session-delete:disabled {

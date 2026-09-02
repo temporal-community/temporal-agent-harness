@@ -1335,12 +1335,21 @@
     overflow-wrap: anywhere;
   }
 
-  .markdown-message :global(.md-citation:hover::before),
-  .markdown-message :global(.md-citation:hover::after),
   .markdown-message :global(.md-citation:focus-visible::before),
   .markdown-message :global(.md-citation:focus-visible::after) {
     opacity: 1;
     transform: translate(-50%, 0);
+  }
+
+  /* A tooltip is the worst thing to leave on a sticky hover: tapping a citation
+     follows the link, and the card would still be open underneath on the way
+     back. Keyboard focus above reaches it without a pointer. */
+  @media (hover: hover) and (pointer: fine) {
+    .markdown-message :global(.md-citation:hover::before),
+    .markdown-message :global(.md-citation:hover::after) {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {

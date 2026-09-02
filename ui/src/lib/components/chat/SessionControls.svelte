@@ -411,11 +411,16 @@
     transform: rotate(180deg);
   }
 
-  :global(.session-add:hover:not(:disabled)) .control-chevron,
   :global(.session-add:focus-visible:not(:disabled)) .control-chevron,
-  :global(.session-drawer-button:hover) .control-chevron,
   :global(.session-drawer-button:focus-visible) .control-chevron {
     color: color-mix(in srgb, var(--chip-color) 78%, white);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    :global(.session-add:hover:not(:disabled)) .control-chevron,
+    :global(.session-drawer-button:hover) .control-chevron {
+      color: color-mix(in srgb, var(--chip-color) 78%, white);
+    }
   }
 
   .control-label {
@@ -508,15 +513,20 @@
     cursor: pointer;
   }
 
-  .session-popover-refresh:hover:not(:disabled),
   .session-popover-refresh:focus-visible:not(:disabled),
-  .session-popover-close:hover,
   .session-popover-close:focus-visible,
-  .new-session-close:hover,
   .new-session-close:focus-visible {
     color: var(--text-1);
     border-color: var(--border-strong);
-    outline: 0;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .session-popover-refresh:hover:not(:disabled),
+    .session-popover-close:hover,
+    .new-session-close:hover {
+      color: var(--text-1);
+      border-color: var(--border-strong);
+    }
   }
 
   .session-popover-refresh:disabled {
@@ -604,12 +614,12 @@
       transform var(--duration-fast) var(--ease-ui);
   }
 
-  .agent-row:hover,
-  .agent-row:focus-visible {
-    border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
-    outline: 0;
-    background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
-    transform: translateY(-1px);
+  @media (hover: hover) and (pointer: fine) {
+    .agent-row:hover {
+      border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
+      background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
+      transform: translateY(-1px);
+    }
   }
 
   .agent-copy {
@@ -665,12 +675,20 @@
       transform var(--duration-fast) var(--ease-ui);
   }
 
-  .session-row:hover,
+  /* Inward, unlike the baseline ring in app.css: .session-list scrolls, so an
+     outline drawn outside a full-width row is clipped away by the container and
+     only the top edge of it survives. */
   .session-row:focus-visible {
-    border-color: color-mix(in srgb, var(--reasoning) 38%, var(--border-strong));
-    background: color-mix(in srgb, var(--reasoning) 5%, var(--surface-2));
-    transform: translateY(-1px);
-    outline: 0;
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .session-row:hover {
+      border-color: color-mix(in srgb, var(--reasoning) 38%, var(--border-strong));
+      background: color-mix(in srgb, var(--reasoning) 5%, var(--surface-2));
+      transform: translateY(-1px);
+    }
   }
 
   .session-row.active {

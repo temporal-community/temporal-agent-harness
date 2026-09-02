@@ -409,8 +409,13 @@
     outline-offset: 1px;
   }
 
-  .bar:hover {
-    filter: brightness(1.12);
+  /* Guarded rather than left decorative: the bar is a button that scrubs, and a
+     brightness that sticks to the last one tapped competes with .bar.active,
+     which is how the selected step is actually shown. */
+  @media (hover: hover) and (pointer: fine) {
+    .bar:hover {
+      filter: brightness(1.12);
+    }
   }
 
   .track-empty,
