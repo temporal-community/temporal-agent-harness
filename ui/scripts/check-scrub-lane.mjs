@@ -12,11 +12,12 @@ import assert from "node:assert/strict";
 /* ponytail: ceiling = everything above the assertions is MIRRORED from
    ui/src/lib/components/flow/StepController.svelte rather than imported, so it
    can drift from the real thing. These are `$derived` expressions inside a
-   Svelte component and plain node cannot import them at all without a Svelte
-   compile step, which is the same wall check-frame-key.mjs and check-status-note.mjs
-   hit. Upgrade path = lift the two derivations into a plain module beside
-   eventVelocity.ts (which this repo's node can import directly) and import them
-   here, the moment a second caller wants them. */
+   Svelte component, so svelteLoader.mjs is not enough on its own: it can compile
+   StepController.svelte, but a `$derived` closing over component state is not
+   something the compiled module exports. Upgrade path = lift the derivations into
+   plain functions beside eventVelocity.ts (which this repo's node can import
+   directly) and import them here, which is what check-status-note.mjs did to
+   statusKind once there was a loader to reach it through. */
 
 // Kept in step with StepController.svelte.
 function scaleOf(total, heldScale = null) {

@@ -1,3 +1,47 @@
+<script lang="ts" module>
+  import type { StatusKind } from "$lib/components/primitives/StatusChip.svelte";
+  import type { ReplayLogRow } from "$lib/state/replayLog";
+
+  /**
+   * The colour a surviving status chip is drawn in. Module scope, and exported,
+   * so check-status-note.mjs can call this one rather than keep a copy: the
+   * ordering below is the whole content of the function and a copy of it drifts
+   * without a word. Pure, so nothing is lost by lifting it out of the instance.
+   */
+  export function statusKind(row: ReplayLogRow): StatusKind {
+    const status = row.status?.toLowerCase() ?? "";
+    if (row.tone === "error" || row.actor === "error" || status.includes("fail")) {
+      return "error";
+    }
+    if (row.actor === "approval" || status.includes("approval") || status.includes("await")) {
+      return "approval";
+    }
+    if (row.actor === "operator") return "queued";
+    if (row.actor === "tool" || status.includes("tool")) return "tool";
+    if (row.actor === "model") return "model";
+    if (row.actor === "reasoning") return "reasoning";
+    if (row.actor === "queue" || status.includes("queue")) return "queued";
+    /* The row's own tone settles the outcome, so the chip cannot disagree with
+       the line it sits on: a subagent reply says ok or error in its tone and
+       nowhere in its status text, and matching on the text alone left every
+       successful reply looking like one still in flight. */
+    if (
+      row.tone === "done" ||
+      status.includes("done") ||
+      status.includes("complete") ||
+      status.includes("approved")
+    ) {
+      return "complete";
+    }
+    if (status.includes("running") || status.includes("streaming")) return "thinking";
+    /* Last, not first. Delegation is what a subagent row is doing when nothing
+       sharper is known about it; asked before the outcome tests it swallowed
+       them, and ok, error, and still-running all came out the same colour. */
+    if (row.actor === "subagent") return "delegating";
+    return "idle";
+  }
+</script>
+
 <script lang="ts">
   import { tick } from "svelte";
   import {
@@ -17,15 +61,8 @@
   } from "@lucide/svelte";
   import { Search, X } from "@lucide/svelte";
   import Badge from "$lib/components/primitives/Badge.svelte";
-  import StatusChip, {
-    type StatusKind
-  } from "$lib/components/primitives/StatusChip.svelte";
-  import {
-    formatDuration,
-    statusNote,
-    type ReplayLogRow,
-    type TurnLogGroup
-  } from "$lib/state/replayLog";
+  import StatusChip from "$lib/components/primitives/StatusChip.svelte";
+  import { formatDuration, statusNote, type TurnLogGroup } from "$lib/state/replayLog";
   import { formatCost, formatTokens } from "$lib/cost/pricing";
 
   export type TranscriptFilter = "all" | "model" | "tool" | "approval" | "error";
@@ -225,38 +262,6 @@
     return row.label.toLowerCase().includes(row.toolName.toLowerCase()) ? null : row.toolName;
   }
 
-  function statusKind(row: ReplayLogRow): StatusKind {
-    const status = row.status?.toLowerCase() ?? "";
-    if (row.tone === "error" || row.actor === "error" || status.includes("fail")) {
-      return "error";
-    }
-    if (row.actor === "approval" || status.includes("approval") || status.includes("await")) {
-      return "approval";
-    }
-    if (row.actor === "operator") return "queued";
-    if (row.actor === "tool" || status.includes("tool")) return "tool";
-    if (row.actor === "model") return "model";
-    if (row.actor === "reasoning") return "reasoning";
-    if (row.actor === "queue" || status.includes("queue")) return "queued";
-    /* The row's own tone settles the outcome, so the chip cannot disagree with
-       the line it sits on: a subagent reply says ok or error in its tone and
-       nowhere in its status text, and matching on the text alone left every
-       successful reply looking like one still in flight. */
-    if (
-      row.tone === "done" ||
-      status.includes("done") ||
-      status.includes("complete") ||
-      status.includes("approved")
-    ) {
-      return "complete";
-    }
-    if (status.includes("running") || status.includes("streaming")) return "thinking";
-    /* Last, not first. Delegation is what a subagent row is doing when nothing
-       sharper is known about it; asked before the outcome tests it swallowed
-       them, and ok, error, and still-running all came out the same colour. */
-    if (row.actor === "subagent") return "delegating";
-    return "idle";
-  }
 </script>
 
 <section class="transcript" aria-label="Replay logs">

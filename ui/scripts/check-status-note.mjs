@@ -8,40 +8,19 @@
 //   node ui/scripts/check-status-note.mjs
 
 import assert from "node:assert/strict";
+import "./libAlias.mjs";
+import "./svelteLoader.mjs";
 
-/* ponytail: everything above the assertions is MIRRORED from the app rather than
-   imported, so it can drift from the real thing. Two different reasons, neither
-   fixable here. The stem table and statusNote() come from
-   ui/src/lib/state/replayLog.ts, which plain node cannot import because it pulls
-   in $lib/cost/pricing as a value import and there is no alias shim in this repo;
-   swap those for a real import the moment such a shim lands for some other
-   reason. statusKind() and the tone lookup come from Svelte components
-   (TranscriptPanel.svelte, StatusChip.svelte) and cannot be imported at all
-   without a Svelte compile step, which is the same wall check-frame-key.mjs hit
-   and answered the same way. Lifting statusKind() into a plain .ts module would
-   make it importable, but only once the pricing shim exists too. */
-
-// Kept in step with IMPLIED_STATUS_STEMS in ui/src/lib/state/replayLog.ts.
-const IMPLIED_STATUS_STEMS = {
-  running: ["start", "progress", "stream"],
-  done: ["complet", "final"],
-  complete: ["complet", "final"],
-  idle: ["end"],
-  dispatched: ["sent"],
-  approved: ["grant"],
-  degraded: ["unavailable"]
-};
-
-// Kept in step with statusNote() in ui/src/lib/state/replayLog.ts.
-function statusNote(row) {
-  const status = row.status?.trim();
-  if (!status) return null;
-  const label = row.label.toLowerCase();
-  const value = status.toLowerCase();
-  if (label.includes(value)) return null;
-  if ((IMPLIED_STATUS_STEMS[value] ?? []).some((stem) => label.includes(stem))) return null;
-  return status;
-}
+/* All three of these were hand-copied here until libAlias.mjs and svelteLoader.mjs
+   landed — the stem table and statusNote() because plain node could not follow
+   `$lib/`, statusKind() and the tone lookup because it could not read a .svelte
+   file at all. A check that reimplements what it checks passes forever while the
+   real thing rots, so they are imported now and the copies are gone. What is left
+   below is fixture and claim: the label/status pairs the app can produce, and what
+   should happen to each. */
+const { statusNote } = await import("../src/lib/state/replayLog.ts");
+const { statusKind } = await import("../src/lib/components/agent/TranscriptPanel.svelte");
+const { STATUS_TONES } = await import("../src/lib/components/primitives/StatusChip.svelte");
 
 /* Every label/status pair rowFromFrame() can produce, read off the branches in
    ui/src/lib/state/replayLog.ts. `null` means the label already says it and the
@@ -117,33 +96,6 @@ assert.equal(
 
 /* --- statusKind: the colour the surviving chip is drawn in ---------------- */
 
-// Kept in step with statusKind() in ui/src/lib/components/agent/TranscriptPanel.svelte.
-function statusKind(row) {
-  const status = row.status?.toLowerCase() ?? "";
-  if (row.tone === "error" || row.actor === "error" || status.includes("fail")) {
-    return "error";
-  }
-  if (row.actor === "approval" || status.includes("approval") || status.includes("await")) {
-    return "approval";
-  }
-  if (row.actor === "operator") return "queued";
-  if (row.actor === "tool" || status.includes("tool")) return "tool";
-  if (row.actor === "model") return "model";
-  if (row.actor === "reasoning") return "reasoning";
-  if (row.actor === "queue" || status.includes("queue")) return "queued";
-  if (
-    row.tone === "done" ||
-    status.includes("done") ||
-    status.includes("complete") ||
-    status.includes("approved")
-  ) {
-    return "complete";
-  }
-  if (status.includes("running") || status.includes("streaming")) return "thinking";
-  if (row.actor === "subagent") return "delegating";
-  return "idle";
-}
-
 /* The three rows that still draw a chip after the suppression above. These are
    the only statusKind() answers a reader can actually see, so they are the ones
    worth pinning. */
@@ -164,12 +116,12 @@ assert.notEqual(
   "ok and error on a subagent reply must not resolve to the same kind"
 );
 
-/* Kinds are only half the claim — the reader sees a colour, not a kind. Mirrors
-   the two entries of STATUS_TONES in ui/src/lib/components/primitives/StatusChip.svelte. */
-const TONE_OF = { complete: "success", error: "error" };
+/* Kinds are only half the claim — the reader sees a colour, not a kind, and two
+   distinct kinds can still be drawn in one hue. STATUS_TONES is StatusChip's own
+   table, so this reads the mapping the chip will actually use. */
 assert.notEqual(
-  TONE_OF[statusKind(ok)],
-  TONE_OF[statusKind(failed)],
+  STATUS_TONES[statusKind(ok)],
+  STATUS_TONES[statusKind(failed)],
   "ok and error on a subagent reply must not render in the same hue"
 );
 
@@ -193,6 +145,13 @@ for (const row of [
   { actor: "model", tone: "error", status: "failed", label: "Model failed" }
 ]) {
   assert.equal(statusKind(row), "error", `${row.label} must resolve to error before anything else`);
+}
+
+/* Every kind statusKind() can return has to have a hue, or the chip renders
+   undefined. Cheap to assert now that the real table is in hand, and impossible
+   to assert while it was a two-entry copy. */
+for (const kind of new Set(ROWS.map(([label, status]) => statusKind({ label, status })))) {
+  assert.ok(STATUS_TONES[kind], `statusKind returned "${kind}", which StatusChip has no tone for`);
 }
 
 console.log(
