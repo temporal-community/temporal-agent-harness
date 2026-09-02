@@ -201,6 +201,29 @@ def test_create_session_manager_worker_rejects_owned_worker_registration() -> No
 async def test_session_manager_startup_attaches_to_running_workflow() -> None:
     handle = _FakeWorkflowHandle(status=WorkflowExecutionStatus.RUNNING)
     temporal = _FakeTemporalClient(handle)
+    registry = AgentRegistry()
+
+    result = await _ensure_session_manager_workflow(
+        temporal,
+        registry=registry,
+        manager_workflow_id="session-manager",
+        manager_task_queue="session-manager",
+    )
+
+    assert result is handle
+    assert temporal.start_calls == []
+    # The manager outlives the server, so attaching to a running one is the ONLY moment this
+    # server can tell it what it serves. Without this the registry stays whatever the first
+    # server ever to start the manager was offering.
+    assert handle.updates == [(SessionManagerWorkflow.set_available_agents, registry)]
+
+
+async def test_session_manager_startup_survives_an_unpushable_registry() -> None:
+    # A manager whose worker predates the handler must not stop the server from booting: it
+    # keeps offering the set it has, which is exactly what happened before the push existed.
+    handle = _FakeWorkflowHandle(status=WorkflowExecutionStatus.RUNNING)
+    handle.execute_update = _raise_rpc  # type: ignore[method-assign]
+    temporal = _FakeTemporalClient(handle)
 
     result = await _ensure_session_manager_workflow(
         temporal,
@@ -210,7 +233,10 @@ async def test_session_manager_startup_attaches_to_running_workflow() -> None:
     )
 
     assert result is handle
-    assert temporal.start_calls == []
+
+
+async def _raise_rpc(*_args, **_kwargs):
+    raise RPCError("no such update handler", RPCStatusCode.NOT_FOUND, b"")
 
 
 async def test_workflow_execution_state_reports_running_workflow_open() -> None:
@@ -556,11 +582,15 @@ class _FakeWorkflowHandle:
         self.status = status
         self.error = error
         self.history_events = history_events or []
+        self.updates: list[tuple[object, object]] = []
 
     async def describe(self):
         if self.error is not None:
             raise self.error
         return SimpleNamespace(status=self.status)
+
+    async def execute_update(self, update, arg=None, **_kwargs):
+        self.updates.append((update, arg))
 
     async def fetch_history_events(self, **_kwargs):
         for event in self.history_events:

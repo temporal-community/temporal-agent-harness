@@ -105,6 +105,24 @@ class SessionManagerWorkflow:
         return self._registry
 
     @workflow.update
+    def set_available_agents(self, registry: AgentRegistry) -> AgentRegistry:
+        """Replace the set of agents this manager offers.
+
+        The manager outlives every server that connects to it, so the registry it was
+        constructed with is the one from the first server ever to start it — and it answers
+        ``available_agents`` for all of them. Without a way to replace it, changing what a
+        server serves does nothing anyone can see: the registry edit is real, the console keeps
+        listing what it listed yesterday, and the first sign of it is a session opened against
+        an agent no worker is running.
+
+        Sessions already under way are untouched. They are addressed by workflow id and
+        abandoned by this parent, so withdrawing an agent only stops it being offered; a
+        conversation in progress against it continues.
+        """
+        self._registry = registry
+        return self._registry
+
+    @workflow.update
     def set_sessions_archived(
         self, request: SetSessionsArchivedRequest
     ) -> list[Session]:
@@ -150,6 +168,18 @@ class SessionManagerWorkflow:
             request.config,
             id=session_id,
             task_queue=task_queue,
+            # EXPLICIT: a session outlives its manager. The manager is shared infrastructure
+            # every browser session is started through, so the SDK default of TERMINATE would
+            # make restarting it — or replacing its registry, or continuing it as new — kill
+            # every live agent session, including ones a person is mid-conversation with.
+            # Sessions are addressed by workflow id and end through their own `close` signal,
+            # so nothing here needs the parent-close relationship.
+            #
+            # It is also what the live manager's history already records on all 36 of its child
+            # starts. The replayer does not compare this attribute, so leaving it at the
+            # default replayed clean while quietly meaning that any session created after a
+            # cutover would be the one child of this manager that dies with it.
+            parent_close_policy=workflow.ParentClosePolicy.ABANDON,
         )
 
         session = Session(

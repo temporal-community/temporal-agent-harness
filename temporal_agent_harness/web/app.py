@@ -853,6 +853,21 @@ async def _ensure_session_manager_workflow(
     else:
         if desc.status == WorkflowExecutionStatus.RUNNING:
             print(f"Connected to existing session manager: {manager_workflow_id}")
+            # The registry below is only an argument to ``start_workflow``, so on this path —
+            # the common one, since the manager is meant to outlive servers — nothing would
+            # carry what THIS server serves to the workflow that answers for it. Push it, so
+            # the console lists what is actually being offered rather than whatever the first
+            # server ever to start this manager was serving.
+            try:
+                await handle.execute_update(
+                    SessionManagerWorkflow.set_available_agents, registry
+                )
+            except RPCError as exc:
+                print(
+                    "warning: could not refresh the session manager's agent list "
+                    f"({exc.status.name}). It will keep offering the set it was started "
+                    "with; restart the session-manager worker so it picks up this handler."
+                )
             return handle
         print(
             "Existing session manager "
