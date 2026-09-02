@@ -44,6 +44,13 @@ package: app-build app-check
     uv run pytest
     uv build
 
+# Prove on a RUNNING server that a subagent outlives its parent's continue-as-new and can still
+# be driven. Deliberately outside `package`: the time-skipping server used by the test suite does
+# not enforce parent-close policies, so this one needs `just temporal` up. Creates and closes two
+# throwaway workflows of its own.
+check-rollover-subagent *ARGS:
+    uv run python tests/harness/check_subagent_survives_rollover.py {{ARGS}}
+
 # Start the custom Temporal server with Nexus callback/update dynamic config enabled.
 temporal-latest:
     #!/usr/bin/env bash
