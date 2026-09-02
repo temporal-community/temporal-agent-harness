@@ -1,6 +1,24 @@
 export type UnixEpochSeconds = number;
 export type ResumeOffset = number;
 export type StreamOffset = ResumeOffset;
+
+/**
+ * One event's own offset in the log of the agent that published it. With the
+ * tree-unique `agent_id` this IDENTIFIES the event — it is stable across
+ * redeliveries and distinct between two events of the same agent, neither of
+ * which is true of `resume_offset` (that one is a root-stream resume cursor and
+ * stands still for the whole of a subagent's turn, so every event in that turn
+ * reports the same value).
+ *
+ * `SYNTHESIZED` when the server made the event up rather than reading it off a
+ * log, so it has no durable coordinate to report. Absent entirely from mock
+ * fixtures and from any server predating the field, which is why it is optional
+ * on the envelope and every reader has to cope with it missing.
+ */
+export type EventOffset = number;
+
+/** An event the server synthesized, which therefore has no `event_offset`. */
+export const SYNTHESIZED: EventOffset = -1;
 export type WorkflowId = string;
 export type TurnId = string;
 export type ToolId = string;
@@ -252,6 +270,7 @@ export interface AgentEventMetadata {
   turn_number: number;
   timestamp: UnixEpochSeconds;
   resume_offset: ResumeOffset;
+  event_offset?: EventOffset;
 }
 
 export interface AgentEventDataBase<TType extends AgentEventType>

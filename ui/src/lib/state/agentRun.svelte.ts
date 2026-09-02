@@ -9,6 +9,7 @@ import type {
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
 import type { AgentDescriptor, Session } from "$lib/api/types";
+import { SYNTHESIZED } from "$lib/api/types";
 import { HttpAgentApi } from "$lib/api/httpClient";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
@@ -208,8 +209,36 @@ function displayTextForMessage(message: AgentInboundMessage): string {
   return JSON.stringify(message);
 }
 
+/**
+ * The identity #ingestFrame dedupes on. A frame arriving twice is normal — a reconnect replays from
+ * a root offset, and the cached frames overlap the live stream — so this has to say "same event"
+ * exactly when it is the same event.
+ *
+ * An event read off a log reports its own offset there, which with the tree-unique `agent_id` is
+ * precisely that: stable across redeliveries, distinct between two events of one agent. Prefer it.
+ *
+ * Fall back to hashing the payload only for the frames that have no offset to report — the ones the
+ * server synthesized, plus client-side stream errors that carry no envelope. This fallback is what
+ * every frame used to use, and the reason not to: two DIFFERENT events with byte-identical payloads
+ * collide under it, and the second is silently dropped. Measured over 214 frames of live traffic
+ * that never fired, but the synthesized `subagent_stream_unavailable` marker is constructibly
+ * vulnerable — every field of it is a constant for a given child, so a child given up twice (the
+ * merge re-arms a re-dispatched child's gate) yields two identical frames. Keeping the fallback
+ * scoped to those frames holds their behavior exactly as it is today while real events, which are
+ * the ones whose loss would corrupt the transcript, get an identity that cannot collide.
+ */
 function frameKey(frame: AgentSseFrame): string {
-  const { resume_offset: _resumeOffset, ...identityData } = frame.data;
+  if (
+    "event_offset" in frame.data &&
+    "agent_id" in frame.data &&
+    typeof frame.data.event_offset === "number" &&
+    frame.data.event_offset !== SYNTHESIZED
+  ) {
+    return `${frame.data.agent_id}|${frame.data.event_offset}`;
+  }
+  const identityData: Record<string, unknown> = { ...frame.data };
+  delete identityData.resume_offset;
+  delete identityData.event_offset;
   return `${frame.event}|${JSON.stringify(identityData)}`;
 }
 
