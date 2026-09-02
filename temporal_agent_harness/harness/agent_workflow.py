@@ -158,7 +158,16 @@ _SLASH_MESSAGE_TYPE = "slash"
 # the problem and leave it over the threshold on its first turn. What is given up is deep
 # replay: a browser tab opened fresh after a rollover shows recent transcript rather than the
 # whole conversation. See ``AgentWorkflowRunner._truncate_stream_for_handover``.
-_STREAM_HANDOVER_BUDGET_BYTES = 256 * 1024
+#
+# Sized against measured frames rather than guessed. Sampling live sessions puts a carried frame
+# at a 270–290 byte mean for conversational agents and 450 for the chattiest observed, with the
+# 95th percentile under 610 in every case. At 512 KB the tail holds ~1,050 frames even on that
+# worst profile, which covers a whole session at the largest size seen in practice; 256 KB
+# covered about 900 and so would have truncated one. Raising it is close to free — the successor
+# starts with a proportionally larger first payload, and one that stays far below both Temporal's
+# ~2 MB per-payload limit and the 1.5 MB at which this repo's converter offloads to external
+# storage, which is the backstop if an agent ever does exceed it.
+_STREAM_HANDOVER_BUDGET_BYTES = 512 * 1024
 
 # Harness default publish-flush cadence for activity-side stream publishers (see
 # ``AgentWorkflowRunner.publisher_from_activity``). Each flush is one Signal into the
