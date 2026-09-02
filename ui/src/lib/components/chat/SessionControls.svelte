@@ -715,11 +715,6 @@
     font-size: var(--font-md);
   }
 
-  .agent-row :global(.status-chip),
-  .session-row :global(.status-chip) {
-    justify-self: end;
-  }
-
   @media (max-width: 980px) {
     .session-controls {
       justify-content: flex-start;

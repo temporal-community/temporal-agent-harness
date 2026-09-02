@@ -3387,11 +3387,6 @@
     cursor: pointer;
   }
 
-  .drawer-session-row :global(.status-chip),
-  .session-card :global(.status-chip) {
-    justify-self: end;
-  }
-
   .session-delete:hover:not(:disabled) {
     border-color: color-mix(in srgb, var(--error) 30%, var(--border));
     color: var(--error);
