@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from nexus_mcp.durable_tools_gateway.registry import (
     AgentRegistration,
+    NexusMCPServerRegistration,
     PendingSessionEvent,
     SpawnedAgentObservation,
     SubagentInstanceRoute,
@@ -49,6 +50,20 @@ def test_accounts_do_not_share_agents_sessions_or_resources() -> None:
     assert second.list_account_entries().subagent_providers == {}
     assert second.list_agents() == []
     assert second.list_sessions() == []
+
+
+def test_native_mcp_registration_is_discovery_metadata_only() -> None:
+    registry = ToolRegistryWorkflow("account-1")
+    registration = NexusMCPServerRegistration(
+        name="native-demo",
+        endpoint="native-demo-endpoint",
+        service="demo-nexus",
+    )
+
+    assert registry.register_nexus_mcp_server(registration) == registration
+    assert registry.list_account_entries().nexus_servers == {
+        "native-demo": registration
+    }
 
 
 def test_closing_session_keeps_it_in_account_history() -> None:

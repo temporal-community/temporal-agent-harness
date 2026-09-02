@@ -15,12 +15,14 @@ import type {
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
+  ToolCallRecord,
   WorkflowExecutionState,
   WorkflowId
 } from "./types";
 
 export interface AgentApi {
   accountOverview(): Promise<AccountOverview>;
+  listToolCalls(serverName: string): Promise<ToolCallRecord[]>;
   listAgents(): Promise<AgentRegistryResponse>;
   listSessions(): Promise<Session[]>;
   refreshSessions(): Promise<Session[]>;
