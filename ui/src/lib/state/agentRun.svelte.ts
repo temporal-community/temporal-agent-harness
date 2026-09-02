@@ -9,7 +9,7 @@ import type {
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
 import type { AgentDescriptor, Session } from "$lib/api/types";
-import { SYNTHESIZED } from "$lib/api/types";
+import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
 import { HttpAgentApi } from "$lib/api/httpClient";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
@@ -1146,7 +1146,18 @@ export class AgentRunController {
         try {
           for await (const frame of this.#api.attach(session.workflow_id, offset, signal)) {
             if (!isCurrentStream()) break;
-            delivered = true;
+            /* An in-band error frame is a fact about the CONNECTION, not about
+               the run, so it must not count as the stream having carried
+               something. Counting it renews the budget below on every pass, and
+               /api/attach answers an unreadable stream with exactly one such
+               frame and nothing else — a re-attach every 500ms for as long as
+               the tab is open, each one re-appending the same error.
+
+               #streamDroppedMidRun already stops on `workflow_not_found`, which
+               is the one code that says retrying is pointless. This covers the
+               other direction: `stream_unavailable` genuinely is worth
+               retrying, so the budget has to be allowed to run out. */
+            if (!isClientSideStreamError(frame.data)) delivered = true;
             this.#appendFrame(frame);
           }
         } catch (error) {

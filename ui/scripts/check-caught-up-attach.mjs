@@ -21,6 +21,9 @@
  *    for it to clear, which is the 31.5s stall back again.
  *  - Not retrying a stream that dropped after delivering: "real drop" fails,
  *    which would be commit 1737027 undone.
+ *  - Letting an in-band `error` frame count as delivery: "error frame" sees the
+ *    backoff stall at 500ms instead of walking 500/1000/2000, which on a real
+ *    server is an unbounded re-attach loop.
  *
  * What does NOT break it, checked rather than assumed: dropping the
  * `isCurrentStream()` guard on the clear. The loop re-tests it at the top and
@@ -141,6 +144,16 @@ function boot({ sessions, streamFor, statusFor }) {
   return { controller, attachCalls, statusCalls };
 }
 
+/**
+ * The shape /api/attach reports a failure with: `kind`/`code` and no `type`,
+ * carrying a fact about the connection rather than about the run. See
+ * _attach_error in web/app.py.
+ */
+const errorFrame = (code) => ({
+  event: "error",
+  data: { kind: "unavailable", code, message: `synthetic ${code}` }
+});
+
 /** A stream that ends immediately having said nothing, the way a caught-up attach does. */
 // eslint-disable-next-line require-yield
 async function* silent() {
@@ -249,6 +262,33 @@ const { AgentRunController } = await vite.ssrLoadModule(
     "a reconnect must resume from the last offset the server sent"
   );
   assert.equal(controller.frames.length, 3, "the delivered frames must reach the view");
+}
+
+// --- case: an in-band error frame must not renew the retry budget ------------
+// `stream_unavailable` is worth retrying, so #streamDroppedMidRun keeps saying
+// yes and only the budget can end it. Counting the frame as delivery resets
+// `attempt` every pass, so the budget never ages and the loop never stops.
+{
+  const { controller, attachCalls } = boot({
+    sessions: [session("wf-error")],
+    streamFor: () =>
+      (async function* () {
+        yield errorFrame("stream_unavailable");
+      })(),
+    statusFor: () => "RUNNING"
+  });
+
+  void controller.selectSession("wf-error");
+  await waitFor("three attaches, enough to see the interval move", () => attachCalls.length >= 3);
+
+  /* The gaps walk 500 -> 1000 -> 2000 iff the frame was not counted. When it is
+     counted every gap stays 500ms forever, so the second gap is the whole test
+     — and it needs no 31.5s wait to see. */
+  const gaps = attachCalls.slice(1).map((call, i) => call.at - attachCalls[i].at);
+  assert.ok(
+    gaps[1] >= 900,
+    `an error frame must not renew the retry budget — backoff stalled at ${gaps.join("/")}ms`
+  );
 }
 
 await vite.close();
