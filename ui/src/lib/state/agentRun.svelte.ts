@@ -841,18 +841,39 @@ export class AgentRunController {
     }
   }
 
+  async #loadSessions(): Promise<void> {
+    const sessions = await this.#api.listSessions();
+    this.sessions = sessions;
+    this.#applySessionExecutionStates(sessions);
+  }
+
   async refreshSessions(): Promise<void> {
     if (this.refreshingSessions) return;
     this.refreshingSessions = true;
     try {
-      const sessions = await this.#api.listSessions();
-      this.sessions = sessions;
-      this.#applySessionExecutionStates(sessions);
+      await this.#loadSessions();
     } catch (error) {
       this.connectionError =
         error instanceof Error ? error.message : "Failed to refresh sessions.";
     } finally {
       this.refreshingSessions = false;
+    }
+  }
+
+  /**
+   * Re-read the session list on the reader's behalf rather than at their request.
+   *
+   * Anything holding a Temporal client can start a session, so the list this UI
+   * created is only ever part of the picture. Quiet on purpose: a tick nobody
+   * asked for must not spin the refresh control or raise the connection banner
+   * over a blip the next tick would have covered.
+   */
+  async syncSessions(): Promise<void> {
+    if (this.refreshingSessions) return;
+    try {
+      await this.#loadSessions();
+    } catch {
+      // The list stays as it was until a later tick answers.
     }
   }
 
