@@ -219,6 +219,12 @@
     return `${prefix}System`;
   }
 
+  /** The tool an event belongs to, unless the label already names it. */
+  function toolNote(row: ReplayLogRow): string | null {
+    if (!row.toolName) return null;
+    return row.label.toLowerCase().includes(row.toolName.toLowerCase()) ? null : row.toolName;
+  }
+
   function statusKind(row: ReplayLogRow): StatusKind {
     const status = row.status?.toLowerCase() ?? "";
     if (row.tone === "error" || row.actor === "error" || status.includes("fail")) {
@@ -329,12 +335,18 @@
             {#each group.rows as row}
               {@const expanded = isRowExpanded(row.id)}
               {@const status = statusNote(row)}
+              {@const tool = toolNote(row)}
               {@const active = activeRowId === row.id || (activeRowId == null && activeOrdinal === row.ordinal)}
               <article
                 id={`log-row-${row.id}`}
                 class={`log-line ${row.tone} ${row.parentTurnNumber != null ? "nested-subagent" : ""} ${expanded ? "expanded" : ""} ${active ? "active-row" : ""}`}
               >
-                <div class="actor-icon" aria-hidden="true">
+                <div
+                  class="actor-icon"
+                  role="img"
+                  aria-label={actorLabel(row)}
+                  title={actorLabel(row)}
+                >
                   {#if row.actor === "user"}
                     <UserRound size={15} />
                   {:else if row.actor === "agent" || row.actor === "subagent"}
@@ -378,9 +390,11 @@
                   >
                     <span class="line-toggle-main">
                       <span class="line-meta">
-                        <span class="actor-name">{actorLabel(row)}</span>
                         <time>{time(row.timestamp)}</time>
                         <Badge label={row.label} tone={row.tone} />
+                        {#if tool}
+                          <span class="line-tool">{tool}</span>
+                        {/if}
                         {#if status}
                           <StatusChip
                             label={status}
@@ -782,10 +796,18 @@
     flex-wrap: wrap;
   }
 
-  .actor-name {
-    flex: 0 0 auto;
-    color: var(--text-2);
-    font-weight: 650;
+  /* An identifier, so it stays mono and unshouted, as tool names are elsewhere.
+     It shrinks before the label does: `reprice_ro…` still reads as the tool it
+     names, which a truncated label does not. */
+  .line-tool {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: var(--figure-size);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .source-turn {
