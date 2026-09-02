@@ -40,7 +40,6 @@ from functools import partial
 from typing import Any, cast
 
 from temporalio import workflow
-from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.exceptions import ApplicationError
 from temporalio.workflow import ActivityConfig
 
@@ -121,7 +120,6 @@ class MontyChatSubagentWorkflow:
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
-            stream=WorkflowStream(),
             # Gate the subagent tools: every start_monty / monty_run_script / stop_monty call
             # escalates to a human (same stance as the inline MontyChatAgent). The script's
             # host calls run inside the child, which has its own dangerously_skip_all policy.
@@ -178,6 +176,22 @@ class MontyChatSubagentWorkflow:
 
     def _set_model(self, model: str) -> None:
         self._model = model
+
+    # Declaring these is what lets a long session roll over into a fresh run rather than
+    # growing its history forever; see the harness docs on continue-as-new.
+    @agent.snapshot
+    def snapshot(self) -> dict[str, Any]:
+        """Hand the conversation to the run that takes over from this one."""
+        return {
+            "previous_interaction_id": self._previous_interaction_id,
+            "model": self._model,
+        }
+
+    @agent.restore
+    def restore(self, state: dict[str, Any]) -> None:
+        """Pick the conversation back up in a new run, before its first turn."""
+        self._previous_interaction_id = state["previous_interaction_id"]
+        self._model = state["model"]
 
     # ------------------------------------------------------------------ chat loop
 

@@ -27,10 +27,9 @@ import asyncio
 import json
 from datetime import timedelta
 from functools import partial
-from typing import Sequence
+from typing import Any, Sequence
 
 from temporalio import workflow
-from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.exceptions import ApplicationError
 from temporalio.workflow import ActivityConfig
 
@@ -66,7 +65,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
-    from .tools import CODING_TOOLS
+    from .tools import CODING_TOOLS, TodoItem
 
 
 TASK_QUEUE = "coding-agent"
@@ -106,7 +105,6 @@ class CodingAgentWorkflow:
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
-            stream=WorkflowStream(),
             # This agent runs real shell commands and edits real files on the user's machine, so
             # every call that touches the machine is gated — the shim turns each gated call into an
             # OpenCode permission prompt. Only tools declared `inherently_safe` are auto-approved;
@@ -144,6 +142,25 @@ class CodingAgentWorkflow:
         replies with what it did."""
         reply_text = await self._handle_chat_turn(self._gemini, message.text)
         return TextReply(text=reply_text)
+
+    # Declaring these is what lets a long session roll over into a fresh run rather than
+    # growing its history forever; see the harness docs on continue-as-new.
+    @agent.snapshot
+    def snapshot(self) -> dict[str, Any]:
+        """Hand the conversation and the task list to the run that takes over from this one."""
+        # The transcript lives on Google's side and this end holds only the id that chains to
+        # it — but the plan is genuinely here, and an agent that came back from a rollover
+        # having lost track of what it was part-way through doing would be worse than useless.
+        return {
+            "previous_interaction_id": self._previous_interaction_id,
+            "todos": [item.model_dump(mode="json") for item in self._todos],
+        }
+
+    @agent.restore
+    def restore(self, state: dict[str, Any]) -> None:
+        """Pick the conversation and the task list back up, before the new run's first turn."""
+        self._previous_interaction_id = state["previous_interaction_id"]
+        self._todos = [TodoItem.model_validate(item) for item in state["todos"]]
 
     # ------------------------------------------------------------------ chat loop
 

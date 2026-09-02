@@ -13,8 +13,9 @@ registered in ``agents.toml`` and driven by the packaged web app. See ``README.m
 
 from __future__ import annotations
 
+from typing import Any
+
 from temporalio import workflow
-from temporalio.contrib.workflow_streams import WorkflowStream
 
 with workflow.unsafe.imports_passed_through():
     from agents import Agent as OpenAIAgent
@@ -58,7 +59,6 @@ class OpenAIHelloAgentWorkflow:
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
-            stream=WorkflowStream(),
             # Hello-world stance: don't gate tool calls. A caller can tighten this per
             # session via AgentConfig.approval_policy.
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
@@ -94,3 +94,19 @@ class OpenAIHelloAgentWorkflow:
 
         self._conversation = result.to_input_list()
         return TextReply(text=str(result.final_output))
+
+    # A session that talks for long enough outgrows one workflow run and rolls over into a
+    # fresh one. The harness carries its own bookkeeping across, but the conversation is the
+    # agent's — it is held privately above, and nothing but this agent knows that. Declaring
+    # the pair is what makes the session survivable; an agent that declares neither keeps
+    # working and simply never rolls over.
+    @agent.snapshot
+    def snapshot(self) -> dict[str, Any]:
+        """Hand the conversation to the run that takes over from this one."""
+        # The SDK's input items are already plain JSON, so there is nothing to convert.
+        return {"conversation": self._conversation}
+
+    @agent.restore
+    def restore(self, state: dict[str, Any]) -> None:
+        """Pick the conversation back up in a new run, before its first turn."""
+        self._conversation = state["conversation"]

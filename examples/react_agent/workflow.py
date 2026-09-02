@@ -29,9 +29,9 @@ FastAPI/UI). See ``README.md``.
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from temporalio import workflow
-from temporalio.contrib.workflow_streams import WorkflowStream
 
 with workflow.unsafe.imports_passed_through():
     from agents import Agent as OpenAIAgent
@@ -93,7 +93,6 @@ class ReactAgentWorkflow:
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
-            stream=WorkflowStream(),
             # No human-in-the-loop yet — don't gate tool calls (demo4-hitl will tighten this).
             # A caller can still override per session via AgentConfig.approval_policy.
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
@@ -146,3 +145,17 @@ class ReactAgentWorkflow:
 
         self._conversation = result.to_input_list()
         return TextReply(text=str(result.final_output))
+
+    # Declaring these is what lets a long session roll over into a fresh run rather than
+    # growing its history forever; see the harness docs on continue-as-new.
+    @agent.snapshot
+    def snapshot(self) -> dict[str, Any]:
+        """Hand the conversation to the run that takes over from this one."""
+        # The SDK's input items are already plain JSON, so there is nothing to convert. The MCP
+        # tool list is not carried on purpose: it is rebuilt per turn from the provider anyway.
+        return {"conversation": self._conversation}
+
+    @agent.restore
+    def restore(self, state: dict[str, Any]) -> None:
+        """Pick the conversation back up in a new run, before its first turn."""
+        self._conversation = state["conversation"]

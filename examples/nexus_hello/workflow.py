@@ -18,8 +18,9 @@ The agent only knows about them when listing tools via the MCP protocol.
 
 from __future__ import annotations
 
+from typing import Any
+
 from temporalio import workflow
-from temporalio.contrib.workflow_streams import WorkflowStream
 
 with workflow.unsafe.imports_passed_through():
     from agents import Agent as OpenAIAgent
@@ -55,7 +56,6 @@ class NexusHelloAgentWorkflow:
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
-            stream=WorkflowStream(),
             # Hello-world default: skip approvals.
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
@@ -89,3 +89,17 @@ class NexusHelloAgentWorkflow:
 
         self._conversation = result.to_input_list()
         return TextReply(text=str(result.final_output))
+
+    # Declaring these is what lets a long session roll over into a fresh run rather than
+    # growing its history forever; see the harness docs on continue-as-new.
+    @agent.snapshot
+    def snapshot(self) -> dict[str, Any]:
+        """Hand the conversation to the run that takes over from this one."""
+        # The SDK's input items are already plain JSON, so there is nothing to convert. The
+        # Nexus tool gateway is not carried: it is rebuilt per turn.
+        return {"conversation": self._conversation}
+
+    @agent.restore
+    def restore(self, state: dict[str, Any]) -> None:
+        """Pick the conversation back up in a new run, before its first turn."""
+        self._conversation = state["conversation"]

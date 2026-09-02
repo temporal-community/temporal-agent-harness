@@ -19,13 +19,14 @@ in ``agents.toml`` and driven by the packaged web app. See ``README.md``.
 
 from __future__ import annotations
 
+from typing import Any
+
 from temporalio import workflow
-from temporalio.contrib.workflow_streams import WorkflowStream
 
 with workflow.unsafe.imports_passed_through():
     from pydantic_ai import Agent
     from pydantic_ai.durable_exec.temporal import TemporalAgent
-    from pydantic_ai.messages import ModelMessage
+    from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
     from temporal_agent_harness.ai_sdks.pydantic_ai_harness import (
         HarnessDeps,
@@ -92,7 +93,6 @@ class PydanticAIHelloAgentWorkflow:
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
-            stream=WorkflowStream(),
             # Hello-world stance: don't gate tool calls. A caller can tighten this per session via
             # AgentConfig.approval_policy.
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
@@ -119,3 +119,19 @@ class PydanticAIHelloAgentWorkflow:
         )
         self._history = result.all_messages()
         return TextReply(text=str(result.output))
+
+    # Declaring these is what lets a long session roll over into a fresh run rather than
+    # growing its history forever; see the harness docs on continue-as-new.
+    @agent.snapshot
+    def snapshot(self) -> dict[str, Any]:
+        """Hand the conversation to the run that takes over from this one."""
+        # Pydantic AI's history is model objects rather than plain data, so unlike the OpenAI
+        # examples it has to be converted. Its own type adapter is the supported way to do it
+        # in both directions, and going through JSON keeps the blob inside what the one shared
+        # AgentConfig can carry — there is nowhere to declare a per-agent type for it.
+        return {"history": ModelMessagesTypeAdapter.dump_python(self._history, mode="json")}
+
+    @agent.restore
+    def restore(self, state: dict[str, Any]) -> None:
+        """Pick the conversation back up in a new run, before its first turn."""
+        self._history = ModelMessagesTypeAdapter.validate_python(state["history"])

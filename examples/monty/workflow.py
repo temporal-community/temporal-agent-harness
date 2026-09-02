@@ -22,7 +22,6 @@ value becomes the turn's reply.
 from __future__ import annotations
 
 from temporalio import workflow
-from temporalio.contrib.workflow_streams import WorkflowStream
 
 with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness import agent
@@ -39,6 +38,12 @@ with workflow.unsafe.imports_passed_through():
 TASK_QUEUE = "monty-dynamic-agent"
 
 
+# No @agent.snapshot / @agent.restore here, deliberately. Those hooks exist so a session that
+# has talked for long enough can roll over into a fresh workflow run carrying the author's
+# conversation state, and this agent holds none: each script is evaluated against the tools and
+# nothing about it is remembered afterwards. Declaring the pair would carry an empty dict. The
+# cost of leaving them off is that this agent never rolls over — right for a script runner,
+# which a parent starts, drives, and stops, and which is not where a long session accumulates.
 @workflow.defn(name="MontyDynamicAgent")
 @agent.defn
 class MontyDynamicAgentWorkflow:
@@ -46,7 +51,6 @@ class MontyDynamicAgentWorkflow:
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
-            stream=WorkflowStream(),
             # The travel tools run inside a sandboxed simulation (no real-world side effects),
             # so this agent skips approvals by default. A caller can still tighten this per
             # session via AgentConfig.approval_policy.

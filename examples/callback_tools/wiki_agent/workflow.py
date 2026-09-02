@@ -21,10 +21,9 @@ import asyncio
 import json
 from datetime import timedelta
 from functools import partial
-from typing import Sequence
+from typing import Any, Sequence
 
 from temporalio import workflow
-from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.exceptions import ApplicationError
 from temporalio.workflow import ActivityConfig
 
@@ -99,7 +98,6 @@ class WikiAgentWorkflow:
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
-            stream=WorkflowStream(),
             # The tools run on the user's own machine — the human attached in the terminal IS the
             # one executing each call — so a separate human-approval gate would be redundant here.
             # Skip approvals by default; a caller can still tighten this per session via
@@ -133,6 +131,19 @@ class WikiAgentWorkflow:
         replies with what it did."""
         reply_text = await self._handle_chat_turn(self._gemini, message.text)
         return TextReply(text=reply_text)
+
+    # Declaring these is what lets a long session roll over into a fresh run rather than
+    # growing its history forever; see the harness docs on continue-as-new.
+    @agent.snapshot
+    def snapshot(self) -> dict[str, Any]:
+        """Hand the conversation to the run that takes over from this one."""
+        # The transcript lives on Google's side; this end holds only the id that chains to it.
+        return {"previous_interaction_id": self._previous_interaction_id}
+
+    @agent.restore
+    def restore(self, state: dict[str, Any]) -> None:
+        """Pick the conversation back up in a new run, before its first turn."""
+        self._previous_interaction_id = state["previous_interaction_id"]
 
     # ------------------------------------------------------------------ chat loop
 
