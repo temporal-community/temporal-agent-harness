@@ -17,7 +17,7 @@ of scope for now, so matching `account_id` values are the trust boundary.
 
 ## What the account owns
 
-After the registration steps, the account pane at <http://localhost:8000> contains:
+After the registration steps, the account sidebar at <http://localhost:8000> contains:
 
 | Registration | Kind | Route |
 |---|---|---|
@@ -25,6 +25,7 @@ After the registration steps, the account pane at <http://localhost:8000> contai
 | `Research` | mountable harness agent/subagent | `nexus-hello-subagent-endpoint` |
 | `Whimsical Agent` | mountable OpenAI Agents SDK agent/subagent | `nexus-hello-whimsical-agent-endpoint` |
 | `Writer HTTP` | mountable third-party agent | `http://127.0.0.1:8766` |
+| `demo-nexus` | directly invoked Nexus MCP service | `nexus-hello-demo-endpoint` |
 | `demo` | MCP server in the toolbox | `http://127.0.0.1:8765/mcp` |
 | `writer` | subagent provider in the toolbox | `http://127.0.0.1:8766` |
 
@@ -44,10 +45,10 @@ The Nexus Hello agent itself can use five resources:
 - `whimsical-agent`: an OpenAI Agents SDK harness subagent reached directly over Nexus.
 - `writer`: the registered HTTP subagent, proxied through the account gateway.
 
-Only registered agents become independently mountable sessions. The native tool and native
-research routes remain direct dependencies of Nexus Hello, so they do not appear in the
-toolbox strip; Research and Whimsical Agent appear as agent cards because their endpoints
-are separately registered.
+Only registered agents become independently mountable sessions. The native tool remains a
+direct dependency of Nexus Hello, but its endpoint/service are registered as observation-only
+metadata so the account sidebar can match its retained Nexus operations. Research and
+Whimsical Agent appear as agent cards because their endpoints are separately registered.
 
 Whimsical Agent is intentionally both a child and a top-level agent. Nexus Hello can create
 it through the native subagent toolset, while an account owner can click **New** on its card
@@ -68,7 +69,7 @@ flowchart TB
     subgraph Pane["Account pane of glass: NexusHelloAccount"]
         Agents["Agent cards<br/>Nexus Hello · Research · Whimsical · Writer HTTP"]
         Sessions["Session views<br/>account-wide · per-agent · live · closed"]
-        Toolbox["Toolbox<br/>MCP: demo · Subagent: writer"]
+        Toolbox["MCP server cards<br/>demo-nexus · demo"]
     end
 
     Browser --> Agents
@@ -278,6 +279,41 @@ polls. Because the event broker is in process, this prototype runs the gateway w
 UI server together. A multi-replica deployment would replace that broker with shared
 pub/sub.
 
+### Historical MCP calls
+
+The left account sidebar lists both MCP transports without changing either execution path.
+Opening **Tool calls** performs a read-only retained-history scan:
+
+```mermaid
+flowchart LR
+    Sidebar[Account sidebar] --> HistoryAPI[Gateway history API]
+
+    HistoryAPI --> Registry[Account-known sessions]
+    Registry --> AgentHistory[Known harness workflow histories]
+    AgentHistory --> NexusEvents[Matching Nexus operation events]
+
+    HistoryAPI --> GatewayNS[gateway namespace]
+    GatewayNS --> Activities[Retained mcp_proxy_activity executions]
+
+    NexusEvents --> Inspector[Tool-call inspector]
+    Activities --> Inspector
+```
+
+Native MCP calls stay on the direct `agent → Nexus endpoint` path. The history reader resolves
+the namespaces behind registered harness endpoints, fetches only account-known workflow IDs,
+and matches scheduled/completed/failed Nexus events by endpoint and service. It does not scan
+Workflow Visibility across those namespaces.
+
+Third-party MCP calls already execute as standalone activities in the gateway namespace. New
+activity inputs include `account_id`, server alias, and caller agent workflow metadata; the
+inspector lists retained `mcp_proxy_activity` executions, point-reads their inputs/outcomes with
+at most eight concurrent describes, and filters them to the current account. The initial
+implementation considers the most recent 500 retained proxy activities. Neither reader persists
+another copy of tool inputs or results. Activity/workflow retention therefore defines how far
+back the inspector can see. Calls made by an older gateway worker do not contain the account
+metadata and are omitted; older calls without caller metadata remain visible but cannot name the
+caller agent workflow. Restart the updated gateway before generating calls for this demo.
+
 ## Run the complete demo
 
 Prerequisites:
@@ -328,12 +364,13 @@ With the services running, populate `NexusHelloAccount` using these one-shot rec
 
 ```sh
 just register-agents                 # Nexus Hello + Research + Whimsical + Writer cards
+just register-native-mcp-server      # native Nexus MCP observation metadata
 just register-third-party-mcp-server # demo MCP toolbox entry
 just register-third-party-subagent   # writer subagent toolbox entry
 ```
 
-All three registration recipes are safe to repeat. Now open <http://localhost:8000>. The
-account pane should show four agent cards and both toolbox registrations.
+All four registration recipes are safe to repeat. Now open <http://localhost:8000>. The
+account sidebar should show four agent cards and two MCP servers.
 
 ### Mount Nexus Hello
 
@@ -383,7 +420,7 @@ the deterministic standalone activity history instead of registry event storage.
 new message from that mounted view continues the provider session; those UI-originated events
 then occupy the next deterministic four-offset turn window.
 
-Mounting any card again creates another independent account session. The account pane
+Mounting any card again creates another independent account session. The account sidebar
 and session drawer show live and historical session counts from the registry.
 
 ## Routes exercised
@@ -467,6 +504,14 @@ Register a harness-native agent dynamically through the account API:
 curl --fail --request POST http://127.0.0.1:8000/api/account/agents \
   --header 'content-type: application/json' \
   --data-binary '{"agent_id":"nexus-hello","kind":"harness_nexus","label":"Nexus Hello","description":"Nexus Hello demo","nexus_endpoint":"nexus-hello-agent-endpoint"}'
+```
+
+Register the directly invoked Nexus MCP service as observation-only metadata:
+
+```sh
+curl --fail --request POST http://127.0.0.1:8000/api/account/mcp-servers \
+  --header 'content-type: application/json' \
+  --data-binary '{"name":"demo-nexus","endpoint":"nexus-hello-demo-endpoint","service":"demo-nexus"}'
 ```
 
 ## Troubleshooting and reset
