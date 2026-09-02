@@ -3233,9 +3233,13 @@
     color: var(--text-3);
   }
 
+  /* The same token the send button beside it is built from, so the pair matches:
+     IconButton is --control-height, and this was left on a literal 32px when the
+     button adopted it. The drift checker cannot catch this one — it only looks at
+     heights near a `cursor: pointer`, and a text field has none. */
   .composer input {
     min-width: 0;
-    height: 32px;
+    height: var(--control-height);
     border: 0;
     outline: none;
     background: transparent;
