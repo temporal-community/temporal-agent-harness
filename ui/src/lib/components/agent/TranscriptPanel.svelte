@@ -61,6 +61,7 @@
   } from "@lucide/svelte";
   import { Search, X } from "@lucide/svelte";
   import Badge from "$lib/components/primitives/Badge.svelte";
+  import Chip from "$lib/components/primitives/Chip.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
   import { formatDuration, statusNote, type TurnLogGroup } from "$lib/state/replayLog";
   import { formatCost, formatTokens } from "$lib/cost/pricing";
@@ -276,14 +277,15 @@
   <div class="transcript-controls">
     <div class="filter-chips" role="group" aria-label="Filter logs">
       {#each filters as item}
-        <button
-          class:active={filter === item.key}
-          type="button"
+        <Chip
+          label={item.label}
+          tone="accent"
+          size="xs"
+          fill="quiet"
+          active={filter === item.key}
           aria-pressed={filter === item.key}
           onclick={() => onFilterChange?.(item.key)}
-        >
-          {item.label}
-        </button>
+        />
       {/each}
     </div>
     <div class="search">
@@ -517,29 +519,11 @@
     gap: 4px;
   }
 
-  .filter-chips button {
-    padding: 4px 9px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-chip);
-    color: var(--text-3);
-    background: var(--surface-0);
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--font-sm);
-  }
-
-  .filter-chips button:hover {
-    color: var(--text-1);
-    border-color: var(--border-strong);
-  }
-
-  .filter-chips button.active {
-    color: var(--accent);
-    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-    background: color-mix(in srgb, var(--accent) 13%, var(--surface-2));
-  }
-
+  /* A row you type into, so the lg box: the same token and the same 34px as the
+     session search in SessionControls. The height lives on the box rather than
+     on the input, which had been sitting on a literal 30px. */
   .search {
+    height: var(--control-height-lg);
     display: flex;
     align-items: center;
     gap: 7px;
@@ -553,7 +537,6 @@
   .search input {
     flex: 1;
     min-width: 0;
-    height: 30px;
     border: 0;
     background: transparent;
     color: var(--text-1);
@@ -575,8 +558,10 @@
     cursor: pointer;
   }
 
-  .search .clear:hover {
-    color: var(--text-1);
+  @media (hover: hover) and (pointer: fine) {
+    .search .clear:hover {
+      color: var(--text-1);
+    }
   }
 
   .items {
@@ -603,11 +588,18 @@
       background var(--duration-fast) var(--ease-ui);
   }
 
-  .turn-group:hover,
   .turn-group.active-turn {
     border-color: var(--border-strong);
     transform: translateY(-1px);
     background: color-mix(in srgb, var(--surface-2) 38%, var(--surface-0));
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .turn-group:hover {
+      border-color: var(--border-strong);
+      transform: translateY(-1px);
+      background: color-mix(in srgb, var(--surface-2) 38%, var(--surface-0));
+    }
   }
 
   .turn-group.active-turn {
@@ -792,11 +784,17 @@
     background: var(--surface-0);
   }
 
-  .log-line:hover .row-toggle-icon,
   .log-line.expanded .row-toggle-icon,
   .line-toggle:focus-visible .row-toggle-icon {
     color: var(--text-1);
     border-color: var(--border-strong);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .log-line:hover .row-toggle-icon {
+      color: var(--text-1);
+      border-color: var(--border-strong);
+    }
   }
 
   .line-meta {
