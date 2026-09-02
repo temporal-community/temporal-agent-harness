@@ -114,8 +114,16 @@ function now(): number {
  * Capped because an unbounded loop against a server that is genuinely down is
  * worse than going quiet: it never stops, never surfaces the error, and buries
  * the real one under retries.
+ *
+ * The tail repeats at the cap rather than doubling further, and the total —
+ * about half a minute — is sized for the one outage nothing else here can
+ * recover from: a server restart. Losing the network fires an `online` event
+ * on the way back (see #reattachWhenOnline), and a sleeping machine suspends
+ * these timers so the budget survives the nap. A server that is down while the
+ * network stays up produces neither signal, so the wait for it has to be spent
+ * here.
  */
-const reattachBackoffMs = [500, 1_000, 2_000, 4_000, 8_000];
+const reattachBackoffMs = [500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000];
 
 /** Sleep, unless the stream is abandoned first. */
 function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
@@ -351,7 +359,39 @@ export class AgentRunController {
 
   constructor(api: AgentApi = new HttpAgentApi()) {
     this.#api = api;
+    /* No teardown: one controller lives as long as the page (see
+       createAgentRunController), and the handler is inert without a session. */
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", this.#reattachWhenOnline);
+    }
   }
+
+  /**
+   * Re-attach when connectivity comes back.
+   *
+   * The retry budget above deliberately stops asking, which strands a reader
+   * whose outage outlasted it — and lengthening the array to cover a two minute
+   * one is guessing at a number the browser already knows. This is the answer
+   * to "is it worth asking again", so it does not need to be estimated.
+   *
+   * Doing nothing while a stream is in flight is what keeps an `online` event
+   * from re-attaching a healthy stream underneath itself: #streamAbort is set
+   * for exactly as long as an attach is running, and only #finishStream clears
+   * it. So this fires for a stream that gave up, and not for one that rode the
+   * blip out.
+   */
+  #reattachWhenOnline = (): void => {
+    const session = this.session;
+    if (this.#streamAbort || !session) return;
+    if (this.#isWorkflowClosed(session.workflow_id)) return;
+    this.connectionError = null;
+    void this.attach(this.lastResumeOffset).catch((error: unknown) => {
+      if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
+        this.connectionError =
+          error instanceof Error ? error.message : "Failed to reconnect.";
+      }
+    });
+  };
 
   replayTimeline = $derived(this.#replayTimeline());
   visibleReplayTimeline = $derived(this.replayTimeline.slice(0, this.viewIndex));

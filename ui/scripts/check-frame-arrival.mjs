@@ -26,6 +26,10 @@
  *  - Resuming a reconnect from 0 rather than the last offset the server sent:
  *    the from_offset assertion fails. Replaying from zero is not harmless — it
  *    re-sends the whole history on every blip.
+ *  - Never registering the `online` listener: "connectivity returns" times out,
+ *    which is a reader stranded by an outage that outlasted the retry budget.
+ *  - Dropping either guard on that listener: it re-attaches a stream that was
+ *    perfectly healthy, or resurrects a workflow that has closed.
  *  - Removing the per-frame "is this still the current stream" check in
  *    attach(): "session switch" sees 11 frames instead of 7, the extra four
  *    being the abandoned session's, landed in the session now on screen.
@@ -89,6 +93,10 @@ const freshStorage = () => {
   storage.session = memoryStorage();
 };
 
+/* Enough of an event target to carry the `online` event the controller listens
+   for. Kept per-type and additive because every controller booted here
+   registers its own listener. */
+const listeners = new Map();
 globalThis.window = {
   get localStorage() {
     return storage.local;
@@ -99,7 +107,16 @@ globalThis.window = {
   setTimeout: (...args) => setTimeout(...args),
   clearTimeout: (...args) => clearTimeout(...args),
   setInterval: (...args) => setInterval(...args),
-  clearInterval: (...args) => clearInterval(...args)
+  clearInterval: (...args) => clearInterval(...args),
+  addEventListener: (type, fn) => {
+    listeners.set(type, [...(listeners.get(type) ?? []), fn]);
+  },
+  removeEventListener: (type, fn) => {
+    listeners.set(type, (listeners.get(type) ?? []).filter((item) => item !== fn));
+  }
+};
+const goOnline = () => {
+  for (const fn of listeners.get("online") ?? []) fn(new Event("online"));
 };
 globalThis.localStorage = new Proxy({}, { get: (_, p) => storage.local[p] });
 globalThis.sessionStorage = new Proxy({}, { get: (_, p) => storage.session[p] });
@@ -244,16 +261,16 @@ const { AgentRunController } = await vite.ssrLoadModule(
  * "the run completed" rather than "the connection died". Ending a stream without
  * it leaves the controller correctly retrying for its whole backoff budget.
  */
-function boot({ sessions, streamFor, closed = false }) {
+function boot({ sessions, streamFor }) {
   freshStorage();
-  const state = { closed };
+  const closed = new Set();
   const { api, attachCalls } = fakeApi({
     streamFor,
-    statusFor: () => (state.closed ? "COMPLETED" : "RUNNING")
+    statusFor: (id) => (closed.has(id) ? "COMPLETED" : "RUNNING")
   });
   const controller = new AgentRunController(api);
   controller.sessions = sessions;
-  return { controller, attachCalls, finish: () => (state.closed = true) };
+  return { controller, attachCalls, finish: (id) => closed.add(id) };
 }
 
 const chunkSize = 24;
@@ -280,7 +297,7 @@ assert.ok(underAChunk < chunkSize, "the whole point is a backlog too short to fi
     "a short backlog should still be staged, not published, before the stream ends"
   );
 
-  finish(); // the run completed; this stream ending is not a drop
+  finish("wf-ends"); // the run completed; this stream ending is not a drop
   stream.end();
   await selected;
 
@@ -338,7 +355,7 @@ assert.ok(underAChunk < chunkSize, "the whole point is a backlog too short to fi
     1,
     "a stream that is still open must not be re-attached underneath itself"
   );
-  finish();
+  finish("wf-open");
   stream.end();
 }
 
@@ -369,7 +386,7 @@ assert.ok(underAChunk < chunkSize, "the whole point is a backlog too short to fi
     () => attachCalls.some((call) => call.sessionId === "wf-new")
   );
   streams["wf-new"].push(...Array.from({ length: 7 }, (_, i) => frame("new", i)));
-  finish();
+  finish("wf-new");
   streams["wf-new"].end();
   await selected;
 
@@ -424,7 +441,7 @@ assert.ok(underAChunk < chunkSize, "the whole point is a backlog too short to fi
     "the scrubber must follow the live edge across a reconnect"
   );
 
-  finish();
+  finish("wf-drop");
   stream.end();
   await sleep(400);
   assert.equal(
@@ -432,6 +449,66 @@ assert.ok(underAChunk < chunkSize, "the whole point is a backlog too short to fi
     2,
     "once the workflow closes, the stream ending must not start another attach"
   );
+}
+
+// --- case: connectivity returning after the retry budget is spent ------------
+// The budget stops asking on purpose, so something has to notice when asking
+// is worth it again. An outage that outlasts the budget is the case; an
+// `online` event arriving while a stream is perfectly healthy is the trap.
+{
+  const streams = { "wf-online": controllableStream(), "wf-later": controllableStream() };
+  const { controller, attachCalls, finish } = boot({
+    sessions: [session("wf-online"), session("wf-later")],
+    streamFor: (id) => streams[id]
+  });
+  const stream = streams["wf-online"];
+
+  void controller.selectSession("wf-online");
+  await waitFor("the stream to be attached", () => attachCalls.length === 1);
+  stream.push(...Array.from({ length: 4 }, (_, i) => frame("root", i)));
+  await sleep(80);
+
+  // The trap: this stream is fine, and re-attaching it would be a regression.
+  goOnline();
+  await sleep(200);
+  assert.equal(
+    attachCalls.length,
+    1,
+    "an online event must not re-attach a stream that is already healthy"
+  );
+
+  /* Let this attach finish so no stream is in flight, which is the state the
+     budget leaves behind when it gives up. Reaching it by actually spending the
+     budget would mean waiting out most of a minute of backoff. */
+  finish("wf-online");
+  stream.end();
+  await waitFor("the first attach to finish", () => attachCalls.length === 1 && !controller.connecting);
+
+  // A run that has since finished stays finished, event or no event.
+  goOnline();
+  await sleep(200);
+  assert.equal(
+    attachCalls.length,
+    1,
+    "an online event must not re-attach a workflow that has closed"
+  );
+
+  // A running one, with nothing in flight, is the case this exists for.
+  controller.session = controller.sessions[1];
+  goOnline();
+  await waitFor("a re-attach once connectivity returns", () => attachCalls.length === 2);
+  assert.equal(
+    attachCalls[1].sessionId,
+    "wf-later",
+    "the reconnect must target the session on screen"
+  );
+  assert.equal(
+    attachCalls[1].fromOffset,
+    controller.lastResumeOffset,
+    "reconnecting on an online event must resume from the last offset too"
+  );
+  finish("wf-later");
+  streams["wf-later"].end();
 }
 
 await vite.close();
