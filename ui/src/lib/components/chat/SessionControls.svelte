@@ -212,6 +212,7 @@
       class="session-add"
       tone="accent"
       fill="quiet"
+      toned
       active={newSessionMenuOpen}
       disabled={!canCreateSession}
       aria-haspopup="menu"
@@ -273,6 +274,7 @@
     class="session-drawer-button"
     tone="reasoning"
     fill="quiet"
+    toned
     active={sessionDrawerOpen}
     aria-pressed={sessionDrawerOpen}
     onclick={toggleSessionPopover}
@@ -384,7 +386,10 @@
   }
 
   /* Both anchors are Chips, so the box, the type, the press and the focus ring
-     are the app's rather than this file's. Only the width behaviour is local. */
+     are the app's rather than this file's. Toned because the same pair renders
+     again in the agent pane header at the same time, and both pairs sit beside
+     filled status chips that would otherwise outshout them. Only the width
+     behaviour is local. */
   :global(.session-add) {
     flex: 0 0 auto;
   }

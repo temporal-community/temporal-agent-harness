@@ -32,6 +32,7 @@
   } from "$lib/api/types";
   import { formatCost } from "$lib/cost/pricing";
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
+  import Chip from "$lib/components/primitives/Chip.svelte";
   import StatusChip, {
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
@@ -1534,22 +1535,25 @@
         <div class="agent-controls">
           {#if layout === "embedded"}
             <div class="new-session-control">
-              <button
-                type="button"
+              <Chip
                 class="header-session-add"
-                class:disabled={!canCreateSession}
-                class:active={newSessionMenuOpen}
+                tone="accent"
+                fill="quiet"
+                toned
+                active={newSessionMenuOpen}
                 disabled={!canCreateSession}
                 aria-haspopup="menu"
                 aria-expanded={newSessionMenuOpen}
                 onclick={toggleNewSessionMenu}
               >
-                <Plus size={13} aria-hidden="true" />
-                <span>{creatingSession ? "Starting" : "New"}</span>
+                {#snippet lead()}
+                  <Plus size={13} />
+                {/snippet}
+                <span class="control-label">{creatingSession ? "Starting" : "New"}</span>
                 <span class="control-chevron" aria-hidden="true">
                   <ChevronDown size={13} />
                 </span>
-              </button>
+              </Chip>
               {#if newSessionMenuOpen}
                 <section class="agent-command-menu header-menu" aria-label="New session">
                   {#each agents as agent}
@@ -1573,19 +1577,23 @@
                 </section>
               {/if}
             </div>
-            <button
-              type="button"
+            <Chip
               class="header-session-drawer"
-              class:active={sessionDrawerOpen}
+              tone="reasoning"
+              fill="quiet"
+              toned
+              active={sessionDrawerOpen}
               aria-pressed={sessionDrawerOpen}
               onclick={toggleSessionDrawer}
             >
-              <History size={13} />
-              <span>Sessions</span>
+              {#snippet lead()}
+                <History size={13} />
+              {/snippet}
+              <span class="control-label">Sessions</span>
               <span class="control-chevron" aria-hidden="true">
                 <ChevronDown size={13} />
               </span>
-            </button>
+            </Chip>
           {/if}
           <StatusChip
             label={statusLabel}
@@ -2231,65 +2239,14 @@
   }
 
   /* Chrome, not content: these sit on the same row as the STATE FLOW pane label
-     and have to read as its peers, so they take the app's one chrome-label
-     recipe -- mono, uppercase, --label-size -- and the standard control row
-     height rather than numbers of their own. */
-  .header-session-add,
-  .header-session-drawer {
-    --control-accent: var(--accent);
-    position: relative;
-    min-width: 0;
-    height: var(--control-height);
-    display: inline-grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 6px;
-    padding: 0 8px;
-    border: 1px solid color-mix(in srgb, var(--control-accent) 18%, var(--border));
-    border-radius: var(--radius-md);
-    background: var(--control-bg);
-    color: var(--text-2);
-    cursor: pointer;
-    font-family: var(--font-mono);
-    font-size: var(--label-size);
-    font-weight: var(--label-weight);
-    letter-spacing: var(--label-tracking);
-    text-transform: uppercase;
-    box-shadow: var(--shadow-inset-soft);
-    transition:
-      transform var(--duration-press) var(--ease-out),
-      border-color var(--duration-fast) var(--ease-ui),
-      background var(--duration-fast) var(--ease-ui),
-      color var(--duration-fast) var(--ease-ui),
-      box-shadow var(--duration-fast) var(--ease-ui);
-  }
-
-  .header-session-add:active:not(.disabled):not(:disabled),
-  .header-session-drawer:active {
-    transform: scale(0.97);
-  }
-
-  .header-session-drawer {
-    --control-accent: var(--reasoning);
-  }
-
-  .header-session-add {
+     and are the same two controls SessionControls renders in the app chrome, so
+     they are Chips for the same reason those are -- both pairs are on screen at
+     once and any difference between them reads as a mistake. Toned rather than
+     plain quiet: they are the row's only actions, and beside two filled status
+     chips a hairline grey box left them quieter than the readouts they sit
+     next to. Only the width behaviour is still this file's business. */
+  :global(.header-session-add) {
     flex: 0 0 auto;
-  }
-
-  .header-session-add:hover:not(.disabled),
-  .header-session-add:focus-within:not(.disabled),
-  .header-session-add.active,
-  .header-session-drawer:hover,
-  .header-session-drawer:focus-visible,
-  .header-session-drawer.active {
-    border-color: color-mix(in srgb, var(--control-accent) 46%, var(--border-strong));
-    color: var(--text-1);
-    background: color-mix(in srgb, var(--control-accent) 10%, var(--control-hover));
-    box-shadow:
-      var(--shadow-inset-strong),
-      0 0 0 3px color-mix(in srgb, var(--control-accent) 16%, transparent);
-    outline: 0;
   }
 
   .control-chevron {
@@ -2300,30 +2257,27 @@
     transition: transform var(--duration-fast) var(--ease-ui), color var(--duration-fast) var(--ease-ui);
   }
 
-  .header-session-add.active .control-chevron,
-  .header-session-drawer.active .control-chevron {
-    color: color-mix(in srgb, var(--control-accent) 78%, white);
+  /* The chip owns the class, so reaching its open and hover states from here has
+     to cross the component boundary. The hue is the chip's own --chip-color, so
+     the chevron cannot drift from the control it sits in. */
+  :global(.header-session-add.active) .control-chevron,
+  :global(.header-session-drawer.active) .control-chevron {
+    color: color-mix(in srgb, var(--chip-color) 78%, white);
     transform: rotate(180deg);
   }
 
-  .header-session-add:hover:not(.disabled) .control-chevron,
-  .header-session-add:focus-within:not(.disabled) .control-chevron,
-  .header-session-drawer:hover .control-chevron,
-  .header-session-drawer:focus-visible .control-chevron {
-    color: color-mix(in srgb, var(--control-accent) 78%, white);
+  :global(.header-session-add:hover:not(:disabled)) .control-chevron,
+  :global(.header-session-add:focus-visible:not(:disabled)) .control-chevron,
+  :global(.header-session-drawer:hover) .control-chevron,
+  :global(.header-session-drawer:focus-visible) .control-chevron {
+    color: color-mix(in srgb, var(--chip-color) 78%, white);
   }
 
-  .header-session-add span,
-  .header-session-drawer span {
+  .control-label {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .header-session-add.disabled {
-    cursor: default;
-    opacity: 0.52;
   }
 
   .new-session-control {
@@ -3629,8 +3583,6 @@
       animation: none;
     }
 
-    .header-session-add:active:not(.disabled):not(:disabled),
-    .header-session-drawer:active,
     .drawer-session-row:focus-visible,
     .session-card:focus-within {
       transform: none;
