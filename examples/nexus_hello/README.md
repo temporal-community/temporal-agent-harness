@@ -88,6 +88,24 @@ tool. It dispatches through `AgentWorkflowRunner.run_tool`. Approval gating and
 tool-lifecycle events fire the same way they do for any other harness tool. The model
 decides when to start, ask, and stop a subagent; the workflow never calls one directly.
 
+### Subagent lifecycle controls
+
+The parent owns and tracks the children it starts. Two slash commands let the operator
+change their lifecycle without adopting sessions from another parent or from an
+account-wide registry:
+
+- `/subagent-reuse use-existing|always-new` controls whether `start_<key>` reuses the
+  most recently used matching child that is still active under this parent. The default
+  is `use-existing`.
+- `/subagent-close-policy keep-open|close|ask-user` controls model-requested stops and
+  graceful parent shutdown. The default is `ask-user`: model-requested stops use the
+  same approval UI as gated tools, while parent shutdown leaves children open.
+
+`keep-open` never closes tracked children, while `close` allows model-requested stops
+and closes tracked children during graceful parent shutdown. An abrupt parent
+termination cannot run cleanup, so local children use Temporal's `ABANDON` parent-close
+policy.
+
 There are two paths to a resource over Nexus: **native** and **gateway-brokered**. This
 example uses both paths for MCP tools and subagents.
 

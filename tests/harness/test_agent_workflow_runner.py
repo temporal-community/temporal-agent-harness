@@ -52,9 +52,12 @@ from temporal_agent_harness.harness.agent_protocol import (
     OperatorCommandRequest,
     OperatorCommandResult,
     SlashCommand,
+    SubagentClosePolicy,
     SubagentReplyReceived,
+    SubagentReusePolicy,
     TextMessage,
     TextReply,
+    ToolApprovalDecision,
     ToolApprovalPolicy,
 )
 from temporal_agent_harness.harness.agent_workflow import _discover_handlers
@@ -326,7 +329,9 @@ async def test_agent_interface_hides_operator_slash_handler(client_and_queue):
     assert {f.name for f in functions} == set()
 
 
-async def test_operator_interface_lists_harness_commands_for_every_agent(client_and_queue):
+async def test_operator_interface_lists_harness_commands_for_every_agent(
+    client_and_queue,
+):
     client, task_queue = client_and_queue
     handle = await _start(client, task_queue, TypedProbeAgent)
 
@@ -335,7 +340,14 @@ async def test_operator_interface_lists_harness_commands_for_every_agent(client_
     )
     by_name = {command.name: command for command in commands}
 
-    assert set(by_name) == {"approvals", "allow-tools", "status", "stop"}
+    assert set(by_name) == {
+        "approvals",
+        "allow-tools",
+        "subagent-close-policy",
+        "subagent-reuse",
+        "status",
+        "stop",
+    }
     assert by_name["approvals"].source == "harness"
     assert by_name["approvals"].payload_name == "set-approvals"
     assert by_name["approvals"].argument is not None
@@ -344,6 +356,17 @@ async def test_operator_interface_lists_harness_commands_for_every_agent(client_
     assert by_name["allow-tools"].argument is not None
     assert by_name["allow-tools"].argument.kind == "tool_names"
     assert "allow-tool" in by_name["allow-tools"].aliases
+    assert by_name["subagent-close-policy"].argument is not None
+    assert by_name["subagent-close-policy"].argument.choices == (
+        "keep-open",
+        "close",
+        "ask-user",
+    )
+    assert by_name["subagent-reuse"].argument is not None
+    assert by_name["subagent-reuse"].argument.choices == (
+        "use-existing",
+        "always-new",
+    )
     assert by_name["stop"].source == "harness"
     assert by_name["stop"].payload_name == "stop-agent"
     assert by_name["stop"].label == "/stop"
@@ -373,7 +396,15 @@ async def test_operator_interface_includes_agent_extension_commands(client_and_q
     )
     by_name = {command.name: command for command in commands}
 
-    assert set(by_name) == {"approvals", "allow-tools", "status", "stop", "model"}
+    assert set(by_name) == {
+        "approvals",
+        "allow-tools",
+        "subagent-close-policy",
+        "subagent-reuse",
+        "status",
+        "stop",
+        "model",
+    }
     assert by_name["model"].source == "agent"
     assert by_name["model"].payload_name == "set-model"
     assert by_name["model"].argument is not None
@@ -388,7 +419,25 @@ async def test_operator_command_status_does_not_create_turn(client_and_queue):
 
     assert "- Agent id:" in result.text
     assert "- Approvals: `skip`" in result.text
+    assert "- Subagent close policy: `ask-user`" in result.text
+    assert "- Subagent reuse policy: `use-existing`" in result.text
     status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.current_turn == 0
+    assert status.pending_turns == []
+
+
+async def test_operator_commands_change_subagent_lifecycle_policies(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    close_reply = await _operator(handle, "subagent-close-policy", "close")
+    reuse_reply = await _operator(handle, "subagent-reuse", "always-new")
+
+    assert close_reply.text == "Subagent close policy set to **close**."
+    assert reuse_reply.text == "Subagent reuse policy set to **always-new**."
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.subagent_close_policy is SubagentClosePolicy.CLOSE
+    assert status.subagent_reuse_policy is SubagentReusePolicy.ALWAYS_NEW
     assert status.current_turn == 0
     assert status.pending_turns == []
 
@@ -632,7 +681,9 @@ async def test_harness_slash_allow_tools_updates_allow_list(client_and_queue):
     )
 
 
-async def test_harness_slash_unknown_without_agent_handler_returns_reply(client_and_queue):
+async def test_harness_slash_unknown_without_agent_handler_returns_reply(
+    client_and_queue,
+):
     client, task_queue = client_and_queue
     handle = await _start(client, task_queue, TypedProbeAgent)
 
@@ -662,7 +713,9 @@ async def test_unknown_slash_falls_back_to_agent_extension(client_and_queue):
     assert text == "custom:unknown-extension:value"
 
 
-async def test_harness_slash_preempts_agent_extension_for_core_commands(client_and_queue):
+async def test_harness_slash_preempts_agent_extension_for_core_commands(
+    client_and_queue,
+):
     client, task_queue = client_and_queue
     handle = await _start(client, task_queue, SlashExtensionProbeAgent)
 
@@ -725,8 +778,7 @@ def test_discover_rejects_scalar_return():
 def test_discover_rejects_missing_docstring():
     class Bad:
         @agent.accepts
-        async def h(self, message: Greeting) -> Greeted:
-            ...  # no docstring
+        async def h(self, message: Greeting) -> Greeted: ...  # no docstring
 
     with pytest.raises(TypeError, match="must have a docstring"):
         _discover_handlers(Bad)
@@ -829,7 +881,9 @@ def test_approval_policy_resolves_config_over_agent_default(offline_build_policy
     agent_default = ToolApprovalPolicy.allow_inherently_safe()
     caller_policy = ToolApprovalPolicy.dangerously_skip_all()
     assert (
-        offline_build_policy(AgentConfig(), default=agent_default).current_approval_policy
+        offline_build_policy(
+            AgentConfig(), default=agent_default
+        ).current_approval_policy
         == agent_default
     )
     assert (
@@ -852,6 +906,15 @@ def test_set_approval_policy_resolves_matching_pending(offline_build_policy):
     runner._status.register_pending_approval(
         "t2", "other_tool", {}, 1, "turn-1", inherently_safe=False
     )
+    runner._status.register_pending_approval(
+        "t3",
+        "trusted_tool",
+        {},
+        1,
+        "turn-1",
+        inherently_safe=False,
+        policy_exempt=True,
+    )
 
     runner.set_approval_policy(ToolApprovalPolicy.allow_tools(["trusted_tool"]))
 
@@ -860,6 +923,32 @@ def test_set_approval_policy_resolves_matching_pending(offline_build_policy):
     assert entry.status is _ApprovalStatus.APPROVED
     assert entry.reason == "auto-approved by updated policy"
     assert runner._status.is_approval_resolved("t2") is False
+    assert runner._status.is_approval_resolved("t3") is False
+
+
+async def test_policy_exempt_approval_does_not_remember_general_allow_list(
+    offline_build_policy,
+):
+    runner = offline_build_policy(
+        AgentConfig(), default=ToolApprovalPolicy.always_require_approvals()
+    )
+    runner._status.register_pending_approval(
+        "t1",
+        "stop_writer",
+        {"subagent": "child"},
+        1,
+        "turn-1",
+        inherently_safe=False,
+        policy_exempt=True,
+    )
+
+    await runner._handle_tool_approval(
+        ToolApprovalDecision(tool_id="t1", approved=True, remember=True)
+    )
+
+    entry = runner._status.approval_entry("t1")
+    assert entry is not None and entry.remember is False
+    assert runner.current_approval_policy.auto_approve_tools == frozenset()
 
 
 def test_custom_fallback_is_consulted_only_as_last_layer(offline_build_policy):
@@ -972,7 +1061,7 @@ def test_accepted_turn_from_error_falls_back_when_detail_absent():
 
 
 async def test_close_stops_all_active_subagents(offline_build):
-    runner = offline_build(AgentConfig())
+    runner = offline_build(AgentConfig(subagent_close_policy=SubagentClosePolicy.CLOSE))
     first = MagicMock()
     first.stop = AsyncMock()
     second = MagicMock()
@@ -980,11 +1069,109 @@ async def test_close_stops_all_active_subagents(offline_build):
     runner._status.register_subagent("first", "target-1", "writer", first)
     runner._status.register_subagent("second", "target-2", "writer", second)
 
-    await runner._stop_all_subagents()
+    await runner._apply_subagent_close_policy()
 
     first.stop.assert_awaited_once_with(target="target-1")
     second.stop.assert_awaited_once_with(target="target-2")
     assert runner.current_status.subagents == []
+
+
+async def test_ask_user_close_policy_keeps_active_subagents_open(offline_build):
+    runner = offline_build(AgentConfig())
+    transport = MagicMock()
+    transport.stop = AsyncMock()
+    runner._status.register_subagent("first", "target-1", "writer", transport)
+
+    await runner._apply_subagent_close_policy()
+
+    transport.stop.assert_not_awaited()
+    assert [item.subagent_id for item in runner.current_status.subagents] == ["first"]
+
+
+async def test_keep_open_rejects_model_requested_subagent_stop(offline_build):
+    runner = offline_build(
+        AgentConfig(subagent_close_policy=SubagentClosePolicy.KEEP_OPEN)
+    )
+    transport = MagicMock()
+    transport.stop = AsyncMock()
+    runner._status.register_subagent("first", "target-1", "writer", transport)
+
+    stopped = await runner.request_subagent_stop("first")
+
+    assert stopped is False
+    transport.stop.assert_not_awaited()
+    assert [item.subagent_id for item in runner.current_status.subagents] == ["first"]
+
+
+async def test_close_allows_model_requested_subagent_stop(offline_build):
+    runner = offline_build(AgentConfig(subagent_close_policy=SubagentClosePolicy.CLOSE))
+    runner.publish = MagicMock()
+    transport = MagicMock()
+    transport.stop = AsyncMock()
+    runner._status.register_subagent("first", "target-1", "writer", transport)
+
+    stopped = await runner.request_subagent_stop("first")
+
+    assert stopped is True
+    transport.stop.assert_awaited_once_with(target="target-1")
+    assert runner.current_status.subagents == []
+
+
+async def test_ask_user_forces_model_requested_subagent_stop_approval(
+    offline_build, monkeypatch
+):
+    runner = offline_build(
+        AgentConfig(
+            approval_policy=ToolApprovalPolicy.dangerously_skip_all(),
+            subagent_close_policy=SubagentClosePolicy.ASK_USER,
+        )
+    )
+    transport = MagicMock()
+    transport.stop = AsyncMock()
+    runner._status.register_subagent("first", "target-1", "writer", transport)
+    approval = AsyncMock()
+    monkeypatch.setattr(
+        "temporal_agent_harness.harness.agent_workflow._apply_approval_policy",
+        approval,
+    )
+
+    await runner.authorize_subagent_stop("stop_writer", "first")
+
+    approval.assert_awaited_once_with(
+        "stop_writer",
+        {"subagent": "first"},
+        inherently_safe=False,
+        force=True,
+    )
+    transport.stop.assert_not_awaited()
+
+
+async def test_start_subagent_reuses_most_recent_matching_child(offline_build):
+    runner = offline_build(AgentConfig())
+    runner.publish = MagicMock()
+    transport = MagicMock()
+    transport.start = AsyncMock(side_effect=["target-1", "target-2"])
+
+    first = await runner.start_subagent("writer", transport)
+    reused = await runner.start_subagent("writer", transport)
+
+    assert reused == first
+    transport.start.assert_awaited_once()
+
+
+async def test_always_new_policy_starts_distinct_children(offline_build):
+    runner = offline_build(
+        AgentConfig(subagent_reuse_policy=SubagentReusePolicy.ALWAYS_NEW)
+    )
+    runner.publish = MagicMock()
+    transport = MagicMock()
+    transport.start = AsyncMock(side_effect=["target-1", "target-2"])
+
+    first = await runner.start_subagent("writer", transport)
+    second = await runner.start_subagent("writer", transport)
+
+    assert first != second
+    assert transport.start.await_count == 2
 
 
 async def test_a2a_stream_poll_uses_requested_timeout(offline_build, monkeypatch):
@@ -1054,7 +1241,9 @@ def offline_build_policy(monkeypatch):
     # no workflow loop, so stub it with a plain uuid.
     monkeypatch.setattr(aw.workflow, "uuid4", lambda: uuid.uuid4())
 
-    def build(config: AgentConfig, *, default: ToolApprovalPolicy, custom_fallback=None):
+    def build(
+        config: AgentConfig, *, default: ToolApprovalPolicy, custom_fallback=None
+    ):
         stream = MagicMock()
         stream.topic.return_value = MagicMock()
         return AgentWorkflowRunner(
