@@ -627,11 +627,17 @@ def _sse(event: str, data: dict, position: StreamPosition | None = None) -> byte
     to ``attach(from_offset=...)`` to resume, while ``event_offset`` with the envelope's ``agent_id``
     is what IDENTIFIES this event — stable across redeliveries and distinct between the events of a
     single subagent turn, which the resume cursor is not (see
-    :class:`~temporal_agent_harness.harness.stream_merge.StreamPosition`)."""
+    :class:`~temporal_agent_harness.harness.stream_merge.StreamPosition`).
+
+    ``replay`` goes on the wire only when true, so its absence means live — which is also what an
+    older server means by not sending it at all, and what the per-turn ``/api/chat`` path means by
+    never being a catch-up in the first place."""
     payload = {**data}
     if position is not None:
         payload["resume_offset"] = position.resume_offset
         payload["event_offset"] = position.event_offset
+        if position.replay:
+            payload["replay"] = True
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
 
 

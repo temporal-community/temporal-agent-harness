@@ -648,5 +648,18 @@ class AgentClient:
             should_stop=should_stop,
             stall_grace_seconds=stall_grace_seconds,
         )
+        # ``stop_at_root_offset`` is where the root's log had got when this attach opened, which is
+        # exactly the seam: at or below it the event was already durable and this delivery is
+        # catching up, past it the consumer is following along live. A consumer batches its commits
+        # while catching up, so the two need telling apart.
+        #
+        # A subagent's ``resume_offset`` stands still for the length of its turn (it is the parent's
+        # cursor as of the dispatch), so a child event published live inside a turn that was
+        # dispatched before the seam is stamped replay. That errs toward "still catching up", which
+        # a consumer must survive anyway for an arbitrarily long history — it is why its batching
+        # needs a ceiling — whereas the opposite error would flash the canvas, which is the thing
+        # this distinction exists to prevent.
         async for ev, position in merged:
-            yield on_item(ev, position)
+            yield on_item(
+                ev, position._replace(replay=position.resume_offset <= stop_at_root_offset)
+            )

@@ -69,10 +69,16 @@ class StreamPosition(NamedTuple):
     length of a subagent's turn is the whole point of a resume cursor and fatal in an identity,
     because it makes every event of that turn look like the same event. :data:`SYNTHESIZED` when
     the merge made the event up rather than reading it.
+
+    ``replay`` says this event was already durable when the stream opened, so this delivery is
+    catching a consumer up rather than showing it something happening now. The merge never sets it
+    — it has no notion of when any particular consumer attached — so it defaults False and the
+    entry point that knows the seam stamps it (see :meth:`AgentClient.attach`).
     """
 
     resume_offset: int
     event_offset: int
+    replay: bool = False
 
 
 # What the merge yields per step: the event plus its :class:`StreamPosition`.

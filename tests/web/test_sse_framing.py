@@ -70,3 +70,22 @@ def test_frame_without_a_position_stamps_neither_offset():
     data = _frame_data(_sse("error", {"kind": "timeout", "message": "nope"}))
     assert "resume_offset" not in data
     assert "event_offset" not in data
+    assert "replay" not in data
+
+
+def test_replay_is_on_the_wire_only_when_true():
+    # Absence has to mean live, because that is also what an older server and the per-turn chat
+    # path mean by never sending it. A client reading `frame.data.replay === true` then needs no
+    # version check.
+    live = _frame_data(_yield_item(_event("root", "hi"), StreamPosition(12, 11)))
+    assert "replay" not in live
+
+    catching_up = _frame_data(
+        _yield_item(_event("root", "hi"), StreamPosition(12, 11, replay=True))
+    )
+    assert catching_up["replay"] is True
+
+
+def test_replay_defaults_off_so_existing_construction_is_unchanged():
+    # Every other caller builds a two-field position; none of them should start claiming replay.
+    assert StreamPosition(3, 2).replay is False
