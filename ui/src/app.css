@@ -187,6 +187,11 @@
   /* One status pixel. --pip-lg is only for pips that overlap a glyph. */
   --pip: 5px;
   --pip-lg: 8px;
+  /* How far a disabled control fades. 0.45 rather than a midpoint because it is
+     already the most common value in the app and the one IconButton settled on;
+     Chip's 0.4 was the outlier, and it is also the least readable of the values
+     in use on these surfaces. */
+  --disabled-opacity: 0.45;
 
 }
 

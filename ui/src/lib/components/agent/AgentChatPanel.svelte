@@ -2945,7 +2945,7 @@
 
   .approval-actions button:disabled {
     cursor: default;
-    opacity: 0.55;
+    opacity: var(--disabled-opacity);
   }
 
   .approval-actions .approval-approve {
@@ -3188,7 +3188,7 @@
   .slash-row:disabled,
   .slash-row.closed {
     cursor: default;
-    opacity: 0.58;
+    opacity: var(--disabled-opacity);
   }
 
   .slash-row:disabled:hover,
@@ -3276,7 +3276,7 @@
   }
 
   .composer input:disabled {
-    opacity: 0.6;
+    opacity: var(--disabled-opacity);
   }
 
   .composer.closed {
@@ -3298,7 +3298,7 @@
   }
 
   .composer button:disabled {
-    opacity: 0.45;
+    opacity: var(--disabled-opacity);
     cursor: default;
   }
 
@@ -3373,7 +3373,7 @@
   }
 
   .session-add-select.disabled {
-    opacity: 0.52;
+    opacity: var(--disabled-opacity);
     cursor: default;
   }
 
@@ -3480,7 +3480,7 @@
   }
 
   .session-delete:disabled {
-    opacity: 0.45;
+    opacity: var(--disabled-opacity);
     cursor: default;
   }
 

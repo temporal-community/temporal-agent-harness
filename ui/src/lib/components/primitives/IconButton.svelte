@@ -90,7 +90,7 @@
   }
 
   .icon-button:disabled {
-    opacity: 0.45;
+    opacity: var(--disabled-opacity);
     cursor: default;
   }
 
