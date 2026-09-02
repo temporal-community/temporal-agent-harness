@@ -2230,24 +2230,31 @@
     justify-content: flex-start;
   }
 
+  /* Chrome, not content: these sit on the same row as the STATE FLOW pane label
+     and have to read as its peers, so they take the app's one chrome-label
+     recipe -- mono, uppercase, --label-size -- and the standard control row
+     height rather than numbers of their own. */
   .header-session-add,
   .header-session-drawer {
     --control-accent: var(--accent);
     position: relative;
     min-width: 0;
-    height: 28px;
+    height: var(--control-height);
     display: inline-grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
     gap: 6px;
     padding: 0 8px;
     border: 1px solid color-mix(in srgb, var(--control-accent) 18%, var(--border));
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     background: var(--control-bg);
     color: var(--text-2);
     cursor: pointer;
-    font-size: var(--font-sm);
-    font-weight: 600;
+    font-family: var(--font-mono);
+    font-size: var(--label-size);
+    font-weight: var(--label-weight);
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
     box-shadow: var(--shadow-inset-soft);
     transition:
       transform var(--duration-press) var(--ease-out),
