@@ -1,249 +1,250 @@
-# Nexus Hello: account gateway and agent UI
+# Nexus Hello: A2A agents behind one account gateway
 
-This prototype gives `NexusHelloAccount` one pane of glass for its agents, sessions,
-and MCP tools. An account owner can mount a Temporal Agent Harness agent through a
-Nexus endpoint even when the UI and agent run in different Temporal namespaces. The
-same UI also demonstrates a minimal third-party HTTP agent.
+This demo is a small pane of glass for an account's agents and tools. It demonstrates
+three ideas together:
 
-The account registry owns registrations and session routing. It does not copy native
-agent transcripts, inspect an agent namespace through Temporal Visibility, or depend on
-`SessionManagerWorkflow`. Authentication is intentionally out of scope; matching
-`account_id` values are the demo trust boundary.
+- a global catalog installs agents and MCP servers into an account registry;
+- registered agents discover the account toolbox dynamically, so installing another
+  agent makes it available as a child on the next turn; and
+- standard A2A is the agent protocol for both top-level UI sessions and subagents.
 
-## What the demo registers
+Temporal Nexus is the transport seam for harness-native agents. A third-party A2A
+agent uses standard HTTP instead. The UI renders both in the same way.
 
-| Resource | Kind | Route |
+The reusable A2A-over-Nexus binding lives in `nexus/a2a` and does not depend on this
+harness. `temporal_agent_harness.a2a` is the thin adapter that maps harness workflows
+and their rich event stream onto that transport.
+
+The demo account is `NexusHelloAccount`. Authentication and OAuth are deliberately
+out of scope, so a matching `account_id` is the prototype trust boundary.
+
+## The high-level model
+
+The browser does not hold a Temporal client and it does not speak directly to an agent.
+It uses HTTP and SSE with the gateway UI backend. The backend resolves the registered
+route. It sends one-shot A2A and harness-control requests as standalone Nexus
+operations. For each accepted turn, the shared Go tunnel pages the rich A2A stream until
+that turn ends.
+
+```mermaid
+flowchart LR
+    Browser[Browser UI] <-->|HTTP + SSE| Gateway[Account gateway<br/>pane of glass]
+
+    Gateway -->|standalone send + controls| Nexus[A2A + controls<br/>over Nexus]
+    Gateway <-->|rich per-turn stream| Tunnel[Go UI tunnel]
+    Tunnel <-->|SubscribeToTask pages| Nexus
+    Nexus <-->|named endpoint| Native[Harness-native agents]
+    Gateway <-->|A2A over HTTP| External[Third-party agents]
+```
+
+One long-lived UI or subagent session maps to one A2A Task. After a turn completes,
+the Task is `INPUT_REQUIRED`; closing the session cancels it. The harness preserves its
+rich event stream in an A2A metadata extension, so existing chat, graph, latency, logs,
+approval, and replay views do not lose information.
+
+Nexus operations currently return one result rather than a server stream. The Nexus
+binding therefore represents A2A `SubscribeToTask` as a bounded cursor page. One
+deterministic, bounded Go `UIAgentTunnelWorkflow` repeats that operation for a single
+A2A Task turn and multicasts the complete serialized `StreamResponse` to attached
+drivers. It closes after the turn's terminal event and subscribers drain. Completed
+harness workflows serve the same pages from their retained stream.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant G as Shared UI tunnel
+    participant N as A2A service over Nexus
+    participant A as Agent workflow
+
+    B->>G: attach to A2A Task turn
+    loop until turn terminal
+        G->>N: SubscribeToTask(task, cursor)
+        N->>A: bounded long-poll update
+        A-->>N: A2A event page + next cursor
+        N-->>G: page
+        G-->>B: rich A2A records
+    end
+```
+
+Approvals, callbacks, slash commands, and harness status are intentionally not part of
+the portable agent protocol. Harness-aware UIs reach those through the separate
+`HarnessControlService`; ordinary A2A clients can still send, inspect, subscribe to, and
+cancel Tasks without knowing that extension.
+
+## Catalog, account, and dynamic toolbox
+
+The global catalog and account registry share one resource descriptor. Agents carry an
+official A2A `AgentCard`; the card's interface declares `TEMPORAL_NEXUS` or standard
+HTTP+JSON. MCP entries declare their Nexus or HTTP transport in the same resource
+envelope.
+
+```mermaid
+flowchart TB
+    Catalog[Global catalog<br/>available AgentCards and MCP servers]
+    Registry[Account registry<br/>installed resources + session routes]
+    UI[Account sidebar]
+    Agent[Running account agent]
+
+    Catalog -->|Register| Registry
+    Registry --> UI
+    Registry -->|resolve at each turn| Agent
+    Agent -->|A2A over Nexus, direct| Native[Native child agent]
+    Agent -->|A2A over Nexus to gateway| Router[Account A2A router]
+    Router -->|A2A over HTTP| ThirdParty[Third-party child agent]
+```
+
+The registry is the control plane, not a transcript store. It owns installations,
+routes, and session identity. Temporal workflow history and the provider remain the
+sources of truth for execution history. Delegation lineage prevents an agent from
+offering itself or an ancestor as a child, and the demo caps dynamic delegation at five
+levels.
+
+## Resources in the demo
+
+Register these from **Catalog** in the sidebar:
+
+| Registration | Protocol | Purpose |
 |---|---|---|
-| Nexus Hello | harness agent | `nexus-hello-agent-endpoint` |
-| Research | harness agent/subagent | `nexus-hello-subagent-endpoint` |
-| Whimsical Agent | OpenAI Agents SDK harness agent/subagent | `nexus-hello-whimsical-agent-endpoint` |
-| Writer HTTP | third-party agent | `http://127.0.0.1:8766` |
-| demo-nexus | native Nexus MCP service | `nexus-hello-demo-endpoint` |
-| demo | third-party MCP server | `http://127.0.0.1:8765/mcp` |
+| `Nexus Hello` | A2A over Nexus | Main OpenAI Agents SDK harness agent |
+| `Research` | A2A over Nexus | Canned native child or standalone agent |
+| `Whimsical Agent` | A2A over Nexus | OpenAI Agents SDK child or standalone agent with a playful voice |
+| `Writer HTTP` | A2A over HTTP | Minimal third-party child or standalone agent |
+| `demo-nexus` | MCP over Nexus | Native lucky-number tool |
+| `demo` | MCP over HTTP | Third-party fun-fact tool |
 
-The registered agent IDs deliberately match the subagent keys Nexus Hello uses. A
-Research, Whimsical, or Writer child can therefore appear under the same account card
-after its lifecycle event is observed. Only account-registered agent types are exposed.
-
-Whimsical Agent is both a child and a top-level agent. It uses the OpenAI Agents SDK
-inside the Temporal Agent Harness and the same account tools as Nexus Hello, but has a
-playful system prompt so its output is easy to distinguish.
-
-## Architecture
-
-The Go UI connector is the shared tunnel. For every mounted A2A task turn it calls
-`SubscribeToTask` once per page and multicasts the complete serialized A2A
-`StreamResponse` to independent subscribers. Browser, Slack, and Teams drivers decide
-how to render that rich stream at the edge; the tunnel does not reduce it to a
-platform-specific message model. A slow subscriber advances from its own cursor without
-blocking another subscriber.
-
-The harness-independent A2A-over-Nexus binding lives in `nexus/a2a`. The
-`temporal_agent_harness.a2a` package is the thin harness adapter: it maps agent
-workflows and their rich events onto that reusable transport.
-
-```mermaid
-flowchart LR
-    subgraph Drivers[Swappable UI drivers]
-        Browser[Account web UI<br/>HTTP + SSE]
-        Slack[Slack]
-        Teams[Teams]
-    end
-
-    subgraph Gateway[gateway namespace]
-        API[Gateway API]
-        Registry[Account registry<br/>agents · sessions · tools]
-        Tunnel["Per-turn Go UI tunnel<br/>rich A2A multicast"]
-        Actions["Standalone Nexus actions<br/>send · status · control"]
-        API <--> Registry
-        API --> Actions
-    end
-
-    subgraph Nexus[Nexus seam]
-        Endpoints[Named agent endpoints<br/>A2AService]
-    end
-
-    subgraph Agents[Agent namespaces]
-        Hello[Nexus Hello]
-        Research[Research]
-        Whimsical[Whimsical Agent]
-    end
-
-    Browser <--> API
-    API <--> Tunnel
-    Slack <--> Tunnel
-    Teams <--> Tunnel
-    Tunnel <--> Endpoints
-    Actions --> Endpoints
-    Endpoints <--> Hello
-    Endpoints <--> Research
-    Endpoints <--> Whimsical
-```
-
-The browser never needs an agent workflow-ID convention, task queue, or namespace. The
-registry resolves an account session to a registered endpoint and A2A task ID. One-shot
-operations such as send, status, close, approval, and command are standalone Nexus
-operations. The shared tunnel remains a workflow because it repeatedly long-polls A2A
-and multicasts pages until that turn reaches its terminal event and subscribers drain.
-
-Nexus is also the seam for account resources. Native resources stay direct; registered
-third-party resources are durably invoked by the gateway.
-
-```mermaid
-flowchart LR
-    Agent[Account agent]
-    Agent -->|A2A over Nexus| NativeAgents[Native agent endpoints]
-    Agent -->|MCP over Nexus| NativeMCP[Native MCP endpoint]
-    Agent -->|account_id over Nexus| Registry[Gateway registry service]
-    Registry -->|standalone activity| HTTPAgent[Third-party HTTP agent]
-    Registry -->|standalone activity| HTTPMCP[Third-party MCP server]
-```
-
-A direct Writer session stays on the gateway HTTP path. For a Writer spawned by Nexus
-Hello, dispatch activities use deterministic IDs, so the UI can reconstruct retained
-turns from Temporal activity input and outcome without persisting a third transcript.
-The provider and the account's Temporal retention policies define how far back that
-history remains available.
-
-### Completed sessions and child discovery
-
-`A2AService.SubscribeToTask` has one cursor contract for both live and completed tasks.
-It long-polls a running harness stream and serves a bounded replay from final workflow
-state after completion. This lets the same driver mount a stopped native child and show
-its retained history.
-
-The tunnel observes rich subagent lifecycle events and reports registered child sessions
-to the account registry. The explicit UI refresh also reconciles children of known live
-account sessions. Neither path scans all workflows in an agent namespace.
-
-### Historical MCP calls
-
-The sidebar's **Tool calls** view is read-only and does not change execution routing.
-
-```mermaid
-flowchart LR
-    UI[Tool-call inspector] --> History[Gateway history reader]
-    History -->|known agent workflows| Native[Nexus operation history]
-    History -->|gateway namespace| External[Standalone activity history]
-    Native --> UI
-    External --> UI
-```
-
-For native MCP, the reader inspects only account-known caller workflows and matches
-retained Nexus operation events to the registered endpoint and service. For third-party
-MCP, it lists recent gateway proxy activities and point-reads their input and outcome,
-with bounded concurrency. It stores no duplicate tool result. The UI shows the Nexus
-operation ID or activity execution ID plus the caller agent workflow when available.
+Nexus Hello resolves the installed account toolbox at the start of every turn. With all
+six resources installed, it can call both MCP servers and invoke Research, Whimsical,
+or Writer as children without those registrations being hard-coded into its worker.
+Whimsical does the same resolution and can therefore act as either a child or a parent.
 
 ## Run the complete demo
 
 Prerequisites:
 
-- Python 3.13 or newer, `temporal`, `just`, `curl`, `pnpm`, and `uv`.
-- Copy `.env.example` to the repository-root `.env.local` and set
-  `OPENAI_API_KEY`.
-- Install once with `uv sync --extra nexus-mcp` and `just app-install` from this
-  directory.
+- Python 3.13 or newer
+- `temporal`, `just`, `pnpm`, and `uv` on `PATH`
+- a repo-root `.env.local` with `OPENAI_API_KEY`
 
-Run all commands below from the example directory:
+Install dependencies once:
 
 ```sh
+uv sync --extra nexus-mcp
 cd examples/nexus_hello
+just app-install
 ```
 
-Start Temporal, then create the four namespaces and five Nexus endpoints:
+Run the remaining commands from `examples/nexus_hello`. Start Temporal first:
 
 ```sh
 just temporal
+```
+
+In another terminal, create four namespaces and five Nexus endpoints. This is a
+one-shot setup command and is safe to rerun:
+
+```sh
 just setup-nexus
 ```
 
-Keep each service below running in its own terminal:
+Start each long-running process in its own terminal:
 
 ```sh
 just third-party-mcp-server  # HTTP MCP server on :8765
-just third-party-subagent    # HTTP agent provider on :8766
+just third-party-subagent    # standard A2A HTTP agent on :8766
 just nexus-tool-service      # native Nexus MCP service
-just nexus-subagent          # native Research agent
-just whimsical-agent         # child/top-level OpenAI Agents SDK agent
-just worker                  # Nexus Hello agent
-just gateway-ui              # UI tunnel + registry + API/UI on :8000
+just nexus-subagent          # native Research A2A agent
+just whimsical-agent         # native Whimsical A2A agent
+just worker                  # Nexus Hello A2A agent
+just gateway-ui              # shared tunnel + catalog + registry + API/UI on :8000
 ```
 
-`just gateway-ui` builds the Svelte UI, starts the Go UI tunnel in the `gateway`
-namespace, and starts the gateway worker/API. If JavaScript dependencies are missing,
-run `just app-install` once.
+Open <http://localhost:8000>, expand **Catalog**, and register the resources you want.
+Register all six for the full demo. Registration updates the account sidebar; no
+`just register-*` command or worker restart is required.
 
-Populate `NexusHelloAccount` with these idempotent one-shot recipes:
-
-```sh
-just register-agents
-just register-native-mcp-server
-just register-third-party-mcp-server
-just register-third-party-subagent
-```
-
-Open <http://localhost:8000>. The account sidebar should show four agent cards and two
-MCP servers.
-
-### Exercise the routes
-
-Click **New** on **Nexus Hello**. Creating the registry session does not start an agent;
-the first message starts it lazily through `nexus-hello-agent-endpoint`. A useful prompt
-is:
+Click **New** on an agent card to create an account session. This only records the A2A
+Task route; the underlying agent starts lazily on the first message. For Nexus Hello,
+try:
 
 ```text
 Get a fun fact and a lucky number, ask the research, whimsical-agent, and writer
-subagents about Temporal, then summarize the results and stop all three subagents.
+agents about Temporal, then summarize their answers.
 ```
 
-The model chooses its own calls, so the exact sequence varies. As registered children
-appear, open the corresponding session drawer and mount one to inspect its own stream.
-Closed native children remain mountable through A2A replay.
+Spawned children appear under their agent card. Open its **Sessions** list and click
+**Mount** to view or continue that exact A2A Task. A top-level refresh reconciles
+children from all active harness sessions. Closed native Tasks remain mountable for
+retained-history replay.
 
-Click **New** on **Whimsical Agent** to run the same workflow directly as a top-level
-account session. Click **New** on **Writer HTTP** to exercise the third-party feasibility
-path. Mounting again creates a separate account session.
+## What each route does
 
-The important routes are:
+### Native send and mount
 
 ```mermaid
 flowchart LR
-    Browser[Browser] <-->|HTTP and SSE| Gateway[Gateway pane of glass]
-    Gateway -->|A2A over Nexus| Agents[Native account agents]
-    Gateway -->|standalone activities| Writer[External Writer agent]
-    Agents -->|direct Nexus| Native[Native MCP and A2A services]
-    Agents -->|account resources over Nexus| Registry[Account registry]
-    Registry -->|standalone activities| External[External MCP and A2A providers]
+    Browser[Browser] -->|HTTP send| Gateway[Gateway driver]
+    Gateway -->|standalone A2A over Nexus| Agent[Native agent]
+    Agent -->|bounded A2A pages over Nexus| Tunnel[Per-turn UI tunnel]
+    Tunnel -->|SSE| Browser
 ```
 
-The one-shot send, status, interface, approval, callback, command, and close requests do
-not need proxy workflows: the gateway starts them as standalone Nexus operations. The
-third-party HTTP equivalents are standalone activities. Only operations that actually
-orchestrate repeated calls remain workflows: a bounded `UIAgentTunnelWorkflow` polls one
-agent turn, and `BrokeredAgentDiscovery` drains lifecycle pages before reconciling child
-sessions.
+One-shot A2A and harness-control calls use standalone Nexus operations. Repeated
+orchestration remains a workflow: one bounded UI tunnel polls each mounted A2A turn and
+`BrokeredAgentDiscovery` explicitly reconciles spawned Tasks.
 
-The Nexus Hello workflow opts into its account toolbox explicitly:
+### Native subagent
+
+```mermaid
+flowchart LR
+    Parent[Parent agent] --> Toolbox[Account toolbox]
+    Toolbox -->|registered AgentCard| Child[Native child agent]
+    Parent <-->|A2A over Nexus| Child
+```
+
+The native route stays direct; it does not pay an extra gateway activity hop.
+
+### Third-party agent
+
+```mermaid
+flowchart LR
+    Caller[Browser or parent agent] -->|A2A over Nexus| Router[Account A2A router]
+    Router -->|standalone activity| Agent[External A2A HTTP agent]
+```
+
+The gateway remembers the route from its deterministic account Task ID to the provider's
+A2A Task ID. It does not invent a second agent protocol or copy the provider transcript.
+
+### MCP and retained tool-call inspection
+
+Native MCP calls remain direct Nexus operations. External MCP calls remain standalone
+gateway activities. Opening **Tool calls** performs a read-only history lookup across
+the known native agent namespaces and the gateway namespace, then matches calls to the
+selected registered MCP server. It stores no duplicate input or output data, so the
+account's Temporal retention policy defines how far back the UI can inspect.
+
+## Dynamic toolbox in code
+
+Every account agent uses the same resolver:
 
 ```python
-account_gateway = nexus_gateway("NexusHelloAccount")
-mcp_server = account_gateway.mcp_servers("demo")
+toolbox = await nexus_gateway(account_id).resolve_toolbox(
+    caller_agent_id=registered_agent_id,
+    lineage=delegation_lineage,
+    delegation_depth=delegation_depth,
+    max_delegation_depth=5,
+)
 
-subagent_gateway = agent.nexus_subagent_gateway("NexusHelloAccount")
-writer = subagent_gateway.subagent([...], "writer", key="writer")
-
-whimsical = agent.nexus_native_subagent(
-    WhimsicalAgentWorkflow,
-    "nexus-hello-whimsical-agent-endpoint",
-    key="whimsical-agent",
+sdk_agent = Agent(
+    mcp_servers=list(toolbox.mcp_servers),
+    tools=[harness_tool_as_openai_tool(tool) for tool in toolbox.subagent_tools],
 )
 ```
 
-An agent using another `account_id` resolves another registry workflow and cannot see
-these registrations.
+The resolver turns installed A2A AgentCard skills into harness tools. It excludes the
+caller and its ancestors, then picks the card's native Nexus or external HTTP interface.
+A different `account_id` resolves a different registry workflow and toolbox.
 
-### Subagent lifecycle controls
+## Subagent lifecycle controls
 
 The parent owns and tracks the children it starts. Two slash commands let the operator
 change their lifecycle without adopting sessions from another parent or from an
@@ -261,39 +262,20 @@ and closes tracked children during graceful parent shutdown. An abrupt parent
 termination cannot run cleanup, so local children use Temporal's `ABANDON` parent-close
 policy.
 
-## Run without `just`
+## Troubleshooting
 
-The justfile is the canonical runbook. The combined gateway command is equivalent to
-running these processes together:
+- Empty sidebar: open **Catalog** and register at least one agent.
+- First native message fails: verify the matching worker is running and rerun
+  `just setup-nexus` to check endpoint creation.
+- Agent toolbox is empty: install agents and MCP servers from **Catalog**; changes are
+  visible on the next turn.
+- HTTP agent fails: verify `just third-party-subagent` serves its AgentCard at
+  <http://127.0.0.1:8766/.well-known/agent-card.json>.
+- UI build fails: run `just app-install`, then `just gateway-ui` again.
 
-```sh
-CONNECTOR_NAMESPACE=gateway just ui-tunnel
+The justfile is the canonical command reference. Account state is durable across gateway
+restarts; use the Temporal UI or CLI to terminate the demo account-registry workflow if
+you want a completely fresh account.
 
-TEMPORAL_NAMESPACE=gateway \
-GATEWAY_SEED_ACCOUNT_ID=NexusHelloAccount \
-GATEWAY_UI_ACCOUNT_ID=NexusHelloAccount \
-uv run --extra nexus-mcp --group examples python -m nexus_mcp.durable_tools_gateway.worker
-```
-
-## Troubleshooting and reset
-
-- If the pane has no cards, run `just register-agents` and reload.
-- If a native send fails, confirm the corresponding worker is running and the Nexus
-  endpoint targets its namespace and task queue.
-- If the toolbox is empty, run the MCP registration recipes after the servers and
-  gateway are ready.
-- If streams do not advance, confirm the `ui-tunnel` process started by
-  `just gateway-ui` is still running on task queue `nexus-ui-tunnel` in namespace
-  `gateway`.
-- To reset durable account state, stop `gateway-ui`, terminate the registry below, then
-  restart and register resources again.
-
-```sh
-temporal workflow terminate \
-  --namespace gateway \
-  --workflow-id account-registry-cf700a56bafc7c6f1417b0fda1135aedd0298c6266fb173b325d69db81b09a8f
-```
-
-The HTTP provider stores sessions and idempotency keys in memory. Authentication,
-authorization, and production registry storage are intentionally left for a production
-implementation.
+This remains a prototype. Production work would add authentication and authorization,
+OAuth-backed catalog installs, and persistent external-provider storage.

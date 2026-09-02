@@ -41,6 +41,7 @@ POLL_TIMEOUT_SECONDS = 25.0
 
 def _decode_stream_item(item: SubscribeToTaskItem) -> AgentEvent:
     """Recover the rich harness event carried as an A2A extension."""
+
     response = StreamResponse()
     response.ParseFromString(base64.b64decode(item.data))
     body = response.WhichOneof("payload")
@@ -82,6 +83,19 @@ class NexusTransport:
         agent_key: str,
         parent_stream_context: TurnStreamContext,
     ) -> SubagentTurnResult:
+        config = self._start_configs.get(target, AgentConfig())
+        context: dict[str, Any] = {"expected_turn": expected_turn}
+        if config.account_id is not None:
+            context["account_id"] = config.account_id
+        if config.registered_agent_id is not None:
+            context["registered_agent_id"] = config.registered_agent_id
+        if config.delegation_lineage is not None:
+            context["delegation_lineage"] = list(config.delegation_lineage)
+        if config.delegation_depth is not None:
+            context["delegation_depth"] = config.delegation_depth
+        if config.max_delegation_depth is not None:
+            context["max_delegation_depth"] = config.max_delegation_depth
+
         try:
             sent = await self._client().execute_operation(
                 A2AService.send_message,
@@ -97,7 +111,7 @@ class NexusTransport:
                             "temporal.io/payload": payload,
                         },
                     ),
-                    metadata={"expected_turn": expected_turn},
+                    metadata=context,
                 ),
             )
         except Exception as exc:
@@ -125,7 +139,9 @@ class NexusTransport:
             poll = await self._client().execute_operation(
                 A2AService.subscribe_to_task,
                 SubscribeToTaskInput(
-                    id=target, cursor=cursor, timeout_seconds=POLL_TIMEOUT_SECONDS
+                    id=target,
+                    cursor=cursor,
+                    timeout_seconds=POLL_TIMEOUT_SECONDS,
                 ),
             )
             if poll.closed:
@@ -166,7 +182,6 @@ class NexusTransport:
 
 
 def _rejection_error(exc: Exception) -> ApplicationError:
-    """Map a Nexus rejection to the transport-independent error type."""
     message = str(exc)
     if message.startswith("StaleTurn: "):
         return ApplicationError(message, type="StaleTurn", non_retryable=True)

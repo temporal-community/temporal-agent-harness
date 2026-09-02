@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from a2a.types import AgentCard, AgentSkill, SendMessageResponse, Task
 from nexus_mcp.durable_tools_gateway.registry import (
     AccountEntries,
     AgentRegistration,
+    GlobalCatalogWorkflow,
     NexusMCPServerRegistration,
     SessionEvent,
     SessionRecord,
@@ -17,14 +18,24 @@ from nexus_mcp.durable_tools_gateway.registry_service_handler import (
     SubagentDispatchInput,
     SubagentDispatchOutput,
 )
+from nexus_mcp.durable_tools_gateway.resources import (
+    AccountResourceRegistration,
+    ResourceDescriptor,
+    text_agent_card,
+)
 from nexus_mcp.durable_tools_gateway.tool_history import ToolCallRecord
 from nexus_mcp.durable_tools_gateway.web import (
     _replay_external_activity_turn,
     create_account_agent_app,
 )
 from fastapi.testclient import TestClient
+from google.protobuf.json_format import MessageToDict
 from temporalio.api.workflowservice.v1 import DescribeActivityExecutionResponse
 from temporalio.contrib.pydantic import pydantic_data_converter
+
+from temporal_agent_harness.a2a.generated import (
+    AgentInterfaceOutput,
+)
 
 
 def _app_client(
@@ -33,6 +44,7 @@ def _app_client(
     agent_override: AgentRegistration | None = None,
     session_events: list[SessionEvent] | None = None,
     entries_override: AccountEntries | None = None,
+    catalog_override: list[ResourceDescriptor] | None = None,
 ) -> tuple[TestClient, MagicMock, MagicMock]:
     agent = agent_override or AgentRegistration(
         agent_id="assistant",
@@ -63,11 +75,47 @@ def _app_client(
             return [session]
         if method is ToolRegistryWorkflow.list_account_entries:
             return entries_override or AccountEntries(
-                remote_servers={"weather": "http://weather"},
-                subagent_providers={"writer": "http://writer"},
+                resources={
+                    "weather": ResourceDescriptor(
+                        "weather",
+                        1,
+                        "mcp",
+                        "external_http",
+                        "Weather",
+                        "",
+                        "http://weather",
+                    ),
+                    "writer": ResourceDescriptor(
+                        "writer",
+                        1,
+                        "agent",
+                        "external_http",
+                        "Writer",
+                        "",
+                        "http://writer",
+                        agent_card=text_agent_card(
+                            name="Writer",
+                            description="",
+                            endpoint="http://writer",
+                            transport="external_http",
+                        ),
+                    ),
+                }
             )
         if method is ToolRegistryWorkflow.poll_session_events:
             return session_events or []
+        if method is GlobalCatalogWorkflow.list_resources:
+            return catalog_override or []
+        if method is GlobalCatalogWorkflow.get_resource:
+            resource_id = args[0]
+            return next(
+                (
+                    item
+                    for item in catalog_override or []
+                    if item.resource_id == resource_id
+                ),
+                None,
+            )
         raise AssertionError(f"unexpected query {method}")
 
     async def update(method, *args, **kwargs):
@@ -84,6 +132,10 @@ def _app_client(
             return []
         if method is ToolRegistryWorkflow.close_session:
             return replace(session, closed=True)
+        if method is ToolRegistryWorkflow.install_resource:
+            return AccountResourceRegistration(args[0], installed_at=123.0)
+        if method is ToolRegistryWorkflow.remove_resource:
+            return None
         raise AssertionError(f"unexpected update {method}")
 
     handle.query = AsyncMock(side_effect=query)
@@ -97,18 +149,7 @@ def _app_client(
     tunnel_handle.signal = AsyncMock()
     temporal.get_workflow_handle.return_value = tunnel_handle
     nexus = MagicMock()
-    nexus.execute_operation = AsyncMock(
-        return_value=AgentCard(
-            name="Assistant",
-            description="A registered harness agent",
-            version="1.0.0",
-            skills=[
-                AgentSkill(
-                    id="ask", name="ask", description="Ask the agent.", tags=["agent"]
-                )
-            ],
-        )
-    )
+    nexus.execute_operation = AsyncMock(return_value=AgentInterfaceOutput(handlers=[]))
     temporal.create_nexus_client.return_value = nexus
     temporal.execute_activity = AsyncMock()
     app = create_account_agent_app(
@@ -135,6 +176,43 @@ def test_account_agents_and_sessions_come_from_the_registry() -> None:
     assert account.json()["mcp_servers"][0]["name"] == "weather"
 
 
+def test_catalog_installs_shared_descriptor_into_account_registry() -> None:
+    catalog_agent = ResourceDescriptor(
+        "catalog-agent",
+        2,
+        "agent",
+        "nexus",
+        "Catalog Agent",
+        "Published globally",
+        "catalog-agent-endpoint",
+        "A2AService",
+        text_agent_card(
+            name="Catalog Agent",
+            description="Published globally",
+            endpoint="catalog-agent-endpoint",
+            transport="nexus",
+        ),
+    )
+    client, handle, _ = _app_client(catalog_override=[catalog_agent])
+
+    with client:
+        catalog = client.get("/api/catalog")
+        installed = client.post("/api/catalog/catalog-agent/register")
+        removed = client.delete("/api/catalog/catalog-agent/register")
+
+    assert catalog.status_code == 200
+    assert catalog.json()["resources"][0]["installed"] is False
+    assert installed.status_code == 200
+    assert installed.json()["revision"] == 2
+    assert removed.status_code == 200
+    install_call = next(
+        call
+        for call in handle.execute_update.await_args_list
+        if call.args[0] is ToolRegistryWorkflow.install_resource
+    )
+    assert install_call.args[1] == catalog_agent
+
+
 def test_native_mcp_history_is_scoped_through_registered_metadata() -> None:
     registration = NexusMCPServerRegistration(
         name="native-demo",
@@ -143,8 +221,18 @@ def test_native_mcp_history_is_scoped_through_registered_metadata() -> None:
     )
     client, handle, _ = _app_client(
         entries_override=AccountEntries(
-            remote_servers={"weather": "http://weather"},
-            nexus_servers={"native-demo": registration},
+            resources={
+                "weather": ResourceDescriptor(
+                    "weather",
+                    1,
+                    "mcp",
+                    "external_http",
+                    "Weather",
+                    "",
+                    "http://weather",
+                ),
+                "native-demo": registration,
+            },
         )
     )
     call = ToolCallRecord(
@@ -162,10 +250,13 @@ def test_native_mcp_history_is_scoped_through_registered_metadata() -> None:
         output="7",
     )
 
-    with patch(
-        "nexus_mcp.durable_tools_gateway.web.scan_native_tool_calls",
-        new=AsyncMock(return_value=[call]),
-    ) as scan, client:
+    with (
+        patch(
+            "nexus_mcp.durable_tools_gateway.web.scan_native_tool_calls",
+            new=AsyncMock(return_value=[call]),
+        ) as scan,
+        client,
+    ):
         registered = client.post(
             "/api/account/mcp-servers",
             json={
@@ -221,10 +312,13 @@ def test_external_mcp_history_uses_the_gateway_activity_reader() -> None:
         output={"temperature": 70},
     )
 
-    with patch(
-        "nexus_mcp.durable_tools_gateway.web.scan_external_tool_calls",
-        new=AsyncMock(return_value=[call]),
-    ) as scan, client:
+    with (
+        patch(
+            "nexus_mcp.durable_tools_gateway.web.scan_external_tool_calls",
+            new=AsyncMock(return_value=[call]),
+        ) as scan,
+        client,
+    ):
         history = client.get("/api/mcp-servers/weather/tool-calls")
 
     assert history.status_code == 200
@@ -289,6 +383,40 @@ def test_provider_session_alias_resolves_through_the_account_registry() -> None:
         if call.args[0] is ToolRegistryWorkflow.resolve_session
     ]
     assert resolved_ids == ["provider-child", "source-child"]
+
+
+def test_provider_alias_waits_for_spawned_session_projection() -> None:
+    spawned = SessionRecord(
+        account_id="account-1",
+        session_id="session-child",
+        agent_id="assistant",
+        provider_session_id="provider-child",
+        source_session_id="writer-subagent-child",
+        created_at=123.0,
+        label="Spawned child",
+        is_spawned=True,
+        has_started=True,
+        current_turn=1,
+    )
+    client, handle, _ = _app_client(session_override=spawned)
+    query = handle.query.side_effect
+    attempts = 0
+
+    async def delayed_projection(method, *args, **kwargs):
+        nonlocal attempts
+        if method is ToolRegistryWorkflow.resolve_session:
+            attempts += 1
+            if attempts < 3:
+                return None
+        return await query(method, *args, **kwargs)
+
+    handle.query.side_effect = delayed_projection
+
+    with client:
+        response = client.get("/api/agent-interface/writer-subagent-child")
+
+    assert response.status_code == 200
+    assert attempts == 3
 
 
 def test_refresh_reconciles_registered_children_from_native_status() -> None:
@@ -372,6 +500,14 @@ def test_native_send_is_standalone_and_does_not_start_a_tunnel() -> None:
     assert call.args[1].message.task_id == "session-1"
     assert call.args[1].message.parts[0].text == "hello"
     assert call.kwargs["id"].startswith("web-send-message-")
+    assert MessageToDict(call.args[1].metadata) == {
+        "account_id": "account-1",
+        "registered_agent_id": "assistant",
+        "delegation_lineage": [],
+        "delegation_depth": 0,
+        "max_delegation_depth": 5,
+        "expected_turn": 1,
+    }
     temporal.execute_update_with_start_workflow.assert_not_awaited()
     temporal.execute_workflow.assert_not_awaited()
     assert any(
@@ -505,12 +641,8 @@ async def test_external_turn_replays_from_deterministic_activity_history() -> No
     response.info.activity_id = "subagent-dispatch-gateway-instance-1-1"
     response.info.activity_type.name = "subagent_proxy_activity"
     response.info.task_queue = "mcp-registry"
-    response.info.schedule_time.FromDatetime(
-        datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
-    )
-    response.info.close_time.FromDatetime(
-        datetime(2026, 9, 1, 12, 0, 2, tzinfo=timezone.utc)
-    )
+    response.info.schedule_time.FromDatetime(datetime(2026, 9, 1, 12, 0, tzinfo=UTC))
+    response.info.close_time.FromDatetime(datetime(2026, 9, 1, 12, 0, 2, tzinfo=UTC))
     activity_input = SubagentDispatchInput(
         url="http://writer",
         instance_id="provider-instance-1",
@@ -621,12 +753,14 @@ def test_spawned_external_stream_merges_temporal_and_ui_turn_offsets() -> None:
         session_events=turn_two,
     )
 
-    with patch(
-        "nexus_mcp.durable_tools_gateway.web._replay_external_activity_turn",
-        new=AsyncMock(return_value=replayed_turn_one),
-    ) as replay:
-        with client:
-            response = client.get("/api/attach?session_id=session-writer&from_offset=2")
+    with (
+        patch(
+            "nexus_mcp.durable_tools_gateway.web._replay_external_activity_turn",
+            new=AsyncMock(return_value=replayed_turn_one),
+        ) as replay,
+        client,
+    ):
+        response = client.get("/api/attach?session_id=session-writer&from_offset=2")
 
     assert response.status_code == 200
     body = response.text
