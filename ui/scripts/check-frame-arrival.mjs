@@ -39,6 +39,17 @@
  *  - cursorAfterPublish no longer following the live edge: the viewIndex
  *    assertions fail while the counts still pass — a console that receives its
  *    frames and shows you the first one.
+ *  - Not resolving a child's status on subagent_stream_unavailable: "operator
+ *    stopped" times out, which is a stopped subagent rendering as running.
+ *  - Assuming an unreadable child stream means a closed workflow, rather than
+ *    letting the status answer decide: "not a closed workflow" closes a child
+ *    that is still running, or one nothing could answer for.
+ *  - Discarding the `code` on an error frame, or letting it outlive the message
+ *    it came with: the unreplayable-run case reports a bare sentence, or a stale
+ *    code describing a failure that is over.
+ *  - Retrying a workflow_not_found, or refusing to retry a stream_unavailable:
+ *    the retry cases fail in one direction or the other. The budget is for
+ *    outages that end, and a deleted history is not one.
  *
  * Run: node ui/scripts/check-frame-arrival.mjs
  */
@@ -194,6 +205,16 @@ const subagentStreamUnavailable = (subagentId, workflowId) => ({
     reason: "subagent stream unavailable — refresh to retry",
     replay: true
   }
+});
+
+/**
+ * An in-band failure frame from /api/attach: `kind`, `code` and `message`, no
+ * `type` and no offset. Matches `_attach_error` and `_unreplayable_run_frame`
+ * in `web/app.py`; the `code` is the part a caller can branch on.
+ */
+const attachErrorFrame = (code, message) => ({
+  event: "error",
+  data: { kind: "unavailable", code, message }
 });
 
 const abortError = () => Object.assign(new Error("aborted"), { name: "AbortError" });
@@ -651,6 +672,101 @@ assert.ok(underAChunk < chunkSize, "the whole point is a backlog too short to fi
   closedIds.add("wf-parent-live");
   finish("wf-parent-live");
   stream.end();
+}
+
+// --- case: an unreplayable run's figures are unknown, not zero ---------------
+// The run finished and Temporal cannot replay its stream, so the console holds
+// none of the events it spent money on. Every total over `frames` is an empty
+// sum, and reporting one as a measured zero is the bug. The server says which
+// case this is; keeping only its sentence threw that away.
+{
+  const stream = controllableStream();
+  const { controller, finish } = boot({
+    sessions: [session("wf-unreplayable")],
+    streamFor: () => stream
+  });
+
+  void controller.selectSession("wf-unreplayable");
+  await waitFor("the stream to be attached", () => controller.connecting);
+  stream.push(
+    attachErrorFrame(
+      "unreplayable_run",
+      "Session finished (COMPLETED) and its event stream cannot be replayed."
+    )
+  );
+
+  await waitFor("the error frame to be ingested", () => controller.connectionError != null);
+  assert.equal(
+    controller.connectionErrorCode,
+    "unreplayable_run",
+    "the code the server sent must survive, not just the sentence"
+  );
+  assert.equal(
+    controller.runUnmeasured,
+    true,
+    "an unreplayable run's totals are unknown, and something has to be able to say so"
+  );
+
+  // Any later failure, or a clearing, describes something else entirely.
+  controller.connectionError = null;
+  assert.equal(
+    controller.connectionErrorCode,
+    null,
+    "clearing the message must clear the code, or a stale code outlives what it described"
+  );
+  assert.equal(controller.runUnmeasured, false, "a cleared error leaves nothing unmeasured");
+
+  finish("wf-unreplayable");
+  stream.end();
+}
+
+// --- case: which failures are worth retrying ---------------------------------
+// The budget exists for outages that end. `workflow_not_found` is not one: the
+// server has said the history is deleted or past retention, so every retry is
+// guaranteed-futile work that re-appends the same error. `stream_unavailable`
+// is the opposite — an unreachable Temporal or an absent worker comes back —
+// and must keep its retries.
+{
+  const stream = controllableStream();
+  const { controller, attachCalls, finish } = boot({
+    sessions: [session("wf-gone")],
+    streamFor: () => stream
+  });
+
+  void controller.selectSession("wf-gone");
+  await waitFor("the first attach", () => attachCalls.length === 1);
+  stream.push(
+    attachErrorFrame("workflow_not_found", "No workflow 'wf-gone' in this namespace.")
+  );
+  await waitFor("the error frame to be ingested", () => controller.connectionError != null);
+  stream.end();
+
+  // Comfortably past the first 500ms backoff step.
+  await sleep(900);
+  assert.equal(
+    attachCalls.length,
+    1,
+    "a workflow whose history is gone must not spend the retry budget"
+  );
+  finish("wf-gone");
+}
+{
+  const stream = controllableStream();
+  const { controller, attachCalls, finish } = boot({
+    sessions: [session("wf-unreachable")],
+    streamFor: () => stream
+  });
+
+  void controller.selectSession("wf-unreachable");
+  await waitFor("the first attach", () => attachCalls.length === 1);
+  stream.push(
+    attachErrorFrame("stream_unavailable", "The event stream could not be read (UNAVAILABLE).")
+  );
+  await waitFor("the error frame to be ingested", () => controller.connectionError != null);
+  stream.end();
+
+  await waitFor("a retry of a transient failure", () => attachCalls.length === 2, 3_000);
+  finish("wf-unreachable");
 }
 
 await vite.close();

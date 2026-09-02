@@ -322,7 +322,8 @@ export class AgentRunController {
   sending = $state(false);
   creatingSession = $state(false);
   refreshingSessions = $state(false);
-  connectionError = $state<string | null>(null);
+  #connectionError = $state<string | null>(null);
+  #connectionErrorCode = $state<string | null>(null);
   playbackSpeed = $state<PlaybackSpeed>(1);
   agents = $state<AgentDescriptor[]>([]);
   sessions = $state<Session[]>([]);
@@ -356,6 +357,47 @@ export class AgentRunController {
   #catchUpFlushTimer: number | null = null;
   #submitQueue: Promise<void> = Promise.resolve();
   #timer: number | null = null;
+
+  /**
+   * The last connection-level failure, and the machine-readable reason for it.
+   *
+   * `/api/attach` reports every way it can fail in band, as an error frame
+   * carrying `kind`, `code` and `message` (see `_attach_error` and
+   * `_unreplayable_run_frame` in `web/app.py`). Keeping only the sentence threw
+   * away the one part a caller can branch on.
+   *
+   * Written through a setter rather than as a second public field because the
+   * two must never disagree. Every existing assignment site is either a fresh
+   * failure with no code of its own or a clearing, and a code left over from the
+   * previous failure would be read as describing this one; clearing it here
+   * means those sites stay correct without knowing this field exists. Only
+   * #ingestFrame, which has the frame in hand, sets both.
+   */
+  get connectionError(): string | null {
+    return this.#connectionError;
+  }
+
+  set connectionError(message: string | null) {
+    this.#connectionError = message;
+    this.#connectionErrorCode = null;
+  }
+
+  get connectionErrorCode(): string | null {
+    return this.#connectionErrorCode;
+  }
+
+  /**
+   * Whether this run's figures are unknown rather than zero.
+   *
+   * `unreplayable_run` means the run finished and Temporal cannot replay its
+   * event stream, so this console holds none of the events it spent money on.
+   * Every total derived from `frames` is therefore an empty sum, and rendering
+   * one as `0 tok $0.0000` reports a measurement that was never taken — beside
+   * runs whose zeros are real.
+   */
+  get runUnmeasured(): boolean {
+    return this.#connectionErrorCode === "unreplayable_run";
+  }
 
   constructor(api: AgentApi = new HttpAgentApi()) {
     this.#api = api;
@@ -1064,9 +1106,15 @@ export class AgentRunController {
    *
    * A status call that fails is the transient case this exists for, so it counts
    * as worth retrying. The retry budget is what keeps an outage bounded.
+   *
+   * `workflow_not_found` is the exception: the server has said the history is
+   * deleted or past retention, so there is nothing left to stream and no wait
+   * will produce any. Spending the budget on it is guaranteed-futile work, and
+   * each attempt re-appends the same error frame.
    */
   async #streamDroppedMidRun(workflowId: string): Promise<boolean> {
     if (this.#isWorkflowClosed(workflowId)) return false;
+    if (this.#connectionErrorCode === "workflow_not_found") return false;
     try {
       await this.#refreshWorkflowExecutionState(workflowId);
     } catch {
@@ -1473,7 +1521,11 @@ export class AgentRunController {
     this.#frameKeys.add(key);
 
     if (!("type" in frame.data)) {
-      this.connectionError = frame.data.message;
+      this.#connectionError = frame.data.message;
+      this.#connectionErrorCode =
+        "code" in frame.data && typeof frame.data.code === "string"
+          ? frame.data.code
+          : null;
     }
     const publisherWorkflowId =
       this.#publisherWorkflowId(frame) ?? options.sourceWorkflowId;
