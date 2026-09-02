@@ -468,7 +468,7 @@
 
   h2 {
     margin: 0;
-    font-size: 13px;
+    font-size: var(--font-lg);
   }
 
   .transcript-controls {
@@ -487,12 +487,12 @@
   .filter-chips button {
     padding: 4px 9px;
     border: 1px solid var(--border);
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     color: var(--text-3);
     background: var(--surface-0);
     cursor: pointer;
     font: inherit;
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .filter-chips button:hover {
@@ -512,7 +512,7 @@
     gap: 7px;
     padding: 0 8px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-0);
     color: var(--text-3);
   }
@@ -524,7 +524,7 @@
     border: 0;
     background: transparent;
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     outline: none;
   }
 
@@ -536,7 +536,7 @@
     display: inline-flex;
     padding: 2px;
     border: 0;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     color: var(--text-3);
     background: transparent;
     cursor: pointer;
@@ -561,13 +561,13 @@
     flex-direction: column;
     min-height: 58px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     overflow: hidden;
     background: color-mix(in srgb, var(--surface-1) 75%, var(--surface-0));
     transition:
-      border-color 140ms ease,
-      transform 140ms ease,
-      background 140ms ease;
+      border-color var(--duration-fast) var(--ease-ui),
+      transform var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui);
   }
 
   .turn-group:hover,
@@ -586,7 +586,7 @@
     border-bottom: 1px solid var(--border);
     background: var(--surface-2);
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-weight: 650;
   }
 
@@ -609,7 +609,7 @@
 
   .turn-title {
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .turn-preview {
@@ -640,14 +640,14 @@
     gap: 5px;
     padding: 0 9px 8px;
     color: var(--text-3);
-    font-size: 10px;
+    font-size: var(--font-xs);
     font-variant-numeric: tabular-nums;
   }
 
   .turn-stats span {
     padding: 2px 6px;
     border: 1px solid var(--border);
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     background: var(--surface-0);
   }
 
@@ -701,7 +701,7 @@
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--text-2);
     background: var(--surface-0);
   }
@@ -736,7 +736,7 @@
   .line-toggle:focus-visible {
     outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
     outline-offset: 3px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
   }
 
   .line-toggle-main {
@@ -752,7 +752,7 @@
     justify-content: center;
     margin-top: 1px;
     border: 1px solid var(--border);
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     color: var(--text-3);
     background: var(--surface-0);
   }
@@ -772,7 +772,7 @@
     gap: 6px;
     overflow: hidden;
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-variant-numeric: tabular-nums;
   }
 
@@ -790,10 +790,10 @@
     flex: 0 0 auto;
     padding: 1px 5px;
     border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     color: var(--accent);
     background: color-mix(in srgb, var(--accent) 9%, transparent);
-    font-size: 10px;
+    font-size: var(--font-xs);
   }
 
   .line-meta time {
@@ -815,7 +815,7 @@
   p {
     margin: 0;
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     line-height: 1.42;
     word-break: break-word;
   }
@@ -828,18 +828,18 @@
 
   .payload-label {
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-weight: 650;
   }
 
   pre {
     margin: 0;
     padding: 8px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     overflow-x: auto;
     background: var(--surface-0);
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .primary-pre {
@@ -859,12 +859,22 @@
 
   .citations a {
     color: var(--accent);
-    font-size: 11px;
+    font-size: var(--font-sm);
     text-decoration: none;
     border-bottom: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
   }
 
   .empty {
     color: var(--text-3);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .turn-group {
+      transition: none;
+    }
+
+    .turn-group.active-turn {
+      transform: none;
+    }
   }
 </style>

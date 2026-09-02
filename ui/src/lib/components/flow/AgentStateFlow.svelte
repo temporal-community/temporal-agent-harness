@@ -183,13 +183,13 @@
       {#if data.metrics?.length}
         <div class="inspector-metrics">
           {#each data.metrics as metric}
-            <span><strong>{metric.value}</strong>{metric.label}</span>
+            <span class="kicker"><strong>{metric.value}</strong>{metric.label}</span>
           {/each}
         </div>
       {/if}
 
       <div class="inspector-content">
-        <div class="content-label">{detail.label}</div>
+        <div class="kicker">{detail.label}</div>
         <pre
           class={`expanded-detail ${detail.kind}`}
           data-language={detail.kind === "json" ? "json" : detail.kind === "code" ? "code" : undefined}
@@ -231,12 +231,10 @@
     gap: 14px;
     padding: 20px;
     border: 2px solid color-mix(in srgb, var(--tone-color) 72%, white 6%);
-    border-radius: 12px;
+    border-radius: var(--radius-xl);
     background: color-mix(in srgb, var(--tone-color) 9%, var(--surface-2));
     color: var(--text-1);
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--tone-color) 26%, transparent),
-      0 26px 80px rgba(0, 0, 0, 0.62);
+    box-shadow: var(--shadow-modal);
   }
 
   .node-inspector.neutral { --tone-color: var(--text-3); }
@@ -266,7 +264,7 @@
 
   .inspector-heading h2 {
     margin: 0;
-    font-size: 22px;
+    font-size: var(--font-title);
     line-height: 1.2;
     letter-spacing: 0;
   }
@@ -274,7 +272,7 @@
   .inspector-heading p {
     margin: 5px 0 0;
     color: var(--text-2);
-    font-size: 13px;
+    font-size: var(--font-lg);
     line-height: 1.35;
     word-break: break-word;
   }
@@ -284,7 +282,7 @@
     width: 11px;
     height: 11px;
     margin-top: 8px;
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     background: var(--tone-color);
     box-shadow: 0 0 0 4px color-mix(in srgb, var(--tone-color) 18%, transparent);
   }
@@ -310,10 +308,10 @@
     max-width: 190px;
     padding: 5px 10px;
     border: 1px solid color-mix(in srgb, var(--tone-color) 34%, var(--border));
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     color: var(--text-2);
     background: color-mix(in srgb, var(--tone-color) 10%, var(--surface-1));
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 700;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -326,7 +324,7 @@
     width: 34px;
     height: 34px;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-3) 72%, transparent);
     color: var(--text-2);
     cursor: pointer;
@@ -347,18 +345,15 @@
     min-width: 84px;
     padding: 8px 10px;
     border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text-3);
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-1) 84%, transparent);
-    font-size: 10px;
-    text-transform: uppercase;
   }
 
   .inspector-metrics strong {
     display: block;
     margin-bottom: 2px;
     color: var(--text-1);
-    font-size: 13px;
+    font-size: var(--font-lg);
     font-variant-numeric: tabular-nums;
     text-transform: none;
   }
@@ -370,14 +365,6 @@
     gap: 7px;
   }
 
-  .content-label {
-    color: var(--text-3);
-    font-size: 11px;
-    font-weight: 750;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
   .expanded-detail {
     position: relative;
     min-height: 180px;
@@ -386,18 +373,11 @@
     padding: 16px;
     overflow: auto;
     border: 1px solid color-mix(in srgb, var(--tone-color) 22%, var(--border));
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-0) 86%, black 10%);
     color: var(--text-2);
-    font-family:
-      ui-monospace,
-      SFMono-Regular,
-      Menlo,
-      Monaco,
-      Consolas,
-      "Liberation Mono",
-      monospace;
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: var(--font-lg);
     line-height: 1.55;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -422,11 +402,11 @@
     right: 10px;
     padding: 2px 7px;
     border: 1px solid var(--code-label-border);
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     background: var(--code-label-bg);
     color: var(--code-label-text);
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-    font-size: 10px;
+    font-family: var(--font-mono);
+    font-size: var(--font-xs);
     font-weight: 750;
     line-height: 1.2;
     letter-spacing: 0;
@@ -442,7 +422,7 @@
 
   :global(.svelte-flow__edge-text) {
     fill: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-weight: 650;
   }
 

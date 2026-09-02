@@ -389,19 +389,25 @@
     gap: 7px;
     padding: 0 10px;
     border: 1px solid color-mix(in srgb, var(--control-accent) 18%, var(--border));
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--control-bg);
     color: var(--text-2);
     cursor: pointer;
     font: inherit;
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 650;
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+    box-shadow: var(--shadow-inset-soft);
     transition:
-      border-color 140ms ease,
-      background 140ms ease,
-      color 140ms ease,
-      box-shadow 140ms ease;
+      transform var(--duration-press) var(--ease-out),
+      border-color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui),
+      color var(--duration-fast) var(--ease-ui),
+      box-shadow var(--duration-fast) var(--ease-ui);
+  }
+
+  .session-add:active:not(.disabled):not(:disabled),
+  .session-drawer-button:active {
+    transform: scale(0.97);
   }
 
   .session-add {
@@ -422,7 +428,7 @@
     color: var(--text-1);
     background: color-mix(in srgb, var(--control-accent) 10%, var(--control-hover));
     box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.06),
+      var(--shadow-inset-strong),
       0 0 0 3px color-mix(in srgb, var(--control-accent) 16%, transparent);
     outline: 0;
   }
@@ -432,7 +438,7 @@
     align-items: center;
     justify-content: center;
     color: var(--text-3);
-    transition: transform 140ms ease, color 140ms ease;
+    transition: transform var(--duration-fast) var(--ease-ui), color var(--duration-fast) var(--ease-ui);
   }
 
   .session-add.active .control-chevron,
@@ -476,15 +482,21 @@
     gap: 10px;
     padding: 14px 12px;
     border: 1px solid var(--border-strong);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--surface-1);
     box-shadow: var(--shadow-popover);
+    /* Grows from the button that opened it, so the menu reads as that
+       control's own surface rather than as something the viewport produced. */
+    transform-origin: top right;
+    animation: session-popover-in var(--duration-fast) var(--ease-out);
   }
 
   .new-session-popover {
     position: absolute;
     top: calc(100% + 10px);
     left: 0;
+    transform-origin: top left;
+    animation: session-popover-in var(--duration-fast) var(--ease-out);
     z-index: 22;
     width: min(360px, calc(100vw - 32px));
     min-height: 0;
@@ -493,7 +505,7 @@
     gap: 10px;
     padding: 14px 12px;
     border: 1px solid var(--border-strong);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--surface-1);
     box-shadow: var(--shadow-popover);
   }
@@ -514,7 +526,7 @@
     align-items: center;
     gap: 7px;
     color: var(--text-1);
-    font-size: 13px;
+    font-size: var(--font-lg);
     font-weight: 700;
   }
 
@@ -533,7 +545,7 @@
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--control-bg);
     color: var(--text-3);
     cursor: pointer;
@@ -559,6 +571,13 @@
     animation: session-refresh-spin 800ms linear infinite;
   }
 
+  @keyframes session-popover-in {
+    from {
+      opacity: 0;
+      transform: scale(0.97);
+    }
+  }
+
   @keyframes session-refresh-spin {
     from {
       transform: rotate(0deg);
@@ -577,7 +596,7 @@
     align-items: center;
     padding: 0 10px;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--control-bg);
     color: var(--text-3);
   }
@@ -595,7 +614,7 @@
     background: transparent;
     color: var(--text-1);
     font: inherit;
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .session-search input::placeholder {
@@ -616,16 +635,16 @@
     align-items: center;
     padding: 10px;
     border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-2) 42%, var(--surface-1));
     color: inherit;
     cursor: pointer;
     font: inherit;
     text-align: left;
     transition:
-      border-color 140ms ease,
-      background 140ms ease,
-      transform 140ms ease;
+      border-color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui),
+      transform var(--duration-fast) var(--ease-ui);
   }
 
   .agent-row:hover,
@@ -646,7 +665,7 @@
     min-width: 0;
     overflow: hidden;
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 650;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -656,7 +675,7 @@
     min-width: 0;
     overflow: hidden;
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -677,16 +696,16 @@
     align-items: start;
     padding: 10px;
     border: 1px solid color-mix(in srgb, var(--reasoning) 10%, var(--border));
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-2) 42%, var(--surface-1));
     color: inherit;
     cursor: pointer;
     font: inherit;
     text-align: left;
     transition:
-      border-color 140ms ease,
-      background 140ms ease,
-      transform 140ms ease;
+      border-color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui),
+      transform var(--duration-fast) var(--ease-ui);
   }
 
   .session-row:hover,
@@ -711,14 +730,14 @@
 
   .session-copy time {
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .session-copy strong {
     min-width: 0;
     overflow: hidden;
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 650;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -728,7 +747,7 @@
     min-width: 0;
     overflow: hidden;
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -736,7 +755,7 @@
   .session-empty {
     margin: 6px 0;
     color: var(--text-3);
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .agent-row :global(.status-chip),
@@ -752,6 +771,33 @@
     .session-popover {
       right: auto;
       left: 0;
+      transform-origin: top left;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* Still reads as busy, by dimming rather than by spinning. */
+    .session-popover-refresh.spinning :global(svg) {
+      animation: none;
+      opacity: 0.6;
+    }
+
+    .session-popover,
+    .new-session-popover {
+      animation: none;
+    }
+
+    .session-add:active:not(.disabled):not(:disabled),
+    .session-drawer-button:active,
+    .agent-row:focus-visible,
+    .session-row:focus-visible {
+      transform: none;
+    }
+
+    .control-chevron,
+    .agent-row,
+    .session-row {
+      transition: none;
     }
   }
 </style>

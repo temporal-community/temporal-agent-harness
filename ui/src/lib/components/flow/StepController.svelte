@@ -123,7 +123,7 @@
           </button>
         {/each}
       </div>
-      <IconButton label="Jump to latest step" tone="live" pressed={following} onclick={onJumpToLive}>
+      <IconButton label="Jump to latest step" tone="follow" pressed={following} onclick={onJumpToLive}>
         <SkipForward size={16} />
       </IconButton>
     </div>
@@ -164,7 +164,7 @@
   </div>
 
   <div class={`current-event ${currentEvent?.tone ?? "neutral"}`}>
-    <span class="event-kicker">Now</span>
+    <span class="event-kicker kicker">Now</span>
     <strong>{currentEvent?.label ?? "Replay start"}</strong>
     {#if currentEvent}
       <span class="event-type">{currentEvent.event}</span>
@@ -243,7 +243,7 @@
     height: 32px;
     padding: 2px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-0);
   }
 
@@ -252,12 +252,12 @@
     height: 26px;
     padding: 0 6px;
     border: 0;
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     color: var(--text-3);
     background: transparent;
     cursor: pointer;
     font: inherit;
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-variant-numeric: tabular-nums;
   }
 
@@ -276,7 +276,7 @@
     gap: 12px;
     margin-bottom: 5px;
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     white-space: nowrap;
   }
 
@@ -325,7 +325,7 @@
     position: absolute;
     width: 2px;
     height: 6px;
-    border-radius: 2px;
+    border-radius: var(--radius-2xs);
     background: var(--queue);
   }
 
@@ -344,12 +344,12 @@
     padding: 0;
     width: 9px;
     height: 9px;
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     border: 1px solid var(--surface-0);
     transform: translateX(-50%);
     background: var(--text-3);
     cursor: pointer;
-    transition: transform 100ms ease;
+    transition: transform var(--duration-fast) var(--ease-ui);
   }
 
   .event-marker:hover {
@@ -375,28 +375,25 @@
     gap: 8px;
     padding: 8px 10px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-2);
     color: var(--text-2);
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .current-event strong {
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     white-space: nowrap;
   }
 
   .event-kicker {
     color: var(--accent);
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
   }
 
   .event-type {
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     white-space: nowrap;
   }
 
@@ -432,7 +429,7 @@
     gap: 12px;
     padding: 7px 10px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-2);
     color: var(--text-2);
     cursor: pointer;
@@ -458,7 +455,7 @@
 
   .usage-toggle-title {
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 700;
   }
 
@@ -466,7 +463,7 @@
     justify-self: end;
     overflow: hidden;
     color: var(--text-3);
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .usage-toggle-summary strong {
@@ -477,7 +474,7 @@
   .usage-toggle-icon {
     display: inline-flex;
     color: var(--text-3);
-    transition: transform 140ms ease;
+    transition: transform var(--duration-fast) var(--ease-ui);
   }
 
   .usage-section.expanded .usage-toggle-icon {
@@ -499,7 +496,7 @@
     gap: 8px;
     padding: 10px 12px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-2);
   }
 
@@ -508,7 +505,7 @@
     align-items: center;
     gap: 6px;
     color: var(--text-2);
-    font-size: 12px;
+    font-size: var(--font-md);
     white-space: nowrap;
   }
 
@@ -520,6 +517,17 @@
 
     .transport {
       justify-content: flex-start;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .event-marker,
+    .usage-toggle-icon {
+      transition: none;
+    }
+
+    .event-marker:hover {
+      transform: translateX(-50%);
     }
   }
 </style>

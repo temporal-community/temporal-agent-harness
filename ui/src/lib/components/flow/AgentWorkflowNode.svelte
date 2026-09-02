@@ -83,7 +83,7 @@
       {/if}
       {#if visibleInterfaces.length}
         <div class="interfaces">
-          <span class="interfaces-label">accepts</span>
+          <span class="kicker">accepts</span>
           {#each visibleInterfaces as item}
             <span class="interface-chip" title={item.description}>{item.name}</span>
           {/each}
@@ -112,16 +112,14 @@
   .workflow-boundary {
     pointer-events: none;
     border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     background:
       linear-gradient(
         180deg,
         color-mix(in srgb, var(--surface-1) 88%, var(--accent) 12%),
         color-mix(in srgb, var(--surface-2) 90%, var(--accent) 10%)
       );
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--surface-0) 64%, transparent),
-      0 18px 44px rgba(0, 0, 0, 0.22);
+    box-shadow: var(--shadow-node-tall);
   }
 
   .workflow-boundary.parent .workflow-head {
@@ -136,9 +134,7 @@
         color-mix(in srgb, var(--surface-1) 92%, var(--accent) 8%),
         color-mix(in srgb, var(--surface-2) 88%, var(--accent) 12%)
       );
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--surface-0) 70%, transparent),
-      0 14px 36px rgba(0, 0, 0, 0.24);
+    box-shadow: var(--shadow-node-mid);
   }
 
   .workflow-boundary.subagent .workflow-head {
@@ -163,7 +159,7 @@
     padding: 13px 14px 11px;
     border-bottom: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 700;
   }
 
@@ -184,7 +180,7 @@
   .workflow-subtitle {
     overflow: hidden;
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-weight: 600;
     line-height: 1.3;
     text-overflow: ellipsis;
@@ -196,7 +192,7 @@
     align-items: center;
     gap: 6px;
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     white-space: nowrap;
   }
 
@@ -208,13 +204,6 @@
     min-width: 0;
   }
 
-  .interfaces-label {
-    color: var(--text-3);
-    font-size: 10px;
-    font-weight: 650;
-    text-transform: uppercase;
-  }
-
   .interface-chip {
     min-width: 0;
     max-width: 96px;
@@ -223,10 +212,10 @@
     white-space: nowrap;
     padding: 2px 7px;
     border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     background: color-mix(in srgb, var(--accent) 10%, transparent);
     color: color-mix(in srgb, var(--accent) 74%, white);
-    font-size: 10px;
+    font-size: var(--font-xs);
     font-weight: 650;
   }
 

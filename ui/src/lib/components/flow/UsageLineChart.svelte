@@ -222,7 +222,7 @@
     align-self: start;
     padding: 8px 10px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-2);
   }
 
@@ -233,12 +233,12 @@
     gap: 10px;
     align-items: center;
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .current-value {
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
@@ -278,10 +278,10 @@
     gap: 1px;
     padding: 5px 8px;
     border: 1px solid var(--border-strong);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--surface-3);
     color: var(--text-1);
-    font-size: 11px;
+    font-size: var(--font-sm);
     white-space: nowrap;
     pointer-events: none;
     z-index: 4;
@@ -297,7 +297,7 @@
 
   .tooltip span {
     color: var(--text-3);
-    font-size: 10px;
+    font-size: var(--font-xs);
   }
 
   .grid {

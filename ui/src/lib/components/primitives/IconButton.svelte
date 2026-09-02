@@ -3,17 +3,24 @@
 
   interface Props {
     label: string;
-    title?: string;
+    /**
+     * The hover hint. Defaults to the accessible name, which is the whole point
+     * of an icon-only control: the word it does not show, shown on hover.
+     * Name the keyboard shortcut here too where one exists — an icon that has
+     * to be discovered by hovering may as well teach the faster way at the same
+     * time.
+     */
+    tip?: string;
     disabled?: boolean;
     pressed?: boolean;
-    tone?: "default" | "primary" | "live";
-    onclick?: () => void;
+    tone?: "default" | "primary" | "follow";
+    onclick?: (event: MouseEvent) => void;
     children?: Snippet;
   }
 
   let {
     label,
-    title = label,
+    tip = label,
     disabled = false,
     pressed = false,
     tone = "default",
@@ -22,40 +29,50 @@
   }: Props = $props();
 </script>
 
+<!-- `data-tip` rather than `title`: the browser waits about a second on one
+     element before showing a `title`, so a row of transport buttons the pointer
+     sweeps across never says anything at all. `aria-label` keeps the name. -->
 <button
   class={`icon-button ${tone} ${pressed ? "pressed" : ""}`}
   type="button"
   aria-label={label}
   aria-pressed={pressed}
-  {title}
+  data-tip={tip}
   {disabled}
-  onclick={() => onclick?.()}
+  onclick={(event) => onclick?.(event)}
 >
   {@render children?.()}
 </button>
 
 <style>
   .icon-button {
-    width: 34px;
-    height: 34px;
+    width: var(--control-height);
+    height: var(--control-height);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: var(--surface-2);
     color: var(--text-2);
     cursor: pointer;
     transition:
-      color 120ms ease,
-      border-color 120ms ease,
-      background 120ms ease;
+      transform var(--duration-press) var(--ease-out),
+      color var(--duration-fast) var(--ease-ui),
+      border-color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui);
   }
 
-  .icon-button:hover:not(:disabled) {
-    color: var(--text-1);
-    border-color: var(--border-strong);
-    background: var(--surface-3);
+  @media (hover: hover) and (pointer: fine) {
+    .icon-button:hover:not(:disabled) {
+      color: var(--text-1);
+      border-color: var(--border-strong);
+      background: var(--surface-3);
+    }
+  }
+
+  .icon-button:active:not(:disabled) {
+    transform: scale(0.97);
   }
 
   .icon-button.primary,
@@ -65,7 +82,9 @@
     background: color-mix(in srgb, var(--accent) 13%, var(--surface-2));
   }
 
-  .icon-button.live {
+  /* Named for what it does, not for the hue it borrows: --live is reserved for
+     work that needs a human, and tailing the stream does not. */
+  .icon-button.follow {
     color: var(--success);
     border-color: color-mix(in srgb, var(--success) 45%, transparent);
   }
@@ -73,5 +92,11 @@
   .icon-button:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .icon-button:active:not(:disabled) {
+      transform: none;
+    }
   }
 </style>

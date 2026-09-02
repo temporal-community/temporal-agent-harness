@@ -93,7 +93,7 @@
           </span>
           <span class="roll-text">
             <strong>{formatDuration(agg.totalSeconds)}</strong>
-            <small>
+            <small class="kicker">
               {kindLabel[agg.kind]} · {agg.count}×
               {#if totalSpanSeconds > 0}
                 · {Math.round((agg.totalSeconds / totalSpanSeconds) * 100)}%
@@ -196,13 +196,13 @@
 
   .title h2 {
     margin: 0;
-    font-size: 14px;
+    font-size: var(--font-xl);
   }
 
   .title p {
     margin: 3px 0 0;
     color: var(--text-3);
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .rollup {
@@ -217,7 +217,7 @@
     gap: 8px;
     padding: 6px 10px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-2);
   }
 
@@ -236,15 +236,8 @@
 
   .roll-text strong {
     color: var(--text-1);
-    font-size: 13px;
+    font-size: var(--font-lg);
     font-variant-numeric: tabular-nums;
-  }
-
-  .roll-text small {
-    color: var(--text-3);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
   }
 
   .turns {
@@ -275,14 +268,14 @@
 
   .turn-no {
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     font-weight: 650;
   }
 
   .turn-dur {
     justify-self: end;
     color: var(--text-2);
-    font-size: 12px;
+    font-size: var(--font-md);
     font-variant-numeric: tabular-nums;
   }
 
@@ -291,7 +284,7 @@
     margin-top: 2px;
     overflow: hidden;
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -299,7 +292,7 @@
   .track {
     position: relative;
     min-height: 30px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--surface-2) 55%, transparent);
   }
 
@@ -338,9 +331,9 @@
     width: max-content;
     padding: 1px 5px;
     border: 1px solid color-mix(in srgb, var(--accent) 44%, transparent);
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     color: var(--accent);
-    font-size: 9px;
+    font-size: var(--font-2xs);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.03em;
@@ -350,7 +343,7 @@
     min-width: 0;
     overflow: hidden;
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-weight: 650;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -358,7 +351,7 @@
 
   .subagent-label small {
     color: var(--text-3);
-    font-size: 10px;
+    font-size: var(--font-xs);
     font-variant-numeric: tabular-nums;
   }
 
@@ -376,14 +369,14 @@
     align-items: center;
     padding: 0 7px;
     border: 1px solid transparent;
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     color: var(--surface-0);
     cursor: pointer;
     font: inherit;
-    font-size: 10px;
+    font-size: var(--font-xs);
     font-variant-numeric: tabular-nums;
     overflow: hidden;
-    transition: filter 120ms ease, opacity 120ms ease, outline-color 120ms ease;
+    transition: filter var(--duration-fast) var(--ease-ui), opacity var(--duration-fast) var(--ease-ui), outline-color var(--duration-fast) var(--ease-ui);
   }
 
   .bar-text {
@@ -423,7 +416,7 @@
   .track-empty,
   .empty {
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .track-empty {
@@ -434,5 +427,13 @@
 
   .empty {
     padding: 20px 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* Nothing here moves, but a bar's filter/opacity fade is still a change
+       the setting asks us not to animate. */
+    .bar {
+      transition: none;
+    }
   }
 </style>
