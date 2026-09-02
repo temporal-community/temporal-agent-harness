@@ -17,9 +17,15 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 from temporalio.api.enums.v1 import EventType
 from temporalio.api.history.v1 import HistoryEvent
-from temporalio.client import Client, WorkflowExecutionStatus, WorkflowHandle
+from temporalio.client import (
+    Client,
+    WorkflowExecutionStatus,
+    WorkflowHandle,
+    WorkflowQueryFailedError,
+)
 from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.envconfig import ClientConfig
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
@@ -239,8 +245,46 @@ def create_agent_harness_app(
     @app.get("/api/attach")
     async def attach(session_id: str, from_offset: int = 0) -> StreamingResponse:
         client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
+
+        async def events():
+            """Stream the session, and say out loud every way that can fail.
+
+            Once the response has begun there is no status code left to answer with, so a
+            raise out of here ends the body with no frames at all — a stream that opens,
+            says nothing and closes, which a browser cannot tell apart from a session that
+            genuinely had nothing to send. Every failure is therefore reported IN BAND, as
+            an ``error`` frame carrying ``kind``/``code`` and no ``type``: the shape a
+            consumer reads as a fact about the connection rather than about the run.
+
+            This is the same job the merge already does for a dying CHILD, whose
+            ``subagent_stream_unavailable`` marker even says "refresh to retry"
+            (``stream_merge/merge.py``). The root got no such courtesy.
+            """
+            delivered = 0
+            try:
+                stream = await client.attach(on_item=_yield_item, from_offset=from_offset)
+                async for chunk in stream:
+                    if chunk:
+                        delivered += 1
+                        yield chunk
+            except (RPCError, WorkflowQueryFailedError) as exc:
+                yield _sse(AgentEventType.ERROR, _attach_error(session_id, exc))
+            else:
+                # Ran to its end without raising and said nothing. On a RUNNING session
+                # that is the ordinary caught-up attach; on a closed one it is the same
+                # pathology as the NOT_FOUND branch minus the exception that made it
+                # reportable — the merge's root cursor dies and ``merge.py`` ends the
+                # generator with a bare ``return``, so a run of hundreds of events
+                # arrives as silence.
+                if delivered == 0:
+                    chunk = await _unreplayable_run_frame(
+                        app.state.temporal, session_id, from_offset=from_offset
+                    )
+                    if chunk:
+                        yield chunk
+
         return StreamingResponse(
-            await client.attach(on_item=_yield_item, from_offset=from_offset),
+            events(),
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
@@ -480,6 +524,103 @@ async def _sessions_with_execution_state(
             *(_session_with_execution_state(temporal, session) for session in sessions)
         )
     )
+
+
+def _attach_error(
+    session_id: str, exc: RPCError | WorkflowQueryFailedError
+) -> dict[str, str]:
+    """The in-band ``error`` payload for a failure while opening or reading a stream.
+
+    ``NOT_FOUND`` is the commonest attach failure a dev stack has — the session list outlives
+    the executions in it, so every id from before a namespace's retention window points at
+    nothing — and it gets its own ``code`` because it is the one case where retrying is
+    pointless: there is no history left to ask for. Everything else shares
+    ``stream_unavailable`` and names its cause in the message, since what a consumer does
+    about a timeout, an absent worker or a query a worker refused is the same thing.
+    """
+    if isinstance(exc, RPCError) and exc.status == RPCStatusCode.NOT_FOUND:
+        return {
+            "kind": "unavailable",
+            "code": "workflow_not_found",
+            "message": (
+                f"No workflow {session_id!r} in this namespace. Its history has been "
+                "deleted or has passed the namespace's retention, so there is nothing "
+                "left to stream."
+            ),
+        }
+    cause = exc.status.name if isinstance(exc, RPCError) else str(exc)
+    return {
+        "kind": "unavailable",
+        "code": "stream_unavailable",
+        "message": (
+            f"The event stream for session {session_id!r} could not be read ({cause}). "
+            "Check that Temporal is reachable and that a worker is polling this agent's "
+            "task queue, then refresh to retry."
+        ),
+    }
+
+
+async def _unreplayable_run_frame(
+    temporal: Client,
+    session_id: str,
+    *,
+    from_offset: int,
+) -> bytes | None:
+    """The frame for an attach that opened on a finished run and read nothing.
+
+    ``unreplayable_run`` rather than ``workflow_not_found``: Temporal HAS this history — the
+    run is in the workflow list and its events are in the history UI — so telling the reader
+    the session is gone would be false.
+
+    ``None`` when the silence is honest, which is most of the time: a RUNNING session the
+    reader has caught up with streams nothing every time it is attached to, and so does a
+    closed run whose whole log the reader already holds.
+    """
+    handle = temporal.get_workflow_handle(session_id)
+    try:
+        desc = await handle.describe()
+    except RPCError:
+        # The status is the only thing that makes this reportable, so an unreachable
+        # Temporal leaves the stream as quiet as it was before.
+        return None
+    if desc.status == WorkflowExecutionStatus.RUNNING:
+        return None
+
+    published = await _published_event_count(temporal, session_id)
+    if published is not None and published <= from_offset:
+        return None
+
+    counted = (
+        f" its {published} recorded events"
+        if published is not None
+        else " the events it recorded"
+    )
+    return _sse(
+        AgentEventType.ERROR,
+        {
+            "kind": "unavailable",
+            "code": "unreplayable_run",
+            "message": (
+                f"Session {session_id!r} finished ({desc.status.name}) and its event "
+                f"stream cannot be replayed, so none of{counted} could be read. The "
+                "history itself is intact in Temporal; what cannot be rebuilt is this "
+                "console's transcript of it."
+            ),
+        },
+    )
+
+
+async def _published_event_count(temporal: Client, session_id: str) -> int | None:
+    """How many events this session published, or ``None`` if it cannot say.
+
+    It is what tells "this run published nothing" apart from "this run published 394 events
+    and none of them could be read", and it costs a history replay on the worker — so it is
+    only ever asked on the path where the alternative is a silent stream.
+    """
+    try:
+        return await WorkflowStreamClient.create(temporal, session_id).get_offset()
+    except Exception:  # noqa: BLE001 — a count we cannot take is not worth a silent stream
+        return None
 
 
 async def _session_initial_user_message(
