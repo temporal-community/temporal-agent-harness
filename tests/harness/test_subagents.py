@@ -82,14 +82,18 @@ def _status() -> _WorkflowStatus:
 
 
 def test_gate_hands_out_tickets_in_call_order():
-    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k", transport=_FAKE_TRANSPORT)
+    inst = _SubagentInstance(
+        handle="h", workflow_id="wf", agent_key="k", transport=_FAKE_TRANSPORT
+    )
     # Tickets are monotonic so gathered callers are ordered by the order they call take_ticket
     # (i.e. the model's call order), not by await scheduling.
     assert [inst.take_ticket() for _ in range(3)] == [0, 1, 2]
 
 
 def test_gate_serves_one_ticket_at_a_time_in_order():
-    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k", transport=_FAKE_TRANSPORT)
+    inst = _SubagentInstance(
+        handle="h", workflow_id="wf", agent_key="k", transport=_FAKE_TRANSPORT
+    )
     t0, t1, t2 = inst.take_ticket(), inst.take_ticket(), inst.take_ticket()
 
     # Only the first ticket is admitted initially.
@@ -108,7 +112,9 @@ def test_gate_serves_one_ticket_at_a_time_in_order():
 
 
 def test_gate_sequential_take_serve_release_never_blocks():
-    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k", transport=_FAKE_TRANSPORT)
+    inst = _SubagentInstance(
+        handle="h", workflow_id="wf", agent_key="k", transport=_FAKE_TRANSPORT
+    )
     # The common (non-concurrent) path: take → already serving → release, repeatedly. Each
     # ticket is served the moment it is taken (no waiting), since the prior one released.
     for expected in range(3):
@@ -123,9 +129,13 @@ def test_gate_sequential_take_serve_release_never_blocks():
 
 def test_register_keys_by_handle_and_stores_workflow_id():
     st = _status()
-    inst = st.register_subagent("a3f9c2", "sample-subagent-<uuid>", "sample", _FAKE_TRANSPORT)
+    inst = st.register_subagent(
+        "a3f9c2", "sample-subagent-<uuid>", "sample", _FAKE_TRANSPORT
+    )
     assert inst.handle == "a3f9c2"
-    assert inst.workflow_id == "sample-subagent-<uuid>"  # the real child id, hidden from the model
+    assert (
+        inst.workflow_id == "sample-subagent-<uuid>"
+    )  # the real child id, hidden from the model
     assert inst.agent_key == "sample"
     assert inst.next_expected_turn == 1
     assert inst.last_consumed_offset == 0
@@ -154,9 +164,23 @@ def test_remove_subagent_is_idempotent_and_then_unknown():
     st.remove_subagent("a3f9c2")
 
 
+def test_reusable_subagent_is_the_most_recently_used_matching_child():
+    st = _status()
+    first = st.register_subagent("first", "wf-1", "writer", _FAKE_TRANSPORT)
+    second = st.register_subagent("second", "wf-2", "writer", _FAKE_TRANSPORT)
+    st.register_subagent("other", "wf-3", "research", _FAKE_TRANSPORT)
+
+    assert st.reusable_subagent("writer") is second
+    st.mark_subagent_used(first)
+    assert st.reusable_subagent("writer") is first
+    assert st.reusable_subagent("missing") is None
+
+
 def test_agent_status_lists_subagents_without_gate_internals():
     st = _status()
-    inst = st.register_subagent("a3f9c2", "sample-subagent-wf", "sample", _FAKE_TRANSPORT)
+    inst = st.register_subagent(
+        "a3f9c2", "sample-subagent-wf", "sample", _FAKE_TRANSPORT
+    )
     inst.next_expected_turn = 4
     # Hand out a couple of gate tickets so the internal counters are non-default.
     inst.take_ticket()
@@ -165,7 +189,12 @@ def test_agent_status_lists_subagents_without_gate_internals():
     status = st.to_agent_status()
     assert len(status.subagents) == 1
     info = status.subagents[0]
-    assert (info.subagent_id, info.agent_key, info.workflow_id, info.next_expected_turn) == (
+    assert (
+        info.subagent_id,
+        info.agent_key,
+        info.workflow_id,
+        info.next_expected_turn,
+    ) == (
         "a3f9c2",
         "sample",
         "sample-subagent-wf",
@@ -184,8 +213,12 @@ def test_subagent_lifecycle_events_carry_workflow_id_and_round_trip():
     # the child workflow_id intact — that field is what lets a consumer dynamically mount the
     # subagent's own stream for a consolidated view.
     for ev in (
-        SubagentStarted(subagent_id="a3f9c2", agent_key="sample", workflow_id="sample-subagent-wf"),
-        SubagentStopped(subagent_id="a3f9c2", agent_key="sample", workflow_id="sample-subagent-wf"),
+        SubagentStarted(
+            subagent_id="a3f9c2", agent_key="sample", workflow_id="sample-subagent-wf"
+        ),
+        SubagentStopped(
+            subagent_id="a3f9c2", agent_key="sample", workflow_id="sample-subagent-wf"
+        ),
     ):
         envelope = AgentEvent(
             event=ev, agent_id="parent-wf", turn_id="t1", turn_number=2, timestamp=0.0
@@ -224,13 +257,22 @@ def test_subagent_message_sent_event_round_trips_with_dispatch_details():
     assert back.event.workflow_id == "monty-subagent-wf"
     assert back.event.function == "run_script"
     assert back.event.subagent_turn == 3
-    assert back.turn_number == 5  # the parent turn, on the envelope — not the subagent's
+    assert (
+        back.turn_number == 5
+    )  # the parent turn, on the envelope — not the subagent's
 
 
 def test_toolset_emits_namespaced_start_send_stop_tools():
-    tools = agent.subagent_toolset(_SampleChildAgent, key="sample", task_queue="sample-q")
+    tools = agent.subagent_toolset(
+        _SampleChildAgent, key="sample", task_queue="sample-q"
+    )
     # start_<key>, one <key>_<fn> per handler (discovery order is alphabetical), then stop_<key>.
-    assert [t.__name__ for t in tools] == ["start_sample", "sample_ask", "sample_summarize", "stop_sample"]
+    assert [t.__name__ for t in tools] == [
+        "start_sample",
+        "sample_ask",
+        "sample_summarize",
+        "stop_sample",
+    ]
     # Every generated tool is a real inline tool_defn — so it inherits run_tool dispatch, the
     # approval gate, and tool lifecycle events with no extra wiring.
     assert all(getattr(t, "__agent_tool__", False) for t in tools)
@@ -245,9 +287,12 @@ def test_toolset_hides_operator_slash_handler():
 
 
 def test_send_tool_signature_uses_the_childs_real_models():
-    tools = {t.__name__: t for t in agent.subagent_toolset(
-        _SampleChildAgent, key="sample", task_queue="sample-q"
-    )}
+    tools = {
+        t.__name__: t
+        for t in agent.subagent_toolset(
+            _SampleChildAgent, key="sample", task_queue="sample-q"
+        )
+    }
     ask = tools["sample_ask"]
     sig = inspect.signature(ask)
     # subagent handle (str) + the handler's own input param name, typed as the real input model.
@@ -262,17 +307,25 @@ def test_send_tool_signature_uses_the_childs_real_models():
 
 
 def test_send_tool_docstring_carries_the_handler_description():
-    tools = {t.__name__: t for t in agent.subagent_toolset(
-        _SampleChildAgent, key="sample", task_queue="sample-q"
-    )}
+    tools = {
+        t.__name__: t
+        for t in agent.subagent_toolset(
+            _SampleChildAgent, key="sample", task_queue="sample-q"
+        )
+    }
     assert "Answer a free-form question." in (tools["sample_ask"].__doc__ or "")
-    assert "Summarize the conversation so far." in (tools["sample_summarize"].__doc__ or "")
+    assert "Summarize the conversation so far." in (
+        tools["sample_summarize"].__doc__ or ""
+    )
 
 
 def test_start_and_stop_tool_signatures():
-    tools = {t.__name__: t for t in agent.subagent_toolset(
-        _SampleChildAgent, key="sample", task_queue="sample-q"
-    )}
+    tools = {
+        t.__name__: t
+        for t in agent.subagent_toolset(
+            _SampleChildAgent, key="sample", task_queue="sample-q"
+        )
+    }
     assert list(inspect.signature(tools["start_sample"]).parameters) == []
     assert inspect.signature(tools["start_sample"]).return_annotation is str
     assert list(inspect.signature(tools["stop_sample"]).parameters) == ["subagent"]

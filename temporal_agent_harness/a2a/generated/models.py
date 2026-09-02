@@ -332,8 +332,28 @@ class _AgentStatusOutputTransferTypeConverter(
             else:
                 has_custom_approval_fallback_value = has_custom_approval_fallback_value_raw
 
+        subagent_close_policy_value: str = typing.cast("typing.Any", None)
+        if "subagentClosePolicy" not in raw or raw["subagentClosePolicy"] is None:
+            violations.append(Violation(path="subagentClosePolicy", reason="required"))
+        else:
+            subagent_close_policy_value_raw = raw["subagentClosePolicy"]
+            if not isinstance(subagent_close_policy_value_raw, str):
+                violations.append(Violation(path="subagentClosePolicy", reason="expected string"))
+            else:
+                subagent_close_policy_value = subagent_close_policy_value_raw
+
+        subagent_reuse_policy_value: str = typing.cast("typing.Any", None)
+        if "subagentReusePolicy" not in raw or raw["subagentReusePolicy"] is None:
+            violations.append(Violation(path="subagentReusePolicy", reason="required"))
+        else:
+            subagent_reuse_policy_value_raw = raw["subagentReusePolicy"]
+            if not isinstance(subagent_reuse_policy_value_raw, str):
+                violations.append(Violation(path="subagentReusePolicy", reason="expected string"))
+            else:
+                subagent_reuse_policy_value = subagent_reuse_policy_value_raw
+
         for key in raw:
-            if key != "agentId" and key != "currentTurn" and key != "turnActive" and key != "isMessageQueuingEnabled" and key != "pendingTurns" and key != "pendingApprovals" and key != "pendingCallbacks" and key != "subagents" and key != "approvalPolicy" and key != "hasCustomApprovalFallback":
+            if key != "agentId" and key != "currentTurn" and key != "turnActive" and key != "isMessageQueuingEnabled" and key != "pendingTurns" and key != "pendingApprovals" and key != "pendingCallbacks" and key != "subagents" and key != "approvalPolicy" and key != "hasCustomApprovalFallback" and key != "subagentClosePolicy" and key != "subagentReusePolicy":
                 violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
@@ -348,6 +368,8 @@ class _AgentStatusOutputTransferTypeConverter(
             subagents=subagents_value,
             approval_policy=approval_policy_value,
             has_custom_approval_fallback=has_custom_approval_fallback_value,
+            subagent_close_policy=subagent_close_policy_value,
+            subagent_reuse_policy=subagent_reuse_policy_value,
         )
 
     @typing_extensions.override
@@ -391,6 +413,8 @@ class _AgentStatusOutputTransferTypeConverter(
         except ValidationError as error:
             _collect(violations, "approvalPolicy", error)
         out["hasCustomApprovalFallback"] = value.has_custom_approval_fallback
+        out["subagentClosePolicy"] = value.subagent_close_policy
+        out["subagentReusePolicy"] = value.subagent_reuse_policy
         if violations:
             raise ValidationError(violations)
         return out
@@ -431,6 +455,14 @@ class AgentStatusOutput:
     """Whether a developer custom-approval predicate is wired (the predicate itself is
     non-serializable and never surfaced)
     """
+
+    subagent_close_policy: str
+    """Effective policy for model-requested and parent-shutdown child closure: keep-open |
+    close | ask-user
+    """
+
+    subagent_reuse_policy: str
+    """Effective policy for start_<agent>: use-existing | always-new"""
 
 
 class _ApprovalPolicyTransferTypeConverter(
