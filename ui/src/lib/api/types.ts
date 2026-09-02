@@ -326,6 +326,12 @@ export interface TokenUsage {
   thought_tokens?: number | null;
   cached_tokens?: number | null;
   tool_use_tokens?: number | null;
+  /**
+   * The provider's own grand total, not necessarily the sum of the fields above
+   * — providers disagree about whether cached and tool-use tokens sit inside
+   * input and output. Absent from producers that report no total of their own.
+   */
+  total_tokens?: number | null;
 }
 
 export interface ModelInteractionStartedEvent

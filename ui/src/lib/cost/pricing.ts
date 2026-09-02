@@ -61,11 +61,6 @@ const emptyTotals = (): UsageTotals => ({
 
 const copyTotals = (tokens: UsageTotals): UsageTotals => ({ ...tokens });
 
-/* `total_tokens` rides on the wire — the harness's TokenUsage defines it — but is
-   not yet declared in $lib/api/types, so read it through a local widening rather
-   than reach into a module five other agents are editing. */
-type ReportedUsage = TokenUsage & { total_tokens?: number | null };
-
 function addUsage(totals: UsageTotals, usage: TokenUsage): void {
   totals.input += usage.input_tokens ?? 0;
   totals.output += usage.output_tokens ?? 0;
@@ -81,8 +76,8 @@ function addUsage(totals: UsageTotals, usage: TokenUsage): void {
      a grand total and documents it as "not necessarily the sum of the parts".
      Falling back to input + output keeps the previous answer for a producer that
      reports no total of its own. */
-  const reported = (usage as ReportedUsage).total_tokens;
-  totals.total += reported ?? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+  totals.total +=
+    usage.total_tokens ?? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
 }
 
 function estimate(model: string, tokens: UsageTotals): number | null {
