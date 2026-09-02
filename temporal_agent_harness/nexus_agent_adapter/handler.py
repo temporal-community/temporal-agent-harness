@@ -41,19 +41,15 @@ from temporal_agent_harness.harness.stream_poll import (
 # same name but a different (reshaped, wire-friendly) shape.
 from .generated import (
     AcceptedFunction as NexusAcceptedFunction,
+)
+from .generated import (
     AgentInterfaceOutput,
-    ApprovalPolicy as NexusApprovalPolicy,
     AgentStatusOutput,
     ApproveToolCallInput,
     ApproveToolCallOutput,
     CloseSessionOutput,
     ExecuteOperatorCommandInput,
     ExecuteOperatorCommandOutput,
-    OperatorCommand as NexusOperatorCommand,
-    OperatorCommandArgument as NexusOperatorCommandArgument,
-    PendingApproval as NexusPendingApproval,
-    PendingCallback as NexusPendingCallback,
-    PendingTurn as NexusPendingTurn,
     PollMessagesInput,
     PollMessagesOutput,
     ProvideCallbackResultInput,
@@ -63,9 +59,29 @@ from .generated import (
     SendAgentMessageInput,
     SendMessageOutput,
     StreamItem,
-    SubagentInfo as NexusSubagentInfo,
 )
 from .generated import AgentService as AgentServiceDefinition
+from .generated import (
+    ApprovalPolicy as NexusApprovalPolicy,
+)
+from .generated import (
+    OperatorCommand as NexusOperatorCommand,
+)
+from .generated import (
+    OperatorCommandArgument as NexusOperatorCommandArgument,
+)
+from .generated import (
+    PendingApproval as NexusPendingApproval,
+)
+from .generated import (
+    PendingCallback as NexusPendingCallback,
+)
+from .generated import (
+    PendingTurn as NexusPendingTurn,
+)
+from .generated import (
+    SubagentInfo as NexusSubagentInfo,
+)
 
 DEFAULT_POLL_TIMEOUT_SECONDS = 30.0
 _MAX_SEND_RETRIES = 5
@@ -193,7 +209,9 @@ class AgentServiceHandler:
                     update_id=f"send-{ctx.request_id}",
                 )
             except StaleTurnError as e:
-                raise HandlerError(f"StaleTurn: {e}", type=HandlerErrorType.BAD_REQUEST) from e
+                raise HandlerError(
+                    f"StaleTurn: {e}", type=HandlerErrorType.BAD_REQUEST
+                ) from e
             return SendMessageOutput(
                 turn_number=reply.turn_number,
                 turn_id=reply.turn_id,
@@ -261,7 +279,9 @@ class AgentServiceHandler:
                 update_id=f"approve-{ctx.request_id}",
             )
         except ToolApprovalError as e:
-            raise HandlerError(str(e), type=HandlerErrorType.BAD_REQUEST) from e  # caller's fault
+            raise HandlerError(
+                str(e), type=HandlerErrorType.BAD_REQUEST
+            ) from e  # caller's fault
         return ApproveToolCallOutput(tool_id=result.tool_id, accepted=result.accepted)
 
     # -----------------------------------------------------------------------
@@ -328,6 +348,8 @@ class AgentServiceHandler:
             subagents=[_nexus_subagent_info(s) for s in status.subagents],
             approval_policy=_nexus_approval_policy(status.approval_policy),
             has_custom_approval_fallback=status.has_custom_approval_fallback,
+            subagent_close_policy=status.subagent_close_policy.value,
+            subagent_reuse_policy=status.subagent_reuse_policy.value,
         )
 
     # -----------------------------------------------------------------------
@@ -350,7 +372,9 @@ class AgentServiceHandler:
                 update_id=f"callback-{ctx.request_id}",
             )
         except CallbackResultError as e:
-            raise HandlerError(str(e), type=HandlerErrorType.BAD_REQUEST) from e  # caller's fault
+            raise HandlerError(
+                str(e), type=HandlerErrorType.BAD_REQUEST
+            ) from e  # caller's fault
         return ProvideCallbackResultOutput(
             tool_id=result.tool_id, accepted=result.accepted
         )
@@ -406,7 +430,10 @@ class AgentServiceHandler:
             if _is_workflow_already_completed(e):
                 return nexus.TemporalOperationResult.sync(
                     PollMessagesOutput(
-                        items=[], more_ready=False, next_offset=input.cursor, closed=True
+                        items=[],
+                        more_ready=False,
+                        next_offset=input.cursor,
+                        closed=True,
                     )
                 )
             raise

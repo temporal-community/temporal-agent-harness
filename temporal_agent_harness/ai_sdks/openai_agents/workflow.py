@@ -23,15 +23,17 @@ from agents.tool_context import ToolContext
 from temporalio import activity
 from temporalio import workflow as temporal_workflow
 from temporalio.common import Priority, RetryPolicy
-from temporal_agent_harness.ai_sdks.openai_agents.sandbox._temporal_sandbox_client import (
-    TemporalSandboxClient,
-)
 from temporalio.exceptions import ApplicationError, TemporalError
 from temporalio.workflow import (
     ActivityCancellationType,
     ActivityConfig,
     VersioningIntent,
 )
+
+from temporal_agent_harness.ai_sdks.openai_agents.sandbox._temporal_sandbox_client import (
+    TemporalSandboxClient,
+)
+from temporal_agent_harness.harness.agent_workflow import ToolApprovalDenied
 
 if typing.TYPE_CHECKING:
     from agents.mcp import MCPServer
@@ -281,7 +283,12 @@ def harness_tool_as_openai_tool(fn: Callable, *, strict_json_schema: bool = True
         args, kwargs = schema.to_call_args(schema.params_pydantic_model(**json_data))
         if schema.takes_context:
             args = [ctx] + args
-        result = await ctx.context.run_tool(ctx.tool_call_id, fn, *args, **kwargs)
+        try:
+            result = await ctx.context.run_tool(ctx.tool_call_id, fn, *args, **kwargs)
+        except ToolApprovalDenied as exc:
+            # A human rejection is a normal tool outcome, not a failed agent turn. Feed it
+            # back to the model so it can respect the decision and finish its response.
+            return f"Tool {schema.name!r} was not run: {exc}"
         try:
             return str(result)
         except Exception as e:
