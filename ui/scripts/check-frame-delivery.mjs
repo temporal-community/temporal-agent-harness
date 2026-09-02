@@ -111,53 +111,82 @@ assert.ok(
    silent and total: an early return while catching up publishes NOTHING for the
    whole backlog, and the console sits empty until the run goes live. */
 
-const streamCatchUp = (replayFrames, liveFrames, msPerFrame, endStream = false) =>
+const streamCatchUp = (replayFrames, liveFrames, msPerFrame, options) =>
   streamFrames(
     [...Array(replayFrames).fill(true), ...Array(liveFrames).fill(false)],
     msPerFrame,
-    endStream
+    options
   );
 
 /* Modelled on #appendFrame + #schedulePublish, driven by an explicit sequence of
-   `replay` marks so an interleaved one can be fed in. `endStream` models the
-   server closing the stream, which attach()'s finally block treats as a commit
-   trigger in its own right. */
-const streamFrames = (replayMarks, msPerFrame, endStream = false) => {
+   `replay` marks so an interleaved one can be fed in.
+   `endStream` models the server closing the stream, which attach()'s finally
+   block treats as a commit trigger in its own right. `quietMs` models the stream
+   staying OPEN after the last frame, which is where the armed #catchUpFlushTimer
+   is the only thing that can commit. */
+const streamFrames = (replayMarks, msPerFrame, { endStream = false, quietMs = 0 } = {}) => {
   let catchingUp = false;
   let liveFrameSeen = false;
   let catchUpStartedAt = 0;
   let sinceCatchUpPublish = 0;
   let clock = 0;
+  let staged = 0; // frames buffered since the last commit
+  let deadlineAt = null; // the armed #catchUpFlushTimer, or null for disarmed
   const commits = [];
+
+  const publish = (kind) => {
+    commits.push({ at: clock, kind });
+    staged = 0;
+    deadlineAt = null; // #publishFrames clears any pending deadline
+  };
+
+  /* The timer firing. Needs no frame to arrive, which is the whole point: this
+     is what makes waiting sufficient on a stream that stays open. */
+  const runDeadline = (until) => {
+    if (deadlineAt == null || deadlineAt > until) return;
+    clock = Math.max(clock, deadlineAt);
+    sinceCatchUpPublish = 0;
+    catchUpStartedAt = clock;
+    publish("deadline");
+  };
 
   const schedulePublish = () => {
     if (catchingUp) {
       sinceCatchUpPublish += 1;
-      if (sinceCatchUpPublish < framePublishChunkSize) return;
-      if (!publishAtChunkBoundary(true, clock - catchUpStartedAt)) return;
+      if (
+        sinceCatchUpPublish < framePublishChunkSize ||
+        !publishAtChunkBoundary(true, clock - catchUpStartedAt)
+      ) {
+        // #armCatchUpFlush: once only, and never with an empty buffer.
+        if (staged > 0 && deadlineAt == null) deadlineAt = catchUpStartedAt + catchUpCeilingMs;
+        return;
+      }
       sinceCatchUpPublish = 0;
       catchUpStartedAt = clock;
-      commits.push({ at: clock, kind: "chunk" });
+      publish("chunk");
       return;
     }
-    commits.push({ at: clock, kind: "paint" }); // rAF coalesces; one per frame here is the ceiling
+    publish("paint"); // rAF coalesces; one per frame here is the ceiling
   };
 
   const append = (isReplay) => {
+    runDeadline(clock + msPerFrame); // the timer can fire before the next frame lands
     clock += msPerFrame;
+    staged += 1;
     if (!isReplay) liveFrameSeen = true;
     const next = catchingUpAfterFrame(isReplay, liveFrameSeen);
     if (next !== catchingUp) {
       catchingUp = next;
       catchUpStartedAt = clock;
       sinceCatchUpPublish = 0;
-      if (!next) commits.push({ at: clock, kind: "crossed-to-live" });
+      if (!next) publish("crossed-to-live");
     }
     schedulePublish();
   };
 
   for (const isReplay of replayMarks) append(isReplay);
-  if (endStream) commits.push({ at: clock, kind: "stream-end" });
+  if (quietMs > 0) runDeadline(clock + quietMs);
+  if (endStream) publish("stream-end");
   return commits;
 };
 
@@ -173,17 +202,22 @@ assert.ok(
   "crossing to live must commit the tail of the backlog rather than hold it"
 );
 
-// A slow cold load. Progress has to show, but bounded by time, not by chunk count.
+/* A slow cold load. Progress has to show, but bounded by time, not by chunk
+   count — so a chunk commit and a deadline commit count alike here. Both are the
+   backlog making visible progress; which one gets there first is a detail of
+   whether the 24th frame or the one-second ceiling arrives sooner. */
 const coldSlow = streamCatchUp(2000, 1, 5);
-const chunkCommits = coldSlow.filter((c) => c.kind === "chunk").length;
+const progressCommits = coldSlow.filter(
+  (c) => c.kind === "chunk" || c.kind === "deadline"
+).length;
 const elapsed = 2000 * 5;
 assert.ok(
-  chunkCommits > 0,
+  progressCommits > 0,
   "a ten-second backlog must show progress instead of looking hung"
 );
 assert.ok(
-  chunkCommits <= Math.ceil(elapsed / catchUpCeilingMs) + 1,
-  `a ${elapsed}ms stream catch-up may commit at most ~${Math.ceil(elapsed / catchUpCeilingMs)} times, got ${chunkCommits}`
+  progressCommits <= Math.ceil(elapsed / catchUpCeilingMs) + 1,
+  `a ${elapsed}ms stream catch-up may commit at most ~${Math.ceil(elapsed / catchUpCeilingMs)} times, got ${progressCommits}`
 );
 
 // The regression this exists to prevent: publishing nothing at all during catch-up.
@@ -202,12 +236,12 @@ assert.equal(
   "a 27-frame replay arriving in 250ms clears no chunk boundary on its own"
 );
 assert.equal(
-  streamCatchUp(27, 0, 9, true).at(-1).kind,
+  streamCatchUp(27, 0, 9, { endStream: true }).at(-1).kind,
   "stream-end",
   "the end of the stream must commit a backlog too short to reach a boundary"
 );
 assert.equal(
-  streamCatchUp(6, 0, 9, true).length,
+  streamCatchUp(6, 0, 9, { endStream: true }).length,
   1,
   "a session shorter than one chunk could never publish without a terminal commit"
 );
@@ -215,10 +249,58 @@ assert.equal(
 /* What that terminal commit costs. A long slow backlog already commits on the
    chunk schedule, so the flush adds exactly one — per stream end, not per frame. */
 assert.equal(
-  streamCatchUp(2000, 1, 5, true).length - streamCatchUp(2000, 1, 5).length,
+  streamCatchUp(2000, 1, 5, { endStream: true }).length - streamCatchUp(2000, 1, 5).length,
   1,
   "a terminal commit costs one publish per stream end, not one per frame"
 );
+
+/* The live-session path, and the harder half of the same chunk gate. The stream
+   stays OPEN: a workflow is still running, has delivered fewer than a chunk of
+   replay frames, and has not reached its live edge. There is no stream end to
+   flush it and no 24th frame coming, and because #schedulePublish only runs when
+   a frame arrives, no amount of waiting used to help. This is the blank console
+   someone watching a running workflow saw. */
+const stillOpen = Array(9).fill(true);
+assert.equal(
+  streamFrames(stillOpen, 9).length,
+  0,
+  "nine replay frames on a still-open stream publish nothing without a deadline"
+);
+const waited = streamFrames(stillOpen, 9, { quietMs: 5000 });
+assert.equal(waited.length, 1, "waiting past the ceiling must commit exactly once");
+assert.equal(waited[0].kind, "deadline", "and it must be the deadline that does it");
+assert.ok(
+  waited[0].at >= catchUpCeilingMs,
+  "the deadline must respect the ceiling rather than committing immediately"
+);
+
+/* A single frame is the extreme of the same case, and the one a run that has
+   just started shows. */
+assert.equal(
+  streamFrames([true], 1, { quietMs: 5000 }).length,
+  1,
+  "one replay frame on an open stream must still reach the view"
+);
+
+/* The cost, which is the constraint the deadline must not break: commits track
+   elapsed time, never frame count. These two streams carry a 10x difference in
+   frames over the same ten seconds and must cost the same number of commits. */
+const busy = streamFrames(Array(20_000).fill(true), 0.5, { quietMs: 2000 });
+const sparse = streamFrames(Array(2_000).fill(true), 5, { quietMs: 2000 });
+assert.equal(
+  busy.length,
+  sparse.length,
+  `20k and 2k frames over the same 10s must cost the same commits, got ${busy.length} and ${sparse.length}`
+);
+assert.ok(
+  busy.length <= Math.ceil(12_000 / catchUpCeilingMs) + 1,
+  `a 12s catch-up may commit at most ~12 times, got ${busy.length}`
+);
+assert.ok(
+  busy.every((c) => c.kind === "deadline"),
+  "a catch-up that never fills a chunk in time should commit only on the deadline"
+);
+
 
 // With no replay marker at all (an older server) every frame takes the paint path,
 // which is exactly today's behavior — so the change cannot regress that case.
@@ -268,6 +350,11 @@ assert.equal(
   mixed.filter((c) => c.kind === "chunk").length,
   0,
   "a replay mark arriving after the live edge must not re-enter chunked batching"
+);
+assert.equal(
+  mixed.filter((c) => c.kind === "deadline").length,
+  0,
+  "nor may it arm a deadline: past the live edge the per-paint schedule owns it"
 );
 
 /* ponytail: bounding the commit COUNT is all this schedule does; each commit is

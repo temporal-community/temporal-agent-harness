@@ -19,6 +19,7 @@ import {
   type AgentGraphSource
 } from "./flowProjection";
 import {
+  catchUpCeilingMs,
   catchingUpAfterFrame,
   cursorAfterPublish,
   framePublishChunkSize,
@@ -315,6 +316,8 @@ export class AgentRunController {
   #catchUpStartedAt = 0;
   /** Frames staged since the last catch-up commit, counting toward the next chunk. */
   #sinceCatchUpPublish = 0;
+  /** Deadline commit for a catch-up whose chunk may never fill. */
+  #catchUpFlushTimer: number | null = null;
   #submitQueue: Promise<void> = Promise.resolve();
   #timer: number | null = null;
 
@@ -1302,6 +1305,7 @@ export class AgentRunController {
        buffer over the new session's empty one. */
     this.#publishGeneration += 1;
     this.#flushQueued = false;
+    this.#clearCatchUpFlush();
     this.#catchingUp = false;
     this.#liveFrameSeen = false;
     this.#sinceCatchUpPublish = 0;
@@ -1396,8 +1400,47 @@ export class AgentRunController {
    * change, not a cheaper copy here.
    */
   #publishFrames(): void {
+    this.#clearCatchUpFlush();
     this.frames = this.#frameBuffer.slice();
     this.viewIndex = cursorAfterPublish(this.following, this.viewIndex, this.total);
+  }
+
+  #clearCatchUpFlush(): void {
+    if (this.#catchUpFlushTimer == null) return;
+    clearTimeout(this.#catchUpFlushTimer);
+    this.#catchUpFlushTimer = null;
+  }
+
+  /**
+   * Commit the staged backlog once the ceiling passes, even if its chunk never
+   * fills.
+   *
+   * The chunk schedule is driven entirely by frames arriving — #schedulePublish
+   * runs from #appendFrame and nowhere else — so a stream that stays open while
+   * trickling fewer than a chunk's worth of replay frames publishes nothing, and
+   * waiting does not help. That is a live session someone is watching, showing a
+   * blank console. A deadline is what makes waiting sufficient.
+   *
+   * Rate-limited by the same clock as the chunk path, since committing restarts
+   * it, so a high-volume catch-up gains no commits: they stay bounded by elapsed
+   * time over the ceiling, not by frame count.
+   */
+  #armCatchUpFlush(): void {
+    if (this.#catchUpFlushTimer != null || typeof window === "undefined") return;
+    /* Nothing staged means nothing to show; committing anyway would re-run every
+       projection to produce the array that is already there. */
+    if (this.#frameBuffer.length === this.frames.length) return;
+    const generation = this.#publishGeneration;
+    const delay = Math.max(0, catchUpCeilingMs - (now() - this.#catchUpStartedAt));
+    this.#catchUpFlushTimer = window.setTimeout(() => {
+      this.#catchUpFlushTimer = null;
+      /* Same guard as the queued per-paint flush: a session switch bumps the
+         generation, and this buffer must not land in the new session's view. */
+      if (generation !== this.#publishGeneration) return;
+      this.#sinceCatchUpPublish = 0;
+      this.#catchUpStartedAt = now();
+      this.#publishFrames();
+    }, delay);
   }
 
   /**
@@ -1416,8 +1459,13 @@ export class AgentRunController {
   #schedulePublish(): void {
     if (this.#catchingUp) {
       this.#sinceCatchUpPublish += 1;
-      if (this.#sinceCatchUpPublish < framePublishChunkSize) return;
-      if (!publishAtChunkBoundary(true, now() - this.#catchUpStartedAt)) return;
+      if (
+        this.#sinceCatchUpPublish < framePublishChunkSize ||
+        !publishAtChunkBoundary(true, now() - this.#catchUpStartedAt)
+      ) {
+        this.#armCatchUpFlush();
+        return;
+      }
       this.#sinceCatchUpPublish = 0;
       /* Restart the clock so the ceiling rate-limits rather than merely delays:
          without it every chunk past the first second commits, and chunks can
