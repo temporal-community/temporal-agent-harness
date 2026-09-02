@@ -356,6 +356,27 @@ def create_agent_harness_app(
             },
         )
 
+    @app.exception_handler(RPCError)
+    async def rpc_error_handler(request, exc: RPCError):
+        """A workflow that is gone is a missing resource, not a server fault.
+
+        The session registry outlives the workflows it lists, and Temporal
+        retention eventually drops closed ones, so any endpoint that takes a
+        workflow id can be handed a dead one. Answering 500 with a traceback
+        made an expected condition look like a bug and buried real ones. Handled
+        here rather than per-endpoint so every route that queries a workflow
+        agrees, including ones added later.
+
+        Anything other than NOT_FOUND is a genuine fault and is left to
+        propagate, keeping its 500 and its traceback.
+        """
+        if exc.status != RPCStatusCode.NOT_FOUND:
+            raise exc
+        return JSONResponse(
+            status_code=404,
+            content={"error": "workflow_not_found", "message": str(exc)},
+        )
+
     return app
 
 
