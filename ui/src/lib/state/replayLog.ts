@@ -620,6 +620,29 @@ export function buildReplayMarkers(input: Array<AgentSseFrame | ReplayLogFrame>)
     }));
 }
 
+/* Most statuses restate the label they sit next to ("Tool completed" carries
+   status "done"), so a status has to survive these stems before it is worth
+   showing. Unknown values like a subagent's "timeout" fall through and stay. */
+const IMPLIED_STATUS_STEMS: Record<string, string[]> = {
+  running: ["start", "progress", "stream"],
+  done: ["complet", "final"],
+  complete: ["complet", "final"],
+  idle: ["end"],
+  dispatched: ["sent"],
+  approved: ["grant"]
+};
+
+/** The row's status, or null when the row's label already carries it. */
+export function statusNote(row: ReplayLogRow): string | null {
+  const status = row.status?.trim();
+  if (!status) return null;
+  const label = row.label.toLowerCase();
+  const value = status.toLowerCase();
+  if (label.includes(value)) return null;
+  if ((IMPLIED_STATUS_STEMS[value] ?? []).some((stem) => label.includes(stem))) return null;
+  return status;
+}
+
 export function formatDuration(seconds: number): string {
   const rounded = Math.max(0, Math.round(seconds));
   if (rounded < 60) return `${rounded}s`;

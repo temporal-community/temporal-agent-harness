@@ -22,6 +22,7 @@
   } from "$lib/components/primitives/StatusChip.svelte";
   import {
     formatDuration,
+    statusNote,
     type ReplayLogRow,
     type TurnLogGroup
   } from "$lib/state/replayLog";
@@ -327,6 +328,7 @@
           <div class="log-lines" id={`turn-${group.turnNumber}-logs`}>
             {#each group.rows as row}
               {@const expanded = isRowExpanded(row.id)}
+              {@const status = statusNote(row)}
               {@const active = activeRowId === row.id || (activeRowId == null && activeOrdinal === row.ordinal)}
               <article
                 id={`log-row-${row.id}`}
@@ -379,9 +381,9 @@
                         <span class="actor-name">{actorLabel(row)}</span>
                         <time>{time(row.timestamp)}</time>
                         <Badge label={row.label} tone={row.tone} />
-                        {#if row.status}
+                        {#if status}
                           <StatusChip
-                            label={row.status}
+                            label={status}
                             kind={statusKind(row)}
                             compact
                             active={row.ordinal === activeOrdinal}
