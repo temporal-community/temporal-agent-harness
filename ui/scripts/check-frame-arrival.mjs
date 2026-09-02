@@ -156,6 +156,46 @@ const frame = (agentId, offset, { replay = true } = {}) => ({
   }
 });
 
+/**
+ * The two parent-stream frames a client sees for a child the merge could not
+ * mount. `subagent_started` is the parent's, so it carries the parent's
+ * `agent_id`; the marker is synthesized (hence `event_offset: -1`) and stamped
+ * with the child's `agent_id`, matching `_unavailable_event` in
+ * `stream_merge/merge.py`.
+ */
+const subagentStarted = (subagentId, workflowId, offset) => ({
+  event: "subagent_started",
+  data: {
+    type: "subagent_started",
+    agent_id: "root",
+    turn_id: "t1",
+    turn_number: 1,
+    timestamp: offset,
+    resume_offset: offset + 1,
+    event_offset: offset,
+    subagent_id: subagentId,
+    agent_key: "qa",
+    workflow_id: workflowId,
+    replay: true
+  }
+});
+
+const subagentStreamUnavailable = (subagentId, workflowId) => ({
+  event: "subagent_stream_unavailable",
+  data: {
+    type: "subagent_stream_unavailable",
+    agent_id: subagentId,
+    turn_id: "",
+    turn_number: 0,
+    timestamp: 0,
+    event_offset: -1,
+    subagent_id: subagentId,
+    workflow_id: workflowId,
+    reason: "subagent stream unavailable — refresh to retry",
+    replay: true
+  }
+});
+
 const abortError = () => Object.assign(new Error("aborted"), { name: "AbortError" });
 
 /**
@@ -218,8 +258,10 @@ function controllableStream({ ignoreAbort = false } = {}) {
  */
 function fakeApi({ streamFor, statusFor }) {
   const attachCalls = [];
+  const statusCalls = [];
   return {
     attachCalls,
+    statusCalls,
     api: {
       async listSessions() {
         return [];
@@ -231,6 +273,7 @@ function fakeApi({ streamFor, statusFor }) {
         return [];
       },
       async workflowStatus(workflowId) {
+        statusCalls.push(workflowId);
         const status = statusFor(workflowId);
         return { workflow_id: workflowId, execution_status: status, closed: status !== "RUNNING" };
       },
@@ -261,16 +304,16 @@ const { AgentRunController } = await vite.ssrLoadModule(
  * "the run completed" rather than "the connection died". Ending a stream without
  * it leaves the controller correctly retrying for its whole backoff budget.
  */
-function boot({ sessions, streamFor }) {
+function boot({ sessions, streamFor, statusFor }) {
   freshStorage();
   const closed = new Set();
-  const { api, attachCalls } = fakeApi({
+  const { api, attachCalls, statusCalls } = fakeApi({
     streamFor,
-    statusFor: (id) => (closed.has(id) ? "COMPLETED" : "RUNNING")
+    statusFor: statusFor ?? ((id) => (closed.has(id) ? "COMPLETED" : "RUNNING"))
   });
   const controller = new AgentRunController(api);
   controller.sessions = sessions;
-  return { controller, attachCalls, finish: (id) => closed.add(id) };
+  return { controller, attachCalls, statusCalls, finish: (id) => closed.add(id) };
 }
 
 const chunkSize = 24;
@@ -509,6 +552,105 @@ assert.ok(underAChunk < chunkSize, "the whole point is a backlog too short to fi
   );
   finish("wf-later");
   streams["wf-later"].end();
+}
+
+// --- case: a subagent an operator stopped, seen by a client that missed it ---
+// `/stop` completes the child workflow, and a completed workflow's stream
+// cannot be mounted, so the merge gives up and the parent's stream carries only
+// the unavailable marker. Neither event that says "closed" arrives: the parent
+// never stopped this child, and the operator_command_completed that did is on
+// the stream that no longer exists. The marker is the only thing left to ask on.
+//
+// Deliberately a cold load rather than a reload: replaying the frame cache
+// re-runs this same ingest, so a tab that watched the stop live recovers either
+// way and would prove nothing.
+{
+  const stream = controllableStream();
+  const { controller, statusCalls, finish } = boot({
+    sessions: [session("wf-parent")],
+    streamFor: () => stream
+  });
+  finish("wf-stopped-child"); // Temporal's answer: the operator's stop landed
+
+  void controller.selectSession("wf-parent");
+  await waitFor("the parent stream to be attached", () => statusCalls.length > 0);
+  stream.push(
+    subagentStarted("child-1", "wf-stopped-child", 0),
+    subagentStreamUnavailable("child-1", "wf-stopped-child")
+  );
+
+  await waitFor("the marker to reach the view", () => controller.frames.length === 2);
+  await waitFor(
+    "the child's status to be resolved",
+    () => controller.operatorTargetForWorkflow("wf-stopped-child").closed
+  );
+  assert.ok(
+    statusCalls.includes("wf-stopped-child"),
+    "an unreadable child stream must be resolved against the child's own status"
+  );
+  assert.equal(
+    controller.graphAgents.find((agent) => agent.workflowId === "wf-stopped-child")?.stopped,
+    true,
+    "a stopped subagent must not render as running"
+  );
+
+  finish("wf-parent");
+  stream.end();
+}
+
+// --- case: an unreadable child stream that is not a closed workflow ----------
+// History aged out, or a worker went away, and the child is still running. The
+// marker looks identical, so only the status answer can tell them apart — and a
+// status call that fails must leave the child no worse than the marker found it.
+{
+  const stream = controllableStream();
+  const closedIds = new Set();
+  const { controller, statusCalls, finish } = boot({
+    sessions: [session("wf-parent-live")],
+    streamFor: () => stream,
+    statusFor: (id) => {
+      if (id === "wf-unanswerable-child") throw new Error("Temporal is unreachable");
+      return closedIds.has(id) ? "COMPLETED" : "RUNNING";
+    }
+  });
+
+  void controller.selectSession("wf-parent-live");
+  await waitFor("the parent stream to be attached", () => statusCalls.length > 0);
+  stream.push(
+    subagentStarted("child-live", "wf-running-child", 0),
+    subagentStreamUnavailable("child-live", "wf-running-child"),
+    subagentStarted("child-lost", "wf-unanswerable-child", 1),
+    subagentStreamUnavailable("child-lost", "wf-unanswerable-child")
+  );
+
+  await waitFor("the markers to reach the view", () => controller.frames.length === 4);
+  await waitFor(
+    "both children to be asked about",
+    () =>
+      statusCalls.includes("wf-running-child") &&
+      statusCalls.includes("wf-unanswerable-child")
+  );
+  await sleep(100); // let any wrong answer land before asserting it did not
+
+  assert.equal(
+    controller.operatorTargetForWorkflow("wf-running-child").closed,
+    false,
+    "a child Temporal reports as RUNNING must stay open, unreadable stream or not"
+  );
+  assert.equal(
+    controller.operatorTargetForWorkflow("wf-unanswerable-child").closed,
+    false,
+    "a status query that fails must not close the child it could not answer for"
+  );
+  assert.equal(
+    controller.frames.length,
+    4,
+    "a failed status query must not disturb the frames already delivered"
+  );
+
+  closedIds.add("wf-parent-live");
+  finish("wf-parent-live");
+  stream.end();
 }
 
 await vite.close();

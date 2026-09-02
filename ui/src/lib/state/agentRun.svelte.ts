@@ -1717,6 +1717,35 @@ export class AgentRunController {
 
     if (frame.event === "subagent_stream_unavailable") {
       this.#upsertSubagent(frame.data, parentWorkflowId);
+      void this.#resolveUnreadableSubagent(frame.data.workflow_id);
+    }
+  }
+
+  /**
+   * Ask Temporal what became of a child whose stream could not be read.
+   *
+   * Without this an operator's `/stop` on a subagent renders as still running
+   * for anyone who did not watch it happen. The stop completes the child
+   * workflow, and a completed workflow's stream cannot be mounted at all, so
+   * the merge gives up and sends this marker — while the two events that DO say
+   * "closed" both miss: `subagent_stopped` only fires when the parent stopped
+   * the child, and the `operator_command_completed` carrying the stop is on the
+   * child's own stream, which by then does not exist. A tab that saw the stop
+   * live recovers from its frame cache; a second tab, or a cold load off the
+   * session list, has nothing to recover from.
+   *
+   * Asking rather than assuming, because an unreadable stream is not proof of a
+   * closed workflow — history aged out or a worker down produces this same
+   * marker over a child that is still running. #applyWorkflowExecutionState
+   * closes it only if the answer says closed, and a query that fails leaves the
+   * child exactly as the marker found it.
+   */
+  async #resolveUnreadableSubagent(workflowId: string): Promise<void> {
+    if (this.#isWorkflowClosed(workflowId)) return;
+    try {
+      await this.#refreshWorkflowExecutionState(workflowId);
+    } catch {
+      // Status is auxiliary here: the child stays as it was until something answers.
     }
   }
 
