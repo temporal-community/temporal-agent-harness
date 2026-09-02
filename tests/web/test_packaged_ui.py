@@ -38,6 +38,7 @@ from temporal_agent_harness.web import (
 )
 from temporal_agent_harness.web.app import (
     _discover_untracked_sessions,
+    _discovered_label,
     _ensure_session_manager_workflow,
     _session_with_execution_state,
     _workflow_execution_state,
@@ -245,6 +246,7 @@ async def test_session_execution_state_reports_completed_workflow_closed() -> No
         "agent_workflow_type": "TestAgent",
         "is_message_queuing_enabled": True,
         "is_discovered": False,
+        "is_archived": False,
         "execution_status": "COMPLETED",
         "closed": True,
     }
@@ -307,7 +309,9 @@ async def test_discover_untracked_sessions_finds_running_workflow_not_in_manager
         Session(
             workflow_id="agent-session-outside",
             created_at=started_at.timestamp(),
-            label="Test Agent",
+            # Suffixed, because the agent's own label is shared by every session of that
+            # agent — see test_discovered_labels_are_distinct_per_workflow.
+            label=_discovered_label("Test Agent", "agent-session-outside"),
             agent_workflow_type="TestAgent",
             is_discovered=True,
         )

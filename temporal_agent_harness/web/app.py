@@ -7,6 +7,7 @@ import json
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from hashlib import blake2s
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,7 @@ from temporal_agent_harness.harness.agent_client import (
     ToolApprovalError,
 )
 from temporal_agent_harness.harness.agent_protocol import (
+    AGENT_ID_LENGTH,
     AgentConfig,
     AgentEvent,
     AgentEventType,
@@ -61,6 +63,7 @@ from temporal_agent_harness.web.session_manager import (
     CreateSessionRequest as ManagerCreateSessionRequest,
     Session,
     SessionManagerWorkflow,
+    SetSessionsArchivedRequest,
 )
 
 RegistrySource = AgentRegistry | Callable[[], AgentRegistry]
@@ -72,6 +75,13 @@ _SESSION_PREVIEW_HISTORY_RPC_TIMEOUT = timedelta(seconds=1)
 class CreateSessionRequestBody(BaseModel):
     agent_workflow_type: str
     is_message_queuing_enabled: bool = False
+
+
+class ArchiveSessionsRequestBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workflow_ids: list[str]
+    is_archived: bool = True
 
 
 class ChatRequestBody(BaseModel):
@@ -177,7 +187,15 @@ def create_agent_harness_app(
         return asdict(registry_result)
 
     @app.get("/api/sessions")
-    async def list_sessions():
+    async def list_sessions(include_archived: bool = False):
+        """Every session this manager knows about, with each one's execution state.
+
+        Archived entries are left out by default, and dropped BEFORE the enrichment rather
+        than after: the enrichment is what this endpoint costs. Each session is a describe
+        plus a history scan paging up to 96 events, so a list nothing ever shed had grown to
+        roughly 283 RPCs per poll — every ten seconds, per visible tab, most of it spent on
+        workflows the namespace's retention deleted hours ago.
+        """
         registry_result: AgentRegistry = await app.state.manager_handle.query(
             SessionManagerWorkflow.available_agents,
             result_type=AgentRegistry,
@@ -186,7 +204,11 @@ def create_agent_harness_app(
             SessionManagerWorkflow.list_sessions,
             result_type=list[Session],
         )
+        # Taken before the archive filter, so an archived session is not handed straight back
+        # by discovery as an untracked workflow.
         known_workflow_ids = {session.workflow_id for session in sessions}
+        if not include_archived:
+            sessions = [session for session in sessions if not session.is_archived]
         try:
             discovered = await _discover_untracked_sessions(
                 app.state.temporal, registry_result, known_workflow_ids
@@ -213,6 +235,41 @@ def create_agent_harness_app(
             result_type=Session,
         )
         return await _session_with_execution_state(app.state.temporal, session)
+
+    @app.post("/api/sessions/archive")
+    async def archive_sessions(req: ArchiveSessionsRequestBody):
+        """Take sessions out of the list, closing any that are still running.
+
+        Archiving is only a flag on the manager's entry, so on its own it would hide a live
+        agent rather than end one: the workflow would keep running, keep holding its worker's
+        slot, and no longer appear anywhere a person would think to look. So closing comes
+        first, and the response says how many were closed rather than leaving the caller to
+        assume.
+
+        Restoring (``is_archived: false``) only unhides. A closed agent stays closed —
+        ``close`` is not reversible, and pretending otherwise by restarting the workflow would
+        silently produce a different execution.
+        """
+        closed: list[str] = []
+        if req.is_archived:
+            for workflow_id in req.workflow_ids:
+                if await _close_if_running(app.state.temporal, workflow_id):
+                    closed.append(workflow_id)
+
+        changed: list[Session] = await app.state.manager_handle.execute_update(
+            SessionManagerWorkflow.set_sessions_archived,
+            SetSessionsArchivedRequest(
+                workflow_ids=list(req.workflow_ids), is_archived=req.is_archived
+            ),
+            result_type=list[Session],
+        )
+        return JSONResponse(
+            content={
+                "archived": [session.workflow_id for session in changed],
+                "closed": closed,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/api/workflow-status/{workflow_id}")
     async def workflow_status(workflow_id: str):
@@ -445,6 +502,34 @@ def _resolve_registry(
     raise ValueError("create_agent_harness_app requires registry or registry_path.")
 
 
+async def _close_if_running(temporal: Client, workflow_id: str) -> bool:
+    """Ask a still-open session to wind down. True if the signal was accepted.
+
+    Accepted is not the same as finished, and on an unstaffed task queue it is not even the
+    same as started: the signal is durably recorded and applies whenever a worker next polls.
+
+    False therefore means "not closed" for every reason, including that Temporal could not be
+    reached to ask. A session that has already gone is still a session the caller is trying to
+    clear, so the archive is allowed to stand rather than the whole batch failing over one
+    entry.
+    """
+    handle = temporal.get_workflow_handle(workflow_id)
+    try:
+        desc = await handle.describe()
+        if desc.status != WorkflowExecutionStatus.RUNNING:
+            return False
+        await handle.signal("close")
+    except RPCError as exc:
+        if exc.status in (
+            RPCStatusCode.NOT_FOUND,
+            RPCStatusCode.DEADLINE_EXCEEDED,
+            RPCStatusCode.UNAVAILABLE,
+        ):
+            return False
+        raise
+    return True
+
+
 async def _workflow_execution_state(
     temporal: Client,
     workflow_id: str,
@@ -513,12 +598,29 @@ async def _discover_untracked_sessions(
             Session(
                 workflow_id=execution.id,
                 created_at=execution.start_time.timestamp(),
-                label=descriptor.label,
+                label=_discovered_label(descriptor.label, execution.id),
                 agent_workflow_type=execution.workflow_type,
                 is_discovered=True,
             )
         )
     return discovered
+
+
+def _discovered_label(agent_label: str, workflow_id: str) -> str:
+    """A label for a discovered session that can tell it from its siblings.
+
+    A tracked session is numbered by the manager, but a discovered one had only the agent's
+    name — which every session of that agent shares, so three scheduled runs of one agent
+    arrived as three rows all called "Scheduled Digest" and nothing said which was which.
+
+    Digested rather than sliced off the workflow id, because the ids these arrive with are not
+    all uuids: a slice of ``scheduled-digest.dispatch-2026-09-02T09:00:00Z`` is a fragment of a
+    timestamp, and a slice of ``agent-session-outside`` is the word "utside", which reads as a
+    typo rather than as an identifier. ``AGENT_ID_LENGTH`` of hex is what this console already
+    shortens an identifier to when a person has to read it, and a digest always looks like one.
+    """
+    short = blake2s(workflow_id.encode(), digest_size=AGENT_ID_LENGTH // 2).hexdigest()
+    return f"{agent_label} {short}"
 
 
 async def _sessions_with_execution_state(

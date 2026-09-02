@@ -67,6 +67,27 @@ class Session:
     is_discovered: bool = False
     """True if this session wasn't started via ``create_session`` but was found already running
     in the namespace (see ``_discover_untracked_sessions`` in ``web/app.py``)."""
+    is_archived: bool = False
+    """Kept out of the session list by default.
+
+    A flag rather than a removal: the workflow's history outlives this list either way, so a
+    deep link into an archived session still resolves and archiving stays undoable. Defaulted
+    so a manager running older code, whose query answers without this field at all, decodes as
+    "not archived" rather than failing."""
+
+
+@dataclass
+class SetSessionsArchivedRequest:
+    """Archive or restore some sessions by workflow id.
+
+    Takes a list because the clutter this exists to clear arrives in bulk. Nothing has ever
+    removed an entry from this list, while the namespace's retention keeps deleting the
+    workflows underneath it, so what accumulates is dozens of corpses at once — and clearing
+    them one update at a time is one workflow task each.
+    """
+
+    workflow_ids: list[str]
+    is_archived: bool = True
 
 
 @workflow.defn
@@ -82,6 +103,33 @@ class SessionManagerWorkflow:
     @workflow.query
     def available_agents(self) -> AgentRegistry:
         return self._registry
+
+    @workflow.update
+    def set_sessions_archived(
+        self, request: SetSessionsArchivedRequest
+    ) -> list[Session]:
+        """Archive or restore sessions, and report back the ones this changed.
+
+        Only the flag moves. Ending a session is the ``close`` signal on the agent itself, and
+        the two are deliberately separate here: this workflow should not be the thing that
+        decides a conversation is over. The caller that archives a session still running is the
+        one that has to close it — see the archive endpoint, which does exactly that, so hiding
+        a session can never leave a live agent running where nobody will look for it.
+
+        Unknown ids are ignored rather than raised on. A session can be archived from one
+        browser tab while another still lists it, and failing the whole batch because one entry
+        has already gone would make the bulk case fail exactly when it is most useful.
+        """
+        wanted = set(request.workflow_ids)
+        changed: list[Session] = []
+        for session in self._sessions:
+            if (
+                session.workflow_id in wanted
+                and session.is_archived != request.is_archived
+            ):
+                session.is_archived = request.is_archived
+                changed.append(session)
+        return changed
 
     @workflow.update
     async def create_session(self, request: CreateSessionRequest) -> Session:

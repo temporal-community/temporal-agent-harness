@@ -11,6 +11,7 @@ from temporal_agent_harness.web.session_manager import (
     CreateSessionRequest,
     Session,
     SessionManagerWorkflow,
+    SetSessionsArchivedRequest,
 )
 
 # ``create_agent_harness_app`` / ``create_session_manager_worker`` are exported lazily via
@@ -44,6 +45,7 @@ __all__ = [
     "CreateSessionRequest",
     "Session",
     "SessionManagerWorkflow",
+    "SetSessionsArchivedRequest",
     "create_agent_harness_app",
     "create_session_manager_worker",
     "load_agent_registry",
