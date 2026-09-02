@@ -33,6 +33,7 @@
   import { formatCost } from "$lib/cost/pricing";
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
+  import IconButton from "$lib/components/primitives/IconButton.svelte";
   import StatusChip, {
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
@@ -1847,36 +1848,45 @@
                 <StatusChip label="Awaiting approval" kind="approval" compact active />
               </div>
               <div class="approval-actions compact">
-                <button
-                  type="button"
-                  class="approval-approve"
+                <Chip
+                  tone="success"
+                  fill="quiet"
+                  toned
                   disabled={!onApproveTool || isApprovalResolving(approval)}
                   onclick={(event) => void resolveApproval(event, approval, true)}
-                  onkeydown={(event) => event.stopPropagation()}
+                  onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
                 >
-                  <CheckCircle2 size={13} />
-                  <span>Approve</span>
-                </button>
-                <button
-                  type="button"
-                  class="approval-remember"
+                  {#snippet lead()}
+                    <CheckCircle2 size={13} />
+                  {/snippet}
+                  Approve
+                </Chip>
+                <Chip
+                  tone="queue"
+                  fill="quiet"
+                  toned
                   disabled={!onApproveTool || isApprovalResolving(approval)}
                   onclick={(event) => void resolveApproval(event, approval, true, true)}
-                  onkeydown={(event) => event.stopPropagation()}
+                  onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
                 >
-                  <ShieldCheck size={13} />
-                  <span>Approve and remember</span>
-                </button>
-                <button
-                  type="button"
-                  class="approval-reject"
+                  {#snippet lead()}
+                    <ShieldCheck size={13} />
+                  {/snippet}
+                  Approve and remember
+                </Chip>
+                <Chip
+                  tone="error"
+                  fill="quiet"
+                  toned
                   disabled={!onApproveTool || isApprovalResolving(approval)}
                   onclick={(event) => void resolveApproval(event, approval, false)}
-                  onkeydown={(event) => event.stopPropagation()}
+                  onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
                 >
-                  <XCircle size={13} />
-                  <span>Reject</span>
-                </button>
+                  {#snippet lead()}
+                    <XCircle size={13} />
+                  {/snippet}
+                  Reject
+                </Chip>
                 {#if approvalError(approval)}
                   <span class="approval-error">{approvalError(approval)}</span>
                 {/if}
@@ -2025,13 +2035,14 @@
           disabled={composerDisabled}
           onkeydown={handleComposerKeydown}
         />
-        <button
+        <IconButton
           type="submit"
-          aria-label="Send message"
+          label="Send message"
+          tone="primary"
           disabled={!canSendDraft}
         >
           <ArrowUp size={17} />
-        </button>
+        </IconButton>
       </form>
     </div>
   </div>
@@ -2924,48 +2935,6 @@
     padding-top: 0;
   }
 
-  .approval-actions button {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    min-height: 26px;
-    padding: 4px 8px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface-0);
-    color: var(--text-2);
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--font-md);
-    line-height: 1;
-  }
-
-  .approval-actions button:hover:not(:disabled),
-  .approval-actions button:focus-visible {
-    border-color: var(--border-strong);
-    outline: 0;
-  }
-
-  .approval-actions button:disabled {
-    cursor: default;
-    opacity: var(--disabled-opacity);
-  }
-
-  .approval-actions .approval-approve {
-    color: var(--success);
-    border-color: color-mix(in srgb, var(--success) 35%, var(--border));
-  }
-
-  .approval-actions .approval-remember {
-    color: var(--queue);
-    border-color: color-mix(in srgb, var(--queue) 40%, var(--border));
-  }
-
-  .approval-actions .approval-reject {
-    color: var(--error);
-    border-color: color-mix(in srgb, var(--error) 35%, var(--border));
-  }
-
   .approval-error {
     min-width: 0;
     color: var(--error);
@@ -3285,24 +3254,6 @@
   .composer.closed {
     border-color: color-mix(in srgb, var(--success) 24%, var(--border));
     background: color-mix(in srgb, var(--surface-1) 80%, var(--surface-0));
-  }
-
-  .composer button {
-    width: 32px;
-    height: 32px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
-    color: var(--accent);
-    cursor: pointer;
-  }
-
-  .composer button:disabled {
-    opacity: var(--disabled-opacity);
-    cursor: default;
   }
 
   .session-panel {

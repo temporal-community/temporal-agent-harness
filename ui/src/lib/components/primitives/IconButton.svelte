@@ -12,29 +12,48 @@
      */
     tip?: string;
     disabled?: boolean;
+    /**
+     * Left undefined for the buttons that are not toggles, so they do not
+     * announce themselves as an unpressed one. A toggle passes it either way
+     * and gets both states.
+     */
     pressed?: boolean;
     tone?: "default" | "primary" | "follow";
+    /**
+     * `submit` is the one behaviour a caller may change, and it is a named prop
+     * rather than something reachable through `rest` because it decides what
+     * the button *does* — a composer needs it to keep native Enter-to-send.
+     */
+    type?: "button" | "submit";
     onclick?: (event: MouseEvent) => void;
     children?: Snippet;
+    /** Everything else (aria-*, title, data-*) lands on the rendered element. */
+    [key: string]: unknown;
   }
 
   let {
     label,
     tip = label,
     disabled = false,
-    pressed = false,
+    pressed,
     tone = "default",
+    type = "button",
     onclick,
-    children
+    children,
+    ...rest
   }: Props = $props();
 </script>
 
 <!-- `data-tip` rather than `title`: the browser waits about a second on one
      element before showing a `title`, so a row of transport buttons the pointer
      sweeps across never says anything at all. `aria-label` keeps the name. -->
+<!-- Callers own description, the primitive owns behaviour: `rest` is spread
+     first, so everything this button is answerable for is written after it and
+     wins. Chip spreads in the same order, for the same reason. -->
 <button
+  {...rest}
   class={`icon-button ${tone} ${pressed ? "pressed" : ""}`}
-  type="button"
+  {type}
   aria-label={label}
   aria-pressed={pressed}
   data-tip={tip}

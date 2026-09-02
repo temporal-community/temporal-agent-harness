@@ -111,16 +111,22 @@
   {/if}
 {/snippet}
 
+<!-- Callers own description, the primitive owns behaviour: `rest` is spread
+     first, so everything the chip is answerable for — the shape, the `rel` that
+     makes `target="_blank"` safe, whether it is a submit button — is written
+     after it and wins. IconButton spreads in the same order, for the same
+     reason. A behaviour a caller legitimately needs gets a named prop there
+     rather than being left overridable here. -->
 {#if href}
-  <a class={classes} {href} target="_blank" rel="noreferrer noopener" {...rest}>
+  <a {...rest} class={classes} {href} target="_blank" rel="noreferrer noopener">
     {@render body()}
   </a>
 {:else if onclick}
-  <button class={classes} type="button" {disabled} {onclick} {...rest}>
+  <button {...rest} class={classes} type="button" {disabled} {onclick}>
     {@render body()}
   </button>
 {:else}
-  <span class={classes} {...rest}>
+  <span {...rest} class={classes}>
     {@render body()}
   </span>
 {/if}
