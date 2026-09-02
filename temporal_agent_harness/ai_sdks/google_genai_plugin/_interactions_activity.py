@@ -99,7 +99,10 @@ def make_gemini_interactions_create_streamed(client: GeminiClient):
             # published around the stream so a turn's several model calls each show
             # up as their own started→ended span. The ended is in a finally so it
             # always closes the started — even if the stream errors — while the
-            # publisher context is still open. Both events carry the requested model; the
+            # publisher context is still open. The same finally first drains any tool
+            # event the step publisher staged for a step whose stop never arrived, so
+            # closing the outer bracket cannot discard the inner ones (see
+            # ``_StreamEventPublisher.drain``). Both events carry the requested model; the
             # ended also carries token usage read off the terminal interaction.completed
             # event (so usage stays None if the stream errors before completing).
             model = kwargs.get("model")
@@ -117,6 +120,8 @@ def make_gemini_interactions_create_streamed(client: GeminiClient):
                         usage = _to_token_usage(event.interaction.usage)
                     collected.append(event.model_dump(exclude_none=True, mode="json"))
             finally:
+                if event_publisher is not None:
+                    event_publisher.drain()
                 if publisher is not None:
                     publisher.publish(ModelInteractionEnded(model=model, usage=usage))
 
@@ -357,15 +362,45 @@ class _StreamEventPublisher:
                 pass
 
     def _on_step_stop(self, event: StepStop) -> None:
-        """A step is complete. ``StepStop`` carries only ``index``.
+        """A step is complete. ``StepStop`` carries only ``index``."""
+        self._publish_step(event.index)
 
-        Publish the consolidated ``tool_requested`` (if a custom function-call step
-        closed), ``tool_start`` (if a built-in call step closed) or ``tool_end`` (if
-        a built-in result step closed). An index belongs to exactly one step, so it
-        matches at most one pending map. Any other stop closes a step we don't
-        bracket (text/thought/function-result steps) and is ignored.
+    def drain(self) -> None:
+        """Publish whatever is still staged, for steps whose ``step.stop`` never came.
+
+        Every pending map is emptied only by that step's stop, so a stream that ends —
+        or errors — mid-step would otherwise strand the step's tool events while the
+        activity's ``finally`` still published ``model_interaction_ended``: a transcript
+        that reads as complete with a tool invocation silently missing. Nothing later
+        makes up for it. The workflow-side reducer parses its own copy of the stream but
+        publishes no tool events at all (``run_tool`` owns start/end for custom calls,
+        and built-in tools are bracketed only here), so an event dropped here is absent
+        from the durable transcript for good.
+
+        Called from the activity's ``finally`` BEFORE ``model_interaction_ended``, so the
+        published order stays started → tools → ended.
         """
-        start = self._pending_tool_starts.pop(event.index, None)
+        pending = {
+            *self._pending_tool_starts,
+            *self._pending_tool_ends,
+            *self._pending_tool_requests,
+        }
+        for index in sorted(pending):
+            self._publish_step(index)
+        # Buffers for a step we never saw start (so nothing above consumed them).
+        self._tool_request_arg_buffers.clear()
+
+    def _publish_step(self, index: int) -> None:
+        """Publish the tool event staged for step ``index``, if any.
+
+        The consolidated ``tool_requested`` (if a custom function-call step closed),
+        ``tool_start`` (if a built-in call step closed) or ``tool_end`` (if a built-in
+        result step closed). An index belongs to exactly one step, so it matches at most
+        one pending map. Any other index closes a step we don't bracket (text/thought/
+        function-result steps) and is ignored. Popping as it goes makes this idempotent,
+        so the drain cannot re-publish a step that already stopped.
+        """
+        start = self._pending_tool_starts.pop(index, None)
         if start is not None:
             self._publisher.publish(
                 ToolStartEvent(
@@ -375,19 +410,19 @@ class _StreamEventPublisher:
                 )
             )
             return
-        end = self._pending_tool_ends.pop(event.index, None)
+        end = self._pending_tool_ends.pop(index, None)
         if end is not None:
             self._publisher.publish(
                 ToolEndEvent(tool_id=end.tool_id, tool_name=end.tool_name)
             )
             return
-        call = self._pending_tool_requests.pop(event.index, None)
+        call = self._pending_tool_requests.pop(index, None)
         if call is not None:
             self._publisher.publish(
                 ToolRequested(
                     tool_id=call.id,
                     tool_name=call.name,
-                    tool_input=self._consolidated_args(event.index, call),
+                    tool_input=self._consolidated_args(index, call),
                 )
             )
 
