@@ -108,7 +108,18 @@ class Gates:
         """
         # OPEN gate: nothing on a child stream may surface before the parent's message_sent for
         # THAT turn has been emitted (which records the turn in ``opened``).
-        if is_child and (source_workflow_id, ev.turn_number) not in self.opened:
+        # EXCEPTION: ``turn_number == 0`` marks an event that belongs to NO turn — a control-plane
+        # audit record published outside the turn loop (today: the operator_command_* family; see
+        # AgentEventType.OPERATOR_COMMAND_STARTED). Agent turns are 1-based, so no message_sent can
+        # ever record turn 0 in ``opened`` and this gate is UNSATISFIABLE for such an event, not
+        # merely unsatisfied — holding it wedges that child's whole remaining stream forever. There
+        # is also nothing to hold it FOR: the open bracket nests a child's turn-T events inside the
+        # parent's turn-T markers, and a non-turn event has no bracket to be nested in.
+        if (
+            is_child
+            and ev.turn_number != 0
+            and (source_workflow_id, ev.turn_number) not in self.opened
+        ):
             return False
         # CLOSE gate: a parent's reply_received waits for the referenced child turn's turn_end to
         # have been emitted — so the subagent's whole turn precedes the parent observing its reply.

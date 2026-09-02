@@ -26,6 +26,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
     AgentEventType,
     AgentReply,
+    OperatorCommandCompleted,
+    OperatorCommandStarted,
     SubagentMessageSent,
     SubagentReplyReceived,
     SubagentStarted,
@@ -117,6 +119,27 @@ def _stopped(agent_id: str, parent_turn: int, *, child: str) -> AgentEvent:
         parent_turn,
         SubagentStopped(subagent_id=child[:6], agent_key="k", workflow_id=child),
     )
+
+
+def _op(agent_id: str, name: str, *, started: bool) -> AgentEvent:
+    """An operator-command audit event, exactly as the workflow publishes it.
+
+    The control-plane shape that has no turn: ``turn_id`` is the operator_command_id and the
+    envelope ``turn_number`` is 0 (see ``AgentWorkflowRunner._handle_execute_operator_command``
+    and the protocol rule on ``AgentEventType.OPERATOR_COMMAND_STARTED``)."""
+    payload = (
+        OperatorCommandStarted(
+            operator_command_id=f"op-{name}", command_name=name, command_label=f"/{name}"
+        )
+        if started
+        else OperatorCommandCompleted(
+            operator_command_id=f"op-{name}",
+            command_name=name,
+            command_label=f"/{name}",
+            text="ok",
+        )
+    )
+    return _ev(agent_id, 0, payload, turn_id=f"op-{name}")
 
 
 def _tool(agent_id: str, turn: int, tid: str, *, start: bool) -> AgentEvent:
@@ -362,6 +385,39 @@ def test_root_events_are_never_open_gated():
     gates = Gates()
     # A non-child (root) event is ready regardless of opened-set state.
     assert gates.ready(is_child=False, source_workflow_id="P", ev=_ts("P", 1))
+
+
+def test_open_gate_admits_a_non_turn_event_no_message_sent_can_ever_open():
+    # Agent turns are 1-based, so ``turn_number == 0`` marks an event that belongs to NO turn (the
+    # operator_command_* control-plane family). No message_sent can ever record turn 0 in
+    # ``opened``, so gating such an event is UNSATISFIABLE, not merely unsatisfied — it must be
+    # admitted. The turn-1 event beside it is still held, proving the exemption is not a blanket
+    # opening of the gate.
+    gates = Gates()
+    assert gates.ready(is_child=True, source_workflow_id="C", ev=_op("C", "stop", started=True))
+    assert not gates.ready(is_child=True, source_workflow_id="C", ev=_ts("C", 1))
+
+
+def test_non_turn_exemption_does_not_release_the_close_gate():
+    # The exemption is scoped to the OPEN gate only. A reply_received still waits for the
+    # referenced child turn's turn_end even when its own envelope carries turn_number 0 — the
+    # close gate is about the turn the event REFERENCES, not the turn it belongs to.
+    gates = Gates()
+    rr = _ev(
+        "C",
+        0,
+        SubagentReplyReceived(
+            subagent_id="G",
+            agent_key="k",
+            workflow_id="G",
+            function="f",
+            subagent_turn=1,
+            outcome="ok",  # type: ignore[arg-type]
+        ),
+    )
+    assert not gates.ready(is_child=True, source_workflow_id="C", ev=rr)
+    gates.on_emit(is_child=True, source_workflow_id="G", ev=_te("G", 1))
+    assert gates.ready(is_child=True, source_workflow_id="C", ev=rr)
 
 
 def test_on_emit_returns_mount_only_for_message_sent():
@@ -1003,6 +1059,99 @@ async def test_resume_inside_subagent_turn_omits_that_subagent_but_parent_flows(
     ]
     assert not [m for m in merged if m.agent_id == "C"]
     assert not [m for m in merged if m.event.type == AgentEventType.SUBAGENT_STREAM_UNAVAILABLE]
+
+
+# ---------------------------------------------------------------------------
+# Non-turn (operator-command) events on a subagent stream
+#
+# THE PROPERTY: a gate-blocked head must never be silently discarded — it is either ADMITTED or
+# its loss is announced by a ``subagent_stream_unavailable`` marker. A ``turn_number == 0``
+# control-plane event used to fail that both ways at once: the open gate held it (no message_sent
+# can ever open turn 0), ``_ensure_pulls`` then froze that child's whole remaining stream behind
+# it, and because no TURN was abandoned ``_give_up`` had no marker to emit — so the events were
+# dropped at teardown with no exception, no marker and no log.
+# ---------------------------------------------------------------------------
+
+
+def _op_after_a_completed_child_turn() -> dict[str, list[AgentEvent]]:
+    """The realistic operator-stop shape: the child's turn is fully OVER (so no turn is
+    abandoned and a give-up would have nothing to report) when the operator command lands."""
+    return {
+        "P": [
+            _ts("P", 1),
+            _ms("P", 1, child="C", child_turn=1),
+            _rr("P", 1, child="C", child_turn=1),
+            _reply("P", 1),
+            _te("P", 1),
+        ],
+        "C": [
+            _ts("C", 1),
+            _reply("C", 1),
+            _te("C", 1),
+            _op("C", "stop", started=True),
+            _op("C", "stop", started=False),
+        ],
+    }
+
+
+@pytest.mark.parametrize("select", [select_replay, select_live])
+async def test_operator_command_on_a_child_is_delivered_not_silently_dropped(select):
+    # The regression. Both operator events must reach the consumer, and since nothing was lost
+    # there must be NO unavailable marker. Before the fix: 0 of 2 delivered and 0 markers.
+    streams = _op_after_a_completed_child_turn()
+    merged = await _run_merge(
+        streams, root="P", select=select, stall_grace_seconds=0.05
+    )
+    assert_valid_merge(merged, streams)
+    assert [
+        m.event.type for m in merged if m.agent_id == "C" and m.turn_number == 0
+    ] == [
+        AgentEventType.OPERATOR_COMMAND_STARTED,
+        AgentEventType.OPERATOR_COMMAND_COMPLETED,
+    ]
+    assert not [
+        m for m in merged if m.event.type == AgentEventType.SUBAGENT_STREAM_UNAVAILABLE
+    ], "nothing was lost, so nothing should be announced as unavailable"
+
+
+async def test_operator_command_does_not_wedge_the_childs_remaining_stream():
+    # The blast radius, not just the held event: ``_ensure_pulls`` only re-pulls a cursor whose
+    # head is None, so a permanently-held head froze EVERYTHING behind it. Here a second child
+    # turn follows the operator command — it must still arrive, and still be nested in its own
+    # bracket (the exemption must not loosen the brackets for real turns).
+    streams = {
+        "P": [
+            _ts("P", 1),
+            _ms("P", 1, child="C", child_turn=1, from_offset=0),
+            _rr("P", 1, child="C", child_turn=1),
+            _ms("P", 1, child="C", child_turn=2, from_offset=4),
+            _rr("P", 1, child="C", child_turn=2),
+            _te("P", 1),
+        ],
+        "C": [
+            _ts("C", 1),
+            _reply("C", 1),
+            _te("C", 1),
+            _op("C", "approvals", started=True),  # offset 3 — between the two turns
+            _ts("C", 2),
+            _reply("C", 2),
+            _te("C", 2),
+        ],
+    }
+    merged = await _run_merge(
+        streams, root="P", select=select_replay, stall_grace_seconds=0.05
+    )
+    # Nothing dropped anywhere, and both brackets still hold for the real turns.
+    assert_valid_merge(merged, streams)
+    assert not [
+        m for m in merged if m.event.type == AgentEventType.SUBAGENT_STREAM_UNAVAILABLE
+    ]
+    # The turn AFTER the non-turn event survived — the stream was not frozen behind it.
+    assert [m.event.type for m in merged if m.agent_id == "C" and m.turn_number == 2] == [
+        AgentEventType.TURN_STARTED,
+        AgentEventType.REPLY,
+        AgentEventType.TURN_END,
+    ]
 
 
 async def test_redispatched_given_up_child_reenables_its_close_gate():
