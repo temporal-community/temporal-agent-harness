@@ -1,25 +1,15 @@
 <script lang="ts">
   import {
-    ChevronDown,
     ChevronLeft,
     ChevronRight,
-    CircleDollarSign,
     Pause,
     Play,
     RotateCcw,
     SkipForward
   } from "@lucide/svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
-  import MetricStrip from "$lib/components/primitives/MetricStrip.svelte";
-  import UsageLineChart from "$lib/components/flow/UsageLineChart.svelte";
-  import ModelBreakdown from "$lib/components/flow/ModelBreakdown.svelte";
-  import type { Metric } from "$lib/components/primitives/metrics";
-  import {
-    formatCost,
-    formatTokens,
-    type CostSummary,
-    type UsageTimelinePoint
-  } from "$lib/cost/pricing";
+  import UsagePopover from "$lib/components/flow/UsagePopover.svelte";
+  import type { CostSummary, UsageTimelinePoint } from "$lib/cost/pricing";
   import type { PlaybackSpeed } from "$lib/state/agentRun.svelte";
   import type { ReplayLogRow, ReplayMarker } from "$lib/state/replayLog";
 
@@ -66,16 +56,6 @@
   }: Props = $props();
 
   const playbackSpeeds: PlaybackSpeed[] = [1, 2, 5, 10];
-  let usageExpanded = $state(false);
-
-  const metrics: Metric[] = $derived([
-    { label: "cost", value: formatCost(usage.estimatedCostUsd), tone: "cost" },
-    { label: "total", value: formatTokens(usage.tokens.total), tone: "strong" },
-    { label: "input", value: formatTokens(usage.tokens.input) },
-    { label: "output", value: formatTokens(usage.tokens.output) },
-    { label: "thought", value: formatTokens(usage.tokens.thought) },
-    { label: "cached", value: formatTokens(usage.tokens.cached) }
-  ]);
 
   const currentLabel = $derived(
     currentEvent
@@ -126,6 +106,7 @@
       <IconButton label="Jump to latest step" tone="follow" pressed={following} onclick={onJumpToLive}>
         <SkipForward size={16} />
       </IconButton>
+      <UsagePopover {usage} {usageTimeline} {viewIndex} />
     </div>
 
     <div class="scrub-area">
@@ -174,41 +155,6 @@
     {/if}
   </div>
 
-  <section class="usage-section" class:expanded={usageExpanded}>
-    <button
-      class="usage-toggle"
-      type="button"
-      aria-expanded={usageExpanded}
-      aria-controls="usage-details"
-      onclick={() => (usageExpanded = !usageExpanded)}
-    >
-      <span class="usage-toggle-title">
-        <CircleDollarSign size={15} />
-        <span>Token / Cost</span>
-      </span>
-      <span class="usage-toggle-summary">
-        <strong>{formatTokens(usage.tokens.total)} tok</strong>
-        <span>{formatCost(usage.estimatedCostUsd)}</span>
-      </span>
-      <span class="usage-toggle-icon" aria-hidden="true">
-        <ChevronDown size={15} />
-      </span>
-    </button>
-
-    {#if usageExpanded}
-      <div id="usage-details" class="usage-row">
-        <div class="usage">
-          <div class="usage-title">
-            <CircleDollarSign size={15} />
-            <span>Replay totals</span>
-          </div>
-          <MetricStrip {metrics} dense />
-        </div>
-        <ModelBreakdown {usage} />
-        <UsageLineChart points={usageTimeline} {viewIndex} />
-      </div>
-    {/if}
-  </section>
 </footer>
 
 <style>
@@ -414,104 +360,8 @@
     border-color: color-mix(in srgb, var(--queue) 40%, var(--border));
   }
 
-  .usage-section {
-    min-width: 0;
-    display: grid;
-    gap: 10px;
-  }
-
-  .usage-toggle {
-    min-width: 0;
-    min-height: 36px;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 12px;
-    padding: 7px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface-2);
-    color: var(--text-2);
-    cursor: pointer;
-    font: inherit;
-    text-align: left;
-  }
-
-  .usage-toggle:hover,
-  .usage-toggle:focus-visible {
-    border-color: var(--border-strong);
-    color: var(--text-1);
-    outline: 0;
-  }
-
-  .usage-toggle-title,
-  .usage-toggle-summary {
-    min-width: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    white-space: nowrap;
-  }
-
-  .usage-toggle-title {
-    color: var(--text-1);
-    font-size: var(--font-md);
-    font-weight: 700;
-  }
-
-  .usage-toggle-summary {
-    justify-self: end;
-    overflow: hidden;
-    color: var(--text-3);
-    font-size: var(--font-md);
-  }
-
-  .usage-toggle-summary strong {
-    color: var(--text-1);
-    font-weight: 700;
-  }
-
-  .usage-toggle-icon {
-    display: inline-flex;
-    color: var(--text-3);
-    transition: transform var(--duration-fast) var(--ease-ui);
-  }
-
-  .usage-section.expanded .usage-toggle-icon {
-    transform: rotate(180deg);
-  }
-
-  .usage-row {
-    min-width: 0;
-    display: grid;
-    grid-template-columns: minmax(300px, 0.85fr) minmax(220px, 0.7fr) minmax(320px, 1fr);
-    gap: 12px;
-    align-items: start;
-  }
-
-  .usage {
-    min-width: 0;
-    display: grid;
-    align-content: start;
-    gap: 8px;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface-2);
-  }
-
-  .usage-title {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--text-2);
-    font-size: var(--font-md);
-    white-space: nowrap;
-  }
-
   @media (max-width: 1120px) {
-    .replay-row,
-    .usage-row {
+    .replay-row {
       grid-template-columns: 1fr;
     }
 
@@ -521,8 +371,7 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .event-marker,
-    .usage-toggle-icon {
+    .event-marker {
       transition: none;
     }
 

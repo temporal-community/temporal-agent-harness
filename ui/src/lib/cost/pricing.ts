@@ -178,6 +178,19 @@ export function formatCost(cost: number | null): string {
   return `$${cost.toFixed(2)}`;
 }
 
+/** Models in this run that we hold no price for, so their cost is unknown. */
+export function unpricedModels(usage: CostSummary): string[] {
+  return usage.modelBreakdown
+    .filter((item) => item.estimatedCostUsd == null)
+    .map((item) => item.model);
+}
+
+/** Hover text for a cost we could not compute. Null when the cost is real. */
+export function unpricedNote(models: string[]): string | null {
+  if (models.length === 0) return null;
+  return `No price configured for ${models.join(", ")} — token counts are exact, cost is not estimated.`;
+}
+
 export function formatTokens(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
