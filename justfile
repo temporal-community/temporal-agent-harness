@@ -22,10 +22,18 @@ default:
 app-install:
     pnpm --dir "{{ui}}" install
 
-# Type-check the Svelte UI and run the local Svelte 5 syntax guard.
+# Type-check the Svelte UI, then run every self-check in ui/scripts. The loop is a glob rather than a
+# list so a new check runs the day it lands; `failglob` means an empty scripts dir is an error rather
+# than a silent pass, which is the one way a glob could be worse than naming each file.
 app-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s failglob
     pnpm --dir "{{ui}}" run check
-    pnpm --dir "{{ui}}" run check:svelte5
+    for check in "{{ui}}"/scripts/check-*.mjs; do
+        echo "--- ${check##*/}"
+        node "${check}"
+    done
 
 # Build the Svelte UI into temporal_agent_harness/ui/dist.
 app-build:
