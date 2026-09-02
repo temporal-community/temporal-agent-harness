@@ -19,6 +19,7 @@ import {
   type AgentGraphSource
 } from "./flowProjection";
 import {
+  catchingUpAfterFrame,
   cursorAfterPublish,
   framePublishChunkSize,
   publishAtChunkBoundary
@@ -309,6 +310,8 @@ export class AgentRunController {
   #publishGeneration = 0;
   /** A bounded backlog is being replayed in, so hold off on per-paint commits. */
   #catchingUp = false;
+  /** A live frame has arrived on this stream, so the catch-up is over for good. */
+  #liveFrameSeen = false;
   #catchUpStartedAt = 0;
   /** Frames staged since the last catch-up commit, counting toward the next chunk. */
   #sinceCatchUpPublish = 0;
@@ -529,6 +532,9 @@ export class AgentRunController {
     this.#streamAbort?.abort();
     const controller = new AbortController();
     this.#streamAbort = controller;
+    /* A fresh attach re-opens on a backlog, so it gets a catch-up of its own —
+       the latch is per stream, not per session. */
+    this.#liveFrameSeen = false;
     return {
       controller,
       signal: controller.signal,
@@ -1280,6 +1286,7 @@ export class AgentRunController {
     this.#publishGeneration += 1;
     this.#flushQueued = false;
     this.#catchingUp = false;
+    this.#liveFrameSeen = false;
     this.#sinceCatchUpPublish = 0;
     this.#workflowResumeOffsets = new Map<string, number>();
     this.viewIndex = 0;
@@ -1357,7 +1364,20 @@ export class AgentRunController {
     if (options.persist !== false) this.#scheduleFrameCacheWrite();
   }
 
-  /** Commit everything staged so far, in one reactive write. */
+  /**
+   * Commit everything staged so far, in one reactive write.
+   *
+   * ponytail: a commit is O(frames) and stays that way — batching bounded how
+   * MANY commits happen, not what one costs. The copy below is not the cost
+   * (0.01% of a commit, measured); the derived projections rebuilding from
+   * scratch are, at ~5us per frame across all of them, so one commit is ~27ms at
+   * 5,000 events and ~107ms at 20,000. Ceiling: total work is still
+   * (commits x frames), so a long LIVE session — one commit per paint — is
+   * quadratic, and past a few thousand events every arriving event costs a
+   * visible hitch. Upgrading that means making the projections incremental
+   * (append one entry, don't rebuild the timeline), which is a state-layer
+   * change, not a cheaper copy here.
+   */
   #publishFrames(): void {
     this.frames = this.#frameBuffer.slice();
     this.viewIndex = cursorAfterPublish(this.following, this.viewIndex, this.total);
@@ -1416,20 +1436,27 @@ export class AgentRunController {
    * a thousand arriving live, and hydrating one commit at a time is what made a
    * fresh tab crawl. The absence of the mark means live, so an older server just
    * gets today's per-paint behavior.
+   *
+   * A subagent's own attach (#attachWorkflow) feeds this same pipeline with its
+   * own seam, so the mark is only ordered per attach and not across them. The
+   * mode therefore latches rather than tracking it per frame — see
+   * catchingUpAfterFrame().
    */
   #appendFrame(
     frame: AgentSseFrame,
     options: { persist?: boolean; sourceWorkflowId?: string } = {}
   ): void {
     const isReplay = "replay" in frame.data && frame.data.replay === true;
-    if (isReplay !== this.#catchingUp) {
-      this.#catchingUp = isReplay;
+    if (!isReplay) this.#liveFrameSeen = true;
+    const catchingUp = catchingUpAfterFrame(isReplay, this.#liveFrameSeen);
+    if (catchingUp !== this.#catchingUp) {
+      this.#catchingUp = catchingUp;
       this.#catchUpStartedAt = now();
       this.#sinceCatchUpPublish = 0;
       /* Crossing to live commits the tail of the backlog immediately rather than
          holding it for a chunk that may never fill — a run that goes quiet right
          after catching up would otherwise leave its last events unpublished. */
-      if (!isReplay) this.#publishFrames();
+      if (!catchingUp) this.#publishFrames();
     }
     this.#ingestFrame(frame, options);
     this.#schedulePublish();

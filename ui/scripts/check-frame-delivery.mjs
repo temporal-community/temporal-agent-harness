@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 import {
   catchUpCeilingMs,
+  catchingUpAfterFrame,
   cursorAfterPublish,
   framePublishChunkSize,
   publishAtChunkBoundary
@@ -110,8 +111,17 @@ assert.ok(
    silent and total: an early return while catching up publishes NOTHING for the
    whole backlog, and the console sits empty until the run goes live. */
 
-const streamCatchUp = (replayFrames, liveFrames, msPerFrame) => {
+const streamCatchUp = (replayFrames, liveFrames, msPerFrame) =>
+  streamFrames(
+    [...Array(replayFrames).fill(true), ...Array(liveFrames).fill(false)],
+    msPerFrame
+  );
+
+/* Modelled on #appendFrame + #schedulePublish, driven by an explicit sequence of
+   `replay` marks so an interleaved one can be fed in. */
+const streamFrames = (replayMarks, msPerFrame) => {
   let catchingUp = false;
+  let liveFrameSeen = false;
   let catchUpStartedAt = 0;
   let sinceCatchUpPublish = 0;
   let clock = 0;
@@ -132,17 +142,18 @@ const streamCatchUp = (replayFrames, liveFrames, msPerFrame) => {
 
   const append = (isReplay) => {
     clock += msPerFrame;
-    if (isReplay !== catchingUp) {
-      catchingUp = isReplay;
+    if (!isReplay) liveFrameSeen = true;
+    const next = catchingUpAfterFrame(isReplay, liveFrameSeen);
+    if (next !== catchingUp) {
+      catchingUp = next;
       catchUpStartedAt = clock;
       sinceCatchUpPublish = 0;
-      if (!isReplay) commits.push({ at: clock, kind: "crossed-to-live" });
+      if (!next) commits.push({ at: clock, kind: "crossed-to-live" });
     }
     schedulePublish();
   };
 
-  for (let i = 0; i < replayFrames; i += 1) append(true);
-  for (let i = 0; i < liveFrames; i += 1) append(false);
+  for (const isReplay of replayMarks) append(isReplay);
   return commits;
 };
 
@@ -184,5 +195,56 @@ assert.equal(
   true,
   "unmarked frames must keep the per-paint schedule"
 );
+
+/* Frames do not all arrive on one attach. Within a single attach the server's
+   `replay` mark is ordered (it is resume_offset <= head, and resume_offset only
+   advances), but a subagent gets a CONCURRENT attach with its own head, and its
+   backlog is stamped replay while the root's frames are live. Merged into one
+   pipeline the two orderings interleave, so the mode latches at the first live
+   frame rather than reading the mark per frame. Proven in
+   tests/harness/test_replay_stamp.py: ordered per attach, not across attaches. */
+
+assert.equal(catchingUpAfterFrame(true, false), true, "a replay frame before the live edge is catch-up");
+assert.equal(
+  catchingUpAfterFrame(true, true),
+  false,
+  "a replay frame AFTER a live one is another stream's backlog, not a new catch-up"
+);
+assert.equal(catchingUpAfterFrame(false, true), false, "a live frame is never catch-up");
+
+// The user's scenario: watching a session live while a subagent's own attach
+// replays its history into the same pipeline.
+const interleaved = [
+  ...Array(200).fill(true),
+  ...Array.from({ length: 600 }, (_, i) => i % 3 === 0)
+];
+const mixed = streamFrames(interleaved, 1);
+
+/* Crossing to live publishes SYNCHRONOUSLY, so unlike a paint commit it is not
+   coalesced by rAF: a burst of thirty events that should cost one commit costs
+   one per flip instead. Bounding the crossings at one is what keeps a burst a
+   burst. Pre-latch this sequence crossed 200 times. */
+assert.equal(
+  mixed.filter((c) => c.kind === "crossed-to-live").length,
+  1,
+  "a stream must cross to live exactly once, however the replay marks interleave"
+);
+
+/* The frames past the live edge must reach the per-paint schedule rather than
+   being held for a chunk that a quiet run may never fill. */
+assert.equal(
+  mixed.filter((c) => c.kind === "chunk").length,
+  0,
+  "a replay mark arriving after the live edge must not re-enter chunked batching"
+);
+
+/* ponytail: bounding the commit COUNT is all this schedule does; each commit is
+   still O(frames), measured at ~5us per frame across the derived projections, so
+   one commit at 20k events costs ~100ms. Total catch-up work is
+   (commits x frames), which the 1s ceiling keeps near-linear for a cold load but
+   which stays quadratic for a long live session at one commit per paint.
+   Upgrading that means making the projections incremental — appending to them
+   rather than rebuilding them — not making the buffer copy cheaper, which is
+   0.01% of a commit. */
 
 console.log("frame delivery OK");
