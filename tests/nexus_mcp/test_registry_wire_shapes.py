@@ -27,6 +27,8 @@ from durable_tools_gateway.generated import (
     CallToolOutput,
     ListAccountEntriesInput,
     ListAccountEntriesOutput,
+    ResolveAccountToolboxInput,
+    ResolveAccountToolboxOutput,
 )
 from durable_tools_gateway.registry import (
     AccountEntries,
@@ -34,6 +36,7 @@ from durable_tools_gateway.registry import (
     account_registry_workflow_id,
     fetch_external_tools,
 )
+from durable_tools_gateway.resources import ResourceDescriptor, TEXT_AGENT_HANDLER
 from durable_tools_gateway.registry_service_handler import (
     RegistryServiceHandler,
     mcp_proxy_activity,
@@ -51,7 +54,9 @@ def _round_trip(value: object, type_hint: type) -> object:
     return decoded
 
 
-def _mock_client(*, remote_servers=None, fetched_tools=None, find_url=None, call_result=None):
+def _mock_client(
+    *, remote_servers=None, fetched_tools=None, find_url=None, call_result=None
+):
     """A fake temporalio.client.Client just capable enough for RegistryServiceHandler."""
     client = MagicMock()
     handle = MagicMock()
@@ -77,8 +82,62 @@ def _mock_client(*, remote_servers=None, fetched_tools=None, find_url=None, call
     return client
 
 
+async def test_resolve_toolbox_filters_self_ancestors_and_max_depth() -> None:
+    resources = {
+        "parent": ResourceDescriptor(
+            "parent",
+            1,
+            "agent",
+            "nexus",
+            "Parent",
+            "",
+            "parent-endpoint",
+            "AgentService",
+            (TEXT_AGENT_HANDLER,),
+        ),
+        "child": ResourceDescriptor(
+            "child",
+            1,
+            "agent",
+            "nexus",
+            "Child",
+            "",
+            "child-endpoint",
+            "AgentService",
+            (TEXT_AGENT_HANDLER,),
+        ),
+        "tool": ResourceDescriptor(
+            "tool", 1, "mcp", "nexus", "Tool", "", "tool-endpoint", "tool-service"
+        ),
+    }
+    client = MagicMock()
+    handle = MagicMock()
+    handle.query = AsyncMock(return_value=AccountEntries(resources=resources))
+    client.start_workflow = AsyncMock(return_value=handle)
+    handler = RegistryServiceHandler(client)
+
+    output = await handler.resolve_account_toolbox(
+        MagicMock(),
+        ResolveAccountToolboxInput(
+            account_id="account-1",
+            caller_agent_id="child",
+            lineage=["parent"],
+            delegation_depth=5,
+            max_delegation_depth=5,
+        ),
+    )
+    decoded = _round_trip(output, ResolveAccountToolboxOutput)
+
+    assert '"resource_id":"tool"' in decoded.manifest
+    assert '"resource_id":"parent"' not in decoded.manifest
+    assert '"resource_id":"child"' not in decoded.manifest
+    assert len(decoded.version) == 16
+
+
 @patch("temporalio.nexus.info", return_value=_FAKE_NEXUS_INFO)
-async def test_list_account_entries_output_serializes_over_the_wire(_mock_info: MagicMock) -> None:
+async def test_list_account_entries_output_serializes_over_the_wire(
+    _mock_info: MagicMock,
+) -> None:
     client = _mock_client(
         remote_servers={"weather": "http://fake"},
         fetched_tools=[{"name": "weather_get_forecast", "description": "fake"}],
@@ -95,13 +154,15 @@ async def test_list_account_entries_output_serializes_over_the_wire(_mock_info: 
     options = client.execute_activity.await_args.kwargs
     assert options["schedule_to_close_timeout"].total_seconds() == 60
     assert options["retry_policy"].maximum_attempts == 3
-    assert client.start_workflow.await_args.kwargs["id"] == account_registry_workflow_id(
-        "account-1"
-    )
+    assert client.start_workflow.await_args.kwargs[
+        "id"
+    ] == account_registry_workflow_id("account-1")
 
 
 @patch("temporalio.nexus.info", return_value=_FAKE_NEXUS_INFO)
-async def test_call_tool_forwards_arguments_and_serializes_result(_mock_info: MagicMock) -> None:
+async def test_call_tool_forwards_arguments_and_serializes_result(
+    _mock_info: MagicMock,
+) -> None:
     fake_result = CallToolResult(content=[TextContent(type="text", text="42")])
     client = _mock_client(find_url="http://fake", call_result=fake_result)
     handler = RegistryServiceHandler(client)

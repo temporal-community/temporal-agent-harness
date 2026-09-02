@@ -900,6 +900,188 @@ class RegisterSubagentInput:
     url: str
 
 
+class _ResolveAccountToolboxInputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["ResolveAccountToolboxInput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["ResolveAccountToolboxInput"]
+    ) -> "ResolveAccountToolboxInput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        account_id_value: str = typing.cast("typing.Any", None)
+        if "account_id" not in raw or raw["account_id"] is None:
+            violations.append(Violation(path="account_id", reason="required"))
+        else:
+            account_id_value_raw = raw["account_id"]
+            if not isinstance(account_id_value_raw, str):
+                violations.append(Violation(path="account_id", reason="expected string"))
+            else:
+                account_id_value = account_id_value_raw
+
+        caller_agent_id_value: str = typing.cast("typing.Any", None)
+        if "caller_agent_id" not in raw or raw["caller_agent_id"] is None:
+            violations.append(Violation(path="caller_agent_id", reason="required"))
+        else:
+            caller_agent_id_value_raw = raw["caller_agent_id"]
+            if not isinstance(caller_agent_id_value_raw, str):
+                violations.append(Violation(path="caller_agent_id", reason="expected string"))
+            else:
+                caller_agent_id_value = caller_agent_id_value_raw
+
+        lineage_value: list[str] = typing.cast("typing.Any", None)
+        if "lineage" not in raw or raw["lineage"] is None:
+            violations.append(Violation(path="lineage", reason="required"))
+        else:
+            lineage_value_raw = raw["lineage"]
+            if not isinstance(lineage_value_raw, list):
+                violations.append(Violation(path="lineage", reason="expected array"))
+            else:
+                lineage_value_list: list[str] = []
+                for lineage_value_index, lineage_value_element in enumerate(typing.cast("list[typing.Any]", lineage_value_raw)):
+                    lineage_value_item_path = f'lineage[{lineage_value_index}]'
+                    lineage_value_item_violation_count = len(violations)
+                    lineage_value_item: str = typing.cast("typing.Any", None)
+                    if not isinstance(lineage_value_element, str):
+                        violations.append(Violation(path=lineage_value_item_path, reason="expected string"))
+                    else:
+                        lineage_value_item = lineage_value_element
+                    if len(violations) == lineage_value_item_violation_count:
+                        lineage_value_list.append(lineage_value_item)
+                lineage_value = lineage_value_list
+
+        delegation_depth_value: int = typing.cast("typing.Any", None)
+        if "delegation_depth" not in raw or raw["delegation_depth"] is None:
+            violations.append(Violation(path="delegation_depth", reason="required"))
+        else:
+            delegation_depth_value_raw = raw["delegation_depth"]
+            delegation_depth_value_parsed = _parse_spec_integer(delegation_depth_value_raw, "delegation_depth", violations)
+            if delegation_depth_value_parsed is not None:
+                delegation_depth_value = delegation_depth_value_parsed
+                if delegation_depth_value < 0:
+                    violations.append(Violation(path="delegation_depth", reason=f"must be >= 0, got {delegation_depth_value}"))
+
+        max_delegation_depth_value: int = typing.cast("typing.Any", None)
+        if "max_delegation_depth" not in raw or raw["max_delegation_depth"] is None:
+            violations.append(Violation(path="max_delegation_depth", reason="required"))
+        else:
+            max_delegation_depth_value_raw = raw["max_delegation_depth"]
+            max_delegation_depth_value_parsed = _parse_spec_integer(max_delegation_depth_value_raw, "max_delegation_depth", violations)
+            if max_delegation_depth_value_parsed is not None:
+                max_delegation_depth_value = max_delegation_depth_value_parsed
+                if max_delegation_depth_value < 1:
+                    violations.append(Violation(path="max_delegation_depth", reason=f"must be >= 1, got {max_delegation_depth_value}"))
+
+        for key in raw:
+            if key != "account_id" and key != "caller_agent_id" and key != "lineage" and key != "delegation_depth" and key != "max_delegation_depth":
+                violations.append(Violation(path=key, reason="unknown field"))
+        if violations:
+            raise ValidationError(violations)
+        return ResolveAccountToolboxInput(
+            account_id=account_id_value,
+            caller_agent_id=caller_agent_id_value,
+            lineage=lineage_value,
+            delegation_depth=delegation_depth_value,
+            max_delegation_depth=max_delegation_depth_value,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "ResolveAccountToolboxInput") -> typing.Any:
+        violations: list[Violation] = []
+        out: dict[str, typing.Any] = {}
+        out["account_id"] = value.account_id
+        out["caller_agent_id"] = value.caller_agent_id
+        out["lineage"] = value.lineage
+        if value.delegation_depth < 0:
+            violations.append(Violation(path="delegation_depth", reason=f"must be >= 0, got {value.delegation_depth}"))
+        out["delegation_depth"] = value.delegation_depth
+        if value.max_delegation_depth < 1:
+            violations.append(Violation(path="max_delegation_depth", reason=f"must be >= 1, got {value.max_delegation_depth}"))
+        out["max_delegation_depth"] = value.max_delegation_depth
+        if violations:
+            raise ValidationError(violations)
+        return out
+
+
+@_transfer_type_convertible(_ResolveAccountToolboxInputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class ResolveAccountToolboxInput:
+    """Account and invocation context used to filter dynamic resources."""
+
+    account_id: str
+
+    caller_agent_id: str
+
+    lineage: list[str]
+
+    delegation_depth: int
+
+    max_delegation_depth: int
+
+
+class _ResolveAccountToolboxOutputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["ResolveAccountToolboxOutput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["ResolveAccountToolboxOutput"]
+    ) -> "ResolveAccountToolboxOutput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        manifest_value: str = typing.cast("typing.Any", None)
+        if "manifest" not in raw or raw["manifest"] is None:
+            violations.append(Violation(path="manifest", reason="required"))
+        else:
+            manifest_value_raw = raw["manifest"]
+            if not isinstance(manifest_value_raw, str):
+                violations.append(Violation(path="manifest", reason="expected string"))
+            else:
+                manifest_value = manifest_value_raw
+
+        version_value: str = typing.cast("typing.Any", None)
+        if "version" not in raw or raw["version"] is None:
+            violations.append(Violation(path="version", reason="required"))
+        else:
+            version_value_raw = raw["version"]
+            if not isinstance(version_value_raw, str):
+                violations.append(Violation(path="version", reason="expected string"))
+            else:
+                version_value = version_value_raw
+
+        for key in raw:
+            if key != "manifest" and key != "version":
+                violations.append(Violation(path=key, reason="unknown field"))
+        if violations:
+            raise ValidationError(violations)
+        return ResolveAccountToolboxOutput(
+            manifest=manifest_value,
+            version=version_value,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "ResolveAccountToolboxOutput") -> typing.Any:
+        out: dict[str, typing.Any] = {}
+        out["manifest"] = value.manifest
+        out["version"] = value.version
+        return out
+
+
+@_transfer_type_convertible(_ResolveAccountToolboxOutputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class ResolveAccountToolboxOutput:
+    """JSON-encoded ResourceDescriptor list pinned for one agent turn."""
+
+    manifest: str
+
+    version: str
+
+
 class _StartSubagentInputTransferTypeConverter(
     temporalio.converter.TransferTypeConverter["StartSubagentInput", typing.Any]
 ):

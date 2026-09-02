@@ -234,6 +234,17 @@ async def execute_agent_action(
     session = QuerySessionInput(session_id=input.session_id)
     match input.action:
         case "send":
+            context = {
+                name: values[name]
+                for name in (
+                    "account_id",
+                    "registered_agent_id",
+                    "delegation_lineage",
+                    "delegation_depth",
+                    "max_delegation_depth",
+                )
+                if values.get(name) is not None
+            }
             operation = AgentService.send_agent_message
             operation_input = SendAgentMessageInput(
                 session_id=input.session_id,
@@ -244,6 +255,7 @@ async def execute_agent_action(
                     if values.get("expected_turn") is not None
                     else None
                 ),
+                **context,
             )
         case "status":
             operation = AgentService.query_agent_status

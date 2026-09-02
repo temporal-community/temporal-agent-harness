@@ -14,6 +14,8 @@ from .models import (
     ListAccountEntriesOutput,
     RegisterExternalInput,
     RegisterSubagentInput,
+    ResolveAccountToolboxInput,
+    ResolveAccountToolboxOutput,
     StartSubagentInput,
     StartSubagentOutput,
     StopSubagentInput,
@@ -43,6 +45,12 @@ class RegistryService:
         ListAccountEntriesOutput,
     ] = Operation(name="ListAccountEntries")
     """All registered 3rd-party tools for one account_id."""
+
+    resolve_account_toolbox: Operation[
+        ResolveAccountToolboxInput,
+        ResolveAccountToolboxOutput,
+    ] = Operation(name="resolve_account_toolbox")
+    """Resolve a stable per-turn snapshot of an account's installed resources."""
 
     call_tool: Operation[
         CallToolInput,

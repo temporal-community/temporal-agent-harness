@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from durable_tools_gateway.registry import (
     AgentRegistration,
+    GlobalCatalogWorkflow,
     NexusMCPServerRegistration,
     PendingSessionEvent,
     SpawnedAgentObservation,
@@ -11,6 +12,7 @@ from durable_tools_gateway.registry import (
     ToolRegistryWorkflow,
     account_registry_workflow_id,
 )
+from durable_tools_gateway.resources import ResourceDescriptor, TEXT_AGENT_HANDLER
 
 
 def test_account_workflow_ids_are_stable_isolated_and_opaque() -> None:
@@ -19,6 +21,61 @@ def test_account_workflow_ids_are_stable_isolated_and_opaque() -> None:
     assert first == account_registry_workflow_id("account-1")
     assert first != account_registry_workflow_id("account-2")
     assert "account-1" not in first
+
+
+def test_catalog_and_account_share_pinned_resource_descriptors() -> None:
+    catalog = GlobalCatalogWorkflow()
+    account = ToolRegistryWorkflow("account-1")
+    published = ResourceDescriptor(
+        resource_id="assistant",
+        revision=3,
+        category="agent",
+        transport="nexus",
+        label="Assistant",
+        description="Catalog agent",
+        endpoint="assistant-endpoint",
+        service="AgentService",
+        handlers=(TEXT_AGENT_HANDLER,),
+    )
+
+    assert catalog.publish_resources([published]) == [published]
+    catalog_entry = catalog.get_resource("assistant")
+    assert catalog_entry is not None
+    with patch("durable_tools_gateway.registry.workflow.time", return_value=123.0):
+        installed = account.install_resource(catalog_entry)
+
+    assert installed.descriptor is published
+    assert installed.installed_at == 123.0
+    assert account.list_agents() == [published]
+
+    account.remove_resource("assistant")
+
+    assert account.list_agents() == []
+    assert account.get_agent("assistant") == published
+
+
+def test_account_registration_updates_replay_the_previous_wire_shape() -> None:
+    account = ToolRegistryWorkflow("account-1")
+
+    account.register_agent(
+        {
+            "agent_id": "legacy-agent",
+            "kind": "harness_nexus",
+            "label": "Legacy Agent",
+            "description": "Recorded before the shared descriptor existed",
+            "nexus_endpoint": "legacy-endpoint",
+            "nexus_service": "AgentService",
+            "provider_url": None,
+        }
+    )
+    account.register_nexus_mcp_server(
+        {"name": "legacy-mcp", "endpoint": "legacy-mcp-endpoint", "service": "mcp"}
+    )
+
+    legacy_agent = account.get_agent("legacy-agent")
+    assert legacy_agent is not None
+    assert legacy_agent.endpoint == "legacy-endpoint"
+    assert account.list_account_entries().nexus_servers["legacy-mcp"].service == "mcp"
 
 
 def test_accounts_do_not_share_agents_sessions_or_resources() -> None:
@@ -44,7 +101,10 @@ def test_accounts_do_not_share_agents_sessions_or_resources() -> None:
     assert first.list_account_entries().subagent_providers == {
         "writer": "http://writer"
     }
-    assert first.list_agents() == [registration]
+    assert {agent.resource_id for agent in first.list_agents()} == {
+        "assistant",
+        "writer",
+    }
     assert first.list_sessions() == [session]
     assert session.account_id == "account-1"
     assert second.list_account_entries().subagent_providers == {}

@@ -5,10 +5,13 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
+from types import SimpleNamespace
 
 from temporalio.converter import DataConverter
 
-from temporal_agent_harness.harness.agent_protocol.agent_interface import CallbackResultAck
+from temporal_agent_harness.harness.agent_protocol.agent_interface import (
+    CallbackResultAck,
+)
 from temporal_agent_harness.harness.stream_poll import (
     AgentStreamPollItem,
     AgentStreamPollResult,
@@ -16,9 +19,11 @@ from temporal_agent_harness.harness.stream_poll import (
 from temporal_agent_harness.nexus_agent_adapter.generated import (
     ProvideCallbackResultInput,
     ProvideCallbackResultInputResult,
+    SendAgentMessageInput,
 )
 from temporal_agent_harness.nexus_agent_adapter.handler import (
     AgentServiceHandler,
+    Config,
     _is_workflow_already_completed,
     _is_workflow_not_found,
 )
@@ -80,13 +85,64 @@ async def test_provide_callback_result_unwraps_result_before_forwarding(
         ProvideCallbackResultInput(
             session_id="s1",
             tool_id="t1",
-            result=ProvideCallbackResultInputResult(additional_properties={"answer": 42}),
+            result=ProvideCallbackResultInputResult(
+                additional_properties={"answer": 42}
+            ),
         ),
     )
 
     assert mock_agent_client.provide_callback_result.await_args.kwargs["result"] == {
         "answer": 42
     }
+
+
+@patch("temporal_agent_harness.nexus_agent_adapter.handler.AgentClient")
+async def test_send_agent_message_stamps_account_and_lineage_on_new_session(
+    mock_agent_client_cls: MagicMock,
+) -> None:
+    mock_agent_client_cls.return_value.start_and_submit_message = AsyncMock(
+        return_value=SimpleNamespace(
+            turn_number=1,
+            turn_id="turn-1",
+            accepted_offset=0,
+            pending=False,
+        )
+    )
+    handler = AgentServiceHandler(
+        MagicMock(),
+        Config(
+            agent_task_queue="agents",
+            workflow_name="Agent",
+            workflow_id_prefix="",
+            is_message_queuing_enabled=True,
+        ),
+    )
+
+    await handler.send_agent_message(
+        SimpleNamespace(request_id="request-1"),
+        SendAgentMessageInput(
+            session_id="session-1",
+            msg_type="ask",
+            payload='{"text":"hello"}',
+            expected_turn=1,
+            account_id="account-1",
+            registered_agent_id="whimsical-agent",
+            delegation_lineage=["nexus-hello"],
+            delegation_depth=1,
+            max_delegation_depth=5,
+        ),
+    )
+
+    config = (
+        mock_agent_client_cls.return_value.start_and_submit_message.await_args.kwargs[
+            "start_config"
+        ]
+    )
+    assert config.account_id == "account-1"
+    assert config.registered_agent_id == "whimsical-agent"
+    assert config.delegation_lineage == ("nexus-hello",)
+    assert config.delegation_depth == 1
+    assert config.max_delegation_depth == 5
 
 
 def test_is_workflow_already_completed_true() -> None:

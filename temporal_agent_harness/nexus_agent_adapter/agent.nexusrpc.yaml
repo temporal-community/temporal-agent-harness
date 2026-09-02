@@ -58,6 +58,22 @@ $defs:
       expectedTurn:
         type: integer
         description: "Caller-known next turn number. Set this when the caller already tracks turn state (e.g. a subagent-driving parent) - the send fails fast with StaleTurn on a mismatch instead of guessing. Omit to fall back to guess-and-retry (e.g. Slack, which has no local turn state)."
+      accountId:
+        type: string
+        description: "Optional account toolbox inherited by a newly started harness session."
+      registeredAgentId:
+        type: string
+        description: "Optional account-local catalog ID for the target agent."
+      delegationLineage:
+        type: array
+        items: { type: string }
+        description: "Account agent IDs already visited by this invocation chain."
+      delegationDepth:
+        type: integer
+        minimum: 0
+      maxDelegationDepth:
+        type: integer
+        minimum: 1
     required:
       - sessionId
       - msgType

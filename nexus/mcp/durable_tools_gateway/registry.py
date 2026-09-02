@@ -13,8 +13,17 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 
+from .resources import (
+    AccountResourceRegistration,
+    ResourceDescriptor,
+    TEXT_AGENT_HANDLER,
+    descriptor_from_dict,
+    validate_resource_descriptor,
+)
+
 REGISTRY_WORKFLOW_ID_PREFIX = "account-registry"
 REGISTRY_TASK_QUEUE = "mcp-registry"
+GLOBAL_CATALOG_WORKFLOW_ID = "global-resource-catalog"
 
 
 def account_registry_workflow_id(account_id: str) -> str:
@@ -47,37 +56,180 @@ async def fetch_external_tools(name: str, url: str) -> list[dict[str, Any]]:
     return tools
 
 
-@dataclass
+@dataclass(init=False)
 class AccountEntries:
-    """Account-owned external routes. MCP tool definitions are fetched live."""
+    """Account-owned resources, all expressed through the shared schema."""
 
-    remote_servers: dict[str, str] = field(default_factory=dict)
-    nexus_servers: dict[str, NexusMCPServerRegistration] = field(
-        default_factory=dict
+    resources: dict[str, ResourceDescriptor] = field(default_factory=dict)
+
+    def __init__(
+        self,
+        resources: dict[str, ResourceDescriptor] | None = None,
+        *,
+        remote_servers: dict[str, str] | None = None,
+        nexus_servers: dict[str, ResourceDescriptor] | None = None,
+        subagent_providers: dict[str, str] | None = None,
+    ) -> None:
+        """Accept legacy constructor views while retaining one canonical schema."""
+        self.resources = dict(resources or {})
+        for name, endpoint in (remote_servers or {}).items():
+            self.resources[name] = ResourceDescriptor(
+                name, 1, "mcp", "external_http", name, "", endpoint
+            )
+        self.resources.update(nexus_servers or {})
+        for name, endpoint in (subagent_providers or {}).items():
+            self.resources[name] = ResourceDescriptor(
+                name,
+                1,
+                "agent",
+                "external_http",
+                name,
+                "",
+                endpoint,
+                handlers=(TEXT_AGENT_HANDLER,),
+            )
+
+    @property
+    def remote_servers(self) -> dict[str, str]:
+        return {
+            key: item.endpoint
+            for key, item in self.resources.items()
+            if item.category == "mcp" and item.transport == "external_http"
+        }
+
+    @property
+    def nexus_servers(self) -> dict[str, ResourceDescriptor]:
+        return {
+            key: item
+            for key, item in self.resources.items()
+            if item.category == "mcp" and item.transport == "nexus"
+        }
+
+    @property
+    def subagent_providers(self) -> dict[str, str]:
+        return {
+            key: item.endpoint
+            for key, item in self.resources.items()
+            if item.category == "agent" and item.transport == "external_http"
+        }
+
+
+@workflow.defn(sandboxed=False, name="GlobalResourceCatalog")
+class GlobalCatalogWorkflow:
+    """Prototype global catalog of resources available for account installation."""
+
+    def __init__(self) -> None:
+        self._resources: dict[str, ResourceDescriptor] = {}
+
+    @workflow.run
+    async def run(self) -> None:
+        await workflow.wait_condition(lambda: False)
+
+    @workflow.update
+    def publish_resources(
+        self, descriptors: list[ResourceDescriptor]
+    ) -> list[ResourceDescriptor]:
+        for descriptor in descriptors:
+            try:
+                validate_resource_descriptor(descriptor)
+            except ValueError as exc:
+                raise ApplicationError(
+                    str(exc), type="InvalidCatalogResource", non_retryable=True
+                ) from exc
+            current = self._resources.get(descriptor.resource_id)
+            if current is not None and descriptor.revision < current.revision:
+                raise ApplicationError(
+                    f"catalog resource {descriptor.resource_id!r} cannot move from "
+                    f"revision {current.revision} back to {descriptor.revision}",
+                    type="CatalogRevisionRegression",
+                    non_retryable=True,
+                )
+            self._resources[descriptor.resource_id] = descriptor
+        return list(self._resources.values())
+
+    @workflow.query
+    def list_resources(self) -> list[ResourceDescriptor]:
+        return list(self._resources.values())
+
+    @workflow.query
+    def get_resource(self, resource_id: str) -> ResourceDescriptor | None:
+        return self._resources.get(resource_id)
+
+
+def AgentRegistration(  # noqa: N802 - compatibility constructor
+    agent_id: str,
+    kind: str,
+    label: str,
+    description: str,
+    nexus_endpoint: str | None = None,
+    nexus_service: str = "AgentService",
+    provider_url: str | None = None,
+) -> ResourceDescriptor:
+    """Build the canonical descriptor from the former agent registration API."""
+    if kind not in {"harness_nexus", "external_http"}:
+        raise ValueError(f"unsupported agent kind {kind!r}")
+    native = kind == "harness_nexus"
+    return ResourceDescriptor(
+        resource_id=agent_id,
+        revision=1,
+        category="agent",
+        transport="nexus" if native else "external_http",
+        label=label,
+        description=description,
+        endpoint=(nexus_endpoint if native else provider_url) or "",
+        service=nexus_service if native else None,
+        handlers=(TEXT_AGENT_HANDLER,),
     )
-    subagent_providers: dict[str, str] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class NexusMCPServerRegistration:
-    """Read-only discovery metadata for a directly invoked Nexus MCP service."""
+def NexusMCPServerRegistration(  # noqa: N802 - compatibility constructor
+    name: str, endpoint: str, service: str
+) -> ResourceDescriptor:
+    """Build the canonical descriptor from the former Nexus MCP API."""
+    return ResourceDescriptor(
+        resource_id=name,
+        revision=1,
+        category="mcp",
+        transport="nexus",
+        label=name,
+        description="Nexus-native MCP server.",
+        endpoint=endpoint,
+        service=service,
+    )
 
-    name: str
-    endpoint: str
-    service: str
+
+def _agent_descriptor(value: Any) -> ResourceDescriptor:
+    """Decode both the former registration wire shape and the canonical shape."""
+    if isinstance(value, ResourceDescriptor):
+        return value
+    if not isinstance(value, dict):
+        raise ValueError("agent registration must be an object")
+    if "resource_id" in value:
+        return descriptor_from_dict(value)
+    return AgentRegistration(
+        agent_id=str(value.get("agent_id", "")),
+        kind=str(value.get("kind", "")),
+        label=str(value.get("label", "")),
+        description=str(value.get("description", "")),
+        nexus_endpoint=value.get("nexus_endpoint"),
+        nexus_service=str(value.get("nexus_service", "AgentService")),
+        provider_url=value.get("provider_url"),
+    )
 
 
-@dataclass(frozen=True)
-class AgentRegistration:
-    """One account-owned agent definition."""
-
-    agent_id: str
-    kind: str
-    label: str
-    description: str
-    nexus_endpoint: str | None = None
-    nexus_service: str = "AgentService"
-    provider_url: str | None = None
+def _nexus_mcp_descriptor(value: Any) -> ResourceDescriptor:
+    """Decode both the former Nexus MCP wire shape and the canonical shape."""
+    if isinstance(value, ResourceDescriptor):
+        return value
+    if not isinstance(value, dict):
+        raise ValueError("Nexus MCP registration must be an object")
+    if "resource_id" in value:
+        return descriptor_from_dict(value)
+    return NexusMCPServerRegistration(
+        name=str(value.get("name", "")),
+        endpoint=str(value.get("endpoint", "")),
+        service=str(value.get("service", "")),
+    )
 
 
 @dataclass(frozen=True)
@@ -142,11 +294,8 @@ class ToolRegistryWorkflow:
     @workflow.init
     def __init__(self, account_id: str) -> None:
         self._account_id = account_id
-        self._remote_entries: dict[str, str] = {}
-        self._nexus_mcp_entries: dict[str, NexusMCPServerRegistration] = {}
-        self._subagent_entries: dict[str, str] = {}
+        self._resources: dict[str, AccountResourceRegistration] = {}
         self._subagent_instances: dict[str, SubagentInstanceRoute] = {}
-        self._agents: dict[str, AgentRegistration] = {}
         self._sessions: dict[str, SessionRecord] = {}
         self._session_events: dict[str, list[SessionEvent]] = {}
         self._next_session_number = 1
@@ -166,7 +315,17 @@ class ToolRegistryWorkflow:
     @workflow.signal
     async def register_external(self, name: str, url: str) -> None:
         """Register an MCP server and check that it is reachable."""
-        self._remote_entries[name] = url
+        self._install(
+            ResourceDescriptor(
+                resource_id=name,
+                revision=1,
+                category="mcp",
+                transport="external_http",
+                label=name,
+                description="Externally hosted MCP server.",
+                endpoint=url,
+            )
+        )
         try:
             tools = await workflow.execute_activity(
                 fetch_external_tools,
@@ -190,17 +349,14 @@ class ToolRegistryWorkflow:
     @workflow.signal
     def deregister(self, name: str) -> None:
         """Remove one account-owned MCP registration."""
-        if self._remote_entries.pop(name, None) is not None:
+        if self._resources.pop(name, None) is not None:
             workflow.logger.info("[registry] deregistered %r", name)
 
     @workflow.signal
     def clear_all(self) -> None:
         """Remove all MCP server and subagent registrations."""
-        self._remote_entries.clear()
-        self._nexus_mcp_entries.clear()
-        self._subagent_entries.clear()
+        self._resources.clear()
         self._subagent_instances.clear()
-        self._agents.clear()
         self._sessions.clear()
         self._session_events.clear()
         workflow.logger.info("[registry] cleared all entries")
@@ -208,68 +364,96 @@ class ToolRegistryWorkflow:
     @workflow.signal
     def register_subagent(self, alias: str, url: str) -> None:
         """Register a minimal HTTP subagent provider for this account."""
-        self._subagent_entries[alias] = url
+        self._install(
+            ResourceDescriptor(
+                resource_id=alias,
+                revision=1,
+                category="agent",
+                transport="external_http",
+                label=alias,
+                description="Externally hosted HTTP agent.",
+                endpoint=url,
+                handlers=(TEXT_AGENT_HANDLER,),
+            )
+        )
         workflow.logger.info("[registry] registered subagent %r at %s", alias, url)
 
     @workflow.signal
     def deregister_subagent(self, alias: str) -> None:
         """Remove one account-owned subagent provider."""
-        if self._subagent_entries.pop(alias, None) is not None:
+        if self._resources.pop(alias, None) is not None:
             workflow.logger.info("[registry] deregistered subagent %r", alias)
 
     @workflow.update
     def register_nexus_mcp_server(
-        self, registration: NexusMCPServerRegistration
-    ) -> NexusMCPServerRegistration:
+        self, registration: Any
+    ) -> ResourceDescriptor:
         """Register metadata without changing the service's direct Nexus route."""
-        if not all(
-            value.strip()
-            for value in (
-                registration.name,
-                registration.endpoint,
-                registration.service,
-            )
-        ):
+        try:
+            descriptor = _nexus_mcp_descriptor(registration)
+        except ValueError as exc:
             raise ApplicationError(
-                "name, endpoint, and service are required",
+                str(exc), type="InvalidNexusMCPRegistration", non_retryable=True
+            ) from exc
+        if descriptor.category != "mcp" or descriptor.transport != "nexus":
+            raise ApplicationError(
+                "register_nexus_mcp_server requires a Nexus MCP descriptor",
                 type="InvalidNexusMCPRegistration",
                 non_retryable=True,
             )
-        self._nexus_mcp_entries[registration.name] = registration
+        return self._install(descriptor).descriptor
+
+    @workflow.update
+    def register_agent(self, registration: Any) -> ResourceDescriptor:
+        try:
+            descriptor = _agent_descriptor(registration)
+        except ValueError as exc:
+            raise ApplicationError(
+                str(exc), type="InvalidAgentRegistration", non_retryable=True
+            ) from exc
+        if descriptor.category != "agent":
+            raise ApplicationError(
+                "register_agent requires an agent descriptor",
+                type="InvalidAgentRegistration",
+                non_retryable=True,
+            )
+        return self._install(descriptor).descriptor
+
+    def _install(self, descriptor: ResourceDescriptor) -> AccountResourceRegistration:
+        try:
+            validate_resource_descriptor(descriptor)
+        except ValueError as exc:
+            raise ApplicationError(
+                str(exc), type="InvalidResourceRegistration", non_retryable=True
+            ) from exc
+        try:
+            installed_at = workflow.time()
+        except Exception:  # noqa: BLE001 - direct deterministic unit construction
+            installed_at = 0.0
+        registration = AccountResourceRegistration(
+            descriptor=descriptor,
+            installed_at=installed_at,
+        )
+        self._resources[descriptor.resource_id] = registration
         return registration
 
     @workflow.update
-    def register_agent(self, registration: AgentRegistration) -> AgentRegistration:
-        if registration.kind not in {"harness_nexus", "external_http"}:
-            raise ApplicationError(
-                f"unsupported agent kind {registration.kind!r}",
-                type="UnsupportedAgentKind",
-                non_retryable=True,
-            )
-        if registration.kind == "harness_nexus" and not registration.nexus_endpoint:
-            raise ApplicationError(
-                "harness_nexus agents require nexus_endpoint",
-                type="InvalidAgentRegistration",
-                non_retryable=True,
-            )
-        if registration.kind == "external_http" and not registration.provider_url:
-            raise ApplicationError(
-                "external_http agents require provider_url",
-                type="InvalidAgentRegistration",
-                non_retryable=True,
-            )
-        self._agents[registration.agent_id] = registration
-        return registration
+    def install_resource(
+        self, descriptor: ResourceDescriptor
+    ) -> AccountResourceRegistration:
+        """Install a pinned catalog descriptor into this account."""
+        return self._install(descriptor)
+
+    @workflow.update
+    def remove_resource(self, resource_id: str) -> None:
+        """Disable future discovery while preserving retained session records."""
+        registration = self._resources.get(resource_id)
+        if registration is not None:
+            self._resources[resource_id] = replace(registration, enabled=False)
 
     @workflow.update
     def deregister_agent(self, agent_id: str) -> None:
-        if any(session.agent_id == agent_id for session in self._sessions.values()):
-            raise ApplicationError(
-                f"agent {agent_id!r} still has registered sessions",
-                type="AgentHasSessions",
-                non_retryable=True,
-            )
-        self._agents.pop(agent_id, None)
+        self._resources.pop(agent_id, None)
 
     @workflow.update
     def create_session(
@@ -278,7 +462,8 @@ class ToolRegistryWorkflow:
         provider_session_id: str | None = None,
         is_message_queuing_enabled: bool = False,
     ) -> SessionRecord:
-        if agent_id not in self._agents:
+        resource = self._resource(agent_id)
+        if resource is None or resource.category != "agent":
             raise ApplicationError(
                 f"unknown agent {agent_id!r}",
                 type="UnknownAgent",
@@ -319,7 +504,7 @@ class ToolRegistryWorkflow:
         observation: SpawnedAgentObservation,
     ) -> SessionRecord | None:
         parent = self._require_session(parent_session_id)
-        registration = self._agents.get(observation.agent_key)
+        registration = self._resource(observation.agent_key)
         if registration is None:
             workflow.logger.info(
                 "[registry] ignoring unregistered spawned agent %r from session %r",
@@ -329,7 +514,7 @@ class ToolRegistryWorkflow:
             return None
 
         provider_session_id = observation.provider_session_id
-        if registration.kind == "external_http":
+        if registration.transport == "external_http":
             route = self._subagent_instances.get(observation.provider_session_id)
             if route is None or route.alias != observation.agent_key:
                 workflow.logger.info(
@@ -518,13 +703,33 @@ class ToolRegistryWorkflow:
 
     # -- queries -----------------------------------------------------------------
 
+    def _resource(self, resource_id: str) -> ResourceDescriptor | None:
+        registration = self._resources.get(resource_id)
+        if registration is None or not registration.enabled:
+            return None
+        return registration.descriptor
+
     @workflow.query
     def find(self, name: str) -> str | None:
-        return self._remote_entries.get(name)
+        resource = self._resource(name)
+        if (
+            resource is None
+            or resource.category != "mcp"
+            or resource.transport != "external_http"
+        ):
+            return None
+        return resource.endpoint
 
     @workflow.query
     def find_subagent(self, alias: str) -> str | None:
-        return self._subagent_entries.get(alias)
+        resource = self._resource(alias)
+        if (
+            resource is None
+            or resource.category != "agent"
+            or resource.transport != "external_http"
+        ):
+            return None
+        return resource.endpoint
 
     @workflow.query
     def find_subagent_instance(self, instance_id: str) -> SubagentInstanceRoute | None:
@@ -534,18 +739,27 @@ class ToolRegistryWorkflow:
     @workflow.query
     def list_account_entries(self) -> AccountEntries:
         return AccountEntries(
-            remote_servers=dict(self._remote_entries),
-            nexus_servers=dict(self._nexus_mcp_entries),
-            subagent_providers=dict(self._subagent_entries),
+            resources={
+                key: registration.descriptor
+                for key, registration in self._resources.items()
+                if registration.enabled
+            }
         )
 
     @workflow.query
-    def list_agents(self) -> list[AgentRegistration]:
-        return list(self._agents.values())
+    def list_agents(self) -> list[ResourceDescriptor]:
+        return [
+            registration.descriptor
+            for registration in self._resources.values()
+            if registration.enabled and registration.descriptor.category == "agent"
+        ]
 
     @workflow.query
-    def get_agent(self, agent_id: str) -> AgentRegistration | None:
-        return self._agents.get(agent_id)
+    def get_agent(self, agent_id: str) -> ResourceDescriptor | None:
+        registration = self._resources.get(agent_id)
+        if registration is None or registration.descriptor.category != "agent":
+            return None
+        return registration.descriptor
 
     @workflow.query
     def list_sessions(self) -> list[SessionRecord]:

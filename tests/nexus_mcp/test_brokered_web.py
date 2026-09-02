@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from durable_tools_gateway.registry import (
     AccountEntries,
     AgentRegistration,
+    GlobalCatalogWorkflow,
     NexusMCPServerRegistration,
     SessionEvent,
     SessionRecord,
@@ -15,6 +16,11 @@ from durable_tools_gateway.registry import (
 from durable_tools_gateway.registry_service_handler import (
     SubagentDispatchInput,
     SubagentDispatchOutput,
+)
+from durable_tools_gateway.resources import (
+    TEXT_AGENT_HANDLER,
+    AccountResourceRegistration,
+    ResourceDescriptor,
 )
 from durable_tools_gateway.tool_history import ToolCallRecord
 from durable_tools_gateway.web import (
@@ -37,6 +43,7 @@ def _app_client(
     agent_override: AgentRegistration | None = None,
     session_events: list[SessionEvent] | None = None,
     entries_override: AccountEntries | None = None,
+    catalog_override: list[ResourceDescriptor] | None = None,
 ) -> tuple[TestClient, MagicMock, MagicMock]:
     agent = agent_override or AgentRegistration(
         agent_id="assistant",
@@ -72,6 +79,18 @@ def _app_client(
             )
         if method is ToolRegistryWorkflow.poll_session_events:
             return session_events or []
+        if method is GlobalCatalogWorkflow.list_resources:
+            return catalog_override or []
+        if method is GlobalCatalogWorkflow.get_resource:
+            resource_id = args[0]
+            return next(
+                (
+                    item
+                    for item in catalog_override or []
+                    if item.resource_id == resource_id
+                ),
+                None,
+            )
         raise AssertionError(f"unexpected query {method}")
 
     async def update(method, *args, **kwargs):
@@ -88,6 +107,10 @@ def _app_client(
             return []
         if method is ToolRegistryWorkflow.close_session:
             return replace(session, closed=True)
+        if method is ToolRegistryWorkflow.install_resource:
+            return AccountResourceRegistration(args[0], installed_at=123.0)
+        if method is ToolRegistryWorkflow.remove_resource:
+            return None
         raise AssertionError(f"unexpected update {method}")
 
     handle.query = AsyncMock(side_effect=query)
@@ -123,6 +146,38 @@ def test_account_agents_and_sessions_come_from_the_registry() -> None:
     assert account.json()["mcp_servers"][0]["name"] == "weather"
 
 
+def test_catalog_installs_shared_descriptor_into_account_registry() -> None:
+    catalog_agent = ResourceDescriptor(
+        "catalog-agent",
+        2,
+        "agent",
+        "nexus",
+        "Catalog Agent",
+        "Published globally",
+        "catalog-agent-endpoint",
+        "AgentService",
+        (TEXT_AGENT_HANDLER,),
+    )
+    client, handle, _ = _app_client(catalog_override=[catalog_agent])
+
+    with client:
+        catalog = client.get("/api/catalog")
+        installed = client.post("/api/catalog/catalog-agent/register")
+        removed = client.delete("/api/catalog/catalog-agent/register")
+
+    assert catalog.status_code == 200
+    assert catalog.json()["resources"][0]["installed"] is False
+    assert installed.status_code == 200
+    assert installed.json()["revision"] == 2
+    assert removed.status_code == 200
+    install_call = next(
+        call
+        for call in handle.execute_update.await_args_list
+        if call.args[0] is ToolRegistryWorkflow.install_resource
+    )
+    assert install_call.args[1] == catalog_agent
+
+
 def test_native_mcp_history_is_scoped_through_registered_metadata() -> None:
     registration = NexusMCPServerRegistration(
         name="native-demo",
@@ -150,10 +205,13 @@ def test_native_mcp_history_is_scoped_through_registered_metadata() -> None:
         output="7",
     )
 
-    with patch(
-        "durable_tools_gateway.web.scan_native_tool_calls",
-        new=AsyncMock(return_value=[call]),
-    ) as scan, client:
+    with (
+        patch(
+            "durable_tools_gateway.web.scan_native_tool_calls",
+            new=AsyncMock(return_value=[call]),
+        ) as scan,
+        client,
+    ):
         registered = client.post(
             "/api/account/mcp-servers",
             json={
@@ -209,10 +267,13 @@ def test_external_mcp_history_uses_the_gateway_activity_reader() -> None:
         output={"temperature": 70},
     )
 
-    with patch(
-        "durable_tools_gateway.web.scan_external_tool_calls",
-        new=AsyncMock(return_value=[call]),
-    ) as scan, client:
+    with (
+        patch(
+            "durable_tools_gateway.web.scan_external_tool_calls",
+            new=AsyncMock(return_value=[call]),
+        ) as scan,
+        client,
+    ):
         history = client.get("/api/mcp-servers/weather/tool-calls")
 
     assert history.status_code == 200

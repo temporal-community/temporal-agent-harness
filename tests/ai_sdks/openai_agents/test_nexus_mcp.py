@@ -22,8 +22,12 @@ from durable_tools_gateway.generated import (
     ListAccountEntriesOutputRemoteTools,
     ListAccountEntriesOutputRemoteToolsValueItem,
 )
+from durable_tools_gateway.resources import ResourceDescriptor, TEXT_AGENT_HANDLER
 
-from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import _NexusGatewayMCPServer
+from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
+    _NexusGatewayMCPServer,
+    _materialize_toolbox,
+)
 
 
 def _server() -> _NexusGatewayMCPServer:
@@ -36,7 +40,74 @@ def _server() -> _NexusGatewayMCPServer:
     )
 
 
-@patch("temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.create_nexus_client")
+def test_dynamic_toolbox_materializes_native_and_external_routes() -> None:
+    toolbox = _materialize_toolbox(
+        [
+            ResourceDescriptor(
+                "research",
+                1,
+                "agent",
+                "nexus",
+                "Research",
+                "",
+                "research-endpoint",
+                "AgentService",
+                (TEXT_AGENT_HANDLER,),
+            ),
+            ResourceDescriptor(
+                "writer",
+                1,
+                "agent",
+                "external_http",
+                "Writer",
+                "",
+                "http://writer",
+                handlers=(TEXT_AGENT_HANDLER,),
+            ),
+            ResourceDescriptor(
+                "native-tools",
+                1,
+                "mcp",
+                "nexus",
+                "Native tools",
+                "",
+                "tools-endpoint",
+                "tools-service",
+            ),
+            ResourceDescriptor(
+                "remote-tools",
+                1,
+                "mcp",
+                "external_http",
+                "Remote tools",
+                "",
+                "http://tools/mcp",
+            ),
+        ],
+        account_id="account-1",
+        gateway_name="RegistryService",
+        gateway_endpoint="registry-endpoint",
+        version="abc",
+    )
+
+    assert toolbox.version == "abc"
+    assert [server.name for server in toolbox.mcp_servers] == [
+        "tools-service",
+        "account-1-RegistryService-registry-endpoint",
+    ]
+    assert [tool.__name__ for tool in toolbox.subagent_tools] == [
+        "start_research",
+        "research_ask",
+        "stop_research",
+        "start_writer",
+        "writer_ask",
+        "stop_writer",
+    ]
+
+
+@patch(
+    "temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.create_nexus_client"
+)
 async def test_list_tools_unwraps_remote_tools(mock_create_client: MagicMock) -> None:
     mock_client = MagicMock()
     mock_client.execute_operation = AsyncMock(
@@ -65,8 +136,12 @@ async def test_list_tools_unwraps_remote_tools(mock_create_client: MagicMock) ->
     assert server._remote_routes == {"weather_get_forecast": "weather"}
 
 
-@patch("temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.create_nexus_client")
-@patch("temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.info")
+@patch(
+    "temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.create_nexus_client"
+)
+@patch(
+    "temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.info"
+)
 async def test_call_tool_wraps_arguments_and_unwraps_result(
     mock_info: MagicMock, mock_create_client: MagicMock
 ) -> None:

@@ -46,13 +46,18 @@ class NexusTransport:
 
     def __init__(self, endpoint: str) -> None:
         self._endpoint = endpoint
+        self._start_configs: dict[str, AgentConfig] = {}
 
     def _client(self) -> workflow.NexusClient[AgentService]:
-        return workflow.create_nexus_client(service=AgentService, endpoint=self._endpoint)
+        return workflow.create_nexus_client(
+            service=AgentService, endpoint=self._endpoint
+        )
 
     async def start(self, *, agent_key: str, config: AgentConfig) -> str:
         # The first message starts or reuses the target workflow.
-        return f"{agent_key}-subagent-{workflow.uuid4()}"
+        target = f"{agent_key}-subagent-{workflow.uuid4()}"
+        self._start_configs[target] = config
+        return target
 
     async def dispatch(
         self,
@@ -67,6 +72,18 @@ class NexusTransport:
         parent_stream_context: TurnStreamContext,
     ) -> SubagentTurnResult:
         try:
+            config = self._start_configs.get(target, AgentConfig())
+            context: dict[str, Any] = {}
+            if config.account_id is not None:
+                context["account_id"] = config.account_id
+            if config.registered_agent_id is not None:
+                context["registered_agent_id"] = config.registered_agent_id
+            if config.delegation_lineage is not None:
+                context["delegation_lineage"] = list(config.delegation_lineage)
+            if config.delegation_depth is not None:
+                context["delegation_depth"] = config.delegation_depth
+            if config.max_delegation_depth is not None:
+                context["max_delegation_depth"] = config.max_delegation_depth
             sent = await self._client().execute_operation(
                 AgentService.send_agent_message,
                 SendAgentMessageInput(
@@ -74,6 +91,7 @@ class NexusTransport:
                     msg_type=msg_type,
                     payload=json.dumps(payload),
                     expected_turn=expected_turn,
+                    **context,
                 ),
             )
         except Exception as exc:
@@ -97,7 +115,9 @@ class NexusTransport:
             poll = await self._client().execute_operation(
                 AgentService.poll_messages,
                 PollMessagesInput(
-                    session_id=target, cursor=cursor, timeout_seconds=POLL_TIMEOUT_SECONDS
+                    session_id=target,
+                    cursor=cursor,
+                    timeout_seconds=POLL_TIMEOUT_SECONDS,
                 ),
             )
             if poll.closed:
@@ -134,6 +154,7 @@ class NexusTransport:
         await self._client().execute_operation(
             AgentService.close_session, QuerySessionInput(session_id=target)
         )
+        self._start_configs.pop(target, None)
 
 
 def _rejection_error(exc: Exception) -> ApplicationError:
