@@ -2,6 +2,7 @@
   import { ChevronDown, History, Plus, RefreshCw, Search, X } from "@lucide/svelte";
   import type { AgentDescriptor, Session } from "$lib/api/types";
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
+  import Chip from "$lib/components/primitives/Chip.svelte";
   import StatusChip, {
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
@@ -207,22 +208,24 @@
 
 <div class="session-controls">
   <div class="new-session-anchor">
-    <button
-      type="button"
+    <Chip
       class="session-add"
-      class:disabled={!canCreateSession}
-      class:active={newSessionMenuOpen}
+      tone="accent"
+      fill="quiet"
+      active={newSessionMenuOpen}
       disabled={!canCreateSession}
       aria-haspopup="menu"
       aria-expanded={newSessionMenuOpen}
       onclick={toggleNewSessionMenu}
     >
-      <Plus size={13} aria-hidden="true" />
-      <span>{creatingSession ? "Starting" : "New"}</span>
+      {#snippet lead()}
+        <Plus size={13} />
+      {/snippet}
+      <span class="control-label">{creatingSession ? "Starting" : "New"}</span>
       <span class="control-chevron" aria-hidden="true">
         <ChevronDown size={13} />
       </span>
-    </button>
+    </Chip>
 
     {#if newSessionMenuOpen}
       <section class="new-session-popover" aria-label="New session">
@@ -266,19 +269,22 @@
     {/if}
   </div>
 
-  <button
-    type="button"
+  <Chip
     class="session-drawer-button"
-    class:active={sessionDrawerOpen}
+    tone="reasoning"
+    fill="quiet"
+    active={sessionDrawerOpen}
     aria-pressed={sessionDrawerOpen}
     onclick={toggleSessionPopover}
   >
-    <History size={13} />
-    <span>Sessions</span>
+    {#snippet lead()}
+      <History size={13} />
+    {/snippet}
+    <span class="control-label">Sessions</span>
     <span class="control-chevron" aria-hidden="true">
       <ChevronDown size={13} />
     </span>
-  </button>
+  </Chip>
 
   <StatusChip
     label={statusLabel}
@@ -377,60 +383,10 @@
     display: inline-flex;
   }
 
-  .session-add,
-  .session-drawer-button {
-    --control-accent: var(--accent);
-    position: relative;
-    min-width: 0;
-    height: 32px;
-    display: inline-grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 7px;
-    padding: 0 10px;
-    border: 1px solid color-mix(in srgb, var(--control-accent) 18%, var(--border));
-    border-radius: var(--radius-sm);
-    background: var(--control-bg);
-    color: var(--text-2);
-    cursor: pointer;
-    font: inherit;
-    font-size: var(--font-md);
-    font-weight: 650;
-    box-shadow: var(--shadow-inset-soft);
-    transition:
-      transform var(--duration-press) var(--ease-out),
-      border-color var(--duration-fast) var(--ease-ui),
-      background var(--duration-fast) var(--ease-ui),
-      color var(--duration-fast) var(--ease-ui),
-      box-shadow var(--duration-fast) var(--ease-ui);
-  }
-
-  .session-add:active:not(.disabled):not(:disabled),
-  .session-drawer-button:active {
-    transform: scale(0.97);
-  }
-
-  .session-add {
+  /* Both anchors are Chips, so the box, the type, the press and the focus ring
+     are the app's rather than this file's. Only the width behaviour is local. */
+  :global(.session-add) {
     flex: 0 0 auto;
-  }
-
-  .session-drawer-button {
-    --control-accent: var(--reasoning);
-  }
-
-  .session-add:hover:not(.disabled),
-  .session-add:focus-visible:not(.disabled),
-  .session-add.active,
-  .session-drawer-button:hover,
-  .session-drawer-button:focus-visible,
-  .session-drawer-button.active {
-    border-color: color-mix(in srgb, var(--control-accent) 46%, var(--border-strong));
-    color: var(--text-1);
-    background: color-mix(in srgb, var(--control-accent) 10%, var(--control-hover));
-    box-shadow:
-      var(--shadow-inset-strong),
-      0 0 0 3px color-mix(in srgb, var(--control-accent) 16%, transparent);
-    outline: 0;
   }
 
   .control-chevron {
@@ -441,31 +397,27 @@
     transition: transform var(--duration-fast) var(--ease-ui), color var(--duration-fast) var(--ease-ui);
   }
 
-  .session-add.active .control-chevron,
-  .session-drawer-button.active .control-chevron {
-    color: color-mix(in srgb, var(--control-accent) 78%, white);
+  /* The chip owns the class, so reaching its open and hover states from here has
+     to cross the component boundary. The hue is the chip's own --chip-color, so
+     the chevron cannot drift from the control it sits in. */
+  :global(.session-add.active) .control-chevron,
+  :global(.session-drawer-button.active) .control-chevron {
+    color: color-mix(in srgb, var(--chip-color) 78%, white);
     transform: rotate(180deg);
   }
 
-  .session-add:hover:not(.disabled) .control-chevron,
-  .session-add:focus-visible:not(.disabled) .control-chevron,
-  .session-drawer-button:hover .control-chevron,
-  .session-drawer-button:focus-visible .control-chevron {
-    color: color-mix(in srgb, var(--control-accent) 78%, white);
+  :global(.session-add:hover:not(:disabled)) .control-chevron,
+  :global(.session-add:focus-visible:not(:disabled)) .control-chevron,
+  :global(.session-drawer-button:hover) .control-chevron,
+  :global(.session-drawer-button:focus-visible) .control-chevron {
+    color: color-mix(in srgb, var(--chip-color) 78%, white);
   }
 
-  .session-add span,
-  .session-drawer-button span {
+  .control-label {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .session-add.disabled,
-  .session-add:disabled {
-    cursor: default;
-    opacity: 0.52;
   }
 
   .session-popover {
@@ -787,8 +739,6 @@
       animation: none;
     }
 
-    .session-add:active:not(.disabled):not(:disabled),
-    .session-drawer-button:active,
     .agent-row:focus-visible,
     .session-row:focus-visible {
       transform: none;
