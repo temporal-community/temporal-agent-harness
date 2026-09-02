@@ -1,42 +1,43 @@
-# ABOUTME: End-to-end integration tests for AgentServiceHandler against a real dev server.
-#
-# Needs a real dev server, not the time-skipping test server — update-with-callback requires
-# dynamic config the time-skipping server doesn't have (see _DEV_SERVER_ARGS below).
-#
-# Run with: uv run pytest tests/nexus_agent_adapter/test_handler_integration.py -v
+"""End-to-end tests for the A2A Nexus binding against a real dev server."""
 
 from __future__ import annotations
 
-import json
 import uuid
 from collections.abc import AsyncGenerator
 
 import pytest_asyncio
 from pydantic import BaseModel
 from temporalio import workflow
-from temporalio.api.enums.v1 import EventType
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from temporal_agent_harness.harness import AgentWorkflowRunner, agent
-from temporal_agent_harness.harness.agent_protocol import AgentConfig, ToolApprovalPolicy
-from temporal_agent_harness.nexus_agent_adapter.generated import (
-    AgentService as AgentServiceDefinition,
-)
-from temporal_agent_harness.nexus_agent_adapter.generated import (
-    ApproveToolCallInput,
-    ExecuteOperatorCommandInput,
-    PollMessagesInput,
-    QuerySessionInput,
-    SendAgentMessageInput,
-)
-from temporal_agent_harness.nexus_agent_adapter.handler import AgentServiceHandler, Config
+with workflow.unsafe.imports_passed_through():
+    from a2a.types import (
+        CancelTaskRequest,
+        GetExtendedAgentCardRequest,
+        Message,
+        Part,
+        Role,
+        SendMessageRequest,
+        StreamResponse,
+        TaskState,
+    )
+    from google.protobuf.json_format import MessageToDict
 
-# Custom dev-server build with the Nexus-update-callback dynamic config surface (matches
-# sdk-python's own tests/conftest.py for PR #1631 — the stock time-skipping test server and
-# ordinary dev-server releases don't have these flags).
+    from temporal_agent_harness.a2a.adapter import (
+        A2AHandlerConfig,
+        A2AServiceHandler,
+        make_agent_card,
+    )
+    from temporal_agent_harness.a2a.nexus import A2AService, SubscribeToTaskInput
+    from temporal_agent_harness.harness import AgentWorkflowRunner, agent
+    from temporal_agent_harness.harness.agent_protocol import (
+        AgentConfig,
+        ToolApprovalPolicy,
+    )
+
 _DEV_SERVER_VERSION = "v1.7.1-system-nexus-operations"
 _DEV_SERVER_ARGS = [
     "--dynamic-config-value",
@@ -57,13 +58,13 @@ _DEV_SERVER_ARGS = [
 
 
 class AskMessage(BaseModel):
-    """A user message to the probe agent."""
+    """Probe input."""
 
     text: str
 
 
 class AskReply(BaseModel):
-    """The probe agent's reply."""
+    """Probe output."""
 
     text: str
 
@@ -71,8 +72,6 @@ class AskReply(BaseModel):
 @workflow.defn
 @agent.defn
 class ProbeAgent:
-    """2s reply delay so pollMessages is provably still pending (async path, not sync)."""
-
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
@@ -87,75 +86,99 @@ class ProbeAgent:
 
     @agent.accepts
     async def ask(self, message: AskMessage) -> AskReply:
-        """Reply to a user message."""
-        await workflow.sleep(2)
+        """Echo one probe message."""
+        await workflow.sleep(0.1)
         return AskReply(text=f"echo: {message.text}")
 
 
 class CallerInput(BaseModel):
     endpoint: str
-    session_id: str
+    task_id: str
 
 
 class CallerOutput(BaseModel):
-    turn_id: str
     turn_number: int
-    poll_closed: bool
-    poll_item_count: int
+    item_count: int
+    closed: bool
 
 
-@workflow.defn
-class TimeoutPollCallerWorkflow:
-    """Poll an idle agent and return after the requested timeout."""
-
-    @workflow.run
-    async def run(self, input: CallerInput) -> int:
-        client = workflow.create_nexus_client(
-            service=AgentServiceDefinition, endpoint=input.endpoint
-        )
-        result = await client.execute_operation(
-            AgentServiceDefinition.poll_messages,
-            PollMessagesInput(
-                session_id=input.session_id,
-                cursor=0,
-                timeout_seconds=0.1,
-            ),
-        )
-        assert not result.closed
-        return len(result.items)
-
-
-@workflow.defn
-class CallerWorkflow:
-    """Stands in for ui_connector — calls AgentService purely over the Nexus wire."""
-
+@workflow.defn(sandboxed=False)
+class A2ACallerWorkflow:
     @workflow.run
     async def run(self, input: CallerInput) -> CallerOutput:
         client = workflow.create_nexus_client(
-            service=AgentServiceDefinition, endpoint=input.endpoint
+            service=A2AService, endpoint=input.endpoint
         )
-        send_out = await client.execute_operation(
-            AgentServiceDefinition.send_agent_message,
-            SendAgentMessageInput(
-                session_id=input.session_id,
-                msg_type="ask",
-                payload=json.dumps({"text": "hi"}),
+        sent = await client.execute_operation(
+            A2AService.send_message,
+            SendMessageRequest(
+                message=Message(
+                    message_id=str(workflow.uuid4()),
+                    task_id=input.task_id,
+                    context_id=input.task_id,
+                    role=Role.ROLE_USER,
+                    parts=[Part(text="hi")],
+                )
             ),
         )
-        poll_out = await client.execute_operation(
-            AgentServiceDefinition.poll_messages,
-            PollMessagesInput(
-                session_id=input.session_id,
-                cursor=send_out.stream_head_offset or 0,
-                timeout_seconds=20,
-            ),
+        metadata = MessageToDict(sent.task.metadata)
+        cursor = int(metadata["temporal.io/accepted-offset"])
+        count = 0
+        for _ in range(10):
+            page = await client.execute_operation(
+                A2AService.subscribe_to_task,
+                SubscribeToTaskInput(
+                    id=input.task_id, cursor=cursor, timeout_seconds=5
+                ),
+            )
+            count += len(page.items)
+            cursor = page.next_cursor
+            for item in page.items:
+                response = StreamResponse()
+                import base64
+
+                response.ParseFromString(base64.b64decode(item.data))
+                if (
+                    response.HasField("status_update")
+                    and response.status_update.status.state
+                    == TaskState.TASK_STATE_INPUT_REQUIRED
+                ):
+                    return CallerOutput(
+                        turn_number=int(metadata["temporal.io/turn-number"]),
+                        item_count=count,
+                        closed=page.closed,
+                    )
+        raise RuntimeError("A2A turn did not reach input-required")
+
+
+@workflow.defn(sandboxed=False)
+class ReplayCallerWorkflow:
+    @workflow.run
+    async def run(self, input: CallerInput) -> CallerOutput:
+        client = workflow.create_nexus_client(
+            service=A2AService, endpoint=input.endpoint
+        )
+        await client.execute_operation(
+            A2AService.cancel_task, CancelTaskRequest(id=input.task_id)
+        )
+        page = await client.execute_operation(
+            A2AService.subscribe_to_task,
+            SubscribeToTaskInput(id=input.task_id, cursor=0, timeout_seconds=1),
         )
         return CallerOutput(
-            turn_id=send_out.turn_id,
-            turn_number=send_out.turn_number,
-            poll_closed=bool(poll_out.closed),
-            poll_item_count=len(poll_out.items),
+            turn_number=0, item_count=len(page.items), closed=page.closed
         )
+
+
+@workflow.defn(sandboxed=False)
+class CardCallerWorkflow:
+    @workflow.run
+    async def run(self, endpoint: str) -> str:
+        client = workflow.create_nexus_client(service=A2AService, endpoint=endpoint)
+        card = await client.execute_operation(
+            A2AService.get_extended_agent_card, GetExtendedAgentCardRequest()
+        )
+        return card.name
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -169,559 +192,97 @@ async def env() -> AsyncGenerator[WorkflowEnvironment, None]:
     await env.shutdown()
 
 
-async def test_poll_messages_delivers_via_async_callback(env: WorkflowEnvironment) -> None:
-    client = env.client
-    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
-    agent_task_queue = f"agent-{uuid.uuid4()}"
-    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
-    caller_task_queue = f"caller-{uuid.uuid4()}"
-
-    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
-
-    config = Config(
-        agent_task_queue=agent_task_queue,
+async def _run_stack(env: WorkflowEnvironment, caller: type, argument):
+    endpoint = f"a2a-agent-{uuid.uuid4()}"
+    agent_queue = f"agent-{uuid.uuid4()}"
+    nexus_queue = f"nexus-{uuid.uuid4()}"
+    caller_queue = f"caller-{uuid.uuid4()}"
+    await env.create_nexus_endpoint(endpoint, nexus_queue)
+    config = A2AHandlerConfig(
+        agent_task_queue=agent_queue,
         workflow_name="ProbeAgent",
-        workflow_id_prefix="probe-",
-        is_message_queuing_enabled=False,
+        workflow_id_prefix="",
+        is_message_queuing_enabled=True,
+        agent_card=make_agent_card(
+            name="Probe", description="Probe", endpoint=endpoint
+        ),
     )
-
-    async with Worker(
-        client,
-        task_queue=agent_task_queue,
-        workflows=[ProbeAgent],
-    ), Worker(
-        client,
-        task_queue=nexus_task_queue,
-        nexus_service_handlers=[AgentServiceHandler(client, config)],
-    ), Worker(
-        client,
-        task_queue=caller_task_queue,
-        workflows=[CallerWorkflow],
-    ):
-        session_id = str(uuid.uuid4())
-        handle = await client.start_workflow(
-            CallerWorkflow.run,
-            CallerInput(endpoint=endpoint_name, session_id=session_id),
-            id=f"caller-{session_id}",
-            task_queue=caller_task_queue,
-        )
-        result = await handle.result()
-
-        assert result.turn_number == 1
-        assert not result.poll_closed
-        assert result.poll_item_count > 0, (
-            "pollMessages must deliver the reply's stream items"
-        )
-
-        # Proves the async callback path was taken, not a sync completion.
-        history = await handle.fetch_history()
-        op_types = {e.event_type for e in history.events}
-        assert EventType.EVENT_TYPE_NEXUS_OPERATION_STARTED in op_types
-        assert EventType.EVENT_TYPE_NEXUS_OPERATION_COMPLETED in op_types
-
-
-async def test_poll_messages_honors_timeout(env: WorkflowEnvironment) -> None:
-    client = env.client
-    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
-    agent_task_queue = f"agent-{uuid.uuid4()}"
-    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
-    caller_task_queue = f"caller-{uuid.uuid4()}"
-    session_id = str(uuid.uuid4())
-
-    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
-    config = Config(
-        agent_task_queue=agent_task_queue,
-        workflow_name="ProbeAgent",
-        workflow_id_prefix="probe-",
-        is_message_queuing_enabled=False,
-    )
-
-    async with Worker(
-        client, task_queue=agent_task_queue, workflows=[ProbeAgent]
-    ), Worker(
-        client,
-        task_queue=nexus_task_queue,
-        nexus_service_handlers=[AgentServiceHandler(client, config)],
-    ), Worker(
-        client, task_queue=caller_task_queue, workflows=[TimeoutPollCallerWorkflow]
-    ):
-        agent_handle = await client.start_workflow(
-            ProbeAgent.run,
-            AgentConfig(),
-            id=f"probe-{session_id}",
-            task_queue=agent_task_queue,
-        )
-        caller_handle = await client.start_workflow(
-            TimeoutPollCallerWorkflow.run,
-            CallerInput(endpoint=endpoint_name, session_id=session_id),
-            id=f"caller-{session_id}",
-            task_queue=caller_task_queue,
-        )
-
-        assert await caller_handle.result() == 0
-        await agent_handle.signal("close")
-
-
-class SendOnlyOutput(BaseModel):
-    turn_number: int
-
-
-@workflow.defn
-class SendOnlyCallerWorkflow:
-    """Send-only, no poll — avoids racing the probe agent's reply delay across a restart."""
-
-    @workflow.run
-    async def run(self, input: CallerInput) -> SendOnlyOutput:
-        client = workflow.create_nexus_client(
-            service=AgentServiceDefinition, endpoint=input.endpoint
-        )
-        send_out = await client.execute_operation(
-            AgentServiceDefinition.send_agent_message,
-            SendAgentMessageInput(
-                session_id=input.session_id,
-                msg_type="ask",
-                payload=json.dumps({"text": "hi"}),
-            ),
-        )
-        return SendOnlyOutput(turn_number=send_out.turn_number)
-
-
-async def test_send_agent_message_survives_handler_worker_restart(
-    env: WorkflowEnvironment,
-) -> None:
-    """Handler worker restarts between two sends on the same session; turn count still
-    advances — state lives in the workflow, not the handler."""
-    client = env.client
-    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
-    agent_task_queue = f"agent-{uuid.uuid4()}"
-    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
-    caller_task_queue = f"caller-{uuid.uuid4()}"
-
-    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
-
-    config = Config(
-        agent_task_queue=agent_task_queue,
-        workflow_name="ProbeAgent",
-        workflow_id_prefix="probe-",
-        is_message_queuing_enabled=False,
-    )
-    session_id = str(uuid.uuid4())
-
-    async with Worker(
-        client, task_queue=agent_task_queue, workflows=[ProbeAgent]
-    ), Worker(
-        client, task_queue=caller_task_queue, workflows=[SendOnlyCallerWorkflow]
-    ):
-        handler_worker_0 = Worker(
-            client,
-            task_queue=nexus_task_queue,
-            nexus_service_handlers=[AgentServiceHandler(client, config)],
-        )
-        async with handler_worker_0:
-            handle_1 = await client.start_workflow(
-                SendOnlyCallerWorkflow.run,
-                CallerInput(endpoint=endpoint_name, session_id=session_id),
-                id=f"caller-restart-msg1-{session_id}",
-                task_queue=caller_task_queue,
-            )
-            result_1 = await handle_1.result()
-        assert result_1.turn_number == 1
-
-        handler_worker_1 = Worker(
-            client,
-            task_queue=nexus_task_queue,
-            nexus_service_handlers=[AgentServiceHandler(client, config)],
-        )
-        async with handler_worker_1:
-            handle_2 = await client.start_workflow(
-                SendOnlyCallerWorkflow.run,
-                CallerInput(endpoint=endpoint_name, session_id=session_id),
-                id=f"caller-restart-msg2-{session_id}",
-                task_queue=caller_task_queue,
-            )
-            result_2 = await handle_2.result()
-        assert result_2.turn_number == 2, (
-            "turn counter must advance after a handler worker restart"
-        )
-
-
-class PollOnlyOutput(BaseModel):
-    poll_closed: bool
-    poll_item_count: int
-
-
-@workflow.defn
-class PollOnlyCallerWorkflow:
-    """Calls only pollMessages, targeting a session whose workflow has already completed."""
-
-    @workflow.run
-    async def run(self, input: CallerInput) -> PollOnlyOutput:
-        client = workflow.create_nexus_client(
-            service=AgentServiceDefinition, endpoint=input.endpoint
-        )
-        poll_out = await client.execute_operation(
-            AgentServiceDefinition.poll_messages,
-            PollMessagesInput(session_id=input.session_id, cursor=0),
-        )
-        return PollOnlyOutput(
-            poll_closed=bool(poll_out.closed), poll_item_count=len(poll_out.items)
-        )
-
-
-async def test_poll_messages_closed_when_workflow_already_completed(
-    env: WorkflowEnvironment,
-) -> None:
-    """A completed harness workflow with no events returns an empty closed page."""
-    client = env.client
-    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
-    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
-    agent_task_queue = f"agent-{uuid.uuid4()}"
-    caller_task_queue = f"caller-{uuid.uuid4()}"
-
-    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
-
-    config = Config(
-        agent_task_queue=agent_task_queue,
-        workflow_name="ProbeAgent",
-        workflow_id_prefix="probe-",
-        is_message_queuing_enabled=False,
-    )
-
-    async with Worker(
-        client,
-        task_queue=agent_task_queue,
-        workflows=[ProbeAgent],
-    ), Worker(
-        client,
-        task_queue=nexus_task_queue,
-        nexus_service_handlers=[AgentServiceHandler(client, config)],
-    ), Worker(
-        client,
-        task_queue=caller_task_queue,
-        workflows=[PollOnlyCallerWorkflow],
-    ):
-        session_id = str(uuid.uuid4())
-        agent_handle = await client.start_workflow(
-            ProbeAgent.run,
-            AgentConfig(),
-            id=f"probe-{session_id}",
-            task_queue=agent_task_queue,
-        )
-        await agent_handle.signal("close")
-        await agent_handle.result()
-
-        handle = await client.start_workflow(
-            PollOnlyCallerWorkflow.run,
-            CallerInput(endpoint=endpoint_name, session_id=session_id),
-            id=f"poll-only-caller-{session_id}",
-            task_queue=caller_task_queue,
-        )
-        result = await handle.result()
-
-        assert result.poll_closed
-        assert result.poll_item_count == 0
-
-
-async def test_poll_messages_replays_completed_agent_history(
-    env: WorkflowEnvironment,
-) -> None:
-    client = env.client
-    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
-    agent_task_queue = f"agent-{uuid.uuid4()}"
-    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
-    caller_task_queue = f"caller-{uuid.uuid4()}"
-    session_id = str(uuid.uuid4())
-
-    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
-    config = Config(
-        agent_task_queue=agent_task_queue,
-        workflow_name="ProbeAgent",
-        workflow_id_prefix="probe-",
-        is_message_queuing_enabled=False,
-    )
-
     async with (
-        Worker(client, task_queue=agent_task_queue, workflows=[ProbeAgent]),
+        Worker(env.client, task_queue=agent_queue, workflows=[ProbeAgent]),
         Worker(
-            client,
-            task_queue=nexus_task_queue,
-            nexus_service_handlers=[AgentServiceHandler(client, config)],
+            env.client,
+            task_queue=nexus_queue,
+            nexus_service_handlers=[A2AServiceHandler(env.client, config)],
         ),
-        Worker(
-            client,
-            task_queue=caller_task_queue,
-            workflows=[CallerWorkflow, PollOnlyCallerWorkflow],
-        ),
+        Worker(env.client, task_queue=caller_queue, workflows=[caller]),
     ):
-        live_caller = await client.start_workflow(
-            CallerWorkflow.run,
-            CallerInput(endpoint=endpoint_name, session_id=session_id),
-            id=f"live-caller-{session_id}",
-            task_queue=caller_task_queue,
-        )
-        assert (await live_caller.result()).poll_item_count > 0
-
-        agent_handle = client.get_workflow_handle(f"probe-{session_id}")
-        await agent_handle.signal("close")
-        await agent_handle.result()
-
-        replay_caller = await client.start_workflow(
-            PollOnlyCallerWorkflow.run,
-            CallerInput(endpoint=endpoint_name, session_id=session_id),
-            id=f"replay-caller-{session_id}",
-            task_queue=caller_task_queue,
-        )
-        replay = await replay_caller.result()
-
-        assert replay.poll_closed
-        assert replay.poll_item_count > 0
-
-
-# ---------------------------------------------------------------------------
-# Full operation surface — approveToolCall, executeOperatorCommand,
-# queryAgentInterface, queryOperatorInterface, queryAgentStatus.
-# ---------------------------------------------------------------------------
-
-
-@agent.tool_defn()
-async def gated_tool(text: str) -> str:
-    """A non-safe inline tool: gated under the default policy."""
-    return f"tool-result:{text}"
-
-
-@workflow.defn
-@agent.defn
-class GatedProbeAgent:
-    """Gates every tool call, unlike ProbeAgent — needed to exercise approveToolCall."""
-
-    @workflow.init
-    def __init__(self, config: AgentConfig) -> None:
-        self._runner = AgentWorkflowRunner(
-            config,
-            stream=WorkflowStream(),
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-        )
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
-
-    @agent.accepts
-    async def use_tool(self, message: AskMessage) -> AskReply:
-        """Run a gated tool call and reply with its result."""
-        result = await self._runner.run_tool("fixed-tool-id", gated_tool, message.text)
-        return AskReply(text=result)
-
-
-class FullSurfaceOutput(BaseModel):
-    handler_names: list[str]
-    operator_command_names: list[str]
-    pending_tool_id: str
-    approve_accepted: bool
-    status_reply: str
-    poll_item_count: int
-
-
-@workflow.defn
-class FullSurfaceCallerWorkflow:
-    """Exercises the remaining operations: interface/status queries, approveToolCall,
-    executeOperatorCommand."""
-
-    @workflow.run
-    async def run(self, input: CallerInput) -> FullSurfaceOutput:
-        client = workflow.create_nexus_client(
-            service=AgentServiceDefinition, endpoint=input.endpoint
-        )
-
-        # Must go first — starts the workflow the queries below need.
-        send_out = await client.execute_operation(
-            AgentServiceDefinition.send_agent_message,
-            SendAgentMessageInput(
-                session_id=input.session_id,
-                msg_type="use_tool",
-                payload=json.dumps({"text": "hi"}),
-            ),
-        )
-
-        iface = await client.execute_operation(
-            AgentServiceDefinition.query_agent_interface,
-            QuerySessionInput(session_id=input.session_id),
-        )
-        ops_iface = await client.execute_operation(
-            AgentServiceDefinition.query_operator_interface,
-            QuerySessionInput(session_id=input.session_id),
-        )
-
-        # Poll instead of sleep — the approval record lands asynchronously.
-        status = None
-        for _ in range(20):
-            status = await client.execute_operation(
-                AgentServiceDefinition.query_agent_status,
-                QuerySessionInput(session_id=input.session_id),
-            )
-            if status.pending_approvals:
-                break
-            await workflow.sleep(0.1)
-        assert status is not None and status.pending_approvals
-        tool_id = status.pending_approvals[0].tool_id
-
-        approve_out = await client.execute_operation(
-            AgentServiceDefinition.approve_tool_call,
-            ApproveToolCallInput(
-                session_id=input.session_id, tool_id=tool_id, approved=True
-            ),
-        )
-
-        status_out = await client.execute_operation(
-            AgentServiceDefinition.execute_operator_command,
-            ExecuteOperatorCommandInput(session_id=input.session_id, name="status"),
-        )
-
-        poll_out = await client.execute_operation(
-            AgentServiceDefinition.poll_messages,
-            PollMessagesInput(
-                session_id=input.session_id,
-                cursor=send_out.stream_head_offset or 0,
-                timeout_seconds=20,
-            ),
-        )
-
-        return FullSurfaceOutput(
-            handler_names=sorted(h.name for h in iface.handlers),
-            operator_command_names=sorted(c.name for c in ops_iface.commands),
-            pending_tool_id=tool_id,
-            approve_accepted=approve_out.accepted,
-            status_reply=status_out.reply,
-            poll_item_count=len(poll_out.items),
+        return await env.client.execute_workflow(
+            caller.run,
+            argument(endpoint) if callable(argument) else argument,
+            id=f"caller-{uuid.uuid4()}",
+            task_queue=caller_queue,
         )
 
 
-class MalformedCallOutput(BaseModel):
-    error_type: str
-    error_message: str
+async def test_a2a_send_and_subscription(env: WorkflowEnvironment) -> None:
+    task_id = f"task-{uuid.uuid4()}"
+    result = await _run_stack(
+        env,
+        A2ACallerWorkflow,
+        lambda endpoint: CallerInput(endpoint=endpoint, task_id=task_id),
+    )
+    assert result.turn_number == 1
+    assert result.item_count > 0
+    assert not result.closed
 
 
-@workflow.defn
-class MalformedInputCallerWorkflow:
-    """Sends session_id=None for a required str field. The generated dataclass has no
-    constructor-time validation (unlike the old pydantic models), so this only gets
-    caught by TransferTypeConverter.from_transfer_type on the handler side, once the
-    value crosses the wire. Proves that boundary still rejects malformed input."""
-
-    @workflow.run
-    async def run(self, input: CallerInput) -> MalformedCallOutput:
-        client = workflow.create_nexus_client(
-            service=AgentServiceDefinition, endpoint=input.endpoint
-        )
-        try:
-            await client.execute_operation(
-                AgentServiceDefinition.send_agent_message,
-                SendAgentMessageInput(
-                    session_id=None,  # type: ignore[arg-type]
-                    msg_type="ask",
-                    payload=json.dumps({"text": "hi"}),
-                ),
-            )
-        except Exception as e:
-            chain = [f"{type(e).__name__}: {e}"]
-            # Protobuf singular message fields are never None when unset (they return
-            # an empty message), so walk with HasField instead of an is-None check.
-            failure = getattr(e, "failure", None)
-            while failure is not None and failure.HasField("cause"):
-                failure = failure.cause
-                chain.append(f"failure.cause: {failure.message}")
-            return MalformedCallOutput(
-                error_type=type(e).__name__, error_message=" | ".join(chain)
-            )
-        raise AssertionError("malformed input should not have succeeded")
+async def test_agent_card_is_discoverable_over_nexus(env: WorkflowEnvironment) -> None:
+    result = await _run_stack(env, CardCallerWorkflow, lambda endpoint: endpoint)
+    assert result == "Probe"
 
 
-async def test_send_agent_message_rejects_malformed_input(
-    env: WorkflowEnvironment,
-) -> None:
-    """A required field sent as null over the wire must fail the Nexus call, not crash
-    the handler worker or silently proceed with a bad value."""
-    client = env.client
-    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
-    agent_task_queue = f"agent-{uuid.uuid4()}"
-    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
-    caller_task_queue = f"caller-{uuid.uuid4()}"
-
-    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
-
-    # No agent workflow worker needed: input conversion fails before the handler's
-    # send_agent_message body (and therefore AgentClient) ever runs.
-    config = Config(
-        agent_task_queue=agent_task_queue,
+async def test_completed_task_history_is_replayable(env: WorkflowEnvironment) -> None:
+    task_id = f"task-{uuid.uuid4()}"
+    # The first stack starts and completes one turn. A second endpoint would not route
+    # to that workflow, so exercise close/replay in one longer-lived worker stack here.
+    endpoint = f"a2a-agent-{uuid.uuid4()}"
+    agent_queue = f"agent-{uuid.uuid4()}"
+    nexus_queue = f"nexus-{uuid.uuid4()}"
+    caller_queue = f"caller-{uuid.uuid4()}"
+    await env.create_nexus_endpoint(endpoint, nexus_queue)
+    config = A2AHandlerConfig(
+        agent_task_queue=agent_queue,
         workflow_name="ProbeAgent",
-        workflow_id_prefix="probe-",
-        is_message_queuing_enabled=False,
+        workflow_id_prefix="",
+        is_message_queuing_enabled=True,
+        agent_card=make_agent_card(
+            name="Probe", description="Probe", endpoint=endpoint
+        ),
     )
-
-    async with Worker(
-        client,
-        task_queue=nexus_task_queue,
-        nexus_service_handlers=[AgentServiceHandler(client, config)],
-    ), Worker(
-        client,
-        task_queue=caller_task_queue,
-        workflows=[MalformedInputCallerWorkflow],
+    async with (
+        Worker(env.client, task_queue=agent_queue, workflows=[ProbeAgent]),
+        Worker(
+            env.client,
+            task_queue=nexus_queue,
+            nexus_service_handlers=[A2AServiceHandler(env.client, config)],
+        ),
+        Worker(
+            env.client,
+            task_queue=caller_queue,
+            workflows=[A2ACallerWorkflow, ReplayCallerWorkflow],
+        ),
     ):
-        session_id = str(uuid.uuid4())
-        handle = await client.start_workflow(
-            MalformedInputCallerWorkflow.run,
-            CallerInput(endpoint=endpoint_name, session_id=session_id),
-            id=f"malformed-caller-{session_id}",
-            task_queue=caller_task_queue,
+        await env.client.execute_workflow(
+            A2ACallerWorkflow.run,
+            CallerInput(endpoint=endpoint, task_id=task_id),
+            id=f"send-{uuid.uuid4()}",
+            task_queue=caller_queue,
         )
-        result = await handle.result()
-
-        assert result.error_type == "NexusOperationError"
-        assert "sessionId" in result.error_message
-        assert "required" in result.error_message
-
-
-async def test_full_operation_surface(env: WorkflowEnvironment) -> None:
-    client = env.client
-    endpoint_name = f"agent-endpoint-{uuid.uuid4()}"
-    agent_task_queue = f"agent-{uuid.uuid4()}"
-    nexus_task_queue = f"nexus-agent-{uuid.uuid4()}"
-    caller_task_queue = f"caller-{uuid.uuid4()}"
-
-    await env.create_nexus_endpoint(endpoint_name, nexus_task_queue)
-
-    config = Config(
-        agent_task_queue=agent_task_queue,
-        workflow_name="GatedProbeAgent",
-        workflow_id_prefix="gated-probe-",
-        is_message_queuing_enabled=False,
-    )
-
-    async with Worker(
-        client,
-        task_queue=agent_task_queue,
-        workflows=[GatedProbeAgent],
-    ), Worker(
-        client,
-        task_queue=nexus_task_queue,
-        nexus_service_handlers=[AgentServiceHandler(client, config)],
-    ), Worker(
-        client,
-        task_queue=caller_task_queue,
-        workflows=[FullSurfaceCallerWorkflow],
-    ):
-        session_id = str(uuid.uuid4())
-        handle = await client.start_workflow(
-            FullSurfaceCallerWorkflow.run,
-            CallerInput(endpoint=endpoint_name, session_id=session_id),
-            id=f"full-surface-caller-{session_id}",
-            task_queue=caller_task_queue,
+        replay = await env.client.execute_workflow(
+            ReplayCallerWorkflow.run,
+            CallerInput(endpoint=endpoint, task_id=task_id),
+            id=f"replay-{uuid.uuid4()}",
+            task_queue=caller_queue,
         )
-        result = await handle.result()
-
-        assert result.handler_names == ["use_tool"]
-        assert "status" in result.operator_command_names
-        assert result.pending_tool_id == "fixed-tool-id"
-        assert result.approve_accepted
-        assert result.status_reply
-        assert result.poll_item_count > 0
+    assert replay.item_count > 0
+    assert replay.closed

@@ -29,9 +29,9 @@ uv run --extra nexus-mcp python -m durable_tools_gateway.worker
 ```
 
 `GATEWAY_UI_PORT` defaults to `8000`. A registered native agent can live in any
-namespace reachable by its Nexus endpoint. `external_http` registrations use the small
-`/sessions`, `/sessions/{id}/turns`, and `/close` protocol as a feasibility proof; the
-harness-native Nexus path is the primary implementation.
+namespace reachable by its Nexus endpoint. Every agent registration carries a standard
+A2A `AgentCard`: native cards select the Temporal Nexus binding and external cards select
+standard A2A HTTP+JSON.
 
 The account bar is the owner-facing pane of glass: it shows registered agents, live and
 historical session counts, MCP servers, and subagent providers. Selecting **Mount** creates
@@ -40,7 +40,8 @@ endpoint; no session-manager workflow or agent-namespace visibility access is in
 
 ## Polling behavior
 
-Nexus has no native attach primitive, so `BrokeredAgentAttach` long-polls `pollMessages`.
+Nexus operations do not yet return a server stream, so `BrokeredAgentAttach` repeatedly
+invokes the bounded Nexus binding for A2A `SubscribeToTask`.
 One bounded workflow owns the loop for a browser attachment, publishes batches through a
 local activity, and stops as soon as the agent is idle and caught up. It checks status only
 after an empty poll or a terminal event, avoiding both per-event status calls and the race
@@ -50,12 +51,12 @@ crossing the Nexus and activity boundaries, and browser disconnects cancel their
 workflow so stale long polls cannot accumulate.
 
 The Nexus operation uses the harness's stream-poll update while the target workflow is
-running. If Temporal reports that the workflow has already completed, `pollMessages` reads
-the same bounded page through the harness's replay query instead. Both paths return identical
+running. If Temporal reports that the workflow has already completed, it reads the same
+bounded A2A page through the harness's replay query instead. Both paths return identical
 stream items and cursors, so stopped native subagents retain their mountable UI history.
 
-One-shot UI controls do not create proxy workflows. The gateway executes native agent
-send, status, interface, approval, callback, command, and close requests as standalone
-Nexus operations. Third-party HTTP start, turn, and close requests run as standalone
-activities. `BrokeredAgentDiscovery` remains a workflow because it drains multiple retained
-pages and then reconciles the resulting child-session snapshot.
+One-shot A2A calls and harness-only status, approval, callback, and operator controls do
+not create proxy workflows; the gateway executes them as standalone Nexus operations.
+Third-party A2A HTTP requests run in standalone activities. `BrokeredAgentDiscovery`
+remains a workflow because it drains multiple retained pages and then reconciles the
+resulting child-session snapshot.

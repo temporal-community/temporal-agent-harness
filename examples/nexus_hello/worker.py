@@ -3,7 +3,7 @@
 Run from the repo root with:
     uv run --extra nexus-mcp --group examples python -m examples.nexus_hello.worker
 
-The worker hosts the agent workflow and its ``AgentServiceHandler`` on the same task
+The worker hosts the agent workflow and its A2A and harness-control services on the same task
 queue. The account gateway UI reaches that front door through the registered Nexus
 endpoint; the agent itself wires its tools and subagents in ``workflow.py``.
 
@@ -26,6 +26,11 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
+from temporal_agent_harness.a2a.adapter import (
+    A2AHandlerConfig,
+    A2AServiceHandler,
+    make_agent_card,
+)
 from temporal_agent_harness.ai_sdks.openai_agents import (
     ModelActivityParameters,
     OpenAIAgentsPlugin,
@@ -35,8 +40,8 @@ from temporal_agent_harness.ai_sdks.openai_agents_harness import (
     stream_to_provider,
 )
 from temporal_agent_harness.nexus_agent_adapter.handler import (
-    AgentServiceHandler,
-    Config,
+    HarnessControlConfig,
+    HarnessControlServiceHandler,
 )
 
 from .workflow import TASK_QUEUE, WORKFLOW_NAME, NexusHelloAgentWorkflow
@@ -64,18 +69,29 @@ async def main() -> None:
 
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(**connect_config, plugins=[plugin])
-    nexus_config = Config(
-        agent_task_queue=task_queue,
-        workflow_name=WORKFLOW_NAME,
-        workflow_id_prefix="",
-        is_message_queuing_enabled=True,
-    )
+    control_config = HarnessControlConfig()
 
     worker = Worker(
         client,
         task_queue=task_queue,
         workflows=[NexusHelloAgentWorkflow],
-        nexus_service_handlers=[AgentServiceHandler(client, nexus_config)],
+        nexus_service_handlers=[
+            A2AServiceHandler(
+                client,
+                A2AHandlerConfig(
+                    agent_task_queue=task_queue,
+                    workflow_name=WORKFLOW_NAME,
+                    workflow_id_prefix="",
+                    is_message_queuing_enabled=True,
+                    agent_card=make_agent_card(
+                        name="Nexus Hello",
+                        description="OpenAI Agents SDK demo with an account toolbox.",
+                        endpoint="nexus-hello-agent-endpoint",
+                    ),
+                ),
+            ),
+            HarnessControlServiceHandler(client, control_config),
+        ],
     )
     print(
         f"Nexus hello agent worker + Nexus front door ready: "

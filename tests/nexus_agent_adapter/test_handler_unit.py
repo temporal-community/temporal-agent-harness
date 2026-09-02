@@ -5,26 +5,18 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
-from types import SimpleNamespace
 
 from temporalio.converter import DataConverter
 
 from temporal_agent_harness.harness.agent_protocol.agent_interface import (
     CallbackResultAck,
 )
-from temporal_agent_harness.harness.stream_poll import (
-    AgentStreamPollItem,
-    AgentStreamPollResult,
-)
 from temporal_agent_harness.nexus_agent_adapter.generated import (
     ProvideCallbackResultInput,
     ProvideCallbackResultInputResult,
-    SendAgentMessageInput,
 )
 from temporal_agent_harness.nexus_agent_adapter.handler import (
-    AgentServiceHandler,
-    Config,
-    _is_workflow_already_completed,
+    HarnessControlServiceHandler,
     _is_workflow_not_found,
 )
 
@@ -52,49 +44,6 @@ def test_provide_callback_result_input_result_round_trips() -> None:
     assert decoded.result.additional_properties == {"ok": True}
 
 
-def test_agent_stream_poll_result_round_trips() -> None:
-    result = AgentStreamPollResult(
-        items=[
-            AgentStreamPollItem(topic="turn_events", data='{"type":"reply"}', offset=7)
-        ],
-        more_ready=False,
-        next_offset=8,
-        closed=True,
-    )
-
-    decoded = _round_trip(result, AgentStreamPollResult)
-
-    assert decoded == result
-
-
-def test_poll_messages_does_not_close_before_retained_pages_are_drained() -> None:
-    result = AgentStreamPollResult(
-        items=[AgentStreamPollItem(topic="turn_events", data="first", offset=0)],
-        more_ready=True,
-        next_offset=1,
-        closed=True,
-    )
-
-    output = AgentServiceHandler._poll_messages_output(result)
-
-    assert output.more_ready
-    assert not output.closed
-
-
-def test_poll_messages_closes_on_the_final_retained_page() -> None:
-    result = AgentStreamPollResult(
-        items=[AgentStreamPollItem(topic="turn_events", data="last", offset=1)],
-        more_ready=False,
-        next_offset=2,
-        closed=True,
-    )
-
-    output = AgentServiceHandler._poll_messages_output(result)
-
-    assert not output.more_ready
-    assert output.closed
-
-
 @patch("temporal_agent_harness.nexus_agent_adapter.handler.AgentClient")
 async def test_provide_callback_result_unwraps_result_before_forwarding(
     mock_agent_client_cls: MagicMock,
@@ -106,7 +55,7 @@ async def test_provide_callback_result_unwraps_result_before_forwarding(
     mock_agent_client.provide_callback_result = AsyncMock(
         return_value=CallbackResultAck(tool_id="t1", accepted=True)
     )
-    handler = AgentServiceHandler(client=MagicMock(), config=MagicMock())
+    handler = HarnessControlServiceHandler(client=MagicMock(), config=MagicMock())
 
     await handler.provide_callback_result(
         MagicMock(),
@@ -122,75 +71,6 @@ async def test_provide_callback_result_unwraps_result_before_forwarding(
     assert mock_agent_client.provide_callback_result.await_args.kwargs["result"] == {
         "answer": 42
     }
-
-
-@patch("temporal_agent_harness.nexus_agent_adapter.handler.AgentClient")
-async def test_send_agent_message_stamps_account_and_lineage_on_new_session(
-    mock_agent_client_cls: MagicMock,
-) -> None:
-    mock_agent_client_cls.return_value.start_and_submit_message = AsyncMock(
-        return_value=SimpleNamespace(
-            turn_number=1,
-            turn_id="turn-1",
-            accepted_offset=0,
-            pending=False,
-        )
-    )
-    handler = AgentServiceHandler(
-        MagicMock(),
-        Config(
-            agent_task_queue="agents",
-            workflow_name="Agent",
-            workflow_id_prefix="",
-            is_message_queuing_enabled=True,
-        ),
-    )
-
-    await handler.send_agent_message(
-        SimpleNamespace(request_id="request-1"),
-        SendAgentMessageInput(
-            session_id="session-1",
-            msg_type="ask",
-            payload='{"text":"hello"}',
-            expected_turn=1,
-            account_id="account-1",
-            registered_agent_id="whimsical-agent",
-            delegation_lineage=["nexus-hello"],
-            delegation_depth=1,
-            max_delegation_depth=5,
-        ),
-    )
-
-    config = (
-        mock_agent_client_cls.return_value.start_and_submit_message.await_args.kwargs[
-            "start_config"
-        ]
-    )
-    assert config.account_id == "account-1"
-    assert config.registered_agent_id == "whimsical-agent"
-    assert config.delegation_lineage == ("nexus-hello",)
-    assert config.delegation_depth == 1
-    assert config.max_delegation_depth == 5
-
-
-def test_is_workflow_already_completed_true() -> None:
-    err = MagicMock()
-    err.__str__.return_value = (
-        "rpc error: workflow execution already completed for id 'x'"
-    )
-    assert _is_workflow_already_completed(err) is True
-
-
-def test_is_workflow_already_completed_case_insensitive() -> None:
-    err = MagicMock()
-    err.__str__.return_value = "Workflow Execution Already Completed"
-    assert _is_workflow_already_completed(err) is True
-
-
-def test_is_workflow_already_completed_false_for_unrelated_error() -> None:
-    err = MagicMock()
-    err.__str__.return_value = "deadline exceeded"
-    assert _is_workflow_already_completed(err) is False
 
 
 def test_is_workflow_not_found_recognizes_temporal_error() -> None:

@@ -21,6 +21,11 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
+from temporal_agent_harness.a2a.adapter import (
+    A2AHandlerConfig,
+    A2AServiceHandler,
+    make_agent_card,
+)
 from temporal_agent_harness.ai_sdks.openai_agents import (
     ModelActivityParameters,
     OpenAIAgentsPlugin,
@@ -30,8 +35,8 @@ from temporal_agent_harness.ai_sdks.openai_agents_harness import (
     stream_to_provider,
 )
 from temporal_agent_harness.nexus_agent_adapter.handler import (
-    AgentServiceHandler,
-    Config,
+    HarnessControlConfig,
+    HarnessControlServiceHandler,
 )
 
 from .whimsical_workflow import WORKFLOW_NAME, WhimsicalAgentWorkflow
@@ -58,17 +63,28 @@ async def _run_worker() -> None:
     )
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(**connect_config, plugins=[plugin])
-    config = Config(
-        agent_task_queue=TASK_QUEUE,
-        workflow_name=WORKFLOW_NAME,
-        workflow_id_prefix="",
-        is_message_queuing_enabled=True,
-    )
+    control_config = HarnessControlConfig()
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
         workflows=[WhimsicalAgentWorkflow],
-        nexus_service_handlers=[AgentServiceHandler(client, config)],
+        nexus_service_handlers=[
+            A2AServiceHandler(
+                client,
+                A2AHandlerConfig(
+                    agent_task_queue=TASK_QUEUE,
+                    workflow_name=WORKFLOW_NAME,
+                    workflow_id_prefix="",
+                    is_message_queuing_enabled=True,
+                    agent_card=make_agent_card(
+                        name="Whimsical Agent",
+                        description="An OpenAI Agents SDK agent with a playful voice.",
+                        endpoint="nexus-hello-whimsical-agent-endpoint",
+                    ),
+                ),
+            ),
+            HarnessControlServiceHandler(client, control_config),
+        ],
     )
     print(
         "Whimsical agent worker + Nexus front door ready: "

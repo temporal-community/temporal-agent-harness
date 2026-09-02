@@ -49,6 +49,7 @@ from .registry import (
     fetch_external_tools,
 )
 from .registry_service_handler import (
+    GatewayA2AServiceHandler,
     RegistryServiceHandler,
     mcp_proxy_activity,
     subagent_proxy_activity,
@@ -169,7 +170,10 @@ async def main(
             subagent_stop_activity,
             publish_agent_events,
         ],
-        nexus_service_handlers=[RegistryServiceHandler(client)],
+        nexus_service_handlers=[
+            RegistryServiceHandler(client),
+            GatewayA2AServiceHandler(client),
+        ],
     )
     async with worker:
         logger.info(

@@ -7,16 +7,17 @@
     "label": "Nexus Hello",
     "description": "OpenAI Agents SDK demo using an account-resolved toolbox.",
     "endpoint": "nexus-hello-agent-endpoint",
-    "service": "AgentService",
-    "handlers": [
-      {
-        "name": "ask",
-        "description": "Ask Nexus Hello a question.",
-        "param_name": "message",
-        "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false},
-        "output_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false}
-      }
-    ]
+    "service": "A2AService",
+    "agent_card": {
+      "name": "Nexus Hello",
+      "description": "OpenAI Agents SDK demo using an account-resolved toolbox.",
+      "version": "1.0.0",
+      "supportedInterfaces": [{"url": "nexus-hello-agent-endpoint", "protocolBinding": "TEMPORAL_NEXUS", "protocolVersion": "1.0"}],
+      "capabilities": {"streaming": true},
+      "defaultInputModes": ["text/plain"],
+      "defaultOutputModes": ["text/plain"],
+      "skills": [{"id": "ask", "name": "ask", "description": "Ask Nexus Hello a question.", "tags": ["assistant"]}]
+    }
   },
   {
     "resource_id": "research",
@@ -26,16 +27,17 @@
     "label": "Research",
     "description": "Nexus-native research agent with a concise canned response.",
     "endpoint": "nexus-hello-subagent-endpoint",
-    "service": "AgentService",
-    "handlers": [
-      {
-        "name": "ask",
-        "description": "Ask the research agent a question.",
-        "param_name": "message",
-        "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false},
-        "output_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false}
-      }
-    ]
+    "service": "A2AService",
+    "agent_card": {
+      "name": "Research",
+      "description": "Nexus-native research agent with a concise canned response.",
+      "version": "1.0.0",
+      "supportedInterfaces": [{"url": "nexus-hello-subagent-endpoint", "protocolBinding": "TEMPORAL_NEXUS", "protocolVersion": "1.0"}],
+      "capabilities": {"streaming": true},
+      "defaultInputModes": ["text/plain"],
+      "defaultOutputModes": ["text/plain"],
+      "skills": [{"id": "ask", "name": "ask", "description": "Ask the research agent a question.", "tags": ["research"]}]
+    }
   },
   {
     "resource_id": "whimsical-agent",
@@ -45,16 +47,17 @@
     "label": "Whimsical Agent",
     "description": "OpenAI Agents SDK agent with a playful voice and the same account toolbox.",
     "endpoint": "nexus-hello-whimsical-agent-endpoint",
-    "service": "AgentService",
-    "handlers": [
-      {
-        "name": "ask",
-        "description": "Ask the whimsical agent a question.",
-        "param_name": "message",
-        "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false},
-        "output_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false}
-      }
-    ]
+    "service": "A2AService",
+    "agent_card": {
+      "name": "Whimsical Agent",
+      "description": "OpenAI Agents SDK agent with a playful voice and the same account toolbox.",
+      "version": "1.0.0",
+      "supportedInterfaces": [{"url": "nexus-hello-whimsical-agent-endpoint", "protocolBinding": "TEMPORAL_NEXUS", "protocolVersion": "1.0"}],
+      "capabilities": {"streaming": true},
+      "defaultInputModes": ["text/plain"],
+      "defaultOutputModes": ["text/plain"],
+      "skills": [{"id": "ask", "name": "ask", "description": "Ask the whimsical agent a question.", "tags": ["whimsical"]}]
+    }
   },
   {
     "resource_id": "writer",
@@ -64,15 +67,16 @@
     "label": "Writer HTTP",
     "description": "Minimal third-party HTTP agent available through the gateway.",
     "endpoint": "http://127.0.0.1:8766",
-    "handlers": [
-      {
-        "name": "ask",
-        "description": "Ask the writer agent for prose.",
-        "param_name": "message",
-        "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false},
-        "output_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false}
-      }
-    ]
+    "agent_card": {
+      "name": "Writer HTTP",
+      "description": "Minimal third-party A2A agent available through the gateway.",
+      "version": "1.0.0",
+      "supportedInterfaces": [{"url": "http://127.0.0.1:8766", "protocolBinding": "HTTP+JSON", "protocolVersion": "1.0"}],
+      "capabilities": {"streaming": true},
+      "defaultInputModes": ["text/plain"],
+      "defaultOutputModes": ["text/plain"],
+      "skills": [{"id": "ask", "name": "ask", "description": "Ask the writer agent for prose.", "tags": ["writing"]}]
+    }
   },
   {
     "resource_id": "demo-nexus",

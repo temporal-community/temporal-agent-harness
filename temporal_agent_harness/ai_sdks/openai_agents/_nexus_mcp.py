@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from agents.mcp import MCPServer
-from pydantic import BaseModel, create_model
 from temporalio import workflow
 
 if TYPE_CHECKING:
@@ -27,7 +26,7 @@ _INSTALL_MESSAGE = (
 
 try:
     with workflow.unsafe.imports_passed_through():
-        from transport.workflow_transport import WorkflowTransport, _coerce_call_tool_result
+        from a2a.types import AgentCard
         from durable_tools_gateway.generated import (
             CallToolInput,
             CallToolInputArguments,
@@ -35,7 +34,29 @@ try:
             RegistryService,
             ResolveAccountToolboxInput,
         )
-        from durable_tools_gateway.resources import ResourceDescriptor, descriptor_from_dict
+        from durable_tools_gateway.resources import (
+            ResourceDescriptor,
+            descriptor_from_dict,
+        )
+        from temporal_agent_harness.harness.agent_protocol import (
+            TextMessage,
+            TextReply,
+        )
+        from temporal_agent_harness.harness.subagent_gateway_transport import (
+            GatewayTransport,
+        )
+        from temporal_agent_harness.harness.subagent_nexus_transport import (
+            NexusTransport,
+        )
+        from temporal_agent_harness.harness.subagent_toolset import (
+            declared_handler,
+            subagent_toolset,
+        )
+        from google.protobuf.json_format import ParseDict
+        from transport.workflow_transport import (
+            WorkflowTransport,
+            _coerce_call_tool_result,
+        )
 except ModuleNotFoundError as exc:
     raise RuntimeError(_INSTALL_MESSAGE) from exc
 
@@ -44,7 +65,9 @@ def _error_result(exc: Exception) -> CallToolResult:
     """Wrap a caught exception as an isError=True CallToolResult."""
     from mcp import types
 
-    return types.CallToolResult(content=[types.TextContent(type="text", text=str(exc))], isError=True)
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=str(exc))], isError=True
+    )
 
 
 class _BaseNexusMCPServer(MCPServer):  # type: ignore[misc]
@@ -95,11 +118,16 @@ class _NexusTransportMCPServer(_BaseNexusMCPServer):
     def name(self) -> str:
         return self._transport.name
 
-    async def list_tools(self, run_context: Any = None, agent: Any = None) -> list[MCPTool]:
+    async def list_tools(
+        self, run_context: Any = None, agent: Any = None
+    ) -> list[MCPTool]:
         return await self._transport.list_tools()
 
     async def call_tool(
-        self, tool_name: str, arguments: dict[str, Any] | None, meta: dict[str, Any] | None = None
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        meta: dict[str, Any] | None = None,
     ) -> CallToolResult:
         return await self._transport.call_tool(tool_name, arguments, meta)
 
@@ -124,7 +152,9 @@ class NexusGateway:
         single Nexus call. An alias that isn't actually registered is silently skipped
         for now (no error handling yet -- this is a prototype).
         """
-        display_name = f"{self._account_id}-{self._gateway_name}-{self._gateway_endpoint}"
+        display_name = (
+            f"{self._account_id}-{self._gateway_name}-{self._gateway_endpoint}"
+        )
         return _NexusGatewayMCPServer(
             self._account_id,
             frozenset(aliases),
@@ -176,66 +206,22 @@ class ResolvedAccountToolbox:
     subagent_tools: tuple[Any, ...]
 
 
-def _schema_type(schema: dict[str, Any], name: str) -> Any:
-    kind = schema.get("type")
-    if kind == "string":
-        return str
-    if kind == "integer":
-        return int
-    if kind == "number":
-        return float
-    if kind == "boolean":
-        return bool
-    if kind == "array":
-        return list[_schema_type(schema.get("items", {}), f"{name}Item")]
-    if kind == "object":
-        properties = schema.get("properties", {})
-        required = set(schema.get("required", []))
-        fields: dict[str, Any] = {}
-        for field_name, field_schema in properties.items():
-            annotation = _schema_type(field_schema, f"{name}{field_name.title()}")
-            fields[field_name] = (
-                (annotation, ...)
-                if field_name in required
-                else (annotation | None, None)
-            )
-        return create_model(name, **fields)
-    return Any
-
-
 def _declared_handlers(
     resource: ResourceDescriptor,
 ) -> list[Any]:
-    from temporal_agent_harness.harness.subagent_toolset import declared_handler
-
-    result = []
-    for handler in resource.handlers:
-        input_type = _schema_type(
-            handler.input_schema,
-            f"{resource.resource_id.title().replace('-', '')}{handler.name.title()}Input",
+    if resource.agent_card is None:
+        raise ValueError(f"agent {resource.resource_id!r} has no A2A AgentCard")
+    card = ParseDict(resource.agent_card, AgentCard())
+    return [
+        declared_handler(
+            skill.id,
+            skill.description,
+            TextMessage,
+            TextReply,
+            param_name="message",
         )
-        output_type = _schema_type(
-            handler.output_schema,
-            f"{resource.resource_id.title().replace('-', '')}{handler.name.title()}Output",
-        )
-        if not isinstance(input_type, type) or not issubclass(input_type, BaseModel):
-            raise TypeError(
-                f"{resource.resource_id}.{handler.name} input must be an object"
-            )
-        if not isinstance(output_type, type) or not issubclass(output_type, BaseModel):
-            raise TypeError(
-                f"{resource.resource_id}.{handler.name} output must be an object"
-            )
-        result.append(
-            declared_handler(
-                handler.name,
-                handler.description,
-                input_type,
-                output_type,
-                param_name=handler.param_name,
-            )
-        )
-    return result
+        for skill in card.skills
+    ]
 
 
 def _materialize_toolbox(
@@ -246,12 +232,6 @@ def _materialize_toolbox(
     gateway_endpoint: str,
     version: str,
 ) -> ResolvedAccountToolbox:
-    from temporal_agent_harness.harness.subagent_gateway_transport import (
-        GatewayTransport,
-    )
-    from temporal_agent_harness.harness.subagent_nexus_transport import NexusTransport
-    from temporal_agent_harness.harness.subagent_toolset import subagent_toolset
-
     mcp_servers: list[MCPServer] = []
     subagent_tools: list[Any] = []
     external_mcp_aliases: list[str] = []
@@ -332,14 +312,17 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
     def name(self) -> str:
         return self._display_name
 
-    async def list_tools(self, run_context: Any = None, agent: Any = None) -> list[MCPTool]:
+    async def list_tools(
+        self, run_context: Any = None, agent: Any = None
+    ) -> list[MCPTool]:
         from mcp import types
 
         gateway_client = workflow.create_nexus_client(
             service=self._gateway_name, endpoint=self._gateway_endpoint
         )
         entries = await gateway_client.execute_operation(
-            RegistryService.list_account_entries, ListAccountEntriesInput(account_id=self._account_id)
+            RegistryService.list_account_entries,
+            ListAccountEntriesInput(account_id=self._account_id),
         )
         # nex-gen wraps map-shaped (additionalProperties) fields in a named type instead
         # of a plain dict.
@@ -361,17 +344,22 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
         return [types.Tool(**d) for d in tool_dicts]
 
     async def call_tool(
-        self, tool_name: str, arguments: dict[str, Any] | None, meta: dict[str, Any] | None = None
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        meta: dict[str, Any] | None = None,
     ) -> CallToolResult:
         from mcp import types
 
         alias = self._remote_routes.get(tool_name)
         if alias is None:
             return types.CallToolResult(
-                content=[types.TextContent(
-                    type="text",
-                    text=f"Unknown tool {tool_name!r} for account {self._account_id!r}.",
-                )],
+                content=[
+                    types.TextContent(
+                        type="text",
+                        text=f"Unknown tool {tool_name!r} for account {self._account_id!r}.",
+                    )
+                ],
                 isError=True,
             )
 
@@ -386,7 +374,9 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
                     alias=alias,
                     name=tool_name,
                     caller_workflow_id=workflow.info().workflow_id,
-                    arguments=CallToolInputArguments(additional_properties=arguments or {}),
+                    arguments=CallToolInputArguments(
+                        additional_properties=arguments or {}
+                    ),
                 ),
             )
             result = (

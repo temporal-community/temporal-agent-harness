@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -22,12 +23,15 @@ from durable_tools_gateway.generated import (
     ListAccountEntriesOutputRemoteTools,
     ListAccountEntriesOutputRemoteToolsValueItem,
 )
-from durable_tools_gateway.resources import ResourceDescriptor, TEXT_AGENT_HANDLER
+from durable_tools_gateway.resources import ResourceDescriptor, text_agent_card
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Worker
 
 from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
-    _NexusGatewayMCPServer,
     _materialize_toolbox,
+    _NexusGatewayMCPServer,
 )
+from tests.ai_sdks.openai_agents._toolbox_sandbox_probe import ToolboxSandboxProbe
 
 
 def _server() -> _NexusGatewayMCPServer:
@@ -51,8 +55,13 @@ def test_dynamic_toolbox_materializes_native_and_external_routes() -> None:
                 "Research",
                 "",
                 "research-endpoint",
-                "AgentService",
-                (TEXT_AGENT_HANDLER,),
+                "A2AService",
+                text_agent_card(
+                    name="Research",
+                    description="",
+                    endpoint="research-endpoint",
+                    transport="nexus",
+                ),
             ),
             ResourceDescriptor(
                 "writer",
@@ -62,7 +71,12 @@ def test_dynamic_toolbox_materializes_native_and_external_routes() -> None:
                 "Writer",
                 "",
                 "http://writer",
-                handlers=(TEXT_AGENT_HANDLER,),
+                agent_card=text_agent_card(
+                    name="Writer",
+                    description="",
+                    endpoint="http://writer",
+                    transport="external_http",
+                ),
             ),
             ResourceDescriptor(
                 "native-tools",
@@ -105,6 +119,30 @@ def test_dynamic_toolbox_materializes_native_and_external_routes() -> None:
     ]
 
 
+async def test_dynamic_toolbox_materializes_inside_workflow_sandbox() -> None:
+    env = await WorkflowEnvironment.start_time_skipping()
+    task_queue = f"toolbox-sandbox-{uuid.uuid4()}"
+    async with Worker(
+        env.client,
+        task_queue=task_queue,
+        workflows=[ToolboxSandboxProbe],
+    ):
+        try:
+            names = await env.client.execute_workflow(
+                ToolboxSandboxProbe.run,
+                id=f"toolbox-sandbox-{uuid.uuid4()}",
+                task_queue=task_queue,
+            )
+        finally:
+            await env.shutdown()
+
+    assert names == [
+        "start_research",
+        "research_ask",
+        "stop_research",
+    ]
+
+
 @patch(
     "temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.create_nexus_client"
 )
@@ -139,9 +177,7 @@ async def test_list_tools_unwraps_remote_tools(mock_create_client: MagicMock) ->
 @patch(
     "temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.create_nexus_client"
 )
-@patch(
-    "temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.info"
-)
+@patch("temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.info")
 async def test_call_tool_wraps_arguments_and_unwraps_result(
     mock_info: MagicMock, mock_create_client: MagicMock
 ) -> None:

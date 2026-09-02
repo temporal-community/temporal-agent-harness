@@ -6,10 +6,20 @@ import asyncio
 import base64
 import json
 import threading
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import timedelta
 from typing import Any
 
+from a2a.types import (
+    CancelTaskRequest,
+    Message,
+    Part,
+    Role,
+    SendMessageRequest,
+    StreamResponse,
+)
+from google.protobuf.json_format import MessageToDict
 from temporalio import activity, workflow
 from temporalio.api.common.v1 import Payload
 from temporalio.client import Client
@@ -18,16 +28,19 @@ from temporalio.common import RetryPolicy
 from .registry import REGISTRY_TASK_QUEUE, SpawnedAgentObservation
 
 with workflow.unsafe.imports_passed_through():
+    from temporal_agent_harness.a2a.control import HarnessControlService
+    from temporal_agent_harness.a2a.nexus import (
+        HARNESS_EVENT_METADATA_KEY,
+        A2AService,
+        SubscribeToTaskInput,
+        SubscribeToTaskItem,
+    )
     from temporal_agent_harness.nexus_agent_adapter.generated import (
-        AgentService,
         ApproveToolCallInput,
         ExecuteOperatorCommandInput,
-        PollMessagesInput,
         ProvideCallbackResultInput,
         ProvideCallbackResultInputResult,
         QuerySessionInput,
-        SendAgentMessageInput,
-        StreamItem,
     )
 
     from .registry_service_handler import (
@@ -79,7 +92,7 @@ class AgentAttachInput:
 @dataclass(frozen=True)
 class PublishBatchInput:
     stream_id: str
-    items: list[StreamItem]
+    items: list[SubscribeToTaskItem]
     error: str | None = None
     close: bool = False
 
@@ -128,8 +141,16 @@ class EventBroker:
 event_broker = EventBroker()
 
 
-def _decode_stream_item(item: StreamItem) -> tuple[str, dict[str, Any]]:
-    raw = base64.b64decode(item.data)
+def _decode_stream_item(item: SubscribeToTaskItem) -> tuple[str, dict[str, Any]]:
+    response = StreamResponse()
+    response.ParseFromString(base64.b64decode(item.data))
+    body = response.WhichOneof("payload")
+    if body is None:
+        raise ValueError("A2A StreamResponse has no payload")
+    a2a_metadata = MessageToDict(
+        getattr(response, body).metadata, preserving_proto_field_name=True
+    )
+    raw = base64.b64decode(str(a2a_metadata[HARNESS_EVENT_METADATA_KEY]))
     payload = Payload()
     payload.ParseFromString(raw)
     envelope = json.loads(payload.data)
@@ -150,7 +171,7 @@ def _sse(event_type: str, data: dict[str, Any]) -> bytes:
 
 
 def _coalesced_ui_frames(
-    items: list[StreamItem],
+    items: list[SubscribeToTaskItem],
 ) -> list[tuple[str, dict[str, Any]]]:
     """Decode a poll page and join adjacent text deltas from the same turn.
 
@@ -184,7 +205,7 @@ def _coalesced_ui_frames(
 
 
 def _spawned_lifecycle(
-    items: list[StreamItem],
+    items: list[SubscribeToTaskItem],
 ) -> tuple[list[SpawnedAgentObservation], list[str]]:
     spawned_agents: list[SpawnedAgentObservation] = []
     stopped_source_session_ids: list[str] = []
@@ -205,6 +226,7 @@ def _spawned_lifecycle(
                     agent_key=str(data["agent_key"]),
                     provider_session_id=str(data["workflow_id"]),
                     next_expected_turn=int(data["subagent_turn"]) + 1,
+                    has_started=True,
                 )
             )
         elif event_type == "subagent_stopped":
@@ -218,6 +240,7 @@ def _observation_dict(observation: SpawnedAgentObservation) -> dict[str, Any]:
         "agent_key": observation.agent_key,
         "workflow_id": observation.provider_session_id,
         "next_expected_turn": observation.next_expected_turn,
+        "has_started": observation.has_started,
     }
 
 
@@ -261,8 +284,11 @@ async def execute_agent_action(
     if not input.nexus_endpoint:
         raise ValueError("nexus_endpoint is required for a native agent action")
 
-    nexus_client = client.create_nexus_client(
-        service=AgentService, endpoint=input.nexus_endpoint
+    control_client = client.create_nexus_client(
+        service=HarnessControlService, endpoint=input.nexus_endpoint
+    )
+    a2a_client = client.create_nexus_client(
+        service=A2AService, endpoint=input.nexus_endpoint
     )
     session = QuerySessionInput(session_id=input.session_id)
     match input.action:
@@ -278,27 +304,42 @@ async def execute_agent_action(
                 )
                 if values.get(name) is not None
             }
-            operation = AgentService.send_agent_message
-            operation_input = SendAgentMessageInput(
-                session_id=input.session_id,
-                msg_type=str(values["msg_type"]),
-                payload=json.dumps(values.get("payload") or {}),
-                expected_turn=(
-                    int(values["expected_turn"])
-                    if values.get("expected_turn") is not None
-                    else None
+            payload = values.get("payload") or {}
+            operation = A2AService.send_message
+            operation_input = SendMessageRequest(
+                message=Message(
+                    message_id=str(uuid.uuid4()),
+                    task_id=input.session_id,
+                    context_id=input.session_id,
+                    role=Role.ROLE_USER,
+                    parts=[Part(text=str(payload.get("text", "")))],
+                    metadata={
+                        "temporal.io/message-type": str(values["msg_type"]),
+                        "temporal.io/payload": payload,
+                    },
                 ),
-                **context,
+                metadata={
+                    **context,
+                    **(
+                        {"expected_turn": int(values["expected_turn"])}
+                        if values.get("expected_turn") is not None
+                        else {}
+                    ),
+                },
             )
+            operation_client = a2a_client
+        case "close":
+            operation = A2AService.cancel_task
+            operation_input = CancelTaskRequest(id=input.session_id)
+            operation_client = a2a_client
         case "status":
-            operation = AgentService.query_agent_status
+            operation = HarnessControlService.query_agent_status
             operation_input = session
-        case "agent_interface":
-            operation = AgentService.query_agent_interface
-            operation_input = session
+            operation_client = control_client
         case "operator_interface":
-            operation = AgentService.query_operator_interface
+            operation = HarnessControlService.query_operator_interface
             operation_input = session
+            operation_client = control_client
         case "operator_command":
             kwargs: dict[str, Any] = {
                 "session_id": input.session_id,
@@ -306,8 +347,9 @@ async def execute_agent_action(
             }
             if values.get("arg") is not None:
                 kwargs["arg"] = str(values["arg"])
-            operation = AgentService.execute_operator_command
+            operation = HarnessControlService.execute_operator_command
             operation_input = ExecuteOperatorCommandInput(**kwargs)
+            operation_client = control_client
         case "approve":
             kwargs = {
                 "session_id": input.session_id,
@@ -317,8 +359,9 @@ async def execute_agent_action(
             }
             if values.get("reason") is not None:
                 kwargs["reason"] = str(values["reason"])
-            operation = AgentService.approve_tool_call
+            operation = HarnessControlService.approve_tool_call
             operation_input = ApproveToolCallInput(**kwargs)
+            operation_client = control_client
         case "callback":
             kwargs = {
                 "session_id": input.session_id,
@@ -330,21 +373,29 @@ async def execute_agent_action(
                 )
             if values.get("error") is not None:
                 kwargs["error"] = str(values["error"])
-            operation = AgentService.provide_callback_result
+            operation = HarnessControlService.provide_callback_result
             operation_input = ProvideCallbackResultInput(**kwargs)
-        case "close":
-            operation = AgentService.close_session
-            operation_input = session
+            operation_client = control_client
         case _:
             raise ValueError(f"unsupported native agent action {input.action!r}")
 
-    result = await nexus_client.execute_operation(
+    result = await operation_client.execute_operation(
         operation,
         operation_input,
         id=execution_id,
         schedule_to_close_timeout=timedelta(seconds=90),
         summary=f"{input.action} agent session {input.session_id}",
     )
+    if input.action == "send":
+        metadata = MessageToDict(result.task.metadata, preserving_proto_field_name=True)
+        return {
+            "turn_number": int(metadata["temporal.io/turn-number"]),
+            "turn_id": str(metadata["temporal.io/turn-id"]),
+            "stream_head_offset": int(metadata["temporal.io/accepted-offset"]),
+            "pending": bool(metadata["temporal.io/pending"]),
+        }
+    if input.action == "close":
+        return {"closed": True}
     return asdict(result)
 
 
@@ -412,18 +463,21 @@ class AgentDiscoveryWorkflow:
 
     @workflow.run
     async def run(self, input: AgentDiscoveryInput) -> dict[str, Any]:
-        client = workflow.create_nexus_client(
-            service=AgentService, endpoint=input.nexus_endpoint
+        a2a_client = workflow.create_nexus_client(
+            service=A2AService, endpoint=input.nexus_endpoint
+        )
+        control_client = workflow.create_nexus_client(
+            service=HarnessControlService, endpoint=input.nexus_endpoint
         )
         cursor = input.cursor
         spawned: list[SpawnedAgentObservation] = []
         stopped: list[str] = []
         closed = False
         for _ in range(100):
-            poll = await client.execute_operation(
-                AgentService.poll_messages,
-                PollMessagesInput(
-                    session_id=input.session_id,
+            poll = await a2a_client.execute_operation(
+                A2AService.subscribe_to_task,
+                SubscribeToTaskInput(
+                    id=input.session_id,
                     cursor=cursor,
                     timeout_seconds=0.1,
                 ),
@@ -431,14 +485,14 @@ class AgentDiscoveryWorkflow:
             batch_spawned, batch_stopped = _spawned_lifecycle(poll.items)
             spawned.extend(batch_spawned)
             stopped.extend(batch_stopped)
-            cursor = poll.next_offset
+            cursor = poll.next_cursor
             closed = poll.closed
             if poll.closed or not poll.more_ready:
                 break
         active = []
         if not closed:
-            status = await client.execute_operation(
-                AgentService.query_agent_status,
+            status = await control_client.execute_operation(
+                HarnessControlService.query_agent_status,
                 QuerySessionInput(session_id=input.session_id),
             )
             active = [asdict(item) for item in status.subagents]
@@ -456,16 +510,19 @@ class AgentAttachWorkflow:
 
     @workflow.run
     async def run(self, input: AgentAttachInput) -> None:
-        client = workflow.create_nexus_client(
-            service=AgentService, endpoint=input.nexus_endpoint
+        a2a_client = workflow.create_nexus_client(
+            service=A2AService, endpoint=input.nexus_endpoint
+        )
+        control_client = workflow.create_nexus_client(
+            service=HarnessControlService, endpoint=input.nexus_endpoint
         )
         cursor = input.from_offset
         for _ in range(MAX_ATTACH_POLLS):
             try:
-                poll = await client.execute_operation(
-                    AgentService.poll_messages,
-                    PollMessagesInput(
-                        session_id=input.session_id,
+                poll = await a2a_client.execute_operation(
+                    A2AService.subscribe_to_task,
+                    SubscribeToTaskInput(
+                        id=input.session_id,
                         cursor=cursor,
                         timeout_seconds=POLL_TIMEOUT_SECONDS,
                     ),
@@ -481,7 +538,7 @@ class AgentAttachWorkflow:
                 )
                 return
 
-            cursor = poll.next_offset
+            cursor = poll.next_cursor
             published = await self._publish(
                 PublishBatchInput(
                     stream_id=input.stream_id,
@@ -493,8 +550,8 @@ class AgentAttachWorkflow:
             if poll.closed:
                 return
             if not poll.items or (published.saw_terminal_event and not poll.more_ready):
-                status = await client.execute_operation(
-                    AgentService.query_agent_status,
+                status = await control_client.execute_operation(
+                    HarnessControlService.query_agent_status,
                     QuerySessionInput(session_id=input.session_id),
                 )
                 if not (

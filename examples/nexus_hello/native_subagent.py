@@ -17,9 +17,14 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
-from temporal_agent_harness.nexus_agent_adapter.handler import AgentServiceHandler, Config
-
 with workflow.unsafe.imports_passed_through():
+    from temporalio.contrib.workflow_streams import WorkflowStream
+
+    from temporal_agent_harness.a2a.adapter import (
+        A2AHandlerConfig,
+        A2AServiceHandler,
+        make_agent_card,
+    )
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
@@ -28,7 +33,10 @@ with workflow.unsafe.imports_passed_through():
         ToolApprovalPolicy,
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
-    from temporalio.contrib.workflow_streams import WorkflowStream
+    from temporal_agent_harness.nexus_agent_adapter.handler import (
+        HarnessControlConfig,
+        HarnessControlServiceHandler,
+    )
 
 TASK_QUEUE = "nexus-hello-subagent"
 
@@ -61,17 +69,28 @@ class NativeResearchSubagentWorkflow:
 async def _run_worker() -> None:
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(**connect_config)
-    config = Config(
-        agent_task_queue=TASK_QUEUE,
-        workflow_name="NativeResearchSubagent",
-        workflow_id_prefix="",  # The Nexus session ID is the workflow ID.
-        is_message_queuing_enabled=True,
-    )
+    control_config = HarnessControlConfig()
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
         workflows=[NativeResearchSubagentWorkflow],
-        nexus_service_handlers=[AgentServiceHandler(client, config)],
+        nexus_service_handlers=[
+            A2AServiceHandler(
+                client,
+                A2AHandlerConfig(
+                    agent_task_queue=TASK_QUEUE,
+                    workflow_name="NativeResearchSubagent",
+                    workflow_id_prefix="",
+                    is_message_queuing_enabled=True,
+                    agent_card=make_agent_card(
+                        name="Research",
+                        description="A concise research agent.",
+                        endpoint="nexus-hello-subagent-endpoint",
+                    ),
+                ),
+            ),
+            HarnessControlServiceHandler(client, control_config),
+        ],
     )
     print(
         f"Native research subagent worker ready (workflow + Nexus front door): "

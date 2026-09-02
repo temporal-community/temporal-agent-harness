@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from a2a.types import SendMessageResponse, Task
 from durable_tools_gateway.registry import (
     AccountEntries,
     AgentRegistration,
@@ -18,9 +19,9 @@ from durable_tools_gateway.registry_service_handler import (
     SubagentDispatchOutput,
 )
 from durable_tools_gateway.resources import (
-    TEXT_AGENT_HANDLER,
     AccountResourceRegistration,
     ResourceDescriptor,
+    text_agent_card,
 )
 from durable_tools_gateway.tool_history import ToolCallRecord
 from durable_tools_gateway.web import (
@@ -28,12 +29,12 @@ from durable_tools_gateway.web import (
     create_account_agent_app,
 )
 from fastapi.testclient import TestClient
+from google.protobuf.json_format import MessageToDict
 from temporalio.api.workflowservice.v1 import DescribeActivityExecutionResponse
 from temporalio.contrib.pydantic import pydantic_data_converter
 
 from temporal_agent_harness.nexus_agent_adapter.generated import (
     AgentInterfaceOutput,
-    SendMessageOutput,
 )
 
 
@@ -155,8 +156,13 @@ def test_catalog_installs_shared_descriptor_into_account_registry() -> None:
         "Catalog Agent",
         "Published globally",
         "catalog-agent-endpoint",
-        "AgentService",
-        (TEXT_AGENT_HANDLER,),
+        "A2AService",
+        text_agent_card(
+            name="Catalog Agent",
+            description="Published globally",
+            endpoint="catalog-agent-endpoint",
+            transport="nexus",
+        ),
     )
     client, handle, _ = _app_client(catalog_override=[catalog_agent])
 
@@ -334,6 +340,40 @@ def test_provider_session_alias_resolves_through_the_account_registry() -> None:
     assert resolved_ids == ["provider-child", "source-child"]
 
 
+def test_provider_alias_waits_for_spawned_session_projection() -> None:
+    spawned = SessionRecord(
+        account_id="account-1",
+        session_id="session-child",
+        agent_id="assistant",
+        provider_session_id="provider-child",
+        source_session_id="writer-subagent-child",
+        created_at=123.0,
+        label="Spawned child",
+        is_spawned=True,
+        has_started=True,
+        current_turn=1,
+    )
+    client, handle, _ = _app_client(session_override=spawned)
+    query = handle.query.side_effect
+    attempts = 0
+
+    async def delayed_projection(method, *args, **kwargs):
+        nonlocal attempts
+        if method is ToolRegistryWorkflow.resolve_session:
+            attempts += 1
+            if attempts < 3:
+                return None
+        return await query(method, *args, **kwargs)
+
+    handle.query.side_effect = delayed_projection
+
+    with client:
+        response = client.get("/api/agent-interface/writer-subagent-child")
+
+    assert response.status_code == 200
+    assert attempts == 3
+
+
 def test_refresh_reconciles_registered_children_from_native_status() -> None:
     started = SessionRecord(
         account_id="account-1",
@@ -387,11 +427,16 @@ def test_refresh_reconciles_registered_children_from_native_status() -> None:
 def test_native_send_defers_stale_turn_reconciliation_to_agent_service() -> None:
     client, handle, temporal = _app_client()
     temporal.create_nexus_client.return_value.execute_operation.return_value = (
-        SendMessageOutput(
-            turn_number=2,
-            turn_id="turn-2",
-            stream_head_offset=8,
-            pending=False,
+        SendMessageResponse(
+            task=Task(
+                id="session-1",
+                metadata={
+                    "temporal.io/turn-number": 2,
+                    "temporal.io/turn-id": "turn-2",
+                    "temporal.io/accepted-offset": 8,
+                    "temporal.io/pending": False,
+                },
+            )
         )
     )
 
@@ -408,7 +453,7 @@ def test_native_send_defers_stale_turn_reconciliation_to_agent_service() -> None
     assert response.status_code == 200
     nexus = temporal.create_nexus_client.return_value
     operation_input = nexus.execute_operation.await_args.args[1]
-    assert operation_input.expected_turn is None
+    assert "expected_turn" not in MessageToDict(operation_input.metadata)
     assert nexus.execute_operation.await_args.kwargs["id"].startswith("ui-agent-send-")
     temporal.execute_workflow.assert_not_awaited()
     assert any(
@@ -494,10 +539,10 @@ async def test_external_turn_replays_from_deterministic_activity_history() -> No
     response.info.activity_type.name = "subagent_proxy_activity"
     response.info.task_queue = "mcp-registry"
     response.info.schedule_time.FromDatetime(
-        datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
+        datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
     )
     response.info.close_time.FromDatetime(
-        datetime(2026, 9, 1, 12, 0, 2, tzinfo=timezone.utc)
+        datetime(2026, 9, 1, 12, 0, 2, tzinfo=UTC)
     )
     activity_input = SubagentDispatchInput(
         url="http://writer",
@@ -612,9 +657,8 @@ def test_spawned_external_stream_merges_temporal_and_ui_turn_offsets() -> None:
     with patch(
         "durable_tools_gateway.web._replay_external_activity_turn",
         new=AsyncMock(return_value=replayed_turn_one),
-    ) as replay:
-        with client:
-            response = client.get("/api/attach?session_id=session-writer&from_offset=2")
+    ) as replay, client:
+        response = client.get("/api/attach?session_id=session-writer&from_offset=2")
 
     assert response.status_code == 200
     body = response.text

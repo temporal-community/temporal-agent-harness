@@ -2,41 +2,46 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, Literal
+
+from a2a.types import AgentCard
+from google.protobuf.json_format import ParseDict
 
 ResourceCategory = Literal["agent", "mcp"]
 ResourceTransport = Literal["nexus", "external_http"]
 
 
-@dataclass(frozen=True)
-class AgentHandlerDescriptor:
-    """Model-facing contract for one remotely callable agent handler."""
+def text_agent_card(
+    *, name: str, description: str, endpoint: str, transport: ResourceTransport
+) -> dict[str, Any]:
+    """Return the minimal standard A2A card used by manually registered agents."""
 
-    name: str
-    description: str
-    input_schema: dict[str, Any]
-    output_schema: dict[str, Any]
-    param_name: str = "input"
-
-
-TEXT_AGENT_HANDLER = AgentHandlerDescriptor(
-    name="ask",
-    description="Ask the agent a question.",
-    param_name="message",
-    input_schema={
-        "type": "object",
-        "properties": {"text": {"type": "string"}},
-        "required": ["text"],
-        "additionalProperties": False,
-    },
-    output_schema={
-        "type": "object",
-        "properties": {"text": {"type": "string"}},
-        "required": ["text"],
-        "additionalProperties": False,
-    },
-)
+    return {
+        "name": name,
+        "description": description,
+        "version": "1.0.0",
+        "supportedInterfaces": [
+            {
+                "url": endpoint,
+                "protocolBinding": (
+                    "TEMPORAL_NEXUS" if transport == "nexus" else "HTTP+JSON"
+                ),
+                "protocolVersion": "1.0",
+            }
+        ],
+        "capabilities": {"streaming": True},
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": [
+            {
+                "id": "ask",
+                "name": "ask",
+                "description": "Ask the agent a question.",
+                "tags": ["agent"],
+            }
+        ],
+    }
 
 
 @dataclass(frozen=True)
@@ -55,13 +60,15 @@ class ResourceDescriptor:
     description: str
     endpoint: str
     service: str | None = None
-    handlers: tuple[AgentHandlerDescriptor, ...] = field(default_factory=tuple)
+    # Official A2A AgentCard JSON. This is the sole agent capability schema shared
+    # by the global catalog, account registry, native Nexus binding, and HTTP agents.
+    agent_card: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-    # Compatibility views keep the broker/UI readable while the canonical stored
-    # shape remains transport-neutral and defined only once.
+    # Named projections keep routing code readable while the canonical stored shape
+    # remains transport-neutral and defined only once.
     @property
     def name(self) -> str:
         return self.resource_id
@@ -80,7 +87,7 @@ class ResourceDescriptor:
 
     @property
     def nexus_service(self) -> str:
-        return self.service or "AgentService"
+        return self.service or "A2AService"
 
     @property
     def provider_url(self) -> str | None:
@@ -115,25 +122,24 @@ def validate_resource_descriptor(descriptor: ResourceDescriptor) -> None:
         raise ValueError(f"unsupported resource transport {descriptor.transport!r}")
     if descriptor.transport == "nexus" and not (descriptor.service or "").strip():
         raise ValueError("Nexus resources require a service name")
-    if descriptor.category == "agent" and not descriptor.handlers:
-        raise ValueError("agent resources require at least one handler contract")
-    if descriptor.category == "mcp" and descriptor.handlers:
-        raise ValueError("MCP resources cannot declare agent handlers")
-    for handler in descriptor.handlers:
-        if not handler.name.strip() or not handler.param_name.strip():
-            raise ValueError("agent handler name and parameter name are required")
-        if handler.input_schema.get("type") != "object":
-            raise ValueError("agent handler input schemas must describe an object")
-        if handler.output_schema.get("type") != "object":
-            raise ValueError("agent handler output schemas must describe an object")
+    if descriptor.category == "agent" and not descriptor.agent_card:
+        raise ValueError("agent resources require an A2A agent_card")
+    if descriptor.category == "mcp" and descriptor.agent_card is not None:
+        raise ValueError("MCP resources cannot declare an A2A agent_card")
+    if descriptor.agent_card is not None:
+        try:
+            card = ParseDict(descriptor.agent_card, AgentCard())
+        except Exception as exc:
+            raise ValueError("agent_card must be valid A2A AgentCard JSON") from exc
+        if not card.name or not card.supported_interfaces or not card.skills:
+            raise ValueError(
+                "agent_card requires a name, supported interface, and skill"
+            )
 
 
 def descriptor_from_dict(value: dict[str, Any]) -> ResourceDescriptor:
     """Decode JSON-shaped catalog data into the canonical descriptor."""
 
-    handlers = tuple(
-        AgentHandlerDescriptor(**handler) for handler in value.get("handlers", [])
-    )
     descriptor = ResourceDescriptor(
         resource_id=str(value["resource_id"]),
         revision=int(value.get("revision", 1)),
@@ -143,7 +149,7 @@ def descriptor_from_dict(value: dict[str, Any]) -> ResourceDescriptor:
         description=str(value.get("description", "")),
         endpoint=str(value["endpoint"]),
         service=value.get("service"),
-        handlers=handlers,
+        agent_card=value.get("agent_card"),
     )
     validate_resource_descriptor(descriptor)
     return descriptor

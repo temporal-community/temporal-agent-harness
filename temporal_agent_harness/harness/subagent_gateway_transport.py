@@ -1,4 +1,4 @@
-# ABOUTME: Transport for an HTTP subagent reached through the Durable Tools Gateway.
+# ABOUTME: A2A transport for an HTTP agent routed by the account gateway.
 
 from __future__ import annotations
 
@@ -8,6 +8,11 @@ from typing import Any
 
 from temporalio import workflow
 
+with workflow.unsafe.imports_passed_through():
+    from a2a.types import CancelTaskRequest, Message, Part, Role, SendMessageRequest
+    from google.protobuf.json_format import MessageToDict
+
+    from temporal_agent_harness.a2a.nexus import A2AService
 from temporal_agent_harness.harness.agent_protocol import (
     AgentConfig,
     SubagentMessageSent,
@@ -16,54 +21,29 @@ from temporal_agent_harness.harness.agent_protocol import (
 from temporal_agent_harness.harness.agent_workflow import _current_runner
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
-_INSTALL_MESSAGE = (
-    "Gateway-brokered subagent support requires the optional `nexus-mcp` extra, which is "
-    "only resolvable from an editable checkout of this repo (it path-depends on nexus/mcp) "
-    "and requires Python >=3.13. Install it with `uv sync --extra nexus-mcp`."
-)
-
-try:
-    with workflow.unsafe.imports_passed_through():
-        from durable_tools_gateway.generated import (
-            DispatchSubagentTurnInput,
-            RegistryService,
-            StartSubagentInput,
-            StopSubagentInput,
-        )
-except ModuleNotFoundError as exc:
-    raise RuntimeError(_INSTALL_MESSAGE) from exc
-
 
 class GatewayTransport:
-    """Reach a registered HTTP subagent through the Durable Tools Gateway.
-
-    The alias identifies a provider. Each ``start`` call creates an instance.
-    """
+    """Route A2A over Nexus to an account-registered HTTP A2A agent."""
 
     def __init__(
         self,
         account_id: str,
         alias: str,
-        gateway_name: str = "RegistryService",
+        gateway_name: str = "A2AService",
         gateway_endpoint: str = "mcp-registry-endpoint",
     ) -> None:
         self._account_id = account_id
         self._alias = alias
-        self._gateway_name = gateway_name
         self._gateway_endpoint = gateway_endpoint
 
-    def _client(self) -> workflow.NexusClient[Any]:
+    def _client(self) -> workflow.NexusClient[A2AService]:
         return workflow.create_nexus_client(
-            service=self._gateway_name, endpoint=self._gateway_endpoint
+            service=A2AService, endpoint=self._gateway_endpoint
         )
 
     async def start(self, *, agent_key: str, config: AgentConfig) -> str:
-        out = await self._client().execute_operation(
-            RegistryService.start_subagent,
-            StartSubagentInput(account_id=self._account_id, alias=self._alias),
-            schedule_to_close_timeout=timedelta(minutes=1),
-        )
-        return out.instance_id
+        # A2A tasks are started lazily by their first Message.
+        return f"{agent_key}-subagent-{workflow.uuid4()}"
 
     async def dispatch(
         self,
@@ -78,41 +58,56 @@ class GatewayTransport:
         parent_stream_context: TurnStreamContext,
     ) -> SubagentTurnResult:
         out = await self._client().execute_operation(
-            RegistryService.dispatch_subagent_turn,
-            DispatchSubagentTurnInput(
-                account_id=self._account_id,
-                instance_id=target,
-                msg_type=msg_type,
-                payload=json.dumps(payload),
-                expected_turn=expected_turn,
+            A2AService.send_message,
+            SendMessageRequest(
+                message=Message(
+                    message_id=str(workflow.uuid4()),
+                    task_id=target,
+                    context_id=target,
+                    role=Role.ROLE_USER,
+                    parts=[Part(text=str(payload.get("text", "")))],
+                    metadata={"temporal.io/message-type": msg_type},
+                ),
+                metadata={
+                    "account_id": self._account_id,
+                    "agent_id": self._alias,
+                    "expected_turn": expected_turn,
+                },
             ),
             schedule_to_close_timeout=timedelta(minutes=6),
         )
-        # Publish only after the gateway returns a reply.
+        metadata = MessageToDict(out.task.metadata, preserving_proto_field_name=True)
+        turn_number = int(metadata["temporal.io/turn-number"])
+        turn_id = str(metadata["temporal.io/turn-id"])
+        text = "".join(
+            part.text
+            for artifact in out.task.artifacts
+            for part in artifact.parts
+            if part.HasField("text")
+        )
         _current_runner().publish(
             SubagentMessageSent(
                 subagent_id=handle,
                 agent_key=agent_key,
                 workflow_id=target,
                 function=msg_type,
-                subagent_turn=out.turn_number,
+                subagent_turn=turn_number,
                 from_offset=from_offset,
             )
         )
         return SubagentTurnResult(
-            output=json.loads(out.output),
-            turn_id=out.turn_id,
-            turn_number=out.turn_number,
-            # This transport has no remote stream cursor.
+            output={"text": text},
+            turn_id=turn_id,
+            turn_number=turn_number,
             consumed_offset=from_offset,
         )
 
     async def stop(self, *, target: str) -> None:
         await self._client().execute_operation(
-            RegistryService.stop_subagent,
-            StopSubagentInput(
-                account_id=self._account_id,
-                instance_id=target,
+            A2AService.cancel_task,
+            CancelTaskRequest(
+                id=target,
+                metadata={"account_id": self._account_id, "agent_id": self._alias},
             ),
             schedule_to_close_timeout=timedelta(minutes=1),
         )

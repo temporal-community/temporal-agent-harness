@@ -27,7 +27,7 @@ callback.allowedAddresses:
       - Pattern: "*"
         AllowInsecure: true
 
-# Required for update-with-callback (the mechanism pollMessages relies on).
+# Required for update-with-callback (the bounded A2A subscription relies on it).
 history.enableUpdateCallbacks:
   - value: true
 

@@ -8,6 +8,7 @@ requires-python = ">=3.11"
 # pydantic. AI-SDK and external-storage needs are opt-in extras below, so installing the
 # harness doesn't drag in Gemini or boto3.
 dependencies = [
+    "a2a-sdk>=1.1.2",
     "temporalio>=1.31.0",  # provides temporalio.contrib.workflow_streams (experimental)
     "pydantic>=2.0",
 ]

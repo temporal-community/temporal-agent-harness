@@ -16,8 +16,8 @@ from temporalio.exceptions import ApplicationError
 from .resources import (
     AccountResourceRegistration,
     ResourceDescriptor,
-    TEXT_AGENT_HANDLER,
     descriptor_from_dict,
+    text_agent_card,
     validate_resource_descriptor,
 )
 
@@ -86,7 +86,12 @@ class AccountEntries:
                 name,
                 "",
                 endpoint,
-                handlers=(TEXT_AGENT_HANDLER,),
+                agent_card=text_agent_card(
+                    name=name,
+                    description="Externally hosted A2A agent.",
+                    endpoint=endpoint,
+                    transport="external_http",
+                ),
             )
 
     @property
@@ -156,13 +161,13 @@ class GlobalCatalogWorkflow:
         return self._resources.get(resource_id)
 
 
-def AgentRegistration(  # noqa: N802 - compatibility constructor
+def AgentRegistration(
     agent_id: str,
     kind: str,
     label: str,
     description: str,
     nexus_endpoint: str | None = None,
-    nexus_service: str = "AgentService",
+    nexus_service: str = "A2AService",
     provider_url: str | None = None,
 ) -> ResourceDescriptor:
     """Build the canonical descriptor from the former agent registration API."""
@@ -178,11 +183,16 @@ def AgentRegistration(  # noqa: N802 - compatibility constructor
         description=description,
         endpoint=(nexus_endpoint if native else provider_url) or "",
         service=nexus_service if native else None,
-        handlers=(TEXT_AGENT_HANDLER,),
+        agent_card=text_agent_card(
+            name=label,
+            description=description,
+            endpoint=(nexus_endpoint if native else provider_url) or "",
+            transport="nexus" if native else "external_http",
+        ),
     )
 
 
-def NexusMCPServerRegistration(  # noqa: N802 - compatibility constructor
+def NexusMCPServerRegistration(
     name: str, endpoint: str, service: str
 ) -> ResourceDescriptor:
     """Build the canonical descriptor from the former Nexus MCP API."""
@@ -212,7 +222,7 @@ def _agent_descriptor(value: Any) -> ResourceDescriptor:
         label=str(value.get("label", "")),
         description=str(value.get("description", "")),
         nexus_endpoint=value.get("nexus_endpoint"),
-        nexus_service=str(value.get("nexus_service", "AgentService")),
+        nexus_service=str(value.get("nexus_service", "A2AService")),
         provider_url=value.get("provider_url"),
     )
 
@@ -276,6 +286,7 @@ class SpawnedAgentObservation:
     agent_key: str
     provider_session_id: str
     next_expected_turn: int = 1
+    has_started: bool = False
 
 
 @dataclass(frozen=True)
@@ -373,7 +384,12 @@ class ToolRegistryWorkflow:
                 label=alias,
                 description="Externally hosted HTTP agent.",
                 endpoint=url,
-                handlers=(TEXT_AGENT_HANDLER,),
+                agent_card=text_agent_card(
+                    name=alias,
+                    description="Externally hosted A2A agent.",
+                    endpoint=url,
+                    transport="external_http",
+                ),
             )
         )
         workflow.logger.info("[registry] registered subagent %r at %s", alias, url)
@@ -385,9 +401,7 @@ class ToolRegistryWorkflow:
             workflow.logger.info("[registry] deregistered subagent %r", alias)
 
     @workflow.update
-    def register_nexus_mcp_server(
-        self, registration: Any
-    ) -> ResourceDescriptor:
+    def register_nexus_mcp_server(self, registration: Any) -> ResourceDescriptor:
         """Register metadata without changing the service's direct Nexus route."""
         try:
             descriptor = _nexus_mcp_descriptor(registration)
@@ -502,6 +516,8 @@ class ToolRegistryWorkflow:
         self,
         parent_session_id: str,
         observation: SpawnedAgentObservation,
+        *,
+        authoritative_started: bool = False,
     ) -> SessionRecord | None:
         parent = self._require_session(parent_session_id)
         registration = self._resource(observation.agent_key)
@@ -526,12 +542,18 @@ class ToolRegistryWorkflow:
             provider_session_id = route.provider_instance_id
 
         current_turn = max(0, observation.next_expected_turn - 1)
+        has_started = observation.has_started or current_turn > 0
         existing = self._spawned_session(
             parent_session_id, observation.provider_session_id
         )
         if existing is not None:
             updated = replace(
                 existing,
+                has_started=(
+                    has_started
+                    if authoritative_started
+                    else existing.has_started or has_started
+                ),
                 current_turn=max(existing.current_turn, current_turn),
                 closed=False,
             )
@@ -551,7 +573,7 @@ class ToolRegistryWorkflow:
             source_session_id=observation.provider_session_id,
             is_spawned=True,
             is_message_queuing_enabled=parent.is_message_queuing_enabled,
-            has_started=True,
+            has_started=has_started,
             current_turn=current_turn,
         )
         self._sessions[session_id] = session
@@ -597,7 +619,11 @@ class ToolRegistryWorkflow:
             observation.provider_session_id for observation in observations
         }
         for observation in observations:
-            session = self._observe_spawned_agent(parent_session_id, observation)
+            session = self._observe_spawned_agent(
+                parent_session_id,
+                observation,
+                authoritative_started=True,
+            )
             if session is not None:
                 synced.append(session)
         for session_id, session in tuple(self._sessions.items()):
@@ -645,6 +671,18 @@ class ToolRegistryWorkflow:
         return updated
 
     @workflow.update
+    def bind_session_provider(
+        self, session_id: str, provider_session_id: str
+    ) -> SessionRecord:
+        """Record the A2A Task ID assigned by an external agent on first send."""
+        if not provider_session_id:
+            raise ValueError("provider_session_id is required")
+        session = self._require_session(session_id)
+        updated = replace(session, provider_session_id=provider_session_id)
+        self._sessions[session_id] = updated
+        return updated
+
+    @workflow.update
     def append_session_events(
         self, session_id: str, events: list[PendingSessionEvent]
     ) -> int:
@@ -688,12 +726,20 @@ class ToolRegistryWorkflow:
     ) -> None:
         """Bind a gateway instance ID to its provider session."""
         existing = self._subagent_instances.get(instance_id)
-        if existing is not None and existing != route:
-            raise ApplicationError(
-                f"subagent instance {instance_id!r} has a different route",
-                type="SubagentInstanceConflict",
-                non_retryable=True,
-            )
+        if existing is not None:
+            if existing == route:
+                return
+            if (
+                existing.alias != route.alias
+                or existing.url != route.url
+                or existing.provider_instance_id
+                or not route.provider_instance_id
+            ):
+                raise ApplicationError(
+                    f"subagent instance {instance_id!r} has a different route",
+                    type="SubagentInstanceConflict",
+                    non_retryable=True,
+                )
         self._subagent_instances[instance_id] = route
 
     @workflow.update
@@ -763,19 +809,29 @@ class ToolRegistryWorkflow:
 
     @workflow.query
     def list_sessions(self) -> list[SessionRecord]:
-        return list(self._sessions.values())
+        return [
+            self._normalized_session(session) for session in self._sessions.values()
+        ]
 
     @workflow.query
     def get_session(self, session_id: str) -> SessionRecord | None:
-        return self._sessions.get(session_id)
+        session = self._sessions.get(session_id)
+        return self._normalized_session(session) if session is not None else None
+
+    @staticmethod
+    def _normalized_session(session: SessionRecord) -> SessionRecord:
+        # A lazy spawned A2A route has no task before its first accepted turn.
+        if session.is_spawned and session.has_started and session.current_turn == 0:
+            return replace(session, has_started=False)
+        return session
 
     @workflow.query
     def resolve_session(self, session_id: str) -> SessionRecord | None:
         """Resolve an account session by its public ID or registered provider alias."""
         session = self._sessions.get(session_id)
         if session is not None:
-            return session
-        return next(
+            return self._normalized_session(session)
+        resolved = next(
             (
                 candidate
                 for candidate in self._sessions.values()
@@ -784,6 +840,7 @@ class ToolRegistryWorkflow:
             ),
             None,
         )
+        return self._normalized_session(resolved) if resolved is not None else None
 
     @workflow.query
     def poll_session_events(

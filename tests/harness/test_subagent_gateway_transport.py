@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from durable_tools_gateway.generated import (
-    DispatchSubagentTurnOutput,
-    StartSubagentOutput,
-)
+from a2a.types import Artifact, Part, SendMessageResponse, Task
 
 from temporal_agent_harness.harness.agent_protocol import AgentConfig
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
@@ -15,24 +12,44 @@ from temporal_agent_harness.harness.subagent_gateway_transport import GatewayTra
 @patch(
     "temporal_agent_harness.harness.subagent_gateway_transport.workflow.create_nexus_client"
 )
-async def test_gateway_transport_uses_started_instance(mock_create_client: MagicMock) -> None:
+async def test_gateway_transport_uses_started_instance(
+    mock_create_client: MagicMock,
+) -> None:
     client = MagicMock()
     client.execute_operation = AsyncMock(
         side_effect=[
-            StartSubagentOutput(instance_id="instance-1"),
-            DispatchSubagentTurnOutput(
-                output='{"text":"done"}', turn_id="turn-1", turn_number=1
+            SendMessageResponse(
+                task=Task(
+                    id="writer-subagent-instance-1",
+                    artifacts=[
+                        Artifact(artifact_id="turn-1", parts=[Part(text="done")])
+                    ],
+                    metadata={
+                        "temporal.io/turn-number": 1,
+                        "temporal.io/turn-id": "turn-1",
+                    },
+                )
             ),
-            None,
+            Task(id="writer-subagent-instance-1"),
         ]
     )
     mock_create_client.return_value = client
     transport = GatewayTransport("agent-1", "writer")
 
-    instance_id = await transport.start(agent_key="writer", config=AgentConfig())
     with patch(
-        "temporal_agent_harness.harness.subagent_gateway_transport._current_runner"
-    ) as current_runner:
+        "temporal_agent_harness.harness.subagent_gateway_transport.workflow.uuid4",
+        return_value="instance-1",
+    ):
+        instance_id = await transport.start(agent_key="writer", config=AgentConfig())
+    with (
+        patch(
+            "temporal_agent_harness.harness.subagent_gateway_transport._current_runner"
+        ) as current_runner,
+        patch(
+            "temporal_agent_harness.harness.subagent_gateway_transport.workflow.uuid4",
+            return_value="message-1",
+        ),
+    ):
         current_runner.return_value.publish = MagicMock()
         result = await transport.dispatch(
             target=instance_id,
@@ -48,10 +65,8 @@ async def test_gateway_transport_uses_started_instance(mock_create_client: Magic
         )
     await transport.stop(target=instance_id)
 
-    start_input = client.execute_operation.await_args_list[0].args[1]
-    dispatch_input = client.execute_operation.await_args_list[1].args[1]
-    stop_input = client.execute_operation.await_args_list[2].args[1]
-    assert start_input.alias == "writer"
-    assert dispatch_input.instance_id == "instance-1"
-    assert stop_input.instance_id == "instance-1"
+    dispatch_input = client.execute_operation.await_args_list[0].args[1]
+    stop_input = client.execute_operation.await_args_list[1].args[1]
+    assert dispatch_input.message.task_id == "writer-subagent-instance-1"
+    assert stop_input.id == "writer-subagent-instance-1"
     assert result.output == {"text": "done"}

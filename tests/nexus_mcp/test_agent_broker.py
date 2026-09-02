@@ -4,6 +4,7 @@ import base64
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from a2a.types import SendMessageResponse, Task
 from durable_tools_gateway.agent_broker import (
     AgentActionInput,
     AgentAttachInput,
@@ -12,6 +13,7 @@ from durable_tools_gateway.agent_broker import (
     AgentDiscoveryWorkflow,
     PublishBatchInput,
     PublishBatchResult,
+    _spawned_lifecycle,
     event_broker,
     execute_agent_action,
     publish_agent_events,
@@ -21,17 +23,18 @@ from durable_tools_gateway.registry_service_handler import (
     SubagentDispatchOutput,
     SubagentStartResult,
 )
+from google.protobuf.json_format import MessageToDict
 from temporalio.api.common.v1 import Payload
 
-from temporal_agent_harness.nexus_agent_adapter.generated import (
-    PollMessagesOutput,
-    SendMessageOutput,
-    StreamItem,
-    SubagentInfo,
+from temporal_agent_harness.a2a.nexus import (
+    SubscribeToTaskItem,
+    SubscribeToTaskOutput,
+    stream_response,
 )
+from temporal_agent_harness.nexus_agent_adapter.generated import SubagentInfo
 
 
-def _stream_item(offset: int = 4, text: str = "hello") -> StreamItem:
+def _stream_item(offset: int = 4, text: str = "hello") -> SubscribeToTaskItem:
     envelope = {
         "agent_id": "agent-1",
         "turn_id": "turn-1",
@@ -40,30 +43,35 @@ def _stream_item(offset: int = 4, text: str = "hello") -> StreamItem:
         "event": {"type": "reply_delta", "text": text},
     }
     payload = Payload(data=json.dumps(envelope).encode())
-    return StreamItem(
-        topic="turn_events",
-        data=base64.b64encode(payload.SerializeToString()).decode(),
+    encoded = base64.b64encode(payload.SerializeToString()).decode()
+    return SubscribeToTaskItem(
+        data=base64.b64encode(stream_response(encoded).SerializeToString()).decode(),
         offset=offset,
     )
 
 
-def _subagent_stream_item(event_type: str, offset: int) -> StreamItem:
+def _subagent_stream_item(
+    event_type: str, offset: int, *, subagent_turn: int | None = None
+) -> SubscribeToTaskItem:
+    event = {
+        "type": event_type,
+        "subagent_id": "research-a1b2c3",
+        "agent_key": "research",
+        "workflow_id": "research-workflow",
+    }
+    if subagent_turn is not None:
+        event["subagent_turn"] = subagent_turn
     envelope = {
         "agent_id": "parent-1",
         "turn_id": "turn-1",
         "turn_number": 1,
         "timestamp": 123.0,
-        "event": {
-            "type": event_type,
-            "subagent_id": "research-a1b2c3",
-            "agent_key": "research",
-            "workflow_id": "research-workflow",
-        },
+        "event": event,
     }
     payload = Payload(data=json.dumps(envelope).encode())
-    return StreamItem(
-        topic="turn_events",
-        data=base64.b64encode(payload.SerializeToString()).decode(),
+    encoded = base64.b64encode(payload.SerializeToString()).decode()
+    return SubscribeToTaskItem(
+        data=base64.b64encode(stream_response(encoded).SerializeToString()).decode(),
         offset=offset,
     )
 
@@ -104,19 +112,30 @@ async def test_publish_activity_coalesces_adjacent_reply_deltas() -> None:
 
 
 async def test_publish_activity_projects_spawned_agent_lifecycle() -> None:
-    result = await publish_agent_events(
-        PublishBatchInput(
-            stream_id="no-browser",
-            items=[
-                _subagent_stream_item("subagent_started", 1),
-                _subagent_stream_item("subagent_stopped", 2),
-            ],
-        )
+    spawned, stopped = _spawned_lifecycle(
+        [
+            _subagent_stream_item("subagent_started", 1),
+            _subagent_stream_item("subagent_stopped", 2),
+        ]
     )
 
-    assert result.spawned_agents[0].agent_key == "research"
-    assert result.spawned_agents[0].provider_session_id == "research-workflow"
-    assert result.stopped_provider_session_ids == ["research-workflow"]
+    assert spawned[0].agent_key == "research"
+    assert spawned[0].provider_session_id == "research-workflow"
+    assert not spawned[0].has_started
+    assert stopped == ["research-workflow"]
+
+
+async def test_publish_activity_marks_spawned_agent_started_after_first_message() -> None:
+    spawned, _ = _spawned_lifecycle(
+        [
+            _subagent_stream_item("subagent_started", 1),
+            _subagent_stream_item("subagent_message_sent", 2, subagent_turn=1),
+        ]
+    )
+
+    assert not spawned[0].has_started
+    assert spawned[1].has_started
+    assert spawned[1].next_expected_turn == 2
 
 
 @patch("durable_tools_gateway.agent_broker.workflow.get_external_workflow_handle")
@@ -154,11 +173,16 @@ async def test_native_send_is_one_standalone_nexus_operation() -> None:
     temporal = MagicMock()
     nexus = MagicMock()
     nexus.execute_operation = AsyncMock(
-        return_value=SendMessageOutput(
-            turn_number=2,
-            turn_id="turn-2",
-            stream_head_offset=8,
-            pending=False,
+        return_value=SendMessageResponse(
+            task=Task(
+                id="provider-session",
+                metadata={
+                    "temporal.io/turn-number": 2,
+                    "temporal.io/turn-id": "turn-2",
+                    "temporal.io/accepted-offset": 8,
+                    "temporal.io/pending": False,
+                },
+            )
         )
     )
     temporal.create_nexus_client.return_value = nexus
@@ -179,8 +203,8 @@ async def test_native_send_is_one_standalone_nexus_operation() -> None:
     )
 
     sent = nexus.execute_operation.await_args.args[1]
-    assert sent.session_id == "provider-session"
-    assert sent.expected_turn == 2
+    assert sent.message.task_id == "provider-session"
+    assert MessageToDict(sent.metadata)["expected_turn"] == 2
     assert nexus.execute_operation.await_args.kwargs["id"] == "broker-action-1"
     assert result == {
         "turn_number": 2,
@@ -194,11 +218,16 @@ async def test_native_send_can_defer_turn_reconciliation_to_agent_service() -> N
     temporal = MagicMock()
     nexus = MagicMock()
     nexus.execute_operation = AsyncMock(
-        return_value=SendMessageOutput(
-            turn_number=3,
-            turn_id="turn-3",
-            stream_head_offset=9,
-            pending=False,
+        return_value=SendMessageResponse(
+            task=Task(
+                id="provider-session",
+                metadata={
+                    "temporal.io/turn-number": 3,
+                    "temporal.io/turn-id": "turn-3",
+                    "temporal.io/accepted-offset": 9,
+                    "temporal.io/pending": False,
+                },
+            )
         )
     )
     temporal.create_nexus_client.return_value = nexus
@@ -215,7 +244,7 @@ async def test_native_send_can_defer_turn_reconciliation_to_agent_service() -> N
     )
 
     sent = nexus.execute_operation.await_args.args[1]
-    assert sent.expected_turn is None
+    assert "expected_turn" not in MessageToDict(sent.metadata)
 
 
 @patch("durable_tools_gateway.agent_broker.workflow.create_nexus_client")
@@ -235,9 +264,9 @@ async def test_subagent_discovery_reads_missed_lifecycle_and_live_status(
     )
     nexus.execute_operation = AsyncMock(
         side_effect=[
-            PollMessagesOutput(
+            SubscribeToTaskOutput(
                 items=[_subagent_stream_item("subagent_started", 4)],
-                next_offset=5,
+                next_cursor=5,
                 more_ready=False,
                 closed=False,
             ),
@@ -313,7 +342,9 @@ async def test_attach_stops_after_an_empty_poll_when_agent_is_idle(
     nexus = MagicMock()
     nexus.execute_operation = AsyncMock(
         side_effect=[
-            PollMessagesOutput(items=[], next_offset=3, more_ready=False, closed=False),
+            SubscribeToTaskOutput(
+                items=[], next_cursor=3, more_ready=False, closed=False
+            ),
             MagicMock(
                 turn_active=False,
                 pending_turns=[],
@@ -351,9 +382,9 @@ async def test_attach_stays_open_until_all_pending_approvals_resolve(
     nexus = MagicMock()
     nexus.execute_operation = AsyncMock(
         side_effect=[
-            PollMessagesOutput(
+            SubscribeToTaskOutput(
                 items=[_stream_item()],
-                next_offset=5,
+                next_cursor=5,
                 more_ready=False,
                 closed=False,
             ),
@@ -363,8 +394,8 @@ async def test_attach_stays_open_until_all_pending_approvals_resolve(
                 pending_approvals=[MagicMock()],
                 pending_callbacks=[],
             ),
-            PollMessagesOutput(
-                items=[], next_offset=5, more_ready=False, closed=False
+            SubscribeToTaskOutput(
+                items=[], next_cursor=5, more_ready=False, closed=False
             ),
             MagicMock(
                 turn_active=False,
@@ -403,8 +434,8 @@ async def test_attach_publishes_final_items_before_closing(
 ) -> None:
     nexus = MagicMock()
     nexus.execute_operation = AsyncMock(
-        return_value=PollMessagesOutput(
-            items=[_stream_item()], next_offset=5, more_ready=False, closed=True
+        return_value=SubscribeToTaskOutput(
+            items=[_stream_item()], next_cursor=5, more_ready=False, closed=True
         )
     )
     mock_create_client.return_value = nexus

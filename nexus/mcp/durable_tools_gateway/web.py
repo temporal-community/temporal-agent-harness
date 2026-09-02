@@ -54,15 +54,13 @@ from .registry_service_handler import (
     SubagentDispatchOutput,
     subagent_dispatch_activity_id,
 )
-from .resources import (
-    TEXT_AGENT_HANDLER,
-    AccountResourceRegistration,
-    ResourceDescriptor,
-)
+from .resources import AccountResourceRegistration, ResourceDescriptor
 from .tool_history import scan_external_tool_calls, scan_native_tool_calls
 
 logger = logging.getLogger(__name__)
 _EXTERNAL_EVENTS_PER_TURN = 4
+_SESSION_PROJECTION_TIMEOUT_SECONDS = 1.0
+_SESSION_PROJECTION_RETRY_SECONDS = 0.025
 
 
 class ExternalTurnHistoryUnavailable(Exception):
@@ -407,11 +405,21 @@ def create_account_agent_app(
         session_id: str,
     ) -> tuple[SessionRecord, ResourceDescriptor]:
         handle = await registry_handle()
-        session: SessionRecord | None = await handle.query(
-            ToolRegistryWorkflow.resolve_session,
-            session_id,
-            result_type=SessionRecord | None,
-        )
+        session: SessionRecord | None = None
+        deadline = time.monotonic() + _SESSION_PROJECTION_TIMEOUT_SECONDS
+        while True:
+            session = await handle.query(
+                ToolRegistryWorkflow.resolve_session,
+                session_id,
+                result_type=SessionRecord | None,
+            )
+            if (
+                session is not None
+                or session_id.startswith("session-")
+                or time.monotonic() >= deadline
+            ):
+                break
+            await asyncio.sleep(_SESSION_PROJECTION_RETRY_SECONDS)
         if session is None:
             raise HTTPException(status_code=404, detail="unknown account session")
         agent: ResourceDescriptor | None = await handle.query(
@@ -450,14 +458,18 @@ def create_account_agent_app(
             "delegation_lineage": [],
             "delegation_depth": 0,
             "max_delegation_depth": 5,
-            # Native AgentService reconciles its live turn when this is omitted.
+            # The native A2A adapter reconciles its live turn when this is omitted.
             "expected_turn": expected_turn,
             "idempotency_key": (f"{account_id}:{session.session_id}:{expected_turn}"),
         }
         result = await execute_action(
             AgentActionInput(
                 action="send",
-                session_id=session.provider_session_id,
+                session_id=(
+                    ""
+                    if agent.kind == "external_http" and not session.has_started
+                    else session.provider_session_id
+                ),
                 nexus_endpoint=agent.nexus_endpoint,
                 provider_url=agent.provider_url,
                 values=values,
@@ -465,6 +477,16 @@ def create_account_agent_app(
         )
         handle = await registry_handle()
         if agent.kind == "external_http":
+            provider_session_id = str(result.get("provider_instance_id") or "")
+            if (
+                provider_session_id
+                and provider_session_id != session.provider_session_id
+            ):
+                session = await handle.execute_update(
+                    ToolRegistryWorkflow.bind_session_provider,
+                    args=[session.session_id, provider_session_id],
+                    result_type=SessionRecord,
+                )
             turn_number = int(result["turn_number"])
             turn_id = str(result["turn_id"])
             output = _json_value(str(result["output"]))
@@ -663,8 +685,34 @@ def create_account_agent_app(
             label=req.label,
             description=req.description,
             endpoint=req.nexus_endpoint or req.provider_url or "",
-            service="AgentService" if req.kind == "harness_nexus" else None,
-            handlers=(TEXT_AGENT_HANDLER,),
+            service="A2AService" if req.kind == "harness_nexus" else None,
+            agent_card={
+                "name": req.label,
+                "description": req.description,
+                "version": "1.0.0",
+                "supportedInterfaces": [
+                    {
+                        "url": req.nexus_endpoint or req.provider_url or "",
+                        "protocolBinding": (
+                            "TEMPORAL_NEXUS"
+                            if req.kind == "harness_nexus"
+                            else "HTTP+JSON"
+                        ),
+                        "protocolVersion": "1.0",
+                    }
+                ],
+                "capabilities": {"streaming": True},
+                "defaultInputModes": ["text/plain"],
+                "defaultOutputModes": ["text/plain"],
+                "skills": [
+                    {
+                        "id": "ask",
+                        "name": "ask",
+                        "description": "Send a text message to this agent.",
+                        "tags": ["agent"],
+                    }
+                ],
+            },
         )
         result: ResourceDescriptor = await app.state.registry.execute_update(
             ToolRegistryWorkflow.register_agent,
@@ -759,6 +807,8 @@ def create_account_agent_app(
                     agent_key=str(item["agent_key"]),
                     provider_session_id=str(item["workflow_id"]),
                     next_expected_turn=int(item.get("next_expected_turn", 1)),
+                    has_started=bool(item.get("has_started", False))
+                    or int(item.get("next_expected_turn", 1)) > 1,
                 )
                 for item in values
             ]
@@ -873,34 +923,20 @@ def create_account_agent_app(
 
     @app.get("/api/agent-interface/{session_id}")
     async def agent_interface(session_id: str):
-        session, agent = await resolve_session(session_id)
-        if agent.kind == "external_http" or not session.has_started:
-            return [
-                {
-                    "name": "ask",
-                    "description": "Send a text message to this agent.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"text": {"type": "string"}},
-                        "required": ["text"],
-                    },
-                    "output": {"type": "object"},
-                }
-            ]
-        result = await execute_action(
-            AgentActionInput(
-                action="agent_interface",
-                session_id=session.provider_session_id,
-                nexus_endpoint=agent.nexus_endpoint,
-            )
-        )
+        _, agent = await resolve_session(session_id)
+        skills = (agent.agent_card or {}).get("skills", [])
         return [
             {
-                **handler,
-                "parameters": _json_value(handler["parameters"]),
-                "output": _json_value(handler["output"]),
+                "name": skill["id"],
+                "description": skill.get("description", skill.get("name", "")),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+                "output": {"type": "object"},
             }
-            for handler in result["handlers"]
+            for skill in skills
         ]
 
     @app.get("/api/operator-interface/{session_id}")
@@ -1160,9 +1196,8 @@ def create_account_agent_app(
                             )
                         )
                     )
-                    if (
-                        status.get("subagent_close_policy") == "ask-user"
-                        and status.get("subagents")
+                    if status.get("subagent_close_policy") == "ask-user" and status.get(
+                        "subagents"
                     ):
                         raise HTTPException(
                             status_code=409,

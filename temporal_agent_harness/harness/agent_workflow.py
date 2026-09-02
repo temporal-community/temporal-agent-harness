@@ -120,6 +120,14 @@ from temporal_agent_harness.harness.stream_poll import (
     bounded_poll_result,
     replay_stream_state,
 )
+with workflow.unsafe.imports_passed_through():
+    from temporal_agent_harness.a2a.nexus import (
+        A2A_STREAM_POLL_UPDATE,
+        A2A_STREAM_REPLAY_QUERY,
+        SubscribeToTaskInput,
+        SubscribeToTaskOutput,
+        subscription_page,
+    )
 
 # ParamSpec/return-type vars for the tool decorators. They let each be typed as an
 # identity over the wrapped callable (``Callable[P, Awaitable[R]] -> Callable[P,
@@ -1434,9 +1442,17 @@ class AgentWorkflowRunner:
             AGENT_STREAM_POLL_UPDATE,
             self._handle_stream_poll,
         )
+        workflow.set_update_handler(
+            A2A_STREAM_POLL_UPDATE,
+            self._handle_a2a_stream_poll,
+        )
         workflow.set_query_handler(
             AGENT_STREAM_REPLAY_QUERY,
             self._handle_stream_replay,
+        )
+        workflow.set_query_handler(
+            A2A_STREAM_REPLAY_QUERY,
+            self._handle_a2a_stream_replay,
         )
         workflow.set_query_handler(AGENT_STATUS_QUERY, self._handle_agent_status)
         workflow.set_query_handler(AGENT_INTERFACE_QUERY, self._handle_agent_interface)
@@ -2069,6 +2085,30 @@ class AgentWorkflowRunner:
     def _handle_stream_replay(self, input: AgentStreamPollInput) -> AgentStreamPollResult:
         """Read a bounded stream page through a query, including after completion."""
         return replay_stream_state(self._stream.get_state(), input)
+
+    async def _handle_a2a_stream_poll(
+        self, input: SubscribeToTaskInput
+    ) -> SubscribeToTaskOutput:
+        result = await self._handle_stream_poll(
+            AgentStreamPollInput(
+                from_offset=input.cursor,
+                topics=[TURN_EVENTS_TOPIC],
+                timeout_seconds=input.timeout_seconds,
+            )
+        )
+        return subscription_page(result)
+
+    def _handle_a2a_stream_replay(
+        self, input: SubscribeToTaskInput
+    ) -> SubscribeToTaskOutput:
+        result = self._handle_stream_replay(
+            AgentStreamPollInput(
+                from_offset=input.cursor,
+                topics=[TURN_EVENTS_TOPIC],
+                timeout_seconds=input.timeout_seconds,
+            )
+        )
+        return subscription_page(result, closed=True)
 
     # -- Turn loop ----------------------------------------------------------
 

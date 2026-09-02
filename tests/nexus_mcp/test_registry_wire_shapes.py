@@ -18,9 +18,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import temporalio.nexus
-from mcp.types import CallToolResult, TextContent
-from temporalio.converter import DataConverter
-
 from durable_tools_gateway.generated import (
     CallToolInput,
     CallToolInputArguments,
@@ -36,11 +33,13 @@ from durable_tools_gateway.registry import (
     account_registry_workflow_id,
     fetch_external_tools,
 )
-from durable_tools_gateway.resources import ResourceDescriptor, TEXT_AGENT_HANDLER
 from durable_tools_gateway.registry_service_handler import (
     RegistryServiceHandler,
     mcp_proxy_activity,
 )
+from durable_tools_gateway.resources import ResourceDescriptor, text_agent_card
+from mcp.types import CallToolResult, TextContent
+from temporalio.converter import DataConverter
 
 _payload_converter = DataConverter.default.payload_converter
 _FAKE_NEXUS_INFO = temporalio.nexus.Info(
@@ -92,8 +91,13 @@ async def test_resolve_toolbox_filters_self_ancestors_and_max_depth() -> None:
             "Parent",
             "",
             "parent-endpoint",
-            "AgentService",
-            (TEXT_AGENT_HANDLER,),
+            "A2AService",
+            text_agent_card(
+                name="Parent",
+                description="",
+                endpoint="parent-endpoint",
+                transport="nexus",
+            ),
         ),
         "child": ResourceDescriptor(
             "child",
@@ -103,8 +107,13 @@ async def test_resolve_toolbox_filters_self_ancestors_and_max_depth() -> None:
             "Child",
             "",
             "child-endpoint",
-            "AgentService",
-            (TEXT_AGENT_HANDLER,),
+            "A2AService",
+            text_agent_card(
+                name="Child",
+                description="",
+                endpoint="child-endpoint",
+                transport="nexus",
+            ),
         ),
         "tool": ResourceDescriptor(
             "tool", 1, "mcp", "nexus", "Tool", "", "tool-endpoint", "tool-service"
