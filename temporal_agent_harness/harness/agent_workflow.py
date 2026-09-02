@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import contextvars
 import inspect
 import json
@@ -45,7 +46,7 @@ from temporalio.contrib.workflow_streams import (
     WorkflowStreamClient,
     WorkflowTopicHandle,
 )
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ApplicationError, FailureError
 from temporalio.workflow import ActivityConfig
 
 from temporal_agent_harness.harness.agent_protocol import (
@@ -151,6 +152,13 @@ _INJECTED = _InjectedMarker()
 CustomApprovalFallback = Callable[[ToolApprovalContext], bool]
 
 _SLASH_MESSAGE_TYPE = "slash"
+
+# How much of the stream's log a rollover carries to its successor. The log IS the history the
+# rollover exists to shed, so carrying it whole would hand the successor a payload as large as
+# the problem and leave it over the threshold on its first turn. What is given up is deep
+# replay: a browser tab opened fresh after a rollover shows recent transcript rather than the
+# whole conversation. See ``AgentWorkflowRunner._truncate_stream_for_handover``.
+_STREAM_HANDOVER_BUDGET_BYTES = 256 * 1024
 
 # Harness default publish-flush cadence for activity-side stream publishers (see
 # ``AgentWorkflowRunner.publisher_from_activity``). Each flush is one Signal into the
@@ -1118,6 +1126,11 @@ class _WorkflowStatus:
     is surfaced on the ``agent_status`` query. ``has_custom_approval_fallback`` records
     only whether a developer fallback predicate is wired (for the status query); the
     predicate itself lives on the runner, never here.
+
+    ``resume`` rehydrates the parts of this state that must survive a continue-as-new: the turn
+    counter, the queue of accepted-but-unstarted messages, and the subagent registry. The two
+    registries it does NOT rehydrate — approvals and callbacks — are discussed at
+    :meth:`resume_state`.
     """
 
     def __init__(
@@ -1127,14 +1140,19 @@ class _WorkflowStatus:
         is_message_queuing_enabled: bool,
         approval_policy: ToolApprovalPolicy,
         has_custom_approval_fallback: bool = False,
+        resume: AgentResumeState | None = None,
     ) -> None:
         # This agent's own short id — stamped on every event (via current_stream_context for
         # activity publishes, and _pub for in-workflow ones) and surfaced on the status query.
         self._agent_id: str = agent_id
-        self._current_turn: int = 0
+        self._current_turn: int = resume.turn_number if resume is not None else 0
         self._current_turn_id: str | None = None
         self._turn_active: bool = False
-        self._pending_turns: list[tuple[AgentMessage, str]] = []
+        self._pending_turns: list[tuple[AgentMessage, str]] = (
+            [(queued.message, queued.turn_id) for queued in resume.pending_turns]
+            if resume is not None
+            else []
+        )
         self._is_message_queuing_enabled: bool = is_message_queuing_enabled
         self._approval_policy: ToolApprovalPolicy = approval_policy
         self._has_custom_approval_fallback: bool = has_custom_approval_fallback
@@ -1144,8 +1162,22 @@ class _WorkflowStatus:
         # Callback tool calls awaiting a client-supplied result, keyed by per-call tool id.
         # Entries are retained after resolution (status flips) for idempotency.
         self._callbacks: dict[str, _CallbackEntry] = {}
-        # Subagents this agent is driving, keyed by child ``subagent_id``.
-        self._subagents: dict[str, _SubagentInstance] = {}
+        # Subagents this agent is driving, keyed by child ``subagent_id``. Re-adopted across a
+        # rollover: the children outlive it, and are addressed by workflow id either way.
+        self._subagents: dict[str, _SubagentInstance] = (
+            {
+                handoff.handle: _SubagentInstance(
+                    handle=handoff.handle,
+                    workflow_id=handoff.workflow_id,
+                    agent_key=handoff.agent_key,
+                    next_expected_turn=handoff.next_expected_turn,
+                    last_consumed_offset=handoff.last_consumed_offset,
+                )
+                for handoff in resume.subagents
+            }
+            if resume is not None
+            else {}
+        )
 
     @property
     def current_turn(self) -> int:
@@ -1429,6 +1461,63 @@ class _WorkflowStatus:
             for inst in self._subagents.values()
         ]
 
+    # -- Continue-as-new ----------------------------------------------------
+
+    def is_quiescent(self) -> bool:
+        """Whether nothing is parked that a run boundary would strand.
+
+        The rollover point sits at the top of the turn loop, where no turn is in flight and so
+        no approval or callback gate can be waiting — both are ``wait_condition`` frames inside a
+        tool body, and a tool body only runs inside a turn. This asserts that rather than
+        assuming it, because the cost of being wrong is a gate whose Python frame is
+        reconstructed by replay and therefore cannot cross the boundary: the human's decision
+        would arrive for a call nobody is waiting on any more.
+        """
+        return (
+            not self._turn_active
+            and not self.pending_approvals()
+            and not self.pending_callbacks()
+        )
+
+    def resume_state(self) -> tuple[int, list[QueuedTurn], list[SubagentHandoff]]:
+        """The parts of this state a successor run needs: turn number, queue, subagents.
+
+        Two registries are deliberately left behind rather than carried, and the reasoning is
+        the same for both. Resolved approval and callback entries are retained during a run so
+        the update validators can reject a second decision for a ``tool_id`` that is already
+        settled — an idempotency guard, not a record. Carrying them would reproduce inside the
+        rollover payload exactly the unbounded growth the rollover exists to stop, since nothing
+        ever prunes them.
+
+        Dropping them keeps the guard's actual promise. A late duplicate decision for a tool id
+        from a previous run is still rejected; it is rejected as ``UnknownToolApproval`` instead
+        of ``ToolApprovalAlreadyResolved``, which is a different sentence for the same refusal
+        and reaches the client as the same error either way. What can never happen — a settled
+        decision being flipped — still cannot happen. And no entry can be *pending* here,
+        because :meth:`is_quiescent` has already established that.
+        """
+        return (
+            self._current_turn,
+            [
+                QueuedTurn(message=message, turn_id=turn_id)
+                for message, turn_id in self._pending_turns
+            ],
+            [
+                SubagentHandoff(
+                    handle=inst.handle,
+                    workflow_id=inst.workflow_id,
+                    agent_key=inst.agent_key,
+                    next_expected_turn=inst.next_expected_turn,
+                    last_consumed_offset=inst.last_consumed_offset,
+                )
+                for inst in self._subagents.values()
+            ],
+        )
+
+    def subagent_handles(self) -> list[str]:
+        """Every registered subagent's handle, as a snapshot safe to iterate while stopping them."""
+        return list(self._subagents)
+
     def to_agent_status(self) -> AgentStatus:
         return AgentStatus(
             agent_id=self._agent_id,
@@ -1460,8 +1549,7 @@ class AgentWorkflowRunner:
     """Workflow-side agent runtime: discovers ``@agent.accepts`` handlers and dispatches.
 
     Construct it directly inside ``@workflow.init`` with the agent's :class:`AgentConfig`
-    plus the agent's defaults (``stream`` and ``approval_policy_default`` are required); see
-    :meth:`__init__`.
+    plus the agent's defaults (``approval_policy_default`` is required); see :meth:`__init__`.
 
     Registers the update, query, and signal handlers the ``AgentClient`` protocol requires;
     routes each inbound ``send_agent_message`` envelope to the handler named by its ``type``
@@ -1474,7 +1562,7 @@ class AgentWorkflowRunner:
         self,
         config: AgentConfig,
         *,
-        stream: WorkflowStream,
+        stream: WorkflowStream | None = None,
         approval_policy_default: ToolApprovalPolicy,
         enable_message_queuing_default: bool = False,
         custom_approval_fallback: CustomApprovalFallback | None = None,
@@ -1484,7 +1572,6 @@ class AgentWorkflowRunner:
 
             self._runner = AgentWorkflowRunner(
                 config,
-                stream=WorkflowStream(),
                 approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
             )
 
@@ -1498,6 +1585,13 @@ class AgentWorkflowRunner:
         human/operator slash command registry used by both first-class operator updates
         and normal ``slash`` turns. If omitted, the packaged harness defaults are enabled;
         pass an empty iterable to disable packaged slash commands.
+
+        ``stream`` is optional and normally omitted: the runner builds its own, which is what
+        lets it hand the stream's state to a successor run at continue-as-new (see
+        :meth:`_continue_as_new`). Passing one is the escape hatch for an agent that needs to
+        share or configure the stream itself, and it trades away rollover — the runner can only
+        construct the successor's ``WorkflowStream(prior_state=...)`` for a stream it built. See
+        :meth:`_warn_if_stream_defeats_the_hooks`.
         """
         # The runner is built inside the agent's @workflow.init; enforce here that the
         # enclosing workflow honors the standardized agent-input contract (run/__init__
@@ -1509,6 +1603,11 @@ class AgentWorkflowRunner:
         cls = _enclosing_workflow_class()
         self._handlers: dict[str, _AcceptedHandler] = (
             agent_handlers(cls) if cls is not None else {}
+        )
+        # The agent's continue-as-new hooks, or None if it declares none — in which case the
+        # session simply never rolls over. Same discovery route as the handlers.
+        self._resumption_hooks: ResumptionHooks | None = (
+            agent_resumption_hooks(cls) if cls is not None else None
         )
         self._slash_commands: tuple[SlashCommandDefinition, ...] = tuple(
             slash_commands if slash_commands is not None else default_commands()
@@ -1532,11 +1631,24 @@ class AgentWorkflowRunner:
         # generates its own. workflow.uuid4 is deterministic in-workflow (offline unit tests patch
         # it). Distinct from the full workflow_id, which the model/UI never needs to reproduce.
         self._agent_id: str = config.agent_id or workflow.uuid4().hex[:AGENT_ID_LENGTH]
+        # State handed over by this session's previous run, if it has rolled over before. Held
+        # for ``run``, which applies the author's half of it (``@agent.restore``) — the runner
+        # has the agent instance there and not here, and restoring in __init__ would in any case
+        # be clobbered by the constructor line that sets the empty default.
+        self._resume = config.resume
         # Retain the WorkflowStream itself (not just the topic handle) so the runner can read
         # the stream's current head offset in-workflow — see ``_handle_send_agent_message``,
         # which returns it as ``AgentMessageReply.accepted_offset`` for the client stream-merge.
-        self._stream = stream
-        self._events: WorkflowTopicHandle[AgentEvent] = stream.topic(
+        # A runner-built stream is rebuilt from the predecessor's log on a rollover, which is
+        # what keeps global offsets monotonic for an attached reader across the boundary.
+        self._owns_stream = stream is None
+        self._stream = (
+            WorkflowStream(prior_state=config.resume.stream if config.resume else None)
+            if stream is None
+            else stream
+        )
+        self._warn_if_stream_defeats_the_hooks()
+        self._events: WorkflowTopicHandle[AgentEvent] = self._stream.topic(
             TURN_EVENTS_TOPIC, type=AgentEvent
         )
         self._custom_approval_fallback = custom_approval_fallback
@@ -1545,8 +1657,19 @@ class AgentWorkflowRunner:
             is_message_queuing_enabled=is_message_queuing_enabled,
             approval_policy=approval_policy,
             has_custom_approval_fallback=custom_approval_fallback is not None,
+            resume=config.resume,
         )
+        # The resolved knob, kept so the successor run can be started with the value this run is
+        # actually operating under rather than the caller's original blank. A ``None`` in
+        # ``AgentConfig`` means "the caller did not specify", and the agent's own default fills
+        # it — but a rollover is not a new caller, so the resolved value travels as if specified.
+        self._is_message_queuing_enabled = is_message_queuing_enabled
         self._closed = False
+        # Turns completed since THIS run started. The rollover guard requires at least one, which
+        # is what makes progress monotonic: if a session's carried state were by itself large
+        # enough to keep ``is_continue_as_new_suggested`` true, an unguarded check would roll the
+        # session over forever without ever answering anybody.
+        self._turns_this_run = 0
 
         # Register protocol handlers dynamically so the containing workflow doesn't need to.
         workflow.set_update_handler(
@@ -2178,13 +2301,52 @@ class AgentWorkflowRunner:
         — the single reliable end-of-turn signal — before looping. A handler that raises
         does NOT end the session: its error surfaces as an :class:`AgentError` and the loop
         continues with the next message.
+
+        A long enough session rolls itself over into a fresh run between turns rather than
+        growing its history until Temporal refuses it (see :meth:`_continue_as_new`). On every
+        other exit path, the agent's still-running subagents are stopped through the same front
+        door a person uses — see :meth:`_stop_subagents`, and the ``ABANDON`` in
+        :meth:`start_subagent` that makes it necessary.
         """
+        self._apply_restore(agent)
+        try:
+            rolling_over = await self._run_turns(agent)
+        except asyncio.CancelledError:
+            # A cancelled session still owes its subagents a shutdown, and the shield is what
+            # buys the time to give them one: without it the first await inside the cleanup is
+            # cancelled too, and the children are simply orphaned. Deliberately narrower than
+            # BaseException — an eviction unwinds this coroutine from outside the workflow's
+            # event loop, where awaiting anything at all is a bug.
+            await asyncio.shield(self._stop_subagents())
+            raise
+        except Exception:
+            await self._stop_subagents()
+            raise
+        if rolling_over:
+            # The successor re-adopts this agent's subagents by workflow id, so they must NOT be
+            # stopped here — the conversation is continuing, only the run is being replaced.
+            await self._continue_as_new(agent)
+        await self._stop_subagents()
+
+    async def _run_turns(self, agent: object) -> bool:
+        """The turn loop proper. Returns True if it stopped in order to continue as new."""
         while not self._closed:
+            if self._rollover_ready():
+                return True
+            self._warn_if_rollover_blocked()
+            # An idle session is not a quiet one: attached browsers keep long-polling the
+            # stream, and each poll is history. So the threshold is watched while waiting and
+            # not only after a turn, or a session left open overnight would sail past it and
+            # only notice when somebody finally typed something.
             await workflow.wait_condition(
-                lambda: self._status.has_pending_turns or self._closed
+                lambda: self._status.has_pending_turns
+                or self._closed
+                or self._rollover_ready()
             )
             if self._closed:
                 break
+            if not self._status.has_pending_turns:
+                continue
             envelope, turn_id = self._status.start_next_turn()
             turn_number = self._status.current_turn
             self._pub(
@@ -2204,7 +2366,232 @@ class AgentWorkflowRunner:
                 # returned or raised. Mark idle, then announce turn_end (the definitive
                 # end-of-turn signal) before looping back to wait for the next message.
                 self._status.complete_turn()
+                self._turns_this_run += 1
                 self._pub(turn_id, turn_number, TurnEnded())
+        return False
+
+    # -- Continue-as-new ----------------------------------------------------
+    #
+    # Agent history is dominated by the observability layer rather than by agent work: the
+    # stream publishes and the browser's long polls that consume them account for most of it,
+    # and they scale with how long a turn streams rather than with what it does. A conversation
+    # therefore approaches Temporal's hard limits on wall-clock talking time, and the failure
+    # mode is the worst available one — a workflow somebody is mid-sentence with, dying, with
+    # the whole conversation inside it.
+    #
+    # There is exactly one point in a session where rolling over is possible. A turn's state
+    # lives in the Python call stack of ``_dispatch_turn``, and possibly several frames deeper
+    # inside an approval or callback gate; those frames are reconstructed by replay rather than
+    # serialized, so none of them can cross a run boundary. The top of the loop — after
+    # ``turn_end``, before the next turn starts — is the only place where no such frame exists.
+
+    def _rollover_ready(self) -> bool:
+        """Whether to hand this session to a fresh run now.
+
+        Temporal's own suggestion is the trigger; everything else here is a veto, and each one
+        exists because ignoring it loses something:
+
+        * **The author's hooks.** Without ``@agent.snapshot`` / ``@agent.restore`` the harness
+          cannot carry the conversation, and an agent that rolls over having forgotten it is
+          worse than one whose history keeps growing.
+        * **A stream this runner owns.** Handing over stream state means constructing the
+          successor's ``WorkflowStream`` with it, which is only possible for a stream the runner
+          built (see :meth:`__init__`).
+        * **Quiescence.** Enforced by construction at this point in the loop, and asserted
+          anyway — see :meth:`_WorkflowStatus.is_quiescent`.
+        * **A turn completed in this run.** The one guard that is about the rollover itself
+          rather than about what it would break. If a session's carried state were large enough
+          on its own to keep Temporal suggesting a rollover, a check without this would roll the
+          session over immediately, repeatedly, and forever, and no message would ever be
+          answered. Requiring a completed turn makes the loop provably productive: at worst the
+          session rolls over once per turn, which is wasteful but not stuck.
+
+        A session vetoed here is not broken — it behaves exactly as every session did before
+        rollover existed. It is reported instead by :meth:`_warn_if_rollover_blocked`, which is
+        kept separate because this is also the predicate the loop waits on: a predicate is
+        evaluated an unspecified number of times, so it has to be free of side effects.
+        """
+        return (
+            workflow.info().is_continue_as_new_suggested()
+            and self._turns_this_run >= 1
+            and self._rollover_blocked_reason() is None
+        )
+
+    def _warn_if_rollover_blocked(self) -> None:
+        """Say why a session that is over the threshold is not rolling over.
+
+        Called once per turn rather than once per run: the reason can only change if the
+        session stops being quiescent, and a periodic reminder is what makes "why is this
+        session's history still growing" answerable from the outside at all.
+        """
+        if not workflow.info().is_continue_as_new_suggested():
+            return
+        reason = self._rollover_blocked_reason()
+        if reason is None:
+            return
+        workflow.logger.warning(
+            "Agent %s is over Temporal's continue-as-new threshold but cannot roll over: "
+            "%s. Its history will keep growing.",
+            self._agent_id,
+            reason,
+        )
+
+    def _warn_if_stream_defeats_the_hooks(self) -> None:
+        """Say at construction that a supplied ``stream`` has switched rollover back off.
+
+        The two facts are both in hand here — the class declares the pair, and this runner did
+        not build its stream — and together they are almost certainly a mistake. Nobody writes
+        ``@agent.snapshot`` / ``@agent.restore`` intending to opt out of rollover, because not
+        writing them is already the opt-out.
+
+        A warning rather than the ``TypeError`` the half-pair gets, and the difference is where
+        each can be caught rather than how bad each is. A half-pair is visible on the class, so
+        it fails at import, before any session exists, and costs nothing. This combination is
+        only knowable once the runner is constructed, which happens inside ``@workflow.init`` —
+        at which point raising fails the workflow task, and Temporal retries a failed workflow
+        task forever, so every live session of a deployed agent would hang on its next turn with
+        no way for its author to opt out but to delete the hooks. Trading a disabled optimisation
+        for a stuck conversation is the wrong direction.
+
+        What it does fix is the timing. :meth:`_warn_if_rollover_blocked` says the same thing,
+        but only once a session is over Temporal's threshold — hours into a real conversation,
+        long after the line that caused it was written. This lands on the first turn of the first
+        run, which is where an author is still looking.
+
+        ``workflow.logger`` is the right logger and only works from inside the workflow's event
+        loop: it skips replays, so this is said once per run rather than once per replayed
+        workflow task. A runner built outside a workflow at all is an offline unit test, which
+        has no session to warn anybody about — the same reason
+        :func:`_assert_standardized_agent_signature` steps aside there.
+        """
+        if self._resumption_hooks is None or self._owns_stream or not workflow.in_workflow():
+            return
+        workflow.logger.warning(
+            "Agent %s declares @agent.snapshot / @agent.restore but was built with a stream it "
+            "did not create, so its sessions will never continue as new and their history will "
+            "grow for the life of each conversation. Handing a stream's log to the successor run "
+            "means constructing that run's WorkflowStream, which the runner can only do for one "
+            "it built. Drop the stream= argument to get the rollover the hooks were written for; "
+            "keep it only if sharing or configuring the stream matters more.",
+            self._agent_id,
+        )
+
+    def _rollover_blocked_reason(self) -> str | None:
+        """Why this session cannot roll over, or ``None`` if it can."""
+        if self._resumption_hooks is None:
+            return (
+                "the agent declares no @agent.snapshot / @agent.restore pair, so its "
+                "conversation cannot be carried to a new run"
+            )
+        if not self._owns_stream:
+            return (
+                "its WorkflowStream was supplied by the agent rather than built by the "
+                "runner, so the runner cannot hand the stream's state to a new run"
+            )
+        if not self._status.is_quiescent():
+            return "a turn, approval, or callback is still in flight"
+        return None
+
+    def _apply_restore(self, agent: object) -> None:
+        """Give the agent back the conversation state its previous run snapshotted.
+
+        Runs once, before the first turn of a resumed run — after ``@workflow.init`` has set
+        whatever empty default the author wrote, which is the whole reason it cannot happen at
+        construction time.
+        """
+        if self._resume is None or self._resume.conversation is None:
+            return
+        hooks = self._resumption_hooks
+        if hooks is None:
+            # Only reachable if an agent's hooks were removed while a rolled-over session was
+            # live. Losing the conversation silently would be the worst outcome; say so.
+            workflow.logger.warning(
+                "Agent %s was resumed with carried conversation state but no @agent.restore "
+                "hook to receive it. The conversation has been dropped.",
+                self._agent_id,
+            )
+            return
+        hooks.restore(agent, self._resume.conversation)
+
+    async def _continue_as_new(self, agent: object) -> NoReturn:
+        """Hand this session to a fresh run and never return.
+
+        The order matters and is not the SDK's packaged ``WorkflowStream.continue_as_new``
+        recipe, because one step has to happen in the middle of it. ``detach_pollers`` releases
+        every attached client's in-flight long poll — each returns its current batch, so nobody
+        loses the events already published — and rejects new ones with a well-known error their
+        subscriber recognizes as "rolling over, retry", which lands them on the successor.
+        Waiting for ``all_handlers_finished`` then guarantees no update is still running when
+        state is read.
+
+        Only then can the log be pruned, which is the step the packaged recipe has no room for:
+        it snapshots the stream itself. Pruning is not an optimisation here but the point of the
+        exercise — the stream log IS the history this rollover exists to shed, and carrying it
+        whole would hand the successor a payload as large as the problem, leaving it over the
+        threshold on its first turn.
+
+        The author's blob is checked against its contract before any of that (see
+        :func:`_assert_json_native_snapshot`). Failing here fails the workflow task, which
+        Temporal retries indefinitely — so the session pauses with the reason on its pending
+        task and resumes, conversation intact, once the hook is fixed and the worker redeployed.
+        Nothing is lost, which is not true of the alternative: rolling over with a blob that
+        degrades on the way loses the conversation's types permanently and says nothing.
+        """
+        assert self._resumption_hooks is not None  # guarded by _rollover_ready
+        conversation = _assert_json_native_snapshot(
+            type(agent).__name__, self._resumption_hooks.snapshot(agent)
+        )
+        self._stream.detach_pollers()
+        await workflow.wait_condition(workflow.all_handlers_finished)
+        self._truncate_stream_for_handover()
+        turn_number, pending_turns, subagents = self._status.resume_state()
+        workflow.continue_as_new(
+            AgentConfig(
+                # Every knob travels as a caller-specified value: this run already resolved the
+                # agent's defaults against the original config, and a rollover must not re-run
+                # that resolution against a default the author has since changed.
+                is_message_queuing_enabled=self._is_message_queuing_enabled,
+                approval_policy=self._status.approval_policy,
+                agent_id=self._agent_id,
+                resume=AgentResumeState(
+                    turn_number=turn_number,
+                    conversation=conversation,
+                    stream=self._stream.get_state(),
+                    pending_turns=pending_turns,
+                    subagents=subagents,
+                ),
+            ),
+            # A successor inherits the memo the CURRENT RUN STARTED WITH, not the one it has
+            # now, so anything upserted since is dropped unless it is passed forward explicitly.
+            # Passing the live memo whole keeps keys this runner does not know about, which is
+            # how it should behave towards anything added later.
+            memo=workflow.memo(),
+        )
+
+    def _truncate_stream_for_handover(self) -> None:
+        """Drop all but a bounded tail of the stream log before it is carried.
+
+        Global offsets stay monotonic across the truncation, so a client that followed the
+        rollover resumes at exactly the offset it left off at — it is polling at the head, which
+        is always retained. What is given up is deep replay: a browser tab opened fresh after a
+        rollover asks for the stream from the beginning and receives whatever survived, so it
+        shows recent transcript rather than the whole conversation. The stream treats offset zero
+        as "from whatever exists", so this degrades to a shorter scrollback rather than an error.
+
+        That is a real loss and it is the right trade. The alternative is carrying megabytes of
+        streamed text into the payload that exists to make the next run small.
+        """
+        state = self._stream.get_state()
+        budget = _STREAM_HANDOVER_BUDGET_BYTES
+        keep_from = state.base_offset + len(state.log)
+        for item in reversed(state.log):
+            # ``item.data`` is already the carried form (base64 of the serialized payload), so
+            # this measures the bytes that will actually travel rather than an estimate of them.
+            budget -= len(item.data)
+            if budget < 0:
+                break
+            keep_from -= 1
+        self._stream.truncate(keep_from)
 
     async def _dispatch_turn(self, agent: object, envelope: AgentMessage) -> BaseModel:
         """Dispatch one already-validated turn envelope and return its reply model."""
@@ -2296,26 +2683,19 @@ class AgentWorkflowRunner:
             child_config,
             id=workflow_id,
             task_queue=task_queue,
-            # EXPLICIT: a subagent is owned by its parent and must never outlive it. If the
-            # parent closes for ANY reason (its own `close` signal, completion, failure,
-            # cancellation, or termination) before `stop_subagent` was called, the Temporal
-            # server terminates this child. We pin TERMINATE rather than rely on the SDK
-            # default so the guarantee can't silently change. (Graceful shutdown of a still-
-            # wanted subagent is the explicit `stop_subagent` path, which sends `close`.)
+            # EXPLICIT, and the opposite of what a subagent's ownership would suggest at first
+            # reading. Continue-as-new IS a parent close, so under the TERMINATE this replaces,
+            # a parent's first rollover would kill every subagent it was driving, mid-turn, for
+            # a conversation that is in fact continuing on the successor run.
             #
-            # TODO: we may prefer to handle parent shutdown more gracefully than a hard
-            # TERMINATE (which kills the child mid-turn with no cleanup — no `close` handling,
-            # no chance to finalize in-flight work). Two candidate approaches:
-            #   1. REQUEST_CANCEL — the server requests cancellation of the child on parent
-            #      close, letting a child that handles cancellation tear down gracefully
-            #      (requires the harness agent loop to treat cancellation as a clean stop).
-            #   2. A workflow finalization/cleanup hook on the parent that, before it exits,
-            #      stops every still-registered subagent through the SAME "front door" a
-            #      human/UI uses — i.e. `stop_subagent` → the `close` signal — so children
-            #      shut down via their normal graceful path rather than being killed by the
-            #      server. (This keeps shutdown semantics uniform with manual stops, but must
-            #      run on every parent-exit path, including failure/cancellation.)
-            parent_close_policy=workflow.ParentClosePolicy.TERMINATE,
+            # ABANDON gives up the server's guarantee that a subagent never outlives its parent,
+            # so the parent makes good on that guarantee itself: ``_stop_subagents`` runs on
+            # every exit path EXCEPT the rollover and closes each registered child through the
+            # same front door a person uses — ``stop_subagent`` and its ``close`` signal — so a
+            # child shuts down the way it always does rather than being killed mid-turn. The gap
+            # that leaves is a parent which never runs code again (terminated, or its worker
+            # gone), where nothing on the parent side could have helped anyway.
+            parent_close_policy=workflow.ParentClosePolicy.ABANDON,
         )
         self._status.register_subagent(handle, workflow_id, agent_key)
         # Announce the subagent on this agent's stream (against the in-flight turn). The
@@ -2328,23 +2708,88 @@ class AgentWorkflowRunner:
         )
         return handle
 
-    async def stop_subagent(self, handle: str) -> None:
-        """Signal a subagent to close and drop it from the registry.
+    def _release_subagent(self, handle: str) -> _SubagentInstance:
+        """Drop a subagent from the registry, announce it, and return its entry to be signalled.
 
-        Raises ``UnknownSubagent`` if ``handle`` isn't one this agent started. Resolves the
-        handle to the child ``workflow_id``, sends it the harness ``close`` signal (the same one
-        a human/UI uses), publishes :class:`SubagentStopped` (so a consumer can unmount its
-        stream), then deregisters so a later ``send_<function>`` to ``handle`` is rejected."""
+        Raises ``UnknownSubagent`` if ``handle`` isn't one this agent started. Otherwise
+        deregisters (so a later ``send_<function>`` to ``handle`` is rejected) and publishes
+        :class:`SubagentStopped` (so a consumer can unmount the child's stream).
+
+        Synchronous, and separated from the signal that follows it, for two reasons.
+
+        **Nothing that can fail precedes the cleanup.** The one step before it is the ownership
+        lookup, which is what the call is for. Signalling first — as this did — put both the
+        deregistration and the announcement behind an await that fails whenever the child has
+        already gone (stopped concurrently, terminated, its history dropped), and the handle
+        then stayed in the registry for the life of the workflow.
+
+        **The announcement is deliverable.** An event published in the same activation that
+        completes the workflow is durable but unreadable: the run closes before a subscriber's
+        next poll can be admitted. Being synchronous, this runs entirely before the first
+        signal's await, so on the teardown path (:meth:`_stop_subagents`) every stop record is
+        published in one activation — a batch an attached poll is woken with, one server round
+        trip before the run can end.
+        """
         inst = self._status.subagent(handle)  # validate ownership (raises UnknownSubagent)
-        await workflow.get_external_workflow_handle(inst.workflow_id).signal("close")
-        self.publish(
+        self._status.remove_subagent(handle)
+        self._publish_session_event(
             SubagentStopped(
                 subagent_id=inst.handle,
                 agent_key=inst.agent_key,
                 workflow_id=inst.workflow_id,
             )
         )
-        self._status.remove_subagent(handle)
+        return inst
+
+    async def stop_subagent(self, handle: str) -> None:
+        """Stop a subagent this agent is driving: drop it, announce it, then close it.
+
+        Raises ``UnknownSubagent`` if ``handle`` isn't one this agent started. The child is sent
+        the harness ``close`` signal — the same one a human/UI uses — so it winds its own turn
+        loop down rather than being killed mid-turn. The signal's failure propagates; it is the
+        caller's to report (:meth:`_stop_subagents` logs it, the tool layer renders it as a tool
+        result the model can read). See :meth:`_release_subagent` for why that ordering is
+        load-bearing."""
+        inst = self._release_subagent(handle)
+        await workflow.get_external_workflow_handle(inst.workflow_id).signal("close")
+
+    async def _stop_subagents(self) -> None:
+        """Stop every subagent this agent still owns, on the way out.
+
+        The counterpart to the ``ABANDON`` parent-close policy in :meth:`start_subagent`. That
+        policy is what lets a rollover keep its children — but it also gives up the server's
+        guarantee that a subagent never outlives its parent, so the parent has to make good on
+        that guarantee itself, through the same front door a person uses.
+
+        Best-effort by construction. It runs on the failure path as well as the ordinary one, so
+        a child that has already gone (stopped concurrently, terminated, its history dropped)
+        must not turn a real failure into a confusing one. "Best-effort" is scoped to that one
+        class of failure and no wider: a child that has gone always arrives as a Temporal
+        :class:`FailureError`, so tolerating exactly that leaves any other bug in this teardown
+        path loud.
+
+        Every child is released before any is signalled, rather than one at a time. The releases
+        are synchronous, so this publishes the whole session's stop records in a single
+        activation and leaves the signals — and the run's own completion — after them, which is
+        what makes the last child's record as readable as the first's (see
+        :meth:`_release_subagent`).
+        """
+        # A list, not a generator: laziness would interleave the releases with the signals and
+        # put the last child's record back in the completing activation.
+        for inst in [
+            self._release_subagent(handle) for handle in self._status.subagent_handles()
+        ]:
+            try:
+                await workflow.get_external_workflow_handle(inst.workflow_id).signal(
+                    "close"
+                )
+            except FailureError:
+                workflow.logger.warning(
+                    "Agent %s could not stop subagent %s during shutdown.",
+                    self._agent_id,
+                    inst.handle,
+                    exc_info=True,
+                )
 
     async def run_subagent_turn(
         self, handle: str, msg_type: str, payload: dict[str, Any]
@@ -2495,11 +2940,38 @@ class AgentWorkflowRunner:
         Most agents never need this — streaming (reply deltas, tool lifecycle) is handled
         by the runner↔SDK integration and ``run_tool``. Use it from inside a handler to
         emit a bespoke progress event. Raises if no turn is active.
+
+        The precondition is deliberate and stays. An author's event is about work the agent is
+        doing for somebody, so there is always a turn it belongs to; an event that escapes the
+        ``turn_started`` … ``turn_end`` bracket is one a console's transcript cannot place. The
+        harness's own session-scoped records go through :meth:`_publish_session_event` instead,
+        which is not the same door on purpose.
         """
         ctx = self.current_stream_context
         if ctx is None:
             raise RuntimeError("publish() called with no active turn")
         self._pub(ctx.turn_id, ctx.turn_number, event)
+
+    def _publish_session_event(self, event: AgentStreamItem) -> None:
+        """Publish a harness record that belongs to the SESSION rather than to one turn.
+
+        There is exactly one such record today: a subagent torn down on the way out of a session
+        (:meth:`_stop_subagents`), which happens after the last ``turn_end`` and so has no turn
+        to be attributed to. When a turn IS in flight — the model calling ``stop_<key>`` — the
+        event is published against it, because there it really is part of that turn's work and a
+        consumer should see it there.
+
+        Outside a turn it takes the shape operator commands already established: a fresh
+        correlation id and ``turn_number=0``, which is the envelope's existing reading of
+        "belongs to no turn". A synthetic terminal turn would instead put a
+        ``turn_started``/``turn_end`` bracket on the stream for a turn nobody took, and that
+        bracket is precisely what a console's transcript is built on.
+        """
+        ctx = self.current_stream_context
+        if ctx is not None:
+            self._pub(ctx.turn_id, ctx.turn_number, event)
+            return
+        self._pub(str(workflow.uuid4()), 0, event)
 
     # -- Activity-side publishing helper -----------------------------------
 

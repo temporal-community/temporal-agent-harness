@@ -783,17 +783,16 @@ def test_agent_defn_rejects_bespoke_input_at_definition_time():
 # ---------------------------------------------------------------------------
 
 
-def test_stream_and_approval_policy_default_are_required():
-    """``stream`` and ``approval_policy_default`` are required keyword-only constructor
-    args, so omitting either is a call-site TypeError — no runtime ``build()`` check to
-    forget. The author must make a deliberate safe-by-default approval choice."""
+def test_approval_policy_default_is_required():
+    """``approval_policy_default`` is a required keyword-only constructor arg, so omitting it
+    is a call-site TypeError — no runtime ``build()`` check to forget. The author must make a
+    deliberate safe-by-default approval choice.
+
+    ``stream`` is deliberately NOT required: the runner builds its own unless an agent insists
+    on supplying one, and only a stream the runner built can be handed to a successor run at
+    continue-as-new."""
     stream = MagicMock()
     stream.topic.return_value = MagicMock()
-    with pytest.raises(TypeError):
-        AgentWorkflowRunner(  # type: ignore[call-arg]  — missing stream
-            AgentConfig(),
-            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
-        )
     with pytest.raises(TypeError):
         AgentWorkflowRunner(  # type: ignore[call-arg]  — missing approval_policy_default
             AgentConfig(),
