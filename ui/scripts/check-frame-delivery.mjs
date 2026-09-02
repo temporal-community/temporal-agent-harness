@@ -111,15 +111,18 @@ assert.ok(
    silent and total: an early return while catching up publishes NOTHING for the
    whole backlog, and the console sits empty until the run goes live. */
 
-const streamCatchUp = (replayFrames, liveFrames, msPerFrame) =>
+const streamCatchUp = (replayFrames, liveFrames, msPerFrame, endStream = false) =>
   streamFrames(
     [...Array(replayFrames).fill(true), ...Array(liveFrames).fill(false)],
-    msPerFrame
+    msPerFrame,
+    endStream
   );
 
 /* Modelled on #appendFrame + #schedulePublish, driven by an explicit sequence of
-   `replay` marks so an interleaved one can be fed in. */
-const streamFrames = (replayMarks, msPerFrame) => {
+   `replay` marks so an interleaved one can be fed in. `endStream` models the
+   server closing the stream, which attach()'s finally block treats as a commit
+   trigger in its own right. */
+const streamFrames = (replayMarks, msPerFrame, endStream = false) => {
   let catchingUp = false;
   let liveFrameSeen = false;
   let catchUpStartedAt = 0;
@@ -154,6 +157,7 @@ const streamFrames = (replayMarks, msPerFrame) => {
   };
 
   for (const isReplay of replayMarks) append(isReplay);
+  if (endStream) commits.push({ at: clock, kind: "stream-end" });
   return commits;
 };
 
@@ -186,6 +190,34 @@ assert.ok(
 assert.ok(
   streamCatchUp(5000, 0, 5).length > 0,
   "a catch-up that never reaches the live edge must still publish something"
+);
+
+/* An idle session, which is the blank-console bug. The server replays the whole
+   history and then ends the stream, so no frame ever crosses to live, and over a
+   local socket the backlog is far too short and too fast to clear a chunk
+   boundary past the ceiling. Nothing but the stream ending can commit these. */
+assert.equal(
+  streamCatchUp(27, 0, 9).length,
+  0,
+  "a 27-frame replay arriving in 250ms clears no chunk boundary on its own"
+);
+assert.equal(
+  streamCatchUp(27, 0, 9, true).at(-1).kind,
+  "stream-end",
+  "the end of the stream must commit a backlog too short to reach a boundary"
+);
+assert.equal(
+  streamCatchUp(6, 0, 9, true).length,
+  1,
+  "a session shorter than one chunk could never publish without a terminal commit"
+);
+
+/* What that terminal commit costs. A long slow backlog already commits on the
+   chunk schedule, so the flush adds exactly one — per stream end, not per frame. */
+assert.equal(
+  streamCatchUp(2000, 1, 5, true).length - streamCatchUp(2000, 1, 5).length,
+  1,
+  "a terminal commit costs one publish per stream end, not one per frame"
 );
 
 // With no replay marker at all (an older server) every frame takes the paint path,

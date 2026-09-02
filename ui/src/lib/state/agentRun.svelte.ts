@@ -999,11 +999,19 @@ export class AgentRunController {
       if (!isAbortError(error)) throw error;
     } finally {
       if (
-        options.clearSendingOnIdle &&
         streamVersion === this.#streamVersion &&
         this.session?.workflow_id === session.workflow_id
       ) {
-        this.sending = false;
+        if (options.clearSendingOnIdle) this.sending = false;
+        /* A stream can end mid-catch-up. #schedulePublish only commits at a chunk
+           boundary past the ceiling, so a replay that ends short of one strands
+           its tail with nothing left to flush it, and an idle session — whose
+           whole history is replay and which never crosses to live — shows an
+           empty console. Commit on the error path too: partial history beats
+           nothing. */
+        this.#catchingUp = false;
+        this.#sinceCatchUpPublish = 0;
+        this.#publishFrames();
       }
       this.#finishStream(controller);
     }
@@ -1039,6 +1047,15 @@ export class AgentRunController {
     } finally {
       if (this.#workflowAttachAbort.get(workflowId) === controller) {
         this.#workflowAttachAbort.delete(workflowId);
+        /* Same stranded tail as the root stream: a subagent's history is replay
+           too, and its stream ends without ever crossing to live. Only flush
+           while this is still the stream that owns the buffer, and still the
+           session it was opened for. */
+        if (this.session?.workflow_id === session.workflow_id) {
+          this.#catchingUp = false;
+          this.#sinceCatchUpPublish = 0;
+          this.#publishFrames();
+        }
       }
     }
   }
