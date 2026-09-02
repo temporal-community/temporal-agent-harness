@@ -2,6 +2,7 @@ import type {
   AcceptedMessageTypesResponse,
   AgentInterfaceFunction,
   AccountOverview,
+  CatalogResponse,
   AgentRegistryResponse,
   AgentSseFrame,
   ChatRequest,
@@ -22,6 +23,9 @@ import type {
 
 export interface AgentApi {
   accountOverview(): Promise<AccountOverview>;
+  catalog(): Promise<CatalogResponse>;
+  installCatalogResource(resourceId: string): Promise<void>;
+  removeCatalogResource(resourceId: string): Promise<void>;
   listToolCalls(serverName: string): Promise<ToolCallRecord[]>;
   listAgents(): Promise<AgentRegistryResponse>;
   listSessions(): Promise<Session[]>;

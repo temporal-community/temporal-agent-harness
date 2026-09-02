@@ -1,6 +1,7 @@
 import type {
   AcceptedMessageTypesResponse,
   AccountOverview,
+  CatalogResponse,
   AgentInterfaceFunction,
   AgentRegistryResponse,
   AgentSseFrame,
@@ -174,6 +175,39 @@ export class MockAgentApi implements AgentApi {
       active_session_count: this.#sessions.filter((session) => !session.closed).length
     };
   }
+
+  async catalog(): Promise<CatalogResponse> {
+    return {
+      resources: [
+        {
+          resource_id: "qa-agent",
+          revision: 1,
+          category: "agent",
+          transport: "nexus",
+          label: "QA Agent",
+          description: "Mock catalog agent",
+          endpoint: "qa-agent-endpoint",
+          service: "AgentService",
+          installed: true
+        },
+        {
+          resource_id: "demo-nexus",
+          revision: 1,
+          category: "mcp",
+          transport: "nexus",
+          label: "Demo MCP",
+          description: "Mock catalog MCP server",
+          endpoint: "demo-endpoint",
+          service: "demo-nexus",
+          installed: true
+        }
+      ]
+    };
+  }
+
+  async installCatalogResource(_resourceId: string): Promise<void> {}
+
+  async removeCatalogResource(_resourceId: string): Promise<void> {}
 
   async listToolCalls(serverName: string): Promise<ToolCallRecord[]> {
     return [

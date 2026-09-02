@@ -73,6 +73,18 @@ class NexusA2ASubagentTransport:
         parent_stream_context: TurnStreamContext,
     ) -> SubagentTurnResult:
         del parent_stream_context
+        config = self._start_configs.get(target, AgentConfig())
+        request_metadata: dict[str, Any] = {"expected_turn": expected_turn}
+        if config.account_id is not None:
+            request_metadata["account_id"] = config.account_id
+        if config.registered_agent_id is not None:
+            request_metadata["registered_agent_id"] = config.registered_agent_id
+        if config.delegation_lineage is not None:
+            request_metadata["delegation_lineage"] = list(config.delegation_lineage)
+        if config.delegation_depth is not None:
+            request_metadata["delegation_depth"] = config.delegation_depth
+        if config.max_delegation_depth is not None:
+            request_metadata["max_delegation_depth"] = config.max_delegation_depth
         try:
             sent = await self._client.send_message(
                 SendMessageRequest(
@@ -87,8 +99,8 @@ class NexusA2ASubagentTransport:
                             "temporal.io/payload": payload,
                         },
                     ),
-                    metadata={"expected_turn": expected_turn},
-                )
+                    metadata=request_metadata,
+                ),
             )
         except Exception as exc:
             raise _rejection_error(exc) from exc

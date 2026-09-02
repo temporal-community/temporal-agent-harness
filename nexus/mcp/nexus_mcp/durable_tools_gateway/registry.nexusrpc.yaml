@@ -18,6 +18,11 @@ services:
         description: All registered 3rd-party tools for one account_id.
         input: { $ref: "#/$defs/ListAccountEntriesInput" }
         output: { $ref: "#/$defs/ListAccountEntriesOutput" }
+      resolveAccountToolbox:
+        fqn: resolve_account_toolbox
+        description: Resolve a stable per-turn snapshot of an account's installed resources.
+        input: { $ref: "#/$defs/ResolveAccountToolboxInput" }
+        output: { $ref: "#/$defs/ResolveAccountToolboxOutput" }
       callTool:
         fqn: call_tool
         description: Invoke one tool on a registered 3rd-party MCP server.
@@ -92,6 +97,37 @@ $defs:
           items:
             type: object
             additionalProperties: true
+
+  ResolveAccountToolboxInput:
+    type: object
+    description: Account and invocation context used to filter dynamic resources.
+    properties:
+      account_id:
+        type: string
+      caller_agent_id:
+        type: string
+      lineage:
+        type: array
+        items: { type: string }
+      delegation_depth:
+        type: integer
+        minimum: 0
+      max_delegation_depth:
+        type: integer
+        minimum: 1
+    required: [account_id, caller_agent_id, lineage, delegation_depth, max_delegation_depth]
+    additionalProperties: false
+
+  ResolveAccountToolboxOutput:
+    type: object
+    description: JSON-encoded ResourceDescriptor list pinned for one agent turn.
+    properties:
+      manifest:
+        type: string
+      version:
+        type: string
+    required: [manifest, version]
+    additionalProperties: false
 
   CallToolInput:
     type: object
