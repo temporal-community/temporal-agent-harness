@@ -398,10 +398,16 @@
     font-weight: 650;
     box-shadow: var(--shadow-inset-soft);
     transition:
+      transform var(--duration-press) var(--ease-out),
       border-color var(--duration-fast) var(--ease-ui),
       background var(--duration-fast) var(--ease-ui),
       color var(--duration-fast) var(--ease-ui),
       box-shadow var(--duration-fast) var(--ease-ui);
+  }
+
+  .session-add:active:not(.disabled):not(:disabled),
+  .session-drawer-button:active {
+    transform: scale(0.97);
   }
 
   .session-add {
@@ -479,12 +485,18 @@
     border-radius: var(--radius-md);
     background: var(--surface-1);
     box-shadow: var(--shadow-popover);
+    /* Grows from the button that opened it, so the menu reads as that
+       control's own surface rather than as something the viewport produced. */
+    transform-origin: top right;
+    animation: session-popover-in var(--duration-fast) var(--ease-out);
   }
 
   .new-session-popover {
     position: absolute;
     top: calc(100% + 10px);
     left: 0;
+    transform-origin: top left;
+    animation: session-popover-in var(--duration-fast) var(--ease-out);
     z-index: 22;
     width: min(360px, calc(100vw - 32px));
     min-height: 0;
@@ -557,6 +569,13 @@
 
   .session-popover-refresh.spinning :global(svg) {
     animation: session-refresh-spin 800ms linear infinite;
+  }
+
+  @keyframes session-popover-in {
+    from {
+      opacity: 0;
+      transform: scale(0.97);
+    }
   }
 
   @keyframes session-refresh-spin {
@@ -752,6 +771,33 @@
     .session-popover {
       right: auto;
       left: 0;
+      transform-origin: top left;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* Still reads as busy, by dimming rather than by spinning. */
+    .session-popover-refresh.spinning :global(svg) {
+      animation: none;
+      opacity: 0.6;
+    }
+
+    .session-popover,
+    .new-session-popover {
+      animation: none;
+    }
+
+    .session-add:active:not(.disabled):not(:disabled),
+    .session-drawer-button:active,
+    .agent-row:focus-visible,
+    .session-row:focus-visible {
+      transform: none;
+    }
+
+    .control-chevron,
+    .agent-row,
+    .session-row {
+      transition: none;
     }
   }
 </style>

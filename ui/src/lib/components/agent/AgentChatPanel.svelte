@@ -2250,10 +2250,16 @@
     font-weight: 600;
     box-shadow: var(--shadow-inset-soft);
     transition:
+      transform var(--duration-press) var(--ease-out),
       border-color var(--duration-fast) var(--ease-ui),
       background var(--duration-fast) var(--ease-ui),
       color var(--duration-fast) var(--ease-ui),
       box-shadow var(--duration-fast) var(--ease-ui);
+  }
+
+  .header-session-add:active:not(.disabled):not(:disabled),
+  .header-session-drawer:active {
+    transform: scale(0.97);
   }
 
   .header-session-drawer {
@@ -2330,14 +2336,26 @@
     border-radius: var(--radius-md);
     background: var(--surface-1);
     box-shadow: var(--shadow-popover);
+    /* Grows from the button that opened it, so the menu reads as that
+       control's own surface rather than as something the viewport produced. */
+    animation: command-menu-in var(--duration-fast) var(--ease-out);
   }
 
   .agent-command-menu.header-menu {
     left: 0;
+    transform-origin: top left;
   }
 
   .agent-command-menu.panel-menu {
     right: 0;
+    transform-origin: top right;
+  }
+
+  @keyframes command-menu-in {
+    from {
+      opacity: 0;
+      transform: scale(0.97);
+    }
   }
 
   .agent-command-row {
@@ -3057,7 +3075,7 @@
     height: 6px;
     border-radius: var(--radius-chip);
     background: var(--text-3);
-    animation: pulse 900ms ease-in-out infinite;
+    animation: pulse 900ms var(--ease-in-out) infinite;
   }
 
   .thinking span:nth-child(2) {
@@ -3068,9 +3086,11 @@
     animation-delay: 240ms;
   }
 
+  /* Opacity only. A dot that also hops draws the eye to the fact that the
+     agent is thinking, which is the least interesting thing on the screen. */
   @keyframes pulse {
-    0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
-    40% { opacity: 1; transform: translateY(-2px); }
+    0%, 80%, 100% { opacity: 0.35; }
+    40% { opacity: 1; }
   }
 
   .error-banner {
@@ -3588,6 +3608,33 @@
 
     .composer {
       padding: 8px 8px 8px 12px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* The busy affordance stays; only the movement goes. */
+    .thinking span {
+      animation: none;
+      opacity: 0.85;
+    }
+
+    .agent-command-menu {
+      animation: none;
+    }
+
+    .header-session-add:active:not(.disabled):not(:disabled),
+    .header-session-drawer:active,
+    .drawer-session-row:focus-visible,
+    .session-card:focus-within {
+      transform: none;
+    }
+
+    /* Chevrons still end up rotated — they just stop swinging there. */
+    .control-chevron,
+    .activity-row-chevron,
+    .drawer-session-row,
+    .session-card {
+      transition: none;
     }
   }
 </style>

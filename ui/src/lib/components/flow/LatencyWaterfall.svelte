@@ -428,4 +428,12 @@
   .empty {
     padding: 20px 2px;
   }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* Nothing here moves, but a bar's filter/opacity fade is still a change
+       the setting asks us not to animate. */
+    .bar {
+      transition: none;
+    }
+  }
 </style>

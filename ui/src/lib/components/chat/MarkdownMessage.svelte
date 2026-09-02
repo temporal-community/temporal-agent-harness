@@ -1342,4 +1342,14 @@
     opacity: 1;
     transform: translate(-50%, 0);
   }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* Same bargain the global tooltip strikes: it still fades in, it just
+       stops sliding into place. */
+    .markdown-message :global(.md-citation::before),
+    .markdown-message :global(.md-citation::after) {
+      transition: opacity var(--duration-fast) var(--ease-ui);
+      transform: translate(-50%, 0);
+    }
+  }
 </style>

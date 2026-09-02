@@ -867,4 +867,14 @@
   .empty {
     color: var(--text-3);
   }
+
+  @media (prefers-reduced-motion: reduce) {
+    .turn-group {
+      transition: none;
+    }
+
+    .turn-group.active-turn {
+      transform: none;
+    }
+  }
 </style>

@@ -519,4 +519,15 @@
       justify-content: flex-start;
     }
   }
+
+  @media (prefers-reduced-motion: reduce) {
+    .event-marker,
+    .usage-toggle-icon {
+      transition: none;
+    }
+
+    .event-marker:hover {
+      transform: translateX(-50%);
+    }
+  }
 </style>
