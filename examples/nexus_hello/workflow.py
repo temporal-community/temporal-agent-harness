@@ -16,7 +16,6 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
         harness_tool_as_openai_tool,
         nexus_gateway,
-        nexus_native_mcp_server,
     )
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
@@ -27,9 +26,6 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
-    from .native_subagent import NativeResearchSubagentWorkflow
-    from .whimsical_workflow import WhimsicalAgentWorkflow
-
 TASK_QUEUE = "nexus-hello"
 WORKFLOW_NAME = "NexusHelloAgent"
 DEFAULT_MODEL = "gpt-5.1"
@@ -39,12 +35,7 @@ SYSTEM_INSTRUCTION = """\
 You are a friendly assistant. Answer the user in brief, natural prose.
 """
 
-RESEARCH_SUBAGENT_ENDPOINT = "nexus-hello-subagent-endpoint"
-RESEARCH_KEY = "research"
-WHIMSICAL_SUBAGENT_ENDPOINT = "nexus-hello-whimsical-agent-endpoint"
-WHIMSICAL_KEY = "whimsical-agent"
-WRITER_KEY = "writer"
-WRITER_ALIAS = "writer"
+REGISTERED_AGENT_ID = "nexus-hello"
 
 
 @workflow.defn(name=WORKFLOW_NAME)
@@ -61,6 +52,11 @@ class NexusHelloAgentWorkflow:
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
         self._conversation: list[TResponseInputItem] = []
+        self._account_id = config.account_id or ACCOUNT_ID
+        self._registered_agent_id = config.registered_agent_id or REGISTERED_AGENT_ID
+        self._delegation_lineage = config.delegation_lineage or ()
+        self._delegation_depth = config.delegation_depth or 0
+        self._max_delegation_depth = config.max_delegation_depth or 5
 
     @workflow.run
     async def run(self, _config: AgentConfig) -> None:
@@ -69,42 +65,20 @@ class NexusHelloAgentWorkflow:
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
         """Ask a question. The model can use Nexus tools and subagents."""
-        account_gateway = nexus_gateway(ACCOUNT_ID)
-        subagent_gateway = agent.nexus_subagent_gateway(ACCOUNT_ID)
-
-        research_tools = agent.nexus_native_subagent(
-            NativeResearchSubagentWorkflow, RESEARCH_SUBAGENT_ENDPOINT, key=RESEARCH_KEY
-        )
-        whimsical_tools = agent.nexus_native_subagent(
-            WhimsicalAgentWorkflow,
-            WHIMSICAL_SUBAGENT_ENDPOINT,
-            key=WHIMSICAL_KEY,
-        )
-        writer_tools = subagent_gateway.subagent(
-            [
-                agent.declared_handler(
-                    "ask",
-                    "Ask the writer subagent a question.",
-                    TextMessage,
-                    TextReply,
-                    param_name="message",
-                )
-            ],
-            WRITER_ALIAS,
-            key=WRITER_KEY,
+        toolbox = await nexus_gateway(self._account_id).resolve_toolbox(
+            caller_agent_id=self._registered_agent_id,
+            lineage=self._delegation_lineage,
+            delegation_depth=self._delegation_depth,
+            max_delegation_depth=self._max_delegation_depth,
         )
 
         sdk_agent = OpenAIAgent(
             name="NexusHello",
             instructions=SYSTEM_INSTRUCTION,
             model=DEFAULT_MODEL,
-            mcp_servers=[
-                account_gateway.mcp_servers("demo"),
-                nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
-            ],
+            mcp_servers=list(toolbox.mcp_servers),
             tools=[
-                harness_tool_as_openai_tool(fn)
-                for fn in [*research_tools, *whimsical_tools, *writer_tools]
+                harness_tool_as_openai_tool(fn) for fn in toolbox.subagent_tools
             ],
         )
         input_items: list[TResponseInputItem] = [

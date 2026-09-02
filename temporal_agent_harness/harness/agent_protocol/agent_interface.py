@@ -227,6 +227,12 @@ class AgentConfig(BaseModel):
     id the parent (and a UI merging the streams) already knows it by. ``None`` → a top-level agent
     generates its own single-segment id. This is the one ``AgentConfig`` field a parent populates
     per-child rather than passing through unchanged.
+
+    ``account_id`` and ``registered_agent_id`` identify the account toolbox and the
+    catalog entry used to start this session. ``delegation_lineage`` and the depth fields
+    are inherited by children so dynamically discovered agents cannot recursively invoke
+    their ancestors forever. These routing fields are optional for callers that do not use
+    an account registry.
     """
 
     is_message_queuing_enabled: bool | None = None
@@ -234,6 +240,11 @@ class AgentConfig(BaseModel):
     subagent_close_policy: SubagentClosePolicy | None = None
     subagent_reuse_policy: SubagentReusePolicy | None = None
     agent_id: AgentId | None = None
+    account_id: str | None = None
+    registered_agent_id: str | None = None
+    delegation_lineage: tuple[str, ...] | None = None
+    delegation_depth: int | None = Field(default=None, ge=0)
+    max_delegation_depth: int | None = Field(default=None, ge=1)
 
 
 # ---------------------------------------------------------------------------

@@ -256,6 +256,17 @@ class AgentActionWorkflow:
             }
         match input.action:
             case "send":
+                context = {
+                    name: values[name]
+                    for name in (
+                        "account_id",
+                        "registered_agent_id",
+                        "delegation_lineage",
+                        "delegation_depth",
+                        "max_delegation_depth",
+                    )
+                    if values.get(name) is not None
+                }
                 result = await client.execute_operation(
                     AgentService.send_agent_message,
                     SendAgentMessageInput(
@@ -267,6 +278,7 @@ class AgentActionWorkflow:
                             if values.get("expected_turn") is not None
                             else None
                         ),
+                        **context,
                     ),
                 )
             case "status":

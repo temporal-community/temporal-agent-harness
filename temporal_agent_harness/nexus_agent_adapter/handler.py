@@ -199,7 +199,16 @@ class AgentServiceHandler:
             ) from e
 
         start_config = AgentConfig(
-            is_message_queuing_enabled=self._config.is_message_queuing_enabled
+            is_message_queuing_enabled=self._config.is_message_queuing_enabled,
+            account_id=input.account_id,
+            registered_agent_id=input.registered_agent_id,
+            delegation_lineage=(
+                tuple(input.delegation_lineage)
+                if input.delegation_lineage is not None
+                else None
+            ),
+            delegation_depth=input.delegation_depth,
+            max_delegation_depth=input.max_delegation_depth,
         )
         client = self._agent_client(input.session_id)
 

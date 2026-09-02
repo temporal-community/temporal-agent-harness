@@ -1358,6 +1358,11 @@ class AgentWorkflowRunner:
         # generates its own. workflow.uuid4 is deterministic in-workflow (offline unit tests patch
         # it). Distinct from the full workflow_id, which the model/UI never needs to reproduce.
         self._agent_id: str = config.agent_id or workflow.uuid4().hex[:AGENT_ID_LENGTH]
+        self._account_id = config.account_id
+        self._registered_agent_id = config.registered_agent_id
+        self._delegation_lineage = config.delegation_lineage or ()
+        self._delegation_depth = config.delegation_depth or 0
+        self._max_delegation_depth = config.max_delegation_depth
         # Retain the WorkflowStream itself (not just the topic handle) so the runner can read
         # the stream's current head offset in-workflow — see ``_handle_send_agent_message``,
         # which returns it as ``AgentMessageReply.accepted_offset`` for the client stream-merge.
@@ -2186,10 +2191,30 @@ class AgentWorkflowRunner:
             if existing is not None:
                 self._status.mark_subagent_used(existing)
                 return existing.handle
+        if (
+            self._max_delegation_depth is not None
+            and self._delegation_depth >= self._max_delegation_depth
+        ):
+            raise ApplicationError(
+                f"maximum delegation depth {self._max_delegation_depth} reached",
+                type="DelegationDepthExceeded",
+                non_retryable=True,
+            )
         handle = self._fresh_subagent_handle()
-        # Local child workflows use the handle as their event agent ID.
+        lineage = self._delegation_lineage
+        if self._registered_agent_id:
+            lineage = (*lineage, self._registered_agent_id)
+        # Local and Nexus children receive the same account/lineage context. A
+        # caller-supplied config can override policy knobs but not routing identity.
         child_config = (config if config is not None else AgentConfig()).model_copy(
-            update={"agent_id": handle}
+            update={
+                "agent_id": handle,
+                "account_id": self._account_id,
+                "registered_agent_id": agent_key,
+                "delegation_lineage": lineage,
+                "delegation_depth": self._delegation_depth + 1,
+                "max_delegation_depth": self._max_delegation_depth,
+            }
         )
         target = await transport.start(agent_key=agent_key, config=child_config)
         self._status.register_subagent(handle, target, agent_key, transport)

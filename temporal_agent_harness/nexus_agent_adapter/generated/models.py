@@ -1982,8 +1982,76 @@ class _SendAgentMessageInputTransferTypeConverter(
                 if expected_turn_value_parsed is not None:
                     expected_turn_value = expected_turn_value_parsed
 
+        account_id_value: str | None = None
+        if "accountId" in raw:
+            account_id_value_raw = raw["accountId"]
+            if account_id_value_raw is None:
+                violations.append(Violation(path="accountId", reason="explicit null not allowed"))
+            else:
+                if not isinstance(account_id_value_raw, str):
+                    violations.append(Violation(path="accountId", reason="expected string"))
+                else:
+                    account_id_value = account_id_value_raw
+
+        registered_agent_id_value: str | None = None
+        if "registeredAgentId" in raw:
+            registered_agent_id_value_raw = raw["registeredAgentId"]
+            if registered_agent_id_value_raw is None:
+                violations.append(Violation(path="registeredAgentId", reason="explicit null not allowed"))
+            else:
+                if not isinstance(registered_agent_id_value_raw, str):
+                    violations.append(Violation(path="registeredAgentId", reason="expected string"))
+                else:
+                    registered_agent_id_value = registered_agent_id_value_raw
+
+        delegation_lineage_value: list[str] | None = None
+        if "delegationLineage" in raw:
+            delegation_lineage_value_raw = raw["delegationLineage"]
+            if delegation_lineage_value_raw is None:
+                violations.append(Violation(path="delegationLineage", reason="explicit null not allowed"))
+            else:
+                if not isinstance(delegation_lineage_value_raw, list):
+                    violations.append(Violation(path="delegationLineage", reason="expected array"))
+                else:
+                    delegation_lineage_value_list: list[str] = []
+                    for delegation_lineage_value_index, delegation_lineage_value_element in enumerate(typing.cast("list[typing.Any]", delegation_lineage_value_raw)):
+                        delegation_lineage_value_item_path = f'delegationLineage[{delegation_lineage_value_index}]'
+                        delegation_lineage_value_item_violation_count = len(violations)
+                        delegation_lineage_value_item: str = typing.cast("typing.Any", None)
+                        if not isinstance(delegation_lineage_value_element, str):
+                            violations.append(Violation(path=delegation_lineage_value_item_path, reason="expected string"))
+                        else:
+                            delegation_lineage_value_item = delegation_lineage_value_element
+                        if len(violations) == delegation_lineage_value_item_violation_count:
+                            delegation_lineage_value_list.append(delegation_lineage_value_item)
+                    delegation_lineage_value = delegation_lineage_value_list
+
+        delegation_depth_value: int | None = None
+        if "delegationDepth" in raw:
+            delegation_depth_value_raw = raw["delegationDepth"]
+            if delegation_depth_value_raw is None:
+                violations.append(Violation(path="delegationDepth", reason="explicit null not allowed"))
+            else:
+                delegation_depth_value_parsed = _parse_spec_integer(delegation_depth_value_raw, "delegationDepth", violations)
+                if delegation_depth_value_parsed is not None:
+                    delegation_depth_value = delegation_depth_value_parsed
+                    if delegation_depth_value < 0:
+                        violations.append(Violation(path="delegationDepth", reason=f"must be >= 0, got {delegation_depth_value}"))
+
+        max_delegation_depth_value: int | None = None
+        if "maxDelegationDepth" in raw:
+            max_delegation_depth_value_raw = raw["maxDelegationDepth"]
+            if max_delegation_depth_value_raw is None:
+                violations.append(Violation(path="maxDelegationDepth", reason="explicit null not allowed"))
+            else:
+                max_delegation_depth_value_parsed = _parse_spec_integer(max_delegation_depth_value_raw, "maxDelegationDepth", violations)
+                if max_delegation_depth_value_parsed is not None:
+                    max_delegation_depth_value = max_delegation_depth_value_parsed
+                    if max_delegation_depth_value < 1:
+                        violations.append(Violation(path="maxDelegationDepth", reason=f"must be >= 1, got {max_delegation_depth_value}"))
+
         for key in raw:
-            if key != "sessionId" and key != "msgType" and key != "payload" and key != "expectedTurn":
+            if key != "sessionId" and key != "msgType" and key != "payload" and key != "expectedTurn" and key != "accountId" and key != "registeredAgentId" and key != "delegationLineage" and key != "delegationDepth" and key != "maxDelegationDepth":
                 violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
@@ -1992,16 +2060,38 @@ class _SendAgentMessageInputTransferTypeConverter(
             msg_type=msg_type_value,
             payload=payload_value,
             expected_turn=expected_turn_value,
+            account_id=account_id_value,
+            registered_agent_id=registered_agent_id_value,
+            delegation_lineage=delegation_lineage_value,
+            delegation_depth=delegation_depth_value,
+            max_delegation_depth=max_delegation_depth_value,
         )
 
     @typing_extensions.override
     def to_transfer_type(self, value: "SendAgentMessageInput") -> typing.Any:
+        violations: list[Violation] = []
         out: dict[str, typing.Any] = {}
         out["sessionId"] = value.session_id
         out["msgType"] = value.msg_type
         out["payload"] = value.payload
         if value.expected_turn is not None:
             out["expectedTurn"] = value.expected_turn
+        if value.account_id is not None:
+            out["accountId"] = value.account_id
+        if value.registered_agent_id is not None:
+            out["registeredAgentId"] = value.registered_agent_id
+        if value.delegation_lineage is not None:
+            out["delegationLineage"] = value.delegation_lineage
+        if value.delegation_depth is not None:
+            if value.delegation_depth < 0:
+                violations.append(Violation(path="delegationDepth", reason=f"must be >= 0, got {value.delegation_depth}"))
+            out["delegationDepth"] = value.delegation_depth
+        if value.max_delegation_depth is not None:
+            if value.max_delegation_depth < 1:
+                violations.append(Violation(path="maxDelegationDepth", reason=f"must be >= 1, got {value.max_delegation_depth}"))
+            out["maxDelegationDepth"] = value.max_delegation_depth
+        if violations:
+            raise ValidationError(violations)
         return out
 
 
@@ -2026,6 +2116,19 @@ class SendAgentMessageInput:
     instead of guessing. Omit to fall back to guess-and-retry (e.g. Slack, which has no
     local turn state).
     """
+
+    account_id: str | None = None
+    """Optional account toolbox inherited by a newly started harness session."""
+
+    registered_agent_id: str | None = None
+    """Optional account-local catalog ID for the target agent."""
+
+    delegation_lineage: list[str] | None = None
+    """Account agent IDs already visited by this invocation chain."""
+
+    delegation_depth: int | None = None
+
+    max_delegation_depth: int | None = None
 
 
 class _SendMessageOutputTransferTypeConverter(

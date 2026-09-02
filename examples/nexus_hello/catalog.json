@@ -1,0 +1,96 @@
+[
+  {
+    "resource_id": "nexus-hello",
+    "revision": 1,
+    "category": "agent",
+    "transport": "nexus",
+    "label": "Nexus Hello",
+    "description": "OpenAI Agents SDK demo using an account-resolved toolbox.",
+    "endpoint": "nexus-hello-agent-endpoint",
+    "service": "AgentService",
+    "handlers": [
+      {
+        "name": "ask",
+        "description": "Ask Nexus Hello a question.",
+        "param_name": "message",
+        "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false},
+        "output_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false}
+      }
+    ]
+  },
+  {
+    "resource_id": "research",
+    "revision": 1,
+    "category": "agent",
+    "transport": "nexus",
+    "label": "Research",
+    "description": "Nexus-native research agent with a concise canned response.",
+    "endpoint": "nexus-hello-subagent-endpoint",
+    "service": "AgentService",
+    "handlers": [
+      {
+        "name": "ask",
+        "description": "Ask the research agent a question.",
+        "param_name": "message",
+        "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false},
+        "output_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false}
+      }
+    ]
+  },
+  {
+    "resource_id": "whimsical-agent",
+    "revision": 1,
+    "category": "agent",
+    "transport": "nexus",
+    "label": "Whimsical Agent",
+    "description": "OpenAI Agents SDK agent with a playful voice and the same account toolbox.",
+    "endpoint": "nexus-hello-whimsical-agent-endpoint",
+    "service": "AgentService",
+    "handlers": [
+      {
+        "name": "ask",
+        "description": "Ask the whimsical agent a question.",
+        "param_name": "message",
+        "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false},
+        "output_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false}
+      }
+    ]
+  },
+  {
+    "resource_id": "writer",
+    "revision": 1,
+    "category": "agent",
+    "transport": "external_http",
+    "label": "Writer HTTP",
+    "description": "Minimal third-party HTTP agent available through the gateway.",
+    "endpoint": "http://127.0.0.1:8766",
+    "handlers": [
+      {
+        "name": "ask",
+        "description": "Ask the writer agent for prose.",
+        "param_name": "message",
+        "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false},
+        "output_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"], "additionalProperties": false}
+      }
+    ]
+  },
+  {
+    "resource_id": "demo-nexus",
+    "revision": 1,
+    "category": "mcp",
+    "transport": "nexus",
+    "label": "Demo Nexus MCP",
+    "description": "Demo tool service invoked directly through Nexus.",
+    "endpoint": "nexus-hello-demo-endpoint",
+    "service": "demo-nexus"
+  },
+  {
+    "resource_id": "demo",
+    "revision": 1,
+    "category": "mcp",
+    "transport": "external_http",
+    "label": "Demo HTTP MCP",
+    "description": "Demo third-party MCP server invoked through the gateway.",
+    "endpoint": "http://127.0.0.1:8765/mcp"
+  }
+]

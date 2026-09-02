@@ -38,15 +38,17 @@ var AgentService = struct {
 	// is active, pending tool approvals, and message-queuing configuration. Mirrors
 	// AgentClient.get_status().
 	QueryAgentStatus nexus.OperationReference[QuerySessionInput, AgentStatusOutput]
-	// Async operation - attaches a completion callback to WorkflowStream's built-in poll
-	// update so reply_delta events published from the agent workflow are delivered.
-	// Returns a batch of stream items (WorkflowStream PollResult wire format) plus the
-	// next cursor.
+	// Returns a bounded batch of agent stream items plus the next cursor. While the
+	// workflow is running it attaches a completion callback to the harness stream-poll
+	// update; after completion it replays the same retained stream through a query.
 	PollMessages nexus.OperationReference[PollMessagesInput, PollMessagesOutput]
 	// Fulfill a pending callback tool call (a tool with no worker-side body - an attached
 	// client executes it and submits the outcome here). Mirrors
 	// AgentClient.provide_callback_result(). Exactly one of result/error should be set.
 	ProvideCallbackResult nexus.OperationReference[ProvideCallbackResultInput, ProvideCallbackResultOutput]
+	// Signal the target agent workflow to close gracefully. Mirrors AgentClient.close() /
+	// the harness 'close' signal a human/UI uses.
+	CloseSession nexus.OperationReference[QuerySessionInput, CloseSessionOutput]
 }{
 	ServiceName: "AgentService",
 	SendAgentMessage: nexus.NewOperationReference[SendAgentMessageInput, SendMessageOutput]("SendAgentMessage"),
@@ -57,6 +59,7 @@ var AgentService = struct {
 	QueryAgentStatus: nexus.NewOperationReference[QuerySessionInput, AgentStatusOutput]("QueryAgentStatus"),
 	PollMessages: nexus.NewOperationReference[PollMessagesInput, PollMessagesOutput]("PollMessages"),
 	ProvideCallbackResult: nexus.NewOperationReference[ProvideCallbackResultInput, ProvideCallbackResultOutput]("ProvideCallbackResult"),
+	CloseSession: nexus.NewOperationReference[QuerySessionInput, CloseSessionOutput]("CloseSession"),
 }
 
 
@@ -731,6 +734,67 @@ func (m ApproveToolCallOutput) MarshalJSON() ([]byte, error) {
 	out := map[string]json.RawMessage{}
 	marshalField(out, "toolId", m.ToolId, &errs)
 	marshalField(out, "accepted", m.Accepted, &errs)
+	if len(errs) > 0 {
+		return nil, &ValidationError{Violations: errs}
+	}
+	return json.Marshal(out)
+}
+
+
+// CloseSessionOutput is generated from the corresponding JSON Schema definition.
+type CloseSessionOutput struct {
+	// Closed Always true on success
+	Closed bool `json:"closed"`
+}
+
+// Validate checks m against every constraint and returns a *ValidationError
+// listing any violations.
+func (m CloseSessionOutput) Validate() error {
+	var errs []Violation
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// UnmarshalJSON parses data into m and validates it, returning a
+// *ValidationError listing any violations.
+func (m *CloseSessionOutput) UnmarshalJSON(data []byte) error {
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return err
+	}
+	var errs []Violation
+	for k := range all {
+		switch k {
+		case "closed":
+		default:
+			errs = append(errs, Violation{k, "unknown field"})
+		}
+	}
+	get := func(k string) *json.RawMessage {
+		if v, ok := all[k]; ok {
+			return &v
+		}
+		return nil
+	}
+	_ = get
+	if v, ok := parseBoolField(get("closed"), "closed", true, false, &errs); ok {
+		m.Closed = v
+	}
+	if len(errs) > 0 {
+		return &ValidationError{Violations: errs}
+	}
+	return nil
+}
+
+// MarshalJSON validates m, then serializes it to JSON, returning a
+// *ValidationError if validation fails.
+func (m CloseSessionOutput) MarshalJSON() ([]byte, error) {
+	var errs []Violation
+	addViolations(&errs, m.Validate())
+	out := map[string]json.RawMessage{}
+	marshalField(out, "closed", m.Closed, &errs)
 	if len(errs) > 0 {
 		return nil, &ValidationError{Violations: errs}
 	}
@@ -1424,8 +1488,8 @@ type PollMessagesOutput struct {
 	NextOffset int64 `json:"next_offset"`
 	// MoreReady True when more items are immediately available (batch was capped)
 	MoreReady bool `json:"more_ready"`
-	// Closed True only in the sync error path when the agent workflow has already
-	// completed
+	// Closed True when the agent workflow has completed; the final response can still
+	// contain replayed items
 	Closed *bool `json:"closed,omitempty"`
 }
 
@@ -1900,12 +1964,46 @@ type SendAgentMessageInput struct {
 	// Payload JSON-encoded input matching the target handler's input model (e.g.
 	// '{"text":"hello"}' for the 'ask' handler)
 	Payload string `json:"payload"`
+	// ExpectedTurn Caller-known next turn number. Set this when the caller already tracks
+	// turn state (e.g. a subagent-driving parent) - the send fails fast with StaleTurn on
+	// a mismatch instead of guessing. Omit to fall back to guess-and-retry (e.g. Slack,
+	// which has no local turn state).
+	ExpectedTurn *int64 `json:"expectedTurn,omitempty"`
+	// AccountId Optional account toolbox inherited by a newly started harness session.
+	AccountId *string `json:"accountId,omitempty"`
+	// RegisteredAgentId Optional account-local catalog ID for the target agent.
+	RegisteredAgentId *string `json:"registeredAgentId,omitempty"`
+	// DelegationLineage Account agent IDs already visited by this invocation chain.
+	DelegationLineage []string `json:"delegationLineage,omitempty"`
+	// DelegationDepth corresponds to the "delegationDepth" JSON property.
+	DelegationDepth *int64 `json:"delegationDepth,omitempty"`
+	// MaxDelegationDepth corresponds to the "maxDelegationDepth" JSON property.
+	MaxDelegationDepth *int64 `json:"maxDelegationDepth,omitempty"`
 }
 
 // Validate checks m against every constraint and returns a *ValidationError
 // listing any violations.
 func (m SendAgentMessageInput) Validate() error {
 	var errs []Violation
+	if m.ExpectedTurn != nil && (*m.ExpectedTurn < -integerCap || *m.ExpectedTurn > integerCap) {
+		errs = append(errs, Violation{"expectedTurn", "exceeds ±(2^53-1) integer cap"})
+	}
+	if m.DelegationDepth != nil && (*m.DelegationDepth < -integerCap || *m.DelegationDepth > integerCap) {
+		errs = append(errs, Violation{"delegationDepth", "exceeds ±(2^53-1) integer cap"})
+	}
+	if m.DelegationDepth != nil {
+		if *m.DelegationDepth < 0 {
+			errs = append(errs, Violation{"delegationDepth", fmt.Sprintf("must be >= 0, got %v", *m.DelegationDepth)})
+		}
+	}
+	if m.MaxDelegationDepth != nil && (*m.MaxDelegationDepth < -integerCap || *m.MaxDelegationDepth > integerCap) {
+		errs = append(errs, Violation{"maxDelegationDepth", "exceeds ±(2^53-1) integer cap"})
+	}
+	if m.MaxDelegationDepth != nil {
+		if *m.MaxDelegationDepth < 1 {
+			errs = append(errs, Violation{"maxDelegationDepth", fmt.Sprintf("must be >= 1, got %v", *m.MaxDelegationDepth)})
+		}
+	}
 	if len(errs) > 0 {
 		return &ValidationError{Violations: errs}
 	}
@@ -1922,7 +2020,7 @@ func (m *SendAgentMessageInput) UnmarshalJSON(data []byte) error {
 	var errs []Violation
 	for k := range all {
 		switch k {
-		case "sessionId", "msgType", "payload":
+		case "sessionId", "msgType", "payload", "expectedTurn", "accountId", "registeredAgentId", "delegationLineage", "delegationDepth", "maxDelegationDepth":
 		default:
 			errs = append(errs, Violation{k, "unknown field"})
 		}
@@ -1943,6 +2041,48 @@ func (m *SendAgentMessageInput) UnmarshalJSON(data []byte) error {
 	if v, ok := parseStringField(get("payload"), "payload", true, false, &errs); ok {
 		m.Payload = v
 	}
+	if v, ok := parseIntegerField(get("expectedTurn"), "expectedTurn", false, false, &errs); ok {
+		m.ExpectedTurn = &v
+	}
+	if v, ok := parseStringField(get("accountId"), "accountId", false, false, &errs); ok {
+		m.AccountId = &v
+	}
+	if v, ok := parseStringField(get("registeredAgentId"), "registeredAgentId", false, false, &errs); ok {
+		m.RegisteredAgentId = &v
+	}
+	if raw := get("delegationLineage"); raw == nil {
+	} else if isNull(*raw) {
+		errs = append(errs, Violation{"delegationLineage", "explicit null not allowed"})
+	} else {
+		var elems0 []json.RawMessage
+		if err := json.Unmarshal(*raw, &elems0); err != nil {
+			errs = append(errs, Violation{"delegationLineage", "expected array"})
+		} else {
+			m.DelegationLineage = make([]string, 0, len(elems0))
+			for i0, e0 := range elems0 {
+				p0 := fmt.Sprintf("%s[%d]", "delegationLineage", i0)
+				if isNull(e0) {
+					errs = append(errs, Violation{p0, "explicit null not allowed"})
+					continue
+				}
+				if value0, ok := parseStringField(&e0, p0, true, false, &errs); ok {
+					m.DelegationLineage = append(m.DelegationLineage, value0)
+				}
+			}
+		}
+	}
+	if v, ok := parseIntegerField(get("delegationDepth"), "delegationDepth", false, false, &errs); ok {
+		if v < 0 {
+			errs = append(errs, Violation{"delegationDepth", fmt.Sprintf("must be >= 0, got %v", v)})
+		}
+		m.DelegationDepth = &v
+	}
+	if v, ok := parseIntegerField(get("maxDelegationDepth"), "maxDelegationDepth", false, false, &errs); ok {
+		if v < 1 {
+			errs = append(errs, Violation{"maxDelegationDepth", fmt.Sprintf("must be >= 1, got %v", v)})
+		}
+		m.MaxDelegationDepth = &v
+	}
 	if len(errs) > 0 {
 		return &ValidationError{Violations: errs}
 	}
@@ -1958,6 +2098,24 @@ func (m SendAgentMessageInput) MarshalJSON() ([]byte, error) {
 	marshalField(out, "sessionId", m.SessionId, &errs)
 	marshalField(out, "msgType", m.MsgType, &errs)
 	marshalField(out, "payload", m.Payload, &errs)
+	if m.ExpectedTurn != nil {
+		marshalField(out, "expectedTurn", *m.ExpectedTurn, &errs)
+	}
+	if m.AccountId != nil {
+		marshalField(out, "accountId", *m.AccountId, &errs)
+	}
+	if m.RegisteredAgentId != nil {
+		marshalField(out, "registeredAgentId", *m.RegisteredAgentId, &errs)
+	}
+	if m.DelegationLineage != nil {
+		marshalField(out, "delegationLineage", m.DelegationLineage, &errs)
+	}
+	if m.DelegationDepth != nil {
+		marshalField(out, "delegationDepth", *m.DelegationDepth, &errs)
+	}
+	if m.MaxDelegationDepth != nil {
+		marshalField(out, "maxDelegationDepth", *m.MaxDelegationDepth, &errs)
+	}
 	if len(errs) > 0 {
 		return nil, &ValidationError{Violations: errs}
 	}

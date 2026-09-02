@@ -8,16 +8,17 @@ mounting either:
   gateway UI and agent live in different Temporal namespaces; or
 - a minimal third-party HTTP agent implementing the gateway's small session protocol.
 
-The registry owns the account's agent registrations, tool registrations, and UI session
-records. There is no `SessionManagerWorkflow`, no `agents.toml`, and no Temporal
-visibility query into the agent's namespace.
+The global catalog advertises resources that can be installed. The account registry owns
+the account's pinned resource registrations and UI session records. There is no
+`SessionManagerWorkflow` or `agents.toml`.
 
 The account used by the demo is `NexusHelloAccount`. Authentication is deliberately out
 of scope for now, so matching `account_id` values are the trust boundary.
 
 ## What the account owns
 
-After the registration steps, the account sidebar at <http://localhost:8000> contains:
+The gateway publishes these resources to the global catalog. After selecting them from
+**Catalog** in the account sidebar at <http://localhost:8000>, the account contains:
 
 | Registration | Kind | Route |
 |---|---|---|
@@ -27,14 +28,10 @@ After the registration steps, the account sidebar at <http://localhost:8000> con
 | `Writer HTTP` | mountable third-party agent | `http://127.0.0.1:8766` |
 | `demo-nexus` | directly invoked Nexus MCP service | `nexus-hello-demo-endpoint` |
 | `demo` | MCP server in the toolbox | `http://127.0.0.1:8765/mcp` |
-| `writer` | subagent provider in the toolbox | `http://127.0.0.1:8766` |
 
-The `Research`, `Whimsical Agent`, and `Writer HTTP` agent IDs deliberately match the
-`research`, `whimsical-agent`, and `writer` keys Nexus Hello uses when it spawns them. That
-lets the registry project a spawned child into the account's session list and route it
-through the already registered endpoint. The Writer card and `writer` subagent registration
-intentionally point at the same canned HTTP server, demonstrating that one provider can be
-mounted directly or used through the gateway.
+The `Research`, `Whimsical Agent`, and `Writer HTTP` resource IDs become their dynamic
+subagent tool keys. That lets the registry project a spawned child into the account's
+session list and route it through the same installed descriptor used for top-level mounts.
 
 The Nexus Hello agent itself can use five resources:
 
@@ -45,10 +42,9 @@ The Nexus Hello agent itself can use five resources:
 - `whimsical-agent`: an OpenAI Agents SDK harness subagent reached directly over Nexus.
 - `writer`: the registered HTTP subagent, proxied through the account gateway.
 
-Only registered agents become independently mountable sessions. The native tool remains a
-direct dependency of Nexus Hello, but its endpoint/service are registered as observation-only
-metadata so the account sidebar can match its retained Nexus operations. Research and
-Whimsical Agent appear as agent cards because their endpoints are separately registered.
+Only installed agents become independently mountable sessions. Installed resources are
+resolved once at the start of every agent turn. A newly registered agent or MCP server is
+therefore available on the next turn without changing or restarting the agent worker.
 
 Whimsical Agent is intentionally both a child and a top-level agent. Nexus Hello can create
 it through the native subagent toolset, while an account owner can click **New** on its card
@@ -58,208 +54,68 @@ makes its replies easy to distinguish from Nexus Hello.
 
 ## Architecture
 
-The gateway is the account owner's pane of glass. The browser talks only HTTP and SSE;
-the gateway owns the durable account mapping and chooses the registered transport for each
-agent or session.
-
-```mermaid
-flowchart TB
-    Owner[Account owner] --> Browser["Browser<br/>localhost:8000"]
-
-    subgraph Pane["Account pane of glass: NexusHelloAccount"]
-        Agents["Agent cards<br/>Nexus Hello · Research · Whimsical · Writer HTTP"]
-        Sessions["Session views<br/>account-wide · per-agent · live · closed"]
-        Toolbox["MCP server cards<br/>demo-nexus · demo"]
-    end
-
-    Browser --> Agents
-    Browser --> Sessions
-    Browser --> Toolbox
-    Agents -->|"mount / new"| API
-    Sessions -->|"mount / replay / close"| API
-    API -->|"SSE event stream"| Sessions
-
-    subgraph Gateway["gateway namespace"]
-        API[Account UI + broker API]
-        Registry["ToolRegistryWorkflow<br/>agents · routes · parent/child sessions"]
-        API --> Registry
-        Registry --> API
-    end
-```
-
-A direct Writer HTTP session is the deliberate exception: its action workflow invokes the
-registered provider with standalone HTTP activities, and attach replays UI events retained
-in the registry. That path stays on the gateway side and never crosses the Nexus seam. A
-Writer spawned by Nexus Hello does cross Nexus into the registry service; its transcript is
-not copied into the registry. Mount reconstructs those turns from the retained standalone
-activity input and outcome described below.
-
-For harness-native agents, Nexus is the transport seam. A named endpoint hides the target
-namespace, task queue, and workflow-ID convention from the gateway. `AgentService` and the
-provider session ID are the contract that crosses the seam.
+The gateway is the account owner's pane of glass. The account registry says which agents
+and tools belong to the account; the broker uses those registrations to reach each agent.
+The browser only talks HTTP and SSE to the gateway.
 
 ```mermaid
 flowchart LR
-    subgraph Gateway["gateway namespace"]
-        API[Broker API]
-        Action["BrokeredAgentAction<br/>send · status · close"]
-        Attach["BrokeredAgentAttach<br/>repeated pollMessages"]
-        Events["In-process EventBroker<br/>SSE bytes"]
-        API --> Action
-        API --> Attach
-        Attach --> Events --> API
+    Owner[Account owner] --> UI[Account UI]
+
+    subgraph Gateway[Account gateway]
+        Catalog[Global catalog]
+        Registry[Account registry]
+        Broker[Agent broker]
+        Catalog -->|register| Registry
+        UI <--> Registry
+        UI <--> Broker
     end
 
-    subgraph Seam["NEXUS SEAM: named endpoint + AgentService"]
-        HelloEndpoint[nexus-hello-agent-endpoint]
-        ResearchEndpoint[nexus-hello-subagent-endpoint]
-        WhimsicalEndpoint[nexus-hello-whimsical-agent-endpoint]
-    end
-
-    subgraph Default["default namespace"]
-        HelloHandler["AgentServiceHandler<br/>session ID → workflow"]
-        HelloWorkflow["NexusHelloAgent<br/>WorkflowStream"]
-        HelloHandler --> HelloWorkflow
-    end
-
-    subgraph ResearchNS["nexus-subagent-server namespace"]
-        ResearchHandler["AgentServiceHandler<br/>session ID → workflow"]
-        ResearchWorkflow["NativeResearchSubagent<br/>WorkflowStream"]
-        ResearchHandler --> ResearchWorkflow
-        WhimsicalHandler["AgentServiceHandler<br/>session ID → workflow"]
-        WhimsicalWorkflow["WhimsicalAgent<br/>OpenAI Agents SDK · WorkflowStream"]
-        WhimsicalHandler --> WhimsicalWorkflow
-    end
-
-    Action -->|"AgentService operations"| HelloEndpoint
-    Attach -->|"pollMessages(cursor)"| HelloEndpoint
-    Action -->|"AgentService operations"| ResearchEndpoint
-    Attach -->|"pollMessages(cursor)"| ResearchEndpoint
-    Action -->|"AgentService operations"| WhimsicalEndpoint
-    Attach -->|"pollMessages(cursor)"| WhimsicalEndpoint
-    HelloEndpoint --> HelloHandler
-    ResearchEndpoint --> ResearchHandler
-    WhimsicalEndpoint --> WhimsicalHandler
-
-    HelloHandler -. "stream items" .-> HelloEndpoint
-    ResearchHandler -. "stream items" .-> ResearchEndpoint
-    WhimsicalHandler -. "stream items" .-> WhimsicalEndpoint
-    HelloEndpoint -. "same cursor contract" .-> Attach
-    ResearchEndpoint -. "same cursor contract" .-> Attach
-    WhimsicalEndpoint -. "same cursor contract" .-> Attach
+    Registry -. routes .-> Broker
+    Broker <-->|Nexus| Native[Harness-native agents]
+    Broker <-->|HTTP| External[Third-party agents]
 ```
 
-`pollMessages` keeps one wire contract across the target workflow's lifecycle.
+Nexus is the seam between the gateway and every harness-native agent. A registered endpoint
+hides the agent's Temporal namespace, task queue, and workflow-ID convention. Third-party
+agents use the same UI and registry model, but the gateway reaches them through standalone
+HTTP activities instead.
 
 ```mermaid
 flowchart LR
-    Poll["AgentService.pollMessages(cursor)"] --> State{Workflow state}
-    State -->|RUNNING| Update["Long-poll stream update<br/>update-with-callback"]
-    State -->|COMPLETED| Replay["Bounded replay query<br/>final WorkflowStream state"]
-    Update --> Result["StreamItem[]<br/>next cursor · more_ready · closed"]
-    Replay --> Result
-    Result --> BrokeredAttach[BrokeredAgentAttach]
-    BrokeredAttach --> EventBroker[In-process EventBroker]
-    EventBroker --> SSE[Browser SSE]
+    Browser[Account UI] -->|send · status · close| Gateway[Gateway broker]
+    Gateway -->|AgentService over Nexus| Agent[Harness-native agent]
+    Agent -->|pollMessages pages| Gateway
+    Gateway -->|SSE stream| Browser
 ```
 
-The agent's own account resources use Nexus in the opposite direction: the agent crosses
-the seam back into the gateway for account-owned HTTP resources, or crosses directly to a
-native Nexus service.
+`pollMessages` works for both live and completed workflows: it long-polls a live stream and
+replays the retained `WorkflowStream` after completion. The browser sees the same cursor-based
+SSE stream either way.
+
+At the beginning of each turn, an agent resolves the account's installed toolbox. Native
+resources remain direct Nexus calls; external resources cross Nexus to the gateway, which
+invokes their HTTP provider. This keeps the normal native path direct while making account
+registrations dynamic.
 
 ```mermaid
 flowchart LR
-    Agent[NexusHelloAgent]
+    Agent[Agent] --> Toolbox[Account toolbox]
+    Toolbox -->|direct Nexus| Native[Native agents and MCP tools]
+    Toolbox -->|Nexus| Gateway[Gateway]
+    Gateway -->|HTTP activities| External[External agents and MCP tools]
 
-    subgraph Seam[NEXUS SEAM]
-        RegistryEndpoint[mcp-registry-endpoint]
-        ToolEndpoint[nexus-hello-demo-endpoint]
-        SubagentEndpoint[nexus-hello-subagent-endpoint]
-        WhimsicalEndpoint[nexus-hello-whimsical-agent-endpoint]
-    end
-
-    subgraph Gateway["gateway namespace"]
-        RegistryService["RegistryService<br/>account_id = NexusHelloAccount"]
-        MCPActivity[Standalone MCP activity]
-        WriterActivities["Standalone writer<br/>start · turn · stop activities"]
-        RegistryService --> MCPActivity
-        RegistryService --> WriterActivities
-    end
-
-    subgraph NativeToolNS["nexus-mcp-server namespace"]
-        NativeTool[Native lucky-number service]
-    end
-
-    subgraph NativeSubagentNS["nexus-subagent-server namespace"]
-        NativeSubagent[NativeResearchSubagent]
-        WhimsicalAgent["WhimsicalAgent<br/>OpenAI Agents SDK"]
-    end
-
-    MCPServer[demo MCP HTTP server]
-    Writer[Writer HTTP provider]
-
-    Agent --> RegistryEndpoint --> RegistryService
-    MCPActivity --> MCPServer
-    WriterActivities --> Writer
-    Agent --> ToolEndpoint --> NativeTool
-    Agent --> SubagentEndpoint --> NativeSubagent
-    Agent --> WhimsicalEndpoint --> WhimsicalAgent
-    WhimsicalAgent --> RegistryEndpoint
-    WhimsicalAgent --> ToolEndpoint
+    Agent -->|spawn| Child[Child agent]
+    Child --> Registry[Account sessions]
+    Registry --> UI[Account UI]
+    UI -->|mount| Child
 ```
 
-Spawned children become independently mountable without scanning Temporal visibility:
-
-```mermaid
-sequenceDiagram
-    participant Parent as NexusHelloAgent
-    participant Attach as BrokeredAgentAttach
-    participant Registry as Account registry
-    participant Owner as Account owner
-    participant Child as Research AgentService
-
-    Parent-->>Attach: subagent lifecycle event<br/>agent_key + workflow_id
-    Attach->>Registry: record registered child session
-    Registry-->>Owner: show spawned session in pane of glass
-    Owner->>Attach: mount child session
-    Attach->>Child: pollMessages(provider_session_id, cursor=0)
-    Child-->>Attach: live stream or completed replay
-    Attach-->>Owner: SSE history
-```
-
-For a spawned third-party child, the registry keeps only its account/session routing record
-and completed turn count. Each dispatch uses
-`subagent-dispatch-{gateway_instance_id}-{turn_number}` as its standalone activity ID.
-Mount can therefore point-read the retained input and outcome for every turn—bounded to eight
-concurrent reads—and project them into the same SSE cursor space as later UI-originated turns.
-There is no Visibility scan and no third copy of the transcript. Once the account's Temporal
-activity retention expires, that historical turn is intentionally reported as unavailable.
-
-```mermaid
-sequenceDiagram
-    participant Parent as NexusHelloAgent
-    participant Nexus as RegistryService over Nexus
-    participant Temporal as gateway Temporal namespace
-    participant Writer as Writer HTTP provider
-    participant Browser as Account UI
-    participant API as Gateway broker API
-
-    Parent->>Nexus: dispatch(instance, expected_turn=N)
-    Nexus->>Temporal: execute activity<br/>id = subagent-dispatch-instance-N
-    Temporal->>Writer: POST retained activity input
-    Writer-->>Temporal: retained activity outcome
-    Temporal-->>Nexus: turn result
-
-    Browser->>API: mount spawned Writer session
-    API->>Temporal: DescribeActivityExecution(id)<br/>include input + outcome
-    Temporal-->>API: retained request + reply
-    API-->>Browser: projected SSE offsets<br/>4N-3 through 4N
-```
-
-The browser and gateway never need the Nexus Hello workflow ID format, task queue, or
-namespace. The account registry stores the agent ID and endpoint. The agent's
-`AgentServiceHandler` maps each gateway-owned session ID onto a lazily started
-`NexusHelloAgent` workflow.
+The registry stores routing and session metadata, not a duplicate transcript. A spawned
+harness child is mounted through its registered Nexus endpoint. A spawned third-party child
+is reconstructed from its deterministically named standalone activity inputs and outcomes,
+subject to the account's Temporal retention policy. Neither path requires a Temporal
+Visibility scan.
 
 ### Why the gateway UI is colocated
 
@@ -286,17 +142,9 @@ Opening **Tool calls** performs a read-only retained-history scan:
 
 ```mermaid
 flowchart LR
-    Sidebar[Account sidebar] --> HistoryAPI[Gateway history API]
-
-    HistoryAPI --> Registry[Account-known sessions]
-    Registry --> AgentHistory[Known harness workflow histories]
-    AgentHistory --> NexusEvents[Matching Nexus operation events]
-
-    HistoryAPI --> GatewayNS[gateway namespace]
-    GatewayNS --> Activities[Retained mcp_proxy_activity executions]
-
-    NexusEvents --> Inspector[Tool-call inspector]
-    Activities --> Inspector
+    UI[Tool-call inspector] --> Reader[Gateway history reader]
+    Reader -->|native Nexus calls| AgentHistory[Known agent histories]
+    Reader -->|external HTTP calls| GatewayHistory[Gateway activity history]
 ```
 
 Native MCP calls stay on the direct `agent → Nexus endpoint` path. The history reader resolves
@@ -360,17 +208,9 @@ just gateway-ui              # registry, gateway, broker, API, and UI on :8000
 process. If the build reports missing JavaScript dependencies, run `just app-install`
 once.
 
-With the services running, populate `NexusHelloAccount` using these one-shot recipes:
-
-```sh
-just register-agents                 # Nexus Hello + Research + Whimsical + Writer cards
-just register-native-mcp-server      # native Nexus MCP observation metadata
-just register-third-party-mcp-server # demo MCP toolbox entry
-just register-third-party-subagent   # writer subagent toolbox entry
-```
-
-All four registration recipes are safe to repeat. Now open <http://localhost:8000>. The
-account sidebar should show four agent cards and two MCP servers.
+Now open <http://localhost:8000>, click **Catalog**, and register the desired agents and
+MCP servers. Register all six entries for the full demo. The account sidebar updates after
+each installation; no registration CLI command or worker restart is required.
 
 ### Mount Nexus Hello
 
@@ -463,24 +303,26 @@ Mount/send Writer HTTP:
           -> standalone start/turn/stop activities -> subagent_server.py
 ```
 
-The Nexus Hello workflow opts into its account toolbox explicitly:
+Nexus Hello and Whimsical use the same generic per-turn resolver:
 
 ```python
-account_gateway = nexus_gateway("NexusHelloAccount")
-mcp_server = account_gateway.mcp_servers("demo")
+toolbox = await nexus_gateway(account_id).resolve_toolbox(
+    caller_agent_id=registered_agent_id,
+    lineage=delegation_lineage,
+    delegation_depth=delegation_depth,
+    max_delegation_depth=5,
+)
 
-subagent_gateway = agent.nexus_subagent_gateway("NexusHelloAccount")
-writer = subagent_gateway.subagent([...], "writer", key="writer")
-
-whimsical = agent.nexus_native_subagent(
-    WhimsicalAgentWorkflow,
-    "nexus-hello-whimsical-agent-endpoint",
-    key="whimsical-agent",
+sdk_agent = Agent(
+    mcp_servers=list(toolbox.mcp_servers),
+    tools=[harness_tool_as_openai_tool(tool) for tool in toolbox.subagent_tools],
 )
 ```
 
-An agent using a different `account_id` resolves a different registry workflow and cannot
-see these registrations.
+The resolved manifest excludes the caller and its ancestors. The runner propagates lineage
+to native child sessions and rejects delegation past depth five, preventing dynamically
+wired agents from recursively bouncing between one another. An agent using a different
+`account_id` resolves a different registry workflow and cannot see these installations.
 
 ## Run without `just`
 
@@ -495,32 +337,23 @@ uv run --extra nexus-mcp --group examples python -m examples.nexus_hello.worker
 TEMPORAL_NAMESPACE=gateway \
 GATEWAY_SEED_ACCOUNT_ID=NexusHelloAccount \
 GATEWAY_UI_ACCOUNT_ID=NexusHelloAccount \
+GATEWAY_CATALOG_FILE=examples/nexus_hello/catalog.json \
 uv run --extra nexus-mcp --group examples python -m durable_tools_gateway.worker
 ```
 
-Register a harness-native agent dynamically through the account API:
+The UI's registration action is also available directly through the catalog API:
 
 ```sh
-curl --fail --request POST http://127.0.0.1:8000/api/account/agents \
-  --header 'content-type: application/json' \
-  --data-binary '{"agent_id":"nexus-hello","kind":"harness_nexus","label":"Nexus Hello","description":"Nexus Hello demo","nexus_endpoint":"nexus-hello-agent-endpoint"}'
-```
-
-Register the directly invoked Nexus MCP service as observation-only metadata:
-
-```sh
-curl --fail --request POST http://127.0.0.1:8000/api/account/mcp-servers \
-  --header 'content-type: application/json' \
-  --data-binary '{"name":"demo-nexus","endpoint":"nexus-hello-demo-endpoint","service":"demo-nexus"}'
+curl --fail --request POST \
+  http://127.0.0.1:8000/api/catalog/nexus-hello/register
 ```
 
 ## Troubleshooting and reset
 
-- If the pane has no cards, run `just register-agents` and reload the page.
+- If the pane has no cards, open **Catalog** and register at least one agent.
 - If Nexus Hello mounts but the first send fails, confirm `just worker` is running and
   `nexus-hello-agent-endpoint` targets namespace `default`, task queue `nexus-hello`.
-- If the toolbox is empty, run both `register-third-party-*` recipes after the HTTP
-  servers and gateway are ready.
+- If an agent's toolbox is empty, install MCP servers and other agents from **Catalog**.
 - Account state is durable. To get a completely fresh demo, stop `gateway-ui`, run the
   command below, and restart `just gateway-ui` before registering resources.
 

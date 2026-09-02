@@ -10,7 +10,9 @@ import asyncio
 import json
 import logging
 import uuid
+from dataclasses import asdict
 from datetime import timedelta
+from hashlib import sha256
 from typing import Any, TypeVar
 
 import httpx
@@ -46,6 +48,8 @@ from .generated import (
     ListAccountEntriesOutputRemoteToolsValueItem,
     RegisterExternalInput,
     RegisterSubagentInput,
+    ResolveAccountToolboxInput,
+    ResolveAccountToolboxOutput,
     RegistryService,
     StartSubagentInput,
     StartSubagentOutput,
@@ -53,11 +57,13 @@ from .generated import (
 )
 from .registry import (
     REGISTRY_TASK_QUEUE,
+    AccountEntries,
     SubagentInstanceRoute,
     ToolRegistryWorkflow,
     account_registry_workflow_id,
     fetch_external_tools,
 )
+from .resources import ResourceDescriptor
 
 REGISTRY_NEXUS_ENDPOINT = "mcp-registry-endpoint"
 
@@ -352,6 +358,51 @@ class RegistryServiceHandler:
                     for alias, tools in remote_tools.items()
                 }
             )
+        )
+
+    @nexusrpc.handler.sync_operation
+    async def resolve_account_toolbox(
+        self, ctx: StartOperationContext, input: ResolveAccountToolboxInput
+    ) -> ResolveAccountToolboxOutput:
+        """Return one immutable discovery snapshot for the caller's next turn."""
+        account_id = input.account_id or ""
+        caller = input.caller_agent_id or ""
+        if not account_id or not caller:
+            raise nexusrpc.HandlerError(
+                "account_id and caller_agent_id are required",
+                type=nexusrpc.HandlerErrorType.BAD_REQUEST,
+            )
+        handle = await self._account_handle(account_id)
+        entries = await handle.query(
+            ToolRegistryWorkflow.list_account_entries,
+            result_type=AccountEntries,
+        )
+        excluded = {*(input.lineage or []), caller}
+        depth = input.delegation_depth or 0
+        max_depth = input.max_delegation_depth or 5
+        resources: list[ResourceDescriptor] = []
+        for descriptor in entries.resources.values():
+            if descriptor.category == "agent":
+                if descriptor.resource_id in excluded:
+                    continue
+                if depth >= max_depth:
+                    continue
+            resources.append(descriptor)
+        resources.sort(
+            key=lambda item: (
+                item.category,
+                item.transport != "nexus",
+                item.resource_id,
+            )
+        )
+        manifest = json.dumps(
+            [asdict(item) for item in resources],
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return ResolveAccountToolboxOutput(
+            manifest=manifest,
+            version=sha256(manifest.encode()).hexdigest()[:16],
         )
 
     @nexusrpc.handler.sync_operation
