@@ -48,6 +48,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEventType,
     AgentMessage,
     AgentStatus,
+    INITIAL_USER_MESSAGE_MEMO,
     OperatorCommand,
     OperatorCommandResult,
     SEND_AGENT_MESSAGE_UPDATE,
@@ -615,7 +616,14 @@ async def _close_if_running(temporal: Client, workflow_id: str) -> bool:
 async def _workflow_execution_state(
     temporal: Client,
     workflow_id: str,
+    *,
+    with_initial_message: bool = False,
 ) -> dict[str, object]:
+    """Describe one execution, optionally reading the preview memo off the same call.
+
+    The memo is off by default so the plain status endpoint's shape does not grow a field only
+    the session list has a use for.
+    """
     handle = temporal.get_workflow_handle(workflow_id)
     try:
         desc = await handle.describe()
@@ -628,24 +636,55 @@ async def _workflow_execution_state(
             "closed": True,
         }
 
-    return {
+    state: dict[str, object] = {
         "workflow_id": workflow_id,
         "execution_status": desc.status.name,
         "closed": desc.status != WorkflowExecutionStatus.RUNNING,
     }
+    if with_initial_message:
+        state["initial_user_message"] = await _memo_initial_user_message(desc)
+    return state
+
+
+async def _memo_initial_user_message(desc: Any) -> str | None:
+    """The session's first message, as the agent recorded it on the workflow memo.
+
+    Rides along on the describe the session list already makes, so a preview costs no RPC of its
+    own. ``None`` means no memo: a session that predates the agent writing one, or one nobody
+    has spoken to yet.
+
+    Unwrapped here so both paths hand back the same thing — a sentence — since the memo carries
+    the same ``{type, payload}`` envelope the history scan reads.
+    """
+    try:
+        memo = await desc.memo()
+    except Exception:  # noqa: BLE001 — a preview is never worth failing a row for
+        return None
+    value = memo.get(INITIAL_USER_MESSAGE_MEMO)
+    return _display_user_message(value) if isinstance(value, str) else None
 
 
 async def _session_with_execution_state(
     temporal: Client,
     session: Session,
 ) -> dict[str, object]:
-    state, initial_user_message = await asyncio.gather(
-        _workflow_execution_state(temporal, session.workflow_id),
-        _session_initial_user_message(temporal, session.workflow_id),
+    state = await _workflow_execution_state(
+        temporal, session.workflow_id, with_initial_message=True
     )
+    raw_message = state.pop("initial_user_message", None)
     content = {**asdict(session), **state}
-    if initial_user_message is not None:
-        content["initial_user_message"] = initial_user_message
+
+    # Fall back to the history scan only for sessions that started before agents wrote a memo.
+    # Preserving today's previews at today's cost for those, rather than blanking every existing
+    # session, and the cost drains away on its own as sessions turn over.
+    #
+    # Not attempted when the workflow is gone: there is no history to scan, so the scan can only
+    # page to its limit and return nothing. That case was the bulk of the waste — 39 of 40 rows
+    # walking up to 96 events each to produce one string between them.
+    if raw_message is None and state["execution_status"] != _WORKFLOW_NOT_FOUND:
+        raw_message = await _session_initial_user_message(temporal, session.workflow_id)
+    if isinstance(raw_message, str):
+        content["initial_user_message"] = raw_message
     return content
 
 

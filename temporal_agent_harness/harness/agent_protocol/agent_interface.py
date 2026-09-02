@@ -25,6 +25,11 @@ AGENT_STATUS_QUERY = "agent_status"
 AGENT_INTERFACE_QUERY = "agent_interface"
 OPERATOR_INTERFACE_QUERY = "operator_interface"
 
+# Memo key holding the session's first user message, for a session list's one-line preview.
+# A memo rather than a history scan because a memo belongs to the WORKFLOW and a scan reads one
+# RUN: the scan's answer disappears the moment a long session continues as new.
+INITIAL_USER_MESSAGE_MEMO = "initial_user_message"
+
 # Width (hex chars) of ONE segment of an agent's short id. A top-level agent's id is a single
 # segment; a subagent's id is its parent's id plus one fresh segment, joined by ``-`` (see
 # ``AGENT_ID`` and ``AgentWorkflowRunner.start_subagent``) — short and cheap for a model to

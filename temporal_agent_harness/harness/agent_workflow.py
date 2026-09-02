@@ -54,6 +54,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
     EXECUTE_OPERATOR_COMMAND_UPDATE,
+    INITIAL_USER_MESSAGE_MEMO,
     OPERATOR_INTERFACE_QUERY,
     PROVIDE_CALLBACK_RESULT_UPDATE,
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
@@ -411,6 +412,47 @@ def _render_message(message: AgentMessage) -> str:
     representation of the message. Consumers that want structure can parse it back.
     """
     return message.model_dump_json(include={"type", "payload"})
+
+
+#: How much of the first message the initial-user-message memo is allowed to carry.
+#:
+#: Temporal's hard cap is 2 MiB per execution (``limit.memoSize.error``), which a message could
+#: not realistically reach — the update carrying it is capped at the same 2 MiB per blob, so
+#: anything big enough to break the memo cannot reach the workflow to begin with. The number that
+#: matters is the WARN threshold, 2 KiB, and it matters because of where a memo is read: it comes
+#: back on every ``describe``, and the session list describes every session on every poll from
+#: every open tab. An unbounded memo would be paid for there, forever, to render one line.
+_INITIAL_MESSAGE_MEMO_MAX_CHARS = 512
+
+
+def _memo_preview(message: AgentMessage) -> str:
+    """Render a message for the memo, bounded to preview length.
+
+    Truncates the payload's strings rather than the rendered JSON, so what lands stays a valid
+    ``{type, payload}`` envelope and unwraps to a sentence on the reading side; a truncated blob
+    of JSON would render as a blob of JSON.
+    """
+    rendered = _render_message(message)
+    if len(rendered) <= _INITIAL_MESSAGE_MEMO_MAX_CHARS:
+        return rendered
+    clipped = message.model_copy(
+        update={
+            "payload": {
+                key: (
+                    value[:_INITIAL_MESSAGE_MEMO_MAX_CHARS] + "…"
+                    if isinstance(value, str)
+                    and len(value) > _INITIAL_MESSAGE_MEMO_MAX_CHARS
+                    else value
+                )
+                for key, value in message.payload.items()
+            }
+        }
+    )
+    # ponytail: clipping per string leaves a payload of MANY short strings unbounded. Capped
+    # again here so the memo has a ceiling regardless of shape, at the cost of that pathological
+    # case previewing as raw JSON. Upgrade path: render the display text in-workflow and store
+    # that instead of the envelope.
+    return _render_message(clipped)[: _INITIAL_MESSAGE_MEMO_MAX_CHARS * 2]
 
 
 # ---------------------------------------------------------------------------
@@ -1679,6 +1721,10 @@ class AgentWorkflowRunner:
         # enough to keep ``is_continue_as_new_suggested`` true, an unguarded check would roll the
         # session over forever without ever answering anybody.
         self._turns_this_run = 0
+        # Whether this session's first message is already on the workflow memo. A successor run
+        # inherits the memo, so it must not overwrite it with the first message of ITS run —
+        # which would be turn N of the conversation, not turn 1.
+        self._initial_message_recorded = config.resume is not None
 
         # Register protocol handlers dynamically so the containing workflow doesn't need to.
         workflow.set_update_handler(
@@ -1737,6 +1783,24 @@ class AgentWorkflowRunner:
 
     # -- Protocol handlers --------------------------------------------------
 
+    def _record_initial_message(self, message: AgentMessage) -> None:
+        """Put this session's first message on the workflow memo, once.
+
+        A session list wants a one-line preview of each conversation, and the only place that
+        line lived was the ``send_agent_message`` update-accepted event in workflow history.
+        Reading it back meant scanning history, and a history scan reads ONE RUN — so the
+        preview vanished from every session the moment it rolled over.
+
+        A memo has neither problem. It belongs to the workflow rather than the run, and it comes
+        back on the ``describe`` the session list already makes, so a preview costs no RPC at all
+        instead of paging up to 96 history events to usually find nothing. ``_continue_as_new``
+        forwards ``workflow.memo()`` whole, so it survives a rollover.
+        """
+        if self._initial_message_recorded:
+            return
+        self._initial_message_recorded = True
+        workflow.upsert_memo({INITIAL_USER_MESSAGE_MEMO: _memo_preview(message)})
+
     async def _handle_send_agent_message(self, message: AgentMessage) -> AgentMessageReply:
         # Capture the stream head BEFORE publishing anything for this message: it is the
         # client stream-merge's read-start hint (``accepted_offset``). The handler body is
@@ -1749,6 +1813,7 @@ class AgentWorkflowRunner:
         turn_id = str(workflow.uuid4())
         pending = self._status.has_pending_work
         turn_number = self._status.enqueue_message(message, turn_id)
+        self._record_initial_message(message)
 
         if pending:
             self._pub(

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from contextlib import aclosing, asynccontextmanager
@@ -34,6 +35,7 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 from temporal_agent_harness.harness import AgentWorkflowRunner, agent, agent_workflow
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_STATUS_QUERY,
+    INITIAL_USER_MESSAGE_MEMO,
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
     AgentConfig,
@@ -478,6 +480,68 @@ async def test_a_session_keeps_its_conversation_across_a_rollover(
     assert successor != handle.result_run_id
 
     assert await _say(client, handle.id, "bananas", 2) == "apples bananas"
+
+
+async def test_the_session_preview_survives_a_rollover(
+    client_and_queue, rollover_after_one_turn
+):
+    """The session list's one-line preview used to come from scanning history for the accepting
+    event, and a history scan reads ONE RUN — so every rolled-over session went blank. The memo
+    belongs to the workflow instead, and ``_continue_as_new`` forwards it whole."""
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue)
+
+    await _say(client, handle.id, "apples", 1)
+    assert await _preview(client, handle.id) == "apples"
+
+    await _await_rollover(client, handle.id, str(handle.result_run_id))
+    await _say(client, handle.id, "bananas", 2)
+
+    # Still turn one's line, not the first message of the SUCCESSOR run — which is the reading a
+    # successor would arrive at on its own, since to it "bananas" is the first message it saw.
+    assert await _preview(client, handle.id) == "apples"
+
+
+async def test_only_the_first_message_of_a_session_becomes_its_preview(
+    client_and_queue,
+) -> None:
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue)
+
+    await _say(client, handle.id, "apples", 1)
+    await _say(client, handle.id, "bananas", 2)
+
+    assert await _preview(client, handle.id) == "apples"
+
+
+async def test_a_session_nobody_has_spoken_to_has_no_preview(client_and_queue) -> None:
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue)
+
+    desc = await client.get_workflow_handle(handle.id).describe()
+    assert INITIAL_USER_MESSAGE_MEMO not in await desc.memo()
+
+
+async def test_a_very_long_first_message_is_not_carried_whole(client_and_queue) -> None:
+    """The memo comes back on every describe, and the session list describes every session on
+    every poll from every tab — so what lands here is bounded, well under the 2 KiB at which
+    Temporal starts warning, rather than the whole of whatever was pasted in."""
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue)
+
+    await _say(client, handle.id, "x" * 50_000, 1)
+
+    desc = await client.get_workflow_handle(handle.id).describe()
+    recorded = (await desc.memo())[INITIAL_USER_MESSAGE_MEMO]
+    assert len(recorded) < 2048
+    # Still the envelope, so the reading side unwraps it to a sentence rather than showing JSON.
+    assert json.loads(recorded)["payload"]["text"].startswith("xxx")
+
+
+async def _preview(client: Client, workflow_id: str) -> str:
+    """The session's recorded opening line, unwrapped from the envelope the memo carries."""
+    desc = await client.get_workflow_handle(workflow_id).describe()
+    return json.loads((await desc.memo())[INITIAL_USER_MESSAGE_MEMO])["payload"]["text"]
 
 
 async def test_stream_offsets_keep_climbing_across_the_boundary(
