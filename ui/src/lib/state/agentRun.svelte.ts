@@ -296,7 +296,11 @@ export class AgentRunController {
   );
 
   get total(): number {
-    return this.replayTimeline.length;
+    // #replayTimeline() emits exactly one entry per frame, so this matches
+    // replayTimeline.length without forcing that projection to rebuild. Reading
+    // the projection here made appending one frame O(n), and hydrating a cached
+    // session O(n^2) — 1,583 frames cost 10.2s of rebuilds before this.
+    return this.session ? this.frames.length : 0;
   }
 
   get runInfo(): RunInfo {
@@ -370,6 +374,13 @@ export class AgentRunController {
       }
     }
 
+    if (import.meta.env.DEV && timeline.length !== this.frames.length) {
+      console.error(
+        `replayTimeline emitted ${timeline.length} entries for ${this.frames.length} frames. ` +
+          "get total() returns frames.length to avoid rebuilding this projection on every " +
+          "appended frame, and that shortcut is now wrong."
+      );
+    }
     return timeline;
   }
 
