@@ -187,9 +187,15 @@ def create_agent_harness_app(
             result_type=list[Session],
         )
         known_workflow_ids = {session.workflow_id for session in sessions}
-        discovered = await _discover_untracked_sessions(
-            app.state.temporal, registry_result, known_workflow_ids
-        )
+        try:
+            discovered = await _discover_untracked_sessions(
+                app.state.temporal, registry_result, known_workflow_ids
+            )
+        except Exception:  # noqa: BLE001 — a scan we cannot run is not worth the sessions we have
+            # Discovery is an extra: it finds agent workflows this manager did not start. A
+            # visibility outage must therefore cost the sessions it would have ADDED, not the
+            # tracked ones the manager query already returned successfully.
+            discovered = []
         return await _sessions_with_execution_state(
             app.state.temporal, sessions + discovered
         )
@@ -519,11 +525,32 @@ async def _sessions_with_execution_state(
     temporal: Client,
     sessions: list[Session],
 ) -> list[dict[str, object]]:
-    return list(
-        await asyncio.gather(
-            *(_session_with_execution_state(temporal, session) for session in sessions)
-        )
+    """Enrich every session, and let each one fail on its own.
+
+    Forty concurrent describes against one dev-server frontend is a place timeouts are the
+    expected case, not a theoretical one — the console's own poller records twelve seconds
+    against twenty stale entries, on a ten-second interval. Without ``return_exceptions`` the
+    first of those took the whole list with it and every healthy session vanished from the
+    sidebar, which is a far worse answer than one row whose status is momentarily unknown.
+    """
+    states = await asyncio.gather(
+        *(_session_with_execution_state(temporal, session) for session in sessions),
+        return_exceptions=True,
     )
+    return [
+        _unknown_execution_state(session) if isinstance(state, BaseException) else state
+        for session, state in zip(sessions, states, strict=True)
+    ]
+
+
+def _unknown_execution_state(session: Session) -> dict[str, object]:
+    """One session the describe could not answer for: listed, with its status withheld.
+
+    ``closed`` stays false because the failure says nothing about the workflow — claiming a
+    live session had ended would be a worse lie than admitting to not knowing, and the next
+    poll corrects it either way.
+    """
+    return {**asdict(session), "execution_status": "UNKNOWN", "closed": False}
 
 
 def _attach_error(
