@@ -101,6 +101,7 @@ def _spawned_lifecycle(
                     agent_key=str(data["agent_key"]),
                     provider_session_id=str(data["workflow_id"]),
                     next_expected_turn=int(data["subagent_turn"]) + 1,
+                    has_started=True,
                 )
             )
         elif event_type == "subagent_stopped":
@@ -114,6 +115,7 @@ def _observation_dict(observation: SpawnedAgentObservation) -> dict[str, Any]:
         "agent_key": observation.agent_key,
         "workflow_id": observation.provider_session_id,
         "next_expected_turn": observation.next_expected_turn,
+        "has_started": observation.has_started,
     }
 
 

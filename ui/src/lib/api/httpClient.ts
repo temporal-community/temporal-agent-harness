@@ -1,6 +1,7 @@
 import type {
   AcceptedMessageTypesResponse,
   AccountOverview,
+  CatalogResponse,
   AgentInterfaceFunction,
   AgentRegistryResponse,
   AgentSseFrame,
@@ -80,6 +81,22 @@ async function* readSse(response: Response): AsyncIterable<AgentSseFrame> {
 export class HttpAgentApi implements AgentApi {
   async accountOverview(): Promise<AccountOverview> {
     return json<AccountOverview>(apiPath("account"));
+  }
+
+  async catalog(): Promise<CatalogResponse> {
+    return json<CatalogResponse>(apiPath("catalog"));
+  }
+
+  async installCatalogResource(resourceId: string): Promise<void> {
+    await json(apiPath(`catalog/${encodeURIComponent(resourceId)}/register`), {
+      method: "POST"
+    });
+  }
+
+  async removeCatalogResource(resourceId: string): Promise<void> {
+    await json(apiPath(`catalog/${encodeURIComponent(resourceId)}/register`), {
+      method: "DELETE"
+    });
   }
 
   async listToolCalls(serverName: string): Promise<ToolCallRecord[]> {

@@ -23,12 +23,9 @@ from temporalio.converter import (
 )
 from temporalio.service import RPCError, RPCStatusCode
 
-from .registry import (
-    AgentRegistration,
-    NexusMCPServerRegistration,
-    SessionRecord,
-)
+from .registry import SessionRecord
 from .registry_service_handler import ExternalMCPCallInput, mcp_proxy_activity
+from .resources import ResourceDescriptor
 
 _READ_CONCURRENCY = 8
 _MAX_ACTIVITY_SCAN = 500
@@ -124,7 +121,7 @@ async def _workflow_history(
 async def _native_calls_from_history(
     client: Client,
     *,
-    server: NexusMCPServerRegistration,
+    server: ResourceDescriptor,
     namespace: str,
     workflow_id: str,
     agent_id: str,
@@ -218,8 +215,8 @@ async def _native_calls_from_history(
 async def scan_native_tool_calls(
     client: Client,
     *,
-    server: NexusMCPServerRegistration,
-    agents: list[AgentRegistration],
+    server: ResourceDescriptor,
+    agents: list[ResourceDescriptor],
     sessions: list[SessionRecord],
 ) -> list[ToolCallRecord]:
     """Scan only account-known harness workflows, never namespace Visibility."""

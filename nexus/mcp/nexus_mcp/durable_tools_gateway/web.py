@@ -9,7 +9,6 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
 
@@ -36,10 +35,10 @@ from .agent_broker import (
     execute_external_agent_action,
 )
 from .registry import (
+    GLOBAL_CATALOG_WORKFLOW_ID,
     REGISTRY_TASK_QUEUE,
     AccountEntries,
-    AgentRegistration,
-    NexusMCPServerRegistration,
+    GlobalCatalogWorkflow,
     PendingSessionEvent,
     SessionEvent,
     SessionRecord,
@@ -52,11 +51,14 @@ from .registry_service_handler import (
     SubagentDispatchOutput,
     subagent_dispatch_activity_id,
 )
+from .resources import AccountResourceRegistration, ResourceDescriptor
 from .tool_history import scan_external_tool_calls, scan_native_tool_calls
 
 logger = logging.getLogger(__name__)
 _EXTERNAL_EVENTS_PER_TURN = 4
 _UI_TUNNEL_TASK_QUEUE = "nexus-ui-tunnel"
+_SESSION_PROJECTION_TIMEOUT_SECONDS = 1.0
+_SESSION_PROJECTION_RETRY_SECONDS = 0.025
 
 
 class ExternalTurnHistoryUnavailable(Exception):
@@ -67,7 +69,7 @@ class RegisterAgentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_id: str
-    kind: str = "harness_nexus"
+    kind: Literal["harness_nexus", "external_http"] = "harness_nexus"
     label: str
     description: str = ""
     nexus_endpoint: str | None = None
@@ -154,6 +156,19 @@ def _session_response(session: SessionRecord) -> dict[str, Any]:
             else "NOT_STARTED"
         ),
         "closed": session.closed,
+    }
+
+
+def _agent_response(agent: ResourceDescriptor) -> dict[str, Any]:
+    return {
+        "agent_id": agent.resource_id,
+        "kind": agent.kind,
+        "label": agent.label,
+        "description": agent.description,
+        "nexus_endpoint": agent.nexus_endpoint,
+        "nexus_service": agent.nexus_service,
+        "provider_url": agent.provider_url,
+        "revision": agent.revision,
     }
 
 
@@ -371,6 +386,12 @@ def create_account_agent_app(
             task_queue=REGISTRY_TASK_QUEUE,
             id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
         )
+        app.state.catalog = await client.start_workflow(
+            GlobalCatalogWorkflow.run,
+            id=GLOBAL_CATALOG_WORKFLOW_ID,
+            task_queue=REGISTRY_TASK_QUEUE,
+            id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
+        )
         yield
 
     app = FastAPI(lifespan=lifespan)
@@ -380,19 +401,29 @@ def create_account_agent_app(
 
     async def resolve_session(
         session_id: str,
-    ) -> tuple[SessionRecord, AgentRegistration]:
+    ) -> tuple[SessionRecord, ResourceDescriptor]:
         handle = await registry_handle()
-        session: SessionRecord | None = await handle.query(
-            ToolRegistryWorkflow.resolve_session,
-            session_id,
-            result_type=SessionRecord | None,
-        )
+        session: SessionRecord | None = None
+        deadline = time.monotonic() + _SESSION_PROJECTION_TIMEOUT_SECONDS
+        while True:
+            session = await handle.query(
+                ToolRegistryWorkflow.resolve_session,
+                session_id,
+                result_type=SessionRecord | None,
+            )
+            if (
+                session is not None
+                or session_id.startswith("session-")
+                or time.monotonic() >= deadline
+            ):
+                break
+            await asyncio.sleep(_SESSION_PROJECTION_RETRY_SECONDS)
         if session is None:
             raise HTTPException(status_code=404, detail="unknown account session")
-        agent: AgentRegistration | None = await handle.query(
+        agent: ResourceDescriptor | None = await handle.query(
             ToolRegistryWorkflow.get_agent,
             session.agent_id,
-            result_type=AgentRegistration | None,
+            result_type=ResourceDescriptor | None,
         )
         if agent is None:
             raise HTTPException(
@@ -409,7 +440,7 @@ def create_account_agent_app(
             execution_id=f"ui-agent-{input.action}-{uuid.uuid4()}",
         )
 
-    def native_driver(agent: AgentRegistration) -> WebTunnelDriver:
+    def native_driver(agent: ResourceDescriptor) -> WebTunnelDriver:
         if agent.nexus_endpoint is None:
             raise HTTPException(
                 status_code=409, detail="native agent has no Nexus endpoint"
@@ -430,13 +461,20 @@ def create_account_agent_app(
             "msg_type": msg_type,
             "payload": payload,
             "expected_turn": expected_turn,
+            "account_id": account_id,
+            "registered_agent_id": agent.resource_id,
+            "delegation_lineage": [],
+            "delegation_depth": 0,
+            "max_delegation_depth": 5,
             "idempotency_key": (f"{account_id}:{session.session_id}:{expected_turn}"),
         }
         if agent.kind == "external_http":
             result = await execute_external_action(
                 ExternalAgentActionInput(
                     action="send",
-                    session_id=session.provider_session_id,
+                    session_id=(
+                        "" if not session.has_started else session.provider_session_id
+                    ),
                     provider_url=str(agent.provider_url),
                     values=values,
                 )
@@ -447,9 +485,29 @@ def create_account_agent_app(
                 message_type=msg_type,
                 payload=payload,
                 expected_turn=expected_turn,
+                metadata={
+                    name: values[name]
+                    for name in (
+                        "account_id",
+                        "registered_agent_id",
+                        "delegation_lineage",
+                        "delegation_depth",
+                        "max_delegation_depth",
+                    )
+                },
             )
         handle = await registry_handle()
         if agent.kind == "external_http":
+            provider_session_id = str(result.get("provider_instance_id") or "")
+            if (
+                provider_session_id
+                and provider_session_id != session.provider_session_id
+            ):
+                session = await handle.execute_update(
+                    ToolRegistryWorkflow.bind_session_provider,
+                    args=[session.session_id, provider_session_id],
+                    result_type=SessionRecord,
+                )
             turn_number = int(result["turn_number"])
             turn_id = str(result["turn_id"])
             output = _json_value(str(result["output"]))
@@ -513,9 +571,9 @@ def create_account_agent_app(
 
     @app.get("/api/agents")
     async def list_agents():
-        agents: list[AgentRegistration] = await app.state.registry.query(
+        agents: list[ResourceDescriptor] = await app.state.registry.query(
             ToolRegistryWorkflow.list_agents,
-            result_type=list[AgentRegistration],
+            result_type=list[ResourceDescriptor],
         )
         return {
             "agents": [
@@ -532,9 +590,9 @@ def create_account_agent_app(
 
     @app.get("/api/account")
     async def account_overview():
-        agents: list[AgentRegistration] = await app.state.registry.query(
+        agents: list[ResourceDescriptor] = await app.state.registry.query(
             ToolRegistryWorkflow.list_agents,
-            result_type=list[AgentRegistration],
+            result_type=list[ResourceDescriptor],
         )
         sessions: list[SessionRecord] = await app.state.registry.query(
             ToolRegistryWorkflow.list_sessions,
@@ -548,7 +606,7 @@ def create_account_agent_app(
             "account_id": account_id,
             "agents": [
                 {
-                    **asdict(agent),
+                    **_agent_response(agent),
                     "session_count": sum(
                         session.agent_id == agent.agent_id for session in sessions
                     ),
@@ -585,27 +643,127 @@ def create_account_agent_app(
             "active_session_count": sum(not session.closed for session in sessions),
         }
 
+    @app.get("/api/catalog")
+    async def catalog_overview():
+        catalog: list[ResourceDescriptor] = await app.state.catalog.query(
+            GlobalCatalogWorkflow.list_resources,
+            result_type=list[ResourceDescriptor],
+        )
+        entries: AccountEntries = await app.state.registry.query(
+            ToolRegistryWorkflow.list_account_entries,
+            result_type=AccountEntries,
+        )
+        installed = set(entries.resources)
+        return {
+            "resources": [
+                {
+                    **descriptor.to_dict(),
+                    "installed": descriptor.resource_id in installed,
+                }
+                for descriptor in catalog
+            ]
+        }
+
+    @app.post("/api/catalog/{resource_id}/register")
+    async def install_catalog_resource(resource_id: str):
+        descriptor: ResourceDescriptor | None = await app.state.catalog.query(
+            GlobalCatalogWorkflow.get_resource,
+            resource_id,
+            result_type=ResourceDescriptor | None,
+        )
+        if descriptor is None:
+            raise HTTPException(status_code=404, detail="unknown catalog resource")
+        registration: AccountResourceRegistration = (
+            await app.state.registry.execute_update(
+                ToolRegistryWorkflow.install_resource,
+                descriptor,
+                id=f"install-{resource_id}-r{descriptor.revision}-{uuid.uuid4()}",
+                result_type=AccountResourceRegistration,
+            )
+        )
+        return {
+            **registration.descriptor.to_dict(),
+            "installed": True,
+            "installed_at": registration.installed_at,
+        }
+
+    @app.delete("/api/catalog/{resource_id}/register")
+    async def remove_catalog_resource(resource_id: str):
+        await app.state.registry.execute_update(
+            ToolRegistryWorkflow.remove_resource,
+            resource_id,
+            id=f"remove-{resource_id}-{uuid.uuid4()}",
+        )
+        return {"resource_id": resource_id, "installed": False}
+
     @app.post("/api/account/agents")
     async def register_agent(req: RegisterAgentRequest):
-        registration = AgentRegistration(**req.model_dump())
-        result: AgentRegistration = await app.state.registry.execute_update(
-            ToolRegistryWorkflow.register_agent,
-            registration,
-            result_type=AgentRegistration,
+        descriptor = ResourceDescriptor(
+            resource_id=req.agent_id,
+            revision=1,
+            category="agent",
+            transport="nexus" if req.kind == "harness_nexus" else "external_http",
+            label=req.label,
+            description=req.description,
+            endpoint=req.nexus_endpoint or req.provider_url or "",
+            service="A2AService" if req.kind == "harness_nexus" else None,
+            agent_card={
+                "name": req.label,
+                "description": req.description,
+                "version": "1.0.0",
+                "supportedInterfaces": [
+                    {
+                        "url": req.nexus_endpoint or req.provider_url or "",
+                        "protocolBinding": (
+                            "TEMPORAL_NEXUS"
+                            if req.kind == "harness_nexus"
+                            else "HTTP+JSON"
+                        ),
+                        "protocolVersion": "1.0",
+                    }
+                ],
+                "capabilities": {"streaming": True},
+                "defaultInputModes": ["text/plain"],
+                "defaultOutputModes": ["text/plain"],
+                "skills": [
+                    {
+                        "id": "ask",
+                        "name": "ask",
+                        "description": "Send a text message to this agent.",
+                        "tags": ["agent"],
+                    }
+                ],
+            },
         )
-        return asdict(result)
+        result: ResourceDescriptor = await app.state.registry.execute_update(
+            ToolRegistryWorkflow.register_agent,
+            descriptor,
+            result_type=ResourceDescriptor,
+        )
+        return _agent_response(result)
 
     @app.post("/api/account/mcp-servers")
     async def register_nexus_mcp_server(req: RegisterNexusMCPServerRequest):
-        registration = NexusMCPServerRegistration(**req.model_dump())
-        result: NexusMCPServerRegistration = (
-            await app.state.registry.execute_update(
-                ToolRegistryWorkflow.register_nexus_mcp_server,
-                registration,
-                result_type=NexusMCPServerRegistration,
-            )
+        descriptor = ResourceDescriptor(
+            resource_id=req.name,
+            revision=1,
+            category="mcp",
+            transport="nexus",
+            label=req.name,
+            description="Nexus-native MCP server.",
+            endpoint=req.endpoint,
+            service=req.service,
         )
-        return asdict(result)
+        result: ResourceDescriptor = await app.state.registry.execute_update(
+            ToolRegistryWorkflow.register_nexus_mcp_server,
+            descriptor,
+            result_type=ResourceDescriptor,
+        )
+        return {
+            "name": result.resource_id,
+            "endpoint": result.endpoint,
+            "service": result.service,
+        }
 
     @app.get("/api/mcp-servers/{server_name}/tool-calls")
     async def tool_calls(server_name: str):
@@ -615,9 +773,9 @@ def create_account_agent_app(
         )
         native = entries.nexus_servers.get(server_name)
         if native is not None:
-            agents: list[AgentRegistration] = await app.state.registry.query(
+            agents: list[ResourceDescriptor] = await app.state.registry.query(
                 ToolRegistryWorkflow.list_agents,
-                result_type=list[AgentRegistration],
+                result_type=list[ResourceDescriptor],
             )
             sessions: list[SessionRecord] = await app.state.registry.query(
                 ToolRegistryWorkflow.list_sessions,
@@ -655,9 +813,9 @@ def create_account_agent_app(
             ToolRegistryWorkflow.list_sessions,
             result_type=list[SessionRecord],
         )
-        agents: list[AgentRegistration] = await handle.query(
+        agents: list[ResourceDescriptor] = await handle.query(
             ToolRegistryWorkflow.list_agents,
-            result_type=list[AgentRegistration],
+            result_type=list[ResourceDescriptor],
         )
         agents_by_id = {agent.agent_id: agent for agent in agents}
 
@@ -670,6 +828,8 @@ def create_account_agent_app(
                     agent_key=str(item["agent_key"]),
                     provider_session_id=str(item["workflow_id"]),
                     next_expected_turn=int(item.get("next_expected_turn", 1)),
+                    has_started=bool(item.get("has_started", False))
+                    or int(item.get("next_expected_turn", 1)) > 1,
                 )
                 for item in values
             ]
@@ -724,10 +884,10 @@ def create_account_agent_app(
 
     @app.post("/api/sessions")
     async def create_session(req: CreateSessionRequest):
-        agent: AgentRegistration | None = await app.state.registry.query(
+        agent: ResourceDescriptor | None = await app.state.registry.query(
             ToolRegistryWorkflow.get_agent,
             req.agent_workflow_type,
-            result_type=AgentRegistration | None,
+            result_type=ResourceDescriptor | None,
         )
         if agent is None:
             raise HTTPException(status_code=422, detail="unknown registered agent")
@@ -780,23 +940,21 @@ def create_account_agent_app(
 
     @app.get("/api/agent-interface/{session_id}")
     async def agent_interface(session_id: str):
-        session, agent = await resolve_session(session_id)
-        if agent.kind == "external_http" or not session.has_started:
-            return [
-                {
-                    "name": "ask",
-                    "description": "Send a text message to this agent.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"text": {"type": "string"}},
-                        "required": ["text"],
-                    },
-                    "output": {"type": "object"},
-                }
-            ]
-        return await native_driver(agent).controls().agent_interface(
-            session.provider_session_id
-        )
+        _, agent = await resolve_session(session_id)
+        skills = (agent.agent_card or {}).get("skills", [])
+        return [
+            {
+                "name": skill["id"],
+                "description": skill.get("description", skill.get("name", "")),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+                "output": {"type": "object"},
+            }
+            for skill in skills
+        ]
 
     @app.get("/api/operator-interface/{session_id}")
     async def operator_interface(session_id: str):
@@ -910,7 +1068,7 @@ def create_account_agent_app(
 
     async def native_stream(
         session: SessionRecord,
-        agent: AgentRegistration,
+        agent: ResourceDescriptor,
         from_offset: int,
         *,
         stop_at_turn_end: bool = False,

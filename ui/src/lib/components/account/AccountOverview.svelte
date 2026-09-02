@@ -1,9 +1,18 @@
 <script lang="ts">
-  import { Braces, ChevronDown, History, RefreshCw, Search, X } from "@lucide/svelte";
+  import {
+    Braces,
+    ChevronDown,
+    History,
+    Library,
+    RefreshCw,
+    Search,
+    X
+  } from "@lucide/svelte";
   import { SubagentCloseDecisionRequiredError } from "$lib/api/httpClient";
   import type {
     AccountOverview as AccountOverviewData,
     AccountResource,
+    CatalogResource,
     Session,
     SubagentCloseResolution,
     SubagentInfo,
@@ -30,6 +39,9 @@
       resolution?: SubagentCloseResolution
     ) => void | Promise<void>;
     onLoadToolCalls?: (serverName: string) => Promise<ToolCallRecord[]>;
+    onLoadCatalog?: () => Promise<CatalogResource[]>;
+    onInstallCatalogResource?: (resourceId: string) => Promise<CatalogResource[]>;
+    onRemoveCatalogResource?: (resourceId: string) => Promise<CatalogResource[]>;
   }
 
   let {
@@ -43,7 +55,10 @@
     onSelectSession,
     onRefreshSessions,
     onCloseSession,
-    onLoadToolCalls
+    onLoadToolCalls,
+    onLoadCatalog,
+    onInstallCatalogResource,
+    onRemoveCatalogResource
   }: Props = $props();
 
   let sessionScope = $state<string | null>(null);
@@ -64,6 +79,13 @@
   let toolHistoryLeft = $state(16);
   let toolHistoryTop = $state(16);
   let toolCallRequestVersion = 0;
+  let catalogOpen = $state(false);
+  let catalogResources = $state<CatalogResource[]>([]);
+  let catalogLoading = $state(false);
+  let catalogError = $state<string | null>(null);
+  let catalogMutation = $state<string | null>(null);
+  let catalogLeft = $state(16);
+  let catalogTop = $state(16);
 
   const sortedSessions = $derived([...sessions].sort((a, b) => b.created_at - a.created_at));
   const sortedAgents = $derived(
@@ -74,6 +96,14 @@
   const sortedMcpServers = $derived(
     [...account.mcp_servers].sort(
       (a, b) => Number(a.kind !== "nexus") - Number(b.kind !== "nexus")
+    )
+  );
+  const sortedCatalogResources = $derived(
+    [...catalogResources].sort(
+      (a, b) =>
+        a.category.localeCompare(b.category) ||
+        Number(a.transport !== "nexus") - Number(b.transport !== "nexus") ||
+        a.label.localeCompare(b.label)
     )
   );
   const scopedSessions = $derived(
@@ -116,10 +146,60 @@
       Math.min(triggerRect.top, window.innerHeight - 576)
     );
     sessionScope = scope;
+    catalogOpen = false;
     toolCallRequestVersion += 1;
     toolCallServerName = null;
     sessionSearch = "";
     closeDecision = null;
+  }
+
+  async function loadCatalog(): Promise<void> {
+    if (!onLoadCatalog || catalogLoading) return;
+    catalogLoading = true;
+    catalogError = null;
+    try {
+      catalogResources = await onLoadCatalog();
+    } catch (error) {
+      catalogError = error instanceof Error ? error.message : "Failed to load catalog.";
+    } finally {
+      catalogLoading = false;
+    }
+  }
+
+  function toggleCatalog(event: MouseEvent): void {
+    if (catalogOpen) {
+      catalogOpen = false;
+      return;
+    }
+    const triggerRect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    catalogLeft = triggerRect.right + 10;
+    catalogTop = Math.max(16, Math.min(triggerRect.top, window.innerHeight - 620));
+    sessionScope = null;
+    toolCallServerName = null;
+    catalogOpen = true;
+    void loadCatalog();
+  }
+
+  async function mutateCatalog(resource: CatalogResource): Promise<void> {
+    if (catalogMutation) return;
+    const operation = resource.installed
+      ? onRemoveCatalogResource
+      : onInstallCatalogResource;
+    if (!operation) return;
+    catalogMutation = resource.resource_id;
+    catalogError = null;
+    try {
+      catalogResources = await operation(resource.resource_id);
+    } catch (error) {
+      catalogError = error instanceof Error ? error.message : "Catalog update failed.";
+    } finally {
+      catalogMutation = null;
+    }
+  }
+
+  function catalogKind(resource: CatalogResource): string {
+    const transport = resource.transport === "nexus" ? "Nexus" : "External";
+    return `${transport} · ${resource.category === "agent" ? "Agent" : "MCP"}`;
   }
 
   async function loadToolCalls(serverName: string): Promise<void> {
@@ -261,6 +341,20 @@
   class="account-pane"
   aria-label={`Account ${account.account_id} resources`}
 >
+  <button
+    type="button"
+    class:active={catalogOpen}
+    class="catalog-trigger"
+    aria-expanded={catalogOpen}
+    onclick={toggleCatalog}
+  >
+    <span class="catalog-trigger-label">
+      <Library size={13} />
+      <span>Catalog</span>
+    </span>
+    <ChevronDown size={12} class={catalogOpen ? "rotated" : ""} />
+  </button>
+
   <div class="account-identity">
     <span class="eyebrow">Account</span>
     <strong>{account.account_id}</strong>
@@ -519,6 +613,74 @@
       }}
     />
   {/if}
+
+  {#if catalogOpen}
+    <section
+      class="catalog-popover"
+      aria-label="Global resource catalog"
+      style={`--catalog-left: ${catalogLeft}px; --catalog-top: ${catalogTop}px`}
+    >
+      <header class="session-popover-head">
+        <span class="session-popover-title">
+          <Library size={15} />
+          <span>Global catalog</span>
+          <small>{catalogResources.length}</small>
+        </span>
+        <div class="session-popover-actions">
+          <button
+            type="button"
+            class:spinning={catalogLoading}
+            class="icon-button"
+            aria-label="Refresh catalog"
+            disabled={catalogLoading}
+            onclick={() => void loadCatalog()}
+          >
+            <RefreshCw size={14} />
+          </button>
+          <button
+            type="button"
+            class="icon-button"
+            aria-label="Close catalog"
+            onclick={() => (catalogOpen = false)}
+          >
+            <X size={15} />
+          </button>
+        </div>
+      </header>
+      <p class="catalog-copy">
+        Install agents and MCP servers into {account.account_id}. Native calls remain direct over Nexus.
+      </p>
+      {#if catalogError}<p class="catalog-error">{catalogError}</p>{/if}
+      <div class="catalog-list">
+        {#if !catalogLoading && catalogResources.length === 0}
+          <p class="session-empty">No catalog resources published.</p>
+        {/if}
+        {#each sortedCatalogResources as resource (resource.resource_id)}
+          <article class="catalog-row">
+            <span class="catalog-resource-copy">
+              <small>{catalogKind(resource)} · r{resource.revision}</small>
+              <strong>{resource.label}</strong>
+              <span>{resource.description}</span>
+              <code title={resource.endpoint}>{resource.endpoint}</code>
+            </span>
+            <button
+              type="button"
+              class:installed={resource.installed}
+              class="catalog-action"
+              disabled={catalogMutation != null}
+              onclick={() => void mutateCatalog(resource)}
+            >
+              {catalogMutation === resource.resource_id
+                ? "Working…"
+                : resource.installed
+                  ? "Remove"
+                  : "Register"}
+            </button>
+          </article>
+        {/each}
+      </div>
+    </section>
+  {/if}
 </section>
 
 <style>
@@ -542,6 +704,7 @@
   }
 
   .account-identity,
+  .catalog-trigger,
   .agent-card,
   .resource-strip {
     border: 1px solid var(--border-strong);
@@ -580,6 +743,40 @@
   .empty {
     color: var(--text-3);
     font-size: 10px;
+  }
+
+  .catalog-trigger {
+    width: 100%;
+    min-height: 36px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    color: var(--text-2);
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    font-weight: 750;
+  }
+
+  .catalog-trigger-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+
+  .catalog-trigger:hover,
+  .catalog-trigger:focus-visible,
+  .catalog-trigger.active {
+    border-color: color-mix(in srgb, var(--reasoning) 45%, var(--border-strong));
+    color: var(--text-1);
+    background: color-mix(in srgb, var(--reasoning) 8%, var(--control-hover));
+    outline: 0;
+  }
+
+  .catalog-trigger :global(.rotated) {
+    transform: rotate(180deg);
   }
 
   .sessions-trigger {
@@ -818,6 +1015,122 @@
     border-radius: 8px;
     background: var(--surface-1);
     box-shadow: var(--shadow-popover);
+  }
+
+  .catalog-popover {
+    position: fixed;
+    top: var(--catalog-top);
+    left: var(--catalog-left);
+    z-index: 31;
+    width: min(560px, calc(100vw - var(--catalog-left) - 16px));
+    max-height: min(600px, calc(100vh - 32px));
+    min-height: 0;
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: auto auto auto minmax(0, 1fr);
+    gap: 10px;
+    padding: 14px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--surface-1);
+    box-shadow: var(--shadow-popover);
+  }
+
+  .catalog-copy,
+  .catalog-error {
+    margin: 0;
+    font-size: 10px;
+  }
+
+  .catalog-copy {
+    color: var(--text-3);
+  }
+
+  .catalog-error {
+    padding: 7px 8px;
+    border: 1px solid color-mix(in srgb, var(--error) 45%, var(--border));
+    border-radius: 5px;
+    color: var(--error);
+    background: color-mix(in srgb, var(--error) 7%, transparent);
+  }
+
+  .catalog-list {
+    min-height: 0;
+    overflow-y: auto;
+    display: grid;
+    align-content: start;
+    gap: 8px;
+  }
+
+  .catalog-row {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--surface-2) 48%, var(--surface-1));
+  }
+
+  .catalog-resource-copy {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  .catalog-resource-copy > small {
+    color: var(--text-3);
+    font-size: 8px;
+    font-weight: 750;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .catalog-resource-copy > strong {
+    color: var(--text-1);
+    font-size: 11px;
+  }
+
+  .catalog-resource-copy > span,
+  .catalog-resource-copy > code {
+    overflow: hidden;
+    color: var(--text-3);
+    font-size: 9px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .catalog-action {
+    min-width: 72px;
+    height: 27px;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+    border-radius: 6px;
+    color: color-mix(in srgb, var(--accent) 76%, white);
+    background: color-mix(in srgb, var(--accent) 10%, var(--control-bg));
+    cursor: pointer;
+    font: inherit;
+    font-size: 9px;
+    font-weight: 750;
+  }
+
+  .catalog-action.installed {
+    border-color: var(--border);
+    color: var(--text-3);
+    background: var(--control-bg);
+  }
+
+  .catalog-action:hover:not(:disabled),
+  .catalog-action:focus-visible {
+    color: var(--text-1);
+    background: var(--control-hover);
+    outline: 0;
+  }
+
+  .catalog-action:disabled {
+    cursor: wait;
+    opacity: 0.55;
   }
 
   .session-popover-head,
