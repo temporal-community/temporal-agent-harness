@@ -71,6 +71,11 @@ _SESSION_PREVIEW_HISTORY_PAGE_SIZE = 16
 _SESSION_PREVIEW_HISTORY_MAX_EVENTS = 96
 _SESSION_PREVIEW_HISTORY_RPC_TIMEOUT = timedelta(seconds=1)
 
+# The one execution status no live workflow can report, so the one that is safe to archive on.
+_WORKFLOW_NOT_FOUND = "NOT_FOUND"
+# How long to leave the archive sweep alone after an update it could not land.
+_ARCHIVE_RETRY_SECONDS = 60.0
+
 
 class CreateSessionRequestBody(BaseModel):
     agent_workflow_type: str
@@ -164,6 +169,10 @@ def create_agent_harness_app(
         yield
 
     app = FastAPI(lifespan=lifespan)
+    # Set here rather than in the lifespan so the endpoints behave the same when the app is
+    # built without one. The lock is only ever contended between requests to this process.
+    app.state.archive_sweep = asyncio.Lock()
+    app.state.archive_retry_after = 0.0
 
     if static_path is not None:
         _mount_static_ui(
@@ -218,9 +227,14 @@ def create_agent_harness_app(
             # visibility outage must therefore cost the sessions it would have ADDED, not the
             # tracked ones the manager query already returned successfully.
             discovered = []
-        return await _sessions_with_execution_state(
+        listed = await _sessions_with_execution_state(
             app.state.temporal, sessions + discovered
         )
+        if include_archived:
+            # An explicit look at the archived state should not also change it.
+            return listed
+        swept = await _archive_vanished_sessions(app, _vanished_workflow_ids(listed))
+        return [item for item in listed if item["workflow_id"] not in swept]
 
     @app.post("/api/sessions")
     async def create_session(req: CreateSessionRequestBody):
@@ -502,6 +516,67 @@ def _resolve_registry(
     raise ValueError("create_agent_harness_app requires registry or registry_path.")
 
 
+def _vanished_workflow_ids(listed: list[dict[str, object]]) -> list[str]:
+    """The listed sessions Temporal demonstrably no longer has.
+
+    ``NOT_FOUND`` only, and it is a status no live workflow can report: it is written by
+    ``_workflow_execution_state`` from an ``RPCError`` that said NOT_FOUND and nothing else.
+    A describe that timed out, or failed any other way, becomes ``UNKNOWN`` instead and is
+    deliberately not here — hiding a session because one RPC was slow would turn a tidy-up
+    into data loss, and a slow describe is the expected case on this endpoint, not a rare one.
+
+    Discovered sessions are skipped because the manager has no entry to flag for them; they
+    come from a Running visibility query on every request and simply stop appearing.
+    """
+    return [
+        str(item["workflow_id"])
+        for item in listed
+        if item.get("execution_status") == _WORKFLOW_NOT_FOUND
+        and not item.get("is_discovered")
+        and not item.get("is_archived")
+    ]
+
+
+async def _archive_vanished_sessions(app: FastAPI, workflow_ids: list[str]) -> set[str]:
+    """Flag sessions whose workflows are gone, in one bulk update, one sweep at a time.
+
+    This is a write on the read path, which is only defensible because it is self-limiting:
+    an archived session is filtered out before the enrichment that would describe it, so it
+    can never be seen NOT_FOUND again. The sweep therefore fires once for a given corpse and
+    the steady state is zero updates, no matter how many tabs are polling.
+
+    That steady state is the point. Every open tab polls this endpoint every ten seconds
+    against a single manager workflow, and Temporal caps concurrent updates per workflow at
+    ten — the same pileup ``stream_merge.gates.UnmountChild`` exists to prevent. Three things
+    keep this under that: one bulk update rather than one per session, a lock so a second
+    request skips rather than queues behind the first, and a cooling-off period after a
+    failure so an update that cannot succeed (a manager whose worker predates the handler) is
+    retried on a timer instead of on every poll from every tab.
+
+    The lock is checked rather than waited on, so the worst a race can produce is a second
+    sweep that finds the work already done — ``set_sessions_archived`` reports only what it
+    CHANGED, so that one returns nothing and archives nothing twice.
+    """
+    if not workflow_ids:
+        return set()
+    loop = asyncio.get_running_loop()
+    if app.state.archive_sweep.locked() or loop.time() < app.state.archive_retry_after:
+        return set()
+
+    async with app.state.archive_sweep:
+        try:
+            changed: list[Session] = await app.state.manager_handle.execute_update(
+                SessionManagerWorkflow.set_sessions_archived,
+                SetSessionsArchivedRequest(workflow_ids=workflow_ids, is_archived=True),
+                result_type=list[Session],
+            )
+        except Exception:  # noqa: BLE001 — a tidy-up that fails must not fail the list
+            app.state.archive_retry_after = loop.time() + _ARCHIVE_RETRY_SECONDS
+            return set()
+
+    return {session.workflow_id for session in changed}
+
+
 async def _close_if_running(temporal: Client, workflow_id: str) -> bool:
     """Ask a still-open session to wind down. True if the signal was accepted.
 
@@ -542,7 +617,7 @@ async def _workflow_execution_state(
             raise
         return {
             "workflow_id": workflow_id,
-            "execution_status": "NOT_FOUND",
+            "execution_status": _WORKFLOW_NOT_FOUND,
             "closed": True,
         }
 
