@@ -100,25 +100,41 @@ def _annotation_added() -> ResponseOutputTextAnnotationAddedEvent:
     )
 
 
-def _fn_call_added(item_id: str, call_id: str, name: str) -> ResponseOutputItemAddedEvent:
+# `output_index` is a required field on all three of these real events and is what correlates
+# them (item ids are unreliable — the Chat Completions backend reuses one synthesized id for
+# every item), so the fixtures carry it explicitly: `model_construct` skips validation and would
+# otherwise leave it None, quietly correlating on nothing.
+
+
+def _fn_call_added(
+    item_id: str, call_id: str, name: str, *, index: int = 0
+) -> ResponseOutputItemAddedEvent:
     item = ResponseFunctionToolCall.model_construct(
         type="function_call", id=item_id, call_id=call_id, name=name, arguments=""
     )
     return ResponseOutputItemAddedEvent.model_construct(
-        type="response.output_item.added", item=item, output_index=0
+        type="response.output_item.added", item=item, output_index=index
     )
 
 
-def _args_delta(item_id: str, delta: str) -> ResponseFunctionCallArgumentsDeltaEvent:
+def _args_delta(
+    item_id: str, delta: str, *, index: int = 0
+) -> ResponseFunctionCallArgumentsDeltaEvent:
     return ResponseFunctionCallArgumentsDeltaEvent.model_construct(
-        type="response.function_call_arguments.delta", item_id=item_id, delta=delta
+        type="response.function_call_arguments.delta",
+        item_id=item_id,
+        output_index=index,
+        delta=delta,
     )
 
 
-def _args_done(item_id: str, name: str, arguments: str) -> ResponseFunctionCallArgumentsDoneEvent:
+def _args_done(
+    item_id: str, name: str, arguments: str, *, index: int = 0
+) -> ResponseFunctionCallArgumentsDoneEvent:
     return ResponseFunctionCallArgumentsDoneEvent.model_construct(
         type="response.function_call_arguments.done",
         item_id=item_id,
+        output_index=index,
         name=name,
         arguments=arguments,
     )

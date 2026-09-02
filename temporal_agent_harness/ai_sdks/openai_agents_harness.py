@@ -51,6 +51,7 @@ from openai.types.responses import (
     ResponseFunctionCallArgumentsDoneEvent,
     ResponseFunctionToolCall,
     ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
     ResponseOutputTextAnnotationAddedEvent,
     ResponseReasoningSummaryTextDeltaEvent,
     ResponseTextDeltaEvent,
@@ -106,11 +107,33 @@ _HARNESS_TOOL_ATTRS = ("__agent_tool__", "__agent_activity_tool__")
 # framed as its own delta event (publish straight through), and the only stateful
 # thing is a custom function call, whose name + call_id arrive on
 # ``response.output_item.added`` while its JSON arguments stream over
-# ``response.function_call_arguments.delta`` and finalize on
-# ``…done``. We consolidate those into ONE ``tool_requested`` keyed by the SDK
-# ``call_id`` — the same id ``as_openai_agent_tool`` hands to ``run_tool`` for the
-# execution lifecycle, so ``tool_requested`` and the eventual ``tool_start`` /
-# ``tool_end`` share a ``tool_id`` (spec §4.4).
+# ``response.function_call_arguments.delta``. We consolidate those into ONE
+# ``tool_requested`` carrying the SDK ``call_id`` as its ``tool_id`` — the same id
+# ``as_openai_agent_tool`` hands to ``run_tool`` for the execution lifecycle, so
+# ``tool_requested`` and the eventual ``tool_start`` / ``tool_end`` share a
+# ``tool_id`` (spec §4.4).
+#
+# TWO different event shapes close a function call, because the SDK has two model
+# backends and they do not agree:
+#
+# * the Responses backend (``OpenAIResponsesModel``) passes the raw API stream
+#   through, which ends a function call with ``response.function_call_arguments.done``
+#   (carrying the authoritative argument string) and THEN ``response.output_item.done``;
+# * the Chat Completions backend (``OpenAIChatCompletionsModel`` and every LiteLLM /
+#   third-party model, which reshape chat deltas into Responses events via
+#   ``ChatCmplStreamHandler``) never emits ``…arguments.done`` at all — it closes a
+#   function call with ``response.output_item.done`` alone.
+#
+# So we treat BOTH as terminal. Staged state is the publish token: created on
+# ``output_item.added`` and popped by whichever terminal arrives first, which makes
+# "exactly once" structural rather than something the two branches have to coordinate.
+# The same pop is what the ``__aexit__`` drain uses for a stream that ended or raised
+# before either terminal — see ``_publish_tool_requested``.
+#
+# Staged state is keyed by ``output_index``, not item id: the Chat Completions backend
+# labels every synthesized item ``__fake_id__`` (``agents.models.fake_id``), so parallel
+# tool calls in one response collide on item id while their ``output_index`` stays
+# distinct. All four events involved carry ``output_index``.
 #
 # As with Gemini, ``run_tool`` OWNS ``tool_start`` / ``tool_end`` / ``tool_error``
 # for custom tools; this translator only emits ``tool_requested`` (the model's
@@ -131,8 +154,9 @@ class OpenAIStreamObserver:
     ``model_interaction_started`` THERE — at model-call dispatch, before the first
     event — so the started→ended span measures the true model-call latency
     (time-to-first-token included). ``on_event`` folds each raw event into harness
-    vocabulary; ``__aexit__`` closes the bracket with ``…_ended`` carrying usage read
-    off the terminal ``response.completed``.
+    vocabulary; ``__aexit__`` drains any function call still staged (see :meth:`_drain`)
+    and then closes the bracket with ``…_ended`` carrying usage read off the terminal
+    ``response.completed``.
     """
 
     def __init__(
@@ -150,11 +174,12 @@ class OpenAIStreamObserver:
         self._model = model
         self._stack: AsyncExitStack | None = None
         self._publisher: TurnEventPublisher | None = None
-        # Function-call item id -> (call_id, tool_name), recorded on
-        # response.output_item.added and consumed on the matching …arguments.done.
-        self._fn_calls: dict[str, tuple[str, str]] = {}
-        # Function-call item id -> accumulated JSON-string argument fragments.
-        self._arg_buffers: dict[str, str] = {}
+        # output_index -> (call_id, tool_name), recorded on response.output_item.added and
+        # consumed by whichever terminal closes that call (…arguments.done or
+        # …output_item.done), or by the __aexit__ drain if neither arrived.
+        self._fn_calls: dict[int, tuple[str, str]] = {}
+        # output_index -> accumulated JSON-string argument fragments.
+        self._arg_buffers: dict[int, str] = {}
         # Token usage, captured off the terminal response.completed for the ended bracket.
         self._usage: TokenUsage | None = None
         # Publish-flush cadence for this call's publisher — the plugin's configured
@@ -178,6 +203,10 @@ class OpenAIStreamObserver:
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool | None:
         try:
             if self._publisher is not None:
+                # Drain first, so a function call whose terminal event never arrived is
+                # still published INSIDE the bracket we are about to close: the order
+                # stays started → tools → ended.
+                self._drain(self._publisher)
                 # In a finally-equivalent: always close the started bracket, even if the
                 # stream errored (usage then stays None). Published while the
                 # publisher/stack is still open.
@@ -214,43 +243,75 @@ class OpenAIStreamObserver:
         elif isinstance(event, ResponseOutputItemAddedEvent):
             item = event.item
             if isinstance(item, ResponseFunctionToolCall):
-                # A custom function call is opening. Record name + call_id keyed
-                # by the item id; its args stream next and finalize on …done.
-                item_id = item.id or item.call_id
-                self._fn_calls[item_id] = (item.call_id, item.name)
-                self._arg_buffers.setdefault(item_id, "")
+                # A custom function call is opening. Record name + call_id; its args
+                # stream next and the call closes on one of the two terminals. This
+                # staged entry is the publish token for that call (see the notes above).
+                self._fn_calls[event.output_index] = (item.call_id, item.name)
+                self._arg_buffers.setdefault(event.output_index, "")
         elif isinstance(event, ResponseFunctionCallArgumentsDeltaEvent):
             if event.delta:
-                self._arg_buffers[event.item_id] = (
-                    self._arg_buffers.get(event.item_id, "") + event.delta
+                self._arg_buffers[event.output_index] = (
+                    self._arg_buffers.get(event.output_index, "") + event.delta
                 )
         elif isinstance(event, ResponseFunctionCallArgumentsDoneEvent):
-            self._emit_tool_requested(event, pub)
+            # Terminal on the Responses backend.
+            self._publish_tool_requested(pub, event.output_index, event.arguments)
+        elif isinstance(event, ResponseOutputItemDoneEvent):
+            # Terminal on the Chat Completions backend, where …arguments.done never
+            # comes; also arrives second on the Responses backend, where the pop above
+            # has already consumed the call and this is a no-op.
+            if isinstance(event.item, ResponseFunctionToolCall):
+                self._publish_tool_requested(
+                    pub, event.output_index, event.item.arguments
+                )
         elif isinstance(event, ResponseCompletedEvent):
             self._usage = _to_token_usage(getattr(event.response, "usage", None))
 
-    def _emit_tool_requested(
-        self,
-        event: ResponseFunctionCallArgumentsDoneEvent,
-        pub: TurnEventPublisher,
-    ) -> None:
-        """Publish the consolidated ``tool_requested`` for one custom function call.
+    def _drain(self, pub: TurnEventPublisher) -> None:
+        """Publish whatever function call is still staged, its terminal never having come.
 
-        Prefers the done event's authoritative ``arguments`` string, falling back
-        to the buffered delta fragments. ``tool_id`` is the SDK ``call_id`` (shared
-        with the execution lifecycle in ``run_tool``); if the opening
-        ``output_item.added`` was somehow missed, we degrade to the item id and the
-        done event's own name rather than dropping the request.
+        A call is emptied only by its own terminal event, so a stream that ends — or
+        raises — with one open would otherwise strand it while ``__aexit__`` still
+        published ``model_interaction_ended``: a transcript that reads as complete with
+        the model's tool request silently missing, and nothing later makes up for it. The
+        workflow-side reducer publishes no ``tool_requested`` at all (``run_tool`` owns
+        ``tool_start`` / ``tool_end``, and deliberately never emits the request), so an
+        event dropped here is absent from the durable transcript for good — the tool still
+        runs, leaving a start and an end with no record of what was asked, or with what.
+
+        Called from ``__aexit__`` BEFORE ``model_interaction_ended``, so the published
+        order stays started → tools → ended. Shares the terminals' publish, which pops as
+        it goes, so a call that did close cannot be published twice.
         """
-        item_id = event.item_id
-        buffered = self._arg_buffers.pop(item_id, "")
-        call_id, name = self._fn_calls.pop(item_id, (item_id, event.name))
-        raw = event.arguments or buffered
+        for index in sorted(self._fn_calls):
+            self._publish_tool_requested(pub, index, "")
+        # Buffers for a call we never saw open (so nothing above consumed them).
+        self._arg_buffers.clear()
+
+    def _publish_tool_requested(
+        self, pub: TurnEventPublisher, index: int, arguments: str | None
+    ) -> None:
+        """Publish the consolidated ``tool_requested`` for the call staged at ``index``.
+
+        Prefers the terminal event's authoritative ``arguments`` string, falling back to
+        the buffered delta fragments. ``tool_id`` is the SDK ``call_id``, shared with the
+        execution lifecycle in ``run_tool``.
+
+        Pops as it goes and publishes only what it popped, which is what makes a call
+        publishable exactly once however many terminals fire for it — the Responses
+        backend sends two, and the drain may follow either. Both backends open a function
+        call with ``output_item.added``, so requiring that staged entry costs no coverage.
+        """
+        staged = self._fn_calls.pop(index, None)
+        buffered = self._arg_buffers.pop(index, "")
+        if staged is None:
+            return
+        call_id, name = staged
         pub.publish(
             ToolRequested(
                 tool_id=call_id,
                 tool_name=name,
-                tool_input=_parse_tool_args(raw),
+                tool_input=_parse_tool_args(arguments or buffered),
             )
         )
 
