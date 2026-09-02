@@ -1,4 +1,4 @@
-# ABOUTME: A2A transport for an HTTP agent routed through the Durable Tools Gateway.
+# ABOUTME: A2A transport for an HTTP agent routed by the account gateway.
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ with workflow.unsafe.imports_passed_through():
     from a2a.types import CancelTaskRequest, Message, Part, Role, SendMessageRequest
     from google.protobuf.json_format import MessageToDict
     from nexus_a2a import A2AService
-
 from temporal_agent_harness.harness.agent_protocol import (
     AgentConfig,
     SubagentMessageSent,
@@ -20,15 +19,9 @@ from temporal_agent_harness.harness.agent_protocol import (
 from temporal_agent_harness.harness.agent_workflow import _current_runner
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
-_INSTALL_MESSAGE = (
-    "Gateway-brokered subagent support requires the optional `nexus-mcp` extra, which is "
-    "only resolvable from an editable checkout of this repo (it path-depends on nexus/mcp) "
-    "and requires Python >=3.13. Install it with `uv sync --extra nexus-mcp`."
-)
-
 
 class GatewayTransport:
-    """Route A2A over Nexus to a registered HTTP A2A agent."""
+    """Route A2A over Nexus to an account-registered HTTP A2A agent."""
 
     def __init__(
         self,
@@ -39,14 +32,15 @@ class GatewayTransport:
     ) -> None:
         self._account_id = account_id
         self._alias = alias
-        self._gateway_name = gateway_name
         self._gateway_endpoint = gateway_endpoint
 
     def _client(self) -> workflow.NexusClient[A2AService]:
-        return workflow.create_nexus_client(service=A2AService, endpoint=self._gateway_endpoint)
+        return workflow.create_nexus_client(
+            service=A2AService, endpoint=self._gateway_endpoint
+        )
 
     async def start(self, *, agent_key: str, config: AgentConfig) -> str:
-        # A2A tasks are allocated locally and started lazily by their first Message.
+        # A2A tasks are started lazily by their first Message.
         return f"{agent_key}-subagent-{workflow.uuid4()}"
 
     async def dispatch(
@@ -111,7 +105,7 @@ class GatewayTransport:
             A2AService.cancel_task,
             CancelTaskRequest(
                 id=target,
-                metadata={"account_id": self._account_id},
+                metadata={"account_id": self._account_id, "agent_id": self._alias},
             ),
             schedule_to_close_timeout=timedelta(minutes=1),
         )
