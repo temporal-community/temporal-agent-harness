@@ -34,9 +34,19 @@
     usage: CostSummary;
     usageTimeline: UsageTimelinePoint[];
     viewIndex: number;
+    /**
+     * The run's figures are unknown rather than zero, so show none of them.
+     *
+     * Every total below is a sum over the frames this console holds, and there
+     * are runs it holds none of: a finished run whose event stream Temporal
+     * cannot replay (`run.runUnmeasured`). An empty sum formatted as
+     * `0 tok $0.0000` reports a measurement that was never taken, beside runs
+     * whose zeros are real.
+     */
+    unmeasured?: boolean;
   }
 
-  let { usage, usageTimeline, viewIndex }: Props = $props();
+  let { usage, usageTimeline, viewIndex, unmeasured = false }: Props = $props();
 
   /* Ids must be unique per instance; the popover can appear in several panes. */
   const instanceId = `usage-popover-${nextInstance()}`;
@@ -44,18 +54,46 @@
   let open = $state(false);
   let rootElement = $state<HTMLDivElement | null>(null);
 
-  const costNote = $derived(unpricedNote(unpricedModels(usage)) ?? undefined);
+  /* A dash says a figure is absent; it does not say why, and a reader who has
+     only ever seen numbers here will read one as a broken panel. The full
+     sentence is on the session banner already (`connectionError`), so this is
+     the short form: what the dashes mean, and that nothing was lost. */
+  const unmeasuredNote =
+    "Unknown, not zero: this run finished and Temporal cannot replay its event stream, " +
+    "so this console read none of the model calls it made. The run's own history is " +
+    "intact in Temporal.";
+
+  /* Two reasons a figure can be absent, and the reader gets ONE hedge. Being
+     unmeasured is the wider claim — no events were read, so which of this run's
+     models we hold prices for is moot — so it supersedes the unpriced note
+     rather than stacking a second explanation beside it. */
+  const costNote = $derived(
+    unmeasured ? unmeasuredNote : (unpricedNote(unpricedModels(usage)) ?? undefined)
+  );
+
+  /** One figure, or the em dash that stands in for every figure of an unmeasured run. */
+  function figure<T>(value: T, format: (value: T) => string): string {
+    return unmeasured ? "—" : format(value);
+  }
 
   /* What the run cost and how many tokens it took, which is the whole reading
      for most openings of this panel. */
   const headline: Metric[] = $derived([
     {
       label: "cost",
-      value: formatCost(usage.estimatedCostUsd),
-      tone: "cost",
-      note: costNote
+      value: figure(usage.estimatedCostUsd, formatCost),
+      /* Tones are affirmative — cost is drawn in --success, total in --accent —
+         and a dash has nothing to affirm. */
+      tone: unmeasured ? "neutral" : "cost",
+      /* The panel says it in full below, so the hover would be the same
+         sentence twice in one box. */
+      note: unmeasured ? undefined : costNote
     },
-    { label: "total", value: formatTokens(usage.tokens.total), tone: "strong" }
+    {
+      label: "total",
+      value: figure(usage.tokens.total, formatTokens),
+      tone: unmeasured ? "neutral" : "strong"
+    }
   ]);
 
   /* Split off from the total rather than listed beside it, because these four
@@ -66,10 +104,10 @@
      figure, and check-usage-totals.mjs pins it against exactly the arithmetic
      this separation is here to stop a reader attempting. */
   const breakdown: Metric[] = $derived([
-    { label: "input", value: formatTokens(usage.tokens.input) },
-    { label: "output", value: formatTokens(usage.tokens.output) },
-    { label: "thought", value: formatTokens(usage.tokens.thought) },
-    { label: "cached", value: formatTokens(usage.tokens.cached) }
+    { label: "input", value: figure(usage.tokens.input, formatTokens) },
+    { label: "output", value: figure(usage.tokens.output, formatTokens) },
+    { label: "thought", value: figure(usage.tokens.thought, formatTokens) },
+    { label: "cached", value: figure(usage.tokens.cached, formatTokens) }
   ]);
 
   const breakdownTip =
@@ -109,7 +147,7 @@
 
 <div class="usage-anchor" bind:this={rootElement}>
   <Chip
-    tone="success"
+    tone={unmeasured ? "neutral" : "success"}
     active={open}
     class="usage-chip"
     aria-expanded={open}
@@ -120,9 +158,9 @@
     {#snippet lead()}
       <CircleDollarSign size={12} />
     {/snippet}
-    <span class="usage-chip-tokens">{formatTokens(usage.tokens.total)}</span>
+    <span class="usage-chip-tokens">{figure(usage.tokens.total, formatTokens)}</span>
     <span class="usage-chip-cost" data-tip={costNote}
-      >{formatCost(usage.estimatedCostUsd)}</span>
+      >{figure(usage.estimatedCostUsd, formatCost)}</span>
   </Chip>
 
   {#if open}
@@ -139,8 +177,15 @@
           </p>
           <MetricStrip metrics={breakdown} dense />
         </div>
-        <ModelBreakdown {usage} />
-        <UsageLineChart points={usageTimeline} {viewIndex} />
+        <!-- A per-model split of nothing and a chart of a flat zero line are not
+             hedged readings, they are empty boxes; the sentence that explains the
+             dashes is the only thing this half of the panel has to say. -->
+        {#if unmeasured}
+          <p class="usage-unmeasured">{unmeasuredNote}</p>
+        {:else}
+          <ModelBreakdown {usage} />
+          <UsageLineChart points={usageTimeline} {viewIndex} />
+        {/if}
       </div>
     </div>
   {/if}
@@ -257,9 +302,28 @@
     cursor: help;
   }
 
+  /* Takes the two tracks the model split and the chart have vacated, so the
+     panel is one box of dashes and one sentence rather than a reading pushed
+     into the left third of an otherwise empty 720px. */
+  .usage-unmeasured {
+    grid-column: 2 / -1;
+    margin: 0;
+    padding: var(--gutter);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-2);
+    font-size: var(--font-sm);
+    line-height: 1.4;
+  }
+
   @media (max-width: 760px) {
     .usage-popover-body {
       grid-template-columns: 1fr;
+    }
+
+    /* One track, so spanning from the second would invent an implicit column. */
+    .usage-unmeasured {
+      grid-column: 1;
     }
   }
 

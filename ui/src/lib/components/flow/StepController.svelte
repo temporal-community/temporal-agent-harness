@@ -26,6 +26,8 @@
     currentEvent: ReplayLogRow | null;
     usage: CostSummary;
     usageTimeline: UsageTimelinePoint[];
+    /** Passed straight to UsagePopover, which explains what it means. */
+    unmeasured?: boolean;
     turnMarkers: Array<{ index: number; turnNumber: number }>;
     anomalyMarkers: ReplayMarker[];
     /**
@@ -55,6 +57,7 @@
     currentEvent,
     usage,
     usageTimeline,
+    unmeasured = false,
     turnMarkers,
     anomalyMarkers,
     eventRows,
@@ -339,7 +342,7 @@
   </div>
 
   <div class="aside">
-    <UsagePopover {usage} {usageTimeline} {viewIndex} />
+    <UsagePopover {usage} {usageTimeline} {viewIndex} {unmeasured} />
   </div>
 
   <div class="now" bind:this={nowElement}>

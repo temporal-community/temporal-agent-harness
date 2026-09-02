@@ -308,6 +308,7 @@
     currentEvent={run.currentLogRow}
     usage={run.usage}
     usageTimeline={run.usageTimeline}
+    unmeasured={run.runUnmeasured}
     turnMarkers={run.turnMarkers}
     anomalyMarkers={run.anomalyMarkers}
     eventRows={run.fullReplayLog.rows}
