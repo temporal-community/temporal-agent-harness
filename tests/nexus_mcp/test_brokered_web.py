@@ -13,14 +13,14 @@ from durable_tools_gateway.registry import (
     SessionRecord,
     ToolRegistryWorkflow,
 )
-from durable_tools_gateway.resources import (
-    AccountResourceRegistration,
-    ResourceDescriptor,
-    TEXT_AGENT_HANDLER,
-)
 from durable_tools_gateway.registry_service_handler import (
     SubagentDispatchInput,
     SubagentDispatchOutput,
+)
+from durable_tools_gateway.resources import (
+    TEXT_AGENT_HANDLER,
+    AccountResourceRegistration,
+    ResourceDescriptor,
 )
 from durable_tools_gateway.tool_history import ToolCallRecord
 from durable_tools_gateway.web import (
@@ -30,6 +30,11 @@ from durable_tools_gateway.web import (
 from fastapi.testclient import TestClient
 from temporalio.api.workflowservice.v1 import DescribeActivityExecutionResponse
 from temporalio.contrib.pydantic import pydantic_data_converter
+
+from temporal_agent_harness.nexus_agent_adapter.generated import (
+    AgentInterfaceOutput,
+    SendMessageOutput,
+)
 
 
 def _app_client(
@@ -113,6 +118,10 @@ def _app_client(
     temporal = MagicMock()
     temporal.start_workflow = AsyncMock(return_value=handle)
     temporal.execute_workflow = AsyncMock()
+    nexus = MagicMock()
+    nexus.execute_operation = AsyncMock(return_value=AgentInterfaceOutput(handlers=[]))
+    temporal.create_nexus_client.return_value = nexus
+    temporal.execute_activity = AsyncMock()
     app = create_account_agent_app(
         "account-1", temporal_client=temporal, static_dir=None
     )
@@ -361,10 +370,9 @@ def test_refresh_reconciles_registered_children_from_native_status() -> None:
         response = client.post("/api/sessions/refresh")
 
     assert response.status_code == 200
-    action = temporal.execute_workflow.await_args.args[1]
-    assert action.action == "discover_subagents"
-    assert action.session_id == "provider-parent"
-    assert action.values == {"cursor": 0}
+    discovery = temporal.execute_workflow.await_args.args[1]
+    assert discovery.session_id == "provider-parent"
+    assert discovery.cursor == 0
     sync = next(
         call
         for call in handle.execute_update.await_args_list
@@ -378,12 +386,14 @@ def test_refresh_reconciles_registered_children_from_native_status() -> None:
 
 def test_native_send_defers_stale_turn_reconciliation_to_agent_service() -> None:
     client, handle, temporal = _app_client()
-    temporal.execute_workflow.return_value = {
-        "turn_number": 2,
-        "turn_id": "turn-2",
-        "stream_head_offset": 8,
-        "pending": False,
-    }
+    temporal.create_nexus_client.return_value.execute_operation.return_value = (
+        SendMessageOutput(
+            turn_number=2,
+            turn_id="turn-2",
+            stream_head_offset=8,
+            pending=False,
+        )
+    )
 
     with client:
         response = client.post(
@@ -396,9 +406,11 @@ def test_native_send_defers_stale_turn_reconciliation_to_agent_service() -> None
         )
 
     assert response.status_code == 200
-    action = temporal.execute_workflow.await_args.args[1]
-    assert action.values is not None
-    assert action.values["expected_turn"] is None
+    nexus = temporal.create_nexus_client.return_value
+    operation_input = nexus.execute_operation.await_args.args[1]
+    assert operation_input.expected_turn is None
+    assert nexus.execute_operation.await_args.kwargs["id"].startswith("ui-agent-send-")
+    temporal.execute_workflow.assert_not_awaited()
     assert any(
         call.args[0] is ToolRegistryWorkflow.mark_session_started
         for call in handle.execute_update.await_args_list
@@ -415,27 +427,29 @@ def test_close_requires_a_decision_when_active_subagents_are_running() -> None:
         label="Session 1",
         has_started=True,
     )
-    client, handle, temporal = _app_client(session_override=started)
-    temporal.execute_workflow.return_value = {
-        "subagent_close_policy": "ask-user",
-        "subagents": [
-            {
-                "subagent_id": "research-a1b2c3",
-                "agent_key": "research",
-                "workflow_id": "research-workflow",
-                "next_expected_turn": 2,
-            }
-        ],
-    }
+    client, handle, _ = _app_client(session_override=started)
+    execute = AsyncMock(
+        return_value={
+            "subagent_close_policy": "ask-user",
+            "subagents": [
+                {
+                    "subagent_id": "research-a1b2c3",
+                    "agent_key": "research",
+                    "workflow_id": "research-workflow",
+                    "next_expected_turn": 2,
+                }
+            ],
+        }
+    )
 
-    with client:
+    with patch("durable_tools_gateway.web.execute_agent_action", execute), client:
         response = client.post("/api/sessions/session-1/close", json={})
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "subagent_close_decision_required"
     assert response.json()["detail"]["subagents"][0]["agent_key"] == "research"
-    assert temporal.execute_workflow.await_count == 1
-    assert temporal.execute_workflow.await_args.args[1].action == "status"
+    execute.assert_awaited_once()
+    assert execute.await_args.args[1].action == "status"
     assert not any(
         call.args[0] is ToolRegistryWorkflow.close_session
         for call in handle.execute_update.await_args_list
@@ -452,17 +466,17 @@ def test_close_applies_the_users_subagent_decision_before_closing() -> None:
         label="Session 1",
         has_started=True,
     )
-    client, handle, temporal = _app_client(session_override=started)
-    temporal.execute_workflow.side_effect = [{"reply": "updated"}, {"closed": True}]
+    client, handle, _ = _app_client(session_override=started)
+    execute = AsyncMock(side_effect=[{"reply": "updated"}, {"closed": True}])
 
-    with client:
+    with patch("durable_tools_gateway.web.execute_agent_action", execute), client:
         response = client.post(
             "/api/sessions/session-1/close",
             json={"subagent_close_policy": "close"},
         )
 
     assert response.status_code == 200
-    actions = [call.args[1] for call in temporal.execute_workflow.await_args_list]
+    actions = [call.args[1] for call in execute.await_args_list]
     assert [action.action for action in actions] == ["operator_command", "close"]
     assert actions[0].values == {
         "name": "subagent-close-policy",

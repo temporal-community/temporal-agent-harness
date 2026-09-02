@@ -6,12 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from durable_tools_gateway.agent_broker import (
     AgentActionInput,
-    AgentActionWorkflow,
     AgentAttachInput,
     AgentAttachWorkflow,
+    AgentDiscoveryInput,
+    AgentDiscoveryWorkflow,
     PublishBatchInput,
     PublishBatchResult,
     event_broker,
+    execute_agent_action,
     publish_agent_events,
 )
 from durable_tools_gateway.registry import SpawnedAgentObservation
@@ -148,8 +150,8 @@ async def test_attach_records_one_registry_batch_with_its_discovery_cursor(
     )
 
 
-@patch("durable_tools_gateway.agent_broker.workflow.create_nexus_client")
-async def test_native_send_is_one_nexus_action(mock_create_client: MagicMock) -> None:
+async def test_native_send_is_one_standalone_nexus_operation() -> None:
+    temporal = MagicMock()
     nexus = MagicMock()
     nexus.execute_operation = AsyncMock(
         return_value=SendMessageOutput(
@@ -159,9 +161,10 @@ async def test_native_send_is_one_nexus_action(mock_create_client: MagicMock) ->
             pending=False,
         )
     )
-    mock_create_client.return_value = nexus
+    temporal.create_nexus_client.return_value = nexus
 
-    result = await AgentActionWorkflow().run(
+    result = await execute_agent_action(
+        temporal,
         AgentActionInput(
             action="send",
             session_id="provider-session",
@@ -171,12 +174,14 @@ async def test_native_send_is_one_nexus_action(mock_create_client: MagicMock) ->
                 "payload": {"text": "hello"},
                 "expected_turn": 2,
             },
-        )
+        ),
+        execution_id="broker-action-1",
     )
 
     sent = nexus.execute_operation.await_args.args[1]
     assert sent.session_id == "provider-session"
     assert sent.expected_turn == 2
+    assert nexus.execute_operation.await_args.kwargs["id"] == "broker-action-1"
     assert result == {
         "turn_number": 2,
         "turn_id": "turn-2",
@@ -185,10 +190,8 @@ async def test_native_send_is_one_nexus_action(mock_create_client: MagicMock) ->
     }
 
 
-@patch("durable_tools_gateway.agent_broker.workflow.create_nexus_client")
-async def test_native_send_can_defer_turn_reconciliation_to_agent_service(
-    mock_create_client: MagicMock,
-) -> None:
+async def test_native_send_can_defer_turn_reconciliation_to_agent_service() -> None:
+    temporal = MagicMock()
     nexus = MagicMock()
     nexus.execute_operation = AsyncMock(
         return_value=SendMessageOutput(
@@ -198,15 +201,17 @@ async def test_native_send_can_defer_turn_reconciliation_to_agent_service(
             pending=False,
         )
     )
-    mock_create_client.return_value = nexus
+    temporal.create_nexus_client.return_value = nexus
 
-    await AgentActionWorkflow().run(
+    await execute_agent_action(
+        temporal,
         AgentActionInput(
             action="send",
             session_id="provider-session",
             nexus_endpoint="agent-endpoint",
             values={"msg_type": "ask", "payload": {"text": "hello"}},
-        )
+        ),
+        execution_id="broker-action-2",
     )
 
     sent = nexus.execute_operation.await_args.args[1]
@@ -241,12 +246,11 @@ async def test_subagent_discovery_reads_missed_lifecycle_and_live_status(
     )
     mock_create_client.return_value = nexus
 
-    result = await AgentActionWorkflow().run(
-        AgentActionInput(
-            action="discover_subagents",
+    result = await AgentDiscoveryWorkflow().run(
+        AgentDiscoveryInput(
             session_id="provider-session",
             nexus_endpoint="agent-endpoint",
-            values={"cursor": 2},
+            cursor=2,
         )
     )
 
@@ -255,27 +259,29 @@ async def test_subagent_discovery_reads_missed_lifecycle_and_live_status(
     assert result["active"][0]["next_expected_turn"] == 3
 
 
-@patch("durable_tools_gateway.agent_broker.workflow.execute_activity")
-async def test_external_agent_uses_the_minimal_http_provider_protocol(
-    mock_execute_activity: AsyncMock,
-) -> None:
-    mock_execute_activity.side_effect = [
-        SubagentStartResult(instance_id="provider-1"),
-        SubagentDispatchOutput(
-            output='{"text":"hello"}', turn_id="turn-1", turn_number=1
-        ),
-    ]
-    action = AgentActionWorkflow()
+async def test_external_agent_uses_standalone_activities() -> None:
+    temporal = MagicMock()
+    temporal.execute_activity = AsyncMock(
+        side_effect=[
+            SubagentStartResult(instance_id="provider-1"),
+            SubagentDispatchOutput(
+                output='{"text":"hello"}', turn_id="turn-1", turn_number=1
+            ),
+        ]
+    )
 
-    started = await action.run(
+    started = await execute_agent_action(
+        temporal,
         AgentActionInput(
             action="start",
             session_id="",
             provider_url="http://provider",
             values={"idempotency_key": "start-1"},
-        )
+        ),
+        execution_id="broker-external-start",
     )
-    sent = await action.run(
+    sent = await execute_agent_action(
+        temporal,
         AgentActionInput(
             action="send",
             session_id="provider-1",
@@ -286,12 +292,16 @@ async def test_external_agent_uses_the_minimal_http_provider_protocol(
                 "expected_turn": 1,
                 "idempotency_key": "turn-1",
             },
-        )
+        ),
+        execution_id="broker-external-send",
     )
 
     assert started == {"instance_id": "provider-1"}
     assert sent["turn_number"] == 1
-    assert mock_execute_activity.await_count == 2
+    assert temporal.execute_activity.await_count == 2
+    assert temporal.execute_activity.await_args_list[0].kwargs["id"] == (
+        "broker-external-start"
+    )
 
 
 @patch("durable_tools_gateway.agent_broker.workflow.execute_activity")

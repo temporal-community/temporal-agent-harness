@@ -12,9 +12,10 @@ from typing import Any
 
 from temporalio import activity, workflow
 from temporalio.api.common.v1 import Payload
+from temporalio.client import Client
 from temporalio.common import RetryPolicy
 
-from .registry import SpawnedAgentObservation
+from .registry import REGISTRY_TASK_QUEUE, SpawnedAgentObservation
 
 with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.nexus_agent_adapter.generated import (
@@ -38,7 +39,7 @@ with workflow.unsafe.imports_passed_through():
         subagent_stop_activity,
     )
 
-AGENT_ACTION_WORKFLOW_NAME = "BrokeredAgentAction"
+AGENT_DISCOVERY_WORKFLOW_NAME = "BrokeredAgentDiscovery"
 AGENT_ATTACH_WORKFLOW_NAME = "BrokeredAgentAttach"
 MAX_ATTACH_POLLS = 500
 POLL_TIMEOUT_SECONDS = 30.0
@@ -56,6 +57,13 @@ class AgentActionInput:
     nexus_endpoint: str | None = None
     provider_url: str | None = None
     values: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class AgentDiscoveryInput:
+    session_id: str
+    nexus_endpoint: str
+    cursor: int = 0
 
 
 @dataclass(frozen=True)
@@ -238,184 +246,208 @@ def _values(input: AgentActionInput) -> dict[str, Any]:
     return input.values or {}
 
 
-@workflow.defn(sandboxed=False, name=AGENT_ACTION_WORKFLOW_NAME)
-class AgentActionWorkflow:
-    """One durable control request to a native Nexus or minimal HTTP agent."""
+async def execute_agent_action(
+    client: Client,
+    input: AgentActionInput,
+    *,
+    execution_id: str,
+) -> dict[str, Any]:
+    """Execute one control request without creating a proxy workflow."""
+    values = _values(input)
+    if input.provider_url:
+        return await _execute_external_action(
+            client, input, values, execution_id=execution_id
+        )
+    if not input.nexus_endpoint:
+        raise ValueError("nexus_endpoint is required for a native agent action")
+
+    nexus_client = client.create_nexus_client(
+        service=AgentService, endpoint=input.nexus_endpoint
+    )
+    session = QuerySessionInput(session_id=input.session_id)
+    match input.action:
+        case "send":
+            context = {
+                name: values[name]
+                for name in (
+                    "account_id",
+                    "registered_agent_id",
+                    "delegation_lineage",
+                    "delegation_depth",
+                    "max_delegation_depth",
+                )
+                if values.get(name) is not None
+            }
+            operation = AgentService.send_agent_message
+            operation_input = SendAgentMessageInput(
+                session_id=input.session_id,
+                msg_type=str(values["msg_type"]),
+                payload=json.dumps(values.get("payload") or {}),
+                expected_turn=(
+                    int(values["expected_turn"])
+                    if values.get("expected_turn") is not None
+                    else None
+                ),
+                **context,
+            )
+        case "status":
+            operation = AgentService.query_agent_status
+            operation_input = session
+        case "agent_interface":
+            operation = AgentService.query_agent_interface
+            operation_input = session
+        case "operator_interface":
+            operation = AgentService.query_operator_interface
+            operation_input = session
+        case "operator_command":
+            kwargs: dict[str, Any] = {
+                "session_id": input.session_id,
+                "name": str(values["name"]),
+            }
+            if values.get("arg") is not None:
+                kwargs["arg"] = str(values["arg"])
+            operation = AgentService.execute_operator_command
+            operation_input = ExecuteOperatorCommandInput(**kwargs)
+        case "approve":
+            kwargs = {
+                "session_id": input.session_id,
+                "tool_id": str(values["tool_id"]),
+                "approved": bool(values["approved"]),
+                "remember": bool(values.get("remember", False)),
+            }
+            if values.get("reason") is not None:
+                kwargs["reason"] = str(values["reason"])
+            operation = AgentService.approve_tool_call
+            operation_input = ApproveToolCallInput(**kwargs)
+        case "callback":
+            kwargs = {
+                "session_id": input.session_id,
+                "tool_id": str(values["tool_id"]),
+            }
+            if values.get("result") is not None:
+                kwargs["result"] = ProvideCallbackResultInputResult(
+                    additional_properties=values["result"]
+                )
+            if values.get("error") is not None:
+                kwargs["error"] = str(values["error"])
+            operation = AgentService.provide_callback_result
+            operation_input = ProvideCallbackResultInput(**kwargs)
+        case "close":
+            operation = AgentService.close_session
+            operation_input = session
+        case _:
+            raise ValueError(f"unsupported native agent action {input.action!r}")
+
+    result = await nexus_client.execute_operation(
+        operation,
+        operation_input,
+        id=execution_id,
+        schedule_to_close_timeout=timedelta(seconds=90),
+        summary=f"{input.action} agent session {input.session_id}",
+    )
+    return asdict(result)
+
+
+async def _execute_external_action(
+    client: Client,
+    input: AgentActionInput,
+    values: dict[str, Any],
+    *,
+    execution_id: str,
+) -> dict[str, Any]:
+    assert input.provider_url is not None
+    if input.action == "start":
+        result = await client.execute_activity(
+            subagent_start_activity,
+            SubagentStartInput(
+                url=input.provider_url,
+                idempotency_key=str(values["idempotency_key"]),
+            ),
+            id=execution_id,
+            task_queue=REGISTRY_TASK_QUEUE,
+            start_to_close_timeout=timedelta(seconds=15),
+            retry_policy=RetryPolicy(maximum_attempts=5),
+            summary=f"start external agent at {input.provider_url}",
+        )
+        return result.model_dump(mode="json")
+    if input.action == "send":
+        result = await client.execute_activity(
+            subagent_proxy_activity,
+            SubagentDispatchInput(
+                url=input.provider_url,
+                instance_id=input.session_id,
+                msg_type=str(values["msg_type"]),
+                payload=json.dumps(values.get("payload") or {}),
+                expected_turn=int(values["expected_turn"]),
+                idempotency_key=str(values["idempotency_key"]),
+            ),
+            id=execution_id,
+            task_queue=REGISTRY_TASK_QUEUE,
+            start_to_close_timeout=timedelta(seconds=75),
+            heartbeat_timeout=timedelta(seconds=30),
+            retry_policy=RetryPolicy(maximum_attempts=5),
+            summary=f"send turn to external agent session {input.session_id}",
+        )
+        return result.model_dump(mode="json")
+    if input.action == "close":
+        await client.execute_activity(
+            subagent_stop_activity,
+            SubagentStopInput(
+                url=input.provider_url,
+                instance_id=input.session_id,
+            ),
+            id=execution_id,
+            task_queue=REGISTRY_TASK_QUEUE,
+            start_to_close_timeout=timedelta(seconds=15),
+            retry_policy=RetryPolicy(maximum_attempts=5),
+            summary=f"close external agent session {input.session_id}",
+        )
+        return {"closed": True}
+    raise ValueError(f"external agents do not support {input.action!r}")
+
+
+@workflow.defn(sandboxed=False, name=AGENT_DISCOVERY_WORKFLOW_NAME)
+class AgentDiscoveryWorkflow:
+    """Drain retained lifecycle events and reconcile a native agent's children."""
 
     @workflow.run
-    async def run(self, input: AgentActionInput) -> dict[str, Any]:
-        values = _values(input)
-        if input.provider_url:
-            return await self._run_external(input, values)
-        if not input.nexus_endpoint:
-            raise ValueError("nexus_endpoint is required for a native agent action")
-
+    async def run(self, input: AgentDiscoveryInput) -> dict[str, Any]:
         client = workflow.create_nexus_client(
             service=AgentService, endpoint=input.nexus_endpoint
         )
-        session = QuerySessionInput(session_id=input.session_id)
-        if input.action == "discover_subagents":
-            cursor = int(values.get("cursor", 0))
-            spawned: list[SpawnedAgentObservation] = []
-            stopped: list[str] = []
-            closed = False
-            for _ in range(100):
-                poll = await client.execute_operation(
-                    AgentService.poll_messages,
-                    PollMessagesInput(
-                        session_id=input.session_id,
-                        cursor=cursor,
-                        timeout_seconds=0.1,
-                    ),
-                )
-                batch_spawned, batch_stopped = _spawned_lifecycle(poll.items)
-                spawned.extend(batch_spawned)
-                stopped.extend(batch_stopped)
-                cursor = poll.next_offset
-                closed = poll.closed
-                if poll.closed or not poll.more_ready:
-                    break
-            active = []
-            if not closed:
-                status = await client.execute_operation(
-                    AgentService.query_agent_status, session
-                )
-                active = [asdict(item) for item in status.subagents]
-            return {
-                "spawned": [_observation_dict(item) for item in spawned],
-                "stopped_source_session_ids": stopped,
-                "next_offset": cursor,
-                "active": active,
-            }
-        match input.action:
-            case "send":
-                context = {
-                    name: values[name]
-                    for name in (
-                        "account_id",
-                        "registered_agent_id",
-                        "delegation_lineage",
-                        "delegation_depth",
-                        "max_delegation_depth",
-                    )
-                    if values.get(name) is not None
-                }
-                result = await client.execute_operation(
-                    AgentService.send_agent_message,
-                    SendAgentMessageInput(
-                        session_id=input.session_id,
-                        msg_type=str(values["msg_type"]),
-                        payload=json.dumps(values.get("payload") or {}),
-                        expected_turn=(
-                            int(values["expected_turn"])
-                            if values.get("expected_turn") is not None
-                            else None
-                        ),
-                        **context,
-                    ),
-                )
-            case "status":
-                result = await client.execute_operation(
-                    AgentService.query_agent_status, session
-                )
-            case "agent_interface":
-                result = await client.execute_operation(
-                    AgentService.query_agent_interface, session
-                )
-            case "operator_interface":
-                result = await client.execute_operation(
-                    AgentService.query_operator_interface, session
-                )
-            case "operator_command":
-                kwargs: dict[str, Any] = {
-                    "session_id": input.session_id,
-                    "name": str(values["name"]),
-                }
-                if values.get("arg") is not None:
-                    kwargs["arg"] = str(values["arg"])
-                result = await client.execute_operation(
-                    AgentService.execute_operator_command,
-                    ExecuteOperatorCommandInput(**kwargs),
-                )
-            case "approve":
-                kwargs = {
-                    "session_id": input.session_id,
-                    "tool_id": str(values["tool_id"]),
-                    "approved": bool(values["approved"]),
-                    "remember": bool(values.get("remember", False)),
-                }
-                if values.get("reason") is not None:
-                    kwargs["reason"] = str(values["reason"])
-                result = await client.execute_operation(
-                    AgentService.approve_tool_call,
-                    ApproveToolCallInput(**kwargs),
-                )
-            case "callback":
-                kwargs = {
-                    "session_id": input.session_id,
-                    "tool_id": str(values["tool_id"]),
-                }
-                if values.get("result") is not None:
-                    kwargs["result"] = ProvideCallbackResultInputResult(
-                        additional_properties=values["result"]
-                    )
-                if values.get("error") is not None:
-                    kwargs["error"] = str(values["error"])
-                result = await client.execute_operation(
-                    AgentService.provide_callback_result,
-                    ProvideCallbackResultInput(**kwargs),
-                )
-            case "close":
-                result = await client.execute_operation(
-                    AgentService.close_session, session
-                )
-            case _:
-                raise ValueError(f"unsupported agent action {input.action!r}")
-        return asdict(result)
-
-    async def _run_external(
-        self, input: AgentActionInput, values: dict[str, Any]
-    ) -> dict[str, Any]:
-        assert input.provider_url is not None
-        if input.action == "start":
-            result = await workflow.execute_activity(
-                subagent_start_activity,
-                SubagentStartInput(
-                    url=input.provider_url,
-                    idempotency_key=str(values["idempotency_key"]),
+        cursor = input.cursor
+        spawned: list[SpawnedAgentObservation] = []
+        stopped: list[str] = []
+        closed = False
+        for _ in range(100):
+            poll = await client.execute_operation(
+                AgentService.poll_messages,
+                PollMessagesInput(
+                    session_id=input.session_id,
+                    cursor=cursor,
+                    timeout_seconds=0.1,
                 ),
-                start_to_close_timeout=timedelta(seconds=15),
-                retry_policy=RetryPolicy(maximum_attempts=5),
             )
-            return result.model_dump(mode="json")
-        if input.action == "send":
-            result = await workflow.execute_activity(
-                subagent_proxy_activity,
-                SubagentDispatchInput(
-                    url=input.provider_url,
-                    instance_id=input.session_id,
-                    msg_type=str(values["msg_type"]),
-                    payload=json.dumps(values.get("payload") or {}),
-                    expected_turn=int(values["expected_turn"]),
-                    idempotency_key=str(values["idempotency_key"]),
-                ),
-                start_to_close_timeout=timedelta(seconds=75),
-                heartbeat_timeout=timedelta(seconds=30),
-                retry_policy=RetryPolicy(maximum_attempts=5),
+            batch_spawned, batch_stopped = _spawned_lifecycle(poll.items)
+            spawned.extend(batch_spawned)
+            stopped.extend(batch_stopped)
+            cursor = poll.next_offset
+            closed = poll.closed
+            if poll.closed or not poll.more_ready:
+                break
+        active = []
+        if not closed:
+            status = await client.execute_operation(
+                AgentService.query_agent_status,
+                QuerySessionInput(session_id=input.session_id),
             )
-            return result.model_dump(mode="json")
-        if input.action == "close":
-            await workflow.execute_activity(
-                subagent_stop_activity,
-                SubagentStopInput(
-                    url=input.provider_url,
-                    instance_id=input.session_id,
-                ),
-                start_to_close_timeout=timedelta(seconds=15),
-                retry_policy=RetryPolicy(maximum_attempts=5),
-            )
-            return {"closed": True}
-        raise ValueError(f"external agents do not support {input.action!r}")
+            active = [asdict(item) for item in status.subagents]
+        return {
+            "spawned": [_observation_dict(item) for item in spawned],
+            "stopped_source_session_ids": stopped,
+            "next_offset": cursor,
+            "active": active,
+        }
 
 
 @workflow.defn(sandboxed=False, name=AGENT_ATTACH_WORKFLOW_NAME)

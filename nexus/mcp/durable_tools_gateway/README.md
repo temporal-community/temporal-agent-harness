@@ -53,3 +53,9 @@ The Nexus operation uses the harness's stream-poll update while the target workf
 running. If Temporal reports that the workflow has already completed, `pollMessages` reads
 the same bounded page through the harness's replay query instead. Both paths return identical
 stream items and cursors, so stopped native subagents retain their mountable UI history.
+
+One-shot UI controls do not create proxy workflows. The gateway executes native agent
+send, status, interface, approval, callback, command, and close requests as standalone
+Nexus operations. Third-party HTTP start, turn, and close requests run as standalone
+activities. `BrokeredAgentDiscovery` remains a workflow because it drains multiple retained
+pages and then reconciles the resulting child-session snapshot.

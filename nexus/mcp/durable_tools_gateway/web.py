@@ -28,13 +28,14 @@ from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
 
 from .agent_broker import (
-    AGENT_ACTION_WORKFLOW_NAME,
     AGENT_ATTACH_WORKFLOW_NAME,
     AgentActionInput,
-    AgentActionWorkflow,
     AgentAttachInput,
     AgentAttachWorkflow,
+    AgentDiscoveryInput,
+    AgentDiscoveryWorkflow,
     event_broker,
+    execute_agent_action,
 )
 from .registry import (
     GLOBAL_CATALOG_WORKFLOW_ID,
@@ -48,15 +49,15 @@ from .registry import (
     ToolRegistryWorkflow,
     account_registry_workflow_id,
 )
-from .resources import (
-    AccountResourceRegistration,
-    ResourceDescriptor,
-    TEXT_AGENT_HANDLER,
-)
 from .registry_service_handler import (
     SubagentDispatchInput,
     SubagentDispatchOutput,
     subagent_dispatch_activity_id,
+)
+from .resources import (
+    TEXT_AGENT_HANDLER,
+    AccountResourceRegistration,
+    ResourceDescriptor,
 )
 from .tool_history import scan_external_tool_calls, scan_native_tool_calls
 
@@ -427,12 +428,10 @@ def create_account_agent_app(
     async def execute_action(
         input: AgentActionInput,
     ) -> dict[str, Any]:
-        return await app.state.temporal.execute_workflow(
-            AgentActionWorkflow.run,
+        return await execute_agent_action(
+            app.state.temporal,
             input,
-            id=f"broker-action-{uuid.uuid4()}",
-            task_queue=REGISTRY_TASK_QUEUE,
-            result_type=dict[str, Any],
+            execution_id=f"ui-agent-{input.action}-{uuid.uuid4()}",
         )
 
     async def submit(req: MessageRequest) -> dict[str, Any]:
@@ -775,13 +774,16 @@ def create_account_agent_app(
                 return
             try:
                 async with refresh_limit:
-                    result = await execute_action(
-                        AgentActionInput(
-                            action="discover_subagents",
+                    result = await app.state.temporal.execute_workflow(
+                        AgentDiscoveryWorkflow.run,
+                        AgentDiscoveryInput(
                             session_id=session.provider_session_id,
-                            nexus_endpoint=agent.nexus_endpoint,
-                            values={"cursor": session.discovery_offset},
-                        )
+                            nexus_endpoint=str(agent.nexus_endpoint),
+                            cursor=session.discovery_offset,
+                        ),
+                        id=f"broker-discovery-{uuid.uuid4()}",
+                        task_queue=REGISTRY_TASK_QUEUE,
+                        result_type=dict[str, Any],
                     )
                 await handle.execute_update(
                     ToolRegistryWorkflow.reconcile_spawned_agents,
@@ -1204,7 +1206,6 @@ def create_account_agent_app(
 
 
 __all__ = [
-    "AGENT_ACTION_WORKFLOW_NAME",
     "AGENT_ATTACH_WORKFLOW_NAME",
     "create_account_agent_app",
 ]

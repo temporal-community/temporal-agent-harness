@@ -272,7 +272,7 @@ and session drawer show live and historical session counts from the registry.
 
 ```text
 Mount/send Nexus Hello:
-  browser -> gateway API -> BrokeredAgentAction
+  browser -> gateway API -> standalone Nexus operation
           -> nexus-hello-agent-endpoint -> AgentServiceHandler -> NexusHelloAgent
 
 Stream Nexus Hello:
@@ -292,7 +292,7 @@ Nexus Hello's Whimsical Agent child:
           -> AgentServiceHandler -> WhimsicalAgent in nexus-subagent-server
 
 Mount/send Whimsical Agent directly:
-  browser -> gateway API -> BrokeredAgentAction
+  browser -> gateway API -> standalone Nexus operation
           -> nexus-hello-whimsical-agent-endpoint -> AgentServiceHandler -> WhimsicalAgent
 
 Whimsical Agent's MCP calls:
@@ -304,9 +304,14 @@ Replay a Writer spawned by Nexus Hello:
           <- subagent-dispatch-{gateway_instance_id}-{turn_number}
 
 Mount/send Writer HTTP:
-  browser -> gateway API -> BrokeredAgentAction
-          -> standalone start/turn/stop activities -> subagent_server.py
+  browser -> gateway API -> standalone start/turn/stop activity -> subagent_server.py
 ```
+
+The one-shot send, status, interface, approval, callback, command, and close requests do
+not need proxy workflows: the gateway starts them as standalone Nexus operations. The
+third-party HTTP equivalents are standalone activities. Only operations that actually
+orchestrate repeated calls remain workflows: `BrokeredAgentAttach` long-polls the stream,
+and `BrokeredAgentDiscovery` drains lifecycle pages before reconciling child sessions.
 
 Nexus Hello and Whimsical use the same generic per-turn resolver:
 

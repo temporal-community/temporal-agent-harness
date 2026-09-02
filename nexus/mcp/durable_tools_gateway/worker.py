@@ -35,8 +35,8 @@ from temporalio.worker import Worker
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
 
 from .agent_broker import (
-    AgentActionWorkflow,
     AgentAttachWorkflow,
+    AgentDiscoveryWorkflow,
     publish_agent_events,
 )
 from .registry import (
@@ -48,7 +48,6 @@ from .registry import (
     account_registry_workflow_id,
     fetch_external_tools,
 )
-from .resources import ResourceDescriptor, descriptor_from_dict
 from .registry_service_handler import (
     RegistryServiceHandler,
     mcp_proxy_activity,
@@ -56,6 +55,7 @@ from .registry_service_handler import (
     subagent_start_activity,
     subagent_stop_activity,
 )
+from .resources import ResourceDescriptor, descriptor_from_dict
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +158,7 @@ async def main(
         workflows=[
             GlobalCatalogWorkflow,
             ToolRegistryWorkflow,
-            AgentActionWorkflow,
+            AgentDiscoveryWorkflow,
             AgentAttachWorkflow,
         ],
         activities=[
