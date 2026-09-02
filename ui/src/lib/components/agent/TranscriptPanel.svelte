@@ -237,12 +237,24 @@
     if (row.actor === "tool" || status.includes("tool")) return "tool";
     if (row.actor === "model") return "model";
     if (row.actor === "reasoning") return "reasoning";
-    if (row.actor === "subagent") return "delegating";
     if (row.actor === "queue" || status.includes("queue")) return "queued";
-    if (status.includes("done") || status.includes("complete") || status.includes("approved")) {
+    /* The row's own tone settles the outcome, so the chip cannot disagree with
+       the line it sits on: a subagent reply says ok or error in its tone and
+       nowhere in its status text, and matching on the text alone left every
+       successful reply looking like one still in flight. */
+    if (
+      row.tone === "done" ||
+      status.includes("done") ||
+      status.includes("complete") ||
+      status.includes("approved")
+    ) {
       return "complete";
     }
     if (status.includes("running") || status.includes("streaming")) return "thinking";
+    /* Last, not first. Delegation is what a subagent row is doing when nothing
+       sharper is known about it; asked before the outcome tests it swallowed
+       them, and ok, error, and still-running all came out the same colour. */
+    if (row.actor === "subagent") return "delegating";
     return "idle";
   }
 </script>
@@ -722,6 +734,9 @@
     background: var(--surface-0);
   }
 
+  /* Full-strength hue on the glyph, now that most rows no longer carry a second
+     chip's wash to say the same thing. */
+  .log-line.agent .actor-icon { color: var(--accent); }
   .log-line.model .actor-icon { color: var(--model); }
   .log-line.tool .actor-icon { color: var(--warning); }
   .log-line.approval .actor-icon,
@@ -830,12 +845,6 @@
     font-family: var(--font-mono);
     font-size: var(--figure-size);
     font-variant-numeric: tabular-nums;
-  }
-
-  .line-meta :global(.badge) {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .line-details {
