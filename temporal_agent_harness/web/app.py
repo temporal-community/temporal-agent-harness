@@ -621,9 +621,17 @@ def _mount_static_ui(
 
 
 def _sse(event: str, data: dict, position: StreamPosition | None = None) -> bytes:
+    """Frame one SSE event, stamping both of the position's offsets when there is one.
+
+    The two are for different jobs and a client needs both: ``resume_offset`` is what it hands back
+    to ``attach(from_offset=...)`` to resume, while ``event_offset`` with the envelope's ``agent_id``
+    is what IDENTIFIES this event — stable across redeliveries and distinct between the events of a
+    single subagent turn, which the resume cursor is not (see
+    :class:`~temporal_agent_harness.harness.stream_merge.StreamPosition`)."""
     payload = {**data}
     if position is not None:
         payload["resume_offset"] = position.resume_offset
+        payload["event_offset"] = position.event_offset
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
 
 
