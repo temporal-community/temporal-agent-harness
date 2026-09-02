@@ -31,8 +31,10 @@ class ChildWorkflowTransport:
             config,
             id=workflow_id,
             task_queue=self._task_queue,
-            # Terminate the subagent when its parent closes.
-            parent_close_policy=workflow.ParentClosePolicy.TERMINATE,
+            # The runner applies its live subagent close policy during graceful
+            # shutdown. ABANDON is required because Temporal cannot change a child
+            # workflow's parent-close policy after it has started.
+            parent_close_policy=workflow.ParentClosePolicy.ABANDON,
         )
         return workflow_id
 
