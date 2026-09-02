@@ -11,7 +11,9 @@
   } from "$lib/components/primitives/StatusChip.svelte";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
+  import HotkeyHelp from "$lib/components/flow/HotkeyHelp.svelte";
   import { createAgentRunController } from "$lib/state/agentRun.svelte";
+  import { describeReplayKeyEvent, resolveReplayAction } from "$lib/state/replayHotkeys";
 
   type RightPanelView = "chat" | "latency" | "logs";
 
@@ -26,6 +28,7 @@
   let workspaceElement = $state<HTMLElement | null>(null);
   let rightPanelWidth = $state(RIGHT_PANEL_DEFAULT_WIDTH);
   let rightPanelResizing = $state(false);
+  let hotkeyHelpOpen = $state(false);
 
   $effect(() => {
     void run.initialize();
@@ -135,7 +138,53 @@
     event.preventDefault();
     rightPanelWidth = Math.round(clampRightPanelWidth(nextWidth));
   }
+
+  function handleReplayHotkey(event: KeyboardEvent): void {
+    const action = resolveReplayAction(describeReplayKeyEvent(event));
+    if (action == null) return;
+    event.preventDefault();
+
+    switch (action) {
+      case "stepBack":
+        run.stepBack();
+        break;
+      case "stepForward":
+        run.stepForward();
+        break;
+      case "previousTurn":
+        run.previousTurn();
+        break;
+      case "nextTurn":
+        run.nextTurn();
+        break;
+      case "first":
+        run.goTo(0);
+        break;
+      case "last":
+        run.goTo(run.total);
+        break;
+      case "jumpToLive":
+        run.jumpToLive();
+        break;
+      case "togglePlay":
+        if (run.playing) run.pause();
+        else run.play();
+        break;
+      case "toggleHelp":
+        hotkeyHelpOpen = !hotkeyHelpOpen;
+        break;
+      case "closeHelp":
+        hotkeyHelpOpen = false;
+        break;
+      default: {
+        const unhandled: never = action;
+        void unhandled;
+      }
+    }
+  }
 </script>
+
+<svelte:window onkeydown={handleReplayHotkey} />
 
 <main class="app">
   <header class="topbar">
@@ -177,6 +226,18 @@
         active={run.graph.status === "running"}
       />
       <StatusChip label={`${run.viewIndex}/${run.total} events`} kind="queued" compact />
+      <!-- The shortcuts are only real if they can be found. This is the entry
+           point; `?` opens the same sheet. -->
+      <button
+        type="button"
+        class="hotkey-hint"
+        aria-label="Replay keyboard shortcuts"
+        aria-expanded={hotkeyHelpOpen}
+        title="Replay keyboard shortcuts (?)"
+        onclick={() => (hotkeyHelpOpen = !hotkeyHelpOpen)}
+      >
+        ?
+      </button>
     </div>
   </header>
 
@@ -303,6 +364,8 @@
   />
 </main>
 
+<HotkeyHelp open={hotkeyHelpOpen} onClose={() => (hotkeyHelpOpen = false)} />
+
 <style>
   .app {
     height: 100vh;
@@ -411,6 +474,44 @@
     display: inline-flex;
     gap: 8px;
     align-items: center;
+  }
+
+  .hotkey-hint {
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    background: var(--control-bg);
+    color: var(--text-3);
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1;
+    transition:
+      color 140ms ease,
+      background 140ms ease;
+  }
+
+  .hotkey-hint:hover,
+  .hotkey-hint:focus-visible {
+    color: var(--text-1);
+    background: var(--control-hover);
+    outline: 0;
+  }
+
+  .hotkey-hint[aria-expanded="true"] {
+    color: color-mix(in srgb, var(--accent) 82%, white);
+    background: color-mix(in srgb, var(--accent) 13%, var(--surface-2));
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hotkey-hint {
+      transition: none;
+    }
   }
 
   .workspace {
