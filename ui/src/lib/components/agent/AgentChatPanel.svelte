@@ -2044,22 +2044,25 @@
           <span>Sessions</span>
         </span>
         <div class="new-session-control panel-add">
-          <button
-            type="button"
+          <Chip
             class="session-add-select"
-            class:disabled={!canCreateSession}
-            class:active={newSessionMenuOpen}
+            tone="accent"
+            fill="quiet"
+            toned
+            active={newSessionMenuOpen}
             disabled={!canCreateSession}
             aria-haspopup="menu"
             aria-expanded={newSessionMenuOpen}
             onclick={toggleNewSessionMenu}
           >
-            <Plus size={14} aria-hidden="true" />
+            {#snippet lead()}
+              <Plus size={13} />
+            {/snippet}
             <span class="session-add-label">{creatingSession ? "Starting" : "Add"}</span>
             <span class="control-chevron" aria-hidden="true">
               <ChevronDown size={13} />
             </span>
-          </button>
+          </Chip>
           {#if newSessionMenuOpen}
             <section class="agent-command-menu panel-menu" aria-label="New session">
               {#each agents as agent}
@@ -3329,31 +3332,8 @@
     gap: 7px;
   }
 
-  .session-add-select {
-    --control-accent: var(--accent);
-    position: relative;
-    height: 30px;
-    display: inline-grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 6px;
-    padding: 0 8px;
-    border: 1px solid color-mix(in srgb, var(--control-accent) 18%, var(--border));
-    border-radius: var(--radius-sm);
-    background: var(--control-bg);
-    color: var(--text-2);
-    cursor: pointer;
-    font-size: var(--font-md);
-    font-weight: 600;
-    white-space: nowrap;
-    box-shadow: var(--shadow-inset-soft);
-    transition:
-      border-color var(--duration-fast) var(--ease-ui),
-      background var(--duration-fast) var(--ease-ui),
-      color var(--duration-fast) var(--ease-ui),
-      box-shadow var(--duration-fast) var(--ease-ui);
-  }
-
+  /* The third rendering of the same control, in the full layout's session
+     panel, so it is the same Chip the other two are. */
   .session-add-label {
     min-width: 58px;
     max-width: 128px;
@@ -3361,29 +3341,13 @@
     text-overflow: ellipsis;
   }
 
-  .session-add-select:hover:not(.disabled),
-  .session-add-select:focus-within:not(.disabled),
-  .session-add-select.active {
-    border-color: color-mix(in srgb, var(--control-accent) 46%, var(--border-strong));
-    color: var(--text-1);
-    background: color-mix(in srgb, var(--control-accent) 10%, var(--control-hover));
-    box-shadow:
-      var(--shadow-inset-strong),
-      0 0 0 3px color-mix(in srgb, var(--control-accent) 16%, transparent);
+  :global(.session-add-select.active) .control-chevron,
+  :global(.session-add-select:hover:not(:disabled)) .control-chevron,
+  :global(.session-add-select:focus-visible:not(:disabled)) .control-chevron {
+    color: color-mix(in srgb, var(--chip-color) 78%, white);
   }
 
-  .session-add-select.disabled {
-    opacity: var(--disabled-opacity);
-    cursor: default;
-  }
-
-  .session-add-select.active .control-chevron,
-  .session-add-select:hover:not(.disabled) .control-chevron,
-  .session-add-select:focus-within:not(.disabled) .control-chevron {
-    color: color-mix(in srgb, var(--control-accent) 78%, white);
-  }
-
-  .session-add-select.active .control-chevron {
+  :global(.session-add-select.active) .control-chevron {
     transform: rotate(180deg);
   }
 
