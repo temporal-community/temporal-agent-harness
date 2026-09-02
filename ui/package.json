@@ -10,7 +10,8 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "check:svelte5": "node scripts/check-svelte5-syntax.mjs"
+    "check:svelte5": "node scripts/check-svelte5-syntax.mjs",
+    "check:boot-session": "node scripts/check-boot-session.mjs"
   },
   "dependencies": {
     "@xyflow/svelte": "^1.6.0",

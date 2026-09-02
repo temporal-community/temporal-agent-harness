@@ -20,6 +20,8 @@
   const RIGHT_PANEL_KEYBOARD_STEP = 24;
   const LEFT_PANE_MIN_WIDTH = 480;
 
+  const SESSION_SYNC_INTERVAL_MS = 10_000;
+
   const run = createAgentRunController();
   let rightPanelView = $state<RightPanelView>("chat");
   let transcriptFilter = $state<TranscriptFilter>("all");
@@ -29,6 +31,22 @@
 
   $effect(() => {
     void run.initialize();
+  });
+
+  /* Sessions this UI did not start still belong in the list, so it is re-read on a
+     timer instead of only when someone reaches for refresh. A hidden tab is
+     skipped and caught up the moment it comes back: nobody is reading it, and
+     every read costs the server a describe and a history scan per session. */
+  $effect(() => {
+    const syncIfVisible = () => {
+      if (document.visibilityState === "visible") void run.syncSessions();
+    };
+    const timer = setInterval(syncIfVisible, SESSION_SYNC_INTERVAL_MS);
+    document.addEventListener("visibilitychange", syncIfVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", syncIfVisible);
+    };
   });
 
   const pendingApprovalCount = $derived.by(() => {

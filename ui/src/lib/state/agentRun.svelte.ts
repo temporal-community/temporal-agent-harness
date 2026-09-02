@@ -9,13 +9,20 @@ import type {
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
 import type { AgentDescriptor, Session } from "$lib/api/types";
+import { SYNTHESIZED } from "$lib/api/types";
 import { HttpAgentApi } from "$lib/api/httpClient";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
+import { chooseBootSession } from "./bootSession";
 import {
   buildAgentTreeGraph,
   type AgentGraphSource
 } from "./flowProjection";
+import {
+  cursorAfterPublish,
+  framePublishChunkSize,
+  publishAtChunkBoundary
+} from "./hydration";
 import { buildReplayLog, buildReplayMarkers } from "./replayLog";
 import { buildStepTimeline, type StepTimelineFrame } from "./stepTimeline";
 import { buildTranscript } from "./transcript";
@@ -92,6 +99,27 @@ function removeStoredActiveSessionId(): void {
   } catch {
     // Ignore storage failures.
   }
+}
+
+function now(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+/**
+ * Hand the main thread back so the browser can paint and answer input.
+ *
+ * A rAF rather than a bare timeout, because the point is to let a paint happen:
+ * resuming before one has means the work was interleaved without the page ever
+ * catching up.
+ */
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => resolve());
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
 }
 
 function readCachedFrames(sessionId: string): AgentSseFrame[] {
@@ -181,8 +209,36 @@ function displayTextForMessage(message: AgentInboundMessage): string {
   return JSON.stringify(message);
 }
 
+/**
+ * The identity #ingestFrame dedupes on. A frame arriving twice is normal — a reconnect replays from
+ * a root offset, and the cached frames overlap the live stream — so this has to say "same event"
+ * exactly when it is the same event.
+ *
+ * An event read off a log reports its own offset there, which with the tree-unique `agent_id` is
+ * precisely that: stable across redeliveries, distinct between two events of one agent. Prefer it.
+ *
+ * Fall back to hashing the payload only for the frames that have no offset to report — the ones the
+ * server synthesized, plus client-side stream errors that carry no envelope. This fallback is what
+ * every frame used to use, and the reason not to: two DIFFERENT events with byte-identical payloads
+ * collide under it, and the second is silently dropped. Measured over 214 frames of live traffic
+ * that never fired, but the synthesized `subagent_stream_unavailable` marker is constructibly
+ * vulnerable — every field of it is a constant for a given child, so a child given up twice (the
+ * merge re-arms a re-dispatched child's gate) yields two identical frames. Keeping the fallback
+ * scoped to those frames holds their behavior exactly as it is today while real events, which are
+ * the ones whose loss would corrupt the transcript, get an identity that cannot collide.
+ */
 function frameKey(frame: AgentSseFrame): string {
-  const { resume_offset: _resumeOffset, ...identityData } = frame.data;
+  if (
+    "event_offset" in frame.data &&
+    "agent_id" in frame.data &&
+    typeof frame.data.event_offset === "number" &&
+    frame.data.event_offset !== SYNTHESIZED
+  ) {
+    return `${frame.data.agent_id}|${frame.data.event_offset}`;
+  }
+  const identityData: Record<string, unknown> = { ...frame.data };
+  delete identityData.resume_offset;
+  delete identityData.event_offset;
   return `${frame.event}|${JSON.stringify(identityData)}`;
 }
 
@@ -218,7 +274,12 @@ export class AgentRunController {
   closedWorkflowIds = $state<string[]>([]);
   viewIndex = $state(0);
   playing = $state(false);
-  following = $state(false);
+  /**
+   * Tail the live edge. Load-bearing now that the cursor only advances while it
+   * is set: starting false would leave a fresh session parked at event zero
+   * while frames streamed in behind it.
+   */
+  following = $state(true);
   connecting = $state(false);
   sending = $state(false);
   creatingSession = $state(false);
@@ -233,6 +294,7 @@ export class AgentRunController {
   #streamVersion = 0;
   #connectionVersion = 0;
   #sendVersion = 0;
+  #syncingSessions = false;
   #streamAbort: AbortController | null = null;
   #interfaceRequests = new Set<string>();
   #operatorInterfaceRequests = new Set<string>();
@@ -240,6 +302,16 @@ export class AgentRunController {
   #workflowAttachAbort = new Map<string, AbortController>();
   #frameKeys = new Set<string>();
   #frameCacheTimer: number | null = null;
+  /** Frames staged but not yet committed. Plain array: writing it must not react. */
+  #frameBuffer: AgentSseFrame[] = [];
+  #flushQueued = false;
+  /** Bumped on session change, to strand a flush queued against the old session. */
+  #publishGeneration = 0;
+  /** A bounded backlog is being replayed in, so hold off on per-paint commits. */
+  #catchingUp = false;
+  #catchUpStartedAt = 0;
+  /** Frames staged since the last catch-up commit, counting toward the next chunk. */
+  #sinceCatchUpPublish = 0;
   #submitQueue: Promise<void> = Promise.resolve();
   #timer: number | null = null;
 
@@ -296,7 +368,11 @@ export class AgentRunController {
   );
 
   get total(): number {
-    return this.replayTimeline.length;
+    // #replayTimeline() emits exactly one entry per frame, so this matches
+    // replayTimeline.length without forcing that projection to rebuild. Reading
+    // the projection here made appending one frame O(n), and hydrating a cached
+    // session O(n^2) — 1,583 frames cost 10.2s of rebuilds before this.
+    return this.session ? this.frames.length : 0;
   }
 
   get runInfo(): RunInfo {
@@ -370,6 +446,13 @@ export class AgentRunController {
       }
     }
 
+    if (import.meta.env.DEV && timeline.length !== this.frames.length) {
+      console.error(
+        `replayTimeline emitted ${timeline.length} entries for ${this.frames.length} frames. ` +
+          "get total() returns frames.length to avoid rebuilding this projection on every " +
+          "appended frame, and that shortcut is now wrong."
+      );
+    }
     return timeline;
   }
 
@@ -723,17 +806,14 @@ export class AgentRunController {
       this.sessions = sessions;
       this.#applySessionExecutionStates(sessions);
       const storedSessionId = readStoredActiveSessionId();
-      const storedSession = storedSessionId
-        ? sessions.find((item) => item.workflow_id === storedSessionId)
-        : null;
-      const existing = [...sessions]
-        .reverse()
-        .find((item) => item.agent_workflow_type === defaultAgent.workflow_type);
+      const openable = chooseBootSession(
+        sessions,
+        storedSessionId,
+        defaultAgent.workflow_type
+      );
 
-      if (storedSession) {
-        this.session = storedSession;
-      } else if (existing) {
-        this.session = existing;
+      if (openable) {
+        this.session = openable;
       } else {
         this.session = await this.#api.createSession({
           agent_workflow_type: defaultAgent.workflow_type,
@@ -744,7 +824,9 @@ export class AgentRunController {
       writeStoredActiveSessionId(this.session.workflow_id);
       void this.#fetchAgentInterface(this.session.workflow_id);
       void this.#fetchOperatorInterface(this.session.workflow_id);
-      this.#hydrateCachedFrames(this.session.workflow_id);
+      /* Awaited so the cache lands before the live stream opens: interleaving
+         the two would order the buffer by arrival rather than by event. */
+      await this.#hydrateCachedFrames(this.session.workflow_id);
       await this.#refreshWorkflowExecutionState(this.session.workflow_id);
 
       if (!this.#isCurrentConnection(connectionVersion)) return;
@@ -760,18 +842,48 @@ export class AgentRunController {
     }
   }
 
+  async #loadSessions(): Promise<void> {
+    const sessions = await this.#api.listSessions();
+    this.sessions = sessions;
+    this.#applySessionExecutionStates(sessions);
+  }
+
   async refreshSessions(): Promise<void> {
     if (this.refreshingSessions) return;
     this.refreshingSessions = true;
     try {
-      const sessions = await this.#api.listSessions();
-      this.sessions = sessions;
-      this.#applySessionExecutionStates(sessions);
+      await this.#loadSessions();
     } catch (error) {
       this.connectionError =
         error instanceof Error ? error.message : "Failed to refresh sessions.";
     } finally {
       this.refreshingSessions = false;
+    }
+  }
+
+  /**
+   * Re-read the session list on the reader's behalf rather than at their request.
+   *
+   * Anything holding a Temporal client can start a session, so the list this UI
+   * created is only ever part of the picture. Quiet on purpose: a tick nobody
+   * asked for must not spin the refresh control or raise the connection banner
+   * over a blip the next tick would have covered.
+   *
+   * A tick is skipped while either read is still in flight. `/api/sessions` costs
+   * a describe plus a history scan per session and has been measured at twelve
+   * seconds against a registry of twenty stale entries, so a sync outlasting the
+   * ten-second interval is the expected case, not the pathological one; without
+   * this the ticks would overlap and pile up on a server already struggling.
+   */
+  async syncSessions(): Promise<void> {
+    if (this.refreshingSessions || this.#syncingSessions) return;
+    this.#syncingSessions = true;
+    try {
+      await this.#loadSessions();
+    } catch {
+      // The list stays as it was until a later tick answers.
+    } finally {
+      this.#syncingSessions = false;
     }
   }
 
@@ -845,7 +957,7 @@ export class AgentRunController {
     writeStoredActiveSessionId(session.workflow_id);
     void this.#fetchAgentInterface(session.workflow_id);
     void this.#fetchOperatorInterface(session.workflow_id);
-    this.#hydrateCachedFrames(session.workflow_id);
+    await this.#hydrateCachedFrames(session.workflow_id);
 
     try {
       await this.#refreshWorkflowExecutionState(session.workflow_id);
@@ -1111,11 +1223,36 @@ export class AgentRunController {
     }
   }
 
-  #hydrateCachedFrames(sessionId: string): void {
+  /**
+   * Replay the cached frames for a session back into the buffer.
+   *
+   * The one place the pipeline does its own chunking. Everywhere else frames
+   * arrive from an await, so the event loop breathes between them by itself;
+   * here the whole cache is already in hand and a tight loop over it would hold
+   * the main thread for the length of the session.
+   */
+  async #hydrateCachedFrames(sessionId: string): Promise<void> {
     const cachedFrames = readCachedFrames(sessionId);
     if (cachedFrames.length === 0) return;
-    for (const frame of cachedFrames) {
-      this.#appendFrame(frame, { persist: false });
+    this.#catchingUp = true;
+    this.#catchUpStartedAt = now();
+    try {
+      for (let index = 0; index < cachedFrames.length; index += 1) {
+        if (this.session?.workflow_id !== sessionId) return;
+        this.#ingestFrame(cachedFrames[index], { persist: false });
+        if ((index + 1) % framePublishChunkSize !== 0) continue;
+        if (publishAtChunkBoundary(this.#catchingUp, now() - this.#catchUpStartedAt)) {
+          this.#publishFrames();
+          /* Restarting the clock is what makes the ceiling a rate limit rather
+             than just a delay: without it, every chunk past the first second
+             commits, and chunks can pass far faster than the page can paint. */
+          this.#catchUpStartedAt = now();
+        }
+        await yieldToMain();
+      }
+    } finally {
+      this.#catchingUp = false;
+      this.#publishFrames();
     }
   }
 
@@ -1137,14 +1274,27 @@ export class AgentRunController {
     this.frames = [];
     this.observedSubagents = [];
     this.#frameKeys = new Set<string>();
+    this.#frameBuffer = [];
+    /* Strand any flush already queued: it would republish the old session's
+       buffer over the new session's empty one. */
+    this.#publishGeneration += 1;
+    this.#flushQueued = false;
+    this.#catchingUp = false;
+    this.#sinceCatchUpPublish = 0;
     this.#workflowResumeOffsets = new Map<string, number>();
     this.viewIndex = 0;
-    this.following = false;
+    this.following = true;
     this.expectedTurn = 1;
     this.lastResumeOffset = 0;
   }
 
-  #appendFrame(
+  /**
+   * Stage one frame: dedup it, record its bookkeeping, and buffer it.
+   *
+   * Deliberately does not touch `frames`. Committing is what costs — it re-runs
+   * every derived projection — so it happens per batch in #publishFrames().
+   */
+  #ingestFrame(
     frame: AgentSseFrame,
     options: { persist?: boolean; sourceWorkflowId?: string } = {}
   ): void {
@@ -1159,9 +1309,7 @@ export class AgentRunController {
       this.#publisherWorkflowId(frame) ?? options.sourceWorkflowId;
     const isRootFrame = publisherWorkflowId === this.session?.workflow_id;
 
-    this.frames = [...this.frames, frame];
-    this.following = true;
-    this.viewIndex = this.total;
+    this.#frameBuffer.push(frame);
 
     if (
       "resume_offset" in frame.data &&
@@ -1207,6 +1355,84 @@ export class AgentRunController {
     }
     this.#handleSubagentEvent(frame, publisherWorkflowId);
     if (options.persist !== false) this.#scheduleFrameCacheWrite();
+  }
+
+  /** Commit everything staged so far, in one reactive write. */
+  #publishFrames(): void {
+    this.frames = this.#frameBuffer.slice();
+    this.viewIndex = cursorAfterPublish(this.following, this.viewIndex, this.total);
+  }
+
+  /**
+   * Commit on the next frame the browser paints, coalescing whatever arrives in
+   * between. A burst of thirty events becomes one commit rather than thirty.
+   *
+   * While catching up, commit on the chunk schedule instead. One commit per paint
+   * is the right rate for tailing a live run and far too many for a backlog of a
+   * thousand events, each commit re-running every projection over a longer
+   * timeline than the last.
+   *
+   * #hydrateCachedFrames drives its own loop and never reaches here, so this is
+   * the catch-up path for history arriving over the stream — where there is no
+   * loop to hang the schedule on, only frames landing one at a time.
+   */
+  #schedulePublish(): void {
+    if (this.#catchingUp) {
+      this.#sinceCatchUpPublish += 1;
+      if (this.#sinceCatchUpPublish < framePublishChunkSize) return;
+      if (!publishAtChunkBoundary(true, now() - this.#catchUpStartedAt)) return;
+      this.#sinceCatchUpPublish = 0;
+      /* Restart the clock so the ceiling rate-limits rather than merely delays:
+         without it every chunk past the first second commits, and chunks can
+         pass far faster than the page can paint. */
+      this.#catchUpStartedAt = now();
+      this.#publishFrames();
+      return;
+    }
+    if (this.#flushQueued) return;
+    this.#flushQueued = true;
+    const generation = this.#publishGeneration;
+    const flush = () => {
+      this.#flushQueued = false;
+      /* Switching sessions bumps the generation, so a flush queued against the
+         old one must not resurrect its frames into the new session's view. */
+      if (generation !== this.#publishGeneration) return;
+      this.#publishFrames();
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(flush);
+      return;
+    }
+    setTimeout(flush, 0);
+  }
+
+  /**
+   * Take one frame off the stream: stage it, then commit on whichever schedule
+   * suits what the server says this frame is.
+   *
+   * The server marks an event replay when it was already durable as the stream
+   * opened. That is the only way to know a cold load is being caught up on
+   * history: a client with no cache cannot tell a thousand backlogged events from
+   * a thousand arriving live, and hydrating one commit at a time is what made a
+   * fresh tab crawl. The absence of the mark means live, so an older server just
+   * gets today's per-paint behavior.
+   */
+  #appendFrame(
+    frame: AgentSseFrame,
+    options: { persist?: boolean; sourceWorkflowId?: string } = {}
+  ): void {
+    const isReplay = "replay" in frame.data && frame.data.replay === true;
+    if (isReplay !== this.#catchingUp) {
+      this.#catchingUp = isReplay;
+      this.#catchUpStartedAt = now();
+      this.#sinceCatchUpPublish = 0;
+      /* Crossing to live commits the tail of the backlog immediately rather than
+         holding it for a chunk that may never fill — a run that goes quiet right
+         after catching up would otherwise leave its last events unpublished. */
+      if (!isReplay) this.#publishFrames();
+    }
+    this.#ingestFrame(frame, options);
+    this.#schedulePublish();
   }
 
   #publisherWorkflowId(frame: AgentSseFrame): string | undefined {
