@@ -399,10 +399,7 @@ def create_agent_harness_app(
     @app.post("/api/messages")
     async def submit_message(req: ChatRequestBody):
         client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
-        if isinstance(req.message, str):
-            msg_type, payload = "ask", {"text": req.message}
-        else:
-            msg_type, payload = req.message["type"], req.message.get("payload") or {}
+        msg_type, payload = _message_parts(req.message)
 
         result = await client.submit_message(msg_type, payload, req.expected_turn)
         return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
@@ -427,10 +424,7 @@ def create_agent_harness_app(
                     return _yield_item(item, position)
 
         client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
-        if isinstance(req.message, str):
-            msg_type, payload = "ask", {"text": req.message}
-        else:
-            msg_type, payload = req.message["type"], req.message.get("payload") or {}
+        msg_type, payload = _message_parts(req.message)
 
         return StreamingResponse(
             await client.send_message(
@@ -514,6 +508,19 @@ def _resolve_registry(
     if registry_path is not None:
         return load_agent_registry(registry_path)
     raise ValueError("create_agent_harness_app requires registry or registry_path.")
+
+
+def _message_parts(message: str | dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Split a submitted message into its type and payload.
+
+    A bare string is the shorthand for asking something, and a dict without a ``type`` is
+    treated as the same thing rather than as an error: the alternative was a KeyError and a
+    500, which tells the console nothing it can act on and loses the text the person typed.
+    Defaulting to ``ask`` fails toward the one interpretation every agent can handle.
+    """
+    if isinstance(message, str):
+        return "ask", {"text": message}
+    return message.get("type", "ask"), message.get("payload") or {}
 
 
 def _vanished_workflow_ids(listed: list[dict[str, object]]) -> list[str]:
