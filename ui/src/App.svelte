@@ -1,33 +1,27 @@
 <script lang="ts">
-  import { Logs, MessageCircle, Timer } from "@lucide/svelte";
   import TranscriptPanel, {
     type TranscriptFilter
   } from "$lib/components/agent/TranscriptPanel.svelte";
   import AgentStateFlow from "$lib/components/flow/AgentStateFlow.svelte";
   import LatencyWaterfall from "$lib/components/flow/LatencyWaterfall.svelte";
   import StepController from "$lib/components/flow/StepController.svelte";
-  import StatusChip, {
-    type StatusKind
-  } from "$lib/components/primitives/StatusChip.svelte";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
+  import PaneRail, { type PaneDescription } from "$lib/panes/PaneRail.svelte";
+  import PaneMinimap from "$lib/panes/PaneMinimap.svelte";
+  import PaneLinkNotice from "$lib/panes/PaneLinkNotice.svelte";
+  import { PANE_META } from "$lib/panes/registry";
   import { createAgentRunController } from "$lib/state/agentRun.svelte";
-
-  type RightPanelView = "chat" | "latency" | "logs";
-
-  const RIGHT_PANEL_MIN_WIDTH = 380;
-  const RIGHT_PANEL_DEFAULT_WIDTH = 880;
-  const RIGHT_PANEL_KEYBOARD_STEP = 24;
-  const LEFT_PANE_MIN_WIDTH = 480;
+  import { createPaneStack, type Pane } from "$lib/state/paneStack.svelte";
 
   const SESSION_SYNC_INTERVAL_MS = 10_000;
 
   const run = createAgentRunController();
-  let rightPanelView = $state<RightPanelView>("chat");
+  const stack = createPaneStack();
+  stack.hydrateFromQuery();
+
+  let rail = $state<PaneRail | null>(null);
   let transcriptFilter = $state<TranscriptFilter>("all");
-  let workspaceElement = $state<HTMLElement | null>(null);
-  let rightPanelWidth = $state(RIGHT_PANEL_DEFAULT_WIDTH);
-  let rightPanelResizing = $state(false);
 
   $effect(() => {
     void run.initialize();
@@ -47,6 +41,40 @@
       clearInterval(timer);
       document.removeEventListener("visibilitychange", syncIfVisible);
     };
+  });
+
+  /* The desk follows the session, so a switch neither carries one run's drill-ins
+     into another nor throws away the desk being left. */
+  $effect(() => {
+    const sessionId = run.session?.workflow_id;
+    if (sessionId) stack.enterSession(sessionId);
+  });
+
+  /* Layout and moment both live in the URL, so a link restores the whole desk.
+     While following live there is no fixed moment to encode. A cursor that has
+     not been applied yet stays in the URL so a reload does not lose it. */
+  $effect(() => {
+    if (stack.pendingCursor != null) {
+      stack.writeQuery(stack.pendingCursor);
+      return;
+    }
+    if (run.following) {
+      stack.writeQuery(0);
+      return;
+    }
+    stack.writeQuery(run.viewIndex);
+  });
+
+  /* A shared cursor can arrive before the stream has caught up to it. Parking on
+     it has to clear `following`, or the next frame would drag the reader back to
+     live and the link would look like it had been ignored. */
+  $effect(() => {
+    const pending = stack.pendingCursor;
+    if (pending == null) return;
+    if (run.total < pending) return;
+    run.goTo(pending);
+    run.following = false;
+    stack.pendingCursor = null;
   });
 
   const pendingApprovalCount = $derived.by(() => {
@@ -78,181 +106,149 @@
     }
   }
 
-  function startedAtLabel(seconds: number): string {
-    if (!seconds) return "";
-    return new Date(seconds * 1000).toLocaleString([], {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit"
-    });
+  function statusTone(status: typeof run.graph.status): string {
+    if (status === "error") return "--error";
+    if (status === "running") return "--accent";
+    if (status === "replied") return "--success";
+    return "--text-3";
   }
 
-  function graphStatusKind(status: typeof run.graph.status): StatusKind {
-    if (status === "error") return "error";
-    if (status === "running") return "thinking";
-    if (status === "replied") return "complete";
-    return "available";
+  /**
+   * The four kinds this build renders. Every other kind keeps its registry label,
+   * which is what a pane restored from a stale link is titled while its body
+   * explains that it is not here yet.
+   */
+  function describePane(pane: Pane): PaneDescription {
+    switch (pane.kind) {
+      case "chat":
+        return {
+          title: (run.session ? run.runInfo.agentLabel : "") || "Agent chat",
+          statusTone: pendingApprovalCount > 0 ? "--live" : null,
+          statusLabel: pendingApprovalCount > 0 ? "needs you" : null
+        };
+      case "graph":
+        return {
+          title: "Session flow",
+          statusTone: statusTone(run.graph.status),
+          statusLabel: run.graph.status
+        };
+      case "logs":
+        return { title: "Replay log" };
+      case "latency":
+        return { title: "Latency waterfall" };
+      default:
+        return { title: PANE_META[pane.kind].kindLabel };
+    }
   }
 
-  function rightPanelMaxWidth(): number {
-    const workspaceWidth = workspaceElement?.getBoundingClientRect().width ?? 0;
-    if (!workspaceWidth) return Math.max(RIGHT_PANEL_MIN_WIDTH, rightPanelWidth);
-    return Math.max(RIGHT_PANEL_MIN_WIDTH, workspaceWidth - LEFT_PANE_MIN_WIDTH);
-  }
-
-  function clampRightPanelWidth(width: number): number {
-    return Math.min(
-      Math.max(width, RIGHT_PANEL_MIN_WIDTH),
-      rightPanelMaxWidth()
+  /* Arrow keys belong to whatever the user is typing in. */
+  function isTextEntry(target: EventTarget | null): boolean {
+    const element = target as HTMLElement | null;
+    if (!element) return false;
+    const tag = element.tagName;
+    return (
+      tag === "INPUT" ||
+      tag === "TEXTAREA" ||
+      tag === "SELECT" ||
+      element.isContentEditable
     );
   }
 
-  function resizeRightPanelFromClientX(clientX: number): void {
-    const rect = workspaceElement?.getBoundingClientRect();
-    if (!rect) return;
-    rightPanelWidth = Math.round(clampRightPanelWidth(rect.right - clientX));
-  }
+  /* Left and right are the rail, up and down are the column you are in — its tabs
+     or the panes split down it, which are the same list either way: Alt walks,
+     Cmd/Ctrl+Shift carries the focused pane. Up out of a shared column is how the
+     keyboard takes a pane back out of one, landing it beside the column. */
+  function handleWindowKeydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented || isTextEntry(event.target)) return;
 
-  function startRightPanelResize(event: PointerEvent): void {
-    if (event.button !== 0 && event.pointerType !== "touch") return;
-    event.preventDefault();
-    rightPanelResizing = true;
-    const handle = event.currentTarget as HTMLElement;
-    handle.setPointerCapture(event.pointerId);
-    resizeRightPanelFromClientX(event.clientX);
-  }
-
-  function moveRightPanelResize(event: PointerEvent): void {
-    if (!rightPanelResizing) return;
-    resizeRightPanelFromClientX(event.clientX);
-  }
-
-  function stopRightPanelResize(event: PointerEvent): void {
-    rightPanelResizing = false;
-    const handle = event.currentTarget as HTMLElement;
-    if (handle.hasPointerCapture(event.pointerId)) {
-      handle.releasePointerCapture(event.pointerId);
-    }
-  }
-
-  function handleRightPanelResizeKeydown(event: KeyboardEvent): void {
-    let nextWidth = rightPanelWidth;
-    if (event.key === "ArrowLeft") {
-      nextWidth += RIGHT_PANEL_KEYBOARD_STEP;
-    } else if (event.key === "ArrowRight") {
-      nextWidth -= RIGHT_PANEL_KEYBOARD_STEP;
-    } else if (event.key === "Home") {
-      nextWidth = RIGHT_PANEL_MIN_WIDTH;
-    } else if (event.key === "End") {
-      nextWidth = rightPanelMaxWidth();
-    } else {
+    if (event.key === "Escape") {
+      if (!stack.bleedingPane) return;
+      event.preventDefault();
+      stack.exitBleed();
       return;
     }
 
+    /* Unmodified, because Cmd+F is the browser's and Alt+F is a menu. */
+    if (event.key === "f" || event.key === "F") {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      event.preventDefault();
+      stack.toggleBleed();
+      return;
+    }
+
+    const alongRail = event.key === "ArrowLeft" || event.key === "ArrowRight";
+    const alongTabs = event.key === "ArrowUp" || event.key === "ArrowDown";
+    if (!alongRail && !alongTabs) return;
+    const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1;
+
+    if ((event.metaKey || event.ctrlKey) && event.shiftKey) {
+      if (!stack.focusedId) return;
+      event.preventDefault();
+      if (alongRail) stack.movePane(stack.focusedId, delta);
+      else stack.movePaneAcross(stack.focusedId, delta);
+      return;
+    }
+
+    if (!event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return;
     event.preventDefault();
-    rightPanelWidth = Math.round(clampRightPanelWidth(nextWidth));
+    if (alongRail) stack.focusAlongRail(delta);
+    else stack.focusAcross(delta);
+    rail?.focusCurrent();
   }
 </script>
 
-<main class="app">
-  <header class="topbar">
-    <div class="brand">
-      <img src="temporal-logo.svg" alt="Temporal logo" width="24" height="24" />
-      <div class="brand-text">
-        <h1>Agentic Harness</h1>
-        <p>
-          {#if run.runInfo.startedAt}
-            {startedAtLabel(run.runInfo.startedAt)}
-          {/if}
-        </p>
-      </div>
-    </div>
+<svelte:window onkeydown={handleWindowKeydown} />
 
-    <div class="session-slot">
-      <SessionControls
-        sessions={run.sessions}
-        agents={run.agents}
-        sessionId={run.runInfo.sessionId}
-        connecting={run.connecting}
-        sending={run.sending}
-        creatingSession={run.creatingSession}
-        refreshingSessions={run.refreshingSessions}
-        closed={run.sessionClosed}
-        closedWorkflowIds={run.closedWorkflowIds}
-        error={run.connectionError}
-        {pendingApprovalCount}
-        onNewSession={(workflowType) => run.startNewSession(workflowType)}
-        onSelectSession={(sessionId) => run.selectSession(sessionId)}
-        onRefreshSessions={() => run.refreshSessions()}
+<main class="app" class:bleed={stack.bleedingPane != null}>
+  <!-- Two strips, and each answers one question: this one what you are looking
+       at, the transport under the rail where in the run you are looking from.
+       The link notice rides with the status line rather than as a third strip:
+       it is a note on the arrangement that row describes, and it is only on
+       screen while the link that opened the desk asked for something missing. -->
+  <div class="chrome">
+    <PaneMinimap {stack} describe={describePane}>
+      {#snippet lead()}
+        <SessionControls
+          sessions={run.sessions}
+          agents={run.agents}
+          sessionId={run.runInfo.sessionId}
+          connecting={run.connecting}
+          sending={run.sending}
+          creatingSession={run.creatingSession}
+          refreshingSessions={run.refreshingSessions}
+          closed={run.sessionClosed}
+          closedWorkflowIds={run.closedWorkflowIds}
+          error={run.connectionError}
+          {pendingApprovalCount}
+          onNewSession={(workflowType) => run.startNewSession(workflowType)}
+          onSelectSession={(sessionId) => run.selectSession(sessionId)}
+          onRefreshSessions={() => run.refreshSessions()}
+        />
+      {/snippet}
+    </PaneMinimap>
+
+    {#if stack.unknownPanes}
+      <PaneLinkNotice
+        report={stack.unknownPanes}
+        onDismiss={() => stack.dismissUnknownPanes()}
       />
-    </div>
+    {/if}
+  </div>
 
-    <div class="replay-status">
-      <StatusChip
-        label={run.graph.status}
-        kind={graphStatusKind(run.graph.status)}
-        active={run.graph.status === "running"}
-      />
-      <StatusChip label={`${run.viewIndex}/${run.total} events`} kind="queued" compact />
-    </div>
-  </header>
-
-  <section
-    class={`workspace states ${rightPanelResizing ? "resizing" : ""}`}
-    bind:this={workspaceElement}
-    style={`--right-panel-width: ${rightPanelWidth}px`}
+  <PaneRail
+    bind:this={rail}
+    {stack}
+    describe={describePane}
+    bleedingId={stack.bleedingPane?.id ?? null}
   >
-    <div class="flow-pane">
-      <AgentStateFlow graph={run.graph} onNodeSelect={selectNode} />
-    </div>
-    <aside class="right-pane" aria-label="Detail panel">
-      <button
-        type="button"
-        class="resize-handle"
-        aria-label="Resize detail panel"
-        aria-keyshortcuts="ArrowLeft ArrowRight Home End"
-        title="Resize detail panel"
-        onpointerdown={startRightPanelResize}
-        onpointermove={moveRightPanelResize}
-        onpointerup={stopRightPanelResize}
-        onpointercancel={stopRightPanelResize}
-        onkeydown={handleRightPanelResizeKeydown}
-      ></button>
-      <header class="right-pane-head">
-        <div class="panel-tabs" role="group" aria-label="Right panel view">
-          <button
-            class={rightPanelView === "chat" ? "active" : ""}
-            type="button"
-            aria-pressed={rightPanelView === "chat"}
-            onclick={() => (rightPanelView = "chat")}
-          >
-            <MessageCircle size={15} />
-            Chat
-          </button>
-          <button
-            class={rightPanelView === "latency" ? "active" : ""}
-            type="button"
-            aria-pressed={rightPanelView === "latency"}
-            onclick={() => (rightPanelView = "latency")}
-          >
-            <Timer size={15} />
-            Latency
-          </button>
-          <button
-            class={rightPanelView === "logs" ? "active" : ""}
-            type="button"
-            aria-pressed={rightPanelView === "logs"}
-            onclick={() => (rightPanelView = "logs")}
-          >
-            <Logs size={15} />
-            Logs
-          </button>
-        </div>
-      </header>
-
-      <div class="right-pane-body">
-        {#if rightPanelView === "chat"}
+    {#snippet paneContent(pane)}
+      <!-- The wrapper is what the narrow-column rules below hang off. It stands in
+           for the old detail column: a definite-height box the four components can
+           each fill with their own height: 100%. -->
+      <div class="pane-content">
+        {#if pane.kind === "graph"}
+          <AgentStateFlow graph={run.graph} onNodeSelect={selectNode} />
+        {:else if pane.kind === "chat"}
           <AgentChatPanel
             layout="embedded"
             showHeader={false}
@@ -279,13 +275,13 @@
             onApproveTool={(workflowId, toolId, approved, remember) =>
               run.approveTool(workflowId, toolId, approved, remember)}
           />
-        {:else if rightPanelView === "latency"}
+        {:else if pane.kind === "latency"}
           <LatencyWaterfall
             timeline={run.stepTimeline}
             viewIndex={run.viewIndex}
             onScrub={(index) => run.goTo(index)}
           />
-        {:else}
+        {:else if pane.kind === "logs"}
           <TranscriptPanel
             groups={run.replayLog.groups}
             activeTurnNumber={run.currentLogRow?.turnNumber ?? null}
@@ -294,10 +290,14 @@
             filter={transcriptFilter}
             onFilterChange={(next) => (transcriptFilter = next)}
           />
+        {:else}
+          <!-- A link can name a kind the registry knows and this build does not
+               render. Saying so beats a pane that is simply blank. -->
+          <p class="pane-todo">Not available yet.</p>
         {/if}
       </div>
-    </aside>
-  </section>
+    {/snippet}
+  </PaneRail>
 
   <StepController
     viewIndex={run.viewIndex}
@@ -331,190 +331,55 @@
     color: var(--text-1);
   }
 
-  .topbar {
-    min-height: 62px;
-    display: grid;
-    grid-template-columns: minmax(180px, auto) minmax(0, 1fr) auto;
-    gap: 14px;
-    align-items: center;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border);
-    background: color-mix(in srgb, var(--surface-1) 88%, black);
-    box-shadow: 0 1px 0 rgb(255 255 255 / 0.03);
+  /* One canvas, edge to edge — but the transport stays.
+
+     The strip that says WHAT you are looking at can go: full screen is the
+     reader saying they want the graph, and the graph names itself. The strip
+     that says WHERE IN THE RUN you are looking from cannot, because this canvas
+     is a point-in-time reading and the scrubber is the only thing that moves
+     that point.
+
+     Hidden rather than unmounted. The desk underneath keeps its columns, its
+     widths and each pane's own scroll — and the canvas that is bleeding keeps
+     its zoom, because it is the same element throughout. */
+  .app.bleed {
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
-  .brand {
-    min-width: 0;
+  .app.bleed .chrome {
+    display: none;
+  }
+
+  /* One grid row, however many rows of chrome are in it, so the rail keeps the
+     whole of what is left whether or not the notice is up. */
+  .chrome {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    color: var(--accent);
-  }
-
-  .brand-text {
+    flex-direction: column;
     min-width: 0;
   }
 
-  h1 {
+  /* PaneShell's own body is a flex column, so `flex: 1 1 0` is what gives this a
+     definite height for the components inside to measure their 100% against. */
+  .pane-content {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .pane-todo {
     margin: 0;
-    color: var(--text-1);
-    font-size: 14px;
-    line-height: 1.2;
-  }
-
-  p {
-    margin: 2px 0 0;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-    align-items: center;
+    padding: var(--gutter);
     color: var(--text-3);
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
-  .panel-tabs {
-    display: inline-flex;
-    gap: 4px;
-    padding: 4px;
-    border: 1px solid var(--border-strong);
-    border-radius: 8px;
-    background: var(--control-bg);
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
-  }
-
-  .panel-tabs button {
-    min-width: 104px;
-    height: 32px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-    border: 0;
-    border-radius: 6px;
-    color: var(--text-2);
-    background: transparent;
-    cursor: pointer;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 650;
-    transition:
-      background 140ms ease,
-      color 140ms ease,
-      box-shadow 140ms ease;
-  }
-
-  .panel-tabs button:hover,
-  .panel-tabs button:focus-visible {
-    color: var(--text-1);
-    background: var(--control-hover);
-    outline: 0;
-  }
-
-  .panel-tabs button.active {
-    color: color-mix(in srgb, var(--accent) 82%, white);
-    background: color-mix(in srgb, var(--accent) 13%, var(--surface-2));
-    box-shadow:
-      inset 0 1px 0 rgb(255 255 255 / 0.06),
-      0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
-  }
-
-  .session-slot {
-    min-width: 0;
-    justify-self: center;
-    width: min(100%, 760px);
-  }
-
-  .replay-status {
-    justify-self: end;
-    display: inline-flex;
-    gap: 8px;
-    align-items: center;
-  }
-
-  .workspace {
-    min-height: 0;
-    display: flex;
-    overflow: hidden;
-  }
-
-  .flow-pane {
-    min-width: 0;
-    flex: 1;
-  }
-
-  .states {
-    display: grid;
-    grid-template-columns: minmax(480px, 1fr)
-      clamp(380px, var(--right-panel-width, 880px), calc(100% - 480px));
-  }
-
-  .states.resizing,
-  .states.resizing * {
-    cursor: col-resize;
-    user-select: none;
-  }
-
-  .right-pane {
-    position: relative;
-    min-width: 0;
-    min-height: 0;
-    display: grid;
-    grid-template-rows: auto minmax(0, 1fr);
-    border-left: 1px solid var(--border);
-    background: var(--surface-0);
-  }
-
-  .resize-handle {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: -6px;
-    z-index: 6;
-    width: 12px;
-    border: 0;
-    padding: 0;
-    appearance: none;
-    background: transparent;
-    cursor: col-resize;
-    outline: 0;
-    touch-action: none;
-  }
-
-  .resize-handle::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 5px;
-    width: 2px;
-    background: transparent;
-    transition: background 120ms ease, box-shadow 120ms ease;
-  }
-
-  .resize-handle:hover::before,
-  .resize-handle:focus-visible::before,
-  .states.resizing .resize-handle::before {
-    background: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
-  }
-
-  .right-pane-head {
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 8px 10px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-1);
-  }
-
-  .right-pane-body {
-    min-width: 0;
-    min-height: 0;
-    overflow: hidden;
-  }
-
-  .right-pane-body :global(.transcript) {
+  /* Re-homed from the deleted `.right-pane-body`. TranscriptPanel and
+     LatencyWaterfall have only ever rendered inside that one narrow column and
+     size themselves for a wide one otherwise; PaneShell offers no equivalent.
+     Every class below is defined in exactly one of those two components, so
+     hanging them off the shared wrapper cannot reach the graph or the chat. */
+  .pane-content :global(.transcript) {
     width: 100%;
     height: 100%;
     min-width: 0;
@@ -522,67 +387,28 @@
     border-left: 0;
   }
 
-  .right-pane-body :global(.waterfall-head) {
+  .pane-content :global(.waterfall-head) {
     padding: 12px;
   }
 
-  .right-pane-body :global(.turns) {
+  .pane-content :global(.turns) {
     padding: 10px 12px 14px;
   }
 
-  .right-pane-body :global(.turn-row) {
+  .pane-content :global(.turn-row) {
     grid-template-columns: minmax(0, 1fr);
     gap: 8px;
   }
 
-  .right-pane-body :global(.turn-label) {
+  .pane-content :global(.turn-label) {
     grid-template-columns: auto auto;
   }
 
-  .right-pane-body :global(.rollup) {
+  .pane-content :global(.rollup) {
     width: 100%;
   }
 
-  .right-pane-body :global(.roll) {
+  .pane-content :global(.roll) {
     flex: 1 1 120px;
-  }
-
-  @media (max-width: 980px) {
-    .topbar {
-      grid-template-columns: 1fr;
-      gap: 10px;
-    }
-
-    .session-slot {
-      justify-self: stretch;
-      width: 100%;
-    }
-
-    .replay-status {
-      justify-self: start;
-    }
-
-    .states {
-      display: flex;
-      flex-direction: column;
-    }
-
-    .right-pane {
-      width: 100%;
-      min-width: 0;
-      max-width: none;
-      height: 44vh;
-      border-left: 0;
-      border-top: 1px solid var(--border);
-    }
-
-    .resize-handle {
-      display: none;
-    }
-
-    .right-pane-head {
-      justify-content: flex-start;
-      overflow-x: auto;
-    }
   }
 </style>

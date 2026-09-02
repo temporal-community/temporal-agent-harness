@@ -1,42 +1,193 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/noto-sans-mono";
+
 :root {
   color-scheme: dark;
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  --surface-0: #0b0d10;
-  --surface-1: #11151a;
-  --surface-2: #171d24;
-  --surface-3: #222a33;
-  --text-1: #f5f7f9;
-  --text-2: #b7c0ca;
-  --text-3: #7b8794;
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.2);
-  --control-bg: #0f1318;
-  --control-hover: #18202a;
-  --focus-ring: rgba(83, 185, 255, 0.28);
-  --shadow-popover: 0 20px 50px rgb(0 0 0 / 0.44);
-  --shadow-active: 0 0 0 1px rgb(255 255 255 / 0.04), 0 12px 32px rgb(0 0 0 / 0.3);
-  --accent: #53b9ff;
-  --model: #b59cff;
+  /* Instrument, not terminal: sans carries content, mono is reserved for chrome
+     labels, identifiers, and anything tabular. */
+  --font-mono:
+    "Noto Sans Mono Variable", "SFMono-Regular", ui-monospace, Consolas,
+    "Liberation Mono", Menlo, monospace;
+  --font-sans:
+    "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-ui: var(--font-sans);
+  --letter-tight: 0.04em;
+  --letter-label: 0.13em;
+
+  /* The chrome label register. Every uppercase mono label in the console is
+     these three values — pane eyebrows, section titles, field keys, chips,
+     badges, table headers, pane tabs, the code language tag. Only the
+     42px collapsed spine is exempt, and only on size: 10px at 0.13em does not
+     fit sideways in 42px. A label that sets its own size, weight, or tracking
+     is drifting, and the eye reads that as sloppiness long before it can name
+     it. Box height varies with context; the label inside it does not.
+
+     Its companion: identifiers and figures are mono at --figure-size, left in
+     sentence case, and always tabular. */
+  --label-size: var(--font-xs);
+  --label-weight: 500;
+  --label-tracking: var(--letter-label);
+  --figure-size: var(--font-sm);
+  font-family: var(--font-sans);
+
+  /* --- Surfaces ------------------------------------------------------------ */
+  --surface-0: #0b0b10;
+  --surface-1: #141414;
+  --surface-2: #17171f;
+  --surface-3: #383947;
+  --surface-head: #141414;
+  --surface-spine: #111117;
+  --control-bg: #111117;
+  --control-hover: #17171f;
+  --overlay-scrim: rgb(0 0 0 / 0.55);
+
+  /* --- Text ---------------------------------------------------------------- */
+  --text-1: #f8fafc;
+  --text-2: #c7c9d4;
+  --text-3: #8b8d9d;
+  --text-4: #5a5c6e;
+  --text-5: #383947;
+
+  /* --- Borders / focus ----------------------------------------------------- */
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.22);
+  --focus-ring: rgba(109, 116, 240, 0.55);
+
+  /* --- Elevation (flat / hairline — no soft blooms) ------------------------ */
+  --shadow-inset-soft: none;
+  --shadow-inset-mid: none;
+  --shadow-inset-strong: none;
+  --shadow-inset-bright: none;
+  --shadow-hairline: none;
+  --shadow-ring-faint: none;
+  --shadow-popover: 0 0 0 1px var(--border-strong);
+  --shadow-active: 0 0 0 1px var(--border-strong);
+  --shadow-node: none;
+  --shadow-node-soft: none;
+  --shadow-node-raised: none;
+  --shadow-node-tall: none;
+  --shadow-node-mid: none;
+  --shadow-dropdown: 0 0 0 1px var(--border-strong);
+  --shadow-floating: 0 0 0 1px var(--border-strong);
+  --shadow-modal: 0 0 0 1px var(--border-strong);
+
+  /* --- Semantic event hues ------------------------------------------------- */
+  /* Temporal indigo is the structural accent; --accent-deep is for fills and
+     marks, --accent for anything with text on top of the surface. */
+  --accent: #6d74f0;
+  --accent-deep: #444ce7;
+  --accent-soft: #9ca3f6;
+  /* Reserved for "this needs you" — never chrome, never decoration. */
+  --live: #cfff0d;
+  --model: #9ca3f6;
   --reasoning: #53dfca;
-  --success: #55d98d;
+  --success: #59fda0;
   --warning: #ffc857;
-  --queue: #ff7ac8;
-  --error: #ff6b6b;
-  --code-block-border: color-mix(in srgb, #a78bfa 42%, var(--border));
-  --code-block-bg:
-    linear-gradient(180deg, rgb(50 38 83 / 88%), rgb(28 20 48 / 94%)),
-    var(--surface-0);
-  --code-block-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 7%),
-    0 10px 26px rgb(12 8 24 / 26%);
+  /* Retrying. Deliberately between --warning and --error, because that is what
+     a retry is: on its way to failing, not there yet. It cannot borrow --warning
+     itself — that is the tool identity hue, so a retrying tool would look like
+     an ordinary one. Red stays reserved for "gave up", and a retry that has gone
+     on long enough to need a person escalates to --live with the approvals. */
+  --retry: #ff8c42;
+  --queue: #ff6bff;
+  --error: #ff5555;
+  --token-spike: #f59e0b;
+
+  /* --- Code / markdown violet layer ---------------------------------------- */
+  --code-violet: #a78bfa;
+  --code-block-border: color-mix(in srgb, var(--code-violet) 42%, var(--border));
+  --code-block-bg: color-mix(in srgb, var(--code-violet) 12%, var(--surface-0));
+  --code-block-shadow: none;
   --code-block-text: #f7f2ff;
   --code-label-border: rgb(196 181 253 / 24%);
   --code-label-bg: rgb(91 68 142 / 34%);
   --code-label-text: #d8ccff;
-  --code-inline-border: color-mix(in srgb, #a78bfa 28%, var(--border));
+  --code-inline-border: color-mix(in srgb, var(--code-violet) 28%, var(--border));
   --code-inline-bg: rgb(63 45 105 / 42%);
+  --code-inline-text: #f5f0ff;
+
+  /* --- Markdown syntax highlighting ---------------------------------------- */
+  --syntax-comment: #9d96b8;
+  --syntax-string: #a7f3d0;
+  --syntax-keyword: #d8b4fe;
+  --syntax-type: #93c5fd;
+  --syntax-function: #fde68a;
+  --syntax-number: #fdba74;
+  --syntax-literal: #f0abfc;
+  --syntax-operator: #c4b5fd;
+
+  /* --- Density: sharp corners / compact type / motion ---------------------- */
+  /* Everything is square, down to the status pips — nothing rounds. */
+  --radius-2xs: 0;
+  --radius-xs: 0;
+  --radius-chip: 0;
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --radius-2xl: 0;
+  --radius-3xl: 0;
+  /* Spacing. Five steps, taken from what the app already reaches for: 2 to
+     separate two lines of the same thought, 4 inside a control, 6 between rows
+     of a list, 8 between things in a box, 12 between boxes. The old 3/5/7/9/11
+     ramp described nothing anyone was building and was used in exactly one
+     place, so it is gone rather than left as a decoy.
+
+     Insets get their own names because they express intent, not size: a box is
+     inset by --gutter, or by --gutter-tight when it is a compact one, and two
+     boxes side by side are separated by --gutter as well — so an inset and a
+     seam measure the same and a row of boxes reads as a grid. */
+  --gap-2xs: 2px;
+  --gap-xs: 4px;
+  --gap-sm: 6px;
+  --gap-md: 8px;
+  --gap-lg: 12px;
+  --gutter: var(--gap-lg);
+  --gutter-tight: var(--gap-md);
+  /* Mono chrome lives at xs/sm; content starts at lg. Nothing below 9px. */
+  --font-micro: 9px;
+  --font-2xs: 9px;
+  --font-xs: 10px;
+  --font-sm: 11px;
+  --font-md: 12px;
+  --font-code: 12px;
+  --font-lg: 13px;
+  --font-xl: 14px;
+  --font-2xl: 15px;
+  --font-3xl: 16px;
+  --font-display: 18px;
+  /* Detail-pane headlines. Two steps, chosen by pane width, not viewport. */
+  --font-title: 20px;
+  --font-headline: 26px;
+  --markdown-body-size: 13.5px;
+  --markdown-heading-size: 14px;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-pane: cubic-bezier(0.2, 0.6, 0.2, 1);
+  --ease-ui: var(--ease-out);
+  --duration-fast: 160ms;
+  --duration-press: 120ms;
+  --duration-pane: 220ms;
+  /* Hover intent for tooltips: long enough that crossing a row of controls stays
+     quiet, short enough that stopping on one feels answered rather than waited
+     for. Well under the browser's own ~1s for `title`. */
+  --tip-delay: 350ms;
+  /* Three rows, and height says where you are. xs is everything inside a pane:
+     tags, filters, status. The default is the app chrome — the status line above
+     the rail and the transport below it share it, so the two strips read as one
+     frame. lg is only for rows you type into, which need the room. Nothing
+     hard-codes a height outside these. */
+  --control-height-xs: 22px;
+  --control-height: 28px;
+  --control-height-lg: 34px;
+  /* Bare icon toggles that sit inside a text row rather than on a control row. */
+  --icon-target: 20px;
+  /* A folded pane. Wide enough for a sideways kind label and a status pixel. */
+  --pane-spine: 42px;
+  /* One status pixel. --pip-lg is only for pips that overlap a glyph. */
+  --pip: 5px;
+  --pip-lg: 8px;
+
 }
 
 * {
@@ -54,6 +205,22 @@ body,
 body {
   overflow: hidden;
   background: var(--surface-0);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 12%);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 button,
@@ -62,8 +229,194 @@ select {
   font: inherit;
 }
 
+/* Baseline ring so a control can never end up with no visible focus; component
+   rules with a class selector outrank it and can move the ring inward. */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 a {
   color: inherit;
+}
+
+/* The code-language tag. Four surfaces render code blocks; they all mark the
+   language up as data-language on the pre, so the tag is declared once here and
+   each block only says where to put it. */
+pre[data-language]::before {
+  content: attr(data-language);
+  padding: 1px 6px;
+  border: 1px solid var(--code-label-border);
+  background: var(--code-label-bg);
+  color: var(--code-label-text);
+  font-family: var(--font-mono);
+  font-size: var(--label-size);
+  font-weight: var(--label-weight);
+  letter-spacing: var(--label-tracking);
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+  /* The chrome label. Every kicker, section title, and key in the app is this one
+     recipe, applied as a class rather than retyped, so labels cannot drift apart.
+     Component rules outrank it, so a context can still recolor its own labels. */
+  .kicker {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--label-size);
+  font-weight: var(--label-weight);
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+
+/* The tooltip. `data-tip="…"` on any element, `data-tip-below` where there is no
+   room above. Declared once here for the same reason the code-language tag is:
+   so every hint in the app has one delay, one type, and one surface.
+ *
+ * Why not the `title` attribute, which this replaces where it was doing tooltip
+ * work: the browser only shows it after the pointer has rested on ONE element
+ * for about a second, so anything that moves or re-renders under the cursor
+ * never shows a hint at all, and its type and timing are the browser's rather
+ * than ours. `title` is still right for text a screen reader should read as a
+ * name; for that, prefer `aria-label`.
+ *
+ * The bubble is drawn with the element's own pseudo-elements, so an element that
+ * already spends `::before`/`::after` cannot take a tip, and it is painted, not
+ * portalled — inside an ancestor that clips, it will be clipped.
+ */
+[data-tip] {
+  position: relative;
+}
+
+[data-tip] {
+  /* Which way the bubble grows, and how far it travels coming in. A centred
+     bubble is wider than most of the controls that carry one, so on a control
+     near a window edge it would hang off the side — and the page does not
+     scroll, so it would simply be cut off. `data-tip-align="end"` (or "start")
+     grows it inward instead. */
+  --tip-x: -50%;
+  --tip-rise: 4px;
+}
+
+[data-tip][data-tip-align="end"] {
+  --tip-x: 0;
+}
+
+[data-tip][data-tip-align="start"] {
+  --tip-x: 0;
+}
+
+[data-tip-below] {
+  --tip-rise: -4px;
+}
+
+[data-tip]::before,
+[data-tip]::after {
+  position: absolute;
+  z-index: 40;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--duration-fast) var(--ease-ui),
+    transform var(--duration-fast) var(--ease-ui);
+}
+
+/* The caret stays on the element's centre whichever way the bubble grows, so a
+   tip that has cleared its element still points back at it. */
+[data-tip]::before {
+  content: "";
+  left: 50%;
+  bottom: calc(100% + 3px);
+  border: 5px solid transparent;
+  border-top-color: var(--surface-3);
+  transform: translate(-50%, calc(var(--tip-rise) * -0.5));
+}
+
+[data-tip]::after {
+  content: attr(data-tip);
+  left: 50%;
+  bottom: calc(100% + 12px);
+  width: max-content;
+  max-width: min(320px, 60vw);
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  box-shadow: var(--shadow-floating);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+  font-size: var(--font-sm);
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  transform: translate(var(--tip-x), var(--tip-rise));
+  white-space: pre-line;
+}
+
+[data-tip][data-tip-align="end"]::after {
+  left: auto;
+  right: 0;
+}
+
+[data-tip][data-tip-align="start"]::after {
+  left: 0;
+}
+
+[data-tip-below]::before {
+  bottom: auto;
+  top: calc(100% + 3px);
+  border-top-color: transparent;
+  border-bottom-color: var(--surface-3);
+}
+
+[data-tip-below]::after {
+  bottom: auto;
+  top: calc(100% + 12px);
+}
+
+/* Hover waits, so crossing a row of controls on the way somewhere else does not
+   leave a trail of bubbles. Focus does not: a keyboard user asked for this one. */
+[data-tip]:hover::before,
+[data-tip]:hover::after,
+[data-tip]:focus-visible::before,
+[data-tip]:focus-visible::after {
+  opacity: 1;
+  transition-delay: var(--tip-delay);
+}
+
+[data-tip]:hover::before,
+[data-tip]:focus-visible::before {
+  transform: translate(-50%, 0);
+}
+
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after {
+  transform: translate(var(--tip-x), 0);
+}
+
+[data-tip]:focus-visible::before,
+[data-tip]:focus-visible::after {
+  transition-delay: 0s;
+}
+
+/* A tip that is being pressed is in the way of its own result. */
+[data-tip]:active::before,
+[data-tip]:active::after {
+  opacity: 0;
+  transition-delay: 0s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* It still fades in — it just stops sliding into place. */
+  [data-tip] {
+    --tip-rise: 0px;
+  }
+
+  [data-tip]::before,
+  [data-tip]::after {
+    transition: opacity var(--duration-fast) var(--ease-ui);
+  }
 }
 
 ::selection {
