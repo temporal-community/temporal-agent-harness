@@ -309,6 +309,8 @@ export class AgentRunController {
   /** A bounded backlog is being replayed in, so hold off on per-paint commits. */
   #catchingUp = false;
   #catchUpStartedAt = 0;
+  /** Frames staged since the last catch-up commit, counting toward the next chunk. */
+  #sinceCatchUpPublish = 0;
   #submitQueue: Promise<void> = Promise.resolve();
   #timer: number | null = null;
 
@@ -1247,6 +1249,7 @@ export class AgentRunController {
     this.#publishGeneration += 1;
     this.#flushQueued = false;
     this.#catchingUp = false;
+    this.#sinceCatchUpPublish = 0;
     this.#workflowResumeOffsets = new Map<string, number>();
     this.viewIndex = 0;
     this.following = true;
@@ -1333,11 +1336,29 @@ export class AgentRunController {
    * Commit on the next frame the browser paints, coalescing whatever arrives in
    * between. A burst of thirty events becomes one commit rather than thirty.
    *
-   * Silent during a catch-up: #hydrateCachedFrames commits on its own chunk
-   * schedule, and a rAF racing that would undo the batching it exists to give.
+   * While catching up, commit on the chunk schedule instead. One commit per paint
+   * is the right rate for tailing a live run and far too many for a backlog of a
+   * thousand events, each commit re-running every projection over a longer
+   * timeline than the last.
+   *
+   * #hydrateCachedFrames drives its own loop and never reaches here, so this is
+   * the catch-up path for history arriving over the stream — where there is no
+   * loop to hang the schedule on, only frames landing one at a time.
    */
   #schedulePublish(): void {
-    if (this.#catchingUp || this.#flushQueued) return;
+    if (this.#catchingUp) {
+      this.#sinceCatchUpPublish += 1;
+      if (this.#sinceCatchUpPublish < framePublishChunkSize) return;
+      if (!publishAtChunkBoundary(true, now() - this.#catchUpStartedAt)) return;
+      this.#sinceCatchUpPublish = 0;
+      /* Restart the clock so the ceiling rate-limits rather than merely delays:
+         without it every chunk past the first second commits, and chunks can
+         pass far faster than the page can paint. */
+      this.#catchUpStartedAt = now();
+      this.#publishFrames();
+      return;
+    }
+    if (this.#flushQueued) return;
     this.#flushQueued = true;
     const generation = this.#publishGeneration;
     const flush = () => {
@@ -1354,10 +1375,31 @@ export class AgentRunController {
     setTimeout(flush, 0);
   }
 
+  /**
+   * Take one frame off the stream: stage it, then commit on whichever schedule
+   * suits what the server says this frame is.
+   *
+   * The server marks an event replay when it was already durable as the stream
+   * opened. That is the only way to know a cold load is being caught up on
+   * history: a client with no cache cannot tell a thousand backlogged events from
+   * a thousand arriving live, and hydrating one commit at a time is what made a
+   * fresh tab crawl. The absence of the mark means live, so an older server just
+   * gets today's per-paint behavior.
+   */
   #appendFrame(
     frame: AgentSseFrame,
     options: { persist?: boolean; sourceWorkflowId?: string } = {}
   ): void {
+    const isReplay = "replay" in frame.data && frame.data.replay === true;
+    if (isReplay !== this.#catchingUp) {
+      this.#catchingUp = isReplay;
+      this.#catchUpStartedAt = now();
+      this.#sinceCatchUpPublish = 0;
+      /* Crossing to live commits the tail of the backlog immediately rather than
+         holding it for a chunk that may never fill — a run that goes quiet right
+         after catching up would otherwise leave its last events unpublished. */
+      if (!isReplay) this.#publishFrames();
+    }
     this.#ingestFrame(frame, options);
     this.#schedulePublish();
   }

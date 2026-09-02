@@ -271,6 +271,16 @@ export interface AgentEventMetadata {
   timestamp: UnixEpochSeconds;
   resume_offset: ResumeOffset;
   event_offset?: EventOffset;
+  /**
+   * This event was already durable when the stream opened, so its delivery is
+   * catching this client up rather than showing it something happening now.
+   *
+   * On the wire only when true, so absent means live — which is also what a
+   * server predating the field means, and what the per-turn chat path means by
+   * never being a catch-up. Read it as `=== true` and no version check is
+   * needed.
+   */
+  replay?: true;
 }
 
 export interface AgentEventDataBase<TType extends AgentEventType>
