@@ -539,6 +539,23 @@ by `key` (so a parent can wire several agent types without collisions):
   flattening — faithful types + preserves Field descriptions).
 - **`stop_<key>(subagent: str) -> str`** — `tool_defn` calling `runner.stop_subagent(subagent)`.
 
+The harness exposes two operator-controlled lifecycle policies for these tools:
+
+- **`/subagent-reuse use-existing|always-new`** — `use-existing` makes `start_<key>`
+  return the most recently used matching child still tracked by this parent. `always-new`
+  creates a separate instance. The default is `use-existing`; reuse never reaches into an
+  account-wide registry or adopts another parent's child.
+- **`/subagent-close-policy keep-open|close|ask-user`** — controls generated
+  `stop_<key>` calls as well as graceful parent shutdown. `close` lets the model stop a
+  named child and stops every tracked child when the parent closes; `keep-open` leaves
+  children running; `ask-user` puts a model-requested stop through the standard tool
+  approval UI and otherwise has the safe shutdown behavior of `keep-open`. The default is
+  `ask-user`.
+
+Local child workflows use Temporal's `ABANDON` parent-close policy so the harness can apply
+the live setting chosen after the child started. Consequently, abrupt parent termination
+can leave a child running; production deployments should reconcile or lease such orphans.
+
 **Runner access:** add a small **private** `_current_runner()` accessor (parallel to `_current_tool_id()`) so
 the closures resolve the live runner from `_CURRENT_RUNNER` (Decision #5 — no holder, no
 `has_self`; that whole approach is abandoned).
