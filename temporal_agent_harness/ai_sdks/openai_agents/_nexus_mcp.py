@@ -213,6 +213,7 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
                     account_id=self._account_id,
                     alias=alias,
                     name=tool_name,
+                    caller_workflow_id=workflow.info().workflow_id,
                     arguments=CallToolInputArguments(additional_properties=arguments or {}),
                 ),
             )

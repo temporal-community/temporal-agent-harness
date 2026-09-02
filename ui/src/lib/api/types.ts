@@ -40,6 +40,28 @@ export interface AccountAgent {
 export interface AccountResource {
   name: string;
   endpoint: string;
+  kind?: "nexus" | "external_http";
+  service?: string | null;
+}
+
+export interface ToolCallRecord {
+  call_id: string;
+  server_name: string;
+  transport: "nexus" | "external_http";
+  tool_name: string;
+  status: "running" | "completed" | "failed" | "canceled" | "timed_out";
+  scheduled_at: UnixEpochSeconds;
+  completed_at?: UnixEpochSeconds | null;
+  duration_ms?: number | null;
+  namespace: string;
+  execution_id: string;
+  workflow_id?: WorkflowId | null;
+  agent_id?: string | null;
+  nexus_request_id?: string | null;
+  nexus_operation_id?: string | null;
+  input?: JsonValue;
+  output?: JsonValue;
+  error?: string | null;
 }
 
 export interface AccountOverview {

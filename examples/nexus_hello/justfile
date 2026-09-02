@@ -21,9 +21,10 @@
 #   just worker                          # 8. Nexus Hello agent workflow + Nexus front door
 #   just gateway-ui                      # 9. account registry + brokered API/UI on :8000
 #   just register-agents                 # 10. ONE-SHOT: registers native + HTTP agents
-#   just register-third-party-mcp-server # 11. ONE-SHOT: tags demo under account_id "NexusHelloAccount"
+#   just register-native-mcp-server      # 11. ONE-SHOT: adds native MCP discovery metadata
+#   just register-third-party-mcp-server # 12. ONE-SHOT: tags demo under account_id "NexusHelloAccount"
 #                                        #    (needs third-party-mcp-server up -- the gateway fetches its tools)
-#   just register-third-party-subagent   # 12. ONE-SHOT: tags writer under account_id "NexusHelloAccount"
+#   just register-third-party-subagent   # 13. ONE-SHOT: tags writer under account_id "NexusHelloAccount"
 #
 # Requires the `nexus-mcp` extra (Python >=3.13): `uv sync --extra nexus-mcp` (or a plain
 # `uv sync` picks it up too, since the repo's `dev` group includes it on 3.13+).
@@ -167,8 +168,8 @@ nexus-subagent:
 whimsical-agent:
     cd "{{ root }}" && TEMPORAL_NAMESPACE={{ nexus_subagent_server_namespace }} uv run --extra nexus-mcp --group examples python -m examples.nexus_hello.whimsical_agent worker
 
-# ONE-SHOT: register every agent key this demo may expose to the account UI. Nexus Hello and
-# Research and Whimsical Agent demonstrate cross-namespace Nexus attachment. Writer
+# ONE-SHOT: register every agent key this demo may expose to the account UI. Research and
+# Whimsical Agent demonstrate cross-namespace Nexus attachment. Writer
 # demonstrates the minimal 3rd-party protocol. Matching the spawned agent keys is what
 # makes child sessions mountable.
 # Safe to re-run. Run after gateway-ui is serving on :8000.
@@ -178,6 +179,7 @@ register-agents:
         --header 'content-type: application/json' \
         --data-binary '{"agent_id":"nexus-hello","kind":"harness_nexus","label":"Nexus Hello","description":"OpenAI Agents SDK demo using account-owned Nexus tools and subagents.","nexus_endpoint":"{{ agent_nexus_endpoint }}"}'
     @echo
+
     curl --fail --silent --show-error \
         --request POST http://127.0.0.1:8000/api/account/agents \
         --header 'content-type: application/json' \
@@ -192,6 +194,16 @@ register-agents:
         --request POST http://127.0.0.1:8000/api/account/agents \
         --header 'content-type: application/json' \
         --data-binary '{"agent_id":"writer","kind":"external_http","label":"Writer HTTP","description":"HTTP agent, mountable directly or after Nexus Hello spawns it.","provider_url":"http://127.0.0.1:8766"}'
+    @echo
+
+# ONE-SHOT: register observation metadata for the Nexus-native MCP service. Calls still go
+# directly from Nexus Hello to this endpoint; the gateway uses this only to match retained
+# Nexus operation events when the account owner opens the tool-call inspector.
+register-native-mcp-server:
+    curl --fail --silent --show-error \
+        --request POST http://127.0.0.1:8000/api/account/mcp-servers \
+        --header 'content-type: application/json' \
+        --data-binary '{"name":"demo-nexus","endpoint":"{{ demo_nexus_endpoint }}","service":"demo-nexus"}'
     @echo
 
 # ONE-SHOT: registers "demo" under account_id "NexusHelloAccount" with the gateway. Plain
