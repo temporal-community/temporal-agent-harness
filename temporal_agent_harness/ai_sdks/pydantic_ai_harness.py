@@ -65,6 +65,7 @@ try:
         TextPartDelta,
         ThinkingPart,
         ThinkingPartDelta,
+        ToolCallPartDelta,
     )
     from pydantic_ai.models import StreamedResponse
     from pydantic_ai.tools import RunContext
@@ -121,6 +122,15 @@ _HARNESS_TOOL_ATTRS = ("__agent_tool__", "__agent_activity_tool__")
 #     id `as_pydantic_ai_tool` hands to `run_tool`, so `tool_requested` and the eventual
 #     `tool_start` / `tool_end` share a `tool_id`.
 #
+# Unlike the OpenAI integration — where two model backends disagree about which event closes a tool
+# call — PartEnd has exactly ONE producer here: `StreamedResponse.__aiter__` wraps every provider's
+# `_get_event_iterator` in a shared `iterator_with_part_end`, and no provider emits PartEnd itself.
+# So the terminal cannot go missing per-provider; it fires either on the next PartStart or when the
+# provider's iterator is exhausted, both of which are inside the iteration we drive. The `__aexit__`
+# drain is therefore a genuine backstop (a stream that errored or was closed early), not the primary
+# path for some backend — which is why the staged part must stay CURRENT rather than being the
+# snapshot taken at PartStart (see `_apply_tool_args_delta`).
+#
 # As with Gemini/OpenAI, `run_tool` OWNS `tool_start` / `tool_end` / `tool_error`; this translator
 # only emits `tool_requested`. Hosted/native tool spans are deferred (as in the OpenAI integration).
 
@@ -163,12 +173,10 @@ class PydanticAIStreamObserver:
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> bool | None:
         try:
             if self._publisher is not None:
-                # Flush any tool call whose PartEnd never arrived (defensive — Pydantic AI
-                # synthesizes PartEnd for tool-call parts), then always close the started bracket
-                # (usage stays None if the stream errored). Published while the publisher is open.
-                for part in self._pending_tool_calls.values():
-                    self._emit_tool_requested(self._publisher, part)
-                self._pending_tool_calls.clear()
+                # Drain any tool call whose PartEnd never arrived, then always close the started
+                # bracket (usage stays None if the stream errored). Both published while the
+                # publisher is still open, so the order stays started → tools → ended.
+                self._drain(self._publisher)
                 self._publisher.publish(
                     ModelInteractionEnded(model=self._model, usage=self._usage)
                 )
@@ -201,7 +209,9 @@ class PydanticAIStreamObserver:
                     pub.publish(ThoughtSummaryDelta(delta=_dump(part)))
             elif isinstance(part, BaseToolCallPart):
                 # A tool call is opening; its args may still stream. Hold it and publish one
-                # consolidated tool_requested on the part's PartEnd.
+                # consolidated tool_requested on the part's PartEnd. This staged entry is the
+                # publish token for the call, and doubles as what the drain would publish, so
+                # each arg delta is folded into it below to keep it current.
                 self._pending_tool_calls[event.index] = part
         elif isinstance(event, PartDeltaEvent):
             delta = event.delta
@@ -211,26 +221,80 @@ class PydanticAIStreamObserver:
             elif isinstance(delta, ThinkingPartDelta):
                 if delta.content_delta or delta.signature_delta:
                     pub.publish(ThoughtSummaryDelta(delta=_dump(delta)))
-            # A ToolCallPartDelta streams arg fragments; the COMPLETE part arrives on PartEnd, so
-            # there is nothing to consolidate here.
+            elif isinstance(delta, ToolCallPartDelta):
+                # The COMPLETE part arrives on PartEnd, so the LIVE path needs nothing here. But
+                # the drain publishes the staged part, so if that stayed the PartStart snapshot
+                # (args="") a stream cut off mid-call would report a tool request with no
+                # arguments — silently wrong content rather than a missing event. Fold the
+                # fragment in so the staged part is always current.
+                self._apply_tool_args_delta(event.index, delta)
         elif isinstance(event, PartEndEvent):
             if isinstance(event.part, BaseToolCallPart):
-                self._pending_tool_calls.pop(event.index, None)
-                self._emit_tool_requested(pub, event.part)
+                # PartEnd's part is the parts manager's own accumulation — authoritative, so
+                # prefer it over what we staged.
+                self._publish_tool_requested(pub, event.index, event.part)
 
-    def _emit_tool_requested(
-        self, pub: TurnEventPublisher, part: BaseToolCallPart
+    def _apply_tool_args_delta(self, index: int, delta: ToolCallPartDelta) -> None:
+        """Fold one streamed arg fragment into the staged tool-call part at ``index``.
+
+        Uses the SDK's own :meth:`ToolCallPartDelta.apply`, so JSON-string and dict argument
+        deltas are handled exactly as the parts manager handles them rather than by a second,
+        divergent accumulator here. Best-effort: ``apply`` raises on a malformed or mismatched
+        delta (e.g. a JSON fragment onto dict args), and this is display-only state, so we keep
+        the last good part instead of failing the model activity.
+        """
+        staged = self._pending_tool_calls.get(index)
+        if staged is None:
+            return
+        try:
+            applied = delta.apply(staged)
+        except Exception:  # noqa: BLE001 - display-only; a malformed delta must not break streaming
+            return
+        if isinstance(applied, BaseToolCallPart):
+            self._pending_tool_calls[index] = applied
+
+    def _drain(self, pub: TurnEventPublisher) -> None:
+        """Publish whatever tool call is still staged, its PartEnd never having come.
+
+        PartEnd is synthesized in one shared place for every provider (see the notes above), so
+        this only fires for a stream that errored or was closed early — where the post-loop flush
+        in ``StreamedResponse.__aiter__`` is skipped. Without it, ``__aexit__`` would still close
+        the model-interaction bracket while dropping the request the model had already made, and
+        nothing republishes it: the workflow-side reducer emits no ``tool_requested`` at all.
+
+        Shares the PartEnd path's publish, which pops as it goes, so a call that did end cannot be
+        published twice.
+        """
+        for index in sorted(self._pending_tool_calls):
+            self._publish_tool_requested(pub, index, None)
+
+    def _publish_tool_requested(
+        self,
+        pub: TurnEventPublisher,
+        index: int,
+        part: BaseToolCallPart | None,
     ) -> None:
-        """Publish the consolidated ``tool_requested`` for one custom tool call.
+        """Publish the consolidated ``tool_requested`` for the call staged at ``index``.
+
+        ``part`` is the authoritative part when PartEnd delivered one, else ``None`` for the drain,
+        which falls back to the staged part kept current by :meth:`_apply_tool_args_delta`.
 
         ``tool_id`` is the SDK ``tool_call_id`` (shared with the execution lifecycle in
         ``run_tool`` via ``RunContext.tool_call_id``). ``args_as_dict`` is best-effort for
-        display/approval; the workflow-side reducer does the authoritative parse on its own copy."""
+        display/approval; the workflow-side reducer does the authoritative parse on its own copy.
+
+        Pops as it goes and publishes only what it popped, so a call is published exactly once
+        however many paths reach it.
+        """
+        staged = self._pending_tool_calls.pop(index, None)
+        resolved = part if part is not None else staged
+        if resolved is None:
+            return
         pub.publish(
             ToolRequested(
-                tool_id=part.tool_call_id,
-                tool_name=part.tool_name,
-                tool_input=_args_as_dict(part),
+                tool_id=resolved.tool_call_id,
+                tool_name=resolved.tool_name,
+                tool_input=_args_as_dict(resolved),
             )
         )
 
