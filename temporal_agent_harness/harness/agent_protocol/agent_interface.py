@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from temporalio.contrib.workflow_streams import WorkflowStreamState
 
 # ---------------------------------------------------------------------------
 # Protocol constants — workflow must use these exact names
@@ -203,11 +204,18 @@ class AgentConfig(BaseModel):
     id the parent (and a UI merging the streams) already knows it by. ``None`` → a top-level agent
     generates its own single-segment id. This is the one ``AgentConfig`` field a parent populates
     per-child rather than passing through unchanged.
+
+    ``resume`` is harness-owned and never set by a caller: it is what one run of a session hands
+    its successor at continue-as-new (see :class:`AgentResumeState`). ``None`` on every start
+    that is not a rollover.
     """
 
     is_message_queuing_enabled: bool | None = None
     approval_policy: ToolApprovalPolicy | None = None
     agent_id: AgentId | None = None
+    # Annotated as a string because AgentResumeState is declared below this class (it needs
+    # AgentMessage, which this does not). Resolved by the model_rebuild() at the end of the file.
+    resume: "AgentResumeState | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +248,101 @@ class AgentMessage(BaseModel):
     type: str
     payload: dict[str, Any] = Field(default_factory=dict)
     expected_turn: int
+
+
+# ---------------------------------------------------------------------------
+# Continue-as-new — what one run of a session hands to its successor
+# ---------------------------------------------------------------------------
+#
+# A long conversation outgrows a single workflow run: agent history is dominated by the
+# streaming layer that feeds the console (a ``reply_delta`` per token batch, plus a history
+# event per attached browser's long poll), so a session accumulates events with wall-clock
+# talking time rather than with how much the agent does — and eventually hits Temporal's hard
+# limits while somebody is still mid-sentence with it. Rolling the session over into a fresh run
+# is the only structural answer, and these models are what survives the boundary.
+
+
+class QueuedTurn(BaseModel):
+    """One accepted-but-not-yet-started message, carried across a rollover.
+
+    The ``send_agent_message`` update already returned an :class:`AgentMessageReply` for this
+    message, so the caller believes the turn will run; the loop simply had not reached it. Both
+    halves matter — the envelope is the work, and ``turn_id`` is the id the caller correlates its
+    stream on — so the queue is carried whole rather than reconstructed.
+    """
+
+    message: AgentMessage
+    turn_id: str
+
+
+class SubagentHandoff(BaseModel):
+    """One running subagent that a rolled-over parent re-adopts in its successor run.
+
+    Subagents outlive the rollover (they are started ``ABANDON``, since a parent's own
+    continue-as-new would otherwise be a parent close that killed them), so the successor picks
+    each one back up by workflow id. Nothing else is needed for that: both ``run_subagent_turn``
+    and ``stop_subagent`` already address a subagent through an external workflow handle rather
+    than a child handle, so neither ever depended on the parent-child relationship the rollover
+    ends.
+
+    The per-subagent FIFO gate's ticket counters are deliberately NOT carried. The rollover point
+    is quiescent by construction — no turn is in flight, so no ticket is outstanding and the two
+    counters are necessarily equal — which makes carrying them a way to be wrong rather than a
+    way to be faithful.
+    """
+
+    handle: str
+    workflow_id: str
+    agent_key: str
+    next_expected_turn: int
+    last_consumed_offset: int
+
+
+class AgentResumeState(BaseModel):
+    """Everything one run of an agent session hands to its successor at continue-as-new.
+
+    Harness-owned end to end: an agent author neither builds one nor reads one. The runner
+    writes it as it rolls over and consumes it when the successor's runner is constructed. It
+    travels on :attr:`AgentConfig.resume`.
+
+    ``conversation`` is the one part the harness does not own, and the reason the
+    ``@agent.snapshot`` / ``@agent.restore`` pair exists at all. The harness deliberately knows
+    nothing about an agent's message history — every agent holds it privately — so at a rollover
+    it asks: ``@agent.snapshot`` returns this blob and ``@agent.restore`` receives it back,
+    unexamined in between. It is typed as plain JSON data rather than a model because there is
+    exactly one ``AgentConfig`` shared by every agent, so there is no per-agent type that could
+    be declared here — the same constraint that makes :attr:`AgentMessage.payload` a dict.
+    "Plain JSON data" is checked at snapshot time rather than trusted: the annotation here is
+    wide enough to hold anything the pydantic data converter can encode, which is a great deal
+    more than the successor can rebuild.
+
+    ``stream`` is the workflow stream's own log and publisher-dedup state, pruned to a bounded
+    tail before it is written. Carrying it whole would move the history the rollover exists to
+    shed into the payload that performs the rollover, which is worse than not rolling over at
+    all; the cost of pruning is that a console reconnecting after a rollover replays only recent
+    transcript. Carrying it at all is what keeps stream offsets monotonic across the boundary —
+    ``base_offset`` travels with the log, so an attached client's cursor stays valid.
+
+    Two things a reader might expect here and will not find, because they already have a home on
+    :class:`AgentConfig` itself: the agent's ``agent_id`` (stamped on every event it publishes,
+    so it must not change across the boundary) and its live ``approval_policy`` (which a
+    ``remember=True`` decision may have widened at runtime). The successor is started with both
+    filled in as caller-specified values, which is exactly the authority those fields carry.
+    """
+
+    # The last turn number this session completed. Carrying it is not bookkeeping tidiness: turn
+    # numbers are the optimistic-concurrency token every client sends as ``expected_turn``, and
+    # restarting at 1 would make every attached client's next message stale.
+    turn_number: int = 0
+    conversation: dict[str, Any] | None = None
+    stream: WorkflowStreamState | None = None
+    pending_turns: list[QueuedTurn] = Field(default_factory=list)
+    subagents: list[SubagentHandoff] = Field(default_factory=list)
+
+
+# ``AgentConfig.resume`` is annotated as a string because AgentResumeState is declared here,
+# below it (it needs AgentMessage, which the config does not).
+AgentConfig.model_rebuild()
 
 
 # ---------------------------------------------------------------------------
