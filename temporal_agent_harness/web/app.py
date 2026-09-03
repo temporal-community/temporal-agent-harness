@@ -206,10 +206,6 @@ def create_agent_harness_app(
         roughly 283 RPCs per poll — every ten seconds, per visible tab, most of it spent on
         workflows the namespace's retention deleted hours ago.
         """
-        registry_result: AgentRegistry = await app.state.manager_handle.query(
-            SessionManagerWorkflow.available_agents,
-            result_type=AgentRegistry,
-        )
         sessions: list[Session] = await app.state.manager_handle.query(
             SessionManagerWorkflow.list_sessions,
             result_type=list[Session],
@@ -220,6 +216,15 @@ def create_agent_harness_app(
         if not include_archived:
             sessions = [session for session in sessions if not session.is_archived]
         try:
+            # Every type the manager knows of, not the ones THIS server offers: a running
+            # session is no less real for having been started by a server that serves agents
+            # this one does not. Fetched inside the try because it is discovery's input and
+            # nothing else's — a manager still running code without this query has to cost the
+            # sessions discovery would have added, not the whole list.
+            registry_result: AgentRegistry = await app.state.manager_handle.query(
+                SessionManagerWorkflow.discoverable_agents,
+                result_type=AgentRegistry,
+            )
             discovered = await _discover_untracked_sessions(
                 app.state.temporal, registry_result, known_workflow_ids
             )

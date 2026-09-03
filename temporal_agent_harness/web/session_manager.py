@@ -45,6 +45,17 @@ class AgentRegistry:
     def by_key(self, key: str) -> AgentDescriptor | None:
         return next((agent for agent in self.agents if agent.key == key), None)
 
+    def merged_with(self, other: AgentRegistry) -> AgentRegistry:
+        """This registry plus ``other``, one entry per workflow type, ``other`` winning ties.
+
+        Keyed on workflow type rather than key because the merged registry exists to identify
+        running workflows, and that is the only field a workflow execution carries. ``other``
+        wins so a relabelled or re-queued agent takes effect rather than being shadowed by
+        whatever a server pushed months ago.
+        """
+        by_type = {agent.workflow_type: agent for agent in [*self.agents, *other.agents]}
+        return AgentRegistry(agents=list(by_type.values()))
+
 
 @dataclass
 class CreateSessionRequest:
@@ -99,10 +110,29 @@ class SessionManagerWorkflow:
         self._sessions: list[Session] = []
         self._next_number = 1
         self._registry = registry
+        self._discoverable = registry
 
     @workflow.query
     def available_agents(self) -> AgentRegistry:
         return self._registry
+
+    @workflow.query
+    def discoverable_agents(self) -> AgentRegistry:
+        """Every agent type this manager has ever been told about.
+
+        Two different questions were being answered by ``available_agents``, and only one of
+        them is about the server asking. "What can I create?" genuinely depends on which agents
+        the current server serves. "What is already running?" does not: a session's existence
+        has nothing to do with whether the server you happen to be talking to could have
+        started it. Session discovery reads this one — see ``_discover_untracked_sessions`` in
+        ``web/app.py``, which can only recognise an agent workflow by its type, so the set it
+        is handed decides which running sessions are visible at all.
+
+        Gating that on the creation registry meant restarting a server that serves seven agents
+        withdrew the other servers' types from the query, and live sessions of those types
+        dropped out of the console mid-conversation while their workflows kept running.
+        """
+        return self._discoverable
 
     @workflow.update
     def set_available_agents(self, registry: AgentRegistry) -> AgentRegistry:
@@ -118,8 +148,13 @@ class SessionManagerWorkflow:
         Sessions already under way are untouched. They are addressed by workflow id and
         abandoned by this parent, so withdrawing an agent only stops it being offered; a
         conversation in progress against it continues.
+
+        Only what is OFFERED is replaced. ``discoverable_agents`` accumulates instead, because
+        a type dropping off this list says the current server stopped serving it, never that
+        its running sessions stopped existing.
         """
         self._registry = registry
+        self._discoverable = self._discoverable.merged_with(registry)
         return self._registry
 
     @workflow.update
