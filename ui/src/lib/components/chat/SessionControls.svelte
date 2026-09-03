@@ -1,12 +1,25 @@
 <script lang="ts">
-  import { ChevronDown, History, Plus, RefreshCw, Search, X } from "@lucide/svelte";
+  /**
+   * Which session you are in, and everything done to a session as a whole.
+   *
+   * It was three objects on this row — a "+ New" menu, a "Sessions" menu, and a
+   * status chip whose detail line repeated the agent's name the chat pane header
+   * had already stated. They are one object now, because they are one question,
+   * and because the row could not afford them: the launcher at the far end of
+   * this same strip is also a 13px Plus, so the two would have been the same
+   * glyph twice on one 40px row meaning different things.
+   */
+  import { ChevronDown, RefreshCw, Search, X } from "@lucide/svelte";
   import type { AgentDescriptor, Session } from "$lib/api/types";
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import StatusChip, {
+    STATUS_TONES,
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
+
+  type MenuTab = "sessions" | "new";
 
   interface Props {
     sessions?: Session[];
@@ -42,9 +55,30 @@
     onRefreshSessions
   }: Props = $props();
 
-  let sessionDrawerOpen = $state(false);
-  let newSessionMenuOpen = $state(false);
+  /**
+   * The states that get words on the anchor as well as a hue.
+   *
+   * Everything else is the pip alone, and the reason is churn: connecting and
+   * thinking turn over several times a turn, and the pane minimap is laid out
+   * immediately after this control in the same flex row, so a label that grows
+   * and shrinks here would slide the tick a reader is aiming at. These states do
+   * not churn — they last until a person acts — so they are the ones worth a
+   * word. The full sentence is in the menu, on a chip with room for it.
+   */
+  const SPOKEN_KINDS = new Set<StatusKind>([
+    "approval",
+    "error",
+    "blocked",
+    "stuck",
+    "closed"
+  ]);
+
+  let menuOpen = $state(false);
+  let menuTab = $state<MenuTab>("sessions");
   let sessionSearch = $state("");
+  let rootElement = $state<HTMLElement | undefined>();
+  let searchElement = $state<HTMLInputElement | undefined>();
+  let agentListElement = $state<HTMLElement | undefined>();
 
   const sessionItems = $derived(sortedSessions(sessions));
   const sessionSearchTerm = $derived(sessionSearch.trim().toLowerCase());
@@ -79,6 +113,9 @@
               ? "Needs attention"
               : "Available"
   );
+  /* The agent's name is not a detail here any more: the anchor this menu hangs
+     off states it, so repeating it under the status chip would be the third
+     reading of it on screen after the chat pane's own header. */
   const statusDetail = $derived(
     closed
       ? "stopped"
@@ -90,8 +127,13 @@
           ? "stream"
           : sending
             ? "turn active"
-            : activeAgent?.label
+            : null
   );
+  const agentTitle = $derived(
+    activeAgent?.label ?? activeSession?.agent_workflow_type ?? "No session"
+  );
+  const statusTone = $derived(STATUS_TONES[statusKind]);
+  const spokenStatus = $derived(SPOKEN_KINDS.has(statusKind) ? statusLabel : null);
 
   function sortedSessions(value: Session[]): Session[] {
     return [...value].sort((a, b) => b.created_at - a.created_at);
@@ -173,32 +215,79 @@
     ].some((value) => value.toLowerCase().includes(term));
   }
 
-  function toggleNewSessionMenu(): void {
-    if (!canCreateSession) return;
-    newSessionMenuOpen = !newSessionMenuOpen;
-    if (newSessionMenuOpen) {
-      sessionDrawerOpen = false;
+  function toggleMenu(): void {
+    menuOpen = !menuOpen;
+  }
+
+  /** Leaves the menu the way it was reached, so the keyboard is never stranded. */
+  function closeMenu({ restoreFocus = true }: { restoreFocus?: boolean } = {}): void {
+    if (!menuOpen) return;
+    menuOpen = false;
+    /* Closing ends the errand, so the next press is the same press as the last
+       one: the list of sessions, which is what the anchor is asked for. */
+    menuTab = "sessions";
+    /* The anchor is a Chip, which owns its own element, so it is found rather
+       than held. */
+    if (restoreFocus) {
+      rootElement?.querySelector<HTMLElement>(".session-anchor")?.focus();
     }
   }
 
-  function toggleSessionPopover(): void {
-    sessionDrawerOpen = !sessionDrawerOpen;
-    if (sessionDrawerOpen) newSessionMenuOpen = false;
+  function selectTab(tab: MenuTab): void {
+    /* The guard `disabled` would have given for free. It is `aria-disabled`
+       instead, because a disabled button takes no pointer events and this is
+       the one state where its tip is worth reading. */
+    if (tab === "new" && !canCreateSession) return;
+    menuTab = tab;
   }
 
+  /* Arrows move between the tabs, and the one that is on is the only one in the
+     page's tab order — the same walk the pane rail gives its own row. */
+  function handleTabKeydown(event: KeyboardEvent): void {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    selectTab(menuTab === "sessions" ? "new" : "sessions");
+  }
+
+  /* Opening a picker means asking which session, so the field that answers that
+     takes the caret. Runs on a tab change too: the new tab's list is the one the
+     keyboard is now in. */
+  $effect(() => {
+    if (!menuOpen) return;
+    if (menuTab === "sessions") searchElement?.focus();
+    else agentListElement?.querySelector<HTMLElement>(".agent-row")?.focus();
+  });
+
+  function handleWindowKeydown(event: KeyboardEvent): void {
+    if (event.key === "Escape" && menuOpen) closeMenu();
+  }
+
+  function handleWindowPointerDown(event: PointerEvent): void {
+    if (!menuOpen) return;
+    const target = event.target;
+    if (target instanceof Node && rootElement?.contains(target)) return;
+    /* A press elsewhere is a press on something else, so focus goes there
+       rather than being pulled back to the anchor. */
+    closeMenu({ restoreFocus: false });
+  }
+
+  /* Both of these close first and await second. Connecting a session does not
+     settle until its event stream ends, so a menu that waits on the promise
+     before closing is a menu that stays open for the life of the session. The
+     anchor is what reports the outcome — "Starting", then the new session's own
+     status — so leaving costs the reader nothing. */
   async function startNewSession(workflowType: string): Promise<void> {
     if (!workflowType || !onNewSession || creatingSession) return;
+    closeMenu();
     await onNewSession(workflowType);
-    newSessionMenuOpen = false;
-    sessionDrawerOpen = false;
   }
 
   async function openSession(nextSessionId: string): Promise<void> {
     if (!onSelectSession) return;
+    closeMenu();
     if (nextSessionId !== sessionId) {
       await onSelectSession(nextSessionId);
     }
-    sessionDrawerOpen = false;
   }
 
   async function refreshSessions(): Promise<void> {
@@ -207,102 +296,48 @@
   }
 </script>
 
-<div class="session-controls">
-  <div class="new-session-anchor">
-    <Chip
-      class="session-add"
-      tone="accent"
-      fill="quiet"
-      toned
-      active={newSessionMenuOpen}
-      disabled={!canCreateSession}
-      aria-haspopup="menu"
-      aria-expanded={newSessionMenuOpen}
-      onclick={toggleNewSessionMenu}
-    >
-      {#snippet lead()}
-        <Plus size={13} />
-      {/snippet}
-      <span class="control-label">{creatingSession ? "Starting" : "New"}</span>
-      <span class="control-chevron" aria-hidden="true">
-        <ChevronDown size={13} />
-      </span>
-    </Chip>
+<svelte:window onkeydown={handleWindowKeydown} onpointerdown={handleWindowPointerDown} />
 
-    {#if newSessionMenuOpen}
-      <section class="new-session-popover" aria-label="New session">
-        <header class="new-session-head">
-          <span class="new-session-title">
-            <Plus size={15} />
-            <span>New session</span>
-          </span>
-          <IconButton
-            label="Close new session menu"
-            data-tip-below
-            data-tip-align="end"
-            onclick={() => (newSessionMenuOpen = false)}
-          >
-            <X size={15} />
-          </IconButton>
-        </header>
-
-        <div class="agent-list" role="menu">
-          {#each agents as agent}
-            <button
-              type="button"
-              class="agent-row"
-              role="menuitem"
-              onclick={() => void startNewSession(agent.workflow_type)}
-            >
-              <AgentGlyph
-                label={agent.label}
-                workflowType={agent.workflow_type}
-                status="available"
-              />
-              <span class="agent-copy">
-                <strong>{agent.label}</strong>
-                <small>{agentDescription(agent)}</small>
-              </span>
-              <StatusChip label="Ready" kind="available" compact />
-            </button>
-          {/each}
-        </div>
-      </section>
-    {/if}
-  </div>
-
+<div class="session-controls" bind:this={rootElement}>
+  <!-- The pip is the Chip's own, tinted by the status tone, so the mark that
+       says how the run is doing cannot drift from the chip that says it in
+       words inside the menu. -->
   <Chip
-    class="session-drawer-button"
-    tone="reasoning"
+    class="session-anchor"
+    pip
+    tone={statusTone}
     fill="quiet"
     toned
-    active={sessionDrawerOpen}
-    aria-pressed={sessionDrawerOpen}
-    onclick={toggleSessionPopover}
+    active={menuOpen}
+    aria-haspopup="dialog"
+    aria-expanded={menuOpen}
+    aria-label={`${agentTitle} — ${statusLabel}. Switch session or start a new one`}
+    data-tip={`${statusLabel} — switch session or start a new one`}
+    data-tip-align="start"
+    data-tip-below
+    onclick={toggleMenu}
   >
-    {#snippet lead()}
-      <History size={13} />
-    {/snippet}
-    <span class="control-label">Sessions</span>
+    <span class="session-name">{agentTitle}</span>
+    {#if spokenStatus}
+      <span class="session-state">{spokenStatus}</span>
+    {/if}
     <span class="control-chevron" aria-hidden="true">
       <ChevronDown size={13} />
     </span>
   </Chip>
 
-  <StatusChip
-    label={statusLabel}
-    kind={statusKind}
-    detail={statusDetail}
-    active={statusKind === "thinking" || statusKind === "connecting"}
-  />
-
-  {#if sessionDrawerOpen}
-    <section class="session-popover" aria-label="Sessions">
+  {#if menuOpen}
+    <section class="session-popover" aria-label="Session menu">
+      <!-- The status in words, once, where there is room for the whole sentence
+           the anchor's pip stands in for. -->
       <header class="session-popover-head">
-        <span class="session-popover-title">
-          <History size={15} />
-          <span>Sessions</span>
-        </span>
+        <StatusChip
+          label={statusLabel}
+          kind={statusKind}
+          detail={statusDetail}
+          active={statusKind === "thinking" || statusKind === "connecting"}
+          size="sm"
+        />
         <div class="session-popover-actions">
           {#if onRefreshSessions}
             <IconButton
@@ -317,54 +352,122 @@
             </IconButton>
           {/if}
           <IconButton
-            label="Close sessions"
+            label="Close session menu"
             data-tip-below
             data-tip-align="end"
-            onclick={() => (sessionDrawerOpen = false)}
+            onclick={() => closeMenu()}
           >
             <X size={15} />
           </IconButton>
         </div>
       </header>
 
-      <label class="session-search">
-        <Search size={14} aria-hidden="true" />
-        <input
-          bind:value={sessionSearch}
-          placeholder="Search sessions"
-          aria-label="Search sessions"
+      <!-- The count rides the tab rather than the anchor: on the strip it would
+           churn the row's width the way a spoken status would, and at rest it is
+           not a number anyone acts on. Here it is the whole of the choice being
+           made — pick one of these, or start another. -->
+      <div class="session-tabs" role="tablist" aria-label="Sessions or a new one">
+        <Chip
+          class="session-tab"
+          id="session-tab-sessions"
+          label={`Sessions ${sessionItems.length}`}
+          fill="quiet"
+          active={menuTab === "sessions"}
+          role="tab"
+          aria-selected={menuTab === "sessions"}
+          aria-controls="session-menu-panel"
+          tabindex={menuTab === "sessions" ? 0 : -1}
+          onclick={() => selectTab("sessions")}
+          onkeydown={handleTabKeydown}
         />
-      </label>
+        <Chip
+          class="session-tab"
+          id="session-tab-new"
+          label={creatingSession ? "Starting" : "New"}
+          fill="quiet"
+          active={menuTab === "new"}
+          aria-disabled={canCreateSession ? undefined : "true"}
+          data-tip={canCreateSession ? undefined : "No agents are registered"}
+          data-tip-below
+          role="tab"
+          aria-selected={menuTab === "new"}
+          aria-controls="session-menu-panel"
+          tabindex={menuTab === "new" ? 0 : -1}
+          onclick={() => selectTab("new")}
+          onkeydown={handleTabKeydown}
+        />
+      </div>
 
-      <div class="session-list">
-        {#if filteredSessionItems.length === 0}
-          <p class="session-empty">No matching sessions.</p>
+      <div
+        class="session-panel"
+        id="session-menu-panel"
+        role="tabpanel"
+        aria-labelledby={menuTab === "sessions" ? "session-tab-sessions" : "session-tab-new"}
+      >
+        {#if menuTab === "new"}
+          <div class="agent-list" role="menu" bind:this={agentListElement}>
+            {#each agents as agent}
+              <button
+                type="button"
+                class="agent-row"
+                role="menuitem"
+                onclick={() => void startNewSession(agent.workflow_type)}
+              >
+                <AgentGlyph
+                  label={agent.label}
+                  workflowType={agent.workflow_type}
+                  status="available"
+                />
+                <span class="agent-copy">
+                  <strong>{agent.label}</strong>
+                  <small>{agentDescription(agent)}</small>
+                </span>
+                <StatusChip label="Ready" kind="available" compact />
+              </button>
+            {/each}
+          </div>
+        {:else}
+          <label class="session-search">
+            <Search size={14} aria-hidden="true" />
+            <input
+              bind:this={searchElement}
+              bind:value={sessionSearch}
+              placeholder="Search sessions"
+              aria-label="Search sessions"
+            />
+          </label>
+
+          <div class="session-list">
+            {#if filteredSessionItems.length === 0}
+              <p class="session-empty">No matching sessions.</p>
+            {/if}
+            {#each filteredSessionItems as item}
+              <button
+                type="button"
+                class={`session-row ${item.workflow_id === sessionId ? "active" : ""}`}
+                aria-current={item.workflow_id === sessionId ? "true" : undefined}
+                onclick={() => void openSession(item.workflow_id)}
+              >
+                <AgentGlyph
+                  label={sessionAgentLabel(item)}
+                  workflowType={item.agent_workflow_type}
+                  status={glyphStatusForSession(item)}
+                />
+                <span class="session-copy">
+                  <time>{sessionCreatedAt(item.created_at)}</time>
+                  <strong>{sessionInitialMessage(item)}</strong>
+                  <small>{sessionAgentLabel(item)}{item.is_discovered ? " · discovered" : ""}</small>
+                </span>
+                <StatusChip
+                  label={sessionStatusLabel(item)}
+                  kind={sessionStatusKind(item)}
+                  compact
+                  active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete" && statusKind !== "closed"}
+                />
+              </button>
+            {/each}
+          </div>
         {/if}
-        {#each filteredSessionItems as item}
-          <button
-            type="button"
-            class={`session-row ${item.workflow_id === sessionId ? "active" : ""}`}
-            aria-current={item.workflow_id === sessionId ? "true" : undefined}
-            onclick={() => void openSession(item.workflow_id)}
-          >
-            <AgentGlyph
-              label={sessionAgentLabel(item)}
-              workflowType={item.agent_workflow_type}
-              status={glyphStatusForSession(item)}
-            />
-            <span class="session-copy">
-              <time>{sessionCreatedAt(item.created_at)}</time>
-              <strong>{sessionInitialMessage(item)}</strong>
-              <small>{sessionAgentLabel(item)}{item.is_discovered ? " · discovered" : ""}</small>
-            </span>
-            <StatusChip
-              label={sessionStatusLabel(item)}
-              kind={sessionStatusKind(item)}
-              compact
-              active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete" && statusKind !== "closed"}
-            />
-          </button>
-        {/each}
       </div>
     </section>
   {/if}
@@ -373,29 +476,39 @@
 <style>
   .session-controls {
     position: relative;
+    flex: none;
     min-width: 0;
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    justify-content: center;
-    gap: 8px;
   }
 
-  .new-session-anchor {
-    position: relative;
-    display: inline-flex;
+  /* The anchor is a Chip, so its box, its tone and its press are the app's. Only
+     the width it may take needs saying, because the name of an agent is the one
+     label in the chrome that can run to any length, and the map beside it must
+     not be pushed off the row by one. Stated as a share of the window as well as
+     in characters: at 760px the characters alone would spend most of the row. */
+  :global(.session-anchor) {
+    max-width: min(34ch, 38vw);
   }
 
-  /* Both anchors are Chips, so the box, the type, the press and the focus ring
-     are the app's rather than this file's. Toned because the same pair renders
-     again in the agent pane header at the same time, and both pairs sit beside
-     filled status chips that would otherwise outshout them. Only the width
-     behaviour is local. */
-  :global(.session-add) {
-    flex: 0 0 auto;
+  .session-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Second in the same chip rather than a chip of its own: one object saying one
+     thing about one session. */
+  .session-state {
+    flex: none;
+    padding-left: 6px;
+    border-left: 1px solid var(--border);
+    color: var(--text-2);
   }
 
   .control-chevron {
+    flex: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -406,91 +519,59 @@
   /* The chip owns the class, so reaching its open and hover states from here has
      to cross the component boundary. The hue is the chip's own --chip-color, so
      the chevron cannot drift from the control it sits in. */
-  :global(.session-add.active) .control-chevron,
-  :global(.session-drawer-button.active) .control-chevron {
+  :global(.session-anchor.active) .control-chevron {
     color: color-mix(in srgb, var(--chip-color) 78%, white);
     transform: rotate(180deg);
   }
 
-  :global(.session-add:focus-visible:not(:disabled)) .control-chevron,
-  :global(.session-drawer-button:focus-visible) .control-chevron {
+  :global(.session-anchor:focus-visible) .control-chevron {
     color: color-mix(in srgb, var(--chip-color) 78%, white);
   }
 
   @media (hover: hover) and (pointer: fine) {
-    :global(.session-add:hover:not(:disabled)) .control-chevron,
-    :global(.session-drawer-button:hover) .control-chevron {
+    :global(.session-anchor:hover) .control-chevron {
       color: color-mix(in srgb, var(--chip-color) 78%, white);
     }
   }
 
-  .control-label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
+  /* Grows out of the anchor it came from, which is at the left end of the status
+     line, so it is pinned and scaled from that corner. The chrome popovers sit in
+     the 40s so they clear every pane-level overlay, which tops out at 30. */
   .session-popover {
     position: absolute;
-    top: calc(100% + 10px);
-    right: 0;
-    z-index: 20;
+    top: calc(100% + var(--gap-sm));
+    left: 0;
+    z-index: 44;
     width: min(420px, calc(100vw - 32px));
+    /* Bounded because the page itself does not scroll: a menu taller than the
+       viewport would put its last rows somewhere no gesture can reach. */
     max-height: min(560px, calc(100vh - 104px));
     min-height: 0;
     overflow: hidden;
-    display: grid;
-    grid-template-rows: auto auto auto minmax(0, 1fr);
-    gap: 10px;
-    padding: 14px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gutter-tight);
+    padding: var(--gutter);
     border: 1px solid var(--border-strong);
-    border-radius: var(--radius-md);
     background: var(--surface-1);
     box-shadow: var(--shadow-popover);
-    /* Grows from the button that opened it, so the menu reads as that
-       control's own surface rather than as something the viewport produced. */
-    transform-origin: top right;
-    animation: session-popover-in var(--duration-fast) var(--ease-out);
-  }
-
-  .new-session-popover {
-    position: absolute;
-    top: calc(100% + 10px);
-    left: 0;
     transform-origin: top left;
     animation: session-popover-in var(--duration-fast) var(--ease-out);
-    z-index: 22;
-    width: min(360px, calc(100vw - 32px));
-    min-height: 0;
-    overflow: hidden;
-    display: grid;
-    gap: 10px;
-    padding: 14px 12px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-md);
-    background: var(--surface-1);
-    box-shadow: var(--shadow-popover);
   }
 
-  .session-popover-head,
-  .new-session-head {
+  @keyframes session-popover-in {
+    from {
+      opacity: 0;
+      transform: scale(0.97) translateY(-3px);
+    }
+  }
+
+  .session-popover-head {
     min-width: 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-  }
-
-  .session-popover-title,
-  .new-session-title {
-    min-width: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    color: var(--text-1);
-    font-size: var(--font-lg);
-    font-weight: 700;
   }
 
   .session-popover-actions {
@@ -499,20 +580,13 @@
     gap: 6px;
   }
 
-  /* All three header buttons are IconButtons, so the box, the hover, the focus
-     ring and the disabled dimming are the app's. The one thing left here is the
-     spin, which is why IconButton takes a `class` that merges instead of one
-     that replaces. `:global` because the class rides across a component
-     boundary and so carries none of this file's scoping. */
+  /* Both header buttons are IconButtons, so the box, the hover, the focus ring
+     and the disabled dimming are the app's. The one thing left here is the spin,
+     which is why IconButton takes a `class` that merges instead of one that
+     replaces. `:global` because the class rides across a component boundary and
+     so carries none of this file's scoping. */
   :global(.session-refresh.spinning svg) {
     animation: session-refresh-spin 800ms linear infinite;
-  }
-
-  @keyframes session-popover-in {
-    from {
-      opacity: 0;
-      transform: scale(0.97);
-    }
   }
 
   @keyframes session-refresh-spin {
@@ -524,9 +598,29 @@
     }
   }
 
+  .session-tabs {
+    display: flex;
+    gap: var(--gap-xs);
+  }
+
+  /* `aria-disabled`, not `disabled`, so the tab that says why it cannot be
+     pressed is still able to say it. The primitive dims for the native state
+     only, so the inert look is owed here. */
+  :global(.session-tab[aria-disabled="true"]) {
+    opacity: var(--disabled-opacity);
+    cursor: default;
+  }
+
+  .session-panel {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gutter-tight);
+  }
+
   .session-search {
     min-width: 0;
-    height: 34px;
+    height: var(--control-height-lg);
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: 8px;
@@ -560,7 +654,9 @@
 
   .agent-list {
     min-height: 0;
+    overflow-y: auto;
     display: grid;
+    align-content: start;
     gap: 8px;
   }
 
@@ -582,6 +678,15 @@
       border-color var(--duration-fast) var(--ease-ui),
       background var(--duration-fast) var(--ease-ui),
       transform var(--duration-fast) var(--ease-ui);
+  }
+
+  /* Inward, unlike the baseline ring in app.css: the lists scroll, so an outline
+     drawn outside a full-width row is clipped away by the container and only the
+     top edge of it survives. */
+  .agent-row:focus-visible,
+  .session-row:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -2px;
   }
 
   @media (hover: hover) and (pointer: fine) {
@@ -618,6 +723,7 @@
   }
 
   .session-list {
+    flex: 1;
     min-height: 0;
     overflow-y: auto;
     display: grid;
@@ -643,14 +749,6 @@
       border-color var(--duration-fast) var(--ease-ui),
       background var(--duration-fast) var(--ease-ui),
       transform var(--duration-fast) var(--ease-ui);
-  }
-
-  /* Inward, unlike the baseline ring in app.css: .session-list scrolls, so an
-     outline drawn outside a full-width row is clipped away by the container and
-     only the top edge of it survives. */
-  .session-row:focus-visible {
-    outline: 2px solid var(--focus-ring);
-    outline-offset: -2px;
   }
 
   @media (hover: hover) and (pointer: fine) {
@@ -703,18 +801,6 @@
     font-size: var(--font-md);
   }
 
-  @media (max-width: 980px) {
-    .session-controls {
-      justify-content: flex-start;
-    }
-
-    .session-popover {
-      right: auto;
-      left: 0;
-      transform-origin: top left;
-    }
-  }
-
   @media (prefers-reduced-motion: reduce) {
     /* Still reads as busy, by dimming rather than by spinning. */
     :global(.session-refresh.spinning svg) {
@@ -722,13 +808,12 @@
       opacity: 0.6;
     }
 
-    .session-popover,
-    .new-session-popover {
+    .session-popover {
       animation: none;
     }
 
-    .agent-row:focus-visible,
-    .session-row:focus-visible {
+    .agent-row:hover,
+    .session-row:hover {
       transform: none;
     }
 
