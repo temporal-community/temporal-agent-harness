@@ -224,14 +224,26 @@ def create_agent_harness_app(
 
     @app.get("/api/agent-interface/{session_id}")
     async def agent_interface(session_id: str):
+        # A gateway subagent alias has no agent workflow to query.
         client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
-        functions = await client.get_agent_interface()
+        try:
+            functions = await client.get_agent_interface()
+        except RPCError as exc:
+            if exc.status != RPCStatusCode.NOT_FOUND:
+                raise
+            return JSONResponse(content=[])
         return JSONResponse(content=[fn.model_dump(mode="json") for fn in functions])
 
     @app.get("/api/operator-interface/{session_id}")
     async def operator_interface(session_id: str):
+        # A gateway subagent alias has no agent workflow to query.
         client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
-        commands = await client.get_operator_interface()
+        try:
+            commands = await client.get_operator_interface()
+        except RPCError as exc:
+            if exc.status != RPCStatusCode.NOT_FOUND:
+                raise
+            return JSONResponse(content=[], headers={"Cache-Control": "no-store"})
         content = TypeAdapter(list[OperatorCommand]).dump_python(commands, mode="json")
         return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 

@@ -18,6 +18,7 @@ from agents.function_schema import function_schema
 from agents.tool import (
     FunctionTool,
 )
+from agents.tool_context import ToolContext
 
 from temporalio import activity
 from temporalio import workflow as temporal_workflow
@@ -242,6 +243,57 @@ def nexus_operation_as_tool(
         description=schema.description or "",
         params_json_schema=schema.params_json_schema,
         on_invoke_tool=run_operation,
+        strict_json_schema=strict_json_schema,
+    )
+
+
+def harness_tool_as_openai_tool(fn: Callable, *, strict_json_schema: bool = True) -> Tool:
+    """Convert an inline harness tool into an OpenAI agent tool.
+
+    Calls use ``AgentWorkflowRunner.run_tool``. This preserves approval checks and tool
+    events. Pass the active runner as the OpenAI ``Runner`` context.
+
+    Args:
+        fn: An inline harness tool.
+        strict_json_schema: Use a strict tool schema when true.
+
+    Returns:
+        An OpenAI agent tool that wraps the provided harness tool.
+
+    Example:
+        >>> research_tools = agent.nexus_native_subagent(cls, endpoint, key="research")
+        >>> sdk_agent = OpenAIAgent(
+        ...     ...,
+        ...     tools=[harness_tool_as_openai_tool(fn) for fn in research_tools],
+        ... )
+        >>> Runner.run_streamed(sdk_agent, input=..., context=self._runner)
+    """
+    schema = function_schema(fn)
+
+    async def run_inline_tool(ctx: ToolContext[Any], input: str) -> Any:
+        try:
+            json_data = json.loads(input)
+        except Exception as e:
+            raise ApplicationError(
+                f"Invalid JSON input for tool {schema.name}: {input}"
+            ) from e
+
+        args, kwargs = schema.to_call_args(schema.params_pydantic_model(**json_data))
+        if schema.takes_context:
+            args = [ctx] + args
+        result = await ctx.context.run_tool(ctx.tool_call_id, fn, *args, **kwargs)
+        try:
+            return str(result)
+        except Exception as e:
+            raise ToolSerializationError(
+                "You must return a string representation of the tool output, or something we can call str() on"
+            ) from e
+
+    return FunctionTool(
+        name=schema.name,
+        description=schema.description or "",
+        params_json_schema=schema.params_json_schema,
+        on_invoke_tool=run_inline_tool,
         strict_json_schema=strict_json_schema,
     )
 

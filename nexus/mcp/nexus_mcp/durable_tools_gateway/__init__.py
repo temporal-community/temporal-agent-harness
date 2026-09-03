@@ -2,12 +2,6 @@ import nexusrpc
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
-    from .registry import (
-        REGISTRY_TASK_QUEUE,
-        REGISTRY_WORKFLOW_ID,
-        ToolRegistryWorkflow,
-        fetch_external_tools,
-    )
     from .generated import (
         CallToolInput,
         CallToolOutput,
@@ -17,9 +11,16 @@ with workflow.unsafe.imports_passed_through():
         RegisterExternalInput,
         RegistryService,
     )
+    from .registry import (
+        REGISTRY_TASK_QUEUE,
+        REGISTRY_WORKFLOW_ID,
+        ToolRegistryWorkflow,
+        fetch_external_tools,
+    )
     from .registry_service_handler import (
         REGISTRY_NEXUS_ENDPOINT,
         ExternalMCPCallInput,
+        GatewayA2ABackend,
         RegistryServiceHandler,
         mcp_proxy_activity,
     )
@@ -39,6 +40,7 @@ __all__ = [
     "CallToolOutput",
     "DeregisterInput",
     "ExternalMCPCallInput",
+    "GatewayA2ABackend",
     "ListAgentEntriesInput",
     "ListAgentEntriesOutput",
     "RegisterExternalInput",
