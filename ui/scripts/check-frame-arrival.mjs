@@ -17,8 +17,11 @@
  *
  * What breaks this check. Each of these was applied to the source and the
  * failure it produces observed, so the list is measured rather than hoped for:
- *  - Removing #flushStreamTail: "ends short" reports 0 frames instead of 9,
- *    which is commit 6277f16 reappearing.
+ *  - Removing #flushStreamTail: "ends short" never publishes and the case times
+ *    out, which is commit 6277f16 reappearing. It reported "0 frames instead of
+ *    9" while this file awaited selectSession's promise; that promise now
+ *    resolves once the session is selected rather than once the stream drains,
+ *    so the wait is on the frames themselves, like every other case here.
  *  - Removing the #armCatchUpFlush call: "stays open" never publishes and the
  *    case times out — the live-session gap, back again.
  *  - Emptying reattachBackoffMs, or otherwise not re-attaching a RUNNING
@@ -351,7 +354,7 @@ assert.ok(underAChunk < chunkSize, "the whole point is a backlog too short to fi
     streamFor: () => stream
   });
 
-  const selected = controller.selectSession("wf-ends");
+  void controller.selectSession("wf-ends");
   await waitFor("the stream to be attached", () => attachCalls.length === 1);
   stream.push(...Array.from({ length: underAChunk }, (_, i) => frame("root", i)));
   await sleep(120);
@@ -363,7 +366,7 @@ assert.ok(underAChunk < chunkSize, "the whole point is a backlog too short to fi
 
   finish("wf-ends"); // the run completed; this stream ending is not a drop
   stream.end();
-  await selected;
+  await waitFor("the ended stream to publish its tail", () => controller.frames.length > 0);
 
   assert.equal(
     controller.frames.length,
@@ -443,7 +446,7 @@ assert.ok(underAChunk < chunkSize, "the whole point is a backlog too short to fi
   assert.equal(controller.frames.length, 0, "the old session's backlog should still be staged");
 
   // Switch while that backlog is staged and its stream is still open.
-  const selected = controller.selectSession("wf-new");
+  void controller.selectSession("wf-new");
   streams["wf-old"].push(...Array.from({ length: 4 }, (_, i) => frame("old", 100 + i)));
   await waitFor(
     "the new stream to be attached",
@@ -452,7 +455,7 @@ assert.ok(underAChunk < chunkSize, "the whole point is a backlog too short to fi
   streams["wf-new"].push(...Array.from({ length: 7 }, (_, i) => frame("new", i)));
   finish("wf-new");
   streams["wf-new"].end();
-  await selected;
+  await waitFor("the new session's tail to publish", () => controller.frames.length > 0);
 
   assert.equal(
     controller.frames.length,

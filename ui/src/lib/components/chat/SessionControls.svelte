@@ -271,23 +271,18 @@
     closeMenu({ restoreFocus: false });
   }
 
-  /* Both of these close first and await second. Connecting a session does not
-     settle until its event stream ends, so a menu that waits on the promise
-     before closing is a menu that stays open for the life of the session. The
-     anchor is what reports the outcome — "Starting", then the new session's own
-     status — so leaving costs the reader nothing. */
   async function startNewSession(workflowType: string): Promise<void> {
     if (!workflowType || !onNewSession || creatingSession) return;
-    closeMenu();
     await onNewSession(workflowType);
+    closeMenu();
   }
 
   async function openSession(nextSessionId: string): Promise<void> {
     if (!onSelectSession) return;
-    closeMenu();
     if (nextSessionId !== sessionId) {
       await onSelectSession(nextSessionId);
     }
+    closeMenu();
   }
 
   async function refreshSessions(): Promise<void> {
