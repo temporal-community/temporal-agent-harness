@@ -155,11 +155,23 @@ def _completed() -> ResponseCompletedEvent:
 
 
 async def _drive(
-    events: list[Any], context: TurnStreamContext, *, model: str | None = "gpt-5.1"
-) -> None:
+    events: list[Any],
+    context: TurnStreamContext,
+    *,
+    model: str | None = "gpt-5.1",
+    publisher: _FakePublisher | None = None,
+) -> list[Any]:
+    """Feed ``events`` through the observer.
+
+    Returns what ``publisher`` had recorded before ``__aexit__`` ran, so a caller can tell a
+    request published live by its terminal from one swept up by the closing drain. Both end up in
+    the same final list, so without this a terminal that stopped firing would be invisible — the
+    request would just arrive after the whole reply instead of where the model made it.
+    """
     async with h.OpenAIStreamObserver(context, model=model) as obs:
         for event in events:
             await obs.on_event(event)
+        return list(publisher.events) if publisher is not None else []
 
 
 @pytest.mark.asyncio
@@ -177,7 +189,7 @@ async def test_full_turn_translates_to_harness_vocabulary(fake_publisher: _FakeP
         _completed(),
     ]
 
-    await _drive(events, ctx)
+    before_close = await _drive(events, ctx, publisher=fake_publisher)
 
     published = fake_publisher.events
     # Bracket: exactly one started first (naming the requested model, emitted at dispatch
@@ -207,6 +219,12 @@ async def test_full_turn_translates_to_harness_vocabulary(fake_publisher: _FakeP
     assert requested[0].tool_id == "call_XYZ"
     assert requested[0].tool_name == "lookup"
     assert requested[0].tool_input == {"q": "cats"}
+
+    # Published LIVE, by the …arguments.done terminal, while the stream was still running. This
+    # sequence carries no trailing …output_item.done (the Responses backend's second terminal), so
+    # if arguments.done stopped publishing, only the closing drain could — and every assertion
+    # above would still hold, with the request arriving after the whole reply.
+    assert [type(e) for e in before_close].count(ToolRequested) == 1
 
     # Ended carries the model + mapped usage read off response.completed.
     ended = ends[0]
