@@ -906,6 +906,36 @@ export class AgentRunController {
     this.#sessionSyncBlockedUntil = Date.now() + backoff;
   }
 
+  /**
+   * Hand an attach off to the background and keep its rejection reportable.
+   *
+   * `attach()` deliberately outlives the reader: it spends a 31.5s retry budget
+   * on background liveness, and a brand-new session is the case that always
+   * spends it in full. Awaiting it made "this session exists and is selected"
+   * indistinguishable from "the stream finally drained", so anything a caller
+   * sequenced after the await was dead for half a minute — which is what the
+   * session menus were doing when they tried to close themselves.
+   *
+   * The flags are not this function's business: `connecting` and
+   * `creatingSession` are cleared at attach's own "went idle" point, which is
+   * the whole reason that point exists. What is left is the failure path. Once
+   * nobody awaits the promise, a rejection would surface as an unhandled one
+   * and no flag would ever be cleared, so it is caught here, reported, and the
+   * flags the idle point will now never reach are released.
+   */
+  #streamInBackground(
+    attaching: Promise<void>,
+    connectionVersion: number,
+    message: string
+  ): void {
+    void attaching.catch((error: unknown) => {
+      if (isAbortError(error) || !this.#isCurrentConnection(connectionVersion)) return;
+      this.connectionError = error instanceof Error ? error.message : message;
+      this.creatingSession = false;
+      this.connecting = false;
+    });
+  }
+
   async startNewSession(workflowType?: string): Promise<void> {
     const connectionVersion = this.#beginConnection();
     this.#sendVersion += 1;
@@ -915,6 +945,10 @@ export class AgentRunController {
     this.connecting = true;
     this.connectionError = null;
 
+    /* Tells the `finally` which of two things happened: the stream was handed
+       off and owns these flags now, or this method gave up before there was one
+       and still owes the caller a release. */
+    let streaming = false;
     try {
       const agents = await this.#loadAgents();
       const currentWorkflowType = this.session?.agent_workflow_type;
@@ -943,14 +977,19 @@ export class AgentRunController {
       await this.#refreshWorkflowExecutionState(session.workflow_id);
       if (!this.#isCurrentConnection(connectionVersion)) return;
       if (this.#isWorkflowClosed(session.workflow_id)) return;
-      await this.attach(0);
+      streaming = true;
+      this.#streamInBackground(
+        this.attach(0),
+        connectionVersion,
+        "Failed to create agent session."
+      );
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
           error instanceof Error ? error.message : "Failed to create agent session.";
       }
     } finally {
-      if (this.#isCurrentConnection(connectionVersion)) {
+      if (!streaming && this.#isCurrentConnection(connectionVersion)) {
         this.creatingSession = false;
         this.connecting = false;
       }
@@ -978,18 +1017,24 @@ export class AgentRunController {
     void this.#fetchOperatorInterface(session.workflow_id);
     await this.#hydrateCachedFrames(session.workflow_id);
 
+    let streaming = false;
     try {
       await this.#refreshWorkflowExecutionState(session.workflow_id);
       if (!this.#isCurrentConnection(connectionVersion)) return;
       if (this.#isWorkflowClosed(session.workflow_id)) return;
-      await this.attach(this.lastResumeOffset);
+      streaming = true;
+      this.#streamInBackground(
+        this.attach(this.lastResumeOffset),
+        connectionVersion,
+        "Failed to load selected session."
+      );
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
           error instanceof Error ? error.message : "Failed to load selected session.";
       }
     } finally {
-      if (this.#isCurrentConnection(connectionVersion)) this.connecting = false;
+      if (!streaming && this.#isCurrentConnection(connectionVersion)) this.connecting = false;
     }
   }
 
@@ -1099,9 +1144,15 @@ export class AgentRunController {
            reloading looked like the cure: initialize() reaches the same
            attach without ever setting this flag.
 
-           Cleared here rather than by the callers, because they await this
-           method: selectSession's own `finally` cannot run until the last retry
-           has. The `finally` still clears `sending` as well, for the paths that
+           Cleared here rather than by the callers because this is where the
+           fact is known: the callers hand this attach off to the background
+           (#streamInBackground) and return as soon as the session exists, so
+           they are long gone by the time the stream goes idle and could not
+           report it even if they wanted to. Their own `finally` releases these
+           flags only on the paths that never reached a stream at all, and
+           #streamInBackground's `catch` covers the paths where this attach
+           throws and so never reaches the line below.
+           The `finally` still clears `sending` as well, for the paths that
            break or throw before completing an iteration. Guarded on the stream,
            so a session switched away from mid-retry does not clear a flag the
            new session just set. */
