@@ -12,10 +12,10 @@
 // by some starting position. Re-add `{ action: "jumpToLive", key: "l", ... }` and this file fails
 // on that pair, naming both rows.
 //
-// A third half, at the bottom: the keyboard seek count the Logs pane reads to scroll instantly for
-// keys and smoothly for clicks. Checked as a delta over the shipped dispatch and the shipped run
-// methods, so it fails if a key stops counting, if a key that moves nothing starts counting, or if
-// the click path ever counts.
+// A third thing is checked between those two: the keyboard seek count the Logs pane reads to
+// scroll instantly for keys and smoothly for clicks. Measured as a delta over the shipped dispatch
+// and the shipped run methods, so it fails if a key stops counting, if a key that moves nothing
+// starts counting, or if the click path ever counts.
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
@@ -249,47 +249,6 @@ function outcome([, setUp], action) {
   });
 }
 
-/* `following` means "the cursor is at the end" and nothing else: goTo() assigns it that way and
-   every transport action routes through goTo, so it is asserted after every press below rather
-   than trusted once. */
-for (const probe of probes) {
-  for (const binding of REPLAY_BINDINGS) {
-    outcome(probe, binding.action);
-    assert.equal(
-      run.following,
-      run.viewIndex === total,
-      `following must mean viewIndex === total (${binding.chord} ${probe[0]}: ` +
-        `following=${run.following}, viewIndex=${run.viewIndex}, total=${total})`
-    );
-  }
-}
-
-/* The check the old one should have been. Every row in the overlay promises a behaviour of its
-   own; a row that cannot be told from another row promises something the app does not have.
-   Compared by effect, so what the two actions are named does not enter into it. */
-for (let i = 0; i < REPLAY_BINDINGS.length; i += 1) {
-  for (let j = i + 1; j < REPLAY_BINDINGS.length; j += 1) {
-    const [a, b] = [REPLAY_BINDINGS[i], REPLAY_BINDINGS[j]];
-    assert.ok(
-      probes.some((probe) => outcome(probe, a.action).after !== outcome(probe, b.action).after),
-      `"${a.chord} — ${a.label}" and "${b.chord} — ${b.label}" leave the replay in the same ` +
-        `state from all ${probes.length} starting positions: one behaviour, two rows in the help ` +
-        `overlay. Drop a binding, or merge them into a single row that lists both keys.`
-    );
-  }
-}
-
-/* A key that changes nothing anywhere is the same broken promise with one row instead of two. */
-for (const binding of REPLAY_BINDINGS) {
-  assert.ok(
-    probes.some((probe) => {
-      const { before, after } = outcome(probe, binding.action);
-      return before !== after;
-    }),
-    `"${binding.chord} — ${binding.label}" never changes anything the user can see`
-  );
-}
-
 // --- keys are told apart from clicks ----------------------------------------------------------
 
 /* The Logs pane scrolls instantly when a key moved the playhead and smoothly when a click did,
@@ -359,12 +318,54 @@ assert.equal(seekDelta(() => run.jumpToLive()), 0, "the live button is not a key
 run.goTo(markerMid);
 run.play();
 assert.equal(seekDelta(() => run.stepForward()), 0, "playback advancing is not a key press");
+run.pause();
+console.log("  keyboard seeks counted on moving keys only, never on the click path");
+
+/* `following` means "the cursor is at the end" and nothing else: goTo() assigns it that way and
+   every transport action routes through goTo, so it is asserted after every press below rather
+   than trusted once. */
+for (const probe of probes) {
+  for (const binding of REPLAY_BINDINGS) {
+    outcome(probe, binding.action);
+    assert.equal(
+      run.following,
+      run.viewIndex === total,
+      `following must mean viewIndex === total (${binding.chord} ${probe[0]}: ` +
+        `following=${run.following}, viewIndex=${run.viewIndex}, total=${total})`
+    );
+  }
+}
+
+/* The check the old one should have been. Every row in the overlay promises a behaviour of its
+   own; a row that cannot be told from another row promises something the app does not have.
+   Compared by effect, so what the two actions are named does not enter into it. */
+for (let i = 0; i < REPLAY_BINDINGS.length; i += 1) {
+  for (let j = i + 1; j < REPLAY_BINDINGS.length; j += 1) {
+    const [a, b] = [REPLAY_BINDINGS[i], REPLAY_BINDINGS[j]];
+    assert.ok(
+      probes.some((probe) => outcome(probe, a.action).after !== outcome(probe, b.action).after),
+      `"${a.chord} — ${a.label}" and "${b.chord} — ${b.label}" leave the replay in the same ` +
+        `state from all ${probes.length} starting positions: one behaviour, two rows in the help ` +
+        `overlay. Drop a binding, or merge them into a single row that lists both keys.`
+    );
+  }
+}
+
+/* A key that changes nothing anywhere is the same broken promise with one row instead of two. */
+for (const binding of REPLAY_BINDINGS) {
+  assert.ok(
+    probes.some((probe) => {
+      const { before, after } = outcome(probe, binding.action);
+      return before !== after;
+    }),
+    `"${binding.chord} — ${binding.label}" never changes anything the user can see`
+  );
+}
 
 run.pause();
 await vite.close();
 console.log(
   `replay hotkeys: ${REPLAY_BINDINGS.length} bindings, guards hold, every pair distinguishable ` +
-    `over ${probes.length} starting positions (${total} events, ${markers.length} turns); ` +
-    `keyboard seeks counted only when a key moves the cursor, never for the click path`
+    `over ${probes.length} starting positions (${total} events, ${markers.length} turns)`
 );
 process.exit(0);
