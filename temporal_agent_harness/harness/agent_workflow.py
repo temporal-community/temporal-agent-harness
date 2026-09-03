@@ -1725,6 +1725,11 @@ class AgentWorkflowRunner:
         # inherits the memo, so it must not overwrite it with the first message of ITS run —
         # which would be turn N of the conversation, not turn 1.
         self._initial_message_recorded = config.resume is not None
+        # The session's opening scenario, enqueued once by ``run`` (see
+        # :meth:`_seed_opening_message`). Held only for a FIRST run, for the same reason the memo
+        # flag above is: the successor run is handed the same config, and re-seeding there would
+        # replay the session's first turn on top of the conversation it just carried over.
+        self._opening_message = config.opening_message if config.resume is None else None
 
         # Register protocol handlers dynamically so the containing workflow doesn't need to.
         workflow.set_update_handler(
@@ -1831,7 +1836,9 @@ class AgentWorkflowRunner:
 
     def _validate_send_agent_message(self, message: AgentMessage) -> None:
         next_turn = self._status.next_turn_number
-        if message.expected_turn != next_turn:
+        # ``None`` is "append to the end of the queue, whatever that is" — a caller with no view
+        # of the conversation has nothing to be stale about (see :class:`AgentMessage`).
+        if message.expected_turn is not None and message.expected_turn != next_turn:
             raise ApplicationError(
                 f"Stale: expected turn {message.expected_turn} "
                 f"but next turn is {next_turn}",
@@ -2376,6 +2383,10 @@ class AgentWorkflowRunner:
         does NOT end the session: its error surfaces as an :class:`AgentError` and the loop
         continues with the next message.
 
+        A session given an opening scenario (:attr:`AgentConfig.opening_message`) enqueues it
+        here, before the loop, so the session is already running when its reader arrives — see
+        :meth:`_seed_opening_message`.
+
         A long enough session rolls itself over into a fresh run between turns rather than
         growing its history until Temporal refuses it (see :meth:`_continue_as_new`). On every
         other exit path, the agent's still-running subagents are stopped through the same front
@@ -2383,6 +2394,7 @@ class AgentWorkflowRunner:
         :meth:`start_subagent` that makes it necessary.
         """
         self._apply_restore(agent)
+        await self._seed_opening_message()
         try:
             rolling_over = await self._run_turns(agent)
         except asyncio.CancelledError:
@@ -2401,6 +2413,44 @@ class AgentWorkflowRunner:
             # stopped here — the conversation is continuing, only the run is being replaced.
             await self._continue_as_new(agent)
         await self._stop_subagents()
+
+    async def _seed_opening_message(self) -> None:
+        """Enqueue this session's opening scenario, once, as its turn 1.
+
+        Deliberately routed through the same front door a person's message takes —
+        :meth:`_validate_send_agent_message` then :meth:`_handle_send_agent_message` — rather
+        than pushed onto the queue directly. The turn that results is an ordinary turn: same
+        ``turn_started`` / ``reply`` / ``turn_end`` bracket, same memo, same numbering, so
+        nothing reading the stream has to learn that a turn can begin without a client.
+
+        A bad opening does NOT fail the session. The message is authored by whoever created the
+        session (a schedule's prompt, a console's opening scenario), so the way it goes wrong is
+        a handler name that no longer exists or a payload that no longer validates — an
+        authoring mistake, whose useful form is a sentence in the console next to an otherwise
+        working agent. Raising here would instead fail the workflow's FIRST task and retry it
+        forever, and the reader would see a session that never starts.
+        """
+        message = self._opening_message
+        if message is None:
+            return
+        self._opening_message = None
+        try:
+            self._validate_send_agent_message(message)
+        except ApplicationError as exc:
+            # Turn 0: the numbering is the client's optimistic-concurrency token, and no turn
+            # ran. Operator-command events already use it for records that belong to no turn.
+            self._pub(
+                str(workflow.uuid4()),
+                0,
+                AgentError(
+                    message=(
+                        f"This session's opening message was not accepted, so it is waiting "
+                        f"for you instead: {exc}"
+                    )
+                ),
+            )
+            return
+        await self._handle_send_agent_message(message)
 
     async def _run_turns(self, agent: object) -> bool:
         """The turn loop proper. Returns True if it stopped in order to continue as new."""

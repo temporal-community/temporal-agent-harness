@@ -213,14 +213,24 @@ class AgentConfig(BaseModel):
     ``resume`` is harness-owned and never set by a caller: it is what one run of a session hands
     its successor at continue-as-new (see :class:`AgentResumeState`). ``None`` on every start
     that is not a rollover.
+
+    ``opening_message`` — a message the harness enqueues for the agent itself, once, as this
+    session's turn 1, so a session can open on a scenario instead of on an empty transcript. It
+    is how a caller with nobody at a keyboard starts a conversation: a cron dispatch, or a
+    console that opens an example already running. Deliberately an ordinary :class:`AgentMessage`
+    delivered through the ordinary front door rather than a second way in — the seeded turn is
+    bracketed by the same ``turn_started`` / ``reply`` / ``turn_end`` as a typed one, and records
+    the same memo, so nothing downstream has to know the difference. ``None`` means the session
+    starts idle and waits to be spoken to.
     """
 
     is_message_queuing_enabled: bool | None = None
     approval_policy: ToolApprovalPolicy | None = None
     agent_id: AgentId | None = None
-    # Annotated as a string because AgentResumeState is declared below this class (it needs
-    # AgentMessage, which this does not). Resolved by the model_rebuild() at the end of the file.
+    # Both annotated as strings because AgentResumeState and AgentMessage are declared below
+    # this class. Resolved by the model_rebuild() at the end of the file.
     resume: "AgentResumeState | None" = None
+    opening_message: "AgentMessage | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -248,11 +258,20 @@ class AgentMessage(BaseModel):
     update validator rejects it if the workflow is already past that turn (stale client).
     It is carried on the envelope itself — the ``send_agent_message`` update takes a bare
     :class:`AgentMessage`, with no separate wrapper.
+
+    It is **optional**, and omitting it means "append to the end of the queue, whatever that
+    is". The number is an optimistic-concurrency token, and only a caller with a view of the
+    conversation has an opinion worth guarding — a UI that would otherwise resubmit from a
+    stale screen. A caller that just wants to enqueue has no such view and no way to obtain
+    the number without a status query whose answer could be stale by the time the update
+    landed, which is the very race the update-based front door exists to avoid. An
+    :attr:`AgentConfig.opening_message` is exactly that caller: it is authored before the
+    session exists, so it sends ``None`` and the staleness check is skipped.
     """
 
     type: str
     payload: dict[str, Any] = Field(default_factory=dict)
-    expected_turn: int
+    expected_turn: int | None = None
 
 
 # ---------------------------------------------------------------------------
