@@ -6,6 +6,7 @@ import type {
   ToolId
 } from "$lib/api/types";
 import { formatTokens, summarizeCost, type CostSummary } from "$lib/cost/pricing";
+import { renderUserMessage } from "$lib/state/inboundMessageText";
 import { UNKNOWN_TOOL_INPUT } from "$lib/state/logValue";
 
 export type AgentNodeTone =
@@ -38,11 +39,29 @@ export interface AgentNodeData {
   flowGroup?: number;
   metrics?: Array<{ label: string; value: string }>;
   interfaces?: AgentInterfaceSummary[];
+  /** Never empty — see contextFor(). The inspector renders these in order. */
+  context?: AgentNodeContext[];
 }
 
 export interface AgentInterfaceSummary {
   name: string;
   description?: string;
+}
+
+/**
+ * One readable body for the node inspector.
+ *
+ * A node card shows a bounded preview and says so; this is where the rest of it
+ * lives. Built here rather than in the inspector because the inspector only ever
+ * receives node DATA — it has no frames to reach back into, which is exactly why
+ * it used to apologise for having nothing to show over a model interaction that
+ * had streamed 3,515 characters: `detail` was the only field it read, and
+ * nodeDataFor has never set one for that kind.
+ */
+export interface AgentNodeContext {
+  label: string;
+  text: string;
+  kind: "text" | "code" | "json";
 }
 
 export interface AgentGraph {
@@ -73,6 +92,11 @@ interface ToolRuntime {
   tone: AgentNodeTone;
   statusTone?: AgentNodeTone;
   detail?: string;
+  /* Kept apart from `detail`, which the card overwrites with whatever happened
+     last. The inspector wants both halves of the call, and the arguments the
+     model chose were being thrown away the moment the tool answered. */
+  input?: string;
+  output?: string;
   subtitle?: string;
   isCodeMode?: boolean;
   script?: string;
@@ -564,6 +588,29 @@ function textFromReply(data: { text?: unknown; output?: unknown }): string {
   return "";
 }
 
+function textSection(
+  label: string,
+  text: string | undefined,
+  kind: AgentNodeContext["kind"] = "text"
+): AgentNodeContext | null {
+  return typeof text === "string" && text.trim() ? { label, text, kind } : null;
+}
+
+/** Pretty-printed if it parses as JSON, kept verbatim if it does not. */
+function maybeJsonSection(label: string, text: string | undefined): AgentNodeContext | null {
+  if (typeof text !== "string" || !text.trim()) return null;
+  try {
+    return { label, text: JSON.stringify(JSON.parse(text), null, 2), kind: "json" };
+  } catch {
+    return { label, text, kind: "text" };
+  }
+}
+
+function valueSection(label: string, value: unknown): AgentNodeContext | null {
+  if (value == null) return null;
+  return { label, text: JSON.stringify(value, null, 2), kind: "json" };
+}
+
 export function buildAgentGraph(
   frames: AgentSseFrame[],
   options: AgentGraphOptions = {}
@@ -597,6 +644,18 @@ export function buildAgentGraph(
   let inputSeen = false;
   let outputSeen = false;
   let latestNodeId: LocalNodeId | null = null;
+  /**
+   * The last frame that touched each node, so no node can be reduced to an
+   * apology. Every node in this graph exists BECAUSE a frame put it there, and
+   * that frame is a better answer than a sentence saying there is nothing to
+   * read — it is the ground truth the rest of the card is derived from.
+   */
+  const lastFrameByNode = new Map<LocalNodeId, AgentSseFrame["data"]>();
+  let currentFrame: AgentSseFrame | null = null;
+
+  function remember(id: LocalNodeId): void {
+    if (currentFrame) lastFrameByNode.set(id, currentFrame.data);
+  }
 
   function markInput(): void {
     inputSeen = true;
@@ -604,12 +663,14 @@ export function buildAgentGraph(
       markRuntimeNode("input");
     } else {
       latestNodeId = "input";
+      remember("input");
     }
   }
 
   function markRuntimeNode(id: RuntimeNodeId): void {
     if (!runtimeNodeOrder.includes(id)) runtimeNodeOrder.push(id);
     latestNodeId = id;
+    remember(id);
   }
 
   function markOutput(): void {
@@ -618,6 +679,7 @@ export function buildAgentGraph(
       markRuntimeNode("output");
     } else {
       latestNodeId = "output";
+      remember("output");
     }
   }
 
@@ -629,6 +691,7 @@ export function buildAgentGraph(
         codeModeChildren.set(parentToolId, [...childIds, toolId]);
       }
       latestNodeId = nodeId;
+      remember(nodeId);
       return nodeId;
     }
     markRuntimeNode(nodeId);
@@ -702,6 +765,7 @@ export function buildAgentGraph(
 
   for (const frame of frames) {
     if (!("type" in frame.data)) continue;
+    currentFrame = frame;
     if (frame.event === "message_queued") {
       markInput();
       queued += 1;
@@ -794,6 +858,7 @@ export function buildAgentGraph(
           frame.data.tool_input === null
             ? UNKNOWN_TOOL_INPUT
             : JSON.stringify(frame.data.tool_input);
+        runtime.input = runtime.detail;
       }
       if (frame.event === "tool_requested") {
         runtime.status = "requested by model";
@@ -826,6 +891,7 @@ export function buildAgentGraph(
             ? "host call running"
             : "execution in progress";
         runtime.detail = frame.data.progress_delta;
+        runtime.output = frame.data.progress_delta;
       } else if (frame.event === "tool_end") {
         runtime.status = "done";
         runtime.tone = "done";
@@ -836,6 +902,7 @@ export function buildAgentGraph(
             ? "host call completed"
             : "execution completed";
         runtime.detail = frame.data.tool_output;
+        runtime.output = frame.data.tool_output;
         if (runtime.isCodeMode) markCodeModeFinished(frame.data.tool_id);
         markToolSettled(frame.data.tool_id, parentToolId);
       } else if (frame.event === "tool_error") {
@@ -848,6 +915,7 @@ export function buildAgentGraph(
             ? "host call failed"
             : "execution failed";
         runtime.detail = frame.data.message;
+        runtime.output = frame.data.message;
         if (runtime.isCodeMode) markCodeModeFinished(frame.data.tool_id);
         markToolSettled(frame.data.tool_id, parentToolId);
       }
@@ -880,6 +948,7 @@ export function buildAgentGraph(
             ? "host call approval gate"
             : "human approval gate";
         runtime.detail = JSON.stringify(frame.data.tool_input);
+        runtime.input = runtime.detail;
       } else {
         runtime.status = frame.data.approved ? "approved" : "denied";
         runtime.tone = frame.data.approved ? "done" : "error";
@@ -923,7 +992,73 @@ export function buildAgentGraph(
   }
   const usage = summarizeCost(frames);
 
+  /**
+   * What the inspector shows, per node kind. Every branch here ends with the
+   * frame that last touched the node, so the list is never empty: a node exists
+   * because a frame put it there, and printing that frame beats printing a
+   * sentence about having nothing to print.
+   *
+   * The two synthetic nodes — the tool container and the runtime boundary — have
+   * no frame of their own, so they describe what they are made of instead.
+   */
+  function contextFor(id: LocalNodeId): AgentNodeContext[] {
+    const sections: Array<AgentNodeContext | null> = [];
+
+    if (id === "input") {
+      const raw = currentUserMessage || queuedMessage;
+      const rendered = renderUserMessage(raw);
+      sections.push(textSection("User message", rendered));
+      if (rendered !== raw) sections.push(maybeJsonSection("Raw message", raw));
+    } else if (id === "model") {
+      /* The model's own output and its thinking — the two things asked for by
+         name. Both were already in this scope; nothing reached them because the
+         inspector only ever read `detail`, and this node has never had one. */
+      sections.push(
+        textSection("Model output", replyText),
+        textSection("Thought summary", reasoningDetail),
+        textSection("Model", currentModel)
+      );
+    } else if (id === "reasoning") {
+      sections.push(textSection("Thought summary", reasoningDetail));
+    } else if (id === "output") {
+      sections.push(textSection("Reply", replyText));
+    } else if (id === "subagent") {
+      sections.push(
+        textSection("Subagent", subagentSubtitle),
+        textSection("Workflow", subagentDetail)
+      );
+    } else if (isToolRuntimeNodeId(id)) {
+      const runtime = tools.get(toolIdFromRuntimeNodeId(id));
+      sections.push(
+        runtime?.script ? { label: "Script", text: runtime.script, kind: "code" } : null,
+        maybeJsonSection("Tool input", runtime?.input),
+        maybeJsonSection("Tool output", runtime?.output)
+      );
+    } else if (id === "tool-container") {
+      sections.push(
+        valueSection(
+          "Delegated runtimes",
+          (options.embeddedToolGraphs ?? []).map((graph) => ({
+            status: graph.status,
+            activeTurn: graph.activeTurn,
+            nodes: graph.nodes.length
+          }))
+        )
+      );
+    }
+
+    sections.push(valueSection("Event payload", lastFrameByNode.get(id)));
+    const built = sections.filter((section): section is AgentNodeContext => section != null);
+    /* Unreachable for every id above, and the reason there is no apology string
+       left in this file: a node with nothing else still describes itself. */
+    return built.length > 0 ? built : [{ label: "Node", text: id, kind: "text" }];
+  }
+
   function nodeDataFor(id: LocalNodeId): AgentNodeData {
+    return { ...baseNodeDataFor(id), context: contextFor(id) };
+  }
+
+  function baseNodeDataFor(id: LocalNodeId): AgentNodeData {
     if (id === "input") {
       return {
         tone: status === "running" ? "queue" : "neutral",
@@ -1060,7 +1195,36 @@ export function buildAgentGraph(
       headerPrefix: runtimeHeaderPrefix,
       boundaryWidth,
       boundaryHeight,
-      interfaces: agentInterface
+      interfaces: agentInterface,
+      /* The boundary is drawn from state rather than from any one frame, so it
+         says what it contains: the run's status and the functions the agent
+         exposes, of which the card itself only has room for two. */
+      context: [
+        {
+          label: "Runtime",
+          text: JSON.stringify(
+            {
+              status,
+              activeTurn,
+              model: currentModel,
+              nodes: runtimeNodeOrder,
+              tokens: usage.tokens
+            },
+            null,
+            2
+          ),
+          kind: "json"
+        },
+        ...(agentInterface.length > 0
+          ? [
+              {
+                label: "Agent interface",
+                text: JSON.stringify(agentInterface, null, 2),
+                kind: "json" as const
+              }
+            ]
+          : [])
+      ]
     },
     "agentWorkflow"
   );
