@@ -30,7 +30,7 @@
     Session,
     SlashCommandMessage,
   } from "$lib/api/types";
-  import { formatCost } from "$lib/cost/pricing";
+  import { formatTokens } from "$lib/cost/pricing";
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
@@ -547,16 +547,14 @@
 
     return {
       label: turnNumber == null ? "Turn" : `Turn ${turnNumber}`,
-      detail: `total ${formatCost(turnEstimatedCost(rows))}`,
+      detail: `total ${formatTokens(turnTokens(rows))} tok`,
       duration: durationMs > 0 ? formatElapsedDuration(durationMs) : null,
       endedAt: Number.isFinite(endedAt) ? endedAt : visibleRows[visibleRows.length - 1]?.timestamp ?? 0
     };
   }
 
-  function turnEstimatedCost(rows: ReplayLogRow[]): number | null {
-    const modelRows = rows.filter((row) => row.event === "model_interaction_ended");
-    if (modelRows.some((row) => row.estimatedCostUsd == null)) return null;
-    return modelRows.reduce((sum, row) => sum + (row.estimatedCostUsd ?? 0), 0);
+  function turnTokens(rows: ReplayLogRow[]): number {
+    return rows.reduce((sum, row) => sum + (row.usage?.total ?? 0), 0);
   }
 
   function scrollMessagesToBottom(): void {

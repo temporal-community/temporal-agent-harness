@@ -5,12 +5,7 @@ import type {
   JsonRecord,
   ToolId
 } from "$lib/api/types";
-import {
-  formatCost,
-  formatTokens,
-  summarizeCost,
-  type UsageTotals
-} from "$lib/cost/pricing";
+import { formatTokens, summarizeCost, type UsageTotals } from "$lib/cost/pricing";
 
 export type ReplayActor =
   | "user"
@@ -176,8 +171,8 @@ function citationBody(citations: FileCitationAnnotation[]): string {
     .join(", ");
 }
 
-function modelUsageBody(usage: UsageTotals, cost: number | null): string {
-  return `${formatTokens(usage.total)} tokens, ${formatCost(cost)}`;
+function modelUsageBody(usage: UsageTotals): string {
+  return `${formatTokens(usage.total)} tokens`;
 }
 
 function operatorCommandDisplay(data: {
@@ -319,7 +314,7 @@ function rowFromFrame(
       actor: "model",
       tone: "done",
       label: "Model completed",
-      body: modelUsageBody(summary.tokens, summary.estimatedCostUsd),
+      body: modelUsageBody(summary.tokens),
       model: frame.data.model,
       status: "completed",
       usage: summary.tokens,

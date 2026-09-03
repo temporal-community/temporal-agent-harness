@@ -1,10 +1,15 @@
 // ABOUTME: Asserts the one property the usage chip has to hold for a run this console read no
 // events of: it must not render a zero. Every figure in UsagePopover is a sum over the frames in
 // hand, and a finished run whose stream Temporal cannot replay leaves none — so the sums are empty
-// and `0 tok $0.0000` in a green success chip is a confident measurement of nothing, sitting beside
-// runs that really spent money. Zero is a fact; "we cannot know" is a different fact. This is the
-// check that fails when a figure stops going through figure(), when the success tone comes back, or
-// when the unmeasured and unpriced hedges start stacking two explanations on one absence.
+// and `0 tok` in a green success chip is a confident measurement of nothing, sitting beside runs
+// that really did the work. Zero is a fact; "we cannot know" is a different fact. This is the check
+// that fails when a figure stops going through figure(), or when the success tone comes back.
+//
+// It also pins the second half of that reading: the money is off the screen. The estimate came from
+// a hardcoded per-million price table nobody wants to maintain in the frontend, so pricing.ts keeps
+// computing it and the UI renders none of it — no dollar figure, and no "no price configured" note
+// hedging a figure that is no longer there. pricing.ts itself is unchanged and still covered by
+// check-usage-totals.mjs.
 //   node ui/scripts/check-unmeasured-usage.mjs
 
 import assert from "node:assert/strict";
@@ -59,7 +64,7 @@ const shown = (props) =>
    covered by the source claim at the bottom instead. Upgrade path = a check that
    can open it, once anything in this repo can drive a component's state. */
 const figures = (html) => [
-  ...html.matchAll(/<span class="usage-chip-(?:tokens|cost)[^"]*"[^>]*>([^<]*)</g)
+  ...html.matchAll(/<span class="usage-chip-tokens[^"]*"[^>]*>([^<]*)</g)
 ].map((match) => match[1].trim());
 
 /* What a reader actually sees: text nodes only. Everything the compiler adds
@@ -78,12 +83,14 @@ const text = (html) =>
 // every assertion below.
 {
   const html = shown({ usage: REAL_SPEND });
-  assert.deepEqual(
-    figures(html),
-    ["2,090", "$0.0014"],
-    "a measured run reports its real figures"
-  );
+  assert.deepEqual(figures(html), ["2,090"], "a measured run reports its real token count");
   assert.match(html, /chip[^"]*\bsuccess\b/, "and keeps the success tone it has earned");
+  assert.doesNotMatch(
+    text(html),
+    /\$/,
+    "...and no dollar figure: the estimate behind it came from a hardcoded price table, so it " +
+      "is computed and not shown"
+  );
 }
 
 /* --- a real zero is still a zero ------------------------------------------- */
@@ -92,8 +99,8 @@ const text = (html) =>
 {
   assert.deepEqual(
     figures(shown({ usage: NOTHING_READ })),
-    ["0", "$0.0000"],
-    "a run with no model calls yet has measured nothing and spent nothing; that is a fact"
+    ["0"],
+    "a run with no model calls yet has measured nothing; that is a fact"
   );
 }
 
@@ -102,7 +109,15 @@ const text = (html) =>
 {
   const html = shown({ usage: NOTHING_READ, unmeasured: true });
 
-  assert.deepEqual(figures(html), ["—", "—"], "both figures of an unmeasured run are absent");
+  assert.deepEqual(figures(html), ["—"], "the chip's figure for an unmeasured run is absent");
+  /* The sentence used to hang off the cost span, which is gone. A bare dash on a
+     closed chip is a broken panel until something says otherwise, and the panel's
+     copy is a click away. */
+  assert.match(
+    html,
+    /usage-chip-tokens[^>]*data-tip="Unknown, not zero/,
+    "the dash on the closed chip must carry the sentence that explains it"
+  );
   assert.doesNotMatch(
     text(html),
     /\d/,
@@ -121,57 +136,62 @@ const text = (html) =>
 {
   assert.deepEqual(
     figures(shown({ usage: REAL_SPEND, unmeasured: true })),
-    ["—", "—"],
+    ["—"],
     "a partially cached unmeasured run shows a lower bound as a figure, so it shows no figure"
   );
 }
 
-/* --- one hedge, not two --------------------------------------------------- */
-// Unpriced models are the other reason a figure here can be unknown, and the two
-// must not stack: being unmeasured is the wider claim, so which models we hold
-// prices for is moot and its note must not appear beside the dash as a second
-// explanation for one absence.
+/* --- one absence, one hedge ----------------------------------------------- */
+// Being unpriced used to be the OTHER reason a figure here could be unknown, and
+// the two hedges had to not stack. Now there is only one: a token count needs no
+// price, so an unpriced run is fully measured and has nothing to explain, and the
+// note that used to hedge its missing cost must not surface anywhere.
 {
   const unpriced = shown({ usage: UNPRICED_SPEND });
-  assert.match(unpriced, /No price configured/, "an unpriced model still explains itself");
   assert.deepEqual(
     figures(unpriced),
-    ["2,090", "—"],
-    "...with exact tokens and no cost, which is what unpriced means"
+    ["2,090"],
+    "a model we hold no price for still has an exact token count"
+  );
+  assert.doesNotMatch(
+    unpriced,
+    /No price configured/,
+    "with no cost on screen there is no missing cost to hedge, so the unpriced note is gone too"
   );
 
   const both = shown({ usage: UNPRICED_SPEND, unmeasured: true });
   assert.match(both, /Unknown, not zero/, "an unmeasured run says why its figures are absent");
-  assert.doesNotMatch(
-    both,
-    /No price configured/,
-    "a run that is both unmeasured and unpriced must read as one hedge, not two"
-  );
+  assert.doesNotMatch(both, /No price configured/, "and says it once");
 }
 
 /* --- every figure goes through figure() ----------------------------------- */
 // The two strips inside the panel are past what an SSR render of a closed popover
-// can see, and they are two of the four call sites. What holds them is that the
-// formatters are only ever PASSED to figure(), never called: a fifth figure added
+// can see, and they are five of the six call sites. What holds them is that the
+// formatter is only ever PASSED to figure(), never called: a seventh figure added
 // straight from formatTokens() would render a zero the renders above cannot
 // reach, and this is what fails instead.
 {
   const source = readFileSync(COMPONENT, "utf8");
-  for (const formatter of ["formatTokens", "formatCost"]) {
-    assert.equal(
-      source.match(new RegExp(`\\b${formatter}\\(`, "g")),
-      null,
-      `${formatter} is called directly, so that figure bypasses the unmeasured dash`
-    );
-  }
+  assert.equal(
+    source.match(/\bformatTokens\(/g),
+    null,
+    "formatTokens is called directly, so that figure bypasses the unmeasured dash"
+  );
   assert.equal(
     source.match(/\bfigure\(/g).length,
-    8,
-    "the count is part of the claim: 2 chip spans, 2 headline metrics and 4 breakdown rows. " +
+    6,
+    "the count is part of the claim: 1 chip span, 1 headline metric and 4 breakdown rows. " +
       "If a figure was added or removed here, say so"
+  );
+  assert.doesNotMatch(
+    source,
+    /formatCost|unpricedNote|unpricedModels|estimatedCostUsd/,
+    "the popover reaches for a cost figure again; pricing.ts still computes one, on purpose, " +
+      "but nothing here may render it"
   );
 }
 
 console.log(
-  "check-unmeasured-usage: an unmeasured run renders no zero, keeps no success tone, and hedges once"
+  "check-unmeasured-usage: an unmeasured run renders no zero and keeps no success tone; no cost " +
+    "figure is rendered at all"
 );

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Cpu } from "@lucide/svelte";
-  import { formatCost, formatTokens, type CostSummary } from "$lib/cost/pricing";
+  import { formatTokens, type CostSummary } from "$lib/cost/pricing";
 
   interface Props {
     usage: CostSummary;
@@ -16,10 +16,10 @@
   );
 </script>
 
-<section class="model-breakdown" aria-label="Cost by model">
+<section class="model-breakdown" aria-label="Tokens by model">
   <div class="head">
     <Cpu size={15} />
-    <span>Cost by model</span>
+    <span>Tokens by model</span>
   </div>
 
   {#if rows.length === 0}
@@ -32,7 +32,6 @@
         <li>
           <div class="row-top">
             <span class="name">{row.model}</span>
-            <span class="cost">{formatCost(row.estimatedCostUsd)}</span>
           </div>
           <div class="bar-track" aria-hidden="true">
             <span class="bar" style={`width: ${(row.tokens.total / maxTokens) * 100}%`}></span>
@@ -109,13 +108,6 @@
     color: var(--text-1);
     font-size: var(--font-md);
     text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .cost {
-    color: var(--success);
-    font-size: var(--font-md);
-    font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 

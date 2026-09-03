@@ -7,24 +7,21 @@
 </script>
 
 <script lang="ts">
-  import { CircleDollarSign } from "@lucide/svelte";
+  import { Sigma } from "@lucide/svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import MetricStrip from "$lib/components/primitives/MetricStrip.svelte";
   import UsageLineChart from "$lib/components/flow/UsageLineChart.svelte";
   import ModelBreakdown from "$lib/components/flow/ModelBreakdown.svelte";
   import type { Metric } from "$lib/components/primitives/metrics";
   import {
-    formatCost,
     formatTokens,
-    unpricedModels,
-    unpricedNote,
     type CostSummary,
     type UsageTimelinePoint
   } from "$lib/cost/pricing";
 
   /**
-   * The run's tokens and cost, as one chip in the transport that opens onto the
-   * whole reading.
+   * The run's tokens, as one chip in the transport that opens onto the whole
+   * reading.
    *
    * A chip rather than a section of the footer: the transport is a row of
    * controls the hand sweeps across, and a panel that is always open costs it
@@ -39,9 +36,9 @@
      *
      * Every total below is a sum over the frames this console holds, and there
      * are runs it holds none of: a finished run whose event stream Temporal
-     * cannot replay (`run.runUnmeasured`). An empty sum formatted as
-     * `0 tok $0.0000` reports a measurement that was never taken, beside runs
-     * whose zeros are real.
+     * cannot replay (`run.runUnmeasured`). An empty sum formatted as `0 tok`
+     * reports a measurement that was never taken, beside runs whose zeros are
+     * real.
      */
     unmeasured?: boolean;
   }
@@ -63,35 +60,19 @@
     "so this console read none of the model calls it made. The run's own history is " +
     "intact in Temporal.";
 
-  /* Two reasons a figure can be absent, and the reader gets ONE hedge. Being
-     unmeasured is the wider claim — no events were read, so which of this run's
-     models we hold prices for is moot — so it supersedes the unpriced note
-     rather than stacking a second explanation beside it. */
-  const costNote = $derived(
-    unmeasured ? unmeasuredNote : (unpricedNote(unpricedModels(usage)) ?? undefined)
-  );
-
   /** One figure, or the em dash that stands in for every figure of an unmeasured run. */
   function figure<T>(value: T, format: (value: T) => string): string {
     return unmeasured ? "—" : format(value);
   }
 
-  /* What the run cost and how many tokens it took, which is the whole reading
-     for most openings of this panel. */
+  /* How many tokens the run took, which is the whole reading for most openings
+     of this panel. */
   const headline: Metric[] = $derived([
-    {
-      label: "cost",
-      value: figure(usage.estimatedCostUsd, formatCost),
-      /* Tones are affirmative — cost is drawn in --success, total in --accent —
-         and a dash has nothing to affirm. */
-      tone: unmeasured ? "neutral" : "cost",
-      /* The panel says it in full below, so the hover would be the same
-         sentence twice in one box. */
-      note: unmeasured ? undefined : costNote
-    },
     {
       label: "total",
       value: figure(usage.tokens.total, formatTokens),
+      /* The tone is affirmative — a total is drawn in --accent — and a dash has
+         nothing to affirm. */
       tone: unmeasured ? "neutral" : "strong"
     }
   ]);
@@ -156,17 +137,19 @@
     onclick={toggle}
   >
     {#snippet lead()}
-      <CircleDollarSign size={12} />
+      <Sigma size={12} />
     {/snippet}
-    <span class="usage-chip-tokens">{figure(usage.tokens.total, formatTokens)}</span>
-    <span class="usage-chip-cost" data-tip={costNote}
-      >{figure(usage.estimatedCostUsd, formatCost)}</span>
+    <!-- The dash is the whole chip now, so the sentence explaining it has to hang
+         off the figure itself; it used to ride on the cost span beside it. Absent
+         when measured: a real number explains itself. -->
+    <span class="usage-chip-tokens" data-tip={unmeasured ? unmeasuredNote : undefined}
+      >{figure(usage.tokens.total, formatTokens)}</span>
   </Chip>
 
   {#if open}
-    <div id={instanceId} class="usage-popover" role="dialog" aria-label="Token and cost details">
+    <div id={instanceId} class="usage-popover" role="dialog" aria-label="Token details">
       <header class="usage-popover-head">
-        <span>Token / Cost</span>
+        <span>Tokens</span>
         <span class="usage-popover-summary">at cursor</span>
       </header>
       <div class="usage-popover-body">
@@ -202,21 +185,14 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Room for the widest reading each figure can reach, for the reason the
-     position readout beside it reserves its own: the scrub lane is the flex item
-     that pays for a readout that grows, and a lane that changes width moves every
-     mark a hand is reaching for. Both are right-aligned, so the digits grow into
-     the room rather than shunting their neighbour. */
+  /* Room for the widest reading the total can reach, for the reason the position
+     readout beside it reserves its own: the scrub lane is the flex item that pays
+     for a readout that grows, and a lane that changes width moves every mark a
+     hand is reaching for. Right-aligned, so the digits grow into the room rather
+     than shunting the chip's edge. */
   .usage-chip-tokens {
     display: inline-block;
     min-width: 9ch;
-    text-align: right;
-  }
-
-  .usage-chip-cost {
-    display: inline-block;
-    min-width: 7ch;
-    color: var(--text-2);
     text-align: right;
   }
 

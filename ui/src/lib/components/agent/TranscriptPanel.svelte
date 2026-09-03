@@ -64,7 +64,7 @@
   import Chip from "$lib/components/primitives/Chip.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
   import { formatDuration, statusNote, type TurnLogGroup } from "$lib/state/replayLog";
-  import { formatCost, formatTokens } from "$lib/cost/pricing";
+  import { formatTokens } from "$lib/cost/pricing";
 
   export type TranscriptFilter = "all" | "model" | "tool" | "approval" | "error";
 
@@ -343,9 +343,6 @@
               {/if}
               {#if group.summary.tokens}
                 <span>{formatTokens(group.summary.tokens)} tok</span>
-              {/if}
-              {#if group.summary.tokens && group.summary.estimatedCostUsd != null}
-                <span>{formatCost(group.summary.estimatedCostUsd)}</span>
               {/if}
             </div>
           </header>
