@@ -26,6 +26,9 @@
  *    server is an unbounded re-attach loop.
  *  - Clearing `sending` only in attach()'s `finally`: "whole budget" sees the
  *    composer held for 31.5s after the reply already arrived.
+ *  - Clearing `creatingSession` only in startNewSession()'s `finally`: "brand-new
+ *    session" sees the composer held for the whole budget, measured at 34,071ms
+ *    in a browser, which is a new session that can never be sent anything.
  *  - Making an exhausted budget raise on a clean end: "whole budget" sees a
  *    banner on a session that is fine.
  *
@@ -128,6 +131,9 @@ function boot({ sessions, streamFor, statusFor }) {
     },
     async listSessions() {
       return [];
+    },
+    async createSession() {
+      return session("wf-created");
     },
     async agentInterface() {
       return [];
@@ -362,6 +368,42 @@ const { AgentRunController } = await vite.ssrLoadModule(
   const settled = attachCalls.length;
   await sleep(1_000);
   assert.equal(attachCalls.length, settled, "the budget must actually stop the loop");
+}
+
+// --- case: a brand-new session must not lock its own composer ----------------
+// The worst instance of the same defect, and the only one that hits every time.
+// A session created a moment ago has published nothing, so its first attach —
+// and every retry after it — answers empty while the workflow stays RUNNING:
+// the budget always drains in full. `creatingSession` gates the composer
+// outright, so the one thing a new session exists for was locked out for the
+// whole 34s, nothing could be sent, and nothing streamed. Reloading appeared to
+// fix it only because initialize() reaches the same attach without ever setting
+// the flag.
+{
+  const { controller, attachCalls } = boot({
+    sessions: [],
+    streamFor: () => silent(),
+    statusFor: () => "RUNNING"
+  });
+
+  /* Pre-seeded so #loadAgents short-circuits: the other cases lean on
+     listAgents() failing to keep initialize() cheap, and this case only needs
+     the create path. */
+  controller.agents = [
+    { key: "qa", label: "QA", workflow_type: "X", task_queue: "q", description: "" }
+  ];
+
+  const started = Date.now();
+  void controller.startNewSession("X");
+  await waitFor("the new session to attach", () => attachCalls.length === 1);
+  await waitFor("the composer to be released", () => !controller.creatingSession, 4_000);
+  const releasedAt = Date.now() - started;
+
+  assert.ok(
+    releasedAt < 2_000,
+    `a new session must accept its first message promptly (composer held ${releasedAt}ms)`
+  );
+  assert.equal(controller.connecting, false, "and must not still present as loading");
 }
 
 await vite.close();

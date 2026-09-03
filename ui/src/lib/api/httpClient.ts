@@ -22,10 +22,46 @@ function apiPath(path: string): string {
   return `api/${path.replace(/^\/+/, "")}`;
 }
 
+/**
+ * A failed response, with the two things a caller has to branch on kept intact.
+ *
+ * The status and `Retry-After` were previously flattened into a message string, so the only
+ * thing a caller could do with a throttle was show it. Backing off needs the number.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly retryAfterMs: number | null;
+
+  constructor(message: string, status: number, retryAfterMs: number | null) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/**
+ * `Retry-After` in milliseconds. Both RFC forms, because a proxy may rewrite the seconds
+ * form we send into an HTTP date, and reading only one would silently yield no backoff.
+ */
+export function retryAfterMs(header: string | null): number | null {
+  if (!header) return null;
+  const trimmed = header.trim();
+  if (!trimmed) return null;
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(trimmed);
+  return Number.isNaN(date) ? null : Math.max(0, date - Date.now());
+}
+
 async function json<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
   if (!response.ok) {
-    throw new Error(await responseErrorMessage(response, `Request failed (${response.status})`));
+    throw new ApiError(
+      await responseErrorMessage(response, `Request failed (${response.status})`),
+      response.status,
+      retryAfterMs(response.headers.get("Retry-After"))
+    );
   }
   return response.json() as Promise<T>;
 }

@@ -620,8 +620,13 @@ export function statusNote(row: ReplayLogRow): string | null {
   return status;
 }
 
+/* Minutes have to roll over into hours: a session left open for three hours read as
+   "200m 05s", which is arithmetically right and useless to a reader. */
 export function formatDuration(seconds: number): string {
   const rounded = Math.max(0, Math.round(seconds));
   if (rounded < 60) return `${rounded}s`;
-  return `${Math.floor(rounded / 60)}m ${String(rounded % 60).padStart(2, "0")}s`;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const minutes = Math.floor(rounded / 60);
+  if (minutes < 60) return `${minutes}m ${pad(rounded % 60)}s`;
+  return `${Math.floor(minutes / 60)}h ${pad(minutes % 60)}m ${pad(rounded % 60)}s`;
 }

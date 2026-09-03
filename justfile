@@ -57,6 +57,51 @@ package: app-build app-check
 check-rollover-subagent *ARGS:
     uv run python tests/harness/check_subagent_survives_rollover.py {{ARGS}}
 
+# Prove that a session whose task queue has no worker produces no query to that workflow.
+# Needs no server: the point is what the app tries to SEND, so Temporal is stood in for and
+# every query counted. Runs in about a second.
+check-workerless-queries *ARGS:
+    uv run python tests/web/check_workerless_session_queries.py {{ARGS}}
+
+# Assert `just temporal` turns a client profile into the right `start-dev` flags: an address it can
+# split is passed through, anything else falls back to the stock defaults. Runs the real recipe with
+# a shim ahead of `temporal` on PATH, so it echoes its argv instead of binding a port. Outside
+# `package` (like check-rollover-subagent) because it needs the `temporal` CLI.
+check-temporal-flags:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir=$(mktemp -d)
+    trap 'rm -rf "$dir"' EXIT
+    mkdir -p "${dir}/bin"
+    printf '#!/bin/sh\n[ "$1" = server ] && { echo "ARGV: $*"; exit 0; }\nexec %s "$@"\n' \
+        "$(command -v temporal)" >"${dir}/bin/temporal"
+    chmod +x "${dir}/bin/temporal"
+    export PATH="${dir}/bin:$PATH"
+    # Bail out before any case runs if the shim is not the `temporal` PATH finds: without it the
+    # cases below would start real servers on whatever ports they resolve to.
+    [ "$(temporal server probe)" = "ARGV: server probe" ] || { echo "error: shim not on PATH"; exit 1; }
+
+    profile() { printf '[profile]\n  [profile.default]\n    address = "%s"\n    namespace = "tah-check"\n' "$2" >"${dir}/$1.toml"; }
+    profile split 127.0.0.1:17433
+    profile noport localhost
+    profile bareport 7433
+
+    expect() {  # expect <label> <config-file> <expected start-dev flags...>
+        local label=$1 config=$2 got
+        shift 2
+        got=$(TEMPORAL_CONFIG_FILE="$config" just temporal 2>/dev/null) || true
+        [ "$got" = "ARGV: server start-dev $*" ] || {
+            printf 'FAIL %s\n  want: ARGV: server start-dev %s\n  got:  %s\n' "$label" "$*" "${got:-<nothing>}"
+            exit 1
+        }
+        echo "ok   ${label}"
+    }
+
+    expect "address splits into --ip/--port" "${dir}/split.toml" --ip 127.0.0.1 --port 17433 --namespace tah-check
+    expect "no profile falls back to stock" "${dir}/absent.toml" --ip localhost --port 7233 --namespace default
+    expect "address with no port keeps stock port" "${dir}/noport.toml" --ip localhost --port 7233 --namespace tah-check
+    expect "bare port is not a hostname" "${dir}/bareport.toml" --ip localhost --port 7233 --namespace tah-check
+
 # Start the custom Temporal server with Nexus callback/update dynamic config enabled.
 temporal-latest:
     #!/usr/bin/env bash

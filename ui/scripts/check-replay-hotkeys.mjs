@@ -5,13 +5,23 @@
 // advertised two shortcuts that were one, and this check passed.
 //   node ui/scripts/check-replay-hotkeys.mjs
 //
+// The last section covers what the transport row stopped offering: four buttons were cut on the
+// argument that the keyboard does relative movement better, so the keys are now the only route and
+// this is the only thing that would notice one going missing.
+//
 // The guards are pure decisions and are checked as such. The behaviour half drives the shipped
 // `applyReplayAction` — the same function App.svelte's window handler calls — against a real
 // `AgentRunController` filled from `realisticQaScenario`, and compares state read back from the
 // controller rather than hardcoded indices. Every pair of rows in the overlay must be told apart
 // by some starting position. Re-add `{ action: "jumpToLive", key: "l", ... }` and this file fails
 // on that pair, naming both rows.
+//
+// A third thing is checked between those two: the keyboard seek count the Logs pane reads to
+// scroll instantly for keys and smoothly for clicks. Measured as a delta over the shipped dispatch
+// and the shipped run methods, so it fails if a key stops counting, if a key that moves nothing
+// starts counting, or if the click path ever counts.
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 
@@ -25,9 +35,8 @@ const vite = await createServer({
   appType: "custom",
   logLevel: "silent"
 });
-const { REPLAY_BINDINGS, resolveReplayAction, applyReplayAction } = await vite.ssrLoadModule(
-  "/src/lib/state/replayHotkeys.ts"
-);
+const { REPLAY_BINDINGS, resolveReplayAction, applyReplayAction, keyboardSeekCount } =
+  await vite.ssrLoadModule("/src/lib/state/replayHotkeys.ts");
 
 /** A key press on nothing in particular: no modifiers, no focused control. */
 function press(overrides = {}) {
@@ -245,6 +254,78 @@ function outcome([, setUp], action) {
   });
 }
 
+// --- keys are told apart from clicks ----------------------------------------------------------
+
+/* The Logs pane scrolls instantly when a key moved the playhead and smoothly when a click did,
+   and the only thing it has to tell them apart is this count. So the count is checked on the
+   property the pane depends on — it advances for keys that move, and for nothing else. Asserted
+   as deltas through the shipped `applyReplayAction` and the shipped run methods, because "the
+   transport button path" is nothing more than calling those methods without going through it. */
+function seekDelta(move) {
+  const before = keyboardSeekCount();
+  move();
+  run.pause();
+  return keyboardSeekCount() - before;
+}
+
+const markerMid = markers[1];
+
+// A key that moves the cursor is one seek, once.
+run.goTo(markerMid);
+assert.equal(seekDelta(() => applyReplayAction("stepForward", surface)), 1, "→ that moves counts");
+assert.equal(seekDelta(() => applyReplayAction("stepBack", surface)), 1, "← that moves counts");
+run.goTo(markerMid);
+assert.equal(seekDelta(() => applyReplayAction("nextTurn", surface)), 1);
+assert.equal(seekDelta(() => applyReplayAction("previousTurn", surface)), 1);
+assert.equal(seekDelta(() => applyReplayAction("first", surface)), 1);
+assert.equal(seekDelta(() => applyReplayAction("last", surface)), 1);
+
+/* A key that lands where the cursor already was must leave no mark, or the next *click* inherits
+   it and scrolls instantly. `←` at the first event and `→` at the live edge are where a reader
+   holding a key ends up, so this is the ordinary case, not an exotic one. */
+run.goTo(0);
+assert.equal(
+  seekDelta(() => applyReplayAction("stepBack", surface)),
+  0,
+  "← at the first event moves nothing and must not arm the next click"
+);
+assert.equal(seekDelta(() => applyReplayAction("first", surface)), 0, "Home when already first");
+run.goTo(total);
+assert.equal(
+  seekDelta(() => applyReplayAction("stepForward", surface)),
+  0,
+  "→ at the live edge moves nothing and must not arm the next click"
+);
+assert.equal(seekDelta(() => applyReplayAction("last", surface)), 0, "End when already at the end");
+
+// Keys that are not about position at all.
+run.goTo(markerMid);
+assert.equal(seekDelta(() => applyReplayAction("toggleHelp", surface)), 0, "? moves nothing");
+assert.equal(seekDelta(() => applyReplayAction("closeHelp", surface)), 0, "Esc moves nothing");
+assert.equal(
+  seekDelta(() => applyReplayAction("togglePlay", surface)),
+  0,
+  "Space mid-run starts playback where the cursor already is"
+);
+
+/* The click path, which is every transport control and the scrubber: the same methods, reached
+   without a key. None of them may count, or clicking would scroll instantly too and the smooth
+   follow-along this whole distinction exists to keep would be gone. */
+run.goTo(markerMid);
+assert.equal(seekDelta(() => run.stepForward()), 0, "the step-forward button is not a key");
+assert.equal(seekDelta(() => run.stepBack()), 0, "the step-back button is not a key");
+assert.equal(seekDelta(() => run.nextTurn()), 0, "the next-turn button is not a key");
+assert.equal(seekDelta(() => run.previousTurn()), 0, "the previous-turn button is not a key");
+assert.equal(seekDelta(() => run.goTo(markers[2])), 0, "dragging the scrubber is not a key");
+assert.equal(seekDelta(() => run.jumpToLive()), 0, "the live button is not a key");
+/* What the playback timer does every 700ms once Space has been pressed. Following the live edge
+   is exactly the case the smooth scroll is for, so those frames must not read as keyboard. */
+run.goTo(markerMid);
+run.play();
+assert.equal(seekDelta(() => run.stepForward()), 0, "playback advancing is not a key press");
+run.pause();
+console.log("  keyboard seeks counted on moving keys only, never on the click path");
+
 /* `following` means "the cursor is at the end" and nothing else: goTo() assigns it that way and
    every transport action routes through goTo, so it is asserted after every press below rather
    than trusted once. */
@@ -286,10 +367,83 @@ for (const binding of REPLAY_BINDINGS) {
   );
 }
 
+// --- motions the transport row no longer offers a button for -------------------------------------
+// The row was cut from seven buttons to three, on the argument that relative movement — one event
+// or one turn, either direction — is better done from the keyboard. That argument is only true
+// while the keys work, and nothing else in this repo would notice if one stopped: the four buttons
+// that used to be the fallback are gone.
+//
+// So the assertion is the consequence, not the shape. For each motion the row dropped, this
+// demands a binding that (a) a real key press resolves to, through the same guards the window
+// handler runs, and (b) leaves the run in the state the removed button's own handler did, from
+// every starting position above. Compared by effect, so renaming an action changes nothing here.
+//
+// Drop the `previousTurn` row from REPLAY_BINDINGS, or give it a key the guards swallow, and this
+// fails naming "one turn back" — which is exactly the silence the deleted buttons used to cover.
+
+/** The same measurement as `outcome`, for a motion invoked directly rather than through a key. */
+function effectOf([, setUp], act) {
+  setUp();
+  act();
+  const after = JSON.stringify(state());
+  run.pause();
+  return after;
+}
+
+/* `label="..."` is the IconButton prop; the negative lookbehind keeps `aria-label=` out. */
+const controller = await readFile(
+  new URL("../src/lib/components/flow/StepController.svelte", import.meta.url),
+  "utf8"
+);
+const buttonLabels = new Set([...controller.matchAll(/(?<!aria-)label="([^"]+)"/g)].map((m) => m[1]));
+assert.ok(
+  buttonLabels.size > 0,
+  "found no IconButton labels in StepController.svelte — the parse above has gone stale"
+);
+
+/* Each entry is the button that was removed and the controller call it made, taken from the
+   handler App.svelte used to pass it. `previousTurn`/`nextTurn` pause on their own, which is why
+   the extra `run.pause()` those handlers carried is not repeated here. */
+const CUT_MOTIONS = [
+  { motion: "one event back", button: "Previous event", act: () => run.stepBack() },
+  { motion: "one event forward", button: "Next event", act: () => run.stepForward() },
+  { motion: "one turn back", button: "Previous turn", act: () => run.previousTurn() },
+  { motion: "one turn forward", button: "Next turn", act: () => run.nextTurn() }
+];
+
+for (const { motion, button, act } of CUT_MOTIONS) {
+  assert.ok(
+    !buttonLabels.has(button),
+    `StepController.svelte still renders a "${button}" button. Either the row grew back — in ` +
+      `which case drop this entry — or the label drifted and this check is now guarding nothing.`
+  );
+
+  const reachable = REPLAY_BINDINGS.filter((binding) => {
+    /* The key must survive the guards on the way in. `shift: null` means the binding does not
+       care, and the plain press is the one a person makes. */
+    const resolved = resolveReplayAction(
+      press({ key: binding.key, shiftKey: binding.shift === true })
+    );
+    if (resolved !== binding.action) return false;
+    return probes.every(
+      (probe) => outcome(probe, binding.action).after === effectOf(probe, act)
+    );
+  });
+
+  assert.ok(
+    reachable.length > 0,
+    `"${button}" is gone from the transport row and no key reproduces it: ${motion} is now ` +
+      `unreachable. Over all ${probes.length} starting positions, no binding in REPLAY_BINDINGS ` +
+      `both resolves from its own key press and lands where that button did.`
+  );
+  console.log(`  ${motion.padEnd(18)} button gone, reached by ${reachable[0].chord}`);
+}
+
 run.pause();
 await vite.close();
 console.log(
   `replay hotkeys: ${REPLAY_BINDINGS.length} bindings, guards hold, every pair distinguishable ` +
-    `over ${probes.length} starting positions (${total} events, ${markers.length} turns)`
+    `over ${probes.length} starting positions (${total} events, ${markers.length} turns); ` +
+    `${CUT_MOTIONS.length} button-less motions still reachable by key`
 );
 process.exit(0);

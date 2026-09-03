@@ -93,6 +93,17 @@ function now(): number {
  */
 const reattachBackoffMs = [500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000];
 
+/**
+ * Bounds on the session poll's retreat when the server answers 429.
+ *
+ * The floor is above the ten-second poll interval, because anything shorter would leave a
+ * throttled server being asked at the same rate as an unthrottled one — a backoff in name
+ * only. The ceiling keeps a session list that recovered from being stale for minutes
+ * afterwards; the reader can always still reach for refresh, which is not throttled.
+ */
+const SESSION_SYNC_MIN_BACKOFF_MS = 15_000;
+const SESSION_SYNC_MAX_BACKOFF_MS = 120_000;
+
 /** Sleep, unless the stream is abandoned first. */
 function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
@@ -220,6 +231,9 @@ export class AgentRunController {
   #connectionVersion = 0;
   #sendVersion = 0;
   #syncingSessions = false;
+  /** Epoch ms before which a session poll must not be sent, set by a 429/503. */
+  #sessionSyncBlockedUntil = 0;
+  #sessionSyncThrottleStreak = 0;
   #streamAbort: AbortController | null = null;
   #interfaceRequests = new Set<string>();
   #operatorInterfaceRequests = new Set<string>();
@@ -844,17 +858,52 @@ export class AgentRunController {
    * seconds against a registry of twenty stale entries, so a sync outlasting the
    * ten-second interval is the expected case, not the pathological one; without
    * this the ticks would overlap and pile up on a server already struggling.
+   *
+   * A tick is also skipped while a `Retry-After` from a previous 429 is still
+   * running. That guard is NOT the in-flight one above: the in-flight guard stops
+   * two syncs overlapping, but a throttled server is asking this client to send
+   * fewer requests, and one-at-a-time is still one every ten seconds.
+   *
+   * The backoff lives here rather than in the backend on purpose. The Temporal SDK
+   * already retries a query internally for about ten seconds before our handler is
+   * reached at all, so a server-side retry would add concurrent attempts to the very
+   * workflow that is shedding them — spending the throttle to make the throttle worse.
    */
   async syncSessions(): Promise<void> {
     if (this.refreshingSessions || this.#syncingSessions) return;
+    if (Date.now() < this.#sessionSyncBlockedUntil) return;
     this.#syncingSessions = true;
     try {
       await this.#loadSessions();
-    } catch {
+      this.#sessionSyncBlockedUntil = 0;
+      this.#sessionSyncThrottleStreak = 0;
+    } catch (error) {
+      this.#noteSessionSyncThrottle(error);
       // The list stays as it was until a later tick answers.
     } finally {
       this.#syncingSessions = false;
     }
+  }
+
+  /**
+   * Hold off the poll when the server said it is shedding requests.
+   *
+   * Doubling per consecutive throttle because `Retry-After` is a floor, not a
+   * measurement: the backend quotes one second because Temporal does not promise a
+   * duration, and obeying one second literally against a queue with no worker would
+   * poll *faster* than the ten seconds it replaced. The streak resets on the first
+   * success, so a passing blip costs one skipped tick rather than a minute of staleness.
+   */
+  #noteSessionSyncThrottle(error: unknown): void {
+    const status = (error as { status?: number } | null)?.status;
+    if (status !== 429 && status !== 503) return;
+    const floor = (error as { retryAfterMs?: number | null } | null)?.retryAfterMs ?? 0;
+    this.#sessionSyncThrottleStreak += 1;
+    const backoff = Math.min(
+      SESSION_SYNC_MAX_BACKOFF_MS,
+      Math.max(floor, SESSION_SYNC_MIN_BACKOFF_MS * 2 ** (this.#sessionSyncThrottleStreak - 1))
+    );
+    this.#sessionSyncBlockedUntil = Date.now() + backoff;
   }
 
   async startNewSession(workflowType?: string): Promise<void> {
@@ -1040,6 +1089,16 @@ export class AgentRunController {
            moment below, not the moment the retries give up. Measured at
            31,536ms before this.
 
+           `creatingSession` is the third of the same family and the worst of
+           them, because a BRAND-NEW session is the case that always spends the
+           whole budget: it has published nothing yet, so every attach in the
+           loop answers empty while the workflow stays RUNNING. It gates the
+           composer outright (`composerDisabled`), so the one thing a new
+           session is for — sending it a first message — was locked out for
+           34.1s, measured. Nothing could be sent, so nothing streamed, and
+           reloading looked like the cure: initialize() reaches the same
+           attach without ever setting this flag.
+
            Cleared here rather than by the callers, because they await this
            method: selectSession's own `finally` cannot run until the last retry
            has. The `finally` still clears `sending` as well, for the paths that
@@ -1048,6 +1107,7 @@ export class AgentRunController {
            new session just set. */
         if (isCurrentStream()) {
           this.connecting = false;
+          this.creatingSession = false;
           if (options.clearSendingOnIdle) this.sending = false;
         }
         /* A stream that carried something earned a fresh budget, so hours of
