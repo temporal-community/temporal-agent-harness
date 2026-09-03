@@ -16,15 +16,9 @@
 // types unaided — but stops on the extensionless relative imports (`./bootSession`), which is a
 // resolver of our own to write. vite already owns that job here.
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
+import { createCheckServer } from "./checkServer.mjs";
 
-const vite = await createServer({
-  root: fileURLToPath(new URL("..", import.meta.url)),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent"
-});
+const vite = await createCheckServer(import.meta.url);
 const { frameKey } = await vite.ssrLoadModule("/src/lib/state/agentRun.svelte.ts");
 /* From the same place the shipped function reads it, so the sentinel cannot drift either. */
 const { SYNTHESIZED } = await vite.ssrLoadModule("/src/lib/api/types.ts");

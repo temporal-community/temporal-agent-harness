@@ -22,20 +22,14 @@
 // starts counting, or if the click path ever counts.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import * as fs from "node:fs/promises";
-import { createServer } from "vite";
+import { createCheckServer } from "./checkServer.mjs";
 
 /* Loaded through vite for the reason check-turn-navigation.mjs records: the state modules use
    runes and extensionless relative imports, so they need compileModule() and a resolver, both of
    which vite already owns here. One server for the whole file also means the table the guards read
    is the same object the actions below are driven from. */
-const vite = await createServer({
-  root: fileURLToPath(new URL("..", import.meta.url)),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent"
-});
+const vite = await createCheckServer(import.meta.url);
 const {
   REPLAY_BINDINGS,
   resolveReplayAction,

@@ -57,8 +57,7 @@
  * Run: node ui/scripts/check-frame-arrival.mjs
  */
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
+import { createCheckServer } from "./checkServer.mjs";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -311,12 +310,7 @@ function fakeApi({ streamFor, statusFor }) {
 
 // --- harness -----------------------------------------------------------------
 
-const vite = await createServer({
-  root: fileURLToPath(new URL("..", import.meta.url)),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent"
-});
+const vite = await createCheckServer(import.meta.url);
 const { AgentRunController } = await vite.ssrLoadModule(
   "/src/lib/state/agentRun.svelte.ts"
 );

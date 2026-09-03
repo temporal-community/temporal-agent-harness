@@ -19,8 +19,7 @@
 // `aria-disabled` rather than `disabled` and so stays pressable: that `following` means exactly
 // `viewIndex === total`, and that pressing it at the live edge changes nothing.
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
-import { createServer } from "vite";
+import { createCheckServer } from "./checkServer.mjs";
 
 function memoryStorage() {
   const map = new Map();
@@ -60,12 +59,7 @@ globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
    extensionless relative imports, so it needs compileModule() and a resolver, both of which vite
    already owns here. The point of paying that ~5s is that these are the shipped methods — a copy of
    nextTurn() in this file could agree with every assertion while the app drifted away from both. */
-const vite = await createServer({
-  root: fileURLToPath(new URL("..", import.meta.url)),
-  server: { middlewareMode: true },
-  appType: "custom",
-  logLevel: "silent"
-});
+const vite = await createCheckServer(import.meta.url);
 const { AgentRunController } = await vite.ssrLoadModule("/src/lib/state/agentRun.svelte.ts");
 const { realisticQaScenario } = await vite.ssrLoadModule("/src/lib/mock/scenarios.ts");
 
