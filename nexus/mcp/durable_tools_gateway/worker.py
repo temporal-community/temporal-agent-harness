@@ -84,6 +84,13 @@ async def main(
         nexus_service_handlers=[RegistryServiceHandler(client)],
     )
     async with worker:
+        # `is_running` is still False when `__aenter__` returns — it flips only once
+        # `Worker.run()` has validated the namespace against the server — so the banner below
+        # would otherwise announce a readiness nothing has established. Same gate as
+        # `temporal_agent_harness.utils.worker.run_worker`, open-coded because that helper runs
+        # the worker to completion and so has nowhere to put the seeding that follows.
+        while not worker.is_running:
+            await asyncio.sleep(0.05)
         logger.info("Durable Tool Call Gateway ready — task_queue=%r", REGISTRY_TASK_QUEUE)
         if seed_external_servers:
             assert seed_agent_id is not None
