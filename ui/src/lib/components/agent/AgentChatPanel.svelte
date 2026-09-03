@@ -2895,21 +2895,11 @@
     white-space: pre;
   }
 
+  /* app.css draws the language tag; this only says where to put it. */
   .activity-script-detail::before {
-    content: attr(data-language);
     position: absolute;
     top: 9px;
     right: 10px;
-    padding: 2px 7px;
-    border: 1px solid var(--code-label-border);
-    border-radius: var(--radius-chip);
-    background: var(--code-label-bg);
-    color: var(--code-label-text);
-    font-family: var(--font-mono);
-    font-size: var(--font-xs);
-    font-weight: 750;
-    line-height: 1.2;
-    letter-spacing: 0;
   }
 
   .activity-script-detail code {
