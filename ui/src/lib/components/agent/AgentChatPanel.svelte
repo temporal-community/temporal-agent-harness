@@ -1520,6 +1520,19 @@
         <div class="empty-chat error">
           <span>{error}</span>
         </div>
+      {:else if logs.length === 0 && messages.length === 0}
+        <!-- Attached, served, and carrying nothing: the case the three branches
+             above left as a blank pane, which is what an operator returned to a
+             session from a probe run sees. Said in the same place a missing
+             worker is said, because the reader's question is the same one.
+
+             Gated on the whole run rather than the view: `messages` empties
+             again at scrub position zero, and a 1,830-frame session parked at
+             its start has plenty to show. -->
+        <div class="empty-chat">
+          <MessageCircle size={18} />
+          <span>No events yet. Ask {agentLabel} something to start this session.</span>
+        </div>
       {/if}
 
       {#each messages as message}
