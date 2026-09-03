@@ -57,3 +57,56 @@ def test_other_rpc_failures_keep_their_500(route: str) -> None:
         response = _client().get(route)
 
     assert response.status_code == 500, f"{route} answered {response.status_code}"
+
+
+# The statuses a busy dev stack produces, and the remedy each one should be answered
+# with. A throttle is not a server fault and must not arrive as one.
+DEGRADED_STATUSES = [
+    (RPCStatusCode.RESOURCE_EXHAUSTED, 429, "temporal_throttled"),
+    (RPCStatusCode.UNAVAILABLE, 503, "temporal_unavailable"),
+    (RPCStatusCode.DEADLINE_EXCEEDED, 504, "temporal_timeout"),
+]
+
+
+@pytest.mark.parametrize("route", INTERFACE_ROUTES)
+@pytest.mark.parametrize(("status", "expected_code", "expected_error"), DEGRADED_STATUSES)
+def test_degraded_temporal_answers_its_own_status(
+    route: str,
+    status: RPCStatusCode,
+    expected_code: int,
+    expected_error: str,
+) -> None:
+    failure = RPCError(status.name, status, b"")
+
+    with patch(
+        "temporal_agent_harness.web.app.AgentClient",
+        side_effect=failure,
+    ):
+        response = _client().get(route)
+
+    assert response.status_code == expected_code, (
+        f"{route} answered {response.status_code} for {status.name}"
+    )
+    assert response.json()["error"] == expected_error
+
+
+@pytest.mark.parametrize("route", INTERFACE_ROUTES)
+def test_throttle_tells_the_caller_to_come_back(route: str) -> None:
+    """The whole point of 429 over 500: waiting is the fix, so say how long.
+
+    ``DEADLINE_EXCEEDED`` deliberately has no ``Retry-After`` — an immediate retry of
+    something that already ran out of time is how a stuck queue gets hammered.
+    """
+    throttled = RPCError(
+        "namespace rate limit exceeded",
+        RPCStatusCode.RESOURCE_EXHAUSTED,
+        b"",
+    )
+
+    with patch(
+        "temporal_agent_harness.web.app.AgentClient",
+        side_effect=throttled,
+    ):
+        response = _client().get(route)
+
+    assert response.headers["Retry-After"] == "1"
