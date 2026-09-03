@@ -270,7 +270,8 @@ def test_subagent_send_tool_signature_renders():
     src = render_type_check_stubs([tools["child_ask"]])
     _parse(src)
     # subagent handle (str) + the child's real input model, returning the real output model.
-    assert "async def child_ask(subagent: str, q: _Question) -> _Answer: ..." in src
+    # The input model must enter ``_send`` through ``**kwargs``.
+    assert "async def child_ask(subagent: str, *, q: _Question) -> _Answer: ..." in src
     assert {"_Question", "_Answer"} <= set(_typed_dict_names(src))
 
 

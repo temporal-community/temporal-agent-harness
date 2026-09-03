@@ -8,6 +8,7 @@ from .models import (
     AgentStatusOutput,
     ApproveToolCallInput,
     ApproveToolCallOutput,
+    CloseSessionOutput,
     ExecuteOperatorCommandInput,
     ExecuteOperatorCommandOutput,
     PollMessagesInput,
@@ -98,4 +99,12 @@ class AgentService:
     """Fulfill a pending callback tool call (a tool with no worker-side body - an attached
     client executes it and submits the outcome here). Mirrors
     AgentClient.provide_callback_result(). Exactly one of result/error should be set.
+    """
+
+    close_session: Operation[
+        QuerySessionInput,
+        CloseSessionOutput,
+    ] = Operation(name="CloseSession")
+    """Signal the target agent workflow to close gracefully. Mirrors AgentClient.close() /
+    the harness 'close' signal a human/UI uses.
     """

@@ -1,6 +1,8 @@
 """Durable Tool Call Gateway Temporal worker: registers 3rd-party MCP servers and
 proxies their tool calls as standalone activities (Nexus + SAA).
 
+The same worker now registers and proxies HTTP A2A subagents.
+
 Requires server-side dynamic config: `activity.enableStandalone`,
 `nexusoperation.enableStandalone`. See examples/nexus_hello/justfile's `temporal` recipe.
 
@@ -20,9 +22,9 @@ import json
 import logging
 import os
 
+from nexus_a2a import NexusA2AServiceHandler, a2a_nexus_data_converter
 from temporalio.client import Client
 from temporalio.common import WorkflowIDConflictPolicy
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
@@ -38,8 +40,12 @@ from .registry import (
     fetch_external_tools,
 )
 from .registry_service_handler import (
+    GatewayA2ABackend,
     RegistryServiceHandler,
     mcp_proxy_activity,
+    subagent_proxy_activity,
+    subagent_start_activity,
+    subagent_stop_activity,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,7 +79,7 @@ async def main(
         # AgentHarnessPlugin — but it exchanges payloads with agents, so the offload backend
         # must match theirs (AgentHarnessPlugin's default is this same local storage).
         data_converter=with_large_payload_offload(
-            pydantic_data_converter, local_payload_storage()
+            a2a_nexus_data_converter, local_payload_storage()
         ),
     )
 
@@ -88,8 +94,17 @@ async def main(
         client,
         task_queue=REGISTRY_TASK_QUEUE,
         workflows=[ToolRegistryWorkflow],
-        activities=[mcp_proxy_activity, fetch_external_tools],
-        nexus_service_handlers=[RegistryServiceHandler(client)],
+        activities=[
+            mcp_proxy_activity,
+            fetch_external_tools,
+            subagent_start_activity,
+            subagent_proxy_activity,
+            subagent_stop_activity,
+        ],
+        nexus_service_handlers=[
+            RegistryServiceHandler(client),
+            NexusA2AServiceHandler(GatewayA2ABackend(client)),
+        ],
     )
     async with worker:
         logger.info("Durable Tool Call Gateway ready — task_queue=%r", REGISTRY_TASK_QUEUE)
