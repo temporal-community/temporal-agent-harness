@@ -77,6 +77,24 @@ _WORKFLOW_NOT_FOUND = "NOT_FOUND"
 # How long to leave the archive sweep alone after an update it could not land.
 _ARCHIVE_RETRY_SECONDS = 60.0
 
+# An RPC failure grouped by what the caller should DO about it, not by which gRPC status
+# produced it. Each entry is the HTTP status that carries that remedy and the error code
+# the console switches on. Anything absent is a genuine fault and keeps its 500.
+_RPC_ERROR_RESPONSES: dict[RPCStatusCode, tuple[int, str]] = {
+    RPCStatusCode.NOT_FOUND: (404, "workflow_not_found"),
+    RPCStatusCode.RESOURCE_EXHAUSTED: (429, "temporal_throttled"),
+    RPCStatusCode.UNAVAILABLE: (503, "temporal_unavailable"),
+    RPCStatusCode.DEADLINE_EXCEEDED: (504, "temporal_timeout"),
+}
+
+# The failures whose cure is waiting rather than sending a different request, so they are
+# the ones worth a ``Retry-After``. One second because these clear as soon as the in-flight
+# requests ahead of them drain; Temporal does not promise a duration we could quote instead.
+_RPC_RETRYABLE_STATUSES = frozenset(
+    {RPCStatusCode.RESOURCE_EXHAUSTED, RPCStatusCode.UNAVAILABLE}
+)
+_RPC_RETRY_AFTER_SECONDS = 1
+
 
 class CreateSessionRequestBody(BaseModel):
     agent_workflow_type: str
@@ -479,7 +497,7 @@ def create_agent_harness_app(
 
     @app.exception_handler(RPCError)
     async def rpc_error_handler(request, exc: RPCError):
-        """A workflow that is gone is a missing resource, not a server fault.
+        """Answer an RPC failure with the status that names the remedy.
 
         The session registry outlives the workflows it lists, and Temporal
         retention eventually drops closed ones, so any endpoint that takes a
@@ -488,14 +506,32 @@ def create_agent_harness_app(
         here rather than per-endpoint so every route that queries a workflow
         agrees, including ones added later.
 
-        Anything other than NOT_FOUND is a genuine fault and is left to
-        propagate, keeping its 500 and its traceback.
+        The same argument covers the failures a busy dev stack actually produces.
+        ``RESOURCE_EXHAUSTED`` is Temporal answering, on time, to say the request
+        was shed — most often ``BusyWorkflow``, where concurrent queries pile up
+        on a single execution faster than a worker drains them. 429 rather than
+        503 because the request is fine and the server is up: it is this caller's
+        own concurrency that has to come down, and it will succeed unchanged once
+        the ones ahead of it finish. 503 would claim the whole stack is down,
+        which is the same misdiagnosis in the other direction.
+
+        ``UNAVAILABLE`` and ``DEADLINE_EXCEEDED`` do mean what 503 and 504 mean —
+        nothing answered, or nothing answered in time — so they keep those.
+        Anything else is a genuine fault and is left to propagate with its 500
+        and its traceback.
         """
-        if exc.status != RPCStatusCode.NOT_FOUND:
+        mapped = _RPC_ERROR_RESPONSES.get(exc.status)
+        if mapped is None:
             raise exc
+        status_code, error = mapped
         return JSONResponse(
-            status_code=404,
-            content={"error": "workflow_not_found", "message": str(exc)},
+            status_code=status_code,
+            content={"error": error, "message": str(exc)},
+            headers=(
+                {"Retry-After": str(_RPC_RETRY_AFTER_SECONDS)}
+                if exc.status in _RPC_RETRYABLE_STATUSES
+                else None
+            ),
         )
 
     return app
@@ -781,6 +817,32 @@ def _unknown_execution_state(session: Session) -> dict[str, object]:
     return {**asdict(session), "execution_status": "UNKNOWN", "closed": False}
 
 
+# Where a failed attach should send the reader, grouped by remedy rather than by status.
+# A throttle and an outage are opposite diagnoses and only the status tells them apart.
+_ATTACH_ERROR_ADVICE = {
+    RPCStatusCode.RESOURCE_EXHAUSTED: (
+        "Temporal is reachable and answered: it shed this request rather than failing "
+        "it, which usually means too many requests are already in flight against this "
+        "one session. Nothing needs fixing — waiting a moment and retrying should "
+        "succeed."
+    ),
+    RPCStatusCode.UNAVAILABLE: (
+        "Nothing answered. Check that Temporal is reachable and that a worker is "
+        "polling this agent's task queue, then refresh to retry."
+    ),
+    RPCStatusCode.DEADLINE_EXCEEDED: (
+        "Nothing answered in time. Check that a worker is polling this agent's task "
+        "queue — a query with no worker to serve it expires exactly like this — then "
+        "refresh to retry."
+    ),
+}
+
+# For causes that are neither a throttle nor a reachability problem — a query a worker
+# refused, a permission failure. Naming a place to check would be a guess, and the wrong
+# guess is what made the old single message useless.
+_ATTACH_ERROR_DEFAULT_ADVICE = "Refresh to retry."
+
+
 def _attach_error(
     session_id: str, exc: RPCError | WorkflowQueryFailedError
 ) -> dict[str, str]:
@@ -789,9 +851,14 @@ def _attach_error(
     ``NOT_FOUND`` is the commonest attach failure a dev stack has — the session list outlives
     the executions in it, so every id from before a namespace's retention window points at
     nothing — and it gets its own ``code`` because it is the one case where retrying is
-    pointless: there is no history left to ask for. Everything else shares
-    ``stream_unavailable`` and names its cause in the message, since what a consumer does
-    about a timeout, an absent worker or a query a worker refused is the same thing.
+    pointless: there is no history left to ask for.
+
+    Everything else keeps ``stream_unavailable``, which is what the console branches on to
+    decide the failure is worth retrying, and that is still true of all of them. What is not
+    the same is where the reader should look, so the sentence after the cause is chosen per
+    class rather than shared. Telling someone to check reachability when Temporal answered
+    the request — which is precisely what ``RESOURCE_EXHAUSTED`` means — sends them to the
+    one part of the stack that is demonstrably working.
     """
     if isinstance(exc, RPCError) and exc.status == RPCStatusCode.NOT_FOUND:
         return {
@@ -804,13 +871,13 @@ def _attach_error(
             ),
         }
     cause = exc.status.name if isinstance(exc, RPCError) else str(exc)
+    status = exc.status if isinstance(exc, RPCError) else None
     return {
         "kind": "unavailable",
         "code": "stream_unavailable",
         "message": (
             f"The event stream for session {session_id!r} could not be read ({cause}). "
-            "Check that Temporal is reachable and that a worker is polling this agent's "
-            "task queue, then refresh to retry."
+            f"{_ATTACH_ERROR_ADVICE.get(status, _ATTACH_ERROR_DEFAULT_ADVICE)}"
         ),
     }
 
