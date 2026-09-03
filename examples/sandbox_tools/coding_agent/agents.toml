@@ -1,0 +1,17 @@
+# Registry of agents the sandboxed-coding-agent UI can launch.
+#
+# The shared FastAPI server (examples/app.py) reads this file and passes the parsed registry into the
+# packaged SessionManagerWorkflow as its workflow init arg, then serves it back over the
+# `available_agents` query so the app exposes it at /api/agents.
+
+[[agents]]
+key = "sandboxed-coding-agent"
+workflow_type = "SandboxedCodingAgent"
+task_queue = "sandboxed-coding-agent"
+label = "Sandboxed Coding Agent"
+description = """
+An OpenAI Agents SDK coding agent whose tools (bash/read/write/edit/grep/glob) run INSIDE a cloud
+sandbox (@agent.activity_tool_defn(sandboxed=True)), on a project that lives in the box. Also uses
+OpenAI's hosted Code Interpreter for quick Python work. Mutating tools pause for your approval. Ask
+it to build a web app and it can serve it for live preview. Needs OPENAI_API_KEY and a prebuilt
+sandbox snapshot (`just build-sandbox`)."""
