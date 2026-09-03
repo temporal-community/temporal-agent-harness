@@ -8,6 +8,12 @@
 # F1_MCP_SERVER_HOME, ...). Prerequisites + run order: see the "Run everything" section in README.md.
 # Build/package + Nexus/Slack/Teams connector recipes follow the run recipes.
 
+# Read the single shared env file at the repo root (TEMPORAL_CONFIG_FILE, creds), the same way
+# every example justfile does. Without it only the recipes that source .env.local by hand see the
+# Temporal profile, and the rest silently fall back to the stock localhost:7233/default.
+set dotenv-path := ".env.local"
+set dotenv-load := true
+
 ui := justfile_directory() / "ui"
 monty := justfile_directory() / "examples" / "monty"
 nexus_dir := justfile_directory() / "nexus"
