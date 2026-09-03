@@ -296,21 +296,11 @@
     word-break: normal;
   }
 
+  /* app.css draws the language tag; this only says where to put it. */
   .code-detail::before {
-    content: attr(data-language);
     position: absolute;
     top: 8px;
     right: 9px;
-    padding: 2px 7px;
-    border: 1px solid var(--code-label-border);
-    border-radius: var(--radius-chip);
-    background: var(--code-label-bg);
-    color: var(--code-label-text);
-    font-family: var(--font-mono);
-    font-size: var(--font-xs);
-    font-weight: 750;
-    line-height: 1.2;
-    letter-spacing: 0;
   }
 
   .code-detail code {
