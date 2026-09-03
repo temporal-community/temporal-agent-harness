@@ -88,7 +88,10 @@ export function buildReplayTimeline(
     }
   }
 
-  if (import.meta.env.DEV && timeline.length !== frames.length) {
+  /* `?.` because `import.meta.env` is Vite's, and this function is also called
+     from a plain-node self-check. A dev-only assertion must not be the reason a
+     consumer outside Vite throws; absent an env, it simply stays off. */
+  if (import.meta.env?.DEV && timeline.length !== frames.length) {
     console.error(
       `replayTimeline emitted ${timeline.length} entries for ${frames.length} frames. ` +
         "get total() returns frames.length to avoid rebuilding this projection on every " +
