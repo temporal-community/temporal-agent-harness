@@ -146,7 +146,11 @@ def test_a_throttle_does_not_send_the_reader_after_reachability() -> None:
 
 @pytest.mark.parametrize(
     "status",
-    [RPCStatusCode.UNAVAILABLE, RPCStatusCode.DEADLINE_EXCEEDED],
+    [
+        RPCStatusCode.UNAVAILABLE,
+        RPCStatusCode.DEADLINE_EXCEEDED,
+        RPCStatusCode.CANCELLED,
+    ],
 )
 def test_an_outage_still_names_the_worker_and_the_stack(status: RPCStatusCode) -> None:
     """The advice the throttle lost is correct here, and has to survive."""
