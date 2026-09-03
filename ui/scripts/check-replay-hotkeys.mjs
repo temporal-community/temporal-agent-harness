@@ -11,6 +11,11 @@
 // controller rather than hardcoded indices. Every pair of rows in the overlay must be told apart
 // by some starting position. Re-add `{ action: "jumpToLive", key: "l", ... }` and this file fails
 // on that pair, naming both rows.
+//
+// A third half, at the bottom: the keyboard seek count the Logs pane reads to scroll instantly for
+// keys and smoothly for clicks. Checked as a delta over the shipped dispatch and the shipped run
+// methods, so it fails if a key stops counting, if a key that moves nothing starts counting, or if
+// the click path ever counts.
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
@@ -25,9 +30,8 @@ const vite = await createServer({
   appType: "custom",
   logLevel: "silent"
 });
-const { REPLAY_BINDINGS, resolveReplayAction, applyReplayAction } = await vite.ssrLoadModule(
-  "/src/lib/state/replayHotkeys.ts"
-);
+const { REPLAY_BINDINGS, resolveReplayAction, applyReplayAction, keyboardSeekCount } =
+  await vite.ssrLoadModule("/src/lib/state/replayHotkeys.ts");
 
 /** A key press on nothing in particular: no modifiers, no focused control. */
 function press(overrides = {}) {
@@ -286,10 +290,81 @@ for (const binding of REPLAY_BINDINGS) {
   );
 }
 
+// --- keys are told apart from clicks ----------------------------------------------------------
+
+/* The Logs pane scrolls instantly when a key moved the playhead and smoothly when a click did,
+   and the only thing it has to tell them apart is this count. So the count is checked on the
+   property the pane depends on — it advances for keys that move, and for nothing else. Asserted
+   as deltas through the shipped `applyReplayAction` and the shipped run methods, because "the
+   transport button path" is nothing more than calling those methods without going through it. */
+function seekDelta(move) {
+  const before = keyboardSeekCount();
+  move();
+  run.pause();
+  return keyboardSeekCount() - before;
+}
+
+const markerMid = markers[1];
+
+// A key that moves the cursor is one seek, once.
+run.goTo(markerMid);
+assert.equal(seekDelta(() => applyReplayAction("stepForward", surface)), 1, "→ that moves counts");
+assert.equal(seekDelta(() => applyReplayAction("stepBack", surface)), 1, "← that moves counts");
+run.goTo(markerMid);
+assert.equal(seekDelta(() => applyReplayAction("nextTurn", surface)), 1);
+assert.equal(seekDelta(() => applyReplayAction("previousTurn", surface)), 1);
+assert.equal(seekDelta(() => applyReplayAction("first", surface)), 1);
+assert.equal(seekDelta(() => applyReplayAction("last", surface)), 1);
+
+/* A key that lands where the cursor already was must leave no mark, or the next *click* inherits
+   it and scrolls instantly. `←` at the first event and `→` at the live edge are where a reader
+   holding a key ends up, so this is the ordinary case, not an exotic one. */
+run.goTo(0);
+assert.equal(
+  seekDelta(() => applyReplayAction("stepBack", surface)),
+  0,
+  "← at the first event moves nothing and must not arm the next click"
+);
+assert.equal(seekDelta(() => applyReplayAction("first", surface)), 0, "Home when already first");
+run.goTo(total);
+assert.equal(
+  seekDelta(() => applyReplayAction("stepForward", surface)),
+  0,
+  "→ at the live edge moves nothing and must not arm the next click"
+);
+assert.equal(seekDelta(() => applyReplayAction("last", surface)), 0, "End when already at the end");
+
+// Keys that are not about position at all.
+run.goTo(markerMid);
+assert.equal(seekDelta(() => applyReplayAction("toggleHelp", surface)), 0, "? moves nothing");
+assert.equal(seekDelta(() => applyReplayAction("closeHelp", surface)), 0, "Esc moves nothing");
+assert.equal(
+  seekDelta(() => applyReplayAction("togglePlay", surface)),
+  0,
+  "Space mid-run starts playback where the cursor already is"
+);
+
+/* The click path, which is every transport control and the scrubber: the same methods, reached
+   without a key. None of them may count, or clicking would scroll instantly too and the smooth
+   follow-along this whole distinction exists to keep would be gone. */
+run.goTo(markerMid);
+assert.equal(seekDelta(() => run.stepForward()), 0, "the step-forward button is not a key");
+assert.equal(seekDelta(() => run.stepBack()), 0, "the step-back button is not a key");
+assert.equal(seekDelta(() => run.nextTurn()), 0, "the next-turn button is not a key");
+assert.equal(seekDelta(() => run.previousTurn()), 0, "the previous-turn button is not a key");
+assert.equal(seekDelta(() => run.goTo(markers[2])), 0, "dragging the scrubber is not a key");
+assert.equal(seekDelta(() => run.jumpToLive()), 0, "the live button is not a key");
+/* What the playback timer does every 700ms once Space has been pressed. Following the live edge
+   is exactly the case the smooth scroll is for, so those frames must not read as keyboard. */
+run.goTo(markerMid);
+run.play();
+assert.equal(seekDelta(() => run.stepForward()), 0, "playback advancing is not a key press");
+
 run.pause();
 await vite.close();
 console.log(
   `replay hotkeys: ${REPLAY_BINDINGS.length} bindings, guards hold, every pair distinguishable ` +
-    `over ${probes.length} starting positions (${total} events, ${markers.length} turns)`
+    `over ${probes.length} starting positions (${total} events, ${markers.length} turns); ` +
+    `keyboard seeks counted only when a key moves the cursor, never for the click path`
 );
 process.exit(0);

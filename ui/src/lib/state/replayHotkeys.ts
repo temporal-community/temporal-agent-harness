@@ -182,6 +182,26 @@ export interface ReplaySurface {
   helpOpen: boolean;
 }
 
+let keyboardSeeks = 0;
+
+/**
+ * How many times a replay *key* has moved the playhead.
+ *
+ * The number itself means nothing; a change in it does. Keyboard and click both
+ * end up calling the same `goTo()`, so a view that follows the cursor cannot ask
+ * the run how the cursor got there — and this module is the one place that
+ * knows, because `applyReplayAction` is the only path a key takes. A follower
+ * remembers the count it last acted on and compares: a different number means
+ * the movement it is reacting to came from a key. TranscriptPanel reads it to
+ * scroll instantly for keys and keep the smooth follow-along for clicks.
+ *
+ * Deliberately not a rune. Reading it must not subscribe the reader to it, or
+ * the count would drive the effect instead of merely colouring what it does.
+ */
+export function keyboardSeekCount(): number {
+  return keyboardSeeks;
+}
+
 /**
  * What a key does, in one place. The window handler calls this and so does
  * `check-replay-hotkeys.mjs`, which is the only way that check can compare what two bindings
@@ -189,39 +209,49 @@ export interface ReplaySurface {
  */
 export function applyReplayAction(action: ReplayAction, surface: ReplaySurface): void {
   const { run } = surface;
+  const before = run.viewIndex;
 
   switch (action) {
     case "stepBack":
       run.stepBack();
-      return;
+      break;
     case "stepForward":
       run.stepForward();
-      return;
+      break;
     case "previousTurn":
       run.previousTurn();
-      return;
+      break;
     case "nextTurn":
       run.nextTurn();
-      return;
+      break;
     case "first":
       run.goTo(0);
-      return;
+      break;
     case "last":
       run.goTo(run.total);
-      return;
+      break;
     case "togglePlay":
       if (run.playing) run.pause();
       else run.play();
-      return;
+      break;
     case "toggleHelp":
       surface.helpOpen = !surface.helpOpen;
-      return;
+      break;
     case "closeHelp":
       surface.helpOpen = false;
-      return;
+      break;
     default: {
       const unhandled: never = action;
       void unhandled;
     }
   }
+
+  /* The cursor having moved is the whole test, rather than a list of which
+     actions are the seeking ones. It answers three awkward cases for free: `→`
+     at the live edge and `←` at the first event move nothing, so they must not
+     leave a mark for the next click to trip over; `?` and `Esc` never touch the
+     playhead; and Space only counts on the press that rewinds a finished run,
+     not for the frames the playback timer then advances through, which are a
+     follow-along and stay smooth. */
+  if (run.viewIndex !== before) keyboardSeeks += 1;
 }
