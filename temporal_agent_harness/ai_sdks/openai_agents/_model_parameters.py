@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from agents import Agent, TResponseInputItem
+from agents import Agent, Model, TResponseInputItem
 
 from temporalio.common import Priority, RetryPolicy
 from temporalio.workflow import ActivityCancellationType, VersioningIntent
@@ -72,6 +72,26 @@ class ModelActivityParameters:
 
     use_local_activity: bool = False
     """Whether to use a local activity. If changed during a workflow execution, that would break determinism."""
+
+    workflow_model_provider: Callable[[str | None], Model] | None = None
+    """Optional workflow-side model provider for non-streaming model calls.
+
+    When set, ``_TemporalModelStub.get_response`` resolves a ``Model`` from this
+    callable (given the requested model name) and awaits its ``get_response``
+    directly, INSTEAD of scheduling the ``invoke_model_activity`` activity. The
+    resolved model runs in workflow context, so — unlike the activity path's
+    worker-side ``model_provider`` — it may do workflow-only things, e.g. make its
+    transport a Nexus call (``workflow.create_nexus_client(...)``), which is
+    impossible from an activity.
+
+    It is the workflow-side analog of the activity path's ``model_provider``: the
+    plugin stays agnostic about the model's transport. Because the stub hands the
+    resolved model its already-live ``tools`` / ``handoffs`` / ``model_settings``,
+    there is no serialization or tool reconstruction on this path. Streaming
+    (``Runner.run_streamed``) ignores it.
+
+    .. warning::
+        Experimental; behavior may change."""
 
     streaming_topic: str | None = None
     """Stream topic to publish raw model stream events to when the workflow

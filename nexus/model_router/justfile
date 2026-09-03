@@ -1,0 +1,21 @@
+# Scoped justfile for the model router Nexus service (nexus/model_router).
+# Run from this directory: `just <recipe>`.
+#
+#   just router   # run the router worker (creates the Nexus endpoint on startup)
+#
+# Needs a Temporal server reachable via the repo-root .env.local profile (or
+# localhost:7233) and OPENAI_API_KEY. The router is the "LLM API over Nexus" that
+# the examples/openai_nexus agent calls.
+
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Run the model router worker (registers the handler + creates the Nexus endpoint).
+router:
+    cd "{{root}}" && uv run --group examples python -m nexus.model_router.worker
