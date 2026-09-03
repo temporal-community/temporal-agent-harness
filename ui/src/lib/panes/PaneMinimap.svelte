@@ -7,8 +7,8 @@
    * rather than a trail of where you have been. Breadcrumbs are history and they
    * cost a chip per step, so a desk with a dozen panes on it either wraps the
    * chrome or truncates the names. This is the other object: one tick per pane in
-   * rail order, a marker on the one you are in, and the counts beside it. It
-   * costs the same at forty panes as at four.
+   * rail order and a marker on the one you are in. It costs the same at forty
+   * panes as at four.
    *
    * The session anchor arrives as `lead` because the row it needs is this one:
    * folding it in here is what let the app's third chrome band go, and the two
@@ -17,7 +17,7 @@
    */
   import type { Snippet } from "svelte";
   import { Plus } from "@lucide/svelte";
-  import Chip from "$lib/components/primitives/Chip.svelte";
+  import IconButton from "$lib/components/primitives/IconButton.svelte";
   import type { PaneDescription } from "$lib/panes/PaneRail.svelte";
   import { PANE_META, ROOT_KINDS, type PaneKind } from "$lib/panes/registry";
   import {
@@ -56,8 +56,6 @@
   /** Where to draw the "you are here" box, in px within the tick run. */
   let marker = $state<{ x: number; width: number } | null>(null);
 
-  const openCount = $derived(stack.expandedPanes.length);
-  const foldedCount = $derived(stack.collapsedPanes.length);
   const closable = $derived(ROOT_KINDS.filter((kind) => !stack.has(kind)));
 
   let launcherOpen = $state(false);
@@ -102,6 +100,15 @@
     ]
       .filter(Boolean)
       .join(" · ");
+  }
+
+  /* `aria-disabled` rather than `disabled`, so the one state where the button
+     does nothing is also the one state where its tip explains why — a disabled
+     button takes no pointer events, so the hint never appears. The guard is
+     what `disabled` was doing for free. */
+  function toggleLauncher(): void {
+    if (closable.length === 0) return;
+    launcherOpen = !launcherOpen;
   }
 
   function openKind(kind: PaneKind): void {
@@ -179,43 +186,42 @@
     {/if}
   </div>
 
-  <!-- The pane you are in is not named here: it names itself, in its own header
-       or along its spine, and the marker on the run above already says which one
-       it is. Saying it a second time in the chrome is how the name of the agent
-       ended up on screen three times. -->
-  <p class="counts">
-    {openCount} open{#if foldedCount > 0}&nbsp;· {foldedCount} folded{/if}
-  </p>
+  <!-- Nothing is written between the run and the controls. The pane you are in
+       names itself, in its own header or along its spine, and the marker on the
+       run says which one it is; how many are open and how many are folded is the
+       run's own shape — one mark per pane, half height for a folded one. A line
+       of prose restating either is how the name of the agent ended up on screen
+       three times. -->
+  <div class="controls">
+    <div class="launcher" bind:this={launcherElement}>
+      <IconButton
+        class="rail-icon"
+        label="Open a view"
+        tip={closable.length === 0 ? "Every view is already open" : "Open a view"}
+        aria-expanded={launcherOpen}
+        aria-disabled={closable.length === 0 ? "true" : undefined}
+        data-tip-below
+        data-tip-align="end"
+        onclick={toggleLauncher}
+      >
+        <Plus size={13} />
+      </IconButton>
 
-  <div class="launcher" bind:this={launcherElement}>
-    <Chip
-      label="Pane"
-      fill="quiet"
-      active={launcherOpen}
-      aria-expanded={launcherOpen}
-      disabled={closable.length === 0}
-      title={closable.length === 0 ? "Every view is already open" : "Open a view"}
-      onclick={() => (launcherOpen = !launcherOpen)}
-    >
-      {#snippet lead()}
-        <Plus size={12} />
-      {/snippet}
-    </Chip>
+      {#if launcherOpen}
+        <div class="launch-menu" role="menu" aria-label="Open a view">
+          {#each closable as kind (kind)}
+            <button type="button" role="menuitem" onclick={() => openKind(kind)}>
+              <span class="kicker">{PANE_META[kind].kindLabel}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
 
-    {#if launcherOpen}
-      <div class="launch-menu" role="menu" aria-label="Open a view">
-        {#each closable as kind (kind)}
-          <button type="button" role="menuitem" onclick={() => openKind(kind)}>
-            <span class="kicker">{PANE_META[kind].kindLabel}</span>
-          </button>
-        {/each}
-      </div>
+    {#if trail}
+      {@render trail()}
     {/if}
   </div>
-
-  {#if trail}
-    {@render trail()}
-  {/if}
 </nav>
 
 <style>
@@ -397,18 +403,34 @@
       width var(--duration-fast) var(--ease-out);
   }
 
-  /* The counts and the launcher hold the right edge; the map keeps its budget on
-     the left, and the slack between them is empty because nothing needs to be
-     said there. */
-  .counts {
+  /* The controls hold the right edge; the map keeps its budget on the left, and
+     the slack between them is empty because nothing needs to be said there.
+     No gap: a pane header's controls are 20px boxes 4px apart, and these are
+     28px boxes, so abutting them puts the same air between the glyphs. The
+     larger box is kept for the hit area — the strip below is the visual
+     reference, not the 20px target. */
+  .controls {
     flex: none;
-    margin: 0 0 0 auto;
-    color: var(--text-4);
-    font-family: var(--font-mono);
-    font-size: var(--font-xs);
-    font-variant-numeric: tabular-nums;
-    letter-spacing: var(--letter-tight);
-    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+  }
+
+  /* Bare at rest and boxed on hover, which is what a pane header's pin, collapse
+     and close do. The primitive still owns the size, the hover, the press, the
+     focus ring and the disabled dimming; the only thing taken off it is the
+     resting box, which is what makes one icon a control and three icons a row
+     of buttons. `:global` because the class rides across a component boundary —
+     the shortcuts button arrives through `trail`, from App. */
+  .minimap :global(.rail-icon) {
+    border-color: transparent;
+    background: transparent;
+  }
+
+  /* Same "this one is on" as a pane header's pinned button. */
+  .minimap :global(.rail-icon[aria-expanded="true"]) {
+    border-color: var(--border-strong);
+    color: var(--text-1);
   }
 
   .launcher {
@@ -463,10 +485,6 @@
     outline-offset: -2px;
   }
 
-  /* One word, in the counts' register and outside the group's box, so it reads
-     as a note on the pair rather than a third thing to choose. It costs width
-     exactly where there is least of it, which is the point: it only appears
-     while the width is the thing deciding. */
   @media (hover: hover) and (pointer: fine) {
     .tick:hover .mark {
       background: var(--text-1);

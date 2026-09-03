@@ -7,6 +7,8 @@
   import StepController from "$lib/components/flow/StepController.svelte";
   import HotkeyHelp from "$lib/components/flow/HotkeyHelp.svelte";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
+  import IconButton from "$lib/components/primitives/IconButton.svelte";
+  import { Keyboard } from "@lucide/svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
   import PaneRail, { type PaneDescription } from "$lib/panes/PaneRail.svelte";
   import PaneMinimap from "$lib/panes/PaneMinimap.svelte";
@@ -269,17 +271,17 @@
            from hung this off a topbar the pane rail replaced; the minimap is the
            strip that took that job, so it lands at the end of it. -->
       {#snippet trail()}
-        <button
-          type="button"
-          class="hotkey-hint"
-          aria-label="Replay keyboard shortcuts"
+        <IconButton
+          class="rail-icon"
+          label="Replay keyboard shortcuts"
+          tip={"Replay keyboard shortcuts\n?"}
           aria-expanded={hotkeyHelpOpen}
-          data-tip={"Replay keyboard shortcuts\n?"}
+          data-tip-below
           data-tip-align="end"
           onclick={() => (hotkeyHelpOpen = !hotkeyHelpOpen)}
         >
-          ?
-        </button>
+          <Keyboard size={13} />
+        </IconButton>
       {/snippet}
     </PaneMinimap>
 
@@ -440,46 +442,6 @@
     padding: var(--gutter);
     color: var(--text-3);
     font-size: var(--font-md);
-  }
-
-  /* Square and --control-height-xs, so it sits in the minimap as one more
-     pane-row control rather than as a badge of its own. */
-  .hotkey-hint {
-    flex: none;
-    width: var(--control-height-xs);
-    height: var(--control-height-xs);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
-    background: var(--control-bg);
-    color: var(--text-3);
-    cursor: pointer;
-    font-size: var(--font-md);
-    font-weight: 650;
-    line-height: 1;
-    transition:
-      color var(--duration-fast) var(--ease-ui),
-      background var(--duration-fast) var(--ease-ui);
-  }
-
-  .hotkey-hint:hover,
-  .hotkey-hint:focus-visible {
-    color: var(--text-1);
-    background: var(--control-hover);
-  }
-
-  .hotkey-hint[aria-expanded="true"] {
-    color: var(--text-1);
-    background: color-mix(in srgb, var(--accent) 13%, var(--surface-2));
-    border-color: var(--accent);
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .hotkey-hint {
-      transition: none;
-    }
   }
 
   /* Re-homed from the deleted `.right-pane-body`. TranscriptPanel and
