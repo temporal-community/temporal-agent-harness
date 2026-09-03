@@ -12,6 +12,7 @@ The ``serve`` subcommand of the ``temporal-agent-harness`` console script is thi
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
 
-def create_app(*registry_paths: str | Path) -> "FastAPI":
+def create_app(*registry_paths: str | Path) -> FastAPI:
     """Build the packaged harness web app serving the merged agents from ``registry_paths``.
 
     A single path serves just that registry's agent(s); multiple paths merge into one registry so
@@ -36,7 +37,13 @@ def create_app(*registry_paths: str | Path) -> "FastAPI":
     if not registry_paths:
         raise ValueError("create_app requires at least one registry path.")
     registry = load_agent_registries(registry_paths)
-    return create_agent_harness_app(registry=registry)
+    nexus_endpoint = os.environ.get("NEXUS_UI_ENDPOINT", "").strip() or None
+    return create_agent_harness_app(
+        registry=registry,
+        nexus_endpoint=nexus_endpoint,
+        connector_namespace=os.environ.get("CONNECTOR_NAMESPACE", "connector"),
+        connector_task_queue=os.environ.get("CONNECTOR_TASK_QUEUE", "nexus-ui-tunnel"),
+    )
 
 
 def run_server(

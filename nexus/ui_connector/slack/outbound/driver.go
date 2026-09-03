@@ -6,109 +6,135 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	slackapi "github.com/slack-go/slack"
 
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/agent"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/citations"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/worker"
-	"go.temporal.io/sdk/workflow"
 )
 
-// Activity name constants under which SlackPlatform's methods must be registered on
-// the worker (see cmd/worker). Private to this package: RouterWorkflow never sees
-// these — it only calls Driver, and a different outbound driver is free to use a
-// completely different activity shape internally, or none at all.
 const (
-	beginStreamActivity        = "SlackBeginStream"
-	updateStreamActivity       = "SlackUpdateStream"
-	finishStreamActivity       = "SlackFinishStream"
-	postMessageActivity        = "SlackPostMessage"
-	postApprovalPromptActivity = "SlackPostApprovalPrompt"
+	DeliverA2AActivity = "SlackDeliverA2A"
 )
-
-// Driver implements router.OutboundDriver for Slack by dispatching to Activities backed by
-// SlackPlatform. It's the bridge between RouterWorkflow (workflow.Context calls) and
-// the real Slack API calls, which must run as Activities since they're non-deterministic
-// I/O.
-type Driver struct {
-	ActivityOptions workflow.ActivityOptions
-
-	// PollInterval sets the wait between poll calls (see router.Streamer). Zero
-	// (default) means no wait: one chat.appendStream call per delta, as today. Set a
-	// few hundred milliseconds to merge deltas into fewer calls. Tune against Slack's
-	// rate limit for chat.appendStream.
-	PollInterval time.Duration
-}
-
-var _ router.OutboundDriver = (*Driver)(nil)
-
-// NewDriver returns a Driver that calls the Slack activities with the given options.
-// PollInterval defaults to zero. Set it on the returned Driver to enable batching.
-func NewDriver(opts workflow.ActivityOptions) Driver {
-	return Driver{ActivityOptions: opts}
-}
-
-// SupportsStreaming reports that Slack supports incremental response updates.
-func (Driver) SupportsStreaming(router.Input) bool {
-	return true
-}
-
-// StreamPollInterval implements router.Streamer.
-func (d Driver) StreamPollInterval(router.Input) time.Duration {
-	return d.PollInterval
-}
-
-func (d Driver) BeginStream(ctx workflow.Context, input router.BeginStreamInput) (router.StreamHandle, error) {
-	var handle router.StreamHandle
-	err := workflow.ExecuteActivity(
-		workflow.WithActivityOptions(ctx, d.ActivityOptions), beginStreamActivity, input,
-	).Get(ctx, &handle)
-	return handle, err
-}
-
-func (d Driver) UpdateStream(ctx workflow.Context, input router.UpdateStreamInput) error {
-	return workflow.ExecuteActivity(
-		workflow.WithActivityOptions(ctx, d.ActivityOptions), updateStreamActivity, input,
-	).Get(ctx, nil)
-}
-
-func (d Driver) FinishStream(ctx workflow.Context, input router.FinishStreamInput) error {
-	return workflow.ExecuteActivity(
-		workflow.WithActivityOptions(ctx, d.ActivityOptions), finishStreamActivity, input,
-	).Get(ctx, nil)
-}
-
-func (d Driver) PostMessage(ctx workflow.Context, input router.TextMetadata) error {
-	return workflow.ExecuteActivity(
-		workflow.WithActivityOptions(ctx, d.ActivityOptions), postMessageActivity, input,
-	).Get(ctx, nil)
-}
-
-func (d Driver) PostApprovalPrompt(ctx workflow.Context, input router.ApprovalPromptInput) error {
-	return workflow.ExecuteActivity(
-		workflow.WithActivityOptions(ctx, d.ActivityOptions), postApprovalPromptActivity, input,
-	).Get(ctx, nil)
-}
-
-// AcknowledgeApproval is a no-op because the Slack interaction webhook replaces
-// the original prompt through its response URL while handling the button click.
-func (d Driver) AcknowledgeApproval(workflow.Context, router.ApprovalAcknowledgementInput) error {
-	return nil
-}
 
 // RegisterActivities registers platform's methods on w under the activity names Driver
 // dispatches to. Call this from the worker binary alongside NewDriver. w is
 // worker.Registry (not worker.Worker) so this also works for a Lambda worker's
 // lambdaworker.Options, which implements Registry but not the full Worker interface.
 func RegisterActivities(w worker.Registry, platform *SlackPlatform) {
-	w.RegisterActivityWithOptions(platform.BeginStream, activity.RegisterOptions{Name: beginStreamActivity})
-	w.RegisterActivityWithOptions(platform.UpdateStream, activity.RegisterOptions{Name: updateStreamActivity})
-	w.RegisterActivityWithOptions(platform.FinishStream, activity.RegisterOptions{Name: finishStreamActivity})
-	w.RegisterActivityWithOptions(platform.PostMessage, activity.RegisterOptions{Name: postMessageActivity})
-	w.RegisterActivityWithOptions(platform.PostApprovalPrompt, activity.RegisterOptions{Name: postApprovalPromptActivity})
+	w.RegisterActivityWithOptions(platform.DeliverA2A, activity.RegisterOptions{Name: DeliverA2AActivity})
+}
+
+// DeliveryContext is opaque to the tunnel and interpreted only by the Slack driver.
+type DeliveryContext struct {
+	Metadata         router.TextMetadata `json:"metadata"`
+	ConversationType string              `json:"conversationType,omitempty"`
+}
+
+type deliveryState struct {
+	Handle    *router.StreamHandle `json:"handle,omitempty"`
+	Text      string               `json:"text,omitempty"`
+	Citations []router.Citation    `json:"citations,omitempty"`
+	Segments  []router.Delta       `json:"segments,omitempty"`
+}
+
+// DeliverA2A renders a batch of untouched A2A records at the platform edge. The
+// returned state is opaque tunnel state, allowing Slack to keep its native stream
+// handle without teaching the router anything about Slack's API.
+func (p *SlackPlatform) DeliverA2A(ctx context.Context, input router.DeliveryInput) (router.DeliveryOutput, error) {
+	var deliveryContext DeliveryContext
+	if err := json.Unmarshal(input.Context, &deliveryContext); err != nil {
+		return router.DeliveryOutput{}, fmt.Errorf("decode Slack delivery context: %w", err)
+	}
+	var state deliveryState
+	if len(input.State) > 0 {
+		if err := json.Unmarshal(input.State, &state); err != nil {
+			return router.DeliveryOutput{}, fmt.Errorf("decode Slack delivery state: %w", err)
+		}
+	}
+	metadata := deliveryContext.Metadata
+	metadata.SessionID = input.SessionID
+	turnComplete := false
+	var pendingText strings.Builder
+	flushText := func() error {
+		if pendingText.Len() == 0 || state.Handle == nil {
+			return nil
+		}
+		text := pendingText.String()
+		pendingText.Reset()
+		return p.UpdateStream(ctx, router.UpdateStreamInput{TextMetadata: metadata, Handle: *state.Handle, Delta: text})
+	}
+	startStream := func() error {
+		if state.Handle != nil {
+			return nil
+		}
+		handle, err := p.BeginStream(ctx, router.BeginStreamInput{TextMetadata: metadata, ConversationType: deliveryContext.ConversationType})
+		if err != nil {
+			return err
+		}
+		state.Handle = &handle
+		return nil
+	}
+	for _, item := range input.Items {
+		delta, err := agent.DecodeStreamItem(item)
+		if err != nil {
+			return router.DeliveryOutput{}, err
+		}
+		if delta == nil {
+			continue
+		}
+		if delta.ApprovalRequested != nil {
+			if err := flushText(); err != nil {
+				return router.DeliveryOutput{}, err
+			}
+			req := delta.ApprovalRequested
+			if err := p.PostApprovalPrompt(ctx, router.ApprovalPromptInput{TextMetadata: metadata, ToolID: req.ToolID, ToolName: req.ToolName, ToolInput: req.ToolInputJSON}); err != nil {
+				return router.DeliveryOutput{}, err
+			}
+			continue
+		}
+		state.Text += delta.Text
+		state.Citations = append(state.Citations, delta.Citations...)
+		state.Segments = append(state.Segments, *delta)
+		if delta.Text != "" || delta.ToolStatus != nil || delta.ThoughtSummary != "" {
+			if err := startStream(); err != nil {
+				return router.DeliveryOutput{}, err
+			}
+			if delta.Text != "" && delta.ToolStatus == nil && delta.ThoughtSummary == "" {
+				pendingText.WriteString(delta.Text)
+			} else {
+				if err := flushText(); err != nil {
+					return router.DeliveryOutput{}, err
+				}
+				if err := p.UpdateStream(ctx, router.UpdateStreamInput{TextMetadata: metadata, Handle: *state.Handle, ToolStatus: delta.ToolStatus, ThoughtSummary: delta.ThoughtSummary}); err != nil {
+					return router.DeliveryOutput{}, err
+				}
+			}
+		}
+		if delta.IsFinal {
+			turnComplete = true
+		}
+	}
+	if err := flushText(); err != nil {
+		return router.DeliveryOutput{}, err
+	}
+	if (turnComplete || input.Closed) && state.Handle != nil {
+		metadata.Text = state.Text
+		metadata.Citations = state.Citations
+		metadata.Segments = state.Segments
+		if err := p.FinishStream(ctx, router.FinishStreamInput{TextMetadata: metadata, Handle: *state.Handle}); err != nil {
+			return router.DeliveryOutput{}, err
+		}
+		state = deliveryState{}
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return router.DeliveryOutput{}, err
+	}
+	return router.DeliveryOutput{State: encoded, TurnComplete: turnComplete}, nil
 }
 
 // ApprovalButtonValue is encoded in each Approve/Deny button's value field so the
@@ -139,10 +165,7 @@ func mrkdwnLink(url, title string) string {
 	return fmt.Sprintf("<%s|%s>", url, title)
 }
 
-// SlackPlatform is the real Activity implementation backing Driver: its methods make
-// the actual Slack API calls and are registered on the worker under the activity names
-// Driver dispatches to. It also exposes additional Slack-specific methods not covered
-// by router.OutboundDriver.
+// SlackPlatform owns the real Slack API calls used by the edge delivery activity.
 type SlackPlatform struct {
 	client *slackapi.Client
 	teamID string
@@ -376,7 +399,7 @@ func (p *SlackPlatform) PostApprovalPrompt(ctx context.Context, input router.App
 	return err
 }
 
-// --- Slack-specific methods not covered by router.OutboundDriver ---
+// --- Slack-specific platform methods ---
 
 type FetchMessagesOutput struct {
 	Messages []MessageElement

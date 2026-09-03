@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from temporalio.client import Client
+    from temporalio.converter import DataConverter
 
 
 # Matches the address `temporal server start-dev` listens on, and the Temporal CLI's own default.
@@ -48,13 +49,15 @@ def ensure_temporal_address(explicit_address: str | None) -> None:
         os.environ["TEMPORAL_ADDRESS"] = DEFAULT_TEMPORAL_ADDRESS
 
 
-async def connect_client() -> "Client":
-    """Connect a Temporal client carrying the harness plugin.
+async def connect_client(*, data_converter: DataConverter | None = None) -> Client:
+    """Connect a Temporal client carrying the harness plugin or an explicit converter.
 
     The plugin is where the shared data converter is DEFINED, so the session-manager worker, the
     web server, and every agent worker can read each other's payloads only because they all add
     it. Its default large-payload storage matches ``create_agent_harness_app``'s, keeping the
-    packaged entrypoints mutually readable out of the box.
+    packaged entrypoints mutually readable out of the box. ``data_converter`` is the narrow
+    escape hatch for protocol front doors, such as A2A over Nexus, whose wire format requires a
+    protocol-specific converter.
     """
     from temporalio.client import Client
     from temporalio.envconfig import ClientConfig
@@ -63,7 +66,15 @@ async def connect_client() -> "Client":
 
     connect_config = ClientConfig.load_client_connect_config()
     try:
-        return await Client.connect(**connect_config, plugins=[AgentHarnessPlugin()])
+        if data_converter is None:
+            return await Client.connect(
+                **connect_config,
+                plugins=[AgentHarnessPlugin()],
+            )
+        return await Client.connect(
+            **connect_config,
+            data_converter=data_converter,
+        )
     except RuntimeError as exc:
         # "no server running" is the commonest way a first run fails, and the SDK reports it as a
         # dozen frames of tonic/bridge internals. Translate just that failure into the two things

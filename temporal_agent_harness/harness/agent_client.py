@@ -11,10 +11,13 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from typing import Any, TypeVar
 
-from temporalio.client import Client, WithStartWorkflowOperation, WorkflowUpdateFailedError
-from temporalio.contrib.workflow_streams import WorkflowStreamClient
-
+from temporalio.client import (
+    Client,
+    WithStartWorkflowOperation,
+    WorkflowUpdateFailedError,
+)
 from temporalio.common import WorkflowIDConflictPolicy
+from temporalio.contrib.workflow_streams import WorkflowStreamClient
 
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_INTERFACE_QUERY,
@@ -29,6 +32,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
     AgentEventType,
     AgentMessage,
+    AgentMessageReply,
     AgentStatus,
     CallbackResult,
     CallbackResultAck,
@@ -39,7 +43,6 @@ from temporal_agent_harness.harness.agent_protocol import (
     PendingCallback,
     ToolApprovalDecision,
     ToolApprovalResult,
-    AgentMessageReply,
 )
 from temporal_agent_harness.harness.stream_merge import (
     DEFAULT_STALL_GRACE_SECONDS,
@@ -318,6 +321,8 @@ class AgentClient:
         msg_type: str,
         payload: dict[str, Any],
         expected_turn: int,
+        *,
+        update_id: str | None = None,
     ) -> AgentMessageReply:
         """Submit one message to the agent's front door, WITHOUT streaming the turn.
 
@@ -342,6 +347,7 @@ class AgentClient:
                 AgentMessage(
                     type=msg_type, payload=payload, expected_turn=expected_turn
                 ),
+                id=update_id,
                 result_type=AgentMessageReply,
             )
         except WorkflowUpdateFailedError as e:
@@ -358,14 +364,23 @@ class AgentClient:
         msg_type: str,
         payload: dict[str, Any],
         expected_turn: int,
+        *,
+        update_id: str | None = None,
     ) -> AgentMessageReply:
         """Submit one message to the agent without streaming the accepted turn.
 
         UI clients that maintain a separate ``attach`` stream should use this to avoid
         opening one long-lived stream per queued message. The returned
         :class:`AgentMessageReply` confirms the workflow accepted or queued the turn.
+        ``update_id`` is an optional caller-owned idempotency key for retrying the
+        submission without accepting the same turn twice.
         """
-        return await self._submit_message(msg_type, payload, expected_turn)
+        return await self._submit_message(
+            msg_type,
+            payload,
+            expected_turn,
+            update_id=update_id,
+        )
 
     async def start_and_submit_message(
         self,
@@ -379,8 +394,8 @@ class AgentClient:
         update_id: str | None = None,
     ) -> AgentMessageReply:
         """Like :meth:`_submit_message`, but starts the workflow first if it isn't already
-        running — for callers that can't assume it exists (e.g. Nexus's
-        ``sendAgentMessage``, which must create-or-reuse a session in one call). Needs
+        running — for callers that can't assume it exists (e.g. an A2A
+        ``SendMessage`` operation, which must create-or-reuse a task in one call). Needs
         ``workflow_name``/``task_queue`` since every other method assumes the workflow is
         already running and never needs them.
 

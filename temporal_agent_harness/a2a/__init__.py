@@ -8,7 +8,7 @@ from nexus_a2a import (
     a2a_nexus_data_converter,
 )
 
-from .control import HarnessControlService
+from .generated import HarnessControlService
 
 __all__ = [
     "A2AService",

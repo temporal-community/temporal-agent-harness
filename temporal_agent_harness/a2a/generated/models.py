@@ -99,7 +99,7 @@ class AcceptedFunction:
     """
 
     name: str
-    """Handler name - the value to pass as msgType in sendAgentMessage"""
+    """Handler name carried by the harness extension on an A2A message"""
 
     description: str
     """Handler docstring describing when and how to use it"""
@@ -735,52 +735,6 @@ class ApproveToolCallOutput:
     """
 
 
-class _CloseSessionOutputTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter["CloseSessionOutput", typing.Any]
-):
-    @typing_extensions.override
-    def from_transfer_type(
-        self, value: typing.Any, type_hint: type["CloseSessionOutput"]
-    ) -> "CloseSessionOutput":
-        violations: list[Violation] = []
-        if not isinstance(value, dict):
-            raise ValidationError([Violation(path="", reason="expected object")])
-        raw = typing.cast("dict[str, typing.Any]", value)
-
-        closed_value: bool = typing.cast("typing.Any", None)
-        if "closed" not in raw or raw["closed"] is None:
-            violations.append(Violation(path="closed", reason="required"))
-        else:
-            closed_value_raw = raw["closed"]
-            if not isinstance(closed_value_raw, bool):
-                violations.append(Violation(path="closed", reason="expected boolean"))
-            else:
-                closed_value = closed_value_raw
-
-        for key in raw:
-            if key != "closed":
-                violations.append(Violation(path=key, reason="unknown field"))
-        if violations:
-            raise ValidationError(violations)
-        return CloseSessionOutput(
-            closed=closed_value,
-        )
-
-    @typing_extensions.override
-    def to_transfer_type(self, value: "CloseSessionOutput") -> typing.Any:
-        out: dict[str, typing.Any] = {}
-        out["closed"] = value.closed
-        return out
-
-
-@_transfer_type_convertible(_CloseSessionOutputTransferTypeConverter)
-@dataclasses.dataclass(slots=True, kw_only=True)
-class CloseSessionOutput:
-
-    closed: bool
-    """Always true on success"""
-
-
 class _ExecuteOperatorCommandInputTransferTypeConverter(
     temporalio.converter.TransferTypeConverter["ExecuteOperatorCommandInput", typing.Any]
 ):
@@ -927,6 +881,16 @@ class _OperatorCommandTransferTypeConverter(
             else:
                 name_value = name_value_raw
 
+        payload_name_value: str = typing.cast("typing.Any", None)
+        if "payloadName" not in raw or raw["payloadName"] is None:
+            violations.append(Violation(path="payloadName", reason="required"))
+        else:
+            payload_name_value_raw = raw["payloadName"]
+            if not isinstance(payload_name_value_raw, str):
+                violations.append(Violation(path="payloadName", reason="expected string"))
+            else:
+                payload_name_value = payload_name_value_raw
+
         label_value: str = typing.cast("typing.Any", None)
         if "label" not in raw or raw["label"] is None:
             violations.append(Violation(path="label", reason="required"))
@@ -946,6 +910,27 @@ class _OperatorCommandTransferTypeConverter(
                 violations.append(Violation(path="description", reason="expected string"))
             else:
                 description_value = description_value_raw
+
+        aliases_value: list[str] = typing.cast("typing.Any", None)
+        if "aliases" not in raw or raw["aliases"] is None:
+            violations.append(Violation(path="aliases", reason="required"))
+        else:
+            aliases_value_raw = raw["aliases"]
+            if not isinstance(aliases_value_raw, list):
+                violations.append(Violation(path="aliases", reason="expected array"))
+            else:
+                aliases_value_list: list[str] = []
+                for aliases_value_index, aliases_value_element in enumerate(typing.cast("list[typing.Any]", aliases_value_raw)):
+                    aliases_value_item_path = f'aliases[{aliases_value_index}]'
+                    aliases_value_item_violation_count = len(violations)
+                    aliases_value_item: str = typing.cast("typing.Any", None)
+                    if not isinstance(aliases_value_element, str):
+                        violations.append(Violation(path=aliases_value_item_path, reason="expected string"))
+                    else:
+                        aliases_value_item = aliases_value_element
+                    if len(violations) == aliases_value_item_violation_count:
+                        aliases_value_list.append(aliases_value_item)
+                aliases_value = aliases_value_list
 
         source_value: str = typing.cast("typing.Any", None)
         if "source" not in raw or raw["source"] is None:
@@ -969,14 +954,16 @@ class _OperatorCommandTransferTypeConverter(
                     _collect(violations, "argument", error)
 
         for key in raw:
-            if key != "name" and key != "label" and key != "description" and key != "source" and key != "argument":
+            if key != "name" and key != "payloadName" and key != "label" and key != "description" and key != "aliases" and key != "source" and key != "argument":
                 violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
         return OperatorCommand(
             name=name_value,
+            payload_name=payload_name_value,
             label=label_value,
             description=description_value,
+            aliases=aliases_value,
             source=source_value,
             argument=argument_value,
         )
@@ -986,8 +973,10 @@ class _OperatorCommandTransferTypeConverter(
         violations: list[Violation] = []
         out: dict[str, typing.Any] = {}
         out["name"] = value.name
+        out["payloadName"] = value.payload_name
         out["label"] = value.label
         out["description"] = value.description
+        out["aliases"] = value.aliases
         out["source"] = value.source
         if value.argument is not None:
             try:
@@ -1006,11 +995,17 @@ class OperatorCommand:
     name: str
     """Canonical command name used as the routing key (e.g. 'scope')"""
 
+    payload_name: str
+    """Wire payload name accepted by the harness operator channel"""
+
     label: str
     """Display label including the slash (e.g. '/scope')"""
 
     description: str
     """Human-readable description suitable for a Slack manifest entry"""
+
+    aliases: list[str]
+    """Alternative command names accepted by the harness"""
 
     source: str
     """'harness' for built-in commands, 'agent' for agent-registered ones"""
@@ -1415,204 +1410,6 @@ class PendingTurn:
     """JSON-compacted {type, payload} envelope of the queued message"""
 
 
-class _PollMessagesInputTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter["PollMessagesInput", typing.Any]
-):
-    @typing_extensions.override
-    def from_transfer_type(
-        self, value: typing.Any, type_hint: type["PollMessagesInput"]
-    ) -> "PollMessagesInput":
-        violations: list[Violation] = []
-        if not isinstance(value, dict):
-            raise ValidationError([Violation(path="", reason="expected object")])
-        raw = typing.cast("dict[str, typing.Any]", value)
-
-        session_id_value: str = typing.cast("typing.Any", None)
-        if "sessionId" not in raw or raw["sessionId"] is None:
-            violations.append(Violation(path="sessionId", reason="required"))
-        else:
-            session_id_value_raw = raw["sessionId"]
-            if not isinstance(session_id_value_raw, str):
-                violations.append(Violation(path="sessionId", reason="expected string"))
-            else:
-                session_id_value = session_id_value_raw
-
-        cursor_value: int = typing.cast("typing.Any", None)
-        if "cursor" not in raw or raw["cursor"] is None:
-            violations.append(Violation(path="cursor", reason="required"))
-        else:
-            cursor_value_raw = raw["cursor"]
-            cursor_value_parsed = _parse_spec_integer(cursor_value_raw, "cursor", violations)
-            if cursor_value_parsed is not None:
-                cursor_value = cursor_value_parsed
-
-        timeout_seconds_value: float | None = None
-        if "timeoutSeconds" in raw:
-            timeout_seconds_value_raw = raw["timeoutSeconds"]
-            if timeout_seconds_value_raw is None:
-                violations.append(Violation(path="timeoutSeconds", reason="explicit null not allowed"))
-            else:
-                if not (not isinstance(timeout_seconds_value_raw, bool) and isinstance(timeout_seconds_value_raw, (int, float))):
-                    violations.append(Violation(path="timeoutSeconds", reason="expected number"))
-                else:
-                    timeout_seconds_value = timeout_seconds_value_raw
-                    if not (-1.7976931348623157e308 <= timeout_seconds_value_raw <= 1.7976931348623157e308):
-                        violations.append(Violation(path="timeoutSeconds", reason=f"must be a finite number, got {timeout_seconds_value_raw}"))
-
-        for key in raw:
-            if key != "sessionId" and key != "cursor" and key != "timeoutSeconds":
-                violations.append(Violation(path=key, reason="unknown field"))
-        if violations:
-            raise ValidationError(violations)
-        return PollMessagesInput(
-            session_id=session_id_value,
-            cursor=cursor_value,
-            timeout_seconds=timeout_seconds_value,
-        )
-
-    @typing_extensions.override
-    def to_transfer_type(self, value: "PollMessagesInput") -> typing.Any:
-        violations: list[Violation] = []
-        out: dict[str, typing.Any] = {}
-        out["sessionId"] = value.session_id
-        out["cursor"] = value.cursor
-        if value.timeout_seconds is not None:
-            if not (-1.7976931348623157e308 <= value.timeout_seconds <= 1.7976931348623157e308):
-                violations.append(Violation(path="timeoutSeconds", reason=f"must be a finite number, got {value.timeout_seconds}"))
-            out["timeoutSeconds"] = value.timeout_seconds
-        if violations:
-            raise ValidationError(violations)
-        return out
-
-
-@_transfer_type_convertible(_PollMessagesInputTransferTypeConverter)
-@dataclasses.dataclass(slots=True, kw_only=True)
-class PollMessagesInput:
-
-    session_id: str
-    """Provider-prefixed session identifier"""
-
-    cursor: int
-
-    timeout_seconds: float | None = None
-    """How long the WorkflowStream poll update waits for new events before returning empty"""
-
-
-class _PollMessagesOutputTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter["PollMessagesOutput", typing.Any]
-):
-    @typing_extensions.override
-    def from_transfer_type(
-        self, value: typing.Any, type_hint: type["PollMessagesOutput"]
-    ) -> "PollMessagesOutput":
-        violations: list[Violation] = []
-        if not isinstance(value, dict):
-            raise ValidationError([Violation(path="", reason="expected object")])
-        raw = typing.cast("dict[str, typing.Any]", value)
-
-        items_value: list[StreamItem] = typing.cast("typing.Any", None)
-        if "items" not in raw or raw["items"] is None:
-            violations.append(Violation(path="items", reason="required"))
-        else:
-            items_value_raw = raw["items"]
-            if not isinstance(items_value_raw, list):
-                violations.append(Violation(path="items", reason="expected array"))
-            else:
-                items_value_list: list[StreamItem] = []
-                for items_value_index, items_value_element in enumerate(typing.cast("list[typing.Any]", items_value_raw)):
-                    items_value_item_path = f'items[{items_value_index}]'
-                    items_value_item_violation_count = len(violations)
-                    items_value_item: StreamItem = typing.cast("typing.Any", None)
-                    try:
-                        items_value_item = _StreamItemTransferTypeConverter().from_transfer_type(items_value_element, StreamItem)
-                    except ValidationError as error:
-                        _collect(violations, items_value_item_path, error)
-                    if len(violations) == items_value_item_violation_count:
-                        items_value_list.append(items_value_item)
-                items_value = items_value_list
-
-        next_offset_value: int = typing.cast("typing.Any", None)
-        if "next_offset" not in raw or raw["next_offset"] is None:
-            violations.append(Violation(path="next_offset", reason="required"))
-        else:
-            next_offset_value_raw = raw["next_offset"]
-            next_offset_value_parsed = _parse_spec_integer(next_offset_value_raw, "next_offset", violations)
-            if next_offset_value_parsed is not None:
-                next_offset_value = next_offset_value_parsed
-
-        more_ready_value: bool = typing.cast("typing.Any", None)
-        if "more_ready" not in raw or raw["more_ready"] is None:
-            violations.append(Violation(path="more_ready", reason="required"))
-        else:
-            more_ready_value_raw = raw["more_ready"]
-            if not isinstance(more_ready_value_raw, bool):
-                violations.append(Violation(path="more_ready", reason="expected boolean"))
-            else:
-                more_ready_value = more_ready_value_raw
-
-        closed_value: bool | None = None
-        if "closed" in raw:
-            closed_value_raw = raw["closed"]
-            if closed_value_raw is None:
-                violations.append(Violation(path="closed", reason="explicit null not allowed"))
-            else:
-                if not isinstance(closed_value_raw, bool):
-                    violations.append(Violation(path="closed", reason="expected boolean"))
-                else:
-                    closed_value = closed_value_raw
-
-        for key in raw:
-            if key != "items" and key != "next_offset" and key != "more_ready" and key != "closed":
-                violations.append(Violation(path=key, reason="unknown field"))
-        if violations:
-            raise ValidationError(violations)
-        return PollMessagesOutput(
-            items=items_value,
-            next_offset=next_offset_value,
-            more_ready=more_ready_value,
-            closed=closed_value,
-        )
-
-    @typing_extensions.override
-    def to_transfer_type(self, value: "PollMessagesOutput") -> typing.Any:
-        violations: list[Violation] = []
-        out: dict[str, typing.Any] = {}
-        items_out: list[typing.Any] = []
-        for items_index, items_element in enumerate(value.items):
-            try:
-                items_out.append(_StreamItemTransferTypeConverter().to_transfer_type(items_element))
-            except ValidationError as error:
-                _collect(violations, f'items[{items_index}]', error)
-        out["items"] = items_out
-        out["next_offset"] = value.next_offset
-        out["more_ready"] = value.more_ready
-        if value.closed is not None:
-            out["closed"] = value.closed
-        if violations:
-            raise ValidationError(violations)
-        return out
-
-
-@_transfer_type_convertible(_PollMessagesOutputTransferTypeConverter)
-@dataclasses.dataclass(slots=True, kw_only=True)
-class PollMessagesOutput:
-    """Mirrors WorkflowStream PollResult wire format so the async update-with-callback
-    payload decodes correctly without transformation.
-    """
-
-    items: list[StreamItem]
-    """Stream events since cursor; decode each as TurnEvent and map to Slack output"""
-
-    next_offset: int
-    """Next cursor value to use in the following pollMessages call"""
-
-    more_ready: bool
-    """True when more items are immediately available (batch was capped)"""
-
-    closed: bool | None = None
-    """True only in the sync error path when the agent workflow has already completed"""
-
-
 class _ProvideCallbackResultInputTransferTypeConverter(
     temporalio.converter.TransferTypeConverter["ProvideCallbackResultInput", typing.Any]
 ):
@@ -1926,279 +1723,6 @@ class QuerySessionInput:
 
     session_id: str
     """Provider-prefixed session identifier"""
-
-
-class _SendAgentMessageInputTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter["SendAgentMessageInput", typing.Any]
-):
-    @typing_extensions.override
-    def from_transfer_type(
-        self, value: typing.Any, type_hint: type["SendAgentMessageInput"]
-    ) -> "SendAgentMessageInput":
-        violations: list[Violation] = []
-        if not isinstance(value, dict):
-            raise ValidationError([Violation(path="", reason="expected object")])
-        raw = typing.cast("dict[str, typing.Any]", value)
-
-        session_id_value: str = typing.cast("typing.Any", None)
-        if "sessionId" not in raw or raw["sessionId"] is None:
-            violations.append(Violation(path="sessionId", reason="required"))
-        else:
-            session_id_value_raw = raw["sessionId"]
-            if not isinstance(session_id_value_raw, str):
-                violations.append(Violation(path="sessionId", reason="expected string"))
-            else:
-                session_id_value = session_id_value_raw
-
-        msg_type_value: str = typing.cast("typing.Any", None)
-        if "msgType" not in raw or raw["msgType"] is None:
-            violations.append(Violation(path="msgType", reason="required"))
-        else:
-            msg_type_value_raw = raw["msgType"]
-            if not isinstance(msg_type_value_raw, str):
-                violations.append(Violation(path="msgType", reason="expected string"))
-            else:
-                msg_type_value = msg_type_value_raw
-
-        payload_value: str = typing.cast("typing.Any", None)
-        if "payload" not in raw or raw["payload"] is None:
-            violations.append(Violation(path="payload", reason="required"))
-        else:
-            payload_value_raw = raw["payload"]
-            if not isinstance(payload_value_raw, str):
-                violations.append(Violation(path="payload", reason="expected string"))
-            else:
-                payload_value = payload_value_raw
-
-        expected_turn_value: int | None = None
-        if "expectedTurn" in raw:
-            expected_turn_value_raw = raw["expectedTurn"]
-            if expected_turn_value_raw is None:
-                violations.append(Violation(path="expectedTurn", reason="explicit null not allowed"))
-            else:
-                expected_turn_value_parsed = _parse_spec_integer(expected_turn_value_raw, "expectedTurn", violations)
-                if expected_turn_value_parsed is not None:
-                    expected_turn_value = expected_turn_value_parsed
-
-        for key in raw:
-            if key != "sessionId" and key != "msgType" and key != "payload" and key != "expectedTurn":
-                violations.append(Violation(path=key, reason="unknown field"))
-        if violations:
-            raise ValidationError(violations)
-        return SendAgentMessageInput(
-            session_id=session_id_value,
-            msg_type=msg_type_value,
-            payload=payload_value,
-            expected_turn=expected_turn_value,
-        )
-
-    @typing_extensions.override
-    def to_transfer_type(self, value: "SendAgentMessageInput") -> typing.Any:
-        out: dict[str, typing.Any] = {}
-        out["sessionId"] = value.session_id
-        out["msgType"] = value.msg_type
-        out["payload"] = value.payload
-        if value.expected_turn is not None:
-            out["expectedTurn"] = value.expected_turn
-        return out
-
-
-@_transfer_type_convertible(_SendAgentMessageInputTransferTypeConverter)
-@dataclasses.dataclass(slots=True, kw_only=True)
-class SendAgentMessageInput:
-
-    session_id: str
-    """Provider-prefixed session identifier (e.g. slack:C12345)"""
-
-    msg_type: str
-    """Target @agent.accepts handler name (e.g. 'ask', 'slash')"""
-
-    payload: str
-    """JSON-encoded input matching the target handler's input model (e.g.
-    '{"text":"hello"}' for the 'ask' handler)
-    """
-
-    expected_turn: int | None = None
-    """Caller-known next turn number. Set this when the caller already tracks turn state
-    (e.g. a subagent-driving parent) - the send fails fast with StaleTurn on a mismatch
-    instead of guessing. Omit to fall back to guess-and-retry (e.g. Slack, which has no
-    local turn state).
-    """
-
-
-class _SendMessageOutputTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter["SendMessageOutput", typing.Any]
-):
-    @typing_extensions.override
-    def from_transfer_type(
-        self, value: typing.Any, type_hint: type["SendMessageOutput"]
-    ) -> "SendMessageOutput":
-        violations: list[Violation] = []
-        if not isinstance(value, dict):
-            raise ValidationError([Violation(path="", reason="expected object")])
-        raw = typing.cast("dict[str, typing.Any]", value)
-
-        turn_number_value: int = typing.cast("typing.Any", None)
-        if "turnNumber" not in raw or raw["turnNumber"] is None:
-            violations.append(Violation(path="turnNumber", reason="required"))
-        else:
-            turn_number_value_raw = raw["turnNumber"]
-            turn_number_value_parsed = _parse_spec_integer(turn_number_value_raw, "turnNumber", violations)
-            if turn_number_value_parsed is not None:
-                turn_number_value = turn_number_value_parsed
-
-        turn_id_value: str = typing.cast("typing.Any", None)
-        if "turnId" not in raw or raw["turnId"] is None:
-            violations.append(Violation(path="turnId", reason="required"))
-        else:
-            turn_id_value_raw = raw["turnId"]
-            if not isinstance(turn_id_value_raw, str):
-                violations.append(Violation(path="turnId", reason="expected string"))
-            else:
-                turn_id_value = turn_id_value_raw
-
-        stream_head_offset_value: int | None = None
-        if "streamHeadOffset" in raw:
-            stream_head_offset_value_raw = raw["streamHeadOffset"]
-            if stream_head_offset_value_raw is None:
-                violations.append(Violation(path="streamHeadOffset", reason="explicit null not allowed"))
-            else:
-                stream_head_offset_value_parsed = _parse_spec_integer(stream_head_offset_value_raw, "streamHeadOffset", violations)
-                if stream_head_offset_value_parsed is not None:
-                    stream_head_offset_value = stream_head_offset_value_parsed
-
-        pending_value: bool | None = None
-        if "pending" in raw:
-            pending_value_raw = raw["pending"]
-            if pending_value_raw is None:
-                violations.append(Violation(path="pending", reason="explicit null not allowed"))
-            else:
-                if not isinstance(pending_value_raw, bool):
-                    violations.append(Violation(path="pending", reason="expected boolean"))
-                else:
-                    pending_value = pending_value_raw
-
-        for key in raw:
-            if key != "turnNumber" and key != "turnId" and key != "streamHeadOffset" and key != "pending":
-                violations.append(Violation(path=key, reason="unknown field"))
-        if violations:
-            raise ValidationError(violations)
-        return SendMessageOutput(
-            turn_number=turn_number_value,
-            turn_id=turn_id_value,
-            stream_head_offset=stream_head_offset_value,
-            pending=pending_value,
-        )
-
-    @typing_extensions.override
-    def to_transfer_type(self, value: "SendMessageOutput") -> typing.Any:
-        out: dict[str, typing.Any] = {}
-        out["turnNumber"] = value.turn_number
-        out["turnId"] = value.turn_id
-        if value.stream_head_offset is not None:
-            out["streamHeadOffset"] = value.stream_head_offset
-        if value.pending is not None:
-            out["pending"] = value.pending
-        return out
-
-
-@_transfer_type_convertible(_SendMessageOutputTransferTypeConverter)
-@dataclasses.dataclass(slots=True, kw_only=True)
-class SendMessageOutput:
-
-    turn_number: int
-    """Monotonic turn counter for this session"""
-
-    turn_id: str
-    """Unique ID for this turn"""
-
-    stream_head_offset: int | None = None
-    """Stream log offset at message-accept time; start the first pollMessages call from
-    this offset to skip prior-turn history
-    """
-
-    pending: bool | None = None
-    """True if the message was queued behind an active turn rather than dispatched
-    immediately
-    """
-
-
-class _StreamItemTransferTypeConverter(
-    temporalio.converter.TransferTypeConverter["StreamItem", typing.Any]
-):
-    @typing_extensions.override
-    def from_transfer_type(
-        self, value: typing.Any, type_hint: type["StreamItem"]
-    ) -> "StreamItem":
-        violations: list[Violation] = []
-        if not isinstance(value, dict):
-            raise ValidationError([Violation(path="", reason="expected object")])
-        raw = typing.cast("dict[str, typing.Any]", value)
-
-        topic_value: str = typing.cast("typing.Any", None)
-        if "topic" not in raw or raw["topic"] is None:
-            violations.append(Violation(path="topic", reason="required"))
-        else:
-            topic_value_raw = raw["topic"]
-            if not isinstance(topic_value_raw, str):
-                violations.append(Violation(path="topic", reason="expected string"))
-            else:
-                topic_value = topic_value_raw
-
-        data_value: str = typing.cast("typing.Any", None)
-        if "data" not in raw or raw["data"] is None:
-            violations.append(Violation(path="data", reason="required"))
-        else:
-            data_value_raw = raw["data"]
-            if not isinstance(data_value_raw, str):
-                violations.append(Violation(path="data", reason="expected string"))
-            else:
-                data_value = data_value_raw
-
-        offset_value: int = typing.cast("typing.Any", None)
-        if "offset" not in raw or raw["offset"] is None:
-            violations.append(Violation(path="offset", reason="required"))
-        else:
-            offset_value_raw = raw["offset"]
-            offset_value_parsed = _parse_spec_integer(offset_value_raw, "offset", violations)
-            if offset_value_parsed is not None:
-                offset_value = offset_value_parsed
-
-        for key in raw:
-            if key != "topic" and key != "data" and key != "offset":
-                violations.append(Violation(path=key, reason="unknown field"))
-        if violations:
-            raise ValidationError(violations)
-        return StreamItem(
-            topic=topic_value,
-            data=data_value,
-            offset=offset_value,
-        )
-
-    @typing_extensions.override
-    def to_transfer_type(self, value: "StreamItem") -> typing.Any:
-        out: dict[str, typing.Any] = {}
-        out["topic"] = value.topic
-        out["data"] = value.data
-        out["offset"] = value.offset
-        return out
-
-
-@_transfer_type_convertible(_StreamItemTransferTypeConverter)
-@dataclasses.dataclass(slots=True, kw_only=True)
-class StreamItem:
-    """One event from WorkflowStream._log. Data is base64(proto
-    Payload{encoding:json/plain, data:TurnEvent JSON}).
-    """
-
-    topic: str
-    """Stream topic name (turn_events)"""
-
-    data: str
-    """base64-encoded proto Payload containing a TurnEvent"""
-
-    offset: int
-    """Absolute position of this item in the stream"""
 
 
 class _SubagentInfoTransferTypeConverter(

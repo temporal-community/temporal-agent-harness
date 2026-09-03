@@ -51,7 +51,9 @@ from .registry_service_handler import (
 logger = logging.getLogger(__name__)
 
 
-async def _seed_external_servers(client: Client, seed: dict[str, str], agent_id: str) -> None:
+async def _seed_external_servers(
+    client: Client, seed: dict[str, str], agent_id: str
+) -> None:
     """Signal each {name: url} pair to ToolRegistryWorkflow.register_external, under
     one agent_id."""
     registry_handle = client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
@@ -59,18 +61,23 @@ async def _seed_external_servers(client: Client, seed: dict[str, str], agent_id:
         await registry_handle.signal(
             ToolRegistryWorkflow.register_external, args=[agent_id, name, url]
         )
-        logger.info("Seeded external server %r -> %s (agent_id=%r)", name, url, agent_id)
+        logger.info(
+            "Seeded external server %r -> %s (agent_id=%r)", name, url, agent_id
+        )
 
 
 async def main(
-    seed_external_servers: dict[str, str] | None = None, seed_agent_id: str | None = None
+    seed_external_servers: dict[str, str] | None = None,
+    seed_agent_id: str | None = None,
 ) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
     if seed_external_servers and not seed_agent_id:
-        raise SystemExit("GATEWAY_SEED_AGENT_ID is required when GATEWAY_SEED_EXTERNAL_SERVERS is set")
+        raise SystemExit(
+            "GATEWAY_SEED_AGENT_ID is required when GATEWAY_SEED_EXTERNAL_SERVERS is set"
+        )
 
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
@@ -107,7 +114,9 @@ async def main(
         ],
     )
     async with worker:
-        logger.info("Durable Tool Call Gateway ready — task_queue=%r", REGISTRY_TASK_QUEUE)
+        logger.info(
+            "Durable Tool Call Gateway ready — task_queue=%r", REGISTRY_TASK_QUEUE
+        )
         if seed_external_servers:
             assert seed_agent_id is not None
             await _seed_external_servers(client, seed_external_servers, seed_agent_id)

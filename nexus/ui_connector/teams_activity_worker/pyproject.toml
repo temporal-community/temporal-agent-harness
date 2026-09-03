@@ -5,6 +5,7 @@ description = "Temporal activity worker for Microsoft Teams outbound messaging"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "a2a-sdk>=1.1.2",
     "microsoft-teams-apps>=2.0.14,<3",
     "temporalio>=1.15.0,<2",
 ]
