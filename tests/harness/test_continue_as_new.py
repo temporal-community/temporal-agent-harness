@@ -135,6 +135,55 @@ class RolloverProbeAgent:
         self._conversation = list(state["conversation"])
 
 
+@workflow.defn(name="HeldTurnProbeAgent")
+@agent.defn
+class HeldTurnProbeAgent:
+    """The same agent, but its first turn stays in flight until a second message is accepted.
+
+    A message queued AT the boundary is the case worth testing and the one the scheduler almost
+    never produces on its own: this agent's turn is a list append, so turn one is over long
+    before a test can send turn two, and the session rolls over from an empty queue. Turn two
+    then lands on a settled successor and is answered by a route that says nothing about the
+    handover — a green test about a different scenario.
+
+    So the ordering is arranged rather than hoped for, on exactly the condition under test:
+    turn one returns once the runner reports an accepted turn waiting behind it. Only the
+    session's first turn holds, so the carried message is answered as soon as the successor
+    picks it up rather than waiting for a third that never comes.
+    """
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+            enable_message_queuing_default=True,
+        )
+        self._conversation: list[str] = []
+
+    @workflow.run
+    async def run(self, _config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+    @agent.accepts
+    async def ask(self, message: TextMessage) -> TextReply:
+        """Append this message, holding the session's first turn open until one is queued."""
+        self._conversation.append(message.text)
+        if len(self._conversation) == 1:
+            await workflow.wait_condition(
+                lambda: self._runner.current_status.pending_turns != []
+            )
+        return TextReply(text=" ".join(self._conversation))
+
+    @agent.snapshot
+    def snapshot(self) -> dict[str, Any]:
+        return {"conversation": self._conversation}
+
+    @agent.restore
+    def restore(self, state: dict[str, Any]) -> None:
+        self._conversation = list(state["conversation"])
+
+
 @workflow.defn(name="ForgetfulProbeAgent")
 @agent.defn
 class ForgetfulProbeAgent:
@@ -328,6 +377,7 @@ class SubagentParentProbeAgent:
 
 _AGENTS = [
     RolloverProbeAgent,
+    HeldTurnProbeAgent,
     ForgetfulProbeAgent,
     OwnStreamProbeAgent,
     SharedStreamProbeAgent,
@@ -436,6 +486,23 @@ async def _await_rollover(client: Client, workflow_id: str, original_run_id: str
             if run_id != original_run_id:
                 return run_id
             await asyncio.sleep(0.05)
+
+
+async def _handover_into(client: Client, workflow_id: str, run_id: str):
+    """The :class:`AgentResumeState` a run was started with, read off its own history.
+
+    The successor's ``WorkflowExecutionStarted`` input is the handover itself rather than a
+    consequence of it, so it is the one place that distinguishes a message carried ACROSS the
+    boundary from one that merely arrived after it — the two are indistinguishable from the
+    outside, and only one of them is what a queued message needs the rollover to do.
+    """
+    handle = client.get_workflow_handle(workflow_id, run_id=run_id)
+    async for event in handle.fetch_history_events():
+        if event.event_type == EventType.EVENT_TYPE_WORKFLOW_EXECUTION_STARTED:
+            payloads = event.workflow_execution_started_event_attributes.input.payloads
+            config = (await client.data_converter.decode(payloads, [AgentConfig]))[0]
+            return config.resume
+    raise AssertionError(f"run {run_id} has no WorkflowExecutionStarted event")
 
 
 def _rollover_warnings(caplog) -> list[str]:
@@ -612,19 +679,38 @@ async def test_a_message_accepted_just_before_the_boundary_is_still_answered(
     """A queued message is work the session already promised: ``send_agent_message`` returned an
     accepted turn number, so its caller believes the turn will run. The queue is therefore
     carried whole rather than reconstructed — dropping it would lose a message the client was
-    told had landed, and renumbering it would make every later ``expected_turn`` wrong."""
+    told had landed, and renumbering it would make every later ``expected_turn`` wrong.
+
+    The ordering that makes this the interesting case is arranged rather than hoped for (see
+    :class:`HeldTurnProbeAgent`) and then read back off the successor's own start event, because
+    a message answered after the boundary and a message carried across it look identical from
+    the outside and only one of them is this test's subject.
+    """
     client, task_queue = client_and_queue
-    handle = await _start(client, task_queue)
+    handle = await _start(client, task_queue, "HeldTurnProbeAgent")
 
     await _send(client, handle.id, "apples", 1)
-    # Queued behind turn 1, which is the state the rollover has to carry. Both turns are sent
-    # before anything is read, so the second is admitted while the first is still in flight.
+    # Admitted while turn 1 is still in flight — which is both what leaves it in the queue and
+    # what releases turn 1, so the rollover is decided with this message unstarted behind it.
     queued = await _send(client, handle.id, "bananas", 2)
+    assert queued.pending
 
-    await _await_rollover(client, handle.id, str(handle.result_run_id))
+    successor = await _await_rollover(client, handle.id, str(handle.result_run_id))
     rollover_after_one_turn()
 
+    # The message crossed the boundary rather than arriving after it: the successor was started
+    # holding turn 1's number and turn 2's envelope, under the same turn_id its caller was given.
+    handover = await _handover_into(client, handle.id, successor)
+    assert handover is not None
+    assert handover.turn_number == 1
+    assert [q.message.payload["text"] for q in handover.pending_turns] == ["bananas"]
+    assert [q.turn_id for q in handover.pending_turns] == [queued.turn_id]
+
     assert await _reply_to(client, handle.id, queued) == "apples bananas"
+    # Answered once, not twice. A second dispatch of the carried message would both say
+    # "bananas" again and consume turn 3's number, so this line fails as a doubled conversation
+    # or as a stale turn.
+    assert await _say(client, handle.id, "cherries", 3) == "apples bananas cherries"
 
 
 async def test_a_client_is_carried_across_even_when_nothing_of_the_log_survives(
