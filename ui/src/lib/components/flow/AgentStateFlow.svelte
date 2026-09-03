@@ -11,6 +11,9 @@
     type NodeTypes
   } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
+  import Badge from "$lib/components/primitives/Badge.svelte";
+  import IconButton from "$lib/components/primitives/IconButton.svelte";
+  import MetricStrip from "$lib/components/primitives/MetricStrip.svelte";
   import type { AgentGraph, AgentNodeData } from "$lib/state/flowProjection";
   import AgentStateNode from "./AgentStateNode.svelte";
   import AgentWorkflowNode from "./AgentWorkflowNode.svelte";
@@ -25,6 +28,7 @@
   let nodes = $state.raw<Node<AgentNodeData>[]>([]);
   let edges = $state.raw<Edge[]>([]);
   let inspectedNode = $state<Node<AgentNodeData> | null>(null);
+  let inspectorElement = $state<HTMLDialogElement | null>(null);
   let flowWrapElement = $state<HTMLDivElement | null>(null);
   let flowViewportWidth = $state(0);
   let flowViewportHeight = $state(0);
@@ -122,12 +126,16 @@
     inspectedNode = null;
   }
 
-  function handleInspectorKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") closeInspector();
-  }
+  /* showModal() rather than the `open` attribute, which is what this used to
+     set. The top layer is what grants a dialog its focus trap, its Escape, its
+     focus restore, and a real ::backdrop; with `open` alone the browser gives
+     none of them, so Escape and the scrim were hand-rolled and the focus
+     behaviour was simply missing. */
+  $effect(() => {
+    const element = inspectorElement;
+    if (element && !element.open) element.showModal();
+  });
 </script>
-
-<svelte:window onkeydown={handleInspectorKeydown} />
 
 <div class="flow-wrap" bind:this={flowWrapElement}>
   <SvelteFlow
@@ -153,47 +161,47 @@
   {#if inspectedNode}
     {@const data = inspectedNode.data}
     {@const detail = detailText(data)}
-    <button
-      type="button"
-      class="inspector-backdrop"
-      aria-label="Close node context"
-      onclick={closeInspector}
-    ></button>
+    <!-- The scrim is the dialog's own ::backdrop now, so there is no element
+         between the canvas and the dialog to catch the click. A click that lands
+         on the dialog itself can only have come from the backdrop, because the
+         body fills it edge to edge. -->
     <dialog
+      bind:this={inspectorElement}
       class={`node-inspector ${data.tone}`}
       aria-label={`${data.title} context`}
-      open
+      onclose={closeInspector}
+      onclick={(event) => {
+        if (event.target === inspectorElement) inspectorElement?.close();
+      }}
     >
-      <header class="inspector-header">
-        <div class="inspector-heading">
-          <span class={`inspector-dot ${data.dotTone ?? data.tone}`} aria-hidden="true"></span>
-          <div>
-            <h2>{data.title}</h2>
-            <p>{data.subtitle ?? "state diagram node"}</p>
+      <div class="inspector-body">
+        <header class="inspector-header">
+          <div class="inspector-heading">
+            <span class={`inspector-dot ${data.dotTone ?? data.tone}`} aria-hidden="true"></span>
+            <div>
+              <h2>{data.title}</h2>
+              <p>{data.subtitle ?? "state diagram node"}</p>
+            </div>
           </div>
-        </div>
-        <div class="inspector-actions">
-          <span class="inspector-state">{data.state}</span>
-          <button type="button" class="close-button" aria-label="Close node context" onclick={closeInspector}>
-            <X size={18} />
-          </button>
-        </div>
-      </header>
+          <div class="inspector-actions">
+            <Badge label={data.state} tone={data.statusTone ?? data.tone} size="sm" />
+            <IconButton label="Close node context" onclick={() => inspectorElement?.close()}>
+              <X size={16} />
+            </IconButton>
+          </div>
+        </header>
 
-      {#if data.metrics?.length}
-        <div class="inspector-metrics">
-          {#each data.metrics as metric}
-            <span class="kicker"><strong>{metric.value}</strong>{metric.label}</span>
-          {/each}
-        </div>
-      {/if}
+        {#if data.metrics?.length}
+          <MetricStrip metrics={data.metrics} />
+        {/if}
 
-      <div class="inspector-content">
-        <div class="kicker">{detail.label}</div>
-        <pre
-          class={`expanded-detail ${detail.kind}`}
-          data-language={detail.kind === "json" ? "json" : detail.kind === "code" ? "code" : undefined}
-        ><code>{detail.text}</code></pre>
+        <div class="inspector-content">
+          <div class="kicker">{detail.label}</div>
+          <pre
+            class={`expanded-detail ${detail.kind}`}
+            data-language={detail.kind === "json" ? "json" : detail.kind === "code" ? "code" : undefined}
+          ><code>{detail.text}</code></pre>
+        </div>
       </div>
     </dialog>
   {/if}
@@ -208,33 +216,31 @@
     background: var(--surface-0);
   }
 
-  .inspector-backdrop {
-    position: absolute;
-    inset: 0;
-    z-index: 20;
-    border: 0;
-    background: rgba(0, 0, 0, 0.42);
-    cursor: default;
-  }
-
+  /* Centred by the UA's own :modal rule rather than by a translate, which is
+     the other thing the top layer hands over for free. */
   .node-inspector {
     --tone-color: var(--text-3);
-    position: absolute;
-    z-index: 21;
-    left: 50%;
-    top: 50%;
-    width: min(760px, calc(100% - 48px));
-    max-height: min(720px, calc(100% - 48px));
-    transform: translate(-50%, -50%);
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding: 20px;
-    border: 2px solid color-mix(in srgb, var(--tone-color) 72%, white 6%);
-    border-radius: var(--radius-xl);
+    width: min(760px, calc(100% - var(--gutter) * 4));
+    max-height: min(720px, calc(100% - var(--gutter) * 4));
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--tone-color) 72%, white 6%);
     background: color-mix(in srgb, var(--tone-color) 9%, var(--surface-2));
     color: var(--text-1);
     box-shadow: var(--shadow-modal);
+  }
+
+  .node-inspector::backdrop {
+    background: var(--overlay-scrim);
+  }
+
+  /* The inset lives here, not on the dialog, so the dialog's own box is only
+     ever the backdrop's click target. */
+  .inspector-body {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gutter);
+    padding: var(--gutter);
   }
 
   .node-inspector.neutral { --tone-color: var(--text-3); }
@@ -251,14 +257,14 @@
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 16px;
+    gap: var(--gutter);
     min-width: 0;
   }
 
   .inspector-heading {
     display: flex;
     align-items: flex-start;
-    gap: 12px;
+    gap: var(--gutter-tight);
     min-width: 0;
   }
 
@@ -270,21 +276,23 @@
   }
 
   .inspector-heading p {
-    margin: 5px 0 0;
+    margin: var(--gap-xs) 0 0;
     color: var(--text-2);
     font-size: var(--font-lg);
     line-height: 1.35;
     word-break: break-word;
   }
 
+  /* The one part of the header with no primitive behind it: a tone square, the
+     same mark Chip draws as its pip and the node card draws beside its title.
+     Sized by the pip token so all three stay one size, and unringed because the
+     elevation layer has no blooms in it. */
   .inspector-dot {
     flex: 0 0 auto;
-    width: 11px;
-    height: 11px;
-    margin-top: 8px;
-    border-radius: var(--radius-chip);
+    width: var(--pip-lg);
+    height: var(--pip-lg);
+    margin-top: var(--gap-md);
     background: var(--tone-color);
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--tone-color) 18%, transparent);
   }
 
   .inspector-dot.neutral { background: var(--text-3); }
@@ -300,69 +308,15 @@
   .inspector-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--gap-md);
     flex: 0 0 auto;
-  }
-
-  .inspector-state {
-    max-width: 190px;
-    padding: 5px 10px;
-    border: 1px solid color-mix(in srgb, var(--tone-color) 34%, var(--border));
-    border-radius: var(--radius-chip);
-    color: var(--text-2);
-    background: color-mix(in srgb, var(--tone-color) 10%, var(--surface-1));
-    font-size: var(--font-md);
-    font-weight: 700;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .close-button {
-    display: inline-grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--surface-3) 72%, transparent);
-    color: var(--text-2);
-    cursor: pointer;
-  }
-
-  .close-button:hover {
-    color: var(--text-1);
-    border-color: var(--border-strong);
-  }
-
-  .inspector-metrics {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-
-  .inspector-metrics span {
-    min-width: 84px;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--surface-1) 84%, transparent);
-  }
-
-  .inspector-metrics strong {
-    display: block;
-    margin-bottom: 2px;
-    color: var(--text-1);
-    font-size: var(--font-lg);
-    font-variant-numeric: tabular-nums;
-    text-transform: none;
   }
 
   .inspector-content {
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 7px;
+    gap: var(--gap-sm);
   }
 
   .expanded-detail {
@@ -370,14 +324,13 @@
     min-height: 180px;
     max-height: min(520px, calc(100vh - 260px));
     margin: 0;
-    padding: 16px;
+    padding: var(--gutter);
     overflow: auto;
     border: 1px solid color-mix(in srgb, var(--tone-color) 22%, var(--border));
-    border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-0) 86%, black 10%);
     color: var(--text-2);
     font-family: var(--font-mono);
-    font-size: var(--font-lg);
+    font-size: var(--font-code);
     line-height: 1.55;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -385,7 +338,8 @@
 
   .expanded-detail.code,
   .expanded-detail.json {
-    padding-top: 34px;
+    /* The gutter, plus a chip row for the language tag to sit in. */
+    padding-top: calc(var(--gutter) + var(--control-height-xs));
     border-color: var(--code-block-border);
     background: var(--code-block-bg);
     color: var(--code-block-text);
@@ -394,22 +348,12 @@
     overflow-wrap: normal;
   }
 
+  /* app.css draws the language tag; this only says where to put it. */
   .expanded-detail.code::before,
   .expanded-detail.json::before {
-    content: attr(data-language);
     position: absolute;
-    top: 9px;
-    right: 10px;
-    padding: 2px 7px;
-    border: 1px solid var(--code-label-border);
-    border-radius: var(--radius-chip);
-    background: var(--code-label-bg);
-    color: var(--code-label-text);
-    font-family: var(--font-mono);
-    font-size: var(--font-xs);
-    font-weight: 750;
-    line-height: 1.2;
-    letter-spacing: 0;
+    top: var(--gap-md);
+    right: var(--gap-md);
   }
 
   :global(.svelte-flow__edges) {
