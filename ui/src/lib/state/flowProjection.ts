@@ -140,6 +140,17 @@ const stateNodeWidth = 230;
 const largeStateNodeWidth = 255;
 const stateNodeHeight = 130;
 const largeStateNodeHeight = 150;
+/**
+ * What a card measures once it carries a Result region, which AgentStateNode
+ * holds at a fixed height on purpose. Reserved here rather than measured,
+ * because these positions are computed from data and never from the DOM — a
+ * card taller than its reservation overlaps the runtime boundary it sits in.
+ *
+ * One number for every kind of result, including scripts: the region is one
+ * fixed height whatever it holds, which is what replaced the old special case
+ * that reserved 210px for nodes whose detail happened to parse as a script.
+ */
+const resultNodeHeight = 231;
 const runtimeColumnGap = 45;
 const runtimeRowGap = 45;
 const modelReasoningGap = 24;
@@ -418,7 +429,7 @@ function codeModeContainerDimensions(childCount: number): NodeDimensions {
       Math.max(0, columns - 1) * codeModeColumnGap,
     height:
       codeModeHeaderHeight +
-      rows * stateNodeHeight +
+      rows * resultNodeHeight +
       Math.max(0, rows - 1) * codeModeRowGap +
       codeModePadding
   };
@@ -429,7 +440,7 @@ function codeModeChildPosition(index: number): { x: number; y: number } {
   const row = Math.floor(index / codeModeColumns);
   return {
     x: codeModePadding + column * (stateNodeWidth + codeModeColumnGap),
-    y: codeModeHeaderHeight + row * (stateNodeHeight + codeModeRowGap)
+    y: codeModeHeaderHeight + row * (resultNodeHeight + codeModeRowGap)
   };
 }
 
@@ -551,18 +562,6 @@ function textFromReply(data: { text?: unknown; output?: unknown }): string {
     if ("message" in output && typeof output.message === "string") return output.message;
   }
   return "";
-}
-
-function hasScriptDetail(detail: string): boolean {
-  try {
-    const parsed = JSON.parse(detail);
-    return (
-      typeof parsed?.script === "string" ||
-      typeof parsed?.payload?.script === "string"
-    );
-  } catch {
-    return false;
-  }
 }
 
 export function buildAgentGraph(
@@ -926,14 +925,13 @@ export function buildAgentGraph(
 
   function nodeDataFor(id: LocalNodeId): AgentNodeData {
     if (id === "input") {
-      const detail = currentUserMessage || queuedMessage;
       return {
         tone: status === "running" ? "queue" : "neutral",
         title: "Input",
         state: inputState,
         subtitle: "user message",
-        detail,
-        nodeHeight: hasScriptDetail(detail) ? 210 : undefined,
+        detail: currentUserMessage || queuedMessage,
+        nodeHeight: resultNodeHeight,
         active: latestNodeId === id
       };
     }
@@ -966,12 +964,15 @@ export function buildAgentGraph(
             ? `${formatTokens(usage.tokens.thought)} thought tokens`
             : "thinking trace",
         detail: reasoningDetail,
+        nodeHeight: resultNodeHeight,
         active: latestNodeId === id
       };
     }
     if (isToolRuntimeNodeId(id)) {
       const runtime = tools.get(toolIdFromRuntimeNodeId(id));
-      const detail = runtime?.detail;
+      /* Always a string: the Result region is a slot the node reserves, not
+         something that appears once the tool has said anything. */
+      const detail = runtime?.detail ?? "";
       const childCount = runtime?.id ? codeModeHostChildIds(runtime.id).length : 0;
       const codeModeDimensions =
         runtime?.isCodeMode && childCount > 0
@@ -987,8 +988,7 @@ export function buildAgentGraph(
         detail,
         size: codeModeDimensions ? "container" : undefined,
         nodeWidth: codeModeDimensions?.width,
-        nodeHeight: codeModeDimensions?.height ??
-          (detail && hasScriptDetail(detail) ? 210 : undefined),
+        nodeHeight: codeModeDimensions?.height ?? resultNodeHeight,
         active: latestNodeId === id,
         toolId: runtime?.id,
         codeMode: runtime?.isCodeMode,
@@ -1020,6 +1020,7 @@ export function buildAgentGraph(
         state: subagentState,
         subtitle: subagentSubtitle,
         detail: subagentDetail,
+        nodeHeight: resultNodeHeight,
         active: latestNodeId === id
       };
     }
@@ -1030,6 +1031,7 @@ export function buildAgentGraph(
         state: replyState,
         subtitle: "streaming response",
         detail: replyText,
+        nodeHeight: resultNodeHeight,
         active: latestNodeId === id
       };
     }
