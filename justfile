@@ -177,10 +177,27 @@ teams-webhook:
 
 # ===== Run ALL example agents behind one UI (each example is still runnable from its own dir) =====
 
-# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+# Start the local Temporal dev server the rest of the stack connects to (needs the `temporal` CLI).
+# `start-dev` binds only what its flags say — the TOML profile merely tells *clients* where to
+# connect — so read the profile back out of the CLI and pass it as flags; the Web UI lands on the
+# gRPC port + 1000. With no profile, stock localhost:7233/default (Web UI http://localhost:8233).
 # Start this fresh, or run `just reset-manager` before `server`, so the merged registry takes effect.
 temporal:
-    temporal server start-dev
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # No profile at all (fresh clone) is a hard error from `config get`, hence the `|| true`.
+    address=$(temporal config get --prop address 2>/dev/null | awk '$1 == "address" { print $2 }') || true
+    namespace=$(temporal config get --prop namespace 2>/dev/null | awk '$1 == "namespace" { print $2 }') || true
+    ip=localhost
+    port=7233
+    # The host has to hold a non-digit, or a bare "7433" would split as a hostname. An empty,
+    # bracketed-IPv6 or otherwise unsplittable address leaves the stock defaults above in place.
+    if [[ $address =~ ^([0-9A-Za-z.-]*[A-Za-z.-][0-9A-Za-z.-]*)(:([0-9]+))?$ ]]; then
+        ip=${BASH_REMATCH[1]}
+        port=${BASH_REMATCH[3]:-$port}
+    fi
+    set -x
+    temporal server start-dev --ip "$ip" --port "$port" --namespace "${namespace:-default}"
 
 # Run the shared, agent-agnostic session-manager worker (hosts only SessionManagerWorkflow).
 session-manager:
