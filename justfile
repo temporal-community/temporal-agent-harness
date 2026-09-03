@@ -57,6 +57,12 @@ package: app-build app-check
 check-rollover-subagent *ARGS:
     uv run python tests/harness/check_subagent_survives_rollover.py {{ARGS}}
 
+# Prove that a session whose task queue has no worker produces no query to that workflow.
+# Needs no server: the point is what the app tries to SEND, so Temporal is stood in for and
+# every query counted. Runs in about a second.
+check-workerless-queries *ARGS:
+    uv run python tests/web/check_workerless_session_queries.py {{ARGS}}
+
 # Assert `just temporal` turns a client profile into the right `start-dev` flags: an address it can
 # split is passed through, anything else falls back to the stock defaults. Runs the real recipe with
 # a shim ahead of `temporal` on PATH, so it echoes its argv instead of binding a port. Outside
