@@ -428,19 +428,26 @@ class _StreamEventPublisher:
 
     def _consolidated_args(
         self, index: int, call: FunctionCallStep
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         """Resolve a function call's args: prefer the buffered JSON-string deltas,
         else fall back to any args inlined on the ``FunctionCallStep`` itself.
 
-        Best-effort for display/approval: a malformed buffer yields ``{}`` rather
-        than failing the activity (the workflow-side reducer does the authoritative
-        parse on its own copy of the stream).
+        Best-effort for display/approval: never raises, so a malformed buffer cannot fail
+        the activity (the workflow-side reducer does the authoritative parse on its own copy
+        of the stream).
+
+        ``{}`` and ``None`` are NOT interchangeable here. No buffer and no inline args means
+        the call takes no arguments — that is ``{}``, a fact. A buffer we could not parse
+        means the arguments are unknown — that is ``None``. The drain reaches this with a
+        buffer truncated mid-JSON whenever a stream dies with a call step open, and reporting
+        that as ``{}`` would put a confident "called with no arguments" in the durable
+        transcript for a call whose arguments we watched stream past.
         """
         raw = self._tool_request_arg_buffers.pop(index, "")
         if raw:
             try:
                 parsed = json.loads(raw)
             except json.JSONDecodeError:
-                return {}
-            return parsed if isinstance(parsed, dict) else {}
+                return None
+            return parsed if isinstance(parsed, dict) else None
         return dict(call.arguments) if call.arguments else {}

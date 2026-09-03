@@ -484,10 +484,15 @@ class ToolRequested(ToolEvent[Literal[AgentEventType.TOOL_REQUESTED]]):
     """
 
     type: Literal[AgentEventType.TOOL_REQUESTED] = AgentEventType.TOOL_REQUESTED
-    tool_input: dict[str, Any] = Field(
+    tool_input: dict[str, Any] | None = Field(
         default_factory=dict,
         description="The full arguments of the requested call, so a UI can render the pending "
-        "call and a future approval policy can evaluate it before it runs.",
+        "call and a future approval policy can evaluate it before it runs. ``None`` means the "
+        "model streamed arguments we could not parse — a stream cut mid-JSON leaves a truncated "
+        "buffer — as distinct from ``{}``, which asserts the call genuinely takes no arguments. "
+        "Unknown is not empty: collapsing the two would render a lost payload as a confident "
+        "claim that the model passed nothing. A reader (and an approval policy) must be able to "
+        "tell 'we don't know' from 'there was nothing'.",
     )
 
 

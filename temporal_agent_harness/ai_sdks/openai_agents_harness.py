@@ -316,19 +316,26 @@ class OpenAIStreamObserver:
         )
 
 
-def _parse_tool_args(raw: str) -> dict[str, Any]:
+def _parse_tool_args(raw: str) -> dict[str, Any] | None:
     """Best-effort parse of a function call's JSON-string arguments.
 
-    For display/approval only: a malformed or non-object payload yields ``{}``
-    rather than failing the streaming activity (the workflow-side reducer does the
-    authoritative parse on its own copy of the stream)."""
+    For display/approval only: never raises, so a malformed payload cannot fail the
+    streaming activity (the workflow-side reducer does the authoritative parse on its own
+    copy of the stream).
+
+    ``{}`` and ``None`` are NOT interchangeable here. No payload at all means the call takes
+    no arguments — that is ``{}``, a fact. A payload we could not parse means the arguments
+    are unknown — that is ``None``. The drain reaches this with a buffer truncated mid-JSON
+    whenever a stream dies with a call open, and reporting that as ``{}`` would put a
+    confident "called with no arguments" in the durable transcript for a call whose arguments
+    we watched stream past."""
     if not raw:
         return {}
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _to_token_usage(usage: Any) -> TokenUsage | None:

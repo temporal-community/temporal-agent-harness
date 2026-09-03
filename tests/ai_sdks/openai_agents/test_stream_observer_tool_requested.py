@@ -245,6 +245,40 @@ async def test_chat_completions_call_survives_stream_ending_before_its_terminal(
     assert requested[0].tool_input == {"q": "cats"}
 
 
+@pytest.mark.asyncio
+async def test_a_call_cut_mid_json_reports_unknown_args_not_empty_ones(
+    fake_publisher: _FakePublisher,
+):
+    # Cutting at 3 instead of 4 stops between the two arg deltas, so the buffer holds `{"q": `
+    # — a real payload we watched stream past, but not parseable JSON. The tempting thing is to
+    # fall back to {}, which is what this did before: json.loads raises, return {}. But {} is a
+    # claim, not an absence — it says the model called this tool with no arguments. On screen
+    # and to an approval policy that is indistinguishable from a genuinely argument-less call,
+    # and it resolves the wrong way: a lost payload renders as a confident "took no args".
+    # Unknown is not empty, so the unknown stays None.
+    await _drive_chat_completions(
+        fake_publisher,
+        [
+            _chunk([_tool_call(0, call_id="call_HALF", name="lookup")], None),
+            _chunk([_tool_call(0, args='{"q": ')], None),
+            _chunk([_tool_call(0, args='"cats"}')], None),
+            _chunk(None, "tool_calls"),
+        ],
+        stop_after=3,
+    )
+
+    requested = _requested(fake_publisher)
+    # The event itself still arrives — losing the args must not also lose the request.
+    assert len(requested) == 1
+    assert requested[0].tool_id == "call_HALF"
+    assert requested[0].tool_name == "lookup"
+    assert requested[0].tool_input is None
+    # The distinction is the whole point, so pin both sides of it: an argument-less call still
+    # reports {} (test_drained_tool_requested_stays_inside_the_model_interaction_bracket drives
+    # exactly that shape), and these two must not collapse onto each other.
+    assert requested[0].tool_input != {}
+
+
 # ---------------------------------------------------------------------------
 # The Responses backend: two terminals fire, so exactly-once has to hold
 # ---------------------------------------------------------------------------
@@ -374,3 +408,8 @@ async def test_drained_tool_requested_stays_inside_the_model_interaction_bracket
         ToolRequested,
         ModelInteractionEnded,
     ]
+    # No arg deltas streamed at all, so {} is the truth here and must stay {} — the other side
+    # of the distinction test_a_call_cut_mid_json_reports_unknown_args_not_empty_ones pins.
+    # Reporting None would be the mirror-image lie: an em dash claiming "we don't know" for a
+    # call we watched take no arguments.
+    assert _requested(fake_publisher)[0].tool_input == {}

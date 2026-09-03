@@ -212,6 +212,35 @@ async def test_custom_tool_requested_survives_stream_ending_mid_step(
 
 
 @pytest.mark.asyncio
+async def test_a_step_cut_mid_json_reports_unknown_args_not_empty_ones(
+    fake_publisher: _FakePublisher,
+):
+    # Same truncation one fragment earlier, so the buffer holds `{"q": ` — a real payload we
+    # watched stream past, but not parseable JSON. The tempting fallback is {}, which is what
+    # this did before: JSONDecodeError, return {}. But {} is a claim, not an absence — it says
+    # the model called this tool with no arguments. On screen and to an approval policy that is
+    # indistinguishable from a genuinely argument-less call, and it resolves the wrong way: a
+    # lost payload renders as a confident "took no args". Unknown is not empty.
+    await _run(
+        [
+            _function_call_start(0, "call_HALF", "search"),
+            _args_delta(0, '{"q": '),
+        ]
+    )
+
+    requested = [e for e in fake_publisher.events if isinstance(e, ToolRequested)]
+    # The event itself still arrives — losing the args must not also lose the request.
+    assert len(requested) == 1
+    assert requested[0].tool_id == "call_HALF"
+    assert requested[0].tool_name == "search"
+    assert requested[0].tool_input is None
+    # The distinction is the whole point, so pin both sides: a step that streamed no args at all
+    # still reports {} (the bracket test below drives exactly that shape), and the two must not
+    # collapse onto each other.
+    assert requested[0].tool_input != {}
+
+
+@pytest.mark.asyncio
 async def test_drained_tool_events_stay_inside_the_model_interaction_bracket(
     fake_publisher: _FakePublisher,
 ):
@@ -221,6 +250,12 @@ async def test_drained_tool_events_stay_inside_the_model_interaction_bracket(
 
     kinds = [type(e) for e in fake_publisher.events]
     assert kinds == [ModelInteractionStarted, ToolRequested, ModelInteractionEnded]
+    # No arg deltas streamed and none inlined on the step, so {} is the truth here and must stay
+    # {} — the other side of the distinction test_a_step_cut_mid_json_reports_unknown_args_not_
+    # empty_ones pins. Reporting None would be the mirror-image lie: an em dash claiming "we
+    # don't know" for a call we watched take no arguments.
+    requested = [e for e in fake_publisher.events if isinstance(e, ToolRequested)]
+    assert requested[0].tool_input == {}
 
 
 @pytest.mark.asyncio

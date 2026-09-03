@@ -305,13 +305,23 @@ def _dump(obj: Any) -> dict[str, Any]:
     return dumped if isinstance(dumped, dict) else {"value": dumped}
 
 
-def _args_as_dict(part: BaseToolCallPart) -> dict[str, Any]:
-    """Best-effort dict of a tool call's arguments for display/approval (never raises)."""
+def _args_as_dict(part: BaseToolCallPart) -> dict[str, Any] | None:
+    """Best-effort dict of a tool call's arguments for display/approval (never raises).
+
+    ``{}`` and ``None`` are NOT interchangeable here. Falsy args mean the call takes no
+    arguments — that is ``{}``, a fact, and ``args_as_dict`` already returns it before
+    parsing. Args we could not parse mean the arguments are unknown — that is ``None``. The
+    drain reaches this with a partial JSON string whenever a stream dies with a call open.
+
+    ``raise_if_invalid`` is what separates the two: by default the SDK swallows malformed
+    JSON into ``{'INVALID_JSON': '<raw>'}``, which is shaped for feeding a retry back to a
+    model API, not for a transcript — it reads as a call whose argument was literally named
+    INVALID_JSON. Opting into the raise lets the unknown stay unknown.
+    """
     try:
-        args = part.args_as_dict()
+        return part.args_as_dict(raise_if_invalid=True)
     except Exception:  # noqa: BLE001 - display-only; a malformed payload must not break streaming
-        return {}
-    return args if isinstance(args, dict) else {}
+        return None
 
 
 def _to_token_usage(usage: Any) -> TokenUsage | None:

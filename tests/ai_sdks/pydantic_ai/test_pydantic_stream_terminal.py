@@ -292,6 +292,34 @@ async def test_drain_consolidates_the_streamed_arg_fragments(
 
 
 @pytest.mark.asyncio
+async def test_a_call_cut_mid_json_reports_unknown_args_not_empty_ones(
+    fake_publisher: _FakePublisher,
+):
+    # Drop the closing fragment so the folded args are `{"n": ` — a real payload we watched
+    # stream past, but not parseable JSON. This integration failed differently from the other
+    # two: args_as_dict defaults to burying malformed JSON as {'INVALID_JSON': '<raw>'}, a shape
+    # meant for feeding a retry back to a model API, so the transcript claimed the model passed
+    # an argument named INVALID_JSON. Wrong in the other direction from {} — invented content
+    # rather than absent content — but the same durable lie about what the model did.
+    await _drive(
+        [
+            _tool_start(0, "call_HALF", "search"),
+            _tool_args_delta(0, "call_HALF", '{"n": '),
+        ]
+    )
+
+    requested = _requested(fake_publisher)
+    # The event itself still arrives — losing the args must not also lose the request.
+    assert len(requested) == 1
+    assert requested[0].tool_id == "call_HALF"
+    assert requested[0].tool_name == "search"
+    assert requested[0].tool_input is None
+    # Pin both sides of the distinction, and that we did not trade {} for a fabricated key.
+    assert requested[0].tool_input != {}
+    assert requested[0].tool_input != {"INVALID_JSON": '{"n": '}
+
+
+@pytest.mark.asyncio
 async def test_drain_does_not_republish_a_call_that_already_ended(
     fake_publisher: _FakePublisher,
 ):
@@ -322,3 +350,8 @@ async def test_drained_request_stays_inside_the_model_interaction_bracket(
         ToolRequested,
         ModelInteractionEnded,
     ]
+    # No arg fragments folded in, so {} is the truth here and must stay {} — the other side of
+    # the distinction test_a_call_cut_mid_json_reports_unknown_args_not_empty_ones pins.
+    # Reporting None would be the mirror-image lie: an em dash claiming "we don't know" for a
+    # call we watched take no arguments.
+    assert _requested(fake_publisher)[0].tool_input == {}
