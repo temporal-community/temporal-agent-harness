@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -58,6 +59,7 @@ class A2AHandlerConfig:
     workflow_id_prefix: str
     is_message_queuing_enabled: bool
     agent_card: AgentCard
+    start_missing_tasks: bool = True
 
 
 def make_agent_card(
@@ -100,9 +102,7 @@ def make_agent_card(
 def _timestamp(value: float | None = None) -> Timestamp:
     timestamp = Timestamp()
     timestamp.FromDatetime(
-        datetime.fromtimestamp(value, UTC)
-        if value is not None
-        else datetime.now(UTC)
+        datetime.fromtimestamp(value, UTC) if value is not None else datetime.now(UTC)
     )
     return timestamp
 
@@ -155,6 +155,11 @@ class A2AServiceHandler:
         message_metadata = _metadata(message.metadata)
         msg_type = str(message_metadata.get(HARNESS_HANDLER_METADATA_KEY, "ask"))
         payload = message_metadata.get(HARNESS_PAYLOAD_METADATA_KEY)
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                payload = None
         if not isinstance(payload, dict):
             payload = {"text": _message_text(message)}
 
@@ -170,15 +175,23 @@ class A2AServiceHandler:
                 status = await client.get_status()
                 expected_turn = status.current_turn + len(status.pending_turns) + 1
             try:
-                reply = await client.start_and_submit_message(
-                    msg_type,
-                    payload,
-                    expected_turn,
-                    workflow_name=self._config.workflow_name,
-                    task_queue=self._config.agent_task_queue,
-                    start_config=config,
-                    update_id=f"a2a-send-{ctx.request_id}-{attempt}",
-                )
+                if self._config.start_missing_tasks:
+                    reply = await client.start_and_submit_message(
+                        msg_type,
+                        payload,
+                        expected_turn,
+                        workflow_name=self._config.workflow_name,
+                        task_queue=self._config.agent_task_queue,
+                        start_config=config,
+                        update_id=f"a2a-send-{ctx.request_id}-{attempt}",
+                    )
+                else:
+                    reply = await client.submit_message(
+                        msg_type,
+                        payload,
+                        expected_turn,
+                        update_id=f"a2a-send-{ctx.request_id}-{attempt}",
+                    )
                 break
             except StaleTurnError as exc:
                 if expected is not None:

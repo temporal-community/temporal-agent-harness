@@ -27,6 +27,7 @@ from temporalio.common import WorkflowIDConflictPolicy
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
+from temporal_agent_harness.a2a import a2a_nexus_data_converter
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
 
 from .registry import (

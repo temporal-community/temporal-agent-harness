@@ -197,12 +197,29 @@ flowchart TB
     Registry --> A2ARoute --> Agent
 ```
 
+### Browser UI tunnel
+
+This example deliberately opts the packaged browser UI into the same Nexus/A2A
+foundation. The scoped `session-manager` and `server` recipes set the endpoint for
+you. Each send/control is a standalone Nexus operation; the UI still receives SSE
+while one bounded per-turn connector workflow owns the repeated A2A polling.
+The Nexus binding carries requests and responses as standard A2A JSON so its Go
+connector and Python agent backends share one package-independent wire contract.
+
+```mermaid
+flowchart LR
+    Browser[Browser UI] <-->|HTTP and SSE| Driver[Web driver]
+    Driver -->|standalone A2A and controls over Nexus| Agent[Nexus Hello agent]
+    Driver <-->|mount accepted turn| Tunnel[Bounded UI tunnel]
+    Tunnel -->|repeated A2A subscription over Nexus| Agent
+```
+
 Four Temporal namespaces show cross-namespace Nexus calls:
 
 | Namespace | Hosts |
 |---|---|
-| `default` | The agent (`worker.py`), session-manager, FastAPI/UI. |
-| `gateway` | The Durable Tools Gateway. Brokers both `demo` (tool) and `writer` (subagent). |
+| `default` | The agent (`worker.py`) and session-manager Nexus front door. |
+| `gateway` | The Durable Tools Gateway and shared UI tunnel. Brokers both `demo` (tool) and `writer` (subagent). |
 | `nexus-mcp-server` | The demo native tool service. |
 | `nexus-subagent-server` | The demo native subagent's own agent workflow. |
 
@@ -240,7 +257,7 @@ Each in its own terminal, in order:
 
 ```sh
 just temporal                        # 1. local Temporal dev server
-just setup-nexus                     # 2. ONE-SHOT: 4 namespaces + 3 Nexus endpoints
+just setup-nexus                     # 2. ONE-SHOT: 4 namespaces + 4 Nexus endpoints
 just third-party-mcp-server          # 3. demo 3rd-party MCP tool server
 just third-party-subagent            # 4. demo 3rd-party subagent
 just registry                        # 5. durable tools gateway (no seed config -- starts empty)
@@ -250,9 +267,10 @@ just nexus-subagent                  # 7. demo native subagent -- agent workflow
 just register-third-party-mcp-server # 8. ONE-SHOT: registers "demo" under agent_id
                                       #    "NexusHelloAgent"
 just register-third-party-subagent   # 9. ONE-SHOT: registers "writer" under the same agent_id
-just session-manager                 # 10. session-manager worker
-just server                          # 11. builds UI, serves API + UI on :8000
-just worker                          # 12. this example's agent worker
+just session-manager                 # 10. session-manager + Nexus A2A/control front door
+just ui-tunnel                       # 11. durable UI connector tunnel
+just server                          # 12. builds UI, serves API + UI on :8000 through Nexus
+just worker                          # 13. this example's agent worker
 ```
 
 Open http://localhost:8000, pick **Nexus Hello**, start a chat. Ask something that calls
@@ -276,12 +294,14 @@ uv run --extra nexus-mcp --group examples python -m examples.nexus_hello.subagen
 TEMPORAL_NAMESPACE=gateway uv run --extra nexus-mcp --group examples python -m nexus_mcp.durable_tools_gateway.worker
 TEMPORAL_NAMESPACE=nexus-mcp-server uv run --extra nexus-mcp python -m examples.nexus_hello.nexus_tool_service
 TEMPORAL_NAMESPACE=nexus-subagent-server uv run --group examples python -m examples.nexus_hello.native_subagent worker
+(cd nexus/ui_connector && CONNECTOR_NAMESPACE=gateway CONNECTOR_TASK_QUEUE=nexus-ui-tunnel go run ./cmd/tunnel/)
 temporal workflow signal --namespace gateway --workflow-id mcp-tool-registry --name register_external \
     --input '"NexusHelloAgent"' --input '"demo"' --input '"http://127.0.0.1:8765/mcp"'
 temporal workflow signal --namespace gateway --workflow-id mcp-tool-registry --name register_subagent \
     --input '"NexusHelloAgent"' --input '"writer"' --input '"http://127.0.0.1:8766"'
-uv run --group examples python -m examples.session_manager_worker
-uv run --group examples python -m examples.app examples/nexus_hello/agents.toml --host 0.0.0.0 --port 8000
+NEXUS_UI_ENDPOINT=nexus-hello-agent-ui-endpoint uv run --group examples python -m examples.session_manager_worker
+NEXUS_UI_ENDPOINT=nexus-hello-agent-ui-endpoint CONNECTOR_NAMESPACE=gateway CONNECTOR_TASK_QUEUE=nexus-ui-tunnel \
+    uv run --group examples python -m examples.app examples/nexus_hello/agents.toml --host 0.0.0.0 --port 8000
 uv run --extra nexus-mcp --group examples python -m examples.nexus_hello.worker
 ```
 

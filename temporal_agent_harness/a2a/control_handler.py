@@ -25,6 +25,10 @@ from temporal_agent_harness.harness.agent_protocol import (
 )
 
 from .generated import (
+    AcceptedFunction as NexusAcceptedFunction,
+)
+from .generated import (
+    AgentInterfaceOutput,
     AgentStatusOutput,
     ApproveToolCallInput,
     ApproveToolCallOutput,
@@ -77,8 +81,10 @@ def _nexus_operator_command(cmd: OperatorCommand) -> NexusOperatorCommand:
         argument_kwargs["argument"] = NexusOperatorCommandArgument(**arg_kwargs)
     return NexusOperatorCommand(
         name=cmd.name,
+        payload_name=cmd.payload_name,
         label=cmd.label,
         description=cmd.description,
+        aliases=list(cmd.aliases),
         source=cmd.source,
         **argument_kwargs,
     )
@@ -172,6 +178,28 @@ class HarnessControlServiceHandler:
             raise
         return QueryOperatorInterfaceOutput(
             commands=[_nexus_operator_command(command) for command in commands]
+        )
+
+    @sync_operation
+    async def query_agent_interface(
+        self, _ctx: StartOperationContext, input: QuerySessionInput
+    ) -> AgentInterfaceOutput:
+        try:
+            functions = await self._agent_client(input.session_id).get_agent_interface()
+        except RPCError as exc:
+            if _is_workflow_not_found(exc):
+                return AgentInterfaceOutput(handlers=[])
+            raise
+        return AgentInterfaceOutput(
+            handlers=[
+                NexusAcceptedFunction(
+                    name=function.name,
+                    description=function.description,
+                    parameters=json.dumps(function.parameters),
+                    output=json.dumps(function.output),
+                )
+                for function in functions
+            ]
         )
 
     @sync_operation

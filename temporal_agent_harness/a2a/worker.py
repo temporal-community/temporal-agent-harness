@@ -17,6 +17,7 @@ from nexus_a2a import a2a_nexus_data_converter
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from temporal_agent_harness.a2a import a2a_nexus_data_converter
 from temporal_agent_harness.a2a.adapter import (
     A2AHandlerConfig,
     A2AServiceHandler,

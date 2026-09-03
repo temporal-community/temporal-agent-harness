@@ -7,9 +7,8 @@ from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from datetime import timedelta
 
-from temporal_agent_harness.ai_sdks.integration_helpers import ObserverFactory
-
 import pydantic
+import temporalio.api.common.v1
 from agents import ModelProvider, Trace, set_trace_provider
 from agents.run import get_default_agent_runner, set_default_agent_runner
 from agents.tracing import get_trace_provider
@@ -19,10 +18,28 @@ from agents.tracing.provider import DefaultTraceProvider
 # one the SDK uses to parse live API responses. It is in a private module but
 # has no public alias.
 from openai._models import construct_type
+from temporalio.contrib.opentelemetry._tracer_provider import ReplaySafeTracerProvider
+from temporalio.contrib.pydantic import (
+    PydanticJSONPlainPayloadConverter,
+    ToJsonOptions,
+)
+from temporalio.converter import (
+    CompositePayloadConverter,
+    DataConverter,
+    DefaultPayloadConverter,
+)
+from temporalio.plugin import SimplePlugin
+from temporalio.worker import WorkflowRunner
+from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
-import temporalio.api.common.v1
-from temporal_agent_harness.ai_sdks.openai_agents._invoke_model_activity import ModelActivity
-from temporal_agent_harness.ai_sdks.openai_agents._model_parameters import ModelActivityParameters
+from nexus_a2a import a2a_payload_converters
+from temporal_agent_harness.ai_sdks.integration_helpers import ObserverFactory
+from temporal_agent_harness.ai_sdks.openai_agents._invoke_model_activity import (
+    ModelActivity,
+)
+from temporal_agent_harness.ai_sdks.openai_agents._model_parameters import (
+    ModelActivityParameters,
+)
 from temporal_agent_harness.ai_sdks.openai_agents._openai_runner import (
     TemporalOpenAIRunner,
 )
@@ -33,20 +50,6 @@ from temporal_agent_harness.ai_sdks.openai_agents._trace_interceptor import (
     OpenAIAgentsContextPropagationInterceptor,
 )
 from temporal_agent_harness.ai_sdks.openai_agents.workflow import AgentsWorkflowError
-from temporalio.contrib.opentelemetry._tracer_provider import ReplaySafeTracerProvider
-from temporalio.contrib.pydantic import (
-    PydanticJSONPlainPayloadConverter,
-    ToJsonOptions,
-)
-from temporalio.converter import (
-    CompositePayloadConverter,
-    DataConverter,
-    DefaultPayloadConverter,
-    JSONPlainPayloadConverter,
-)
-from temporalio.plugin import SimplePlugin
-from temporalio.worker import WorkflowRunner
-from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
 if typing.TYPE_CHECKING:
     from temporal_agent_harness.ai_sdks.openai_agents import (
@@ -134,14 +137,7 @@ class OpenAIPayloadConverter(CompositePayloadConverter):
         json_payload_converter = _OpenAIJSONPlainPayloadConverter(
             ToJsonOptions(exclude_unset=True)
         )
-        super().__init__(
-            *(
-                c
-                if not isinstance(c, JSONPlainPayloadConverter)
-                else json_payload_converter
-                for c in DefaultPayloadConverter.default_encoding_payload_converters
-            )
-        )
+        super().__init__(*a2a_payload_converters(json_payload_converter))
 
 
 def _data_converter(converter: DataConverter | None) -> DataConverter:

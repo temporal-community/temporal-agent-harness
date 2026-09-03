@@ -70,7 +70,8 @@ class NativeResearchSubagentWorkflow:
 async def _run_worker() -> None:
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
-        **connect_config, data_converter=a2a_nexus_data_converter
+        **connect_config,
+        data_converter=a2a_nexus_data_converter,
     )
     control_config = HarnessControlConfig()
     worker = Worker(
