@@ -18,7 +18,7 @@
 #
 # Run with:  just check-rollover-subagent
 #      or:   uv run python tests/harness/check_subagent_survives_rollover.py
-#            [--address 127.0.0.1:7433] [--namespace agent-harness]
+#            [--address localhost:7233] [--namespace default]
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ from temporalio import workflow
 from temporalio.api.enums.v1 import WorkflowExecutionStatus
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.envconfig import ClientConfig
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from temporal_agent_harness.harness import AgentWorkflowRunner, agent
@@ -310,9 +311,13 @@ async def _terminate_if_running(client: Client, workflow_id: str) -> None:
 
 
 def main() -> int:
+    # Default to the connection the rest of the repo resolves, so this check lands on whatever
+    # server `just worker` does instead of on one machine's private profile. Empty when no config
+    # file is configured or present at all, hence the stock `just temporal` fallback.
+    connect_config = ClientConfig.load_client_connect_config()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--address", default="127.0.0.1:7433")
-    parser.add_argument("--namespace", default="agent-harness")
+    parser.add_argument("--address", default=connect_config.get("target_host", "localhost:7233"))
+    parser.add_argument("--namespace", default=connect_config.get("namespace", "default"))
     args = parser.parse_args()
 
     print(f"--- subagent survives its parent's rollover ({args.address}/{args.namespace})")
