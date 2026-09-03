@@ -1040,6 +1040,16 @@ export class AgentRunController {
            moment below, not the moment the retries give up. Measured at
            31,536ms before this.
 
+           `creatingSession` is the third of the same family and the worst of
+           them, because a BRAND-NEW session is the case that always spends the
+           whole budget: it has published nothing yet, so every attach in the
+           loop answers empty while the workflow stays RUNNING. It gates the
+           composer outright (`composerDisabled`), so the one thing a new
+           session is for — sending it a first message — was locked out for
+           34.1s, measured. Nothing could be sent, so nothing streamed, and
+           reloading looked like the cure: initialize() reaches the same
+           attach without ever setting this flag.
+
            Cleared here rather than by the callers, because they await this
            method: selectSession's own `finally` cannot run until the last retry
            has. The `finally` still clears `sending` as well, for the paths that
@@ -1048,6 +1058,7 @@ export class AgentRunController {
            new session just set. */
         if (isCurrentStream()) {
           this.connecting = false;
+          this.creatingSession = false;
           if (options.clearSendingOnIdle) this.sending = false;
         }
         /* A stream that carried something earned a fresh budget, so hours of
