@@ -264,8 +264,13 @@ function displayTextForMessage(message: AgentInboundMessage): string {
  * merge re-arms a re-dispatched child's gate) yields two identical frames. Keeping the fallback
  * scoped to those frames holds their behavior exactly as it is today while real events, which are
  * the ones whose loss would corrupt the transcript, get an identity that cannot collide.
+ *
+ * Exported for check-frame-key.mjs, which asserts these properties. It held a
+ * hand-copied twin of this function for as long as there was no way to import
+ * one — so the check could agree with itself while disagreeing with the shipped
+ * dedupe, which is the one thing it exists to rule out.
  */
-function frameKey(frame: AgentSseFrame): string {
+export function frameKey(frame: AgentSseFrame): string {
   if (
     "event_offset" in frame.data &&
     "agent_id" in frame.data &&

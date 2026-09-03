@@ -1,29 +1,33 @@
-// ABOUTME: Asserts the frame identity #ingestFrame dedupes on. Mirrors frameKey() from
-// agentRun.svelte.ts, which cannot be imported here because that module is Svelte-compiled. The
-// properties that matter: a redelivered event keys the same (reconnects overlap), two distinct
-// events of one agent never key the same (or the second is silently dropped), and the frames with no
-// offset to report still fall back to the old payload hash rather than colliding on -1.
+// ABOUTME: Asserts the frame identity #ingestFrame dedupes on, imported from
+// agentRun.svelte.ts rather than copied. The properties that matter: a redelivered event keys the
+// same (reconnects overlap), two distinct events of one agent never key the same (or the second is
+// silently dropped), and the frames with no offset to report still fall back to the old payload hash
+// rather than colliding on -1.
 //   node ui/scripts/check-frame-key.mjs
-
+//
+// This file used to carry a hand-copied twin of frameKey, kept "in step" by hand. That is the one
+// failure a dedupe check cannot afford: the copy and its assertions agree with each other while the
+// shipped function drifts away from both, so the check passes brightest exactly when it is wrong.
+//
+// Loaded through vite, as check-frame-arrival.mjs and check-caught-up-attach.mjs already do.
+// svelteLoader.mjs does not reach this module and was left alone: it matches on `.svelte`, which
+// `agentRun.svelte.ts` is not, and a rune-using module needs compileModule() rather than the
+// compile() that serves a component. Plain node gets further than you would expect — it strips the
+// types unaided — but stops on the extensionless relative imports (`./bootSession`), which is a
+// resolver of our own to write. vite already owns that job here.
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
+import { createServer } from "vite";
 
-const SYNTHESIZED = -1;
-
-// Kept in step with frameKey() in ui/src/lib/state/agentRun.svelte.ts.
-function frameKey(frame) {
-  if (
-    "event_offset" in frame.data &&
-    "agent_id" in frame.data &&
-    typeof frame.data.event_offset === "number" &&
-    frame.data.event_offset !== SYNTHESIZED
-  ) {
-    return `${frame.data.agent_id}|${frame.data.event_offset}`;
-  }
-  const identityData = { ...frame.data };
-  delete identityData.resume_offset;
-  delete identityData.event_offset;
-  return `${frame.event}|${JSON.stringify(identityData)}`;
-}
+const vite = await createServer({
+  root: fileURLToPath(new URL("..", import.meta.url)),
+  server: { middlewareMode: true },
+  appType: "custom",
+  logLevel: "silent"
+});
+const { frameKey } = await vite.ssrLoadModule("/src/lib/state/agentRun.svelte.ts");
+/* From the same place the shipped function reads it, so the sentinel cannot drift either. */
+const { SYNTHESIZED } = await vite.ssrLoadModule("/src/lib/api/types.ts");
 
 const ev = (over = {}) => ({
   event: "reply_delta",
@@ -127,4 +131,6 @@ console.log(
   `key length for one ordinary frame: offset=${frameKey(real).length}B  payload-hash=${oldKey.length}B`
 );
 
+await vite.close();
 console.log("check-frame-key: all assertions passed");
+process.exit(0);
