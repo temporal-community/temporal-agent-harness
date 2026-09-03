@@ -150,9 +150,7 @@
   let historyStash = $state("");
   let localMessages = $state<ChatMessage[]>([]);
   let observedSessionId = $state<string | null>(null);
-  let sessionDrawerOpen = $state(false);
   let newSessionMenuOpen = $state(false);
-  let sessionSearch = $state("");
   let expandedActivityTurns = $state<number[]>([]);
   let expandedLogRows = $state<string[]>([]);
   let observedActivitySessionId = $state<string | null>(null);
@@ -177,12 +175,6 @@
   const pendingApprovalRows = $derived(logs.filter((row) => isApprovalPending(row)));
   const sources = $derived(uniqueCitations(messages.flatMap((message) => message.citations)));
   const sessionItems = $derived(sortedSessions(sessions));
-  const sessionSearchTerm = $derived(sessionSearch.trim().toLowerCase());
-  const filteredSessionItems = $derived(
-    sessionSearchTerm
-      ? sessionItems.filter((session) => sessionMatchesSearch(session, sessionSearchTerm))
-      : sessionItems
-  );
   const activeSession = $derived(
     sessionItems.find((item) => item.workflow_id === sessionId) ?? null
   );
@@ -278,13 +270,11 @@
       !creatingSession &&
       (!draft.trimStart().startsWith("/") || operatorCommandForDraft(draft) != null)
   );
-  const drawerActive = $derived(showHeader && layout === "embedded" && sessionDrawerOpen);
   const latestMessage = $derived(messages[messages.length - 1] ?? null);
   const latestLog = $derived(logs[logs.length - 1] ?? null);
   const chatScrollSignature = $derived(
     [
       sessionId,
-      drawerActive ? "drawer" : "chat",
       messages.length,
       latestMessage?.id ?? "",
       latestMessage?.text.length ?? 0,
@@ -361,7 +351,6 @@
 
   $effect(() => {
     chatScrollSignature;
-    if (drawerActive) return;
 
     void tick().then(() => {
       scrollMessagesToBottom();
@@ -894,15 +883,6 @@
     if (statusKind === "approval") return "approval";
     if (statusKind === "available" || statusKind === "complete") return "available";
     return "busy";
-  }
-
-  function sessionMatchesSearch(session: Session, term: string): boolean {
-    return [
-      sessionInitialMessage(session),
-      sessionAgentLabel(session),
-      session.workflow_id,
-      session.agent_workflow_type
-    ].some((value) => value.toLowerCase().includes(term));
   }
 
   function citationUrl(citation: FileCitationAnnotation): string {
@@ -1462,28 +1442,16 @@
     if (!onNewSession || creatingSession) return;
     await onNewSession(workflowType);
     newSessionMenuOpen = false;
-    sessionDrawerOpen = false;
   }
 
   function toggleNewSessionMenu(): void {
     if (!canCreateSession) return;
     newSessionMenuOpen = !newSessionMenuOpen;
-    if (newSessionMenuOpen) sessionDrawerOpen = false;
-  }
-
-  function toggleSessionDrawer(): void {
-    sessionDrawerOpen = !sessionDrawerOpen;
-    if (sessionDrawerOpen) newSessionMenuOpen = false;
   }
 
   async function selectSession(nextSessionId: string): Promise<void> {
     if (!onSelectSession || nextSessionId === sessionId) return;
     await onSelectSession(nextSessionId);
-  }
-
-  async function openSession(nextSessionId: string): Promise<void> {
-    await selectSession(nextSessionId);
-    sessionDrawerOpen = false;
   }
 
   function sessionDeleting(nextSessionId: string): boolean {
@@ -1527,68 +1495,6 @@
           <p>{sessionId}</p>
         </div>
         <div class="agent-controls">
-          {#if layout === "embedded"}
-            <div class="new-session-control">
-              <Chip
-                class="header-session-add"
-                tone="accent"
-                fill="quiet"
-                toned
-                active={newSessionMenuOpen}
-                disabled={!canCreateSession}
-                aria-haspopup="menu"
-                aria-expanded={newSessionMenuOpen}
-                onclick={toggleNewSessionMenu}
-              >
-                {#snippet lead()}
-                  <Plus size={13} />
-                {/snippet}
-                <span class="control-label">{creatingSession ? "Starting" : "New"}</span>
-                <span class="control-chevron" aria-hidden="true">
-                  <ChevronDown size={13} />
-                </span>
-              </Chip>
-              {#if newSessionMenuOpen}
-                <section class="agent-command-menu header-menu" aria-label="New session">
-                  {#each agents as agent}
-                    <button
-                      type="button"
-                      class="agent-command-row"
-                      onclick={() => void startNewSession(agent.workflow_type)}
-                    >
-                      <AgentGlyph
-                        label={agent.label}
-                        workflowType={agent.workflow_type}
-                        status="available"
-                      />
-                      <span class="agent-command-copy">
-                        <strong>{agent.label}</strong>
-                        <small>{agent.description || agent.workflow_type}</small>
-                      </span>
-                      <StatusChip label="Ready" kind="available" compact />
-                    </button>
-                  {/each}
-                </section>
-              {/if}
-            </div>
-            <Chip
-              class="header-session-drawer"
-              tone="reasoning"
-              fill="quiet"
-              toned
-              active={sessionDrawerOpen}
-              aria-pressed={sessionDrawerOpen}
-              onclick={toggleSessionDrawer}
-            >
-              {#snippet lead()}
-                <History size={13} />
-              {/snippet}
-              <span class="control-label">Sessions</span>
-              <span class="control-chevron" aria-hidden="true">
-                <ChevronDown size={13} />
-              </span>
-            </Chip>
-          {/if}
           <StatusChip
             label={statusLabel}
             kind={statusKind}
@@ -1599,227 +1505,168 @@
       </header>
     {/if}
 
-    {#if drawerActive}
-      <section class="session-drawer" aria-label="Sessions">
-        <header class="session-drawer-head">
-          <span class="session-drawer-title">
-            <History size={15} />
-            <span>Sessions</span>
-          </span>
-          <IconButton
-            label="Close sessions"
-            data-tip-below
-            data-tip-align="end"
-            onclick={() => (sessionDrawerOpen = false)}
-          >
-            <X size={15} />
-          </IconButton>
-        </header>
-
-        <label class="session-drawer-search">
-          <Search size={14} aria-hidden="true" />
-          <input
-            bind:value={sessionSearch}
-            placeholder="Search sessions"
-            aria-label="Search sessions"
-          />
-        </label>
-
-        <div class="session-drawer-list">
-          {#if filteredSessionItems.length === 0}
-            <p class="session-empty">No matching sessions.</p>
-          {/if}
-          {#each filteredSessionItems as item}
-            <button
-              type="button"
-              class={`drawer-session-row ${item.workflow_id === sessionId ? "active" : ""}`}
-              aria-current={item.workflow_id === sessionId ? "true" : undefined}
-              onclick={() => void openSession(item.workflow_id)}
-            >
-              <AgentGlyph
-                label={sessionAgentLabel(item)}
-                workflowType={item.agent_workflow_type}
-                status={glyphStatusForSession(item)}
-              />
-              <span class="session-copy">
-                <time>{sessionCreatedAt(item.created_at)}</time>
-                <strong>{sessionInitialMessage(item)}</strong>
-                <small>{sessionAgentLabel(item)}</small>
-              </span>
-              <StatusChip
-                label={sessionStatusLabel(item)}
-                kind={sessionStatusKind(item)}
-                compact
-                active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete" && statusKind !== "closed"}
-              />
-            </button>
-          {/each}
+    <div class="message-list" bind:this={messageListElement}>
+      {#if connecting && messages.length === 0}
+        <div class="empty-chat">
+          <Sparkles size={18} />
+          <span>Connecting to {agentLabel}...</span>
         </div>
-      </section>
-    {:else}
-      <div class="message-list" bind:this={messageListElement}>
-        {#if connecting && messages.length === 0}
-          <div class="empty-chat">
-            <Sparkles size={18} />
-            <span>Connecting to {agentLabel}...</span>
-          </div>
-        {:else if closed && messages.length === 0}
-          <div class="empty-chat closed-empty">
-            <CheckCircle2 size={18} />
-            <span>{agentLabel} is closed.</span>
-          </div>
-        {:else if error && messages.length === 0}
-          <div class="empty-chat error">
-            <span>{error}</span>
-          </div>
-        {/if}
+      {:else if closed && messages.length === 0}
+        <div class="empty-chat closed-empty">
+          <CheckCircle2 size={18} />
+          <span>{agentLabel} is closed.</span>
+        </div>
+      {:else if error && messages.length === 0}
+        <div class="empty-chat error">
+          <span>{error}</span>
+        </div>
+      {/if}
 
-        {#each messages as message}
-          <article class={`message ${message.role}`}>
-            {#if message.role === "assistant" || message.role === "operator-assistant"}
-              <div class="assistant-avatar" aria-hidden="true">
-                {#if message.role === "operator-assistant"}
-                  <span>/</span>
-                {:else}
-                  <Sparkles size={15} />
-                {/if}
-              </div>
-            {/if}
-
-            <div class="bubble">
-              <MarkdownMessage
-                text={message.text}
-                citations={message.role === "assistant" ? message.citations : []}
-              />
-            </div>
-          </article>
-
-          {#if message.role === "user"}
-            {@const activityLogs = logsForTurn(message.turnNumber)}
-            {@const activeLog = activeLogForTurn(message.turnNumber)}
-            {@const expanded = activityExpanded(message.turnNumber)}
-            {#if activityLogs.length > 0 && activeLog}
-              {@const turnSummary = turnActivitySummary(message.turnNumber, activityLogs)}
-              <div class={`activity-feed ${expanded ? "expanded" : ""}`}>
-                {#key activeLog.ordinal}
-                  <button
-                    type="button"
-                    class={`activity-summary ${expanded ? "expanded" : ""} activity-line turn-summary active`}
-                    aria-expanded={expanded}
-                    aria-label={expanded ? "Collapse activity logs" : "Expand activity logs"}
-                    onclick={() => toggleActivity(message.turnNumber)}
-                    in:fade={{ duration: activeLogFadeDuration(message.turnNumber, activeLog) }}
-                  >
-                    <span class="activity-icon" aria-hidden="true">
-                      <History size={14} />
-                    </span>
-                    <span class="activity-copy">
-                      <span class="activity-heading">
-                        <strong>{turnSummary.label}</strong>
-                        <span>{turnSummary.detail}</span>
-                      </span>
-                      <span class="activity-message">{turnMessagePreview(message.text)}</span>
-                    </span>
-                    <span
-                      class="activity-duration"
-                      aria-hidden={turnSummary.duration ? undefined : "true"}
-                    >
-                      {turnSummary.duration ?? ""}
-                    </span>
-                    <time>{time(turnSummary.endedAt)}</time>
-                    <ChevronDown class="activity-chevron" size={14} aria-hidden="true" />
-                  </button>
-                {/key}
-
-                {#if expanded}
-                  <div class="activity-list">
-                    {#each activityLogs as log}
-                      {@const rowExpanded = logExpanded(log)}
-                      {@const fullDetail = logFullDetail(log)}
-                      {@const scriptDetail = logScript(log)}
-                      {@const rowDuration = logElapsedDuration(log, activityLogs)}
-                      <div class={`activity-row ${rowExpanded ? "expanded" : ""}`}>
-                        <button
-                          type="button"
-                          class={`${activityLineClass(log, log.ordinal === activeLog.ordinal)} activity-row-button`}
-                          aria-expanded={rowExpanded}
-                          onclick={() => toggleLog(log)}
-                        >
-                          <span class="activity-icon" aria-hidden="true">
-                            {#if log.actor === "model"}
-                              <Cpu size={14} />
-                            {:else if log.actor === "reasoning"}
-                              <BrainCircuit size={14} />
-                            {:else if log.actor === "tool"}
-                              <Wrench size={14} />
-                            {:else if log.actor === "approval"}
-                              <ShieldCheck size={14} />
-                            {:else if log.actor === "subagent"}
-                              <MessageCircle size={14} />
-                            {:else if logTone(log) === "error"}
-                              <AlertTriangle size={14} />
-                            {:else if logTone(log) === "done"}
-                              <CheckCircle2 size={14} />
-                            {:else}
-                              <Clock3 size={14} />
-                            {/if}
-                          </span>
-                          <span class="activity-copy">
-                            <strong>{log.label}</strong>
-                            {#if logDetail(log)}
-                              <span>{logDetail(log)}</span>
-                            {/if}
-                          </span>
-                          <span
-                            class="activity-duration"
-                            aria-hidden={rowDuration ? undefined : "true"}
-                          >
-                            {rowDuration ?? ""}
-                          </span>
-                          <time>{time(log.timestamp)}</time>
-                          <ChevronDown class="activity-row-chevron" size={13} aria-hidden="true" />
-                        </button>
-
-                        {#if rowExpanded}
-                          {#if scriptDetail}
-                            <pre class="activity-script-detail" data-language="python"><code>{scriptDetail}</code></pre>
-                          {/if}
-                          <pre class="activity-detail">{fullDetail}</pre>
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {/if}
-          {/if}
-        {/each}
-
-        {#if sending && !closed}
-          <article class="message assistant">
+      {#each messages as message}
+        <article class={`message ${message.role}`}>
+          {#if message.role === "assistant" || message.role === "operator-assistant"}
             <div class="assistant-avatar" aria-hidden="true">
-              <Sparkles size={15} />
+              {#if message.role === "operator-assistant"}
+                <span>/</span>
+              {:else}
+                <Sparkles size={15} />
+              {/if}
             </div>
-            <div class="bubble thinking">
-              <span></span><span></span><span></span>
-            </div>
-          </article>
-        {/if}
-      </div>
-    {/if}
+          {/if}
 
-    {#if !drawerActive && !closed && error && messages.length > 0}
+          <div class="bubble">
+            <MarkdownMessage
+              text={message.text}
+              citations={message.role === "assistant" ? message.citations : []}
+            />
+          </div>
+        </article>
+
+        {#if message.role === "user"}
+          {@const activityLogs = logsForTurn(message.turnNumber)}
+          {@const activeLog = activeLogForTurn(message.turnNumber)}
+          {@const expanded = activityExpanded(message.turnNumber)}
+          {#if activityLogs.length > 0 && activeLog}
+            {@const turnSummary = turnActivitySummary(message.turnNumber, activityLogs)}
+            <div class={`activity-feed ${expanded ? "expanded" : ""}`}>
+              {#key activeLog.ordinal}
+                <button
+                  type="button"
+                  class={`activity-summary ${expanded ? "expanded" : ""} activity-line turn-summary active`}
+                  aria-expanded={expanded}
+                  aria-label={expanded ? "Collapse activity logs" : "Expand activity logs"}
+                  onclick={() => toggleActivity(message.turnNumber)}
+                  in:fade={{ duration: activeLogFadeDuration(message.turnNumber, activeLog) }}
+                >
+                  <span class="activity-icon" aria-hidden="true">
+                    <History size={14} />
+                  </span>
+                  <span class="activity-copy">
+                    <span class="activity-heading">
+                      <strong>{turnSummary.label}</strong>
+                      <span>{turnSummary.detail}</span>
+                    </span>
+                    <span class="activity-message">{turnMessagePreview(message.text)}</span>
+                  </span>
+                  <span
+                    class="activity-duration"
+                    aria-hidden={turnSummary.duration ? undefined : "true"}
+                  >
+                    {turnSummary.duration ?? ""}
+                  </span>
+                  <time>{time(turnSummary.endedAt)}</time>
+                  <ChevronDown class="activity-chevron" size={14} aria-hidden="true" />
+                </button>
+              {/key}
+
+              {#if expanded}
+                <div class="activity-list">
+                  {#each activityLogs as log}
+                    {@const rowExpanded = logExpanded(log)}
+                    {@const fullDetail = logFullDetail(log)}
+                    {@const scriptDetail = logScript(log)}
+                    {@const rowDuration = logElapsedDuration(log, activityLogs)}
+                    <div class={`activity-row ${rowExpanded ? "expanded" : ""}`}>
+                      <button
+                        type="button"
+                        class={`${activityLineClass(log, log.ordinal === activeLog.ordinal)} activity-row-button`}
+                        aria-expanded={rowExpanded}
+                        onclick={() => toggleLog(log)}
+                      >
+                        <span class="activity-icon" aria-hidden="true">
+                          {#if log.actor === "model"}
+                            <Cpu size={14} />
+                          {:else if log.actor === "reasoning"}
+                            <BrainCircuit size={14} />
+                          {:else if log.actor === "tool"}
+                            <Wrench size={14} />
+                          {:else if log.actor === "approval"}
+                            <ShieldCheck size={14} />
+                          {:else if log.actor === "subagent"}
+                            <MessageCircle size={14} />
+                          {:else if logTone(log) === "error"}
+                            <AlertTriangle size={14} />
+                          {:else if logTone(log) === "done"}
+                            <CheckCircle2 size={14} />
+                          {:else}
+                            <Clock3 size={14} />
+                          {/if}
+                        </span>
+                        <span class="activity-copy">
+                          <strong>{log.label}</strong>
+                          {#if logDetail(log)}
+                            <span>{logDetail(log)}</span>
+                          {/if}
+                        </span>
+                        <span
+                          class="activity-duration"
+                          aria-hidden={rowDuration ? undefined : "true"}
+                        >
+                          {rowDuration ?? ""}
+                        </span>
+                        <time>{time(log.timestamp)}</time>
+                        <ChevronDown class="activity-row-chevron" size={13} aria-hidden="true" />
+                      </button>
+
+                      {#if rowExpanded}
+                        {#if scriptDetail}
+                          <pre class="activity-script-detail" data-language="python"><code>{scriptDetail}</code></pre>
+                        {/if}
+                        <pre class="activity-detail">{fullDetail}</pre>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+        {/if}
+      {/each}
+
+      {#if sending && !closed}
+        <article class="message assistant">
+          <div class="assistant-avatar" aria-hidden="true">
+            <Sparkles size={15} />
+          </div>
+          <div class="bubble thinking">
+            <span></span><span></span><span></span>
+          </div>
+        </article>
+      {/if}
+    </div>
+
+    {#if !closed && error && messages.length > 0}
       <div class="error-banner">{error}</div>
     {/if}
 
-    {#if !drawerActive && closed}
+    {#if closed}
       <div class="closed-banner">
         <CheckCircle2 size={14} aria-hidden="true" />
         <span>This agent is closed. Start a new session to continue.</span>
       </div>
     {/if}
 
-    {#if !drawerActive && pendingApprovalRows.length > 0}
+    {#if pendingApprovalRows.length > 0}
       <section class="pending-approvals" aria-label="Pending tool approvals">
         <header class="pending-approvals-head">
           <StatusChip
@@ -2245,51 +2092,19 @@
     justify-content: flex-start;
   }
 
-  /* Chrome, not content: these sit on the same row as the STATE FLOW pane label
-     and are the same two controls SessionControls renders in the app chrome, so
-     they are Chips for the same reason those are -- both pairs are on screen at
-     once and any difference between them reads as a mistake. Toned rather than
-     plain quiet: they are the row's only actions, and beside two filled status
-     chips a hairline grey box left them quieter than the readouts they sit
-     next to. Only the width behaviour is still this file's business. */
-  :global(.header-session-add) {
-    flex: 0 0 auto;
-  }
-
+  /* The chevron belongs to the "Add" chip in the full layout's session panel,
+     which is the only chip left in this file. The pane header used to carry a
+     second "New"/"Sessions" pair here, stated to be deliberately identical to
+     the app chrome's — that stopped being true when the chrome consolidated to
+     one session anchor, and the pair went with it. This header does not render
+     in the app at all (App.svelte passes showHeader={false}), so it was a
+     second entry point nobody could reach. */
   .control-chevron {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     color: var(--text-3);
     transition: transform var(--duration-fast) var(--ease-ui), color var(--duration-fast) var(--ease-ui);
-  }
-
-  /* The chip owns the class, so reaching its open and hover states from here has
-     to cross the component boundary. The hue is the chip's own --chip-color, so
-     the chevron cannot drift from the control it sits in. */
-  :global(.header-session-add.active) .control-chevron,
-  :global(.header-session-drawer.active) .control-chevron {
-    color: color-mix(in srgb, var(--chip-color) 78%, white);
-    transform: rotate(180deg);
-  }
-
-  :global(.header-session-add:focus-visible:not(:disabled)) .control-chevron,
-  :global(.header-session-drawer:focus-visible) .control-chevron {
-    color: color-mix(in srgb, var(--chip-color) 78%, white);
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    :global(.header-session-add:hover:not(:disabled)) .control-chevron,
-    :global(.header-session-drawer:hover) .control-chevron {
-      color: color-mix(in srgb, var(--chip-color) 78%, white);
-    }
-  }
-
-  .control-label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .new-session-control {
@@ -2312,11 +2127,6 @@
     /* Grows from the button that opened it, so the menu reads as that
        control's own surface rather than as something the viewport produced. */
     animation: command-menu-in var(--duration-fast) var(--ease-out);
-  }
-
-  .agent-command-menu.header-menu {
-    left: 0;
-    transform-origin: top left;
   }
 
   .agent-command-menu.panel-menu {
@@ -2377,119 +2187,6 @@
   .agent-command-copy small {
     color: var(--text-3);
     font-size: var(--font-sm);
-  }
-
-  .session-drawer {
-    min-height: 0;
-    overflow: hidden;
-    display: grid;
-    grid-template-rows: auto auto auto minmax(0, 1fr);
-    gap: 10px;
-    padding: 14px 12px;
-    background: var(--surface-0);
-    border-bottom: 1px solid var(--border);
-  }
-
-  .session-drawer-head {
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .session-drawer-title {
-    min-width: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    color: var(--text-1);
-    font-size: var(--font-lg);
-    font-weight: 700;
-  }
-
-  .session-drawer-search {
-    min-width: 0;
-    height: 34px;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 8px;
-    align-items: center;
-    padding: 0 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--control-bg);
-    color: var(--text-3);
-  }
-
-  .session-drawer-search:focus-within {
-    border-color: color-mix(in srgb, var(--accent) 48%, var(--border-strong));
-    color: var(--text-2);
-    box-shadow: 0 0 0 3px var(--focus-ring);
-  }
-
-  .session-drawer-search input {
-    min-width: 0;
-    border: 0;
-    outline: 0;
-    background: transparent;
-    color: var(--text-1);
-    font: inherit;
-    font-size: var(--font-md);
-  }
-
-  .session-drawer-search input::placeholder {
-    color: var(--text-3);
-  }
-
-  .session-drawer-list {
-    min-height: 0;
-    overflow-y: auto;
-    display: grid;
-    align-content: start;
-    gap: 8px;
-  }
-
-  .drawer-session-row {
-    min-width: 0;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 9px;
-    align-items: center;
-    padding: 10px;
-    border: 1px solid color-mix(in srgb, var(--reasoning) 10%, var(--border));
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--surface-2) 42%, var(--surface-1));
-    color: inherit;
-    cursor: pointer;
-    font: inherit;
-    text-align: left;
-    transition:
-      border-color var(--duration-fast) var(--ease-ui),
-      background var(--duration-fast) var(--ease-ui),
-      transform var(--duration-fast) var(--ease-ui);
-  }
-
-  /* Inward, unlike the baseline ring in app.css: .session-drawer-list scrolls,
-     so an outline drawn outside a full-width row is clipped away by the
-     container and only its top edge survives. */
-  .drawer-session-row:focus-visible {
-    outline: 2px solid var(--focus-ring);
-    outline-offset: -2px;
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .drawer-session-row:hover {
-      border-color: color-mix(in srgb, var(--reasoning) 38%, var(--border-strong));
-      background: color-mix(in srgb, var(--reasoning) 5%, var(--surface-2));
-      transform: translateY(-1px);
-    }
-  }
-
-  .drawer-session-row.active {
-    border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
-    background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
-    box-shadow: inset 3px 0 0 var(--accent);
   }
 
   .message-list {
@@ -3503,7 +3200,6 @@
       animation: none;
     }
 
-    .drawer-session-row:focus-visible,
     .session-card:focus-within {
       transform: none;
     }
@@ -3511,7 +3207,6 @@
     /* Chevrons still end up rotated — they just stop swinging there. */
     .control-chevron,
     .activity-row-chevron,
-    .drawer-session-row,
     .session-card {
       transition: none;
     }
