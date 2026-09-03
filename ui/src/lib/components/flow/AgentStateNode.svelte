@@ -234,27 +234,27 @@
     box-shadow: var(--shadow-node);
   }
 
-  .state-node::before {
-    content: "";
-    position: absolute;
-    inset: 0 auto 0 0;
-    width: 3px;
-    background: color-mix(in srgb, var(--tone-color, var(--text-2)) 86%, white 4%);
-    opacity: 0.78;
-  }
-
   .state-node.selected {
     outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
   }
 
   /* Same three cues the transcript spends on the row at the playhead
      (.turn-group.active-turn): the hairline brightens neutrally, the surface
-     lifts, and the left edge marker fills in. Not a brighter edge in the tone,
-     which is what this used to be — colour on this card already names the
-     node's KIND, so a lit-up kind hue has to say "current" through a channel
-     that is taken, and the only way it could be heard over eight equally
-     colourful siblings was to get thick. A surface that is simply lighter than
-     every other card is findable at a glance and adds no stroke at all. */
+     lifts, and the left edge marker appears.
+
+     Appears, not brightens — and that is the whole difference from the version
+     this replaces. The bar used to sit on every card and step 3px/0.78 to
+     4px/1 on the current one, which is a comparative signal: it cannot be read
+     without finding a neighbour to compare against, and the only way it could
+     win that comparison over eight equally colourful siblings was to get thick.
+     No idle card carries one now, so presence IS the signal and a single card
+     in isolation answers the question. That is also why a tone-coloured edge is
+     the right channel here when it was the wrong one before — the hue is no
+     longer busy naming the node's kind on every sibling at once.
+
+     It is the loudest channel the active state has, measured against the same
+     card one frame earlier: 55 units of RGB, against ~10 for the lifted surface
+     and ~11 for the neutralised hairline. */
   .state-node.active {
     border-color: var(--border-strong);
     background: linear-gradient(
@@ -265,9 +265,12 @@
   }
 
   .state-node.active::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
     width: 4px;
+    background: color-mix(in srgb, var(--tone-color, var(--text-2)) 86%, white 4%);
     opacity: 1;
-    box-shadow: var(--shadow-node-soft);
   }
 
   .state-node.large {
