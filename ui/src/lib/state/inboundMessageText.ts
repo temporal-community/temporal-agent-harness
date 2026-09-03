@@ -8,29 +8,31 @@
  * on the slash spelling by sharing slashCommandDisplayText() rather than by
  * both getting it right.
  *
- * NOTE: transcript.ts and replayLog.ts each carry their own older copy of
- * renderUserMessage() — identical to each other, narrower than this one (no
- * `payload.script`, and their own inline slash formatting). Not consolidated
- * here because doing so would change what those two render, which is a
- * behaviour change rather than a move.
- *
- * That divergence is a live rendering bug, not a harmless difference, and it is
- * this copy that is right. A MontyDynamicAgent session wraps a typed line as
- * `{type:"run_script", payload:{script}}` (see #messageForSession), and the
- * workflow echoes that envelope back verbatim as `turn_started.user_message`
- * (agent_workflow.py `_render_message`). Because the narrow copies check
- * top-level `script` but not `payload.script`, and the type is "run_script"
- * rather than a slash, they fall through to returning the raw value: the chat
- * bubble and the replay log both show
+ * renderUserMessage() is the only copy. transcript.ts and replayLog.ts each
+ * carried their own, byte-identical to each other and narrower than this one:
+ * they checked top-level `script` but not `payload.script`. A MontyDynamicAgent
+ * session wraps a typed line as `{type:"run_script", payload:{script}}` (see
+ * #messageForSession) and the workflow echoes that envelope back verbatim as
+ * `turn_started.user_message` (agent_workflow.py `_render_message`), so the type
+ * is "run_script" rather than a slash and those two fell through to returning
+ * the raw value: the chat bubble and the replay log showed
  * `{"type":"run_script","payload":{"script":"book_flight(\"SFO\", \"LHR\")"}}`
- * where the session list shows `book_flight("SFO", "LHR")`. Escaped quotes and
- * all, so it does not even read as the script it is. Slash commands render
- * identically on all three, which is why this hid.
+ * where the session list showed `book_flight("SFO", "LHR")`. Escaped quotes and
+ * all, so it did not even read as the script it is. Slash commands rendered
+ * identically on all three, which is why it hid.
  *
- * The server agrees with this copy, not with them: web/app.py's
- * `_display_user_message` checks `payload.script` in the same order. So the fix
- * is to widen those two, not to narrow this one — left as a decision to make
- * deliberately rather than as a side effect of a move.
+ * They import this now rather than each growing the missing branch, because the
+ * divergence was the bug: three copies, one of which had been fixed. The server
+ * agrees with this one — web/app.py's `_display_user_message` checks
+ * `payload.text` then `payload.script` then the slash spelling, same order.
+ *
+ * Its one remaining difference from the server is unreachable: the server tries
+ * the slash branch before top-level `script` and this tries them the other way
+ * round, which can only be told apart by a message carrying BOTH a top-level
+ * `script` and a slash payload. `AgentMessage` is `{type, payload, expected_turn}`
+ * and `_render_message` emits `include={type, payload}`, so no top-level `script`
+ * can ever reach either function from the wire. check-user-message-rendering.mjs
+ * pins that.
  */
 import type { AgentInboundMessage, AgentMessageObject } from "$lib/api/types";
 

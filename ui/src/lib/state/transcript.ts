@@ -1,4 +1,5 @@
 import type { AgentSseFrame, FileCitationAnnotation } from "$lib/api/types";
+import { renderUserMessage } from "$lib/state/inboundMessageText";
 
 export type TranscriptItem =
   | {
@@ -47,29 +48,6 @@ export type TranscriptItem =
       status: "running" | "completed" | "failed";
       timestamp: number;
     };
-
-function renderUserMessage(value: string): string {
-  if (!value.startsWith("{")) return value;
-  try {
-    const message = JSON.parse(value) as {
-      type?: string;
-      payload?: { name?: string; arg?: string; text?: string };
-      script?: string;
-    };
-    if (typeof message.payload?.text === "string") return message.payload.text;
-    if (typeof message.script === "string") return message.script;
-    if (
-      (message.type !== "slash" && message.type !== "slash_command") ||
-      !message.payload?.name
-    ) {
-      return value;
-    }
-    const command = message.payload.name === "set-model" ? "model" : message.payload.name;
-    return `/${command}${message.payload.arg ? ` ${message.payload.arg}` : ""}`;
-  } catch {
-    return value;
-  }
-}
 
 function textFromReply(data: { text?: unknown; output?: unknown }): string {
   if (typeof data.text === "string") return data.text;

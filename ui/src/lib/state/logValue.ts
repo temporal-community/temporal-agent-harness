@@ -3,8 +3,8 @@
  *
  * This was two byte-identical copies, one in TranscriptPanel.svelte and one in
  * AgentChatPanel.svelte, and both needed the same change on the same day. That is
- * the shape that drifts: inboundMessageText.ts already documents three divergent
- * copies of renderUserMessage() elsewhere in this codebase. One copy now, because
+ * the shape that drifts: renderUserMessage() was three copies, two of which had gone
+ * stale and rendered a script turn as raw JSON. One copy now, because
  * the wording below has to be identical in both panels and in the check that pins
  * it — not because a formatting layer was wanted. Nothing general belongs here.
  *
