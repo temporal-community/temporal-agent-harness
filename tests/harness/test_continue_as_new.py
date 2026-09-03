@@ -56,9 +56,14 @@ from temporal_agent_harness.utils import large_payload
 _NEVER = 10_000_000
 _SUGGEST_AFTER = {"events": _NEVER}
 
-# Any real session is past this by the end of its first turn, so a session that can roll over
-# does so in the gap after that turn — which is the only gap it ever gets.
-_AFTER_ONE_TURN = 5
+# Say yes at every sample, which leaves the harness's own "a turn has completed in this run"
+# guard as the only thing deciding when a session rolls over — which is what these tests are
+# about. Deliberately not a history-length threshold: the real flag and this stand-in are both
+# read once per workflow task and not re-read until the next one, and a first message that the
+# server batched into the run's FIRST workflow task is answered while history length is still 3.
+# A threshold above that leaves such a session parked, over a limit it will not look at again
+# until something else wakes it — which for a session with no attached stream client is never.
+_ALWAYS = 0
 
 # Comfortably over both Temporal's ~2 MB per-payload limit and the 1.5 MB threshold at which the
 # harness's converter offloads to external storage.
@@ -86,7 +91,7 @@ def rollover_after_one_turn():
     settled run to observe. Flipping it back is safe between runs but not within one: the run
     that has already decided to roll over must not replay into deciding otherwise.
     """
-    _SUGGEST_AFTER["events"] = _AFTER_ONE_TURN
+    _SUGGEST_AFTER["events"] = _ALWAYS
     return lambda: _SUGGEST_AFTER.update(events=_NEVER)
 
 
