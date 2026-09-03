@@ -6,7 +6,7 @@
     ChevronsRight,
     Pause,
     Play,
-    RotateCcw,
+    SkipBack,
     SkipForward
   } from "@lucide/svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
@@ -213,9 +213,14 @@
 <svelte:body onpointerdown={handleBodyPointerDown} />
 
 <footer class="step-controller">
+  <!-- Movements first, in the order they move: the two that go all the way
+       bracket the four that go one step or one turn, and the speed cycler is
+       kept out of that run by the rule below. It is the only control here that
+       changes how playback behaves rather than where the cursor is, and it was
+       sitting between the last two movements. -->
   <div class="transport">
-    <IconButton label="Reset replay" onclick={onReset}>
-      <RotateCcw size={14} />
+    <IconButton label="Jump to first step" onclick={onReset} disabled={viewIndex === 0}>
+      <SkipBack size={14} />
     </IconButton>
     {#if onPreviousTurn}
       <IconButton label="Previous turn" onclick={onPreviousTurn} disabled={viewIndex === 0}>
@@ -242,6 +247,23 @@
         <ChevronsRight size={14} />
       </IconButton>
     {/if}
+    <!-- Not a toggle, so no `pressed`: this only ever seeks to the end, and
+         pressing it while it was showing pressed left following true — there
+         was no second state to reach. What it announced as a toggle state was
+         really "the cursor is at the end", which is what disabling it says, in
+         the same way Next event says it one step earlier. The tailing that
+         follows from being there is the part nobody could see, so the tip is
+         where it gets said. -->
+    <IconButton
+      label="Jump to latest step"
+      tip="Jump to latest step — new events keep the view here"
+      tone="follow"
+      disabled={following}
+      onclick={onJumpToLive}
+    >
+      <SkipForward size={14} />
+    </IconButton>
+    <span class="rule" aria-hidden="true"></span>
     <!-- Four speeds cycle from one chip, the way podcast players do it. -->
     <Chip
       class="speed"
@@ -253,9 +275,6 @@
     >
       {playbackSpeed}×
     </Chip>
-    <IconButton label="Jump to latest step" tone="follow" pressed={following} onclick={onJumpToLive}>
-      <SkipForward size={14} />
-    </IconButton>
   </div>
 
   <!-- The lane is not a control — the range input inside it is. These handlers
@@ -409,6 +428,13 @@
     display: flex;
     align-items: center;
     gap: var(--gap-sm);
+  }
+
+  /* Divides the movements from the one control that is not one. */
+  .rule {
+    align-self: stretch;
+    width: 1px;
+    background: var(--border);
   }
 
   /* Chip carries the box, the height, the press and the hover. Only the
