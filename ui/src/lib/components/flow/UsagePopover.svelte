@@ -210,7 +210,6 @@
     border: 1px solid var(--border-strong);
     background: var(--surface-1);
     box-shadow: var(--shadow-modal);
-    transform-origin: bottom right;
     opacity: 1;
     transform: none;
     transition:
@@ -218,10 +217,15 @@
       transform var(--duration-fast) var(--ease-out);
   }
 
+  /* A rise and a fade, deliberately no scale: the chart inside measures its own
+     container, a scale changes the measured rect without changing the layout box, and
+     the renderer's ResizeObserver only watches the layout box. So a scaled entry left
+     the chart drawn for a container ~3% narrower than the one it ended up in, with no
+     second measurement ever coming. A translate leaves the measured width alone. */
   @starting-style {
     .usage-popover {
       opacity: 0;
-      transform: scale(0.97) translateY(3px);
+      transform: translateY(3px);
     }
   }
 

@@ -11,11 +11,14 @@
     "preview": "vite preview --host 127.0.0.1",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "check:svelte5": "node scripts/check-svelte5-syntax.mjs",
-    "check:boot-session": "node scripts/check-boot-session.mjs"
+    "check:boot-session": "node scripts/check-boot-session.mjs",
+    "check:usage-chart": "node scripts/check-usage-chart.mjs",
+    "check:time-ticks": "node scripts/check-time-ticks.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource-variable/noto-sans-mono": "^5.3.0",
+    "@tanstack/charts": "^0.16.0",
     "@xyflow/svelte": "^1.6.0",
     "@lucide/svelte": "^1.0.1",
     "svelte": "^5.0.0"
