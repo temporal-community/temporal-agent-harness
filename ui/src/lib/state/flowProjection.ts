@@ -1065,7 +1065,11 @@ export function buildAgentGraph(
         title: "Input",
         state: inputState,
         subtitle: "user message",
-        detail: currentUserMessage || queuedMessage,
+        /* The text, not the envelope it arrived in. The card used to show the
+           raw `{"type":"ask","payload":{...}}` — barely legible in four lines
+           and plainly wrong now the Result region is big enough to read. The
+           envelope is still in the inspector, as "Raw message". */
+        detail: renderUserMessage(currentUserMessage || queuedMessage),
         nodeHeight: resultNodeHeight,
         active: latestNodeId === id
       };
