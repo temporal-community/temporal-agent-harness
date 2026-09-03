@@ -5,6 +5,7 @@
   import AgentStateFlow from "$lib/components/flow/AgentStateFlow.svelte";
   import LatencyWaterfall from "$lib/components/flow/LatencyWaterfall.svelte";
   import StepController from "$lib/components/flow/StepController.svelte";
+  import HotkeyHelp from "$lib/components/flow/HotkeyHelp.svelte";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
   import PaneRail, { type PaneDescription } from "$lib/panes/PaneRail.svelte";
@@ -13,6 +14,12 @@
   import { PANE_META } from "$lib/panes/registry";
   import { createAgentRunController } from "$lib/state/agentRun.svelte";
   import { createPaneStack, type Pane } from "$lib/state/paneStack.svelte";
+  import {
+    applyReplayAction,
+    describeReplayKeyEvent,
+    resolveReplayAction,
+    type ReplaySurface
+  } from "$lib/state/replayHotkeys";
 
   const SESSION_SYNC_INTERVAL_MS = 10_000;
 
@@ -22,6 +29,7 @@
 
   let rail = $state<PaneRail | null>(null);
   let transcriptFilter = $state<TranscriptFilter>("all");
+  let hotkeyHelpOpen = $state(false);
 
   $effect(() => {
     void run.initialize();
@@ -154,12 +162,43 @@
     );
   }
 
-  /* Left and right are the rail, up and down are the column you are in — its tabs
-     or the panes split down it, which are the same list either way: Alt walks,
-     Cmd/Ctrl+Shift carries the focused pane. Up out of a shared column is how the
-     keyboard takes a pane back out of one, landing it beside the column. */
+  /* The keys act through `applyReplayAction`, which is also what the hotkey check drives, so
+     what a key does here is what the check measures. */
+  const replaySurface: ReplaySurface = {
+    run,
+    get helpOpen() {
+      return hotkeyHelpOpen;
+    },
+    set helpOpen(open: boolean) {
+      hotkeyHelpOpen = open;
+    }
+  };
+
+  /* One window handler, because a component may only have one `<svelte:window>`,
+     and two sets of bindings sharing it.
+
+     The replay set is asked first: it brings its own guards — an IME mid-word, a
+     text field, a focused scrubber, a control that claims the key through
+     `aria-keyshortcuts` — which are finer than the `isTextEntry` test the pane
+     bindings run on. The two sets cannot collide over the arrows, which is the
+     only key they both spell: every pane binding carries Alt or Cmd/Ctrl+Shift,
+     and `resolveReplayAction` declines anything modified.
+
+     Escape is the one key both genuinely want. The help sheet is the topmost
+     surface, so it takes Escape while it is up and a second press reaches the
+     bleeding pane underneath; with the sheet closed the key falls straight
+     through. */
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.defaultPrevented || isTextEntry(event.target)) return;
+    if (event.defaultPrevented) return;
+
+    const replayAction = resolveReplayAction(describeReplayKeyEvent(event));
+    if (replayAction != null && !(replayAction === "closeHelp" && !hotkeyHelpOpen)) {
+      event.preventDefault();
+      applyReplayAction(replayAction, replaySurface);
+      return;
+    }
+
+    if (isTextEntry(event.target)) return;
 
     if (event.key === "Escape") {
       if (!stack.bleedingPane) return;
@@ -224,6 +263,23 @@
           onSelectSession={(sessionId) => run.selectSession(sessionId)}
           onRefreshSessions={() => run.refreshSessions()}
         />
+      {/snippet}
+
+      <!-- The shortcuts are only real if they can be found. The branch this came
+           from hung this off a topbar the pane rail replaced; the minimap is the
+           strip that took that job, so it lands at the end of it. -->
+      {#snippet trail()}
+        <button
+          type="button"
+          class="hotkey-hint"
+          aria-label="Replay keyboard shortcuts"
+          aria-expanded={hotkeyHelpOpen}
+          data-tip={"Replay keyboard shortcuts\n?"}
+          data-tip-align="end"
+          onclick={() => (hotkeyHelpOpen = !hotkeyHelpOpen)}
+        >
+          ?
+        </button>
       {/snippet}
     </PaneMinimap>
 
@@ -331,6 +387,8 @@
   />
 </main>
 
+<HotkeyHelp open={hotkeyHelpOpen} onClose={() => (hotkeyHelpOpen = false)} />
+
 <style>
   .app {
     height: 100vh;
@@ -382,6 +440,46 @@
     padding: var(--gutter);
     color: var(--text-3);
     font-size: var(--font-md);
+  }
+
+  /* Square and --control-height-xs, so it sits in the minimap as one more
+     pane-row control rather than as a badge of its own. */
+  .hotkey-hint {
+    flex: none;
+    width: var(--control-height-xs);
+    height: var(--control-height-xs);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--control-bg);
+    color: var(--text-3);
+    cursor: pointer;
+    font-size: var(--font-md);
+    font-weight: 650;
+    line-height: 1;
+    transition:
+      color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui);
+  }
+
+  .hotkey-hint:hover,
+  .hotkey-hint:focus-visible {
+    color: var(--text-1);
+    background: var(--control-hover);
+  }
+
+  .hotkey-hint[aria-expanded="true"] {
+    color: var(--text-1);
+    background: color-mix(in srgb, var(--accent) 13%, var(--surface-2));
+    border-color: var(--accent);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hotkey-hint {
+      transition: none;
+    }
   }
 
   /* Re-homed from the deleted `.right-pane-body`. TranscriptPanel and

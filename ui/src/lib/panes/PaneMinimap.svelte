@@ -33,9 +33,11 @@
     describe: (pane: Pane) => PaneDescription;
     /** Whatever anchors the row ahead of the map — in the app, the session menu. */
     lead?: Snippet;
+    /** Whatever closes the row after the launcher — in the app, the shortcuts hint. */
+    trail?: Snippet;
   }
 
-  let { stack, describe, lead }: Props = $props();
+  let { stack, describe, lead, trail }: Props = $props();
 
   /**
    * The only hues that reach a tick.
@@ -211,6 +213,9 @@
     {/if}
   </div>
 
+  {#if trail}
+    {@render trail()}
+  {/if}
 </nav>
 
 <style>
