@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -16,8 +17,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, TypeAdapter
-from temporalio.api.enums.v1 import EventType
+from temporalio.api.enums.v1 import EventType, TaskQueueType
 from temporalio.api.history.v1 import HistoryEvent
+from temporalio.api.taskqueue.v1 import TaskQueue
+from temporalio.api.workflowservice.v1 import DescribeTaskQueueRequest
 from temporalio.client import (
     Client,
     WorkflowExecutionStatus,
@@ -94,6 +97,103 @@ _RPC_RETRYABLE_STATUSES = frozenset(
     {RPCStatusCode.RESOURCE_EXHAUSTED, RPCStatusCode.UNAVAILABLE}
 )
 _RPC_RETRY_AFTER_SECONDS = 1
+
+# How long one answer about a task queue's pollers is reused. Shorter than the console's
+# ten-second session poll, so a worker that starts is honoured within a single tick rather
+# than the session staying dark until a cache expires.
+_WORKER_PROBE_TTL_SECONDS = 5.0
+
+
+class WorkerUnavailableError(Exception):
+    """No worker is polling the task queue this session runs on.
+
+    Raised INSTEAD of sending a query, which is the whole point: a query to a workflow whose
+    task queue has no poller does not fail fast. It is held open for the query timeout while
+    the SDK retries it internally, and every one of those attempts occupies a slot in
+    Temporal's per-workflow query buffer. Once that buffer is full Temporal sheds the rest as
+    ``RESOURCE_EXHAUSTED``/``BusyWorkflow`` — so a console polling one workerless session
+    every ten seconds manufactures its own throttling, and the throttling lands on whatever
+    else is querying that workflow too.
+    """
+
+    def __init__(self, session_id: str, task_queue: str) -> None:
+        self.session_id = session_id
+        self.task_queue = task_queue
+        super().__init__(
+            f"No worker is polling task queue {task_queue!r}, which session "
+            f"{session_id!r} runs on, so it cannot answer queries. Start a worker "
+            "for this agent and the session will respond again."
+        )
+
+
+class _WorkerPresence:
+    """Whether a task queue has a poller, remembered for a few seconds.
+
+    Keyed by task queue rather than by workflow because that is the thing the answer is
+    actually about: twenty sessions of one agent share one queue and one worker, so twenty
+    sessions cost one probe.
+
+    ``describe_task_queue`` is the right question to ask because it cannot reproduce the
+    problem it is diagnosing. It is answered by the frontend from task-queue state, never
+    routed to the workflow, so it does not touch the query buffer and cannot itself be shed
+    as ``BusyWorkflow`` — measured at ~1ms against this dev server, against ~10s for the
+    query it replaces.
+
+    A cooldown keyed on observed query failures was the alternative. It is kept as well
+    (``mark_unserviceable``) because it catches what pollers cannot — a worker that is
+    present but wedged, or on code without this query handler — but it is not sufficient on
+    its own: a cooldown must eventually re-probe with a real query, so a permanently
+    workerless session would still emit one hanging query per cooldown, forever. Asking
+    about pollers is what makes the steady state cost nothing at all.
+    """
+
+    def __init__(self, ttl_seconds: float = _WORKER_PROBE_TTL_SECONDS) -> None:
+        self._ttl = ttl_seconds
+        self._cache: dict[str, tuple[float, bool]] = {}
+        self._probes: dict[str, asyncio.Task[bool]] = {}
+
+    async def has_worker(self, temporal: Client, task_queue: str) -> bool:
+        cached = self._cache.get(task_queue)
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < self._ttl:
+            return cached[1]
+
+        # One probe per queue in flight: a burst of sessions sharing a queue arrives
+        # together, and each starting its own describe would rebuild the pile-up in
+        # miniature against the frontend.
+        probe = self._probes.get(task_queue)
+        if probe is None:
+            probe = asyncio.ensure_future(self._probe(temporal, task_queue))
+            self._probes[task_queue] = probe
+            probe.add_done_callback(lambda _: self._probes.pop(task_queue, None))
+        return await asyncio.shield(probe)
+
+    async def _probe(self, temporal: Client, task_queue: str) -> bool:
+        try:
+            response = await temporal.workflow_service.describe_task_queue(
+                DescribeTaskQueueRequest(
+                    namespace=temporal.namespace,
+                    task_queue=TaskQueue(name=task_queue),
+                    task_queue_type=TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW,
+                )
+            )
+        except Exception:  # noqa: BLE001 — a probe we cannot run must not block the query
+            # Fail OPEN. Not knowing whether a worker exists is not evidence that none does,
+            # and treating it as such would quarantine every session the moment this one RPC
+            # got unlucky — which is worse than the bug being fixed.
+            return True
+        has_worker = len(response.pollers) > 0
+        self._cache[task_queue] = (time.monotonic(), has_worker)
+        return has_worker
+
+    def mark_unserviceable(self, task_queue: str) -> None:
+        """Record that a query to this queue was shed or timed out.
+
+        Covers the case pollers cannot see: a worker that is registered but not draining
+        queries. Held for the same TTL, so it costs at most one hanging query per queue per
+        few seconds rather than one per session per poll.
+        """
+        self._cache[task_queue] = (time.monotonic(), False)
 
 
 class CreateSessionRequestBody(BaseModel):
@@ -192,6 +292,44 @@ def create_agent_harness_app(
     # built without one. The lock is only ever contended between requests to this process.
     app.state.archive_sweep = asyncio.Lock()
     app.state.archive_retry_after = 0.0
+    app.state.worker_presence = _WorkerPresence()
+    # A workflow's task queue is fixed for the life of the execution, so this is a cache with
+    # nothing to invalidate: it saves the describe that would otherwise precede every query.
+    app.state.session_task_queues = {}
+
+    async def _task_queue_for(session_id: str) -> str | None:
+        """The task queue a session runs on, or ``None`` if it cannot be established."""
+        cached = app.state.session_task_queues.get(session_id)
+        if cached is not None:
+            return cached
+        try:
+            desc = await app.state.temporal.get_workflow_handle(session_id).describe()
+            task_queue = desc.task_queue
+        except Exception:  # noqa: BLE001 — see below; this must never be the thing that fails
+            # Fail OPEN, for every reason the lookup can fail, and note that reading the
+            # attribute is inside the guard rather than after it: the describe succeeding is
+            # not a promise that it carries a task queue. NOT_FOUND and friends belong to the
+            # endpoint's own error handling, which reports them far better than a guess made
+            # here would. More importantly this lookup is an optimisation on the way to a
+            # request that was going to happen anyway: if it cannot answer, the correct
+            # outcome is the behaviour we had before it existed, never a failure of its own.
+            return None
+        app.state.session_task_queues[session_id] = task_queue
+        return task_queue
+
+    async def _require_worker(session_id: str) -> None:
+        """Refuse to query a session whose task queue has no worker.
+
+        The refusal is the fix. Sending the query anyway is what fills Temporal's per-workflow
+        query buffer and earns the whole console a ``RESOURCE_EXHAUSTED``.
+        """
+        task_queue = await _task_queue_for(session_id)
+        if task_queue is None:
+            return
+        if not await app.state.worker_presence.has_worker(
+            app.state.temporal, task_queue
+        ):
+            raise WorkerUnavailableError(session_id, task_queue)
 
     if static_path is not None:
         _mount_static_ui(
@@ -254,6 +392,7 @@ def create_agent_harness_app(
         listed = await _sessions_with_execution_state(
             app.state.temporal, sessions + discovered
         )
+        await _annotate_worker_presence(app, listed)
         if include_archived:
             # An explicit look at the archived state should not also change it.
             return listed
@@ -316,6 +455,7 @@ def create_agent_harness_app(
 
     @app.get("/api/status/{session_id}")
     async def get_status(session_id: str):
+        await _require_worker(session_id)
         client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
         status = await client.get_status()
         content = TypeAdapter(AgentStatus).dump_python(status, mode="json")
@@ -332,12 +472,14 @@ def create_agent_harness_app(
 
     @app.get("/api/agent-interface/{session_id}")
     async def agent_interface(session_id: str):
+        await _require_worker(session_id)
         client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
         functions = await client.get_agent_interface()
         return JSONResponse(content=[fn.model_dump(mode="json") for fn in functions])
 
     @app.get("/api/operator-interface/{session_id}")
     async def operator_interface(session_id: str):
+        await _require_worker(session_id)
         client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
         commands = await client.get_operator_interface()
         content = TypeAdapter(list[OperatorCommand]).dump_python(commands, mode="json")
@@ -363,12 +505,19 @@ def create_agent_harness_app(
             """
             delivered = 0
             try:
+                # Checked here rather than before the response so the answer arrives as a
+                # frame like every other attach failure, and a reader that is already
+                # rendering a stream is told why it stopped rather than seeing a bare 503.
+                await _require_worker(session_id)
                 stream = await client.attach(on_item=_yield_item, from_offset=from_offset)
                 async for chunk in stream:
                     if chunk:
                         delivered += 1
                         yield chunk
+            except WorkerUnavailableError as exc:
+                yield _sse(AgentEventType.ERROR, _worker_unavailable_error(exc))
             except (RPCError, WorkflowQueryFailedError) as exc:
+                _note_unserviceable(session_id, exc)
                 yield _sse(AgentEventType.ERROR, _attach_error(session_id, exc))
             else:
                 # Ran to its end without raising and said nothing. On a RUNNING session
@@ -493,6 +642,45 @@ def create_agent_harness_app(
                 "error": exc.error_type or "callback_result_error",
                 "message": str(exc),
             },
+        )
+
+    def _note_unserviceable(session_id: str, exc: BaseException) -> None:
+        """Remember a queue whose worker is present but did not answer.
+
+        Only for the two statuses that mean "nobody drained this": a shed query
+        (``RESOURCE_EXHAUSTED``) or one that timed out waiting for a worker
+        (``DEADLINE_EXCEEDED``). Anything else is about this request, not the queue.
+        """
+        if not isinstance(exc, RPCError):
+            return
+        if exc.status not in (
+            RPCStatusCode.RESOURCE_EXHAUSTED,
+            RPCStatusCode.DEADLINE_EXCEEDED,
+        ):
+            return
+        task_queue = app.state.session_task_queues.get(session_id)
+        if task_queue is not None:
+            app.state.worker_presence.mark_unserviceable(task_queue)
+
+    @app.exception_handler(WorkerUnavailableError)
+    async def worker_unavailable_handler(request, exc: WorkerUnavailableError):
+        """503, because the session is fine and the thing that serves it is missing.
+
+        Not 500: nothing is broken here. Not 404: the workflow exists and its history is
+        intact, and saying it is gone would send a reader looking for a session that is
+        actually sitting there waiting for a worker. ``Retry-After`` because starting a
+        worker is exactly what clears it, and the console should keep the session listed
+        meanwhile rather than treating this as a dead end.
+        """
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "agent_worker_unavailable",
+                "message": str(exc),
+                "task_queue": exc.task_queue,
+                "session_id": exc.session_id,
+            },
+            headers={"Retry-After": str(_RPC_RETRY_AFTER_SECONDS)},
         )
 
     @app.exception_handler(RPCError)
@@ -682,6 +870,13 @@ async def _workflow_execution_state(
         "execution_status": desc.status.name,
         "closed": desc.status != WorkflowExecutionStatus.RUNNING,
     }
+    # Carried out of the describe the list already pays for, so a caller can tell whether
+    # anything is serving this session without a second round trip. Absent rather than null
+    # when the description does not carry one, which keeps this endpoint's shape as it was
+    # for every describe that has nothing to add.
+    task_queue = getattr(desc, "task_queue", None)
+    if task_queue is not None:
+        state["task_queue"] = task_queue
     if with_initial_message:
         state["initial_user_message"] = await _memo_initial_user_message(desc)
     return state
@@ -807,6 +1002,37 @@ async def _sessions_with_execution_state(
     ]
 
 
+async def _annotate_worker_presence(
+    app: FastAPI, listed: list[dict[str, object]]
+) -> None:
+    """Mark each listed session with whether anything is polling its task queue.
+
+    The list is the one place a person sees every session at once, so it is where "this one
+    is not being served" belongs. Without it the console cannot tell a healthy idle session
+    from one whose worker died — they describe identically, both RUNNING, and the only thing
+    that ever revealed the difference was a query hanging for ten seconds.
+
+    Distinct queues only, so a list of twenty sessions on two agents costs two probes; and
+    each one is already cached by ``_WorkerPresence`` across the poll interval. ``None``
+    rather than ``True`` when the queue is unknown, so "we did not establish this" is not
+    reported as "a worker is there".
+    """
+    task_queues = {
+        item["task_queue"]
+        for item in listed
+        if isinstance(item.get("task_queue"), str)
+    }
+    presence: dict[object, bool] = {}
+    for task_queue in task_queues:
+        presence[task_queue] = await app.state.worker_presence.has_worker(
+            app.state.temporal, task_queue
+        )
+    for item in listed:
+        item["worker_available"] = presence.get(item.get("task_queue"))
+        if item.get("task_queue") is not None:
+            app.state.session_task_queues[item["workflow_id"]] = item["task_queue"]
+
+
 def _unknown_execution_state(session: Session) -> dict[str, object]:
     """One session the describe could not answer for: listed, with its status withheld.
 
@@ -815,6 +1041,22 @@ def _unknown_execution_state(session: Session) -> dict[str, object]:
     poll corrects it either way.
     """
     return {**asdict(session), "execution_status": "UNKNOWN", "closed": False}
+
+
+def _worker_unavailable_error(exc: WorkerUnavailableError) -> dict[str, str]:
+    """The in-band frame for attaching to a session no worker is polling for.
+
+    Its own ``code`` rather than ``stream_unavailable`` because the remedy is specific and
+    nameable — start a worker on this task queue — and because it is the one attach failure
+    that was never actually attempted: nothing timed out, the query was deliberately not
+    sent. Saying "could not be read" would describe an attempt that did not happen.
+    """
+    return {
+        "kind": "unavailable",
+        "code": "agent_worker_unavailable",
+        "message": str(exc),
+        "task_queue": exc.task_queue,
+    }
 
 
 def _attach_error(

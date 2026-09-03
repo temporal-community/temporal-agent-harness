@@ -51,6 +51,12 @@ package: app-build app-check
 check-rollover-subagent *ARGS:
     uv run python tests/harness/check_subagent_survives_rollover.py {{ARGS}}
 
+# Prove that a session whose task queue has no worker produces no query to that workflow.
+# Needs no server: the point is what the app tries to SEND, so Temporal is stood in for and
+# every query counted. Runs in about a second.
+check-workerless-queries *ARGS:
+    uv run python tests/web/check_workerless_session_queries.py {{ARGS}}
+
 # Start the custom Temporal server with Nexus callback/update dynamic config enabled.
 temporal-latest:
     #!/usr/bin/env bash
