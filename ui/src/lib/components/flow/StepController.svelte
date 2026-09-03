@@ -1,14 +1,5 @@
 <script lang="ts">
-  import {
-    ChevronLeft,
-    ChevronRight,
-    ChevronsLeft,
-    ChevronsRight,
-    Pause,
-    Play,
-    SkipBack,
-    SkipForward
-  } from "@lucide/svelte";
+  import { Pause, Play, SkipBack, SkipForward } from "@lucide/svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import UsagePopover from "$lib/components/flow/UsagePopover.svelte";
@@ -38,14 +29,10 @@
     eventRows: ReplayLogRow[];
     onPlay: () => void;
     onPause: () => void;
-    onStepBack: () => void;
-    onStepForward: () => void;
     onSpeedChange: (speed: PlaybackSpeed) => void;
     onJumpToLive: () => void;
     onReset: () => void;
     onScrub: (index: number) => void;
-    onPreviousTurn?: () => void;
-    onNextTurn?: () => void;
   }
 
   let {
@@ -63,14 +50,10 @@
     eventRows,
     onPlay,
     onPause,
-    onStepBack,
-    onStepForward,
     onSpeedChange,
     onJumpToLive,
     onReset,
-    onScrub,
-    onPreviousTurn,
-    onNextTurn
+    onScrub
   }: Props = $props();
 
   const playbackSpeeds: PlaybackSpeed[] = [1, 2, 5, 10];
@@ -213,22 +196,24 @@
 <svelte:body onpointerdown={handleBodyPointerDown} />
 
 <footer class="step-controller">
-  <!-- Movements first, in the order they move: the two that go all the way
-       bracket the four that go one step or one turn, and the speed cycler is
-       kept out of that run by the rule below. It is the only control here that
-       changes how playback behaves rather than where the cursor is, and it was
-       sitting between the last two movements. -->
+  <!-- Three controls, and what is missing is the point. Relative movement — one
+       event or one turn, either direction — is keyboard only: the arrows and
+       Shift+arrows do it, the `?` overlay is where they are written down, and
+       four buttons that only repeated them cost 136px of a row the lane has to
+       share. What survives is the pair of absolute destinations, which
+       have no key-repeat to be worn out by, and the one toggle.
+
+       Said the other way: the two that stayed carry state a button is the only
+       thing that can show — play/pause is which of the two it is, follow dims
+       once the view is already at the live edge. A stepper carries none, which
+       is exactly why it survives being a key and nothing else.
+
+       The rule below keeps the speed cycler out of that run: it is the only
+       control here that changes how playback behaves rather than where the
+       cursor is. -->
   <div class="transport">
     <IconButton label="Jump to first step" onclick={onReset} disabled={viewIndex === 0}>
       <SkipBack size={14} />
-    </IconButton>
-    {#if onPreviousTurn}
-      <IconButton label="Previous turn" onclick={onPreviousTurn} disabled={viewIndex === 0}>
-        <ChevronsLeft size={14} />
-      </IconButton>
-    {/if}
-    <IconButton label="Previous event" onclick={onStepBack} disabled={viewIndex === 0}>
-      <ChevronLeft size={16} />
     </IconButton>
     {#if playing}
       <IconButton label="Pause replay" tone="primary" onclick={onPause}>
@@ -239,21 +224,12 @@
         <Play size={16} />
       </IconButton>
     {/if}
-    <IconButton label="Next event" onclick={onStepForward} disabled={viewIndex >= total}>
-      <ChevronRight size={16} />
-    </IconButton>
-    {#if onNextTurn}
-      <IconButton label="Next turn" onclick={onNextTurn} disabled={viewIndex >= total}>
-        <ChevronsRight size={14} />
-      </IconButton>
-    {/if}
     <!-- Not a toggle, so no `pressed`: this only ever seeks to the end, and
          pressing it while it was showing pressed left following true — there
          was no second state to reach. What it announced as a toggle state was
-         really "the cursor is at the end", which is what the inert state says,
-         in the same way Next event says it one step earlier. The tailing that
-         follows from being there is the part nobody could see, so the tip is
-         where it gets said.
+         really "the cursor is at the end", which is what the inert state says.
+         The tailing that follows from being there is the part nobody could see,
+         so the tip is where it gets said.
 
          `aria-disabled` rather than `disabled`, and the tip is the whole
          reason: the dimming exists to explain that the view is already at the
