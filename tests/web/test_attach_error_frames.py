@@ -130,6 +130,34 @@ def test_other_rpc_failures_are_reported_too_and_named() -> None:
     assert "PERMISSION_DENIED" in frame["message"]
 
 
+def test_a_throttle_does_not_send_the_reader_after_reachability() -> None:
+    """RESOURCE_EXHAUSTED is Temporal answering. The old message said to check that it
+    was reachable, which is the one thing the status has already proved."""
+    throttled = RPCError("busy workflow", RPCStatusCode.RESOURCE_EXHAUSTED, b"")
+    with _app(status=None, raises=throttled) as client:
+        response = _attach(client)
+
+    (frame,) = _frames(response.text)
+    assert frame["code"] == "stream_unavailable"
+    assert "RESOURCE_EXHAUSTED" in frame["message"]
+    assert "reachable and answered" in frame["message"]
+    assert "Check that Temporal is reachable" not in frame["message"]
+
+
+@pytest.mark.parametrize(
+    "status",
+    [RPCStatusCode.UNAVAILABLE, RPCStatusCode.DEADLINE_EXCEEDED],
+)
+def test_an_outage_still_names_the_worker_and_the_stack(status: RPCStatusCode) -> None:
+    """The advice the throttle lost is correct here, and has to survive."""
+    with _app(status=None, raises=RPCError(status.name, status, b"")) as client:
+        response = _attach(client)
+
+    (frame,) = _frames(response.text)
+    assert status.name in frame["message"]
+    assert "worker is polling this agent's task queue" in frame["message"]
+
+
 def test_a_query_the_worker_refused_is_reported_too() -> None:
     # Not an RPCError, and the ordinary way a dev stack fails: the worker replays a history
     # written by an earlier build of the agent to answer the status query, and cannot.

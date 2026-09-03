@@ -781,6 +781,32 @@ def _unknown_execution_state(session: Session) -> dict[str, object]:
     return {**asdict(session), "execution_status": "UNKNOWN", "closed": False}
 
 
+# Where a failed attach should send the reader, grouped by remedy rather than by status.
+# A throttle and an outage are opposite diagnoses and only the status tells them apart.
+_ATTACH_ERROR_ADVICE = {
+    RPCStatusCode.RESOURCE_EXHAUSTED: (
+        "Temporal is reachable and answered: it shed this request rather than failing "
+        "it, which usually means too many requests are already in flight against this "
+        "one session. Nothing needs fixing — waiting a moment and retrying should "
+        "succeed."
+    ),
+    RPCStatusCode.UNAVAILABLE: (
+        "Nothing answered. Check that Temporal is reachable and that a worker is "
+        "polling this agent's task queue, then refresh to retry."
+    ),
+    RPCStatusCode.DEADLINE_EXCEEDED: (
+        "Nothing answered in time. Check that a worker is polling this agent's task "
+        "queue — a query with no worker to serve it expires exactly like this — then "
+        "refresh to retry."
+    ),
+}
+
+# For causes that are neither a throttle nor a reachability problem — a query a worker
+# refused, a permission failure. Naming a place to check would be a guess, and the wrong
+# guess is what made the old single message useless.
+_ATTACH_ERROR_DEFAULT_ADVICE = "Refresh to retry."
+
+
 def _attach_error(
     session_id: str, exc: RPCError | WorkflowQueryFailedError
 ) -> dict[str, str]:
@@ -789,9 +815,14 @@ def _attach_error(
     ``NOT_FOUND`` is the commonest attach failure a dev stack has — the session list outlives
     the executions in it, so every id from before a namespace's retention window points at
     nothing — and it gets its own ``code`` because it is the one case where retrying is
-    pointless: there is no history left to ask for. Everything else shares
-    ``stream_unavailable`` and names its cause in the message, since what a consumer does
-    about a timeout, an absent worker or a query a worker refused is the same thing.
+    pointless: there is no history left to ask for.
+
+    Everything else keeps ``stream_unavailable``, which is what the console branches on to
+    decide the failure is worth retrying, and that is still true of all of them. What is not
+    the same is where the reader should look, so the sentence after the cause is chosen per
+    class rather than shared. Telling someone to check reachability when Temporal answered
+    the request — which is precisely what ``RESOURCE_EXHAUSTED`` means — sends them to the
+    one part of the stack that is demonstrably working.
     """
     if isinstance(exc, RPCError) and exc.status == RPCStatusCode.NOT_FOUND:
         return {
@@ -804,13 +835,13 @@ def _attach_error(
             ),
         }
     cause = exc.status.name if isinstance(exc, RPCError) else str(exc)
+    status = exc.status if isinstance(exc, RPCError) else None
     return {
         "kind": "unavailable",
         "code": "stream_unavailable",
         "message": (
             f"The event stream for session {session_id!r} could not be read ({cause}). "
-            "Check that Temporal is reachable and that a worker is polling this agent's "
-            "task queue, then refresh to retry."
+            f"{_ATTACH_ERROR_ADVICE.get(status, _ATTACH_ERROR_DEFAULT_ADVICE)}"
         ),
     }
 
