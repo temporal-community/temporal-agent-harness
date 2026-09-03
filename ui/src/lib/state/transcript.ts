@@ -35,38 +35,33 @@ export type TranscriptItem =
       turnNumber: number;
       text: string;
       timestamp: number;
-    }
-  | {
-      kind: "operator";
-      id: string;
-      turnNumber: number;
-      command: string;
-      text: string;
-      status: "running" | "completed" | "failed";
-      timestamp: number;
     };
 
 function renderUserMessage(value: string): string {
   if (!value.startsWith("{")) return value;
+  let parsed: unknown;
   try {
-    const message = JSON.parse(value) as {
-      type?: string;
-      payload?: { name?: string; arg?: string; text?: string };
-      script?: string;
-    };
-    if (typeof message.payload?.text === "string") return message.payload.text;
-    if (typeof message.script === "string") return message.script;
-    if (
-      (message.type !== "slash" && message.type !== "slash_command") ||
-      !message.payload?.name
-    ) {
-      return value;
-    }
-    const command = message.payload.name === "set-model" ? "model" : message.payload.name;
-    return `/${command}${message.payload.arg ? ` ${message.payload.arg}` : ""}`;
+    parsed = JSON.parse(value);
   } catch {
     return value;
   }
+  if (!parsed || typeof parsed !== "object") return value;
+  const message = parsed as { type?: unknown; payload?: unknown };
+  const payload = message.payload;
+  if (!payload || typeof payload !== "object") {
+    return typeof message.type === "string" ? message.type : value;
+  }
+  // Handler names and payload shapes are agent-specific, so stay generic: a lone string
+  // field is the common prompt shape (whatever it is named), and anything else is labelled
+  // by handler name. Never assume a particular handler or field exists.
+  const entries = Object.entries(payload as Record<string, unknown>);
+  const strings = entries.filter(([, v]) => typeof v === "string");
+  if (entries.length === 1 && strings.length === 1) return strings[0][1] as string;
+  const rendered = entries
+    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+    .sort()
+    .join(", ");
+  return typeof message.type === "string" ? `${message.type}(${rendered})` : rendered;
 }
 
 function textFromReply(data: { text?: unknown; output?: unknown }): string {
@@ -91,20 +86,10 @@ function citationAnnotations(frame: AgentSseFrame): FileCitationAnnotation[] {
   );
 }
 
-function operatorCommandDisplay(data: {
-  command_label: string;
-  command_name: string;
-  arg?: string | null;
-}): string {
-  const label = data.command_label || `/${data.command_name}`;
-  return `${label}${data.arg ? ` ${data.arg}` : ""}`;
-}
-
 export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
   const replyIndexByTurn = new Map<number, number>();
   const toolIndexById = new Map<string, number>();
-  const operatorIndexById = new Map<string, number>();
   const citationsByTurn = new Map<number, FileCitationAnnotation[]>();
 
   for (const frame of frames) {
@@ -119,39 +104,6 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
         text: renderUserMessage(frame.data.user_message),
         timestamp
       });
-    }
-
-    if (
-      frame.event === "operator_command_started" ||
-      frame.event === "operator_command_completed" ||
-      frame.event === "operator_command_failed"
-    ) {
-      const command = operatorCommandDisplay(frame.data);
-      let itemIndex = operatorIndexById.get(frame.data.operator_command_id);
-      if (itemIndex == null) {
-        itemIndex = items.length;
-        operatorIndexById.set(frame.data.operator_command_id, itemIndex);
-        items.push({
-          kind: "operator",
-          id: `operator-${frame.data.operator_command_id}`,
-          turnNumber: turn_number,
-          command,
-          text: "Running...",
-          status: "running",
-          timestamp
-        });
-      }
-      const item = items[itemIndex];
-      if (!item || item.kind !== "operator") continue;
-      item.timestamp = timestamp;
-      item.command = command;
-      if (frame.event === "operator_command_completed") {
-        item.status = "completed";
-        item.text = frame.data.text;
-      } else if (frame.event === "operator_command_failed") {
-        item.status = "failed";
-        item.text = frame.data.message;
-      }
     }
 
     if (frame.event === "text_annotation") {

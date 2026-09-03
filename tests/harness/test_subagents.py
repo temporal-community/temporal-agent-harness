@@ -14,11 +14,9 @@ from temporalio.exceptions import ApplicationError
 from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
-    SlashCommand,
     SubagentMessageSent,
     SubagentStarted,
     SubagentStopped,
-    TextReply,
     ToolApprovalPolicy,
 )
 from temporal_agent_harness.harness.agent_workflow import _SubagentInstance, _WorkflowStatus
@@ -52,22 +50,23 @@ class _SampleChildAgent:
         ...
 
 
-class _SampleChildAgentWithSlash:
+class _SampleChildAgentWithOperatorOnly:
+    """A child that declares an operator-only handler alongside a model-callable one."""
+
     @agent.accepts
     async def ask(self, q: _Question) -> _Answer:
         """Answer a free-form question."""
         ...
 
-    @agent.accepts
-    async def slash(self, command: SlashCommand) -> TextReply:
-        """Handle operator slash commands."""
+    @agent.accepts(model_callable=False)
+    async def set_config(self, q: _Question) -> _Answer:
+        """Reconfigure the session — an operator surface, not for a parent's model."""
         ...
 
 
 def _status() -> _WorkflowStatus:
     return _WorkflowStatus(
         agent_id="parent",
-        is_message_queuing_enabled=False,
         approval_policy=ToolApprovalPolicy.allow_inherently_safe(),
     )
 
@@ -227,12 +226,79 @@ def test_toolset_emits_namespaced_start_send_stop_tools():
     assert all(getattr(t, "__agent_tool__", False) for t in tools)
 
 
-def test_toolset_hides_operator_slash_handler():
+def test_toolset_honors_model_callable_hints_by_default():
+    """The default policy omits a handler the child marked ``model_callable=False``.
+
+    This is the replacement for the old magic-name filter: what a parent's model can reach is
+    decided by the policy, not by what a handler happens to be called."""
     tools = agent.subagent_toolset(
-        _SampleChildAgentWithSlash, key="sample", task_queue="sample-q"
+        _SampleChildAgentWithOperatorOnly, key="sample", task_queue="sample-q"
     )
 
     assert [t.__name__ for t in tools] == ["start_sample", "sample_ask", "stop_sample"]
+
+
+def test_toolset_policy_can_narrow_below_the_hints():
+    """``allow_only`` is authoritative even when the hints are more permissive."""
+    tools = agent.subagent_toolset(
+        _SampleChildAgent,
+        key="sample",
+        task_queue="sample-q",
+        tools=agent.SubagentToolPolicy.allow_only("summarize"),
+    )
+
+    assert [t.__name__ for t in tools] == [
+        "start_sample",
+        "sample_summarize",
+        "stop_sample",
+    ]
+
+
+def test_toolset_policy_can_override_a_non_model_callable_hint():
+    """A parent naming a handler explicitly overrides its ``model_callable=False`` hint —
+    naming it IS the override. The hint is intent, never an access decision."""
+    tools = agent.subagent_toolset(
+        _SampleChildAgentWithOperatorOnly,
+        key="sample",
+        task_queue="sample-q",
+        tools=agent.SubagentToolPolicy.allow_only("set_config"),
+    )
+
+    assert [t.__name__ for t in tools] == [
+        "start_sample",
+        "sample_set_config",
+        "stop_sample",
+    ]
+
+
+def test_toolset_dangerously_allow_all_ignores_the_hints():
+    tools = agent.subagent_toolset(
+        _SampleChildAgentWithOperatorOnly,
+        key="sample",
+        task_queue="sample-q",
+        tools=agent.SubagentToolPolicy.dangerously_allow_all(),
+    )
+
+    assert [t.__name__ for t in tools] == [
+        "start_sample",
+        "sample_ask",
+        "sample_set_config",
+        "stop_sample",
+    ]
+
+
+def test_toolset_rejects_a_policy_that_selects_nothing():
+    """A child whose whole surface is operator-only has no callable surface to wire, and the
+    error names what it declared so the mistake is diagnosable."""
+
+    class _OperatorOnlyChild:
+        @agent.accepts(model_callable=False)
+        async def set_config(self, q: _Question) -> _Answer:
+            """Operator-only."""
+            ...
+
+    with pytest.raises(TypeError, match="no handlers under the given SubagentToolPolicy"):
+        agent.subagent_toolset(_OperatorOnlyChild, key="x", task_queue="q")
 
 
 def test_send_tool_signature_uses_the_childs_real_models():
@@ -273,7 +339,7 @@ def test_toolset_requires_at_least_one_handler():
     class _NoHandlers:
         pass
 
-    with pytest.raises(TypeError, match="no @agent.accepts handlers"):
+    with pytest.raises(TypeError, match="no handlers under the given SubagentToolPolicy"):
         agent.subagent_toolset(_NoHandlers, key="x", task_queue="q")
 
 

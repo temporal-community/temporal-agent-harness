@@ -143,47 +143,47 @@ state outside the active stream. Verify server JSON serialization for
 
 ### `GET /api/agent-interface/{session_id}`
 
-Returns the inbound message contract for the agent behind a session, as a list
-of accepted handler functions.
+Returns the inbound message contract for the agent behind a session: **every**
+`@agent.accepts` handler it declares.
 
 ```ts
 type AgentInterfaceFunction = {
   name: string
   description: string
-  parameters: Record<string, unknown>
-  output: Record<string, unknown>
+  parameters: Record<string, unknown>   // JSON Schema of the handler's input model
+  output: Record<string, unknown>       // JSON Schema of its return model
+  mid_turn: "enqueue" | "reject" | "accept"
+  model_callable: boolean
 }
 ```
 
-Plain text is represented by an `ask` function that accepts a `text` field. For
-typed messages, send the handler name as the message `type` and the input model
-as `payload`.
+This is the only discovery surface an agent has, and it is enough to render an
+arbitrary agent: send the handler `name` as the message `type` and build
+`payload` from its `parameters` schema. A client should not hardcode handler
+names — there is no privileged handler, and no separate command channel.
 
-### `GET /api/operator-interface/{session_id}`
+`mid_turn` says what happens if the message arrives while a turn is already
+open, so a client can tell the user whether sending will queue behind the
+current work (`enqueue`), join it (`accept`), or be refused (`reject`). All
+three behave identically when the agent is idle.
 
-Returns operator-only slash command metadata for one session. This is separate
-from `agent_interface`: models and parent agents should not treat these commands
-as tools.
+`model_callable` is the handler author's hint that a parent agent's model may
+drive it. It is advisory: a parent's own `SubagentToolPolicy` decides what
+actually reaches its model, so never treat this as an access decision.
 
-```ts
-type OperatorCommand = {
-  name: string
-  payload_name: string
-  label: string
-  description: string
-  aliases: string[]
-  argument?: OperatorCommandArgument | null
-  source: "harness" | "agent"
-}
+The two harness-owned updates (`tool_approval`, `provide_callback_result`) are
+absent because they are not handlers — they are resolved in-process and are
+reachable only from an out-of-band control plane (`POST /api/approve`,
+`POST /api/callback-result`).
 
-type OperatorCommandArgument = {
-  kind: "enum" | "text" | "tool_names"
-  required: boolean
-  choices: string[]
-  placeholder?: string | null
-  allow_multiple: boolean
-}
-```
+### `POST /api/sessions/{session_id}/close`
+
+Stops an agent via the harness `close` signal: it winds down its turn loop,
+drains in-flight work, and auto-denies pending approvals and callbacks.
+
+A control-plane action rather than a message, so it works on any agent whatever
+it happens to accept. This is what a client uses to stop an agent — there is no
+packaged stop *message*.
 
 ### `POST /api/approve`
 
@@ -248,41 +248,37 @@ type SubmitMessageResponse = {
 }
 ```
 
+**Tracking `expected_turn`.** Set the next value from the reply's `turn_number + 1`, not
+from a count of messages sent. A message whose handler declares `mid_turn: "accept"` joins
+the turn already in flight, so the agent's counter does not advance and the next message must
+claim the same number again — a per-send increment over-counts on the first join and then
+fails every later send with a 409 `stale_turn`. `GET /api/status/{session_id}` re-derives the
+correct value (`current_turn + pending_turns.length + 1`) if a client loses track.
+
 The shared UI uses this endpoint for queued sends, then keeps one
 `GET /api/attach` stream open from its last `resume_offset`. This avoids
 starting many concurrent Temporal Updates and long-lived merged streams when a
 user sends several queued messages quickly.
 
-Slash commands are discovered from `GET /api/operator-interface/{session_id}`
-and sent as structured messages. For example, the UI command
-`/model gemini-3.1-flash-lite` sends:
+Message payloads are built from the target handler's `parameters` schema, which
+`GET /api/agent-interface/{session_id}` returns. There is no command channel and
+no reserved message type — reconfiguring an agent mid-session is just a message
+to a handler that agent declares. For example, an agent exposing a `set_model`
+handler whose input model is `{"model": Literal["a", "b"]}` is driven with:
 
 ```json
 {
-  "type": "slash",
-  "payload": {
-    "name": "set-model",
-    "arg": "gemini-3.1-flash-lite"
-  }
+  "type": "set_model",
+  "payload": { "model": "gemini-3.1-flash-lite" }
 }
 ```
 
-The harness accepts these runtime commands for every agent:
+Because the constraint lives in the JSON Schema (as an `enum`), a client can
+render it as a dropdown and the workflow enforces it at the update boundary.
 
-| UI command | Payload |
-| --- | --- |
-| `/approvals strict\|safe\|skip` | `{"name":"set-approvals","arg":"..."}` |
-| `/allow-tools search_flights` | `{"name":"allow-tools","arg":"search_flights"}` |
-| `/status` | `{"name":"status"}` |
-
-These harness runtime commands are operator controls. They are advertised in
-`operator_interface`, not as agent-to-agent tools in `agent_interface`.
-
-Monty conversational agents additionally accept:
-
-| UI command | Payload |
-| --- | --- |
-| `/model gemini-3.1-flash-lite` | `{"name":"set-model","arg":"gemini-3.1-flash-lite"}` |
+The packaged UI keeps a familiar affordance on top of this: typing `/` in the
+composer opens a picker over the handlers `agent_interface` returned. That is
+purely a client-side convention — the harness has no notion of a slash.
 
 ### `GET /api/attach?session_id=...&from_offset=0`
 

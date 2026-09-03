@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 
@@ -314,7 +315,16 @@ async def test_merged_send_message_nests_live_subagent_events_in_brackets(client
     _assert_subagent_turns_nested_in_brackets(merged, expected_child_turns=2)
 
 
-async def test_operator_command_can_target_live_subagent_directly(client_and_queue):
+async def test_human_can_message_a_live_subagent_directly(client_and_queue):
+    """A human/operator can drive a LIVE subagent through the ordinary front door.
+
+    There is no side channel to reach a child with: every control is an ``@agent.accepts``
+    handler, so addressing a subagent means sending it a normal ``send_agent_message`` at its
+    own ``workflow_id`` — which the parent advertises on ``subagent_started``. The child's
+    resulting turn events must land on the CHILD's stream stamped with the child's own
+    ``agent_id`` (the handle its parent knows it by), so a UI merging both streams can
+    attribute them correctly.
+    """
     client, task_queue = client_and_queue
     _parent_id, merged = await _merged_send(
         client, task_queue, [_const_script(42)], stop=False
@@ -326,30 +336,37 @@ async def test_operator_command_can_target_live_subagent_directly(client_and_que
     child_workflow_id = started[0].event.workflow_id
     child_agent_id = started[0].event.subagent_id
 
+    # The parent already drove turn 1 through the subagent-turn activity, so ours is turn 2.
     child_client = AgentClient(client, child_workflow_id)
-    result = await child_client.execute_operator_command("status")
+    status = await child_client.get_status()
+    reply = await child_client.submit_message(
+        "run_script",
+        {"script": _const_script(7)},
+        status.current_turn + len(status.pending_turns) + 1,
+    )
 
     stream = WorkflowStreamClient.create(client, child_workflow_id)
-    operator_events: list[AgentEvent] = []
+    own_turn: list[AgentEvent] = []
     async for item in stream.subscribe(
-        topics=[TURN_EVENTS_TOPIC], from_offset=0, result_type=AgentEvent
+        topics=[TURN_EVENTS_TOPIC], from_offset=reply.accepted_offset, result_type=AgentEvent
     ):
         envelope: AgentEvent = item.data
-        if envelope.event.type in {
-            AgentEventType.OPERATOR_COMMAND_STARTED,
-            AgentEventType.OPERATOR_COMMAND_COMPLETED,
-        }:
-            operator_events.append(envelope)
-        if envelope.event.type == AgentEventType.OPERATOR_COMMAND_COMPLETED:
+        if envelope.turn_id != reply.turn_id:
+            continue
+        own_turn.append(envelope)
+        if envelope.event.type == AgentEventType.TURN_END:
             break
 
-    assert [e.event.type for e in operator_events] == [
-        AgentEventType.OPERATOR_COMMAND_STARTED,
-        AgentEventType.OPERATOR_COMMAND_COMPLETED,
-    ]
-    assert all(e.agent_id == child_agent_id for e in operator_events)
-    assert operator_events[-1].event.command_name == "status"
-    assert operator_events[-1].event.text == result.text
+    # One turn bracket, opened and closed exactly once — the child ran our message as its own
+    # turn, and turn_end is the terminal (there is no operator-command terminal any more).
+    assert [e.event.type for e in own_turn][0] == AgentEventType.TURN_STARTED
+    assert [e.event.type for e in own_turn][-1] == AgentEventType.TURN_END
+    assert sum(e.event.type == AgentEventType.TURN_END for e in own_turn) == 1
+    assert all(e.agent_id == child_agent_id for e in own_turn)
+    assert all(e.turn_number == reply.turn_number for e in own_turn)
+    replies = [e.event for e in own_turn if e.event.type == AgentEventType.REPLY]
+    assert len(replies) == 1
+    assert "7" in json.dumps(replies[0].output)
 
 
 async def test_attach_after_stopped_subagent_degrades_gracefully(client_and_queue):

@@ -25,7 +25,7 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_harness.harness.agent_client import (
-    AgentBusyError,
+    MidTurnRejectedError,
     AgentClient,
     AgentStreamOutput,
     AgentTurnError,
@@ -40,8 +40,6 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEventType,
     AgentMessage,
     AgentStatus,
-    OperatorCommand,
-    OperatorCommandResult,
     SEND_AGENT_MESSAGE_UPDATE,
 )
 from temporal_agent_harness.ui import packaged_ui_dist
@@ -64,7 +62,6 @@ _SESSION_PREVIEW_HISTORY_RPC_TIMEOUT = timedelta(seconds=1)
 
 class CreateSessionRequestBody(BaseModel):
     agent_workflow_type: str
-    is_message_queuing_enabled: bool = False
 
 
 class ChatRequestBody(BaseModel):
@@ -81,14 +78,6 @@ class ToolApprovalRequestBody(BaseModel):
     approved: bool
     reason: str | None = None
     remember: bool = False
-
-
-class OperatorCommandRequestBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    session_id: str
-    name: str
-    arg: str | None = None
 
 
 class CallbackResultRequestBody(BaseModel):
@@ -193,9 +182,7 @@ def create_agent_harness_app(
             SessionManagerWorkflow.create_session,
             ManagerCreateSessionRequest(
                 agent_workflow_type=req.agent_workflow_type,
-                config=AgentConfig(
-                    is_message_queuing_enabled=req.is_message_queuing_enabled
-                ),
+                config=AgentConfig(),
             ),
             result_type=Session,
         )
@@ -228,13 +215,6 @@ def create_agent_harness_app(
         functions = await client.get_agent_interface()
         return JSONResponse(content=[fn.model_dump(mode="json") for fn in functions])
 
-    @app.get("/api/operator-interface/{session_id}")
-    async def operator_interface(session_id: str):
-        client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
-        commands = await client.get_operator_interface()
-        content = TypeAdapter(list[OperatorCommand]).dump_python(commands, mode="json")
-        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
-
     @app.get("/api/attach")
     async def attach(session_id: str, from_offset: int = 0) -> StreamingResponse:
         client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
@@ -266,13 +246,6 @@ def create_agent_harness_app(
             req.tool_id, result=req.result, error=req.error
         )
         return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
-
-    @app.post("/api/operator-commands")
-    async def execute_operator_command(req: OperatorCommandRequestBody):
-        client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
-        result = await client.execute_operator_command(req.name, arg=req.arg)
-        content = TypeAdapter(OperatorCommandResult).dump_python(result, mode="json")
-        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.post("/api/messages")
     async def submit_message(req: ChatRequestBody):
@@ -328,11 +301,14 @@ def create_agent_harness_app(
             content={"error": "stale_turn", "message": str(exc)},
         )
 
-    @app.exception_handler(AgentBusyError)
-    async def agent_busy_handler(request, exc):
+    @app.exception_handler(MidTurnRejectedError)
+    async def mid_turn_rejected_handler(request, exc):
+        # 409, not 429: the handler declared it must not run mid-turn, so this is a
+        # conflict with current state rather than a rate limit — and unlike a stale turn,
+        # resending with a fresh expected_turn will not help until the agent goes idle.
         return JSONResponse(
             status_code=409,
-            content={"error": "agent_busy", "message": str(exc)},
+            content={"error": "mid_turn_rejected", "message": str(exc)},
         )
 
     @app.exception_handler(ToolApprovalError)
@@ -516,6 +492,16 @@ async def _session_user_message_from_history_event(
 
 
 def _display_user_message(value: str) -> str:
+    """Render a stored ``{type, payload}`` message envelope as a one-line label.
+
+    Used for the session list's preview of the message that started a session. Handler names
+    and payload shapes are agent-specific, so this stays generic: prefer the payload's single
+    string field when there is exactly one (the common chat/prompt shape, whatever its field
+    is named), and otherwise fall back to ``type`` plus the compacted payload. Never assumes a
+    particular handler exists or that a field is called anything in particular.
+
+    A non-JSON value passes through unchanged.
+    """
     if not value.startswith("{"):
         return value
     try:
@@ -525,24 +511,16 @@ def _display_user_message(value: str) -> str:
     if not isinstance(message, dict):
         return value
 
+    msg_type = message.get("type")
     payload = message.get("payload")
-    if isinstance(payload, dict):
-        text = payload.get("text")
-        if isinstance(text, str):
-            return text
-        script = payload.get("script")
-        if isinstance(script, str):
-            return script
-        name = payload.get("name")
-        arg = payload.get("arg")
-        if isinstance(name, str) and message.get("type") in {"slash", "slash_command"}:
-            display_name = "model" if name == "set-model" else name
-            return f"/{display_name}{f' {arg}' if isinstance(arg, str) and arg else ''}"
+    if not isinstance(payload, dict) or not payload:
+        return msg_type if isinstance(msg_type, str) else value
 
-    script = message.get("script")
-    if isinstance(script, str):
-        return script
-    return value
+    strings = [v for v in payload.values() if isinstance(v, str)]
+    if len(strings) == 1 and len(payload) == 1:
+        return strings[0]
+    rendered = ", ".join(f"{k}={payload[k]!r}" for k in sorted(payload))
+    return f"{msg_type}({rendered})" if isinstance(msg_type, str) else rendered
 
 
 async def _ensure_session_manager_workflow(

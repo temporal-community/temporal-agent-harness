@@ -35,6 +35,11 @@
 # ``runner.set_approval_policy``). A gated call pauses in-workflow for a human approve/deny
 # (see the ``tool_approval`` update + ``ToolApprovalRequested``/``ToolApprovalResolved``).
 #
+# Declare accepted messages as ``@agent.accepts`` handler methods. Each declares its own
+# ``mid_turn`` (what happens if the message arrives while a turn is open — queue, fail, or
+# join it) and a ``model_callable`` hint (whether a PARENT agent's model may drive it; the
+# parent's ``SubagentToolPolicy`` decides for real). See ``MidTurn``.
+#
 # Annotate a parameter ``x: Injected[Foo]`` to have the WORKFLOW supply it per call
 # (via run_tool(injections=...)) instead of the model — hidden from the model's tool
 # schema. Use it for per-call context the model must not choose::
@@ -42,7 +47,12 @@
 #     @agent.activity_tool_defn()
 #     async def read_page(store: Injected[str], page_url: str) -> str: ...
 
-from temporal_agent_harness.harness.agent_protocol import ToolApprovalContext, ToolApprovalPolicy
+from temporal_agent_harness.harness.agent_protocol import (
+    MessageContext,
+    MidTurn,
+    ToolApprovalContext,
+    ToolApprovalPolicy,
+)
 from temporal_agent_harness.harness.agent_workflow import (
     AgentToolContext,
     CallbackToolError,
@@ -57,13 +67,18 @@ from temporal_agent_harness.harness.agent_workflow import (
     tool_defn,
 )
 from temporal_agent_harness.harness.code_mode import code_mode_tool
-from temporal_agent_harness.harness.subagent_toolset import subagent_toolset
+from temporal_agent_harness.harness.subagent_toolset import (
+    SubagentToolPolicy,
+    subagent_toolset,
+)
 
 __all__ = [
     "AgentToolContext",
     "CallbackToolError",
     "CustomApprovalFallback",
     "Injected",
+    "MessageContext",
+    "MidTurn",
     "ToolApprovalContext",
     "ToolApprovalDenied",
     "ToolApprovalPolicy",
@@ -72,6 +87,7 @@ __all__ = [
     "callback_tool_defn",
     "code_mode_tool",
     "defn",
+    "SubagentToolPolicy",
     "subagent_toolset",
     "tool_activity",
     "tool_defn",

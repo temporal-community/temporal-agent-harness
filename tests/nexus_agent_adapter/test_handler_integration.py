@@ -27,7 +27,6 @@ from temporal_agent_harness.nexus_agent_adapter.generated import (
 )
 from temporal_agent_harness.nexus_agent_adapter.generated import (
     ApproveToolCallInput,
-    ExecuteOperatorCommandInput,
     PollMessagesInput,
     QuerySessionInput,
     SendAgentMessageInput,
@@ -161,7 +160,6 @@ async def test_poll_messages_delivers_via_async_callback(env: WorkflowEnvironmen
         agent_task_queue=agent_task_queue,
         workflow_name="ProbeAgent",
         workflow_id_prefix="probe-",
-        is_message_queuing_enabled=False,
     )
 
     async with Worker(
@@ -240,7 +238,6 @@ async def test_send_agent_message_survives_handler_worker_restart(
         agent_task_queue=agent_task_queue,
         workflow_name="ProbeAgent",
         workflow_id_prefix="probe-",
-        is_message_queuing_enabled=False,
     )
     session_id = str(uuid.uuid4())
 
@@ -328,7 +325,6 @@ async def test_poll_messages_closed_when_workflow_already_completed(
         agent_task_queue=completed_task_queue,
         workflow_name="ImmediatelyDoneWorkflow",
         workflow_id_prefix="done-",
-        is_message_queuing_enabled=False,
     )
 
     async with Worker(
@@ -365,8 +361,10 @@ async def test_poll_messages_closed_when_workflow_already_completed(
 
 
 # ---------------------------------------------------------------------------
-# Full operation surface — approveToolCall, executeOperatorCommand,
-# queryAgentInterface, queryOperatorInterface, queryAgentStatus.
+# Full operation surface — sendAgentMessage, queryAgentInterface, queryAgentStatus,
+# approveToolCall, pollMessages. (executeOperatorCommand / queryOperatorInterface are
+# NOT exercised: operator commands are gone from the harness and those two operations now
+# answer NOT_IMPLEMENTED until the contract is regenerated without them.)
 # ---------------------------------------------------------------------------
 
 
@@ -402,17 +400,15 @@ class GatedProbeAgent:
 
 class FullSurfaceOutput(BaseModel):
     handler_names: list[str]
-    operator_command_names: list[str]
     pending_tool_id: str
     approve_accepted: bool
-    status_reply: str
     poll_item_count: int
 
 
 @workflow.defn
 class FullSurfaceCallerWorkflow:
     """Exercises the remaining operations: interface/status queries, approveToolCall,
-    executeOperatorCommand."""
+    pollMessages."""
 
     @workflow.run
     async def run(self, input: CallerInput) -> FullSurfaceOutput:
@@ -432,10 +428,6 @@ class FullSurfaceCallerWorkflow:
 
         iface = await client.execute_operation(
             AgentServiceDefinition.query_agent_interface,
-            QuerySessionInput(session_id=input.session_id),
-        )
-        ops_iface = await client.execute_operation(
-            AgentServiceDefinition.query_operator_interface,
             QuerySessionInput(session_id=input.session_id),
         )
 
@@ -459,11 +451,6 @@ class FullSurfaceCallerWorkflow:
             ),
         )
 
-        status_out = await client.execute_operation(
-            AgentServiceDefinition.execute_operator_command,
-            ExecuteOperatorCommandInput(session_id=input.session_id, name="status"),
-        )
-
         poll_out = await client.execute_operation(
             AgentServiceDefinition.poll_messages,
             PollMessagesInput(
@@ -475,10 +462,8 @@ class FullSurfaceCallerWorkflow:
 
         return FullSurfaceOutput(
             handler_names=sorted(h.name for h in iface.handlers),
-            operator_command_names=sorted(c.name for c in ops_iface.commands),
             pending_tool_id=tool_id,
             approve_accepted=approve_out.accepted,
-            status_reply=status_out.reply,
             poll_item_count=len(poll_out.items),
         )
 
@@ -542,7 +527,6 @@ async def test_send_agent_message_rejects_malformed_input(
         agent_task_queue=agent_task_queue,
         workflow_name="ProbeAgent",
         workflow_id_prefix="probe-",
-        is_message_queuing_enabled=False,
     )
 
     async with Worker(
@@ -581,7 +565,6 @@ async def test_full_operation_surface(env: WorkflowEnvironment) -> None:
         agent_task_queue=agent_task_queue,
         workflow_name="GatedProbeAgent",
         workflow_id_prefix="gated-probe-",
-        is_message_queuing_enabled=False,
     )
 
     async with Worker(
@@ -607,8 +590,6 @@ async def test_full_operation_surface(env: WorkflowEnvironment) -> None:
         result = await handle.result()
 
         assert result.handler_names == ["use_tool"]
-        assert "status" in result.operator_command_names
         assert result.pending_tool_id == "fixed-tool-id"
         assert result.approve_accepted
-        assert result.status_reply
         assert result.poll_item_count > 0

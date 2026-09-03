@@ -30,33 +30,30 @@ from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from temporal_agent_harness.harness import AgentWorkflowRunner, agent, slash_commands
+from temporal_agent_harness.harness import AgentWorkflowRunner, agent
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
-    EXECUTE_OPERATOR_COMMAND_UPDATE,
-    OPERATOR_INTERFACE_QUERY,
     SEND_AGENT_MESSAGE_UPDATE,
     AcceptedFunction,
     AgentConfig,
     AgentEvent,
     AgentEventType,
     AgentMessage,
+    AgentReply,
     AgentStatus,
-    OperatorCommand,
-    OperatorCommandRequest,
-    OperatorCommandResult,
+    MessageContext,
+    MidTurn,
     SubagentReplyReceived,
     TextMessage,
     TextReply,
     ToolApprovalPolicy,
     AgentMessageReply,
-    SlashCommand,
 )
 from temporalio.exceptions import ApplicationError
 
 from temporal_agent_harness.harness.agent_client import AgentClient
-from temporal_agent_harness.harness.agent_workflow import _discover_handlers
+from temporal_agent_harness.harness.agent_workflow import Injected, _discover_handlers
 
 # ---------------------------------------------------------------------------
 # Message models + probe workflows
@@ -87,17 +84,6 @@ class Picked(BaseModel):
     model: str
 
 
-def probe_model_command(handler) -> slash_commands.SlashCommandDefinition:
-    return slash_commands.command(
-        name="model",
-        payload_name="set-model",
-        label="/model",
-        description="Set the probe model.",
-        argument=slash_commands.enum_arg(("alpha", "beta"), placeholder="model"),
-        handler=handler,
-    )
-
-
 @workflow.defn
 @agent.defn
 class TypedProbeAgent:
@@ -110,9 +96,6 @@ class TypedProbeAgent:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            # Default queuing on (tests send several messages back-to-back); a config
-            # value would still win over this default.
-            enable_message_queuing_default=True,
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
         self._seen: list[str] = []
@@ -121,19 +104,19 @@ class TypedProbeAgent:
     async def run(self, _config: AgentConfig) -> None:
         await self._runner.run(self)
 
-    @agent.accepts
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def greet(self, message: Greeting) -> Greeted:
         """Greet a person by name."""
         self._seen.append(f"greet:{message.name}")
         return Greeted(message=f"hi {message.name}")
 
-    @agent.accepts
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def pick(self, message: ModelPick) -> Picked:
         """Pick a model for the session."""
         self._seen.append(f"pick:{message.model}")
         return Picked(model=message.model)
 
-    @agent.accepts
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def boom(self, message: TextMessage) -> TextReply:
         """Always raises — to prove an errored turn publishes AgentError + turn_end and
         the loop survives for the next message."""
@@ -146,40 +129,70 @@ class TypedProbeAgent:
 
 @workflow.defn
 @agent.defn
-class SlashExtensionProbeAgent:
-    """Agent with an agent-specific slash extension, used to prove harness slash commands
-    are handled first and unknown commands still fall through to the agent."""
+class MidTurnProbeAgent:
+    """Covers all three ``mid_turn`` modes plus ``Injected[MessageContext]``.
+
+    ``work`` blocks until signalled, so a test can hold a turn open and observe what happens
+    to a message that arrives while it is running."""
 
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-            slash_commands=[
-                *slash_commands.default_commands(),
-                probe_model_command(self._handle_model_command),
-            ],
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
+        self._released: set[str] = set()
+        self._joined: list[bool] = []
+        self._published_after_sibling = False
 
     @workflow.run
     async def run(self, _config: AgentConfig) -> None:
         await self._runner.run(self)
 
-    @agent.accepts
-    async def slash(self, command: SlashCommand) -> TextReply:
-        """Handle agent-specific slash commands."""
-        return TextReply(text=f"custom:{command.name}:{command.arg or ''}")
+    @workflow.signal
+    def release(self, which: str) -> None:
+        self._released.add(which)
 
-    def _handle_model_command(
-        self, _context: slash_commands.SlashCommandContext, command: SlashCommand
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
+    async def work(self, message: TextMessage) -> TextReply:
+        """Long-running work — holds its turn open until released."""
+        await workflow.wait_condition(lambda: "work" in self._released)
+        return TextReply(text=f"worked:{message.text}")
+
+    @agent.accepts(mid_turn=MidTurn.ACCEPT)
+    async def steer(
+        self, message: TextMessage, ctx: Injected[MessageContext]
     ) -> TextReply:
-        return TextReply(text=f"operator:{command.name}:{command.arg or ''}")
+        """Joins an open turn, or opens one when idle — and records which case it was."""
+        self._joined.append(ctx.joined_turn)
+        return TextReply(
+            text=f"steer:{message.text}:joined={ctx.joined_turn}:turn={ctx.turn_number}"
+        )
 
+    @agent.accepts(mid_turn=MidTurn.ACCEPT)
+    async def outlive(self, message: TextMessage) -> TextReply:
+        """Joins a turn, waits for the OPENER to finish, then publishes against the turn.
 
-# ---------------------------------------------------------------------------
-# Fixtures + helpers
-# ---------------------------------------------------------------------------
+        The regression this guards: if the turn id were cleared when the first participant
+        finished, this publish would hard-raise instead of landing on the still-open turn."""
+        await workflow.wait_condition(lambda: "outlive" in self._released)
+        self._runner.publish(AgentReply(output={"note": "still in the turn"}))
+        self._published_after_sibling = True
+        return TextReply(text=f"outlived:{message.text}")
+
+    @agent.accepts(mid_turn=MidTurn.REJECT)
+    async def exclusive(self, message: TextMessage) -> TextReply:
+        """Must not pile up behind in-flight work."""
+        return TextReply(text=f"exclusive:{message.text}")
+
+    @workflow.query
+    def joined(self) -> list[bool]:
+        return self._joined
+
+    @workflow.query
+    def published_after_sibling(self) -> bool:
+        return self._published_after_sibling
 
 
 @pytest_asyncio.fixture
@@ -192,7 +205,7 @@ async def client_and_queue():
     async with Worker(
         env.client,
         task_queue=task_queue,
-        workflows=[TypedProbeAgent, SlashExtensionProbeAgent],
+        workflows=[TypedProbeAgent, MidTurnProbeAgent],
         # Unsandboxed so the test module's imports (pydantic, harness, pytest) don't
         # trip the workflow sandbox; the runner logic under test is unaffected.
         workflow_runner=UnsandboxedWorkflowRunner(),
@@ -225,16 +238,6 @@ async def _send(
             expected_turn=await _next_expected_turn(handle),
         ),
         result_type=AgentMessageReply,
-    )
-
-
-async def _operator(
-    handle: WorkflowHandle, name: str, arg: str | None = None
-) -> OperatorCommandResult:
-    return await handle.execute_update(
-        EXECUTE_OPERATOR_COMMAND_UPDATE,
-        OperatorCommandRequest(name=name, arg=arg),
-        result_type=OperatorCommandResult,
     )
 
 
@@ -311,222 +314,6 @@ async def test_agent_interface_query_announces_handlers(client_and_queue):
     assert "message" in by_name["greet"].output["properties"]
 
 
-async def test_agent_interface_hides_operator_slash_handler(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
-
-    functions = await handle.query(
-        AGENT_INTERFACE_QUERY, result_type=list[AcceptedFunction]
-    )
-
-    assert {f.name for f in functions} == set()
-
-
-async def test_operator_interface_lists_harness_commands_for_every_agent(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, TypedProbeAgent)
-
-    commands = await handle.query(
-        OPERATOR_INTERFACE_QUERY, result_type=list[OperatorCommand]
-    )
-    by_name = {command.name: command for command in commands}
-
-    assert set(by_name) == {"approvals", "allow-tools", "status", "stop"}
-    assert by_name["approvals"].source == "harness"
-    assert by_name["approvals"].payload_name == "set-approvals"
-    assert by_name["approvals"].argument is not None
-    assert by_name["approvals"].argument.kind == "enum"
-    assert by_name["approvals"].argument.choices == ("strict", "safe", "skip")
-    assert by_name["allow-tools"].argument is not None
-    assert by_name["allow-tools"].argument.kind == "tool_names"
-    assert "allow-tool" in by_name["allow-tools"].aliases
-    assert by_name["stop"].source == "harness"
-    assert by_name["stop"].payload_name == "stop-agent"
-    assert by_name["stop"].label == "/stop"
-    assert "stop-agent" in by_name["stop"].aliases
-
-
-def test_slash_commands_can_select_or_disable_packaged_commands(offline_build):
-    runner = offline_build(
-        AgentConfig(),
-        slash_commands=slash_commands.commands("status", "stop-agent"),
-    )
-    assert [command.name for command in runner._handle_operator_interface()] == [
-        "status",
-        "stop",
-    ]
-
-    runner = offline_build(AgentConfig(), slash_commands=[])
-    assert runner._handle_operator_interface() == []
-
-
-async def test_operator_interface_includes_agent_extension_commands(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
-
-    commands = await handle.query(
-        OPERATOR_INTERFACE_QUERY, result_type=list[OperatorCommand]
-    )
-    by_name = {command.name: command for command in commands}
-
-    assert set(by_name) == {"approvals", "allow-tools", "status", "stop", "model"}
-    assert by_name["model"].source == "agent"
-    assert by_name["model"].payload_name == "set-model"
-    assert by_name["model"].argument is not None
-    assert by_name["model"].argument.choices == ("alpha", "beta")
-
-
-async def test_operator_command_status_does_not_create_turn(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, TypedProbeAgent)
-
-    result = await _operator(handle, "status")
-
-    assert "- Agent id:" in result.text
-    assert "- Approvals: `skip`" in result.text
-    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
-    assert status.current_turn == 0
-    assert status.pending_turns == []
-
-
-async def test_operator_command_stop_completes_workflow(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, TypedProbeAgent)
-    events_task = asyncio.create_task(
-        _collect_until_operator_terminal(client, handle.id)
-    )
-    await asyncio.sleep(0)
-
-    result = await _operator(handle, "stop-agent")
-    events = await events_task
-
-    assert result.text == "Agent stop requested."
-    assert [event.event.type for event in events] == [
-        AgentEventType.OPERATOR_COMMAND_STARTED,
-        AgentEventType.OPERATOR_COMMAND_COMPLETED,
-    ]
-    assert events[0].event.command_name == "stop-agent"
-    assert events[0].event.command_label == "/stop"
-    assert events[-1].event.text == "Agent stop requested."
-    async with asyncio.timeout(5):
-        await handle.result()
-
-
-async def test_operator_command_publishes_durable_audit_events(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, TypedProbeAgent)
-
-    await _operator(handle, "status")
-
-    events = await _collect_until_operator_terminal(client, handle.id)
-    assert [event.event.type for event in events] == [
-        AgentEventType.OPERATOR_COMMAND_STARTED,
-        AgentEventType.OPERATOR_COMMAND_COMPLETED,
-    ]
-    started, completed = events
-    assert started.turn_number == 0
-    assert completed.turn_number == 0
-    assert started.turn_id == completed.turn_id
-    assert started.event.operator_command_id == completed.event.operator_command_id
-    assert started.event.command_name == "status"
-    assert started.event.command_label == "/status"
-    assert completed.event.text.startswith("- Agent id:")
-
-
-async def test_unknown_operator_command_publishes_failed_event(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, TypedProbeAgent)
-
-    result = await _operator(handle, "not-real")
-
-    assert result.text == "Unknown operator command: `not-real`."
-    events = await _collect_until_operator_terminal(client, handle.id)
-    assert [event.event.type for event in events] == [
-        AgentEventType.OPERATOR_COMMAND_STARTED,
-        AgentEventType.OPERATOR_COMMAND_FAILED,
-    ]
-    failed = events[-1]
-    assert failed.turn_number == 0
-    assert failed.event.command_name == "not-real"
-    assert failed.event.message == "Unknown operator command: `not-real`."
-
-
-async def test_attach_replays_operator_only_history_and_stops(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, TypedProbeAgent)
-    await _operator(handle, "status")
-    agent_client = AgentClient(client, handle.id)
-
-    stream = await agent_client.attach(
-        from_offset=0,
-        on_item=lambda item, _resume_offset: item,
-    )
-
-    items: list[AgentEvent] = []
-    async with asyncio.timeout(5):
-        async for item in stream:
-            assert isinstance(item, AgentEvent)
-            items.append(item)
-
-    assert [item.event.type for item in items] == [
-        AgentEventType.OPERATOR_COMMAND_STARTED,
-        AgentEventType.OPERATOR_COMMAND_COMPLETED,
-    ]
-
-
-async def test_operator_command_set_approvals_updates_policy_without_turn(
-    client_and_queue,
-):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, TypedProbeAgent)
-
-    result = await _operator(handle, "set-approvals", "safe")
-
-    assert result.text == "Approvals set to **safe**."
-    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
-    assert status.approval_policy == ToolApprovalPolicy.allow_inherently_safe()
-    assert status.current_turn == 0
-
-
-async def test_operator_command_allow_tools_updates_policy_without_turn(
-    client_and_queue,
-):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, TypedProbeAgent)
-
-    result = await _operator(handle, "allow-tools", "alpha_tool,beta_tool")
-
-    assert result.text == "Tools `alpha_tool`, `beta_tool` will be auto-approved."
-    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
-    assert status.approval_policy.auto_approve_tools == frozenset(
-        {"alpha_tool", "beta_tool"}
-    )
-    assert status.current_turn == 0
-
-
-async def test_operator_command_uses_configured_slash_command(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
-
-    result = await _operator(handle, "set-model", "alpha")
-
-    assert result.text == "operator:set-model:alpha"
-    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
-    assert status.current_turn == 0
-
-
-async def test_configured_core_command_preempts_agent_extension(
-    client_and_queue,
-):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
-
-    result = await _operator(handle, "status")
-
-    assert "- Agent id:" in result.text
-    assert "operator:status" not in result.text
-
-
 async def _collect_until_turn_end(client: Client, workflow_id: str) -> list[AgentEvent]:
     from datetime import timedelta
 
@@ -547,31 +334,6 @@ async def _collect_until_turn_end(client: Client, workflow_id: str) -> list[Agen
     return events
 
 
-async def _collect_until_operator_terminal(
-    client: Client, workflow_id: str
-) -> list[AgentEvent]:
-    from datetime import timedelta
-
-    from temporalio.contrib.workflow_streams import WorkflowStreamClient
-
-    stream = WorkflowStreamClient.create(client, workflow_id)
-    events: list[AgentEvent] = []
-    async with asyncio.timeout(30):
-        async for item in stream.subscribe(
-            topics=["turn_events"],
-            from_offset=0,
-            result_type=AgentEvent,
-            poll_cooldown=timedelta(milliseconds=10),
-        ):
-            events.append(item.data)
-            if item.data.event.type in {
-                AgentEventType.OPERATOR_COMMAND_COMPLETED,
-                AgentEventType.OPERATOR_COMMAND_FAILED,
-            }:
-                break
-    return events
-
-
 def _reply_text(events: list[AgentEvent]) -> str:
     reply = next(e.event for e in events if e.event.type == AgentEventType.REPLY)
     text = reply.output.get("text")
@@ -588,85 +350,6 @@ async def test_reply_is_the_handler_return_value(client_and_queue):
     reply = next(e.event for e in events if e.event.type == AgentEventType.REPLY)
     # The reply carries the handler's return model serialized to a dict.
     assert reply.output == {"message": "hi Ada"}
-
-
-async def test_harness_slash_status_without_agent_handler(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, TypedProbeAgent)
-
-    await _send(handle, "slash", {"name": "status"})
-
-    text = _reply_text(await _collect_until_turn_end(client, handle.id))
-    assert "- Agent id:" in text
-    assert "- Approvals: `skip`" in text
-    assert "- Pending approvals: none" in text
-
-
-async def test_harness_slash_set_approvals_updates_policy(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, TypedProbeAgent)
-
-    await _send(handle, "slash", {"name": "set-approvals", "arg": "safe"})
-
-    text = _reply_text(await _collect_until_turn_end(client, handle.id))
-    assert text == "Approvals set to **safe**."
-    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
-    assert status.approval_policy == ToolApprovalPolicy.allow_inherently_safe()
-
-
-async def test_harness_slash_allow_tools_updates_allow_list(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, TypedProbeAgent)
-
-    await _send(handle, "slash", {"name": "allow-tools", "arg": "alpha_tool,beta_tool"})
-
-    text = _reply_text(await _collect_until_turn_end(client, handle.id))
-    assert "Tools `alpha_tool`, `beta_tool` will be auto-approved." == text
-    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
-    assert status.approval_policy.auto_approve_tools == frozenset(
-        {"alpha_tool", "beta_tool"}
-    )
-
-
-async def test_harness_slash_unknown_without_agent_handler_returns_reply(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, TypedProbeAgent)
-
-    await _send(handle, "slash", {"name": "not-real"})
-
-    text = _reply_text(await _collect_until_turn_end(client, handle.id))
-    assert text == "Unknown slash command: `not-real`."
-
-
-async def test_configured_slash_command_handles_normal_slash_turn(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
-
-    await _send(handle, "slash", {"name": "set-model", "arg": "gemini"})
-
-    text = _reply_text(await _collect_until_turn_end(client, handle.id))
-    assert text == "operator:set-model:gemini"
-
-
-async def test_unknown_slash_falls_back_to_agent_extension(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
-
-    await _send(handle, "slash", {"name": "unknown-extension", "arg": "value"})
-
-    text = _reply_text(await _collect_until_turn_end(client, handle.id))
-    assert text == "custom:unknown-extension:value"
-
-
-async def test_harness_slash_preempts_agent_extension_for_core_commands(client_and_queue):
-    client, task_queue = client_and_queue
-    handle = await _start(client, task_queue, SlashExtensionProbeAgent)
-
-    await _send(handle, "slash", {"name": "status"})
-
-    text = _reply_text(await _collect_until_turn_end(client, handle.id))
-    assert "- Agent id:" in text
-    assert "custom:status" not in text
 
 
 async def test_handler_error_publishes_agent_error_and_loop_survives(client_and_queue):
@@ -801,26 +484,6 @@ def test_stream_and_approval_policy_default_are_required():
         )
 
 
-def test_message_queuing_resolves_config_over_agent_default(offline_build):
-    assert offline_build(AgentConfig())._status.is_message_queuing_enabled is False
-    assert (
-        offline_build(AgentConfig(), default=True)._status.is_message_queuing_enabled
-        is True
-    )
-    assert (
-        offline_build(
-            AgentConfig(is_message_queuing_enabled=True), default=False
-        )._status.is_message_queuing_enabled
-        is True
-    )
-    assert (
-        offline_build(
-            AgentConfig(is_message_queuing_enabled=False), default=True
-        )._status.is_message_queuing_enabled
-        is False
-    )
-
-
 def test_approval_policy_resolves_config_over_agent_default(offline_build_policy):
     agent_default = ToolApprovalPolicy.allow_inherently_safe()
     caller_policy = ToolApprovalPolicy.dangerously_skip_all()
@@ -888,25 +551,19 @@ def test_protocol_types_use_concrete_annotations():
     the Temporal pydantic converter, which builds their TypeAdapter inside the workflow
     sandbox, where a stringized annotation fails to resolve."""
     from temporal_agent_harness.harness.agent_protocol import (
+        AcceptedFunction,
         AgentMessage,
         AgentMessageReply,
         AgentStatus,
-        OperatorCommand,
-        OperatorCommandArgument,
-        OperatorCommandRequest,
-        OperatorCommandResult,
-        SlashCommand,
+        MessageContext,
     )
 
     for cls in (
         AgentMessage,
         AgentStatus,
         AgentMessageReply,
-        SlashCommand,
-        OperatorCommand,
-        OperatorCommandArgument,
-        OperatorCommandRequest,
-        OperatorCommandResult,
+        AcceptedFunction,
+        MessageContext,
     ):
         for field_name, annotation in cls.__annotations__.items():
             assert not isinstance(annotation, str), (
@@ -928,7 +585,7 @@ def test_errored_subagent_turn_closes_bracket_on_actual_accepted_turn(offline_bu
     runner._status.enqueue_message(
         AgentMessage(type="x", payload={}, expected_turn=1), "turn-1"
     )
-    runner._status.start_next_turn()
+    runner._status.open_next_turn()
     inst = runner._status.register_subagent("aaaaaa-bbbbbb", "child-wf-1", "k")
 
     # The activity raises with the child's ACTUAL accepted turn number (7) in the details —
@@ -981,24 +638,13 @@ def offline_build(monkeypatch):
     # no workflow loop, so stub it with a plain uuid.
     monkeypatch.setattr(aw.workflow, "uuid4", lambda: uuid.uuid4())
 
-    def build(
-        config: AgentConfig,
-        *,
-        default: bool | None = None,
-        slash_commands=None,
-    ):
+    def build(config: AgentConfig):
         stream = MagicMock()
         stream.topic.return_value = MagicMock()
-        kwargs: dict[str, Any] = {}
-        if default is not None:
-            kwargs["enable_message_queuing_default"] = default
-        if slash_commands is not None:
-            kwargs["slash_commands"] = slash_commands
         return AgentWorkflowRunner(
             config,
             stream=stream,
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
-            **kwargs,
         )
 
     return build
@@ -1026,3 +672,229 @@ def offline_build_policy(monkeypatch):
         )
 
     return build
+
+
+# ---------------------------------------------------------------------------
+# Mid-turn dispatch: reject / enqueue / accept, and the refcounted turn bracket
+# ---------------------------------------------------------------------------
+
+
+async def _hold_a_turn_open(client: Client, task_queue: str):
+    """Start MidTurnProbeAgent and leave ``work`` running, so a turn is open.
+
+    Returns ``(handle, work_reply)``. Polls status rather than sleeping, so the turn is
+    genuinely open before the caller sends its mid-turn message."""
+    handle = await _start(client, task_queue, MidTurnProbeAgent)
+    work = await _send(handle, "work", {"text": "long"})
+    for _ in range(200):
+        status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+        if status.turn_active:
+            return handle, work
+        await asyncio.sleep(0.05)
+    raise AssertionError("work never opened a turn")
+
+
+async def test_reject_handler_fails_while_a_turn_is_open(client_and_queue):
+    """A REJECT handler fails the update mid-turn — and the message is never admitted."""
+    client, task_queue = client_and_queue
+    handle, _work = await _hold_a_turn_open(client, task_queue)
+
+    with pytest.raises(WorkflowUpdateFailedError) as excinfo:
+        await _send(handle, "exclusive", {"text": "now"})
+    cause = excinfo.value.cause
+    assert getattr(cause, "type", None) == "MidTurnRejected"
+    assert "exclusive" in str(cause)
+
+    # Rejected at the validator, so nothing was queued and no turn was reserved.
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.pending_turns == []
+    assert status.current_turn == 1
+
+    # The same handler succeeds once the agent is idle — REJECT governs only mid-turn arrival.
+    await handle.signal(MidTurnProbeAgent.release, "work")
+    for _ in range(200):
+        status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+        if not status.turn_active:
+            break
+        await asyncio.sleep(0.05)
+    reply = await _send(handle, "exclusive", {"text": "later"})
+    assert reply.turn_number == 2
+
+
+async def test_accept_handler_joins_the_open_turn(client_and_queue):
+    """An ACCEPT message shares the open turn's id/number instead of getting its own.
+
+    And the bracket stays singular: ONE turn_started and ONE turn_end for that turn, with
+    both participants' replies inside it."""
+    client, task_queue = client_and_queue
+    handle, work = await _hold_a_turn_open(client, task_queue)
+
+    steer = await _send(handle, "steer", {"text": "ride along"})
+    # Same turn — not a new one, and not queued behind the open one.
+    assert steer.turn_id == work.turn_id
+    assert steer.turn_number == work.turn_number
+    assert steer.pending is False
+
+    # Nothing was queued — a join does not take a queue slot. (We deliberately do NOT assert
+    # turn_participants == 2 here: `steer` returns immediately, so the count may already be
+    # back to 1. That IS the point of ACCEPT — it ran now rather than waiting. The blocking
+    # `outlive` handler is where the count is observable; see the sibling test below.)
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.turn_active is True
+    assert status.pending_turns == []
+
+    # A JOIN CONSUMES NO TURN SLOT. This is the invariant every client's expected_turn
+    # bookkeeping rests on: after joining, the agent still hands out the SAME next turn
+    # number, so a caller that increments once per message *sent* over-counts here and gets
+    # StaleTurn on everything after. reply.turn_number + 1 is the reliable source.
+    assert await _next_expected_turn(handle) == steer.turn_number + 1
+    again = await _send(handle, "steer", {"text": "and again"})
+    assert again.turn_id == work.turn_id
+    assert await _next_expected_turn(handle) == steer.turn_number + 1
+
+    await handle.signal(MidTurnProbeAgent.release, "work")
+    events = await _collect_until_turn_end(client, handle.id)
+
+    ours = [e for e in events if e.turn_id == work.turn_id]
+    types = [e.event.type for e in ours]
+    assert types.count(AgentEventType.TURN_STARTED) == 1
+    assert types.count(AgentEventType.TURN_END) == 1
+    assert types[-1] == AgentEventType.TURN_END
+    # Both participants replied inside the one bracket.
+    replies = [e.event.output for e in ours if e.event.type == AgentEventType.REPLY]
+    assert len(replies) == 3  # the opener plus both joins
+    assert {r["text"].split(":")[0] for r in replies} == {"worked", "steer"}
+
+
+async def test_message_context_distinguishes_joining_from_opening(client_and_queue):
+    """``MessageContext.joined_turn`` tells the handler which case it is in.
+
+    Same handler, both cases: idle arrival opens a turn (False), mid-turn arrival joins
+    one (True). This is what lets one text box start a prompt when idle and steer when busy."""
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, MidTurnProbeAgent)
+
+    # Idle: opens its own turn.
+    idle = await _send(handle, "steer", {"text": "fresh"})
+    for _ in range(200):
+        if await handle.query("joined", result_type=list[bool]):
+            break
+        await asyncio.sleep(0.05)
+    assert await handle.query("joined", result_type=list[bool]) == [False]
+    assert idle.pending is False
+
+    # Mid-turn: joins the open turn.
+    _handle2, work = await _hold_a_turn_open(client, task_queue)
+    joined_reply = await _send(_handle2, "steer", {"text": "ride"})
+    assert joined_reply.turn_id == work.turn_id
+    for _ in range(200):
+        if await _handle2.query("joined", result_type=list[bool]):
+            break
+        await asyncio.sleep(0.05)
+    assert await _handle2.query("joined", result_type=list[bool]) == [True]
+
+    await _handle2.signal(MidTurnProbeAgent.release, "work")
+
+
+async def test_joined_handler_keeps_its_turn_after_a_sibling_finishes(client_and_queue):
+    """The turn id must survive the FIRST participant finishing, not just the last.
+
+    Regression guard for the loudest way to get refcounting wrong: clearing the turn id on
+    first completion makes a still-running joined handler's next publish (or gated tool call)
+    hard-raise, because the runner reports no active turn."""
+    client, task_queue = client_and_queue
+    handle, work = await _hold_a_turn_open(client, task_queue)
+
+    joined = await _send(handle, "outlive", {"text": "after you"})
+    assert joined.turn_id == work.turn_id
+
+    # Both participants are in flight, sharing one turn — the count is observable here
+    # because `outlive` parks rather than returning immediately.
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.turn_participants == 2
+    assert status.pending_turns == []
+
+    # Let the OPENER finish first, while the joined handler is still parked.
+    await handle.signal(MidTurnProbeAgent.release, "work")
+    for _ in range(200):
+        status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+        if status.turn_participants == 1:
+            break
+        await asyncio.sleep(0.05)
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    # One participant left, so the turn is STILL open — turn_end has not been claimed.
+    assert status.turn_participants == 1
+    assert status.turn_active is True
+
+    # Now the joined handler publishes against the turn. This is the assertion that fails
+    # loudly if the turn id was cleared early.
+    await handle.signal(MidTurnProbeAgent.release, "outlive")
+    events = await _collect_until_turn_end(client, handle.id)
+    assert await handle.query("published_after_sibling", result_type=bool) is True
+
+    ours = [e for e in events if e.turn_id == work.turn_id]
+    assert [e.event.type for e in ours].count(AgentEventType.TURN_END) == 1
+    assert [e.event.type for e in ours][-1] == AgentEventType.TURN_END
+
+
+async def test_close_drains_an_in_flight_joined_handler(client_and_queue):
+    """Closing must not discard a joined handler's work.
+
+    ``_closed`` is only observed between loop iterations, so without an explicit drain the
+    workflow would complete while a spawned participant was still parked — Temporal would
+    warn and the result would be lost."""
+    client, task_queue = client_and_queue
+    handle, work = await _hold_a_turn_open(client, task_queue)
+    await _send(handle, "outlive", {"text": "drain me"})
+    await handle.signal(MidTurnProbeAgent.release, "work")
+
+    # Close while the joined handler is still parked.
+    await handle.signal("close")
+    await asyncio.sleep(0.2)
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.turn_active is True, "closed before the in-flight join finished"
+
+    # Releasing it lets the workflow wind down — and its work was not thrown away.
+    await handle.signal(MidTurnProbeAgent.release, "outlive")
+    await handle.result()
+    assert await handle.query("published_after_sibling", result_type=bool) is True
+
+
+async def test_agent_interface_reports_mid_turn_and_model_callable(client_and_queue):
+    """Discovery carries the dispatch metadata a generic client needs, for EVERY handler.
+
+    A UI reads ``mid_turn`` to tell the user whether sending will queue, join, or be
+    rejected; a parent reads ``model_callable`` to honor the author's intent by default."""
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, MidTurnProbeAgent)
+
+    functions = await handle.query(
+        AGENT_INTERFACE_QUERY, result_type=list[AcceptedFunction]
+    )
+    by_name = {f.name: f for f in functions}
+    assert set(by_name) == {"work", "steer", "outlive", "exclusive"}
+    assert by_name["work"].mid_turn is MidTurn.ENQUEUE
+    assert by_name["steer"].mid_turn is MidTurn.ACCEPT
+    assert by_name["exclusive"].mid_turn is MidTurn.REJECT
+    assert all(f.model_callable for f in functions)
+    # The injected MessageContext is workflow-supplied, so it must not leak into the schema
+    # a caller (or a model) fills in.
+    assert set(by_name["steer"].parameters["properties"]) == {"text"}
+
+
+async def test_stale_expected_turn_is_rejected(client_and_queue):
+    """``expected_turn`` is a staleness token, and the workflow enforces it."""
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, TypedProbeAgent)
+
+    with pytest.raises(WorkflowUpdateFailedError) as excinfo:
+        await handle.execute_update(
+            SEND_AGENT_MESSAGE_UPDATE,
+            AgentMessage(type="greet", payload={"name": "Ada"}, expected_turn=99),
+            result_type=AgentMessageReply,
+        )
+    cause = excinfo.value.cause
+    assert getattr(cause, "type", None) == "StaleTurn"
+
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.current_turn == 0 and status.pending_turns == []

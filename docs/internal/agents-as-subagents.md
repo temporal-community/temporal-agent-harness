@@ -64,7 +64,7 @@ adapter that lets one harness agent drive another through that same standardized
   and `_stream_turn()` (phase 2). These are in-package primitives the harness reuses (e.g. the
   subagent activity); B adds idempotency to the `_submit_message` path.
 - `harness/agent_protocol/agent_interface.py` — `AgentConfig`, `AgentMessage`,
-  `UserInput`, `UserInputResult`, the `user_input` validator's `StaleTurn` / `AgentBusy` /
+  `UserInput`, `UserInputResult`, the `user_input` validator's `StaleTurn` / `MidTurnRejected` /
   `MalformedMessage` rejections. Workstream A: the `user_input` update → **`send_agent_message`**;
   its payload → an `AgentMessage{type, payload}` **envelope** (`type` names the target
   handler; `payload` is that handler's input-model JSON) — note `AgentMessage` is
@@ -124,11 +124,13 @@ adapter that lets one harness agent drive another through that same standardized
    consumed that turn) and surface `is_error`; on a pre-acceptance rejection (abnormal under
    the gate — e.g. an external driver) advance nothing and surface `is_error`.
 
-   **Consequence (explicit):** this **bypasses the child's own message-queuing mechanism** for
-   parent-driven turns — the parent serializes caller-side instead, so `AgentBusy` /
-   `is_message_queuing_enabled` never surface to the parent. A deliberate reversal of the
-   earlier "expose the child's queuing model" intent, traded for race-freedom at no throughput
-   cost. Gates are per-subagent, so calls to *different* subagents still run concurrently.
+   **Consequence (explicit):** this **serializes parent-driven turns caller-side**, so the child's
+   own mid-turn behavior never comes into play for them — a `MidTurn.REJECT` handler is not
+   spuriously refused just because the parent issued two calls at once, because the gate means the
+   second call is not sent until the first finishes. A deliberate reversal of the earlier "expose
+   the child's queuing model" intent, traded for race-freedom at no throughput cost. Gates are
+   per-subagent, so calls to *different* subagents still run concurrently. A human addressing the
+   same child directly is NOT behind this gate, so the child's declared `mid_turn` governs there.
 3. **[OPEN — Workstream B, deferred] Hash-retention scope** — retain only the last K turns'
    `turn_number → hash` (dedupe window is the activity-retry window, ~seconds), vs.
    unbounded. Leaning bounded-K. Only relevant once idempotency is picked up.
@@ -204,7 +206,7 @@ Each is intended to be separable and potentially worked in its own session. Stat
 
 > **Implemented (2026-06-15).** `@agent.accepts` + `_discover_handlers` + `agent_handlers`
 > (`harness/agent_workflow.py`); `defn` stamps `__agent_handlers__` at import. Runner
-> rewritten: name-routed `send_agent_message` validator (`StaleTurn`/`AgentBusy`/
+> rewritten: name-routed `send_agent_message` validator (`StaleTurn`/`MidTurnRejected`/
 > `UnknownFunction`/`MalformedMessage`, all with structured `details`), `agent_interface`
 > query → `list[AcceptedFunction]`, and `runner.run(self)` turn loop (publishes the
 > handler's return as the reply, `AgentError`+`turn_end` on raise, loop survives). Removed
@@ -257,14 +259,16 @@ class QaAgentWorkflow:
     async def run(self, config: AgentConfig) -> None:
         await self._runner.run(self)          # internal loop: validate → route by type → publish return
 
-    @agent.accepts
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def on_text(self, msg: TextMessage) -> TextReply:
         """Answer a free-form question about the docs."""        # docstring → function description
         ...
 
-    @agent.accepts
-    async def slash(self, cmd: SlashCommand) -> SlashCommandResult:
-        """Apply a slash command to the session."""
+    # ACCEPT so it applies to a session that is mid-turn; not model_callable, so the default
+    # SubagentToolPolicy leaves it out of a parent's generated toolset.
+    @agent.accepts(mid_turn=MidTurn.ACCEPT, model_callable=False)
+    async def set_scope(self, msg: SetScope) -> TextReply:
+        """Narrow which docs this session searches."""
         ...
 ```
 
@@ -334,7 +338,7 @@ correctness-of-the-feature requirement, so it must not gate the working demo.
 
 > **Already shipped in A (not part of this deferred work):** the *structured rejection
 > `details`* on every `send_agent_message` rejection —
-> `StaleTurn {expected_turn, next_turn}` · `AgentBusy {current_turn}` ·
+> `StaleTurn {expected_turn, next_turn}` · `MidTurnRejected {function, current_turn, turn_participants}` ·
 > `UnknownFunction {name, known}` · `MalformedMessage {function, error}`. Those payloads are
 > in place precisely so this workstream can add `DuplicateMessage` later without reworking
 > the rejection surface.
@@ -383,7 +387,7 @@ already landed in A).
 > update and the stream subscribe against the *child* — but **not by re-implementing them**:
 > the activity drives the child through the same `AgentClient` front door a human/UI uses.
 > `agent_client.py` was refactored into two **private** composable halves of `send_message` —
-> `_submit_message(...)` (phase 1: the update + `StaleTurn`/`AgentBusy` mapping) and
+> `_submit_message(...)` (phase 1: the update + `StaleTurn`/`MidTurnRejected` mapping) and
 > `_stream_turn(turn_id=…, from_offset=…, timeout=…)` (phase 2: the turn-id/error/turn_end
 > reduce loop, `timeout: float | None` so `None` = wait indefinitely). `send_message` (the one
 > PUBLIC way to drive a turn) is now just `_submit_message` + `_stream_turn`, and the activity

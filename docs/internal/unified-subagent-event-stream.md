@@ -612,7 +612,7 @@ ever does, document that `attach` replays from the live base, not absolute 0. Ou
    reads via `_accepted_turn_from_error` — the *same* number the opening `subagent_message_sent`
    carried — so the close-gate key `(workflow_id, subagent_turn)` matches the open marker by
    construction (not by re-deriving `expected`).
-2. **Pre-acceptance failure (`StaleTurn`/`AgentBusy`).** No child turn exists; no `turn_end` will
+2. **Pre-acceptance failure (`StaleTurn`/`MidTurnRejected`).** No child turn exists; no `turn_end` will
    ever come. We must **not** publish `reply_received` here (it would gate forever on a nonexistent
    `turn_end`). This matches the counter logic that advances nothing on a pre-acceptance rejection.
 3. **`stop_subagent` mid-session / parent `TERMINATE`.** A normal stop happens at a quiescent point,
@@ -646,7 +646,7 @@ The public surface gets *smaller* while the semantics get *stronger*:
 - `AgentClient.send_message(msg_type, payload, expected_turn, *, on_item, timeout,
   subagent_stall_grace_seconds)` — **`from_offset` removed.** The client reads `accepted_offset` from
   the submit reply internally and drives the merge from there; callers track no offsets. Phase 1
-  (`_submit_message`) still runs eagerly so `StaleTurnError`/`AgentBusyError` raise *before* any
+  (`_submit_message`) still runs eagerly so `StaleTurnError`/`MidTurnRejectedError` raise *before* any
   streaming — and, critically, before the merge is even constructed, so there is no failure path after
   the agent has accepted. `subagent_stall_grace_seconds` (default 5s) tunes the liveness backstop (see
   [Graceful degradation](#graceful-degradation)).

@@ -45,7 +45,7 @@ from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.exceptions import ApplicationError
 
 from temporal_agent_harness.harness.agent_client import (
-    AgentBusyError,
+    MidTurnRejectedError,
     AgentClient,
     StaleTurnError,
 )
@@ -110,7 +110,7 @@ class SubagentActivities:
         Failure modes surface as non-retryable :class:`ApplicationError` so the calling tool
         can render them as an ``is_error`` result to the parent model:
 
-        * the child rejected the send (``StaleTurn`` / ``AgentBusy`` / ``UnknownFunction`` /
+        * the child rejected the send (``StaleTurn`` / ``MidTurnRejected`` / ``UnknownFunction`` /
           ``MalformedMessage``) — the child's error ``type`` is preserved;
         * the turn ended in an error (``SubagentTurnError``);
         * the turn ended with no reply (``SubagentNoReply``).
@@ -249,7 +249,7 @@ class SubagentActivities:
 
         Delegates the envelope build + update to :meth:`AgentClient._submit_message`, then
         translates a rejection into a non-retryable :class:`ApplicationError` that preserves
-        the child's error ``type`` (``StaleTurn`` / ``AgentBusy`` / ``UnknownFunction`` /
+        the child's error ``type`` (``StaleTurn`` / ``MidTurnRejected`` / ``UnknownFunction`` /
         ``MalformedMessage``), so the calling tool can surface it verbatim. The memo seeds its
         ``consumed_offset`` from the caller-supplied ``req.from_offset`` (the perf hint — see
         :class:`RunSubagentTurnInput`); the stream then advances it from there.
@@ -260,8 +260,10 @@ class SubagentActivities:
             )
         except StaleTurnError as e:
             raise ApplicationError(str(e), type="StaleTurn", non_retryable=True) from e
-        except AgentBusyError as e:
-            raise ApplicationError(str(e), type="AgentBusy", non_retryable=True) from e
+        except MidTurnRejectedError as e:
+            raise ApplicationError(
+                str(e), type="MidTurnRejected", non_retryable=True
+            ) from e
         except WorkflowUpdateFailedError as e:
             cause = e.cause
             raise ApplicationError(

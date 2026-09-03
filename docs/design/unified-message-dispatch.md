@@ -1,10 +1,20 @@
-# Should slash commands stop being a harness concept?
+# Slash commands are not a harness concept
 
-> Status: design note, not a proposal to merge. Written up from a discussion so there's
-> something concrete to argue against before anyone touches code. The three design
-> questions this raised have been settled deliberately — see **Decisions**, which records
-> the reasoning so they aren't silently re-opened. What's left open is implementation
-> choice, not design.
+> Status: accepted, and implemented across the harness, the Python client, the FastAPI layer
+> and the packaged Svelte UI. The Nexus surface (IDL, generated stubs, Go connector) follows
+> in a separate change; until it lands, its two operator operations stay declared but answer
+> `NOT_IMPLEMENTED`.
+>
+> This note records the reasoning as well as the result, because several of the questions it
+> raised have non-obvious answers that would otherwise be silently re-opened — see
+> **Decisions**, and the two-halves discussion under **Consequences that need care**.
+> **Arguments against** is kept deliberately: the trades were made knowingly, not because
+> they went unnoticed.
+>
+> **Follow-on:** making a turn hold several messages left the event vocabulary behind — the
+> stream still encodes a message as `turn_started.user_message`, so a mid-turn message is
+> invisible and replies cannot be paired with the message that produced them. See
+> [`per-message-events.md`](per-message-events.md).
 
 The harness currently knows what a slash command is. `slash_commands.py`, the
 `operator_interface` query, the `execute_operator_command` update, and the
@@ -94,6 +104,79 @@ That branch exists only because operator commands aren't turns. Under this model
 terminal is `TURN_END` and it deletes itself, along with the `OperatorCommandStarted` /
 `Completed` / `Failed` event types (`events.py:341-370`).
 
+### The turn model, before and after
+
+The reframe is easier to see than to describe, and it is the one place in this note worth
+comparing old against new directly. Before, the bracket is scoped to one message — so
+anything that must *not* get its own turn needs a second, turn-less channel to live in,
+which is exactly what `execute_operator_command` is and why its events carry
+`turn_number = 0`. After, the bracket is scoped to busyness, and there is nothing left for a
+side channel to do.
+
+**Before — a turn is a message bracket:**
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    [*] --> Idle
+
+    Idle --> Turn : run loop pops the queue<br/>start_next_turn() · turn_started
+    Turn --> Idle : handler returns or raises<br/>complete_turn() · turn_end
+    Turn --> Turn : mid-turn arrival<br/>queuing ON → enqueue behind this turn<br/>queuing OFF → ✗ AgentBusy
+
+    note right of Turn
+      ONE message per turn, strictly sequential.
+      _current_turn_id is unambiguous throughout,
+      so ambient activity-side publishing works
+      off a single value.
+    end note
+
+    note left of Idle
+      execute_operator_command is a SIDE CHANNEL:
+      it runs here and mid-turn alike, creating no
+      turn at all (its events carry turn_number = 0).
+      Whether a message may interrupt is one global
+      switch, is_message_queuing_enabled, for every
+      handler at once.
+    end note
+```
+
+**After — a turn is a busy bracket:**
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    [*] --> Idle
+
+    Idle --> Turn : first message — any handler, any mode<br/>participants = 1 · turn_started
+    Idle --> Turn : queue non-empty → run loop pops<br/>participants = 1 · turn_started
+
+    Turn --> Turn : mid_turn = ACCEPT<br/>JOINS the open turn · participants += 1
+    Turn --> Turn : mid_turn = ENQUEUE<br/>enqueue behind this turn
+    Turn --> Turn : mid_turn = REJECT<br/>✗ MidTurnRejected — the update fails
+    Turn --> Turn : a participant finishes<br/>participants -= 1, still > 0
+
+    Turn --> Idle : LAST participant finishes<br/>participants == 0 · clear turn_id · turn_end
+
+    note right of Turn
+      Refcounted. Many participants share one
+      turn_id, so a turn is "the interval the agent
+      is non-idle" — which is what makes turn_end a
+      true quiescence signal a client can disconnect on.
+      At most one turn is ever open, so nested or
+      interleaved brackets are unconstructible.
+    end note
+
+    note left of Idle
+      No side channel. Every control is an ordinary
+      handler that opens or joins a turn like anything
+      else. Interruption is declared per handler,
+      not globally.
+    end note
+```
+
 ## Proposed surface
 
 Mid-turn behavior, declared per handler. All three modes are identical when the agent is
@@ -101,26 +184,36 @@ idle (open a turn, run) — the setting governs only mid-turn arrival, so there 
 idle-case ambiguity to specify.
 
 ```python
-@agent.accepts(mid_turn=MidTurn.ENQUEUE, model_callable=True)
+@agent.accepts(mid_turn=MidTurn.ENQUEUE)
 async def ask(self, msg: Ask) -> TextReply: ...
 
-@agent.accepts(mid_turn=MidTurn.REJECT, model_callable=True)   # must not pile up behind work
+@agent.accepts                                 # mid_turn=REJECT, model_callable=True
 async def start_batch(self, msg: Batch) -> BatchStarted: ...
 
-@agent.accepts(mid_turn=MidTurn.ACCEPT)                        # model_callable defaults False
+@agent.accepts(mid_turn=MidTurn.ACCEPT, model_callable=False)
 async def set_approvals(self, msg: SetApprovals) -> TextReply: ...
 ```
 
-- `MidTurn.ENQUEUE` — queue behind the open turn. Reproduces today's behavior.
+- `MidTurn.ENQUEUE` — queue behind the open turn.
 - `MidTurn.REJECT` — fail the update with a typed error.
 - `MidTurn.ACCEPT` — join the open turn and run now.
 
-`mid_turn` is a **required** enum, not a string. Required because there is no defensible
-default across handlers — the whole point is that the right answer differs per handler, and
-silence would just reintroduce a global convention. An enum because these are three fixed
-behaviors the harness dispatches on, and a typo'd string should not be a runtime discovery.
-It can be given a default later if a dominant case emerges; going from required to optional
-is a compatible change, and the reverse isn't.
+`mid_turn` is an enum, not a string: these are three fixed behaviors the harness dispatches
+on, and a typo'd string should not be a runtime discovery. It defaults to `MidTurn.REJECT`,
+and `model_callable` defaults to `True`, so the bare `@agent.accepts` form stays valid.
+
+`REJECT` is the right default because it is the only one of the three that cannot surprise
+an author: a handler that silently queues (`ENQUEUE`) delays work the caller thought it had
+dispatched, and one that silently joins (`ACCEPT`) opts the author into concurrency with the
+open turn — see *Concurrent state mutation is the author's problem*. Failing loudly on a
+busy agent is the mode whose consequence is visible immediately, at the call site, in
+development.
+
+`model_callable` is only a hint, and the parent's `SubagentToolPolicy` is authoritative
+either way (see below) — so a permissive default costs nothing that the policy can't
+recover, while a restrictive one makes the common case (an agent whose whole surface is
+meant to be drivable) the one that needs annotating. The real control is at toolset
+construction, not here.
 
 `is_message_queuing_enabled` and the global `AgentBusy` check (`agent_workflow.py:1397`)
 are deleted in favor of this. Centralizing that decision was the original mistake: "a stop
@@ -154,10 +247,13 @@ agent.subagent_toolset(
 )
 ```
 
-`model_callable` defaults to `False`, matching `inherently_safe`'s conservative default: a
-handler becomes model-drivable only by saying so. That inverts today's failure mode, where
-forgetting to name a handler `slash` silently exposes it. The migration cost is near zero
-because `mid_turn` is required — every `@agent.accepts` is being touched anyway.
+This two-layer split is what makes `model_callable`'s permissive default safe. Unlike
+`inherently_safe` — whose conservative default matters because a tool's own claim can be the
+*last* word when a policy honors it — a handler hint is never the last word: the parent
+builds the toolset, and `allow_only` / `dangerously_allow_all` override the hints in both
+directions. So the hint's job is to express intent, not to enforce, and defaulting it to
+`True` keeps the common case (an agent whose whole surface is meant to be drivable)
+annotation-free while leaving the actual control exactly where it belongs.
 
 **Consequence: `agent_interface` now returns every handler**, each carrying its `mid_turn`
 and `model_callable` values. It has to, since `operator_interface` is gone and a debugging
@@ -196,23 +292,31 @@ and the running turn's model loop drains it when composing its next model input.
 same shape as the approval-policy case — a state mutation the open turn observes. Any
 richer steering API is a convenience over this mechanism, not a missing part of it.
 
-### Packaged controls become a mixin
+### Packaged controls go away entirely
 
-`slash_commands.default_commands()` can't survive, since handlers become agent methods.
-`_discover_handlers` walks the MRO via `inspect.getmembers` (`agent_workflow.py:538`), so
-inherited handlers are found — packaged controls become a mixin the author explicitly
-inherits:
+`slash_commands.default_commands()` can't survive, since handlers become agent methods. The
+harness ships **no replacement**: `approvals`, `allow-tools`, `status` and `stop` are simply
+gone, and an agent that wants any of them as a message writes its own handler.
 
-```python
-@agent.defn
-class MyAgent(HarnessControls):   # set_approvals / allow_tools / status / stop
-    ...
-```
+This costs nothing, because every one of them already has a first-class, non-command surface
+that a client should have been using anyway:
 
-This also fixes a real problem: those commands are currently **on by default**
-(`agent_workflow.py:1265`), and `set_approvals` can disable human-in-the-loop for the whole
-session via an unauthenticated `POST /api/operator-commands` (`web/app.py:270`). Opt-in by
-inheritance is a more honest default.
+| Packaged command | First-class surface it duplicated |
+| --- | --- |
+| `approvals` / `allow-tools` | the `tool_approval` update — `remember=True` relaxes the live policy and cascades to already-parked gates |
+| `status` | the `agent_status` query |
+| `stop` | the `close` signal |
+
+It also removes a real problem rather than relocating it: those commands are currently **on
+by default** (`agent_workflow.py:1265`), so `set_approvals` can disable human-in-the-loop
+for a whole session through an unauthenticated `POST /api/operator-commands`
+(`web/app.py:270`). Deleting the channel is a stronger fix than making it opt-in.
+
+A packaged mixin — `class MyAgent(HarnessControls)`, found automatically because
+`_discover_handlers` walks the MRO via `inspect.getmembers` (`agent_workflow.py:538`) —
+remains available as a later convenience if a real need for these as *messages* shows up. It
+is deliberately not part of this change: the mechanism it would need already exists, so
+nothing is foreclosed by waiting.
 
 ## What this deletes
 
@@ -225,7 +329,9 @@ inheritance is a more honest default.
 - The client's terminal-operator-event branch (`agent_client.py:620`).
 - The Slack connector's slash-prefix stripping (#78) — which is itself evidence for this
   design. That code exists because Slack's `/` collides with the harness's. Under one door
-  the connector just maps a platform command to a message type.
+  the connector just maps a platform command to a message type. (Deferred to a follow-up
+  along with the rest of the Nexus surface, which is still experimental; the harness-side
+  operations it calls remain declared but answer `NOT_IMPLEMENTED` in the meantime.)
 
 Two bugs go away as a side effect:
 
@@ -250,6 +356,69 @@ gets made from a real client that needs something specific.
 
 ## Consequences that need care
 
+### Admission and execution are two halves
+
+Admission and execution are separate halves joined by one queue, and most of what follows
+turns on that seam. The update handler contains no `await`, so it completes inside a single
+workflow task — which is what guarantees `accepted_offset <= turn_started`, and is the same
+property the participant refcount relies on: increment during admission, never when a
+handler body starts.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Client
+    participant U as send_agent_message<br/>update handler
+    participant Q as _pending_turns<br/>queue
+    participant R as AgentWorkflowRunner.run<br/>workflow body
+    participant H as @agent.accepts<br/>handler
+
+    Note over C,H: All C ⇠ R/H arrows are events published to the<br/>WorkflowStream log and read by the client's merge.<br/>accepted_offset is a position in that log.
+
+    C->>+U: execute_update(AgentMessage)
+
+    rect rgb(238, 243, 255)
+        Note over U,Q: ONE workflow task, no await — atomic
+        U->>U: validate expected_turn / type / payload / mid_turn
+        U->>U: accepted_offset = stream.head()
+        U->>U: resolve turn_id — new turn, or the open one to join
+        U->>Q: admit — enqueue, or join and bump participants
+    end
+
+    U-->>-C: AgentMessageReply(turn_id, turn_number, accepted_offset)
+
+    Q-->>R: wait_condition wakes
+    R->>Q: take the next runnable participant
+
+    rect rgb(240, 250, 242)
+        Note over R,H: turn open — participants > 0, _current_turn_id set
+        R-)C: turn_started
+        C->>C: attach(from_offset = accepted_offset)
+
+        R->>+H: await handler(msg)
+        H-)C: reply_delta · tool_start · tool_end
+        H-)C: tool_approval_requested
+        C->>H: tool_approval update → gate unblocks
+        H-->>-R: OutputModel
+
+        R-)C: reply
+        Note over R: participants -= 1 · at zero, clear turn_id
+        R-)C: turn_end
+    end
+
+    Note over R: loop back · close drains on participants == 0
+```
+
+The update's *return value* is on the critical path for streaming, which is why a handler
+body must not run inside the update handler. `accepted_offset` is the client's read-start
+hint: `send_message` awaits the update to completion and only then builds the merge
+(`agent_client.py:459`), as does the `run_subagent_turn` activity. Deferring the response
+until the work finished would stop anything streaming live, and would deadlock a gated tool
+on those submit-then-stream callers — the client that would send `tool_approval` is still
+awaiting the update response, so it never sees `tool_approval_requested`. An `accept`
+handler therefore runs as a spawned in-workflow task and replies on the stream, exactly as a
+queued one does.
+
 **`TurnEnded` becomes refcounted, with an admission race.** Today it's one message in, one
 turn out (`agent_workflow.py:943-954`). With join-semantics a turn ends when the *last*
 participant finishes. The race — participant A finishes, count hits zero, `TurnEnded`
@@ -268,11 +437,26 @@ handler's next tool call hits a hard raise — either `_apply_approval_policy:33
 the turn id at refcount zero, not on first completion. Loud rather than silent, so it's
 cheap to get wrong on the first pass.
 
-**`expected_turn` silently changes meaning.** It is currently a slot reservation —
-`current_turn + len(pending) + 1` (`:935`), "I claim to be turn N." Under join-semantics a
-message may not get its own turn at all, so the field becomes "I have observed through turn
-N." Same type, different meaning — the kind of change that would normally demand a version
-bump, since every client computing `last_seen + 1` keeps working until it doesn't.
+**`expected_turn` silently changes meaning, and it breaks naive clients.** It was a slot
+reservation — `current_turn + len(pending) + 1`, "I claim to be turn N." Under
+join-semantics a message may not get its own turn at all, so it becomes a staleness token:
+"the next number the agent should hand out." Same type, different meaning — the kind of
+change that would normally demand a version bump, since every client computing
+`last_seen + 1` keeps working until it doesn't.
+
+**It does not stay theoretical.** A client that increments once per message *sent* is
+correct until the first `accept` message joins an open turn: that join advances no counter,
+so the client is permanently one ahead and every later send fails `StaleTurn`. The stream
+cannot repair it either — a join publishes under the joined turn's *lower* number, so a
+`turn_number >= expected` reconciliation never fires. The bug is invisible until someone
+uses `accept` on a busy agent, which is exactly when they will.
+
+So the contract must be stated positively, not left implicit: **a client sets its next
+`expected_turn` from `AgentMessageReply.turn_number + 1`** — the joined turn for a join, the
+reserved slot otherwise — and never from a local send count. `agent_status` re-derives it for
+a client that has lost track. This is documented on both `AgentMessage.expected_turn` and
+`AgentMessageReply.turn_number`, and pinned by a test asserting that a join leaves the next
+expected turn unchanged.
 
 No versioning here. The repository is early-stage with test users only, so the semantics
 change outright and the packaged Svelte UI is updated in the same change to keep the stack
@@ -288,9 +472,14 @@ The entry-carried publishing in `_publish_approval_resolved:1660` and
 `_publish_callback_resolved:1752` ("an update handler driving a policy cascade isn't bound
 to any one turn") already handles the one case that isn't ambient.
 
-**Close must drain.** `_closed` is only observed between turns (`:1934`). In-flight
-`accept` handlers need `workflow.all_handlers_finished` before the workflow completes, or
-Temporal warns and their results are lost.
+**Close must drain.** `_closed` is only observed between turns (`:1934`), so in-flight
+`accept` handlers must be waited on before the workflow completes or their results are lost.
+The wait is on the participant refcount reaching zero, not
+`workflow.all_handlers_finished` — an `accept` handler's body runs as a spawned task rather
+than inside its update handler (see *Admission and execution are two halves*), so the
+handler-level signal wouldn't see it. The refcount is the right instrument anyway: it is the
+same counter that closes the turn bracket, so "the turn has ended" and "it is safe to
+complete" cannot disagree.
 
 **Status must stop lying.** `turn_active` / `has_pending_work` (`:927-932`) need a
 companion notion of in-flight participants, or `/status` misreports and any remaining
@@ -370,15 +559,30 @@ So `expected_turn` remains the only staleness token, with the semantics change n
 *Consequences*: it stops meaning "the queue position I claim" and starts meaning "the turn
 I have observed through." Coarse, but stable enough to be worth sending honestly.
 
+## The client's generic message surface
+
+`agent_interface` returning every handler is enough for a client to render an arbitrary
+agent, with no per-agent knowledge and no hardcoded handler names. The packaged Svelte UI
+demonstrates the shape:
+
+- The composer always has **one selected handler**. Sending builds
+  `{type: <handler>, payload: {...}}` for it.
+- A handler whose input schema is **single-string-shaped** — exactly one property, `type:
+  "string"`, no `enum` — renders as an ordinary chat text box, with the property name read
+  from the schema. This is what keeps a plain chat agent feeling like a chat agent without
+  the client assuming the field is called `text`.
+- Every other handler renders as a **form generated from its input JSON schema**. `enum`
+  (and `anyOf` of `const`s, which is how pydantic emits a `Literal`) becomes a dropdown, so a
+  constrained field is impossible to get wrong. This is the enforced replacement for
+  `OperatorCommandArgument.kind`/`choices`, which was never checked workflow-side.
+- Typing `/` in the text box opens a **picker over every handler** — name, docstring, and a
+  `mid_turn` badge telling the user whether sending will queue, join, or be rejected —
+  filtered by prefix and navigable by arrow keys. The `/` is purely a client-side
+  convention for a familiar affordance; nothing about it reaches the harness, which is the
+  whole point of this note.
+
 ## Still open (implementation, not design)
 
-- **The Svelte UI's generic message surface.** The packaged debug UI currently renders a
-  chat box plus a slash menu. With `operator_interface` gone and `agent_interface`
-  returning every handler, it needs to render an arbitrary agent with an arbitrary number
-  of accepted messages, driven entirely by the discovery query — including each handler's
-  `mid_turn` so the UI can tell the user whether sending will queue, join, or be rejected.
-  This is the one piece deliberately left undesigned; decide it when implementing that
-  part, not now.
 - **Whether `AcceptedFunction` carries anything beyond** `mid_turn` + `model_callable`.
   Deliberately nothing else for v1 — no presentation metadata. The input model's JSON
   schema already describes the payload, and a client that needs more should prove the need
@@ -393,7 +597,8 @@ I have observed through." Coarse, but stable enough to be worth sending honestly
 - **Per-handler dispatch config is more rope.** A global queuing switch is easy to reason
   about; per-handler `accept` invites authors into concurrency they may not realize they've
   opted into. The position above accepts that trade knowingly, but it *is* a trade, and
-  "the docs said so" is the only thing standing behind it.
+  "the docs said so" is the only thing standing behind it. The `REJECT` default narrows the
+  exposure — concurrency is now something an author types — but does not remove it.
 - **`mid_turn` may not be the last axis.** Adding `model_callable` and `mid_turn` today invites
   a third and fourth later, and decorator config that grows without bound is its own smell.
   Worth being explicit that these two are justified by existing, demonstrated needs and

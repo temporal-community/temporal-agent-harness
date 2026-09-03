@@ -21,8 +21,9 @@ import asyncio
 import json
 from datetime import timedelta
 from functools import partial
-from typing import Sequence
+from typing import Literal, Sequence
 
+from pydantic import BaseModel
 from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.exceptions import ApplicationError
@@ -48,10 +49,10 @@ with workflow.unsafe.imports_passed_through():
     )
     from google.genai.client import AsyncClient
     from temporal_agent_harness.ai_sdks.google_genai_plugin import function_param, google_genai_client
-    from temporal_agent_harness.harness import agent, slash_commands
+    from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
-        SlashCommand,
+        MidTurn,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
@@ -66,12 +67,14 @@ SUPPORTED_MODELS = ("gemini-3.5-flash", "gemini-3.1-flash-lite")
 DEFAULT_MODEL = SUPPORTED_MODELS[0]
 
 
-def model_slash_command(set_model) -> slash_commands.SlashCommandDefinition:
-    return slash_commands.model_selector(
-        choices=SUPPORTED_MODELS,
-        set_model=set_model,
-        description="Set the model for this Monty session.",
-    )
+class SetModel(BaseModel):
+    """Which model this Monty session should use for subsequent turns."""
+
+    # A Literal (not a bare str) so the choice is enforced rather than merely suggested:
+    # pydantic rejects anything else at the update boundary, and the same constraint shows up
+    # as an enum in this handler's `parameters` JSON schema — which is what lets a generic
+    # client render a dropdown without knowing anything about Monty.
+    model: Literal[SUPPORTED_MODELS]  # type: ignore[valid-type]
 
 
 SYSTEM_INSTRUCTION = """\
@@ -107,10 +110,6 @@ class MontyChatAgentWorkflow:
             # hotels), since every call is dispatched through run_tool and gated.
             # always_require_approvals does not auto-approve even inherently_safe tools.
             approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-            slash_commands=[
-                *slash_commands.default_commands(),
-                model_slash_command(self._set_model),
-            ],
         )
         self._model: str = DEFAULT_MODEL
         # Server-side conversation chaining id (Interactions API); updated each turn. Safe to
@@ -142,7 +141,7 @@ class MontyChatAgentWorkflow:
         )
         await self._runner.run(self)
 
-    @agent.accepts
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def ask(self, message: TextMessage) -> TextReply:
         """Chat with the travel assistant. Describe the trip you want (flights, hotels,
         dates, traveler name) in plain text; the assistant converses, writes and runs Python
@@ -150,18 +149,17 @@ class MontyChatAgentWorkflow:
         reply_text = await self._handle_chat_turn(self._gemini, message.text)
         return TextReply(text=reply_text)
 
-    @agent.accepts
-    async def slash(self, command: SlashCommand) -> TextReply:
-        """Apply a slash command to this parent agent session."""
-        return TextReply(
-            text=(
-                f"Unknown Monty slash command: `{command.name}`. Try `/model`. "
-                "Harness commands include `/approvals`, `/allow-tools`, and `/status`."
-            )
-        )
-
-    def _set_model(self, model: str) -> None:
-        self._model = model
+    # ACCEPT: reconfiguring the session is not work, so it should not wait behind work. It
+    # joins the open turn and applies immediately, which is the whole point of being able to
+    # switch models while the agent is mid-conversation. model_callable=False keeps it off a
+    # parent agent's generated toolset by default — choosing the model is an operator's call,
+    # not something a driving model should do to its own child.
+    @agent.accepts(mid_turn=MidTurn.ACCEPT, model_callable=False)
+    async def set_model(self, message: SetModel) -> TextReply:
+        """Set the model this session uses for subsequent turns. Takes effect on the next
+        model call, so a turn already in flight finishes on the model it started with."""
+        self._model = message.model
+        return TextReply(text=f"Model set to **{message.model}**.")
 
     # ------------------------------------------------------------------ chat loop
 

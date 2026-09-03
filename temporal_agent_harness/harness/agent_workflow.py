@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import contextvars
 import inspect
 import textwrap
@@ -50,8 +51,6 @@ from temporal_agent_harness.harness.agent_protocol import (
     AGENT_ID_LENGTH,
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
-    EXECUTE_OPERATOR_COMMAND_UPDATE,
-    OPERATOR_INTERFACE_QUERY,
     PROVIDE_CALLBACK_RESULT_UPDATE,
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
     DEFAULT_SUBAGENT_START_TO_CLOSE_TIMEOUT,
@@ -71,18 +70,13 @@ from temporal_agent_harness.harness.agent_protocol import (
     CallbackResolved,
     CallbackResult,
     CallbackResultAck,
+    MessageContext,
     MessageQueued,
-    OperatorCommand,
-    OperatorCommandCompleted,
-    OperatorCommandFailed,
-    OperatorCommandRequest,
-    OperatorCommandResult,
-    OperatorCommandStarted,
+    MidTurn,
     PendingApproval,
     PendingCallback,
     PendingTurn,
     RunSubagentTurnInput,
-    SlashCommand,
     SubagentInfo,
     SubagentReplyReceived,
     SubagentStarted,
@@ -102,12 +96,6 @@ from temporal_agent_harness.harness.agent_protocol import (
     TurnStarted,
     AgentMessageReply,
 )
-from temporal_agent_harness.harness.slash_commands import (
-    SlashCommandContext,
-    SlashCommandDefinition,
-    default_commands,
-)
-
 # TurnStreamContext (the activity-side stream-publishing carrier this runner builds + consumes)
 # lives in its own leaf module so the sandbox-safe activity contracts in agent_protocol can embed
 # it without a circular import back through this module.
@@ -144,8 +132,6 @@ _INJECTED = _InjectedMarker()
 # Passed to the runner via its ``custom_approval_fallback=`` constructor arg; it is
 # non-serializable (a closure), so it is never carried in ``AgentConfig`` or status.
 CustomApprovalFallback = Callable[[ToolApprovalContext], bool]
-
-_SLASH_MESSAGE_TYPE = "slash"
 
 # Harness default publish-flush cadence for activity-side stream publishers (see
 # ``AgentWorkflowRunner.publisher_from_activity``). Each flush is one Signal into the
@@ -506,21 +492,64 @@ def _workflow_run_arg_types(cls: type) -> list[type]:
 # reply, no ``turns()`` loop — the dev's ``(self, msg) -> Output`` signature is fully typed.
 
 _ACCEPTS_MARKER = "__agent_accepts__"
+_ACCEPTS_MID_TURN = "__agent_accepts_mid_turn__"
+_ACCEPTS_MODEL_CALLABLE = "__agent_accepts_model_callable__"
 _HANDLERS_ATTR = "__agent_handlers__"
 
 
-def accepts(fn: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
+@overload
+def accepts(fn: Callable[_P, Awaitable[_R]], /) -> Callable[_P, Awaitable[_R]]: ...
+@overload
+def accepts(
+    *, mid_turn: MidTurn = ..., model_callable: bool = ...
+) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]: ...
+def accepts(
+    fn: Callable[..., Awaitable[Any]] | None = None,
+    /,
+    *,
+    mid_turn: MidTurn = MidTurn.REJECT,
+    model_callable: bool = True,
+) -> Any:
     """Mark an agent method as a message handler (returned unchanged).
+
+    Usable bare or called — ``@agent.accepts`` and
+    ``@agent.accepts(mid_turn=..., model_callable=...)`` are both valid::
+
+        @agent.accepts(mid_turn=MidTurn.ENQUEUE)
+        async def ask(self, msg: TextMessage) -> TextReply: ...
 
     The method must be ``async def name(self, msg: InputModel) -> OutputModel`` where both
     ``InputModel`` and ``OutputModel`` are pydantic models with docstrings (the input
     model's fields become the tool ``parameters`` schema; the handler's own docstring is
     its tool ``description``). The function name is the tool name and the value a caller
-    sends in :attr:`AgentMessage.type`. Discovery + validation happen at import time in
-    :func:`defn`; a malformed handler raises :class:`TypeError` then.
+    sends in :attr:`AgentMessage.type`. It may declare ONE extra parameter annotated
+    ``Injected[MessageContext]``, which the workflow fills and the model never sees — use
+    it to tell whether this message opened its turn or joined one.
+
+    ``mid_turn`` (default :attr:`MidTurn.REJECT`) declares what happens when this message
+    arrives while a turn is already open — queue, fail, or join it. See :class:`MidTurn`;
+    all three behave identically when the agent is idle. ``REJECT`` is the default because
+    it is the only mode that cannot silently surprise an author: queuing delays work the
+    caller thought it had dispatched, and joining opts the handler into concurrency with
+    the open turn.
+
+    ``model_callable`` (default ``True``) is a HINT that a parent agent's model may drive
+    this handler. It is not an access decision — the parent's ``SubagentToolPolicy`` is
+    authoritative and may honor, narrow, or ignore the hints (see :func:`subagent_toolset`).
+    Set it ``False`` for a handler meant only for a human/operator surface, so the default
+    policy leaves it out of a generated toolset.
+
+    Discovery + validation happen at import time in :func:`defn`; a malformed handler
+    raises :class:`TypeError` then.
     """
-    setattr(fn, _ACCEPTS_MARKER, True)
-    return fn
+
+    def decorate(f: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+        setattr(f, _ACCEPTS_MARKER, True)
+        setattr(f, _ACCEPTS_MID_TURN, MidTurn(mid_turn))
+        setattr(f, _ACCEPTS_MODEL_CALLABLE, bool(model_callable))
+        return f
+
+    return decorate(fn) if fn is not None else decorate
 
 
 @dataclass(frozen=True)
@@ -532,6 +561,15 @@ class _AcceptedHandler:
     output_type: type[BaseModel]
     description: str
     method: Callable[..., Awaitable[Any]]
+    # Declared mid-turn arrival behavior — read by the update validator (REJECT) and by
+    # admission (ACCEPT joins the open turn; ENQUEUE queues behind it).
+    mid_turn: MidTurn = MidTurn.REJECT
+    # The author's hint that a parent model may drive this handler. Advisory only: the
+    # parent's SubagentToolPolicy decides what actually reaches its model.
+    model_callable: bool = True
+    # Name of the handler's ``Injected[MessageContext]`` parameter, or None if it declared
+    # none. Excluded from the ``parameters`` schema and filled at dispatch.
+    ctx_param: str | None = None
 
 
 def _discover_handlers(cls: type) -> dict[str, _AcceptedHandler]:
@@ -547,10 +585,29 @@ def _discover_handlers(cls: type) -> dict[str, _AcceptedHandler]:
             continue
         hints = get_type_hints(fn)
         params = [p for p in inspect.signature(fn).parameters if p != "self"]
+        # A handler may declare ONE ``Injected[MessageContext]`` parameter alongside its
+        # input model. It is workflow-supplied and excluded from the ``parameters`` schema
+        # callers introspect, so it is separated out here before the arity check — leaving
+        # the contract "exactly one MODEL argument" intact.
+        injected = set(_injected_param_names(fn))
+        ctx_params = [p for p in params if p in injected]
+        if len(ctx_params) > 1:
+            raise TypeError(
+                f"@agent.accepts {name!r} may declare at most one Injected[...] parameter "
+                f"(the MessageContext); got {ctx_params}."
+            )
+        for p in ctx_params:
+            if hints.get(p) is not MessageContext:
+                raise TypeError(
+                    f"@agent.accepts {name!r}: its injected parameter {p!r} must be "
+                    f"annotated Injected[MessageContext]; got {hints.get(p)!r}."
+                )
+        params = [p for p in params if p not in injected]
         if len(params) != 1:
             raise TypeError(
                 f"@agent.accepts {name!r} must take exactly one argument besides self "
-                f"(the input message model); got {params}."
+                f"(the input message model), plus at most one Injected[MessageContext]; "
+                f"got {params}."
             )
         input_type = hints.get(params[0])
         output_type = hints.get("return")
@@ -576,6 +633,11 @@ def _discover_handlers(cls: type) -> dict[str, _AcceptedHandler]:
             output_type=output_type,
             description=(fn.__doc__ or "").strip(),
             method=fn,
+            # Defaults mirror the decorator's, so a handler marked by a bare
+            # ``@agent.accepts`` (or by an older stamp) still resolves.
+            mid_turn=getattr(fn, _ACCEPTS_MID_TURN, MidTurn.REJECT),
+            model_callable=getattr(fn, _ACCEPTS_MODEL_CALLABLE, True),
+            ctx_param=ctx_params[0] if ctx_params else None,
         )
     return handlers
 
@@ -866,24 +928,26 @@ class _WorkflowStatus:
     """Internal workflow state that owns all status fields and the pending queue.
 
     All fields are private. Mutations go through methods so state
-    transitions stay consistent (e.g. starting a turn always sets
-    turn_active and increments current_turn atomically).
+    transitions stay consistent (e.g. opening a turn always increments current_turn and
+    seeds the participant count atomically).
 
-    ``is_message_queuing_enabled`` is an agent-level capability set at
-    construction and immutable for the lifetime of the workflow.
+    A TURN IS REFCOUNTED. It is the interval during which the agent is non-idle, not the
+    span of one message: :meth:`open_next_turn` starts it with one participant, and a
+    ``MidTurn.ACCEPT`` message can :meth:`join_turn` to run inside it. The turn closes only
+    when the LAST participant calls :meth:`leave_turn` — which is when ``_current_turn_id``
+    is cleared and the runner publishes ``turn_end``.
 
-    ``approval_policy`` is the live :class:`ToolApprovalPolicy`. Unlike message queuing it
-    is *mutable* — :meth:`set_approval_policy` swaps it for a runtime policy update — and
-    is surfaced on the ``agent_status`` query. ``has_custom_approval_fallback`` records
-    only whether a developer fallback predicate is wired (for the status query); the
-    predicate itself lives on the runner, never here.
+    ``approval_policy`` is the live :class:`ToolApprovalPolicy`. It is *mutable* —
+    :meth:`set_approval_policy` swaps it for a runtime policy update — and is surfaced on
+    the ``agent_status`` query. ``has_custom_approval_fallback`` records only whether a
+    developer fallback predicate is wired (for the status query); the predicate itself
+    lives on the runner, never here.
     """
 
     def __init__(
         self,
         *,
         agent_id: str,
-        is_message_queuing_enabled: bool,
         approval_policy: ToolApprovalPolicy,
         has_custom_approval_fallback: bool = False,
     ) -> None:
@@ -892,9 +956,11 @@ class _WorkflowStatus:
         self._agent_id: str = agent_id
         self._current_turn: int = 0
         self._current_turn_id: str | None = None
-        self._turn_active: bool = False
+        # How many messages are running inside the open turn. 0 == idle. Incremented in the
+        # SYNCHRONOUS admission prologue (never when a handler body starts) so a join can
+        # never race a concurrent drop-to-zero and split one turn into two brackets.
+        self._turn_participants: int = 0
         self._pending_turns: list[tuple[AgentMessage, str]] = []
-        self._is_message_queuing_enabled: bool = is_message_queuing_enabled
         self._approval_policy: ToolApprovalPolicy = approval_policy
         self._has_custom_approval_fallback: bool = has_custom_approval_fallback
         # Gated tool calls awaiting a human decision, keyed by per-call tool id.
@@ -927,16 +993,28 @@ class _WorkflowStatus:
         )
 
     @property
-    def is_message_queuing_enabled(self) -> bool:
-        return self._is_message_queuing_enabled
+    def turn_active(self) -> bool:
+        """Whether a turn is open — i.e. at least one participant is still running."""
+        return self._turn_participants > 0
+
+    @property
+    def turn_participants(self) -> int:
+        """How many messages are currently running inside the open turn (0 when idle)."""
+        return self._turn_participants
 
     @property
     def has_pending_work(self) -> bool:
-        return self._turn_active or len(self._pending_turns) > 0
+        return self.turn_active or len(self._pending_turns) > 0
 
     @property
     def has_pending_turns(self) -> bool:
         return len(self._pending_turns) > 0
+
+    @property
+    def can_open_turn(self) -> bool:
+        """Whether the runner may open the next queued turn — i.e. a message is waiting and
+        no turn is currently open (turns never overlap; joins share the open one)."""
+        return len(self._pending_turns) > 0 and not self.turn_active
 
     @property
     def next_turn_number(self) -> int:
@@ -947,18 +1025,40 @@ class _WorkflowStatus:
         self._pending_turns.append((message, turn_id))
         return self._current_turn + len(self._pending_turns)
 
-    def start_next_turn(self) -> tuple[AgentMessage, str]:
-        """Pop the next pending message and begin the turn."""
+    def open_next_turn(self) -> tuple[AgentMessage, str]:
+        """Pop the next pending message and OPEN a turn for it (one participant).
+
+        Only legal when :attr:`can_open_turn` — a turn never opens while one is already
+        open, which is what makes nested/interleaved turn brackets unconstructible."""
         message, turn_id = self._pending_turns.pop(0)
         self._current_turn += 1
         self._current_turn_id = turn_id
-        self._turn_active = True
+        self._turn_participants = 1
         return message, turn_id
 
-    def complete_turn(self) -> None:
-        """Mark the current turn as finished."""
-        self._turn_active = False
+    def join_turn(self) -> tuple[str, int]:
+        """Add a participant to the OPEN turn and return its ``(turn_id, turn_number)``.
+
+        The admission path for a ``MidTurn.ACCEPT`` message arriving mid-turn. MUST be
+        called synchronously during update admission (see ``_turn_participants``). Raises
+        if no turn is open — the caller checks :attr:`turn_active` first."""
+        if self._current_turn_id is None:
+            raise RuntimeError("join_turn() called with no open turn")
+        self._turn_participants += 1
+        return self._current_turn_id, self._current_turn
+
+    def leave_turn(self) -> bool:
+        """Drop one participant. Returns True if that CLOSED the turn (count hit zero).
+
+        The turn id is cleared only at zero, never on the first participant's completion —
+        otherwise a still-running joined handler's next tool call would find no active turn
+        and hard-raise (``_apply_approval_policy`` / ``AgentToolContext``)."""
+        self._turn_participants -= 1
+        if self._turn_participants > 0:
+            return False
+        self._turn_participants = 0
         self._current_turn_id = None
+        return True
 
     # -- Tool-approval registry ---------------------------------------------
 
@@ -1192,7 +1292,8 @@ class _WorkflowStatus:
         return AgentStatus(
             agent_id=self._agent_id,
             current_turn=self._current_turn,
-            turn_active=self._turn_active,
+            turn_active=self.turn_active,
+            turn_participants=self._turn_participants,
             pending_turns=[
                 PendingTurn(
                     turn_number=self._current_turn + i + 1,
@@ -1201,7 +1302,6 @@ class _WorkflowStatus:
                 )
                 for i, (message, turn_id) in enumerate(self._pending_turns)
             ],
-            is_message_queuing_enabled=self._is_message_queuing_enabled,
             pending_approvals=self.pending_approvals(),
             pending_callbacks=self.pending_callbacks(),
             subagents=self.active_subagents(),
@@ -1235,9 +1335,7 @@ class AgentWorkflowRunner:
         *,
         stream: WorkflowStream,
         approval_policy_default: ToolApprovalPolicy,
-        enable_message_queuing_default: bool = False,
         custom_approval_fallback: CustomApprovalFallback | None = None,
-        slash_commands: Iterable[SlashCommandDefinition] | None = None,
     ) -> None:
         """Construct the runner inside the agent's ``@workflow.init``::
 
@@ -1250,13 +1348,10 @@ class AgentWorkflowRunner:
         ``config`` is the standardized agent input; the runner resolves each universal
         knob as *the caller's config value if given, else the agent's default*
         (``approval_policy_default`` is required — the author must make a deliberate
-        safe-by-default choice; ``enable_message_queuing_default`` defaults to the harness
-        baseline of disabled). The accepted messages are NOT configured here — they are
-        discovered from the agent's ``@agent.accepts`` handler methods. Registers the
-        workflow's update/query/signal handlers. ``slash_commands`` configures the
-        human/operator slash command registry used by both first-class operator updates
-        and normal ``slash`` turns. If omitted, the packaged harness defaults are enabled;
-        pass an empty iterable to disable packaged slash commands.
+        safe-by-default choice). The accepted messages are NOT configured here — they are
+        discovered from the agent's ``@agent.accepts`` handler methods, which also declare
+        their own mid-turn behavior, so there is no agent-level queuing knob. Registers the
+        workflow's update/query/signal handlers.
         """
         # The runner is built inside the agent's @workflow.init; enforce here that the
         # enclosing workflow honors the standardized agent-input contract (run/__init__
@@ -1269,9 +1364,6 @@ class AgentWorkflowRunner:
         self._handlers: dict[str, _AcceptedHandler] = (
             agent_handlers(cls) if cls is not None else {}
         )
-        self._slash_commands: tuple[SlashCommandDefinition, ...] = tuple(
-            slash_commands if slash_commands is not None else default_commands()
-        )
         # Resolve each knob: the caller's config value wins when given; otherwise fall back
         # to the agent's default. The caller can never be overridden — the agent only fills
         # gaps.
@@ -1279,11 +1371,6 @@ class AgentWorkflowRunner:
             config.approval_policy
             if config.approval_policy is not None
             else approval_policy_default
-        )
-        is_message_queuing_enabled = (
-            config.is_message_queuing_enabled
-            if config.is_message_queuing_enabled is not None
-            else enable_message_queuing_default
         )
         # This agent's short id, stamped on every event it publishes and reported on its status
         # query. A parent assigns it when starting a subagent (pushing down the same short handle
@@ -1301,11 +1388,17 @@ class AgentWorkflowRunner:
         self._custom_approval_fallback = custom_approval_fallback
         self._status = _WorkflowStatus(
             agent_id=self._agent_id,
-            is_message_queuing_enabled=is_message_queuing_enabled,
             approval_policy=approval_policy,
             has_custom_approval_fallback=custom_approval_fallback is not None,
         )
         self._closed = False
+        # Messages admitted as JOINS of the currently-open turn, awaiting dispatch by the run
+        # loop: (envelope, turn_id, turn_number). The participant refcount was already
+        # incremented during admission, so an entry here is accounted for even before it runs.
+        self._joining: list[tuple[AgentMessage, str, int]] = []
+        # Strong references to in-flight participant tasks. Held only so a spawned task is not
+        # garbage-collected mid-flight; turn accounting lives in the refcount, not here.
+        self._participant_tasks: set[asyncio.Future[None]] = set()
 
         # Register protocol handlers dynamically so the containing workflow doesn't need to.
         workflow.set_update_handler(
@@ -1351,28 +1444,49 @@ class AgentWorkflowRunner:
             self._handle_provide_callback_result,
             validator=self._validate_provide_callback_result,
         )
-        workflow.set_update_handler(
-            EXECUTE_OPERATOR_COMMAND_UPDATE,
-            self._handle_execute_operator_command,
-        )
         workflow.set_query_handler(AGENT_STATUS_QUERY, self._handle_agent_status)
         workflow.set_query_handler(AGENT_INTERFACE_QUERY, self._handle_agent_interface)
-        workflow.set_query_handler(
-            OPERATOR_INTERFACE_QUERY, self._handle_operator_interface
-        )
         workflow.set_signal_handler("close", self._handle_close)
 
     # -- Protocol handlers --------------------------------------------------
 
     async def _handle_send_agent_message(self, message: AgentMessage) -> AgentMessageReply:
-        # Capture the stream head BEFORE publishing anything for this message: it is the
-        # client stream-merge's read-start hint (``accepted_offset``). The handler body is
-        # synchronous (no await that yields), so this runs atomically before the turn loop can
-        # publish this turn's ``turn_started`` — guaranteeing ``accepted_offset <= turn_started``,
-        # which is all the merge requires (it discards events up to ``turn_started``). Read the
-        # real log head (``_on_offset``), not a publish counter: activity-published events enter
-        # the same global log via signals and would be missed by an in-workflow counter.
+        """Admit one message and return immediately — the ADMISSION half of dispatch.
+
+        This body is deliberately synchronous (declared ``async`` only because Temporal
+        requires it): it contains no ``await`` that yields, so it completes inside a single
+        workflow task. Two invariants ride on that:
+
+          * ``accepted_offset`` is captured before anything for this message is published,
+            guaranteeing ``accepted_offset <= turn_started`` — all the client stream-merge
+            requires, since it discards events up to ``turn_started``.
+          * a join's participant increment cannot race the open turn dropping to zero, so
+            one logical turn can never split into two brackets.
+
+        It does NOT run the handler. Execution is the other half, in :meth:`run` — which is
+        what lets the caller have ``accepted_offset`` (and thus start streaming) while the
+        work is still in flight.
+        """
+        # Read the real log head (``_on_offset``), not a publish counter: activity-published
+        # events enter the same global log via signals and would be missed by a counter.
         accepted_offset = self._stream._on_offset()
+        handler = self._handlers[message.type]  # validator rejected an unknown type
+
+        # A MidTurn.ACCEPT message arriving while a turn is OPEN joins it: same turn_id, one
+        # more participant, runs concurrently. Anything else takes a queue slot and will open
+        # (or wait for) a turn of its own. MidTurn.REJECT never reaches here while busy — the
+        # validator already failed it.
+        if handler.mid_turn is MidTurn.ACCEPT and self._status.turn_active:
+            turn_id, turn_number = self._status.join_turn()
+            self._joining.append((message, turn_id, turn_number))
+            return AgentMessageReply(
+                turn_number=turn_number,
+                turn_id=turn_id,
+                accepted_offset=accepted_offset,
+                # Not pending: it is running now, inside the turn it joined.
+                pending=False,
+            )
+
         turn_id = str(workflow.uuid4())
         pending = self._status.has_pending_work
         turn_number = self._status.enqueue_message(message, turn_id)
@@ -1401,31 +1515,6 @@ class AgentWorkflowRunner:
                 type="StaleTurn",
                 non_retryable=True,
             )
-        if (
-            self._status.has_pending_work
-            and not self._status.is_message_queuing_enabled
-        ):
-            raise ApplicationError(
-                "Agent is busy and message queuing is currently disabled.",
-                {"current_turn": self._status.current_turn},
-                type="AgentBusy",
-                non_retryable=True,
-            )
-        # ``slash`` is a harness-reserved operator command channel. It is accepted for every
-        # runner, whether or not the agent has an agent-specific slash extension handler.
-        if message.type == _SLASH_MESSAGE_TYPE:
-            try:
-                SlashCommand.model_validate(message.payload)
-            except ValidationError as e:
-                raise ApplicationError(
-                    f"Payload for function {_SLASH_MESSAGE_TYPE!r} does not match its "
-                    f"input model {SlashCommand.__name__}. Validation error: {e}",
-                    {"function": _SLASH_MESSAGE_TYPE, "error": str(e)},
-                    type="MalformedMessage",
-                    non_retryable=True,
-                )
-            return
-
         # Route by the envelope ``type`` (the handler's function name); reject an unknown
         # function, then validate the ``payload`` against that handler's input model. So the
         # dispatch loop only ever sees a known handler + an already-coerced input.
@@ -1446,6 +1535,24 @@ class AgentWorkflowRunner:
                 f"model {handler.input_type.__name__}. Validation error: {e}",
                 {"function": message.type, "error": str(e)},
                 type="MalformedMessage",
+                non_retryable=True,
+            )
+        # Mid-turn arrival is the handler's own declared decision — there is no global busy
+        # check. Rejecting HERE (in the validator, not the handler) means the message is
+        # never admitted: no turn is reserved, nothing enters history, and the caller gets a
+        # typed failure it can act on rather than silently waiting behind work it can't see.
+        # Safe to read turn state synchronously: the validator and the admission prologue run
+        # in the same workflow task, so this cannot go stale between the two.
+        if handler.mid_turn is MidTurn.REJECT and self._status.has_pending_work:
+            raise ApplicationError(
+                f"Function {message.type!r} declares mid_turn={MidTurn.REJECT.value!r} and "
+                f"the agent is busy.",
+                {
+                    "function": message.type,
+                    "current_turn": self._status.current_turn,
+                    "turn_participants": self._status.turn_participants,
+                },
+                type="MidTurnRejected",
                 non_retryable=True,
             )
 
@@ -1508,72 +1615,6 @@ class AgentWorkflowRunner:
                 self._status.approval_policy.with_tool_allowed(entry.tool_name)
             )
         return ToolApprovalResult(tool_id=decision.tool_id, accepted=True)
-
-    def _handle_execute_operator_command(
-        self, request: OperatorCommandRequest
-    ) -> OperatorCommandResult:
-        """Execute a human/operator command without creating an agent turn.
-
-        This is the first-class execution counterpart to ``operator_interface``. It does
-        not enqueue ``send_agent_message``, increment the turn counter, or publish a model
-        reply. Configured slash commands mutate runner state directly through a small
-        workflow-safe command context.
-        """
-        command = SlashCommand(name=request.name, arg=request.arg)
-        operator_command_id = str(workflow.uuid4())
-        command_label = self._operator_command_label(command.name)
-        self._pub(
-            operator_command_id,
-            0,
-            OperatorCommandStarted(
-                operator_command_id=operator_command_id,
-                command_name=command.name,
-                command_label=command_label,
-                arg=command.arg,
-            ),
-        )
-        try:
-            reply = self._handle_slash_command(command)
-        except Exception as e:  # noqa: BLE001 — make operator failures durable
-            message = str(e) or type(e).__name__
-            self._pub(
-                operator_command_id,
-                0,
-                OperatorCommandFailed(
-                    operator_command_id=operator_command_id,
-                    command_name=command.name,
-                    command_label=command_label,
-                    arg=command.arg,
-                    message=message,
-                ),
-            )
-            return OperatorCommandResult(text=f"Operator command failed: {message}")
-        if reply is None:
-            text = f"Unknown operator command: `{command.name}`."
-            self._pub(
-                operator_command_id,
-                0,
-                OperatorCommandFailed(
-                    operator_command_id=operator_command_id,
-                    command_name=command.name,
-                    command_label=command_label,
-                    arg=command.arg,
-                    message=text,
-                ),
-            )
-            return OperatorCommandResult(text=text)
-        self._pub(
-            operator_command_id,
-            0,
-            OperatorCommandCompleted(
-                operator_command_id=operator_command_id,
-                command_name=command.name,
-                command_label=command_label,
-                arg=command.arg,
-                text=reply.text,
-            ),
-        )
-        return OperatorCommandResult(text=reply.text)
 
     # -- Tool-approval policy ----------------------------------------------
 
@@ -1859,49 +1900,31 @@ class AgentWorkflowRunner:
         """Answer the discovery query with the agent's callable surface, tool-style.
 
         One :class:`AcceptedFunction` per ``@agent.accepts`` handler — name, docstring
-        description, and the input/output JSON schemas — all reachable through
-        ``send_agent_message``. Operator-only channels are INTENTIONALLY absent here:
-        ``tool_approval`` is a human-in-the-loop guardrail, and ``slash`` carries runtime
-        operator controls such as approval-policy changes. A parent agent introspecting
-        this contract must not be able to reach either one as an agent-to-agent tool."""
+        description, the input/output JSON schemas, and the handler's declared ``mid_turn``
+        and ``model_callable`` — all reachable through ``send_agent_message``.
+
+        EVERY handler is returned; nothing is filtered. That is deliberate, and it is not a
+        weakening: what a parent agent's model can actually reach is decided by which tools
+        its toolset was built with (``SubagentToolPolicy``), not by what this query admits
+        to — so filtering here would only be security-by-obscurity, while costing a
+        debugging UI the ability to discover an agent's full surface. ``model_callable``
+        travels with each handler so a parent can honor the author's intent by default.
+
+        The two harness-owned updates (``tool_approval``, ``provide_callback_result``) are
+        absent for a different reason: they are not ``@agent.accepts`` handlers at all. They
+        are resolved in-process by the harness and are reachable only from an out-of-band
+        human/client control plane, never through this front door."""
         return [
             AcceptedFunction(
                 name=h.name,
                 description=h.description,
                 parameters=h.input_type.model_json_schema(),
                 output=h.output_type.model_json_schema(),
+                mid_turn=h.mid_turn,
+                model_callable=h.model_callable,
             )
             for h in self._handlers.values()
-            if h.name != _SLASH_MESSAGE_TYPE
         ]
-
-    def _handle_operator_interface(self) -> list[OperatorCommand]:
-        """Answer the operator discovery query with slash-command metadata.
-
-        Unlike ``agent_interface``, this surface is for human/client control planes. It is
-        intentionally not consumed by generated subagent tools.
-        """
-        return [definition.command for definition in self._slash_commands]
-
-    def _operator_command_label(self, command_name: str) -> str:
-        definition = self._find_slash_command(command_name)
-        if definition is not None:
-            return definition.command.label
-        return f"/{command_name}"
-
-    def _find_slash_command(self, command_name: str) -> SlashCommandDefinition | None:
-        for definition in self._slash_commands:
-            if definition.matches(command_name):
-                return definition
-        return None
-
-    def _slash_command_context(self) -> SlashCommandContext:
-        return SlashCommandContext(
-            current_status=self.current_status,
-            current_approval_policy=self.current_approval_policy,
-            set_approval_policy=self.set_approval_policy,
-            close=self._handle_close,
-        )
 
     @property
     def current_stream_context(self) -> TurnStreamContext | None:
@@ -1925,61 +1948,152 @@ class AgentWorkflowRunner:
             async def run(self, config: AgentConfig) -> None:
                 await self._runner.run(self)
 
-        Waits for each inbound message, routes it to the matching ``@agent.accepts``
-        handler on ``agent`` (the validator has already coerced the payload + rejected
-        unknown functions), ``await``s the handler, and publishes its return value as the
-        turn's reply. Turns are processed **sequentially** (one handler awaited to
-        completion before the next), so the runner's notion of the active turn — and thus
-        activity-side stream publishing — is unambiguous throughout a handler.
+        This is the EXECUTION half of dispatch; admission is
+        :meth:`_handle_send_agent_message`, which only records intent and returns. This loop
+        wakes on that intent and runs each admitted message as its own asyncio task, routing
+        it to the matching ``@agent.accepts`` handler on ``agent`` (the validator has already
+        rejected unknown functions and coerced the payload) and publishing the handler's
+        return value as a ``reply``.
 
-        Lifecycle events are emitted automatically: ``turn_started`` before the handler,
-        then ``reply`` (success) or ``error`` (the handler raised), and always ``turn_end``
-        — the single reliable end-of-turn signal — before looping. A handler that raises
-        does NOT end the session: its error surfaces as an :class:`AgentError` and the loop
-        continues with the next message.
+        A TURN IS THE INTERVAL THE AGENT IS NON-IDLE, and it is refcounted. Opening one
+        publishes ``turn_started``; ``turn_end`` follows only when the LAST participant
+        finishes. Queued messages each get their own turn and run one at a time; a
+        ``MidTurn.ACCEPT`` message admitted mid-turn JOINS the open turn and runs
+        concurrently with it, sharing its ``turn_id``. At most one turn is open at a time —
+        nothing else opens one — so nested or interleaved turn brackets cannot occur.
+
+        A handler that raises does NOT end the session: its error surfaces as an
+        :class:`AgentError` and the loop carries on.
+
+        On close, the loop waits for in-flight participants to finish before returning, so a
+        joined handler's work is never silently discarded.
         """
         while not self._closed:
             await workflow.wait_condition(
-                lambda: self._status.has_pending_turns or self._closed
+                lambda: self._status.can_open_turn or bool(self._joining) or self._closed
             )
             if self._closed:
                 break
-            envelope, turn_id = self._status.start_next_turn()
-            turn_number = self._status.current_turn
-            self._pub(
-                turn_id, turn_number, TurnStarted(user_message=_render_message(envelope))
-            )
-            try:
-                result = await self._dispatch_turn(agent, envelope)
+            # Joins first: they belong to the turn that is already open, and draining them
+            # before opening a new one keeps a participant from being stranded if the open
+            # turn finishes in this same task.
+            while self._joining:
+                envelope, turn_id, turn_number = self._joining.pop(0)
+                self._spawn_participant(
+                    agent, envelope, turn_id, turn_number, joined=True
+                )
+            if self._status.can_open_turn:
+                envelope, turn_id = self._status.open_next_turn()
+                turn_number = self._status.current_turn
                 self._pub(
                     turn_id,
                     turn_number,
-                    AgentReply(output=result.model_dump(mode="json")),
+                    TurnStarted(user_message=_render_message(envelope)),
                 )
-            except Exception as e:  # noqa: BLE001 — surface ANY turn failure, keep the loop alive
-                self._pub(turn_id, turn_number, AgentError(message=str(e)))
-            finally:
-                # The turn is over and the agent is idle again — whether the handler
-                # returned or raised. Mark idle, then announce turn_end (the definitive
-                # end-of-turn signal) before looping back to wait for the next message.
-                self._status.complete_turn()
-                self._pub(turn_id, turn_number, TurnEnded())
+                self._spawn_participant(
+                    agent, envelope, turn_id, turn_number, joined=False
+                )
 
-    async def _dispatch_turn(self, agent: object, envelope: AgentMessage) -> BaseModel:
-        """Dispatch one already-validated turn envelope and return its reply model."""
-        if envelope.type == _SLASH_MESSAGE_TYPE:
-            command = SlashCommand.model_validate(envelope.payload)
-            reply = self._handle_slash_command(command)
-            if reply is not None:
-                return reply
-            handler = self._handlers.get(_SLASH_MESSAGE_TYPE)
-            if handler is None:
-                return TextReply(text=f"Unknown slash command: `{command.name}`.")
+        # CLOSE MUST DRAIN. ``_closed`` is only observed between iterations, so a
+        # participant spawned earlier may still be running. Wait on the refcount rather than
+        # ``workflow.all_handlers_finished``: a participant runs as a spawned task, not
+        # inside its update handler, so the handler-level signal would not see it. The
+        # refcount is also the same counter that closes the turn bracket, so "the turn ended"
+        # and "it is safe to complete" cannot disagree.
+        await workflow.wait_condition(lambda: not self._status.turn_active)
+
+    def _spawn_participant(
+        self,
+        agent: object,
+        envelope: AgentMessage,
+        turn_id: str,
+        turn_number: int,
+        *,
+        joined: bool,
+    ) -> None:
+        """Run one admitted message inside its turn, as its own asyncio task.
+
+        Spawned rather than awaited so several participants can share an open turn, and so
+        the loop stays responsive to the next admission. The task is retained until it
+        finishes purely to keep a strong reference (a bare ``create_task`` may be
+        garbage-collected mid-flight); turn accounting is the refcount's job, not the set's.
+        """
+        task = asyncio.ensure_future(
+            self._run_participant(
+                agent, envelope, turn_id, turn_number, joined=joined
+            )
+        )
+        self._participant_tasks.add(task)
+        task.add_done_callback(self._participant_tasks.discard)
+
+    async def _run_participant(
+        self,
+        agent: object,
+        envelope: AgentMessage,
+        turn_id: str,
+        turn_number: int,
+        *,
+        joined: bool,
+    ) -> None:
+        """Dispatch one participant and close its half of the turn bracket.
+
+        Publishes ``reply`` on success or ``error`` if the handler raised, then drops its
+        refcount — publishing ``turn_end`` only if it was the last one out. Every event is
+        stamped with the turn this participant belongs to, which for a join is the turn it
+        joined, not "the current turn".
+        """
+        try:
+            result = await self._dispatch_turn(
+                agent, envelope, turn_id=turn_id, turn_number=turn_number, joined=joined
+            )
+        except Exception as e:  # noqa: BLE001 — surface ANY failure, keep the agent alive
+            self._pub(turn_id, turn_number, AgentError(message=str(e)))
+        except BaseException:
+            # Cancellation or workflow teardown — e.g. the instance is evicted (or the worker
+            # shuts down) while this participant is still parked, and the coroutine is resumed
+            # only to be closed. We are NOT on the workflow event loop here, so any publish
+            # would raise (``workflow.time()`` needs the loop). Drop the refcount so a
+            # still-live workflow's drain can complete, but publish nothing: this turn is being
+            # ABANDONED, not finished, and claiming ``turn_end`` would tell a client the agent
+            # went quiescent when in fact its work was discarded.
+            self._status.leave_turn()
+            raise
         else:
-            handler = self._handlers[envelope.type]
+            self._pub(
+                turn_id, turn_number, AgentReply(output=result.model_dump(mode="json"))
+            )
+        # Reached whether the handler returned or raised — both are real completions, unlike
+        # the teardown path above. Announce turn_end ONLY when this was the turn's LAST
+        # participant: it is the quiescence signal a client disconnects on, so emitting it
+        # while a joined handler is still working would be a lie.
+        if self._status.leave_turn():
+            self._pub(turn_id, turn_number, TurnEnded())
 
+    async def _dispatch_turn(
+        self,
+        agent: object,
+        envelope: AgentMessage,
+        *,
+        turn_id: str,
+        turn_number: int,
+        joined: bool,
+    ) -> BaseModel:
+        """Dispatch one already-validated envelope to its handler, returning its reply model.
+
+        A handler that declared ``Injected[MessageContext]`` gets it supplied here — by
+        keyword, so it works wherever the author placed the parameter. It is deliberately
+        NOT part of the model-facing schema (see :data:`Injected`), so the handler can branch
+        on whether it opened its turn or joined one without that ever becoming a field a
+        caller could set.
+        """
+        handler = self._handlers[envelope.type]
         arg = handler.input_type.model_validate(envelope.payload)
-        result = await getattr(agent, handler.name)(arg)
+        kwargs: dict[str, Any] = {}
+        if handler.ctx_param is not None:
+            kwargs[handler.ctx_param] = MessageContext(
+                joined_turn=joined, turn_id=turn_id, turn_number=turn_number
+            )
+        result = await getattr(agent, handler.name)(arg, **kwargs)
         if not isinstance(result, handler.output_type):
             raise ApplicationError(
                 f"handler {handler.name!r} returned {type(result).__name__}, "
@@ -1988,12 +2102,6 @@ class AgentWorkflowRunner:
                 non_retryable=True,
         )
         return result
-
-    def _handle_slash_command(self, command: SlashCommand) -> TextReply | None:
-        definition = self._find_slash_command(command.name)
-        if definition is None:
-            return None
-        return definition.execute(self._slash_command_context(), command)
 
     # -- Subagents ----------------------------------------------------------
     #

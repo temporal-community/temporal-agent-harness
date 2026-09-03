@@ -245,7 +245,7 @@
             sessionId={run.runInfo.sessionId}
             agents={run.agents}
             agentInterface={run.agentInterfaces[run.runInfo.sessionId] ?? []}
-            operatorTargets={run.operatorTargets}
+            messageTargets={run.messageTargets}
             currentAgentWorkflowType={run.session?.agent_workflow_type ?? null}
             connecting={run.connecting}
             sending={run.sending}
@@ -253,9 +253,8 @@
             closed={run.sessionClosed}
             closedWorkflowIds={run.closedWorkflowIds}
             error={run.connectionError}
-            onSend={(message) => run.sendMessage(message)}
-            onOperatorCommand={(name, arg, workflowId) =>
-              run.executeOperatorCommand(name, arg, workflowId)}
+            onSend={(message, workflowId) => run.sendMessage(message, workflowId)}
+            onStopAgent={(workflowId) => run.stopAgent(workflowId)}
             onNewSession={(workflowType) => run.startNewSession(workflowType)}
             onSelectSession={(sessionId) => run.selectSession(sessionId)}
             onApproveTool={(workflowId, toolId, approved, remember) =>

@@ -1,14 +1,11 @@
 import type {
-  AcceptedMessageTypesResponse,
   AgentInterfaceFunction,
+  AgentStatusResponse,
   AgentRegistryResponse,
   AgentSseFrame,
   ChatRequest,
   CreateSessionRequest,
   CreateSessionResponse,
-  OperatorCommand,
-  OperatorCommandRequest,
-  OperatorCommandResponse,
   Session,
   SubmitMessageResponse,
   ToolApprovalRequest,
@@ -88,18 +85,6 @@ export class HttpAgentApi implements AgentApi {
     );
   }
 
-  async acceptedMessageTypes(
-    sessionId: WorkflowId
-  ): Promise<AcceptedMessageTypesResponse> {
-    const functions = await this.agentInterface(sessionId);
-    return {
-      accepts_text: functions.some((item) => item.name === "ask"),
-      models: functions.map((item) => ({
-        name: item.name,
-        json_schema: item.parameters
-      }))
-    };
-  }
 
   async agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]> {
     return json<AgentInterfaceFunction[]>(
@@ -107,21 +92,20 @@ export class HttpAgentApi implements AgentApi {
     );
   }
 
-  async operatorInterface(sessionId: WorkflowId): Promise<OperatorCommand[]> {
-    return json<OperatorCommand[]>(
-      apiPath(`operator-interface/${encodeURIComponent(sessionId)}`)
+  async agentStatus(sessionId: WorkflowId): Promise<AgentStatusResponse> {
+    return json<AgentStatusResponse>(
+      apiPath(`status/${encodeURIComponent(sessionId)}`)
     );
   }
 
-  async executeOperatorCommand(
-    request: OperatorCommandRequest
-  ): Promise<OperatorCommandResponse> {
-    return json<OperatorCommandResponse>(apiPath("operator-commands"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request)
-    });
+  async closeSession(sessionId: WorkflowId): Promise<void> {
+    await json<{ ok: boolean }>(
+      apiPath(`sessions/${encodeURIComponent(sessionId)}/close`),
+      { method: "POST" }
+    );
   }
+
+
 
   async *attach(
     sessionId: WorkflowId,

@@ -210,7 +210,6 @@
     if (row.actor === "model") return `${prefix}Model`;
     if (row.actor === "tool") return `${prefix}${row.toolName ?? "Tool"}`;
     if (row.actor === "approval") return `${prefix}Approval`;
-    if (row.actor === "operator") return `${prefix}Operator`;
     if (row.actor === "subagent") return "Subagent";
     if (row.actor === "queue") return `${prefix}Queue`;
     if (row.actor === "reasoning") return `${prefix}Reasoning`;
@@ -226,7 +225,6 @@
     if (row.actor === "approval" || status.includes("approval") || status.includes("await")) {
       return "approval";
     }
-    if (row.actor === "operator") return "queued";
     if (row.actor === "tool" || status.includes("tool")) return "tool";
     if (row.actor === "model") return "model";
     if (row.actor === "reasoning") return "reasoning";
@@ -351,8 +349,6 @@
                     {/if}
                   {:else if row.actor === "queue"}
                     <MessageSquarePlus size={15} />
-                  {:else if row.actor === "operator"}
-                    <Radio size={15} />
                   {:else if row.actor === "error"}
                     <AlertTriangle size={15} />
                   {:else if row.tone === "done"}
@@ -710,7 +706,6 @@
   .log-line.tool .actor-icon { color: var(--warning); }
   .log-line.approval .actor-icon,
   .log-line.queue .actor-icon { color: var(--queue); }
-  .log-line.operator .actor-icon { color: var(--accent); }
   .log-line.done .actor-icon { color: var(--success); }
   .log-line.error .actor-icon { color: var(--error); }
 

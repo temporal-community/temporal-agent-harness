@@ -8,7 +8,8 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal
+from enum import StrEnum
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
@@ -19,10 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 SEND_AGENT_MESSAGE_UPDATE = "send_agent_message"
 TOOL_APPROVAL_UPDATE = "tool_approval"
 PROVIDE_CALLBACK_RESULT_UPDATE = "provide_callback_result"
-EXECUTE_OPERATOR_COMMAND_UPDATE = "execute_operator_command"
 AGENT_STATUS_QUERY = "agent_status"
 AGENT_INTERFACE_QUERY = "agent_interface"
-OPERATOR_INTERFACE_QUERY = "operator_interface"
 
 # Width (hex chars) of ONE segment of an agent's short id. A top-level agent's id is a single
 # segment; a subagent's id is its parent's id plus one fresh segment, joined by ``-`` (see
@@ -175,7 +174,8 @@ class AgentConfig(BaseModel):
     as a top-level agent or as a sub-agent — since a caller can always construct one
     knowing only ``AgentConfig``, never a bespoke per-agent input type. Consequently
     this carries ONLY knobs universal to every agent; agent-specific behavior is
-    configured at runtime (e.g. via slash commands), never through a custom input type.
+    configured at runtime through the agent's own ``@agent.accepts`` handlers, never
+    through a custom input type.
 
     EVERY field is optional, with ``None`` meaning "the caller did not specify this."
     An agent supplies its own default for any unspecified field (via the matching
@@ -184,9 +184,10 @@ class AgentConfig(BaseModel):
     of each knob is: the caller's value if given, else the agent's default, else the
     harness baseline.
 
-    ``is_message_queuing_enabled`` — whether the agent accepts a new message while a
-    turn is already in flight (queuing it behind the active turn) rather than rejecting
-    it as busy. ``None`` → defer to the agent's default (harness baseline: disabled).
+    Note there is no knob here for mid-turn behavior. Whether a message may interrupt,
+    queue behind, or join an in-flight turn is declared PER HANDLER via
+    ``@agent.accepts(mid_turn=...)`` — see :class:`MidTurn`. It is not universal to an
+    agent, so it cannot live in this contract.
 
     ``approval_policy`` — the tool-approval policy to run the agent under (see
     :class:`ToolApprovalPolicy`). ``None`` → use the agent's built-in default (the runner's
@@ -205,7 +206,6 @@ class AgentConfig(BaseModel):
     per-child rather than passing through unchanged.
     """
 
-    is_message_queuing_enabled: bool | None = None
     approval_policy: ToolApprovalPolicy | None = None
     agent_id: AgentId | None = None
 
@@ -224,15 +224,35 @@ class AgentMessage(BaseModel):
     ``model_validate``s ``payload`` into the handler's input model (coercing it, or
     rejecting a bad shape) before dispatching::
 
-        AgentMessage(type="slash",
-                     payload={"name": "set-model", "arg": "gemini-3.1-flash-lite"},
+        AgentMessage(type="set_model",
+                     payload={"model": "gemini-3.1-flash-lite"},
                      expected_turn=1)
 
     Routing is **by name**, not by a discriminator on the payload type — so two handlers
     may accept the *same* input model.
 
-    ``expected_turn`` is the turn number the client believes this message should be; the
-    update validator rejects it if the workflow is already past that turn (stale client).
+    ``expected_turn`` is a STALENESS TOKEN: the caller asserting how far it has observed,
+    expressed as the next turn number the agent should hand out
+    (``current_turn + len(pending_turns) + 1``). The update validator rejects the message if
+    the workflow is not at exactly that point.
+
+    It is deliberately not a slot reservation, and **a caller must not simply increment it
+    once per message sent.** A message whose handler declares :attr:`MidTurn.ACCEPT` JOINS a
+    turn already in flight instead of getting one of its own, so the agent's turn counter
+    does not advance and the *next* message must claim the same number again. Counting sends
+    rather than turns over-counts on the first join and then rejects every later message as
+    stale.
+
+    The reliable source is :attr:`AgentMessageReply.turn_number`, returned on every accepted
+    message: set the next ``expected_turn`` to ``reply.turn_number + 1``, which is correct
+    whether the message joined a turn (its number) or reserved one (the new slot). A caller
+    that has lost track can always re-derive it from ``agent_status``.
+
+    The check is turn-granular and therefore coarse — it will not catch a caller acting during a turn
+    it has not finished observing. That is accepted deliberately: asserting a stream offset
+    instead would fail on nearly every busy-agent interaction (the offset advances on every
+    streamed delta), and a check people learn to retry past protects nothing.
+
     It is carried on the envelope itself — the ``send_agent_message`` update takes a bare
     :class:`AgentMessage`, with no separate wrapper.
     """
@@ -264,62 +284,70 @@ class TextReply(BaseModel):
     text: str
 
 
-class SlashCommand(BaseModel):
-    """A slash command selected by an interactive client."""
-
-    name: str
-    arg: str | None = None
+# ---------------------------------------------------------------------------
+# Mid-turn dispatch behavior + the context a handler can ask for
+# ---------------------------------------------------------------------------
 
 
-class OperatorCommandArgument(BaseModel):
-    """Argument metadata for an operator-only slash command.
+class MidTurn(StrEnum):
+    """What happens to a message that arrives while a turn is already open.
 
-    ``kind`` is intentionally small and UI-oriented:
+    Declared per handler via ``@agent.accepts(mid_turn=...)`` — there is no global switch,
+    because "a control message must work on a busy agent" and "a user message should queue"
+    are the same decision made oppositely, and no single answer serves both.
 
-      * ``enum`` — the argument must be one of ``choices``.
-      * ``text`` — arbitrary text.
-      * ``tool_names`` — one or more tool names, usually suggested from pending approvals.
+    All three are IDENTICAL when the agent is idle: the message opens a turn and runs. The
+    mode governs only mid-turn arrival.
 
-    The workflow still validates the resulting :class:`SlashCommand`; this model is discovery
-    metadata so operator clients can render menus and construct the payload without hardcoding
-    each command.
+      * :attr:`ENQUEUE` — queue behind the open turn; it runs as its own turn later.
+      * :attr:`REJECT` — fail the ``send_agent_message`` update with a typed
+        ``MidTurnRejected`` error, so the caller learns immediately rather than having work
+        pile up invisibly behind a turn it cannot see.
+      * :attr:`ACCEPT` — JOIN the open turn and run concurrently with it, sharing its
+        ``turn_id``. The turn ends when its last participant finishes.
+
+    ``ACCEPT`` is the one that carries a real obligation: such a handler runs concurrently
+    with the open turn AND with other ``ACCEPT`` handlers, so any agent state it mutates is
+    shared. A read-modify-write split across an ``await`` can lose an update. The harness's
+    own state is safe by construction (its registries are partitioned by unique id and its
+    status mutators never yield), but agent state is the author's to protect.
+
+    ``REJECT`` is the default precisely because it is the only mode whose consequence is
+    visible at the call site during development.
     """
 
-    kind: Literal["enum", "text", "tool_names"]
-    required: bool = True
-    choices: tuple[str, ...] = ()
-    placeholder: str | None = None
-    allow_multiple: bool = False
+    ENQUEUE = "enqueue"
+    REJECT = "reject"
+    ACCEPT = "accept"
 
 
-class OperatorCommand(BaseModel):
-    """One operator-only slash command accepted through the operator update channel.
+class MessageContext(BaseModel):
+    """Per-message context the WORKFLOW supplies to a handler that asks for it.
 
-    This is the element type of the ``operator_interface`` query. It deliberately lives
-    outside :class:`AcceptedFunction`: operator commands are for human/client control planes,
-    not for parent agents to discover as model-callable tools.
+    A handler opts in by declaring a second parameter annotated
+    ``Injected[MessageContext]``; it is filled at dispatch and hidden from the
+    ``parameters`` schema every caller introspects, so the model never sees or chooses it::
+
+        @agent.accepts(mid_turn=MidTurn.ACCEPT)
+        async def user_text(self, msg: UserText, ctx: Injected[MessageContext]) -> Reply:
+            if ctx.joined_turn:
+                self._steering.append(msg.text)   # drained by the running model loop
+            else:
+                return await self._prompt(msg.text)
+
+    ``joined_turn`` is the distinction most handlers care about: ``False`` when this message
+    OPENED the turn it is running in, ``True`` when it joined a turn that was already open
+    (only possible for :attr:`MidTurn.ACCEPT`). The motivating case is a chat box that should
+    start a new prompt when idle but *steer* the model mid-turn.
+
+    ``turn_id`` / ``turn_number`` identify the turn this message is participating in — the
+    same values the caller received from ``send_agent_message`` — so a handler can correlate
+    its own work with the event stream without reaching into the runner.
     """
 
-    name: str
-    payload_name: str
-    label: str
-    description: str
-    aliases: tuple[str, ...] = ()
-    argument: OperatorCommandArgument | None = None
-    source: Literal["harness", "agent"] = "harness"
-
-
-class OperatorCommandRequest(BaseModel):
-    """Payload for the ``execute_operator_command`` update."""
-
-    name: str
-    arg: str | None = None
-
-
-class OperatorCommandResult(BaseModel):
-    """Result returned by the ``execute_operator_command`` update."""
-
-    text: str
+    joined_turn: bool
+    turn_id: str
+    turn_number: int
 
 
 # ---------------------------------------------------------------------------
@@ -331,8 +359,15 @@ class OperatorCommandResult(BaseModel):
 class AgentMessageReply:
     """Returned by the workflow's ``send_agent_message`` update on acceptance.
 
-    ``pending`` is True if the message was queued behind an active
-    turn rather than being processed immediately.
+    ``turn_number`` is the turn this message actually belongs to — a NEW turn for a queued or
+    idle message, or the ALREADY-OPEN turn it joined when its handler declares
+    :attr:`MidTurn.ACCEPT`. It is the authoritative input to the caller's next
+    ``expected_turn`` (``turn_number + 1``); see :attr:`AgentMessage.expected_turn` for why
+    counting sends instead is wrong.
+
+    ``pending`` is True if the message was queued behind an active turn rather than being
+    processed immediately. A join reports ``False``: it is running now, inside the turn it
+    joined.
 
     ``accepted_offset`` is the agent's stream offset captured at the instant the update was
     accepted (the log head BEFORE this turn publishes anything). It is internal plumbing for the
@@ -506,9 +541,16 @@ class AgentStatus:
     # Empty only as a dataclass default; a live workflow's status always carries its real id.
     agent_id: str = ""
     current_turn: int = 0
+    # True while a turn is open — i.e. while ``turn_participants > 0``. A turn is the
+    # interval the agent is non-idle, not the span of one message, so this stays True while
+    # ANY participant is still running (see ``turn_participants``).
     turn_active: bool = False
+    # How many messages are currently running inside the open turn. Normally 1; more when
+    # ``MidTurn.ACCEPT`` messages have joined it. 0 exactly when the agent is idle. The turn
+    # closes — and ``turn_end`` publishes — when this reaches 0, which is what makes
+    # ``turn_active`` an honest answer rather than "the first participant is still going".
+    turn_participants: int = 0
     pending_turns: list[PendingTurn] = field(default_factory=list)
-    is_message_queuing_enabled: bool = False
     pending_approvals: list[PendingApproval] = field(default_factory=list)
     # Callback tool calls currently awaiting a client-supplied result (its own machine executes
     # them), each a :class:`PendingCallback`. Distinct from ``pending_approvals``: an approval is a
@@ -541,13 +583,28 @@ class AcceptedFunction(BaseModel):
       * ``description`` — the handler method's docstring (when/how to use it).
       * ``parameters`` — the JSON schema of the handler's single input model.
       * ``output`` — the JSON schema of the handler's return model.
+      * ``mid_turn`` — what happens if this message arrives while a turn is open, so a
+        client can tell the user whether sending will queue, join, or be rejected.
+      * ``model_callable`` — the handler author's HINT that a parent agent's model may
+        drive this handler. Only a hint: the parent's ``SubagentToolPolicy`` decides, and
+        may honor it, narrow it, or ignore it. Never treat this as an access decision.
+
+    This query returns EVERY handler the agent declares. Nothing is hidden from it — the
+    real boundary on what a parent model can reach is which tools its toolset was built
+    with, not what a discovery query admits to. The two harness-owned updates
+    (``tool_approval``, ``provide_callback_result``) are absent because they are not
+    ``@agent.accepts`` handlers at all.
 
     A caller introspects this to construct a valid :class:`AgentMessage` for any handler
     (or, for a parent agent, to model each handler as a tool) without hardcoding the
-    contract, so it can evolve without client-side changes.
+    contract, so it can evolve without client-side changes. A generic client can render an
+    arbitrary agent from this alone: ``parameters`` fully describes the payload, so no
+    per-agent knowledge — and no hardcoded handler name — is needed.
     """
 
     name: str
     description: str
     parameters: dict[str, Any]
     output: dict[str, Any]
+    mid_turn: MidTurn = MidTurn.REJECT
+    model_callable: bool = True

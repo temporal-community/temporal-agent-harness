@@ -39,19 +39,19 @@ AgentMessage(
   a stale `expected_turn` → `StaleTurn`. So the dispatch loop only ever sees a known handler + an
   already-coerced input. The handler's **return value becomes the turn's `reply` event** (see below).
 - **Discovery, not hardcoding.** A client learns an agent's callable surface at runtime from the
-  `agent_interface` query — each handler's name + input/output JSON schemas (tool-style) — and
-  `operator_interface` for slash commands. The packaged server exposes these at
-  `GET /api/agent-interface/{session_id}` and `/api/operator-interface/{session_id}`. A generic UI
-  can read the schema and format correct envelopes (even auto-generate a form) without knowing the
-  agent in advance. This is the same interface a **parent agent** reads to call a subagent, and the
-  same handlers `subagent_toolset` reflects over statically.
-- **The packaged UI's conventions** (a pragmatic layer on top of the contract, in `web/app.py`):
-  a plain-text chat message maps to `ask` with `{"text": …}` — so the chat box assumes a handler
-  `ask(TextMessage) -> TextReply` (every conversational example exposes exactly that). Slash
-  commands map to the reserved `slash` channel. Any other handler is reachable via a structured
-  `{"type": …, "payload": {…}}` message. **To work with the packaged chat UI out of the box, expose
-  `ask(TextMessage) -> TextReply`;** an agent with a different handler (e.g. Monty's
-  `run_script(RunScript)`) needs the structured path or a custom UI.
+  `agent_interface` query — **every** handler's name, docstring, input/output JSON schemas, plus its
+  `mid_turn` and `model_callable`. There is only this one discovery surface, and nothing is filtered
+  out of it: what a parent model can reach is decided by which tools its toolset was built with
+  (`SubagentToolPolicy`), so filtering here would be security-by-obscurity while costing a debugging
+  UI the ability to see an agent's whole surface. The packaged server exposes it at
+  `GET /api/agent-interface/{session_id}`. This is the same interface a **parent agent** reads to
+  call a subagent, and the same handlers `subagent_toolset` reflects over statically.
+- **A generic client needs nothing else.** `parameters` fully describes the payload, so the packaged
+  UI renders an arbitrary agent with no hardcoded handler names: it selects a handler, renders a
+  plain text box when the input schema is a single string field (reading the field's name from the
+  schema, so `text` / `script` / `prompt` all work), and otherwise generates a form — turning an
+  `enum` into a dropdown. Typing `/` opens a picker over the discovered handlers, which is purely a
+  client-side affordance. **No handler name is privileged**, by the harness or by the UI.
 
 ## The AgentEvent stream — a turn's observable output
 
@@ -67,7 +67,7 @@ above (`turn_started`, `reply_delta`, `tool_*`, …).
 - **The vocabulary is closed and discriminated.** `AgentStreamItem` unions the ~two dozen event
   types (`turn_*`, `model_interaction_*` with `TokenUsage`, the full `tool_*` lifecycle incl.
   approvals, `subagent_*`, `reply_delta`/`thought_summary`/`text_annotation`, terminal
-  `reply`/`error`, `operator_command_*`) keyed on `type`. The *same* vocabulary for every agent
+  `reply`/`error`) keyed on `type`. The *same* vocabulary for every agent
   regardless of which SDK wrote the loop → one UI, one analytics pipeline across the fleet. (Defined
   in `agent_protocol/events.py`.)
 - **One topic, two producers.** All events publish to the single `turn_events` topic on the agent's
@@ -157,45 +157,51 @@ Fulfillment is decoupled from any UI: the packaged server mirrors the update at
 `harness/agent_workflow.py` (`callback_tool_defn`, `await_callback_result`, the `_CallbackEntry`
 registry).
 
-## Slash commands — the operator channel every agent gets (and extends cheaply)
+## Mid-turn dispatch — one door, per-handler behavior
 
-A **slash command** is an operator/control action on the harness-reserved `slash` message type —
-a channel *separate* from the agent's `@agent.accepts` message handlers. Every agent gets a packaged
-set for free, and adding your own is a few lines.
+There is **one inbound door**: `send_agent_message` routed to an `@agent.accepts` handler. The
+harness has no notion of a command, an operator channel, or a reserved message type. Whether a
+message may interrupt in-flight work is declared per handler, because "a config change must work on
+a busy agent" and "a user message should queue" are the same decision made oppositely.
 
-- **Free defaults** (`slash_commands.default_commands()`): `/approvals` (set the tool-approval
-  policy), `/allow-tools` (auto-approve named tools), `/status`, `/stop`.
-- **Add your own** — pass a `slash_commands=[...]` list to the runner; keep the defaults by
-  splatting them in:
+- `MidTurn.ENQUEUE` — queues behind the open turn; runs as its own turn later.
+- `MidTurn.REJECT` (the default) — fails the update with a typed `MidTurnRejected` error, rejected
+  in the *validator* so nothing is admitted and no turn is reserved.
+- `MidTurn.ACCEPT` — **joins** the open turn, sharing its `turn_id`, and runs concurrently with it.
 
-```python
-self._runner = AgentWorkflowRunner(
-    config,
-    stream=WorkflowStream(),
-    slash_commands=[
-        *slash_commands.default_commands(),      # keep the packaged ones
-        model_slash_command(self._set_model),    # + your own
-    ],
-)
-```
+All three are identical when the agent is idle: the message opens a turn and runs. `REJECT` is the
+default because it is the only one that cannot silently surprise an author — queuing delays work the
+caller thought it had dispatched, and joining opts the handler into concurrency.
 
-- Each entry is a `slash_commands.command(name=, label="/model", description=, handler=,
-  argument=?, aliases=?)`. The **handler is synchronous** — `(SlashCommandContext, SlashCommand) ->
-  TextReply`. Its `SlashCommandContext` exposes session state + mutators (`current_status`,
-  `current_approval_policy`, `set_approval_policy(...)`, `close()`), so a command can *change* the
-  session — e.g. a `/model` command calls back into the agent's own `set_model`, `/approvals` flips
-  the policy, `/stop` calls `close`. `slash_commands.model_selector(...)` is a ready-made helper for
-  the common "pick a model" case.
-- **Typed arguments**: `argument=enum_arg(choices, …)` / `tool_names_arg()` give the UI a typed,
-  validated input (choices/placeholder) checked before the handler runs.
-- **Discoverable + audited**: the packaged set plus your additions are advertised on the
-  `operator_interface` query (the UI renders them; contrast `agent_interface`, which advertises the
-  `@agent.accepts` handlers), and each invocation is audited as `operator_command_*` events stamped
-  `turn_number=0` — control-plane records, deliberately *not* agent turns.
+**A turn is the interval the agent is non-idle**, not the span of one message, and it is refcounted:
+`turn_started` when it opens, `turn_end` only when the *last* participant finishes. That is what
+makes `turn_end` a true quiescence signal a client can disconnect on, and it means nested or
+interleaved turn brackets are unconstructible (nothing but the runner opens a turn, and only when
+none is open).
 
-Grounded in `harness/slash_commands.py`; see `examples/monty/conversational_workflow.py` for the
-`/model` extension, and `what-the-harness-adds.md` (Control plane) for where this fits the value
-story.
+**Admission and execution are two halves.** `_handle_send_agent_message` contains no `await`, so it
+completes inside one workflow task: it captures `accepted_offset`, resolves the turn (new, or the
+open one to join), bumps the participant refcount, and returns. `AgentWorkflowRunner.run` then
+dispatches each admitted message as its own asyncio task. Keeping execution out of the update
+handler is load-bearing: the update's return value carries `accepted_offset`, which is the client's
+stream read-start hint, so a handler running inside it would stall streaming and deadlock a gated
+tool (the approving client would still be awaiting the response).
+
+**`ACCEPT` concurrency is the author's problem, deliberately.** Such a handler runs alongside the
+open turn and alongside other `ACCEPT` handlers, so agent state it mutates is shared and a
+read-modify-write across an `await` can lose an update. Harness state is safe by construction (its
+registries are partitioned by unique id; `_WorkflowStatus` mutators never yield), but hardening only
+harness state would be an inconsistent guarantee — authors own state the harness cannot see.
+
+**Nothing replaces the packaged commands.** `/approvals`, `/allow-tools`, `/status` and `/stop` are
+gone with no substitute, because each already had a first-class non-command surface: the
+`tool_approval` update (whose `remember` flag relaxes the live policy and cascades to parked gates),
+the `agent_status` query, and the `close` signal. An agent that wants any of them *as a message*
+writes its own handler.
+
+Grounded in `harness/agent_workflow.py`; see `docs/design/unified-message-dispatch.md` for the
+reasoning, and `examples/monty/conversational_workflow.py` for a `set_model` handler declared
+`ACCEPT`.
 
 ## What an SDK integration must provide
 

@@ -1,14 +1,11 @@
 import type {
-  AcceptedMessageTypesResponse,
   AgentInterfaceFunction,
+  AgentStatusResponse,
   AgentRegistryResponse,
   AgentSseFrame,
   ChatRequest,
   CreateSessionRequest,
   CreateSessionResponse,
-  OperatorCommand,
-  OperatorCommandRequest,
-  OperatorCommandResponse,
   Session,
   SubmitMessageResponse,
   ToolApprovalRequest,
@@ -37,10 +34,16 @@ const qaInterface: AgentInterfaceFunction[] = [
       properties: {
         text: { type: "string", title: "Text" }
       }
-    }
+    },
+    mid_turn: "enqueue",
+    model_callable: true
   }
 ];
 
+// Deliberately varied so the composer's schema-driven rendering is exercised by the mock:
+// a single-string handler (renders as the plain text box), an enum-constrained one (renders
+// as a dropdown), and a multi-field one (renders as a form). None of these names is special
+// to the UI — it reads them all from this discovery payload.
 const montyInterface: AgentInterfaceFunction[] = [
   {
     name: "run_script",
@@ -57,77 +60,55 @@ const montyInterface: AgentInterfaceFunction[] = [
       properties: {
         text: { type: "string", title: "Text" }
       }
-    }
-  }
-];
-
-const harnessOperatorInterface: OperatorCommand[] = [
-  {
-    name: "approvals",
-    payload_name: "set-approvals",
-    label: "/approvals",
-    description: "Set the tool approval policy for this session.",
-    aliases: ["set-approvals"],
-    argument: {
-      kind: "enum",
-      required: true,
-      choices: ["strict", "safe", "skip"],
-      placeholder: "strict | safe | skip",
-      allow_multiple: false
     },
-    source: "harness"
+    mid_turn: "enqueue",
+    model_callable: true
   },
   {
-    name: "allow-tools",
-    payload_name: "allow-tools",
-    label: "/allow-tools",
-    description: "Auto-approve one or more named tools for this session.",
-    aliases: ["allow-tool"],
-    argument: {
-      kind: "tool_names",
-      required: true,
-      choices: [],
-      placeholder: "tool_name",
-      allow_multiple: true
+    name: "set_model",
+    description: "Set the model this session uses for subsequent turns.",
+    parameters: {
+      type: "object",
+      title: "SetModel",
+      properties: {
+        model: {
+          title: "Model",
+          type: "string",
+          enum: ["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+        }
+      },
+      required: ["model"]
     },
-    source: "harness"
+    output: {
+      type: "object",
+      properties: {
+        text: { type: "string", title: "Text" }
+      }
+    },
+    mid_turn: "accept",
+    model_callable: false
   },
   {
-    name: "status",
-    payload_name: "status",
-    label: "/status",
-    description: "Show the current harness status for this session.",
-    aliases: [],
-    argument: null,
-    source: "harness"
-  },
-  {
-    name: "stop",
-    payload_name: "stop-agent",
-    label: "/stop",
-    description: "Stop this agent workflow.",
-    aliases: ["stop-agent"],
-    argument: null,
-    source: "harness"
-  }
-];
-
-const montyOperatorInterface: OperatorCommand[] = [
-  ...harnessOperatorInterface,
-  {
-    name: "model",
-    payload_name: "set-model",
-    label: "/model",
-    description: "Set the model for this Monty session.",
-    aliases: [],
-    argument: {
-      kind: "enum",
-      required: true,
-      choices: ["gemini-3.5-flash", "gemini-3.1-flash-lite"],
-      placeholder: "model",
-      allow_multiple: false
+    name: "start_batch",
+    description: "Kick off a batch run. Refuses to start while the agent is busy.",
+    parameters: {
+      type: "object",
+      title: "Batch",
+      properties: {
+        label: { title: "Label", type: "string" },
+        size: { title: "Size", type: "integer", minimum: 1, maximum: 100, default: 10 },
+        dry_run: { title: "Dry Run", type: "boolean", default: false }
+      },
+      required: ["label"]
     },
-    source: "agent"
+    output: {
+      type: "object",
+      properties: {
+        text: { type: "string", title: "Text" }
+      }
+    },
+    mid_turn: "reject",
+    model_callable: true
   }
 ];
 
@@ -169,54 +150,39 @@ export class MockAgentApi implements AgentApi {
     };
   }
 
-  async acceptedMessageTypes(
-    _sessionId: WorkflowId
-  ): Promise<AcceptedMessageTypesResponse> {
-    return {
-      accepts_text: true,
-      models: []
-    };
-  }
 
   async agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]> {
     return sessionId.toLowerCase().includes("monty") ? montyInterface : qaInterface;
   }
 
-  async operatorInterface(sessionId: WorkflowId): Promise<OperatorCommand[]> {
-    return sessionId.toLowerCase().includes("monty")
-      ? montyOperatorInterface
-      : harnessOperatorInterface;
+  async agentStatus(sessionId: WorkflowId): Promise<AgentStatusResponse> {
+    return {
+      current_turn: 0,
+      turn_active: false,
+      turn_participants: 0,
+      pending_turns: [],
+      pending_approvals: [],
+      subagents: [],
+      approval_policy: {
+        dangerously_skip_all_approvals: false,
+        auto_approve_inherently_safe: true,
+        auto_approve_tools: []
+      },
+      has_custom_approval_fallback: false
+    };
   }
 
-  async executeOperatorCommand(
-    request: OperatorCommandRequest
-  ): Promise<OperatorCommandResponse> {
-    await sleep(80);
-    if (request.name === "set-approvals") {
-      return { text: `Approvals set to **${request.arg ?? "strict"}**.` };
-    }
-    if (request.name === "allow-tools") {
-      const noun = request.arg?.includes(",") ? "Tools" : "Tool";
-      return {
-        text: `${noun} \`${request.arg ?? ""}\` will be auto-approved.`
-      };
-    }
-    if (request.name === "set-model") {
-      return { text: `Model set to **${request.arg ?? "gemini-3.5-flash"}**.` };
-    }
-    if (request.name === "status") {
-      return { text: "- Agent id: `mock`\n- Turn: `0` (idle)\n- Approvals: `strict`" };
-    }
-    if (request.name === "stop-agent") {
-      this.#sessions = this.#sessions.map((session) =>
-        session.workflow_id === request.session_id
-          ? { ...session, execution_status: "COMPLETED", closed: true }
-          : session
-      );
-      return { text: "Agent stop requested." };
-    }
-    return { text: `Unknown operator command: \`${request.name}\`.` };
+  async closeSession(sessionId: WorkflowId): Promise<void> {
+    // Mirrors the real close signal's observable effect, so the mock UI's stop control
+    // behaves the same way it does against a live workflow.
+    this.#sessions = this.#sessions.map((item) =>
+      item.workflow_id === sessionId
+        ? { ...item, execution_status: "COMPLETED", closed: true }
+        : item
+    );
   }
+
+
 
   async *attach(
     _sessionId: WorkflowId,

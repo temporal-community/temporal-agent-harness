@@ -3,8 +3,6 @@ import type {
   AgentInterfaceFunction,
   AgentMessageObject,
   AgentSseFrame,
-  OperatorCommand,
-  OperatorCommandResponse,
   WorkflowExecutionState
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
@@ -37,16 +35,22 @@ export interface ObservedSubagent {
   agentKey: string;
   label: string;
   agentInterface?: AgentInterfaceFunction[];
-  operatorInterface?: OperatorCommand[];
   targetTurn: number | null;
   stopped: boolean;
 }
 
-export interface OperatorTarget {
+/**
+ * One agent a message can be addressed to: the session's parent, or a live subagent of it.
+ *
+ * Carries that agent's OWN discovered handler surface, because a subagent generally accepts
+ * different messages than its parent — the composer reads `agentInterface` from whichever
+ * target is selected rather than assuming the parent's surface applies everywhere.
+ */
+export interface MessageTarget {
   workflowId: string;
   role: "parent" | "subagent";
   label: string;
-  operatorInterface: OperatorCommand[];
+  agentInterface: AgentInterfaceFunction[];
   closed: boolean;
 }
 
@@ -125,21 +129,24 @@ function writeCachedFrames(sessionId: string, frames: AgentSseFrame[]): void {
 function renderUserMessage(value: string): string {
   if (!value.startsWith("{")) return value;
   try {
-    const message = JSON.parse(value) as {
-      type?: string;
-      payload?: { name?: string; arg?: string; text?: string; script?: string };
-      script?: string;
-    };
-    if (typeof message.payload?.text === "string") return message.payload.text;
-    if (typeof message.payload?.script === "string") return message.payload.script;
-    if (typeof message.script === "string") return message.script;
-    if (
-      (message.type !== "slash" && message.type !== "slash_command") ||
-      !message.payload?.name
-    ) {
-      return value;
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object") return value;
+    const message = parsed as { type?: unknown; payload?: unknown };
+    const payload = message.payload;
+    if (!payload || typeof payload !== "object") {
+      return typeof message.type === "string" ? message.type : value;
     }
-    return slashCommandDisplayText(message.payload.name, message.payload.arg);
+    // Generic by design: handler names and payload field names are agent-specific, so a
+    // lone string field is shown bare (the common prompt shape, whatever it is called) and
+    // anything else is labelled by handler name.
+    const entries = Object.entries(payload as Record<string, unknown>);
+    const strings = entries.filter(([, v]) => typeof v === "string");
+    if (entries.length === 1 && strings.length === 1) return strings[0][1] as string;
+    const rendered = entries
+      .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+      .sort()
+      .join(", ");
+    return typeof message.type === "string" ? `${message.type}(${rendered})` : rendered;
   } catch {
     return value;
   }
@@ -149,36 +156,26 @@ function isAgentMessageObject(message: AgentInboundMessage): message is AgentMes
   return typeof message === "object" && message !== null;
 }
 
-function slashCommandDisplayText(name: string, arg?: string): string {
-  const command = name === "set-model" ? "model" : name;
-  return `/${command}${arg ? ` ${arg}` : ""}`;
-}
-
 function displayTextForMessage(message: AgentInboundMessage): string {
   if (typeof message === "string") return message.trim();
-  if (
-    message.type === "slash" &&
-    typeof message.payload === "object" &&
-    message.payload != null &&
-    "name" in message.payload &&
-    typeof message.payload.name === "string"
-  ) {
-    const arg =
-      "arg" in message.payload && typeof message.payload.arg === "string"
-        ? message.payload.arg
-        : undefined;
-    return slashCommandDisplayText(message.payload.name, arg);
+  const payload = message.payload;
+  if (payload && typeof payload === "object") {
+    const entries = Object.entries(payload as Record<string, unknown>);
+    const strings = entries.filter(([, v]) => typeof v === "string");
+    // A single string field renders bare so a chat-shaped handler reads like chat; anything
+    // else is labelled by handler name. No handler or field name is special-cased.
+    if (entries.length === 1 && strings.length === 1) {
+      return (strings[0][1] as string).trim();
+    }
+    if (entries.length > 0) {
+      const rendered = entries
+        .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+        .sort()
+        .join(", ");
+      return `${message.type}(${rendered})`;
+    }
   }
-  if (
-    message.type === "run_script" &&
-    typeof message.payload === "object" &&
-    message.payload != null &&
-    "script" in message.payload &&
-    typeof message.payload.script === "string"
-  ) {
-    return message.payload.script.trim();
-  }
-  return JSON.stringify(message);
+  return message.type ? message.type : JSON.stringify(message);
 }
 
 function frameKey(frame: AgentSseFrame): string {
@@ -195,18 +192,6 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-function isOperatorCommandFrame(frame: AgentSseFrame): boolean {
-  return (
-    frame.event === "operator_command_started" ||
-    frame.event === "operator_command_completed" ||
-    frame.event === "operator_command_failed"
-  );
-}
-
-function isStopOperatorCommandName(name: string): boolean {
-  return name === "stop-agent" || name === "stop";
-}
-
 export class AgentRunController {
   #api: AgentApi;
   #initialized = false;
@@ -214,7 +199,6 @@ export class AgentRunController {
   frames = $state<AgentSseFrame[]>([]);
   observedSubagents = $state<ObservedSubagent[]>([]);
   agentInterfaces = $state<Record<string, AgentInterfaceFunction[]>>({});
-  operatorInterfaces = $state<Record<string, OperatorCommand[]>>({});
   closedWorkflowIds = $state<string[]>([]);
   viewIndex = $state(0);
   playing = $state(false);
@@ -235,7 +219,6 @@ export class AgentRunController {
   #sendVersion = 0;
   #streamAbort: AbortController | null = null;
   #interfaceRequests = new Set<string>();
-  #operatorInterfaceRequests = new Set<string>();
   #workflowResumeOffsets = new Map<string, number>();
   #workflowAttachAbort = new Map<string, AbortController>();
   #frameKeys = new Set<string>();
@@ -263,16 +246,16 @@ export class AgentRunController {
   );
   graphAgents = $derived(this.#graphAgents());
   graph = $derived(buildAgentTreeGraph(this.graphAgents));
-  operatorTargets = $derived(this.#operatorTargets());
   sessionClosed = $derived(
     this.session != null && this.#isWorkflowClosed(this.session.workflow_id)
   );
   replayLog = $derived(buildReplayLog(this.visibleReplayTimeline));
   fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
+  messageTargets = $derived(this.#messageTargets());
   chatTranscript = $derived(
     buildTranscript(
       this.replayTimeline
-        .filter((entry) => entry.role === "parent" || isOperatorCommandFrame(entry.frame))
+        .filter((entry) => entry.role === "parent")
         .map((entry) => entry.frame)
     )
   );
@@ -425,8 +408,6 @@ export class AgentRunController {
           frames: visibleSubagentFrames.get(agent.workflowId) ?? [],
           agentInterface:
             this.agentInterfaces[agent.workflowId] ?? agent.agentInterface ?? [],
-          operatorInterface:
-            this.operatorInterfaces[agent.workflowId] ?? agent.operatorInterface ?? [],
           stopped: agent.stopped || this.#isWorkflowClosed(agent.workflowId)
         }))
     ];
@@ -550,12 +531,7 @@ export class AgentRunController {
     this.#applyWorkflowExecutionState(state);
   }
 
-  #resumeOffsetForWorkflow(workflowId: string): number {
-    if (workflowId === this.session?.workflow_id) return this.lastResumeOffset;
-    return this.#workflowResumeOffsets.get(workflowId) ?? 0;
-  }
-
-  #operatorTargets(): OperatorTarget[] {
+  #messageTargets(): MessageTarget[] {
     const session = this.session;
     if (!session) return [];
     return [
@@ -563,59 +539,23 @@ export class AgentRunController {
         workflowId: session.workflow_id,
         role: "parent",
         label: this.runInfo.agentLabel,
-        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? [],
+        agentInterface: this.agentInterfaces[session.workflow_id] ?? [],
         closed: this.#isWorkflowClosed(session.workflow_id)
       },
-      ...this.observedSubagents
-        .map((agent) => ({
-          workflowId: agent.workflowId,
-          role: agent.role,
-          label: agent.label,
-          operatorInterface:
-            this.operatorInterfaces[agent.workflowId] ??
-            agent.operatorInterface ??
-            [],
-          closed: agent.stopped || this.#isWorkflowClosed(agent.workflowId)
-        }))
+      ...this.observedSubagents.map((agent) => ({
+        workflowId: agent.workflowId,
+        role: "subagent" as const,
+        label: agent.label,
+        agentInterface:
+          this.agentInterfaces[agent.workflowId] ?? agent.agentInterface ?? [],
+        closed: agent.stopped || this.#isWorkflowClosed(agent.workflowId)
+      }))
     ];
   }
 
-  operatorTargetForWorkflow(workflowId?: string | null): OperatorTarget | null {
-    const session = this.session;
-    if (!session) return null;
-    if (!workflowId || workflowId === session.workflow_id) {
-      return {
-        workflowId: session.workflow_id,
-        role: "parent",
-        label: this.runInfo.agentLabel,
-        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? [],
-        closed: this.#isWorkflowClosed(session.workflow_id)
-      };
-    }
-
-    const subagent = this.observedSubagents.find(
-      (agent) => agent.workflowId === workflowId
-    );
-    if (!subagent) {
-      return {
-        workflowId: session.workflow_id,
-        role: "parent",
-        label: this.runInfo.agentLabel,
-        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? [],
-        closed: this.#isWorkflowClosed(session.workflow_id)
-      };
-    }
-
-    return {
-      workflowId: subagent.workflowId,
-      role: "subagent",
-      label: subagent.label,
-      operatorInterface:
-        this.operatorInterfaces[subagent.workflowId] ??
-        subagent.operatorInterface ??
-        [],
-      closed: subagent.stopped || this.#isWorkflowClosed(subagent.workflowId)
-    };
+  #resumeOffsetForWorkflow(workflowId: string): number {
+    if (workflowId === this.session?.workflow_id) return this.lastResumeOffset;
+    return this.#workflowResumeOffsets.get(workflowId) ?? 0;
   }
 
   #subagentLabel(agentKey: string, subagentId: string): string {
@@ -644,8 +584,6 @@ export class AgentRunController {
       label: this.#subagentLabel(agentKey, data.subagent_id),
       agentInterface:
         this.agentInterfaces[data.workflow_id] ?? existing?.agentInterface,
-      operatorInterface:
-        this.operatorInterfaces[data.workflow_id] ?? existing?.operatorInterface,
       targetTurn:
         data.targetTurn == null
           ? existing?.targetTurn ?? null
@@ -678,32 +616,6 @@ export class AgentRunController {
       // Agent-interface discovery is auxiliary UI metadata; streaming remains authoritative.
     } finally {
       this.#interfaceRequests.delete(workflowId);
-    }
-  }
-
-  async #fetchOperatorInterface(workflowId: string): Promise<void> {
-    if (
-      this.operatorInterfaces[workflowId] ||
-      this.#operatorInterfaceRequests.has(workflowId)
-    ) {
-      return;
-    }
-    this.#operatorInterfaceRequests.add(workflowId);
-    try {
-      const operatorInterface = await this.#api.operatorInterface(workflowId);
-      this.operatorInterfaces = {
-        ...this.operatorInterfaces,
-        [workflowId]: operatorInterface
-      };
-      if (this.observedSubagents.some((agent) => agent.workflowId === workflowId)) {
-        this.observedSubagents = this.observedSubagents.map((agent) =>
-          agent.workflowId === workflowId ? { ...agent, operatorInterface } : agent
-        );
-      }
-    } catch {
-      // Operator-interface discovery is auxiliary UI metadata; streaming remains authoritative.
-    } finally {
-      this.#operatorInterfaceRequests.delete(workflowId);
     }
   }
 
@@ -743,7 +655,6 @@ export class AgentRunController {
       }
       writeStoredActiveSessionId(this.session.workflow_id);
       void this.#fetchAgentInterface(this.session.workflow_id);
-      void this.#fetchOperatorInterface(this.session.workflow_id);
       this.#hydrateCachedFrames(this.session.workflow_id);
       await this.#refreshWorkflowExecutionState(this.session.workflow_id);
 
@@ -808,7 +719,6 @@ export class AgentRunController {
       this.session = session;
       writeStoredActiveSessionId(session.workflow_id);
       void this.#fetchAgentInterface(session.workflow_id);
-      void this.#fetchOperatorInterface(session.workflow_id);
       await this.#refreshWorkflowExecutionState(session.workflow_id);
       if (!this.#isCurrentConnection(connectionVersion)) return;
       if (this.#isWorkflowClosed(session.workflow_id)) return;
@@ -844,7 +754,6 @@ export class AgentRunController {
     this.session = session;
     writeStoredActiveSessionId(session.workflow_id);
     void this.#fetchAgentInterface(session.workflow_id);
-    void this.#fetchOperatorInterface(session.workflow_id);
     this.#hydrateCachedFrames(session.workflow_id);
 
     try {
@@ -925,24 +834,40 @@ export class AgentRunController {
     }
   }
 
-  async sendMessage(message: AgentInboundMessage): Promise<void> {
+  async sendMessage(
+    message: AgentInboundMessage,
+    workflowId?: string | null
+  ): Promise<void> {
     const displayText = displayTextForMessage(message);
     if (!displayText) return;
     await this.initialize();
     const session = this.session;
     if (!session) return;
+
+    // A message can target the parent OR one of its live subagents — a subagent is addressed
+    // at its own workflow_id (which the parent advertises on `subagent_started`). There is no
+    // separate operator channel to reach a child with any more: it is the same front door.
+    const targetWorkflowId =
+      workflowId && this.#isKnownWorkflowId(workflowId)
+        ? workflowId
+        : session.workflow_id;
+    const targetsParent = targetWorkflowId === session.workflow_id;
+
     try {
-      await this.#refreshWorkflowExecutionState(session.workflow_id);
+      await this.#refreshWorkflowExecutionState(targetWorkflowId);
     } catch (error) {
       this.connectionError =
-        error instanceof Error
-          ? error.message
-          : "Failed to check workflow status.";
+        error instanceof Error ? error.message : "Failed to check workflow status.";
       return;
     }
-    if (this.#isWorkflowClosed(session.workflow_id)) {
+    if (this.#isWorkflowClosed(targetWorkflowId)) {
       this.connectionError = null;
-      this.sending = false;
+      if (targetsParent) this.sending = false;
+      return;
+    }
+
+    if (!targetsParent) {
+      await this.#sendToSubagent(targetWorkflowId, message);
       return;
     }
 
@@ -956,17 +881,33 @@ export class AgentRunController {
 
     const submitted = this.#submitQueue.then(async () => {
       if (this.session?.workflow_id !== session.workflow_id) return;
-      await this.#api.submitMessage({
+      return await this.#api.submitMessage({
         session_id: session.workflow_id,
         message: this.#messageForSession(message, session),
         expected_turn: expectedTurn
       });
     });
-    this.#submitQueue = submitted.catch(() => {});
+    // Keep the queue a bare Promise<void>: it only serializes submits, and must not carry
+    // the reply (or a rejection) forward to the next sender.
+    this.#submitQueue = submitted.then(
+      () => {},
+      () => {}
+    );
 
     try {
-      await submitted;
+      const reply = await submitted;
       if (this.session?.workflow_id !== session.workflow_id) return;
+      // RECONCILE FROM THE REPLY — the optimistic `+= 1` above is only a provisional guess,
+      // and it is WRONG whenever the message joined an already-open turn: a `mid_turn:
+      // "accept"` handler shares that turn rather than taking a slot, so the agent's turn
+      // counter does not advance and the next message must still claim the same number.
+      // Blindly incrementing per *send* over-counts and wedges every later send with
+      // StaleTurn, which the stream reconciliation cannot repair (a join publishes under the
+      // joined turn's lower number, so the `>=` check below never fires).
+      //
+      // `reply.turn_number` is authoritative in all three cases: the joined turn for a join,
+      // and the reserved slot for a queued or idle send.
+      if (reply) this.expectedTurn = reply.turn_number + 1;
       void this.attach(this.lastResumeOffset, { clearSendingOnIdle: true }).catch(
         (error: unknown) => {
           if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
@@ -988,70 +929,71 @@ export class AgentRunController {
     }
   }
 
-  async executeOperatorCommand(
-    name: string,
-    arg?: string | null,
-    workflowId?: string | null
-  ): Promise<OperatorCommandResponse> {
+  /**
+   * Send to a live subagent at its own workflow_id, then re-attach that child's stream so
+   * its resulting turn events actually surface (the parent attach does not carry them).
+   *
+   * `expected_turn` is read from the CHILD's status rather than tracked optimistically: the
+   * parent has usually already driven turns on it, so the UI has no local count to trust.
+   */
+  async #sendToSubagent(
+    workflowId: string,
+    message: AgentInboundMessage
+  ): Promise<void> {
+    this.connectionError = null;
+    try {
+      const status = await this.#api.agentStatus(workflowId);
+      await this.#api.submitMessage({
+        session_id: workflowId,
+        message,
+        expected_turn: status.current_turn + status.pending_turns.length + 1
+      });
+    } catch (error) {
+      this.connectionError =
+        error instanceof Error ? error.message : "Failed to send message to subagent.";
+      return;
+    }
+    void this.#attachWorkflow(
+      workflowId,
+      this.#resumeOffsetForWorkflow(workflowId)
+    ).catch((error: unknown) => {
+      if (!isAbortError(error)) {
+        this.connectionError =
+          error instanceof Error
+            ? error.message
+            : "Failed to stream subagent events.";
+      }
+    });
+  }
+
+  /**
+   * Stop an agent (the parent, or a named subagent) via the harness `close` signal.
+   *
+   * A first-class control-plane action, not a message: it works on any agent whatever it
+   * accepts, and it is what a human uses instead of hoping the agent happens to declare a
+   * stop handler.
+   */
+  async stopAgent(workflowId?: string | null): Promise<void> {
     await this.initialize();
     const session = this.session;
-    if (!session) throw new Error("No active session.");
+    if (!session) return;
     const targetWorkflowId =
       workflowId && this.#isKnownWorkflowId(workflowId)
         ? workflowId
         : session.workflow_id;
-
     this.connectionError = null;
     try {
-      if (!isStopOperatorCommandName(name)) {
-        await this.#refreshWorkflowExecutionState(targetWorkflowId);
-        if (this.#isWorkflowClosed(targetWorkflowId)) {
-          return { text: "Agent is closed." };
-        }
-      }
-      const result = await this.#api.executeOperatorCommand({
-        session_id: targetWorkflowId,
-        name,
-        arg: arg ?? null
-      });
-      if (isStopOperatorCommandName(name)) {
-        this.#markWorkflowClosed(targetWorkflowId);
-        if (targetWorkflowId === session.workflow_id) {
-          this.sending = false;
-        } else {
-          this.#markObservedSubagentStopped(targetWorkflowId);
-        }
-        return result;
-      }
-      if (targetWorkflowId === session.workflow_id) {
-        const shouldClearSendingOnIdle = this.sending;
-        void this.attach(this.lastResumeOffset, {
-          clearSendingOnIdle: shouldClearSendingOnIdle
-        }).catch((error: unknown) => {
-          if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
-            this.connectionError =
-              error instanceof Error ? error.message : "Failed to stream operator events.";
-            if (shouldClearSendingOnIdle) this.sending = false;
-          }
-        });
-      } else {
-        void this.#attachWorkflow(
-          targetWorkflowId,
-          this.#resumeOffsetForWorkflow(targetWorkflowId)
-        ).catch((error: unknown) => {
-          if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
-            this.connectionError =
-              error instanceof Error
-                ? error.message
-                : "Failed to stream operator events.";
-          }
-        });
-      }
-      return result;
+      await this.#api.closeSession(targetWorkflowId);
     } catch (error) {
       this.connectionError =
-        error instanceof Error ? error.message : "Failed to execute operator command.";
-      throw error;
+        error instanceof Error ? error.message : "Failed to stop the agent.";
+      return;
+    }
+    this.#markWorkflowClosed(targetWorkflowId);
+    if (targetWorkflowId === session.workflow_id) {
+      this.sending = false;
+    } else {
+      this.#markObservedSubagentStopped(targetWorkflowId);
     }
   }
 
@@ -1195,16 +1137,6 @@ export class AgentRunController {
     if (isRootFrame && frame.event === "turn_started" && frame.data.turn_number === 1) {
       this.#recordInitialUserMessage(renderUserMessage(frame.data.user_message));
     }
-    if (
-      publisherWorkflowId &&
-      frame.event === "operator_command_completed" &&
-      "type" in frame.data &&
-      isStopOperatorCommandName(frame.data.command_name)
-    ) {
-      this.#markWorkflowClosed(publisherWorkflowId);
-      if (!isRootFrame) this.#markObservedSubagentStopped(publisherWorkflowId);
-      if (isRootFrame) this.sending = false;
-    }
     this.#handleSubagentEvent(frame, publisherWorkflowId);
     if (options.persist !== false) this.#scheduleFrameCacheWrite();
   }
@@ -1225,7 +1157,6 @@ export class AgentRunController {
     if (frame.event === "subagent_started") {
       this.#upsertSubagent(frame.data, parentWorkflowId);
       void this.#fetchAgentInterface(frame.data.workflow_id);
-      void this.#fetchOperatorInterface(frame.data.workflow_id);
       return;
     }
 
@@ -1235,7 +1166,6 @@ export class AgentRunController {
         parentWorkflowId
       );
       void this.#fetchAgentInterface(frame.data.workflow_id);
-      void this.#fetchOperatorInterface(frame.data.workflow_id);
       return;
     }
 
@@ -1245,7 +1175,6 @@ export class AgentRunController {
         parentWorkflowId
       );
       void this.#fetchAgentInterface(frame.data.workflow_id);
-      void this.#fetchOperatorInterface(frame.data.workflow_id);
       return;
     }
 

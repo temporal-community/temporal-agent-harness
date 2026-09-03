@@ -66,17 +66,17 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.ai_sdks.google_genai_plugin import function_param, google_genai_client
     from pydantic import BaseModel
 
-    from temporal_agent_harness.harness import agent, slash_commands
+    from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
-        SlashCommand,
+        MidTurn,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
-    from .conversational_workflow import SUPPORTED_MODELS, model_slash_command
+    from .conversational_workflow import SUPPORTED_MODELS, SetModel
     from .workflow import TASK_QUEUE, MontyDynamicAgentWorkflow
 
 
@@ -126,10 +126,6 @@ class MontyChatSubagentWorkflow:
             # escalates to a human (same stance as the inline MontyChatAgent). The script's
             # host calls run inside the child, which has its own dangerously_skip_all policy.
             approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-            slash_commands=[
-                *slash_commands.default_commands(),
-                model_slash_command(self._set_model),
-            ],
         )
         self._model: str = DEFAULT_MODEL
         # Server-side conversation chaining id (Interactions API); updated each turn. Safe to
@@ -157,7 +153,7 @@ class MontyChatSubagentWorkflow:
         )
         await self._runner.run(self)
 
-    @agent.accepts
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def ask(self, message: TextMessage) -> TextReply:
         """Chat with the travel assistant. Describe the trip you want (flights, hotels,
         dates, traveler name) in plain text; the assistant converses, writes Python scripts,
@@ -166,18 +162,13 @@ class MontyChatSubagentWorkflow:
         reply_text = await self._handle_chat_turn(self._gemini, message.text)
         return TextReply(text=reply_text)
 
-    @agent.accepts
-    async def slash(self, command: SlashCommand) -> TextReply:
-        """Apply a slash command to this parent agent session."""
-        return TextReply(
-            text=(
-                f"Unknown Monty slash command: `{command.name}`. Try `/model`. "
-                "Harness commands include `/approvals`, `/allow-tools`, and `/status`."
-            )
-        )
-
-    def _set_model(self, model: str) -> None:
-        self._model = model
+    # See the inline MontyChatAgent's set_model for why this is ACCEPT + not model_callable.
+    @agent.accepts(mid_turn=MidTurn.ACCEPT, model_callable=False)
+    async def set_model(self, message: SetModel) -> TextReply:
+        """Set the model this session uses for subsequent turns. Takes effect on the next
+        model call, so a turn already in flight finishes on the model it started with."""
+        self._model = message.model
+        return TextReply(text=f"Model set to **{message.model}**.")
 
     # ------------------------------------------------------------------ chat loop
 

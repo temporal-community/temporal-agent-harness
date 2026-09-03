@@ -26,7 +26,12 @@ from temporalio.contrib.workflow_streams import WorkflowStream
 
 with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness import agent
-    from temporal_agent_harness.harness.agent_protocol import AgentConfig, TextReply, ToolApprovalPolicy
+    from temporal_agent_harness.harness.agent_protocol import (
+        AgentConfig,
+        MidTurn,
+        TextReply,
+        ToolApprovalPolicy,
+    )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
     from . import activities
@@ -69,7 +74,10 @@ class MontyDynamicAgentWorkflow:
     async def run(self, _config: AgentConfig) -> None:
         await self._runner.run(self)
 
-    @agent.accepts
+    # ENQUEUE: a parent drives this one turn at a time through the subagent FIFO gate, but a
+    # human can also address this agent directly at the same time — so a second message should
+    # wait its turn rather than be rejected.
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def run_script(self, message: RunScript) -> TextReply:
         r"""Execute a Python ``script`` in a sandbox over the travel host functions, returning its
         printed output + final value.

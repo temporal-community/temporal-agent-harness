@@ -57,49 +57,31 @@ export type CreateSessionResponse = Session;
 // Accepted inbound messages
 // ---------------------------------------------------------------------------
 
-export interface MessageTypeSchema {
-  name: string;
-  json_schema: JsonRecord;
-}
+/**
+ * What happens to a message that arrives while the agent already has a turn open.
+ * Declared per handler by the agent author, so the UI can tell the user whether sending
+ * will queue behind the current work, join it, or be refused.
+ */
+export type MidTurn = "enqueue" | "reject" | "accept";
 
-export interface AcceptedMessageTypesResponse {
-  accepts_text: boolean;
-  models: MessageTypeSchema[];
-}
-
+/**
+ * One `@agent.accepts` handler, as returned by the `agent_interface` discovery query.
+ *
+ * This is the ONLY thing the UI knows about an agent's inbound surface. Every handler the
+ * agent declares appears here, and `parameters` (a JSON Schema of the handler's input model)
+ * fully describes the payload — so the composer can render an arbitrary agent without any
+ * hardcoded handler name or field name.
+ *
+ * `model_callable` is the author's hint that a parent agent's model may drive this handler.
+ * It is advisory (a parent's own policy decides), and the UI shows it only as a label.
+ */
 export interface AgentInterfaceFunction {
   name: string;
   description: string;
   parameters: JsonRecord;
   output: JsonRecord;
-}
-
-export interface OperatorCommandArgument {
-  kind: "enum" | "text" | "tool_names";
-  required: boolean;
-  choices: string[];
-  placeholder?: string | null;
-  allow_multiple: boolean;
-}
-
-export interface OperatorCommand {
-  name: string;
-  payload_name: string;
-  label: string;
-  description: string;
-  aliases: string[];
-  argument?: OperatorCommandArgument | null;
-  source: "harness" | "agent";
-}
-
-export interface OperatorCommandRequest {
-  session_id: WorkflowId;
-  name: string;
-  arg?: string | null;
-}
-
-export interface OperatorCommandResponse {
-  text: string;
+  mid_turn: MidTurn;
+  model_callable: boolean;
 }
 
 export interface AgentMessageObject {
@@ -109,35 +91,14 @@ export interface AgentMessageObject {
 
 export type AgentInboundMessage = string | AgentMessageObject;
 
-export type SlashCommandModel =
-  | "gemini-3.5-flash"
-  | "gemini-3.1-flash-lite";
-
-export type SlashCommandApprovalMode = "strict" | "safe" | "skip";
-
-export type SlashCommandPayload =
-  | { name: "set-model"; arg?: SlashCommandModel }
-  | { name: "set-approvals"; arg?: SlashCommandApprovalMode }
-  | { name: "allow-tools"; arg?: string }
-  | { name: "allow-tool"; arg?: string }
-  | { name: "status" }
-  | { name: "stop-agent" }
-  | { name: "stop" }
-  | { name: string; arg?: string };
-
-export interface SlashCommandMessage extends AgentMessageObject {
-  type: "slash";
-  payload: SlashCommandPayload;
+/**
+ * A message addressed to a named handler. There are no per-agent message types in the UI:
+ * the handler name comes from `agent_interface` and the payload is built from its schema.
+ */
+export interface HandlerMessage extends AgentMessageObject {
+  type: string;
+  payload: JsonRecord;
 }
-
-export interface MontyRunScriptMessage extends AgentMessageObject {
-  type: "run_script";
-  payload: {
-    script: string;
-  };
-}
-
-export type KnownAgentMessage = SlashCommandMessage | MontyRunScriptMessage;
 
 // ---------------------------------------------------------------------------
 // Chat, attach, approval, and status endpoints
@@ -199,7 +160,8 @@ export interface AgentStatusResponse {
   current_turn: number;
   turn_active: boolean;
   pending_turns: PendingTurn[];
-  is_message_queuing_enabled: boolean;
+  /** Messages running inside the open turn — >1 when `accept` handlers have joined it. */
+  turn_participants: number;
   pending_approvals: PendingApproval[];
   subagents: SubagentInfo[];
   approval_policy: ToolApprovalPolicy;
@@ -223,9 +185,6 @@ export type AgentEventType =
   | "message_queued"
   | "turn_started"
   | "turn_end"
-  | "operator_command_started"
-  | "operator_command_completed"
-  | "operator_command_failed"
   | "model_interaction_started"
   | "model_interaction_ended"
   | "tool_requested"
@@ -269,27 +228,6 @@ export interface TurnStartedEvent extends AgentEventDataBase<"turn_started"> {
 }
 
 export interface TurnEndEvent extends AgentEventDataBase<"turn_end"> {}
-
-export interface OperatorCommandEventDataBase<TType extends AgentEventType>
-  extends AgentEventDataBase<TType> {
-  operator_command_id: string;
-  command_name: string;
-  command_label: string;
-  arg: string | null;
-}
-
-export interface OperatorCommandStartedEvent
-  extends OperatorCommandEventDataBase<"operator_command_started"> {}
-
-export interface OperatorCommandCompletedEvent
-  extends OperatorCommandEventDataBase<"operator_command_completed"> {
-  text: string;
-}
-
-export interface OperatorCommandFailedEvent
-  extends OperatorCommandEventDataBase<"operator_command_failed"> {
-  message: string;
-}
 
 export interface TokenUsage {
   input_tokens?: number | null;
@@ -457,9 +395,6 @@ export interface AgentSseEventMap {
   message_queued: MessageQueuedEvent;
   turn_started: TurnStartedEvent;
   turn_end: TurnEndEvent;
-  operator_command_started: OperatorCommandStartedEvent;
-  operator_command_completed: OperatorCommandCompletedEvent;
-  operator_command_failed: OperatorCommandFailedEvent;
   model_interaction_started: ModelInteractionStartedEvent;
   model_interaction_ended: ModelInteractionEndedEvent;
   tool_requested: ToolRequestedEvent;

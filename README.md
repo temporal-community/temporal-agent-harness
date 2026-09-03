@@ -208,8 +208,8 @@ from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.workflow import ActivityConfig
 
-from temporal_agent_harness.harness import AgentWorkflowRunner, agent, slash_commands
-from temporal_agent_harness.harness.agent_protocol import AgentConfig, ToolApprovalPolicy
+from temporal_agent_harness.harness import AgentWorkflowRunner, agent
+from temporal_agent_harness.harness.agent_protocol import AgentConfig, MidTurn, ToolApprovalPolicy
 
 
 # A durable, activity-backed tool: runs as a retried, observable Temporal activity and
@@ -242,7 +242,6 @@ class TravelAgent:
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
-            slash_commands=slash_commands.default_commands(),
         )
 
     @workflow.run
@@ -319,63 +318,99 @@ worker = Worker(
 See [`examples/monty`](examples/monty) for three agents all built on Code Mode: a no-model script
 runner, a conversational agent that writes its own scripts, and a subagent-driven variant.
 
-## Slash Commands
+## Accepted Messages
 
-Agents can expose human/operator slash commands through a small library of
-workflow-safe command definitions. A command bundles the UI metadata returned by
-the `operator_interface` query with the deterministic handler that runs inside
-the workflow.
+An agent's inbound surface is just its `@agent.accepts` handlers. There is no
+separate command channel, no reserved message type, and nothing the harness
+knows how to do on an agent's behalf — a control action is an ordinary handler
+with a typed input model:
 
-If `slash_commands` is omitted, `AgentWorkflowRunner` enables the packaged
-defaults:
+```python
+class SetModel(BaseModel):
+    """Which model this session should use for subsequent turns."""
 
-| Command | Effect |
+    # A Literal, not a bare str: pydantic enforces it at the update boundary AND emits it as
+    # an enum in the handler's `parameters` schema, so a generic client renders a dropdown.
+    model: Literal["gemini-3.5-flash", "gemini-3.1-flash-lite"]
+
+
+@agent.defn
+class TravelAgent:
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
+    async def plan(self, msg: PlanTrip) -> Itinerary:
+        """Plan a trip."""
+        ...
+
+    @agent.accepts(mid_turn=MidTurn.ACCEPT, model_callable=False)
+    async def set_model(self, msg: SetModel) -> TextReply:
+        """Set the model this session uses for subsequent turns."""
+        self._model = msg.model
+        return TextReply(text=f"Model set to {msg.model}.")
+```
+
+Each handler declares two things:
+
+**`mid_turn`** — what happens if the message arrives while a turn is already
+open. It is per handler because "a config change must work on a busy agent" and
+"a user message should queue" are the same decision made oppositely, and no
+single answer serves both. All three modes behave identically when the agent is
+idle.
+
+| Mode | Mid-turn arrival |
 | --- | --- |
-| `/approvals strict\|safe\|skip` | Change the live tool-approval policy. |
-| `/allow-tools tool_name` | Auto-approve one or more named tools for this session. |
-| `/status` | Show the current harness status. |
-| `/stop` | Stop the agent workflow. |
+| `MidTurn.ENQUEUE` | Queues behind the open turn; runs as its own turn later. |
+| `MidTurn.REJECT` | Fails the update with a typed `MidTurnRejected` error. |
+| `MidTurn.ACCEPT` | **Joins** the open turn and runs concurrently with it. |
 
-Configure exactly the packaged commands you want in one place:
+`REJECT` is the default: it is the only mode that cannot silently surprise you.
+Queuing delays work you thought you had dispatched, and joining opts the handler
+into concurrency with the running turn — an `ACCEPT` handler runs alongside that
+turn *and* alongside other `ACCEPT` handlers, so any agent state it mutates is
+shared and a read-modify-write across an `await` can lose an update.
+
+Because a turn is now the interval the agent is non-idle rather than the span of
+one message, `turn_end` fires when the turn's **last** participant finishes —
+making it a true quiescence signal a client can disconnect on.
+
+**`model_callable`** (default `True`) — a hint that a parent agent's model may
+drive this handler. Only a hint: the parent's `SubagentToolPolicy` decides, and
+may honor it, narrow it, or ignore it:
 
 ```python
-from temporal_agent_harness.harness import slash_commands
-
-self._runner = AgentWorkflowRunner(
-    config,
-    stream=WorkflowStream(),
-    approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-    slash_commands=slash_commands.commands("approvals", "status", "stop"),
+agent.subagent_toolset(
+    ChildAgent, key="researcher", task_queue=...,
+    tools=agent.SubagentToolPolicy.allow_model_callable(),   # default: honor the hints
+    # tools=agent.SubagentToolPolicy.allow_only("ask"),      # narrower than the hints
+    # tools=agent.SubagentToolPolicy.dangerously_allow_all() # ignore them entirely
 )
 ```
 
-Pass an empty list to disable packaged slash commands:
+A handler that wants to know whether it opened its turn or joined one asks for
+the context, which the workflow supplies and the model never sees:
 
 ```python
-slash_commands=[]
+@agent.accepts(mid_turn=MidTurn.ACCEPT)
+async def user_text(self, msg: UserText, ctx: agent.Injected[MessageContext]) -> Reply:
+    if ctx.joined_turn:
+        self._steering.append(msg.text)   # drained by the running model loop
+    else:
+        return await self._prompt(msg.text)
 ```
 
-Custom commands use the same registry. For example, a model selector can share
-one implementation across the first-class operator update path and the normal
-`slash` turn path:
+### Discovery
 
-```python
-SUPPORTED_MODELS = ("gemini-3.5-flash", "gemini-3.1-flash-lite")
+The `agent_interface` query returns **every** handler — name, docstring, the
+input/output JSON schemas, `mid_turn`, and `model_callable`. Nothing is hidden
+from it: what a parent model can reach is decided by which tools its toolset was
+built with, not by what a query admits to, so filtering there would only be
+security-by-obscurity while costing a debugging UI the ability to see an agent's
+full surface.
 
-self._runner = AgentWorkflowRunner(
-    config,
-    stream=WorkflowStream(),
-    approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-    slash_commands=[
-        *slash_commands.default_commands(),
-        slash_commands.model_selector(
-            choices=SUPPORTED_MODELS,
-            set_model=lambda model: setattr(self, "_model", model),
-            description="Set the model for this session.",
-        ),
-    ],
-)
-```
+That is enough for a client to drive an arbitrary agent with no hardcoded
+handler names — which is exactly what the packaged UI does. Human/operator
+actions that are *not* messages stay first-class and separate: approve or deny a
+gated tool call (`tool_approval`, whose `remember` flag also relaxes the live
+policy), read state (`agent_status`), and stop the agent (the `close` signal).
 
 ## Requirements
 
