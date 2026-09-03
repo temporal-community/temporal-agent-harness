@@ -458,7 +458,10 @@ export class AgentRunController {
       visibleSubagentWorkflowIds.add(workflowId);
     }
     for (const entry of this.visibleReplayTimeline) {
-      if (entry.role !== "subagent") continue;
+      // The one consumer that wants "announced yet?" rather than "is this the
+      // root?", and it reads that off the field it then groups by: a pane can
+      // only exist for a subagent whose workflow id we have been told.
+      if (entry.workflowId === session.workflow_id) continue;
       visibleSubagentWorkflowIds.add(entry.workflowId);
       const frames = visibleSubagentFrames.get(entry.workflowId) ?? [];
       frames.push(entry.frame);

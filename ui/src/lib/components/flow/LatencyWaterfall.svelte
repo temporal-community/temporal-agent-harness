@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Cpu, ShieldCheck, Wrench } from "@lucide/svelte";
   import { formatDuration } from "$lib/state/replayLog";
+  import { niceTimeTicks } from "$lib/state/timeTicks";
   import {
     aggregateSpans,
     type SpanKind,
@@ -24,8 +25,20 @@
     timeline.turns.reduce((sum, turn) => sum + turn.subagentTurns.length, 0)
   );
 
+  /* The shared horizontal scale every track is drawn against. */
+  const scale = $derived(Math.max(timeline.maxTurnDuration, 1));
+
+  /* The panel's header has always claimed the bars share one time scale; these are the
+     ticks that let a duration actually be read off it. Evenly spaced by construction,
+     which is what lets the track guides be a single repeating gradient. */
+  const ticks = $derived(niceTimeTicks(scale, 6));
+
+  /* A bar narrower than this cannot hold even a couple of characters, and CSS clipping
+     turns its label into a one-character stub. Bare is more legible; the title still
+     answers for it. */
+  const MIN_LABEL_WIDTH_PCT = 7;
+
   function pct(span: TimelineSpan, turnStart: number): { left: number; width: number } {
-    const scale = Math.max(timeline.maxTurnDuration, 1);
     const left = Math.min(99.5, Math.max(0, ((span.startTs - turnStart) / scale) * 100));
     const rawWidth = (span.durationSeconds / scale) * 100;
     return {
@@ -48,9 +61,15 @@
     return "past";
   }
 
-  function barClass(span: TimelineSpan): string {
+  function barClass(span: TimelineSpan, width: number): string {
     const tone = span.tone === "error" ? "error" : span.kind;
-    return ["bar", tone, spanState(span), span.ongoing ? "ongoing" : ""]
+    return [
+      "bar",
+      tone,
+      spanState(span),
+      span.ongoing ? "ongoing" : "",
+      width < MIN_LABEL_WIDTH_PCT ? "unlabelled" : ""
+    ]
       .filter(Boolean)
       .join(" ");
   }
@@ -80,7 +99,7 @@
       </p>
     </div>
     <div class="rollup" aria-label="Time by step kind">
-      {#each aggregates as agg}
+      {#each aggregates as agg (agg.kind)}
         <div class={`roll ${agg.kind}`}>
           <span class="roll-icon" aria-hidden="true">
             {#if agg.kind === "model"}
@@ -105,11 +124,22 @@
     </div>
   </header>
 
-  <div class="turns">
+  <div class="turns" style={`--tick-gap: ${100 / Math.max(ticks.length - 1, 1)}%`}>
     {#if timeline.turns.length === 0}
       <p class="empty">Step through the stream to chart per-step latency.</p>
     {:else}
-      {#each timeline.turns as turn}
+      <div class="turn-row axis-row">
+        <div class="axis-spacer"></div>
+        <div class="axis" role="presentation">
+          {#each ticks as tick, i (tick)}
+            <span class="tick" style={`left: ${(tick / scale) * 100}%`} data-last={i === ticks.length - 1 ? "true" : undefined}>
+              {formatDuration(tick)}
+            </span>
+          {/each}
+        </div>
+      </div>
+
+      {#each timeline.turns as turn (turn.turnNumber)}
         <article class="turn-row">
           <div class="turn-label">
             <p class="turn-no">Turn {turn.turnNumber}</p>
@@ -117,10 +147,10 @@
           </div>
           <div class="turn-body">
             <div class="track parent-track" style={`height: ${trackHeight(turn.laneCount)}px`}>
-              {#each turn.spans as span}
+              {#each turn.spans as span (span.id)}
                 {@const box = pct(span, turn.startTs)}
                 <button
-                  class={barClass(span)}
+                  class={barClass(span, box.width)}
                   style={`left: ${box.left}%; width: ${box.width}%; top: ${laneTop(span)}px`}
                   title={spanTitle(span)}
                   onclick={() => onScrub(span.startIndex)}
@@ -135,7 +165,7 @@
 
             {#if turn.subagentTurns.length > 0}
               <div class="subagent-stack" aria-label={`Subagent latency for turn ${turn.turnNumber}`}>
-                {#each turn.subagentTurns as subagent}
+                {#each turn.subagentTurns as subagent (`${subagent.workflowId}:${subagent.turnNumber}`)}
                   <div class="subagent-row">
                     <div class="subagent-label">
                       <span>Subagent</span>
@@ -145,10 +175,10 @@
                       </small>
                     </div>
                     <div class="track subagent-track" style={`height: ${trackHeight(subagent.laneCount)}px`}>
-                      {#each subagent.spans as span}
+                      {#each subagent.spans as span (span.id)}
                         {@const box = pct(span, turn.startTs)}
                         <button
-                          class={barClass(span)}
+                          class={barClass(span, box.width)}
                           style={`left: ${box.left}%; width: ${box.width}%; top: ${laneTop(span)}px`}
                           title={`${subagent.label} · ${spanTitle(span)}`}
                           onclick={() => onScrub(span.startIndex)}
@@ -258,6 +288,49 @@
     border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   }
 
+  /* The ruler carries .turn-row so it inherits whatever column layout the host has
+     imposed on the rows it measures — the right pane collapses them to one column, and
+     an axis that did not follow would point at the wrong place. The spacer occupies the
+     label column when there are two, and collapses to nothing when there is one. */
+  .turn-row.axis-row {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    align-items: end;
+    padding: 0 0 4px;
+    border-bottom: none;
+    background: var(--surface-0);
+  }
+
+  .axis-spacer {
+    height: 0;
+  }
+
+  .axis {
+    position: relative;
+    height: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tick {
+    position: absolute;
+    bottom: 2px;
+    color: var(--text-3);
+    font-size: var(--font-xs);
+    font-variant-numeric: tabular-nums;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+
+  /* The end labels would otherwise hang outside the track they belong to. */
+  .tick:first-child {
+    transform: none;
+  }
+
+  .tick[data-last="true"] {
+    transform: translateX(-100%);
+  }
+
   .turn-label {
     display: grid;
     grid-template-columns: auto auto;
@@ -294,6 +367,13 @@
     min-height: 30px;
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+    /* Guides under the bars, one gradient rather than a node per line. The ticks are
+       evenly spaced, so a repeat is exact. */
+    background-image: repeating-linear-gradient(
+      to right,
+      color-mix(in srgb, var(--border) 55%, transparent) 0 1px,
+      transparent 1px var(--tick-gap)
+    );
   }
 
   .turn-body {
@@ -383,6 +463,15 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Too narrow to read: drop the text rather than clip it to a stub. */
+  .bar.unlabelled {
+    padding: 0;
+  }
+
+  .bar.unlabelled .bar-text {
+    display: none;
   }
 
   .bar.model {

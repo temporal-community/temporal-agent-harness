@@ -5,6 +5,7 @@
  * as the root's.
  */
 import type { AgentSseFrame, Session } from "$lib/api/types";
+import { isRootAgentEvent } from "$lib/state/agentIdentity";
 import type { StepTimelineFrame } from "./stepTimeline";
 
 export type ReplayTimelineRole = "parent" | "subagent";
@@ -67,7 +68,14 @@ export function buildReplayTimeline(
         : parentTurnBySubagentTurn.get(
             `${frame.data.agent_id}:${frame.data.turn_number}`
           );
-    const role: ReplayTimelineRole = observedSubagent == null ? "parent" : "subagent";
+    /* Asked of the `agent_id`, not of `observedSubagent`: a subagent is only
+       observed once its `subagent_started` has arrived, and that frame is
+       published on the PARENT's log, so a stream opened past its offset never
+       carries it. Inferring rootness from that absence attributed every
+       unannounced child's frames to the root. */
+    const role: ReplayTimelineRole = isRootAgentEvent(frame.data)
+      ? "parent"
+      : "subagent";
     timeline.push({
       workflowId: observedSubagent?.workflowId ?? session.workflow_id,
       role,
