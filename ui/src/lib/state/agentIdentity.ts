@@ -17,13 +17,18 @@
  * `agent_id`".
  *
  * Asked as "does it END in a fresh segment" rather than "does it contain a `-`
- * anywhere", because a `-` alone is not the thing that makes an id a child: a
- * label-style root id like `qa-root` carries one and is still the root of its
- * tree, and reading it as a child drops every one of its frames — which
- * collapses `turnMarkers` to nothing and leaves the replay bar with no chapters
- * at all. Matching the documented segment shape keeps the whole chain right:
+ * anywhere", because a `-` alone is not the thing that makes an id a child, and
+ * matching the documented segment shape is what keeps the whole chain right:
  * `de539b` is a root, `de539b-093b70` its child, and `de539b-093b70-a1b2c3` no
  * more the root than its parent is.
+ *
+ * Which cuts both ways, and no predicate can rescue an id that ignores the
+ * shape: a label-style `qa-root-search` ends in six characters that are not six
+ * hex digits, so it reads as a root and its own turn 1 lands on the replay bar
+ * beside the real root's — the each_key_duplicate the lane throws when two
+ * chapters share a turn number. It stands to `qa-root` exactly as `qa-root`
+ * stands to `qa`, so any rule calling one a root must call the other one too.
+ * Fixtures conform to `AgentId` instead; check-turn-markers.mjs asserts it.
  *
  * Worth asking this way round rather than "is this a subagent I have heard of":
  * a subagent is only KNOWN once its `subagent_started` has arrived, and that is

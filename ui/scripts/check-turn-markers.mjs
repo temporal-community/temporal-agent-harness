@@ -14,6 +14,7 @@ import "./libAlias.mjs";
 
 const { buildTranscript } = await import("../src/lib/state/transcript.ts");
 const { buildReplayTimeline } = await import("../src/lib/state/replayTimeline.ts");
+const { realisticQaScenario } = await import("../src/lib/mock/scenarios.ts");
 
 const session = {
   workflow_id: "wf-root",
@@ -220,6 +221,48 @@ const unannouncedChildren = [
   const operatorItems = transcript.filter((item) => item.kind === "operator");
   assert.equal(operatorItems.length, 1, "the operator's command survives the root-only filter");
   assert.equal(operatorItems[0].text, "Researcher stopped.", "with its reply");
+}
+
+// --- the fixture every other check reads -----------------------------------
+// The sections above prove the rule on fixtures written here, which is the wrong place to prove it
+// about `realisticQaScenario`: check-turn-navigation.mjs and check-replay-hotkeys.mjs both drive
+// the whole transport off that scenario's markers and assert only that there are `>= 3` of them,
+// so a duplicated chapter in the fixture satisfies both while the lane it feeds throws
+// each_key_duplicate on every flush. It happened: the mock's ids were the label-style `qa-root`
+// and `qa-root-search`, `search` is six characters that are not six hex digits, so the child read
+// as a second root and its turn 1 landed on the bar beside the root's — markers came out
+// `1,2,3,4,5,6,7,1,8,9,10,11,12,13`.
+//
+// So the property is asserted here, once, on the shared fixture rather than in either consumer:
+// the keys the lane will use must be strictly increasing, which is uniqueness plus the order a
+// reader scrubs in. Uniqueness alone would pass a bar whose chapters run backwards.
+{
+  const markers = turnMarkersOf(replayTimeline(realisticQaScenario.frames));
+  const keys = keysOf(markers);
+
+  assert.ok(keys.length >= 3, `the scenario must carry turns at all (saw ${keys.length})`);
+  assert.ok(
+    unique(keys),
+    `realisticQaScenario produces a duplicate turn marker — the each_key_duplicate case, in the ` +
+      `fixture the transport checks read: ${keys.join(",")}. A subagent's turn is being credited ` +
+      `to the root, which means an agent_id in the mock does not carry the documented trailing ` +
+      `hex segment (AgentId in harness/agent_protocol/agent_interface.py). Conform the id; do ` +
+      `not loosen isRootAgentEvent to admit it.`
+  );
+  assert.deepEqual(
+    keys,
+    [...keys].sort((a, b) => a - b),
+    `the root's turn numbers must climb with the timeline, since the replay bar lays its chapters ` +
+      `out in frame order: ${keys.join(",")}`
+  );
+  assert.deepEqual(
+    markers.map((marker) => marker.index),
+    [...markers.map((marker) => marker.index)].sort((a, b) => a - b),
+    "and each chapter must sit later in the timeline than the one before it"
+  );
+  console.log(
+    `  realisticQaScenario: ${keys.length} chapters, strictly increasing (${keys.join(",")})`
+  );
 }
 
 console.log("check-turn-markers: root-only attribution holds for the replay bar and the chat");

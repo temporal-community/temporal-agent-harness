@@ -46,8 +46,15 @@ const sessions: Session[] = [
   }
 ];
 
-const rootAgentId = "qa-root";
-const searchSubagentId = "qa-root-search";
+/* Shaped like a real one: `AgentId` (harness/agent_protocol/agent_interface.py) constrains an
+   agent id to `AGENT_ID_LENGTH`-wide lowercase-hex segments joined by `-`, and a subagent's is its
+   parent's plus one fresh segment. A label-style id here would be readable and wrong — the client
+   reads rootness off that trailing segment, so `qa-root-search` classified as a SECOND root and
+   put its own turn 1 on the replay bar next to the root's, which is the each_key_duplicate
+   check-turn-markers.mjs exists to catch. The human-readable name of this subagent is its
+   `agent_key`, which is where a reader should be looking for it anyway. */
+const rootAgentId = "7f3c1a";
+const searchSubagentId = `${rootAgentId}-b52e04`;
 const searchSubagentWorkflowId = "agent-session-mock-qa-search";
 let resumeOffset = 0;
 
