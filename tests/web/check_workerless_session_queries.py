@@ -14,7 +14,27 @@
 #
 # Teeth: delete `await _require_worker(session_id)` from the /api/agent-interface,
 # /api/status or /api/operator-interface handler in temporal_agent_harness/web/app.py and
-# the first assertion fails, reporting the queries that were sent.
+# the first assertion fails, reporting the queries that were sent. It also fails against a
+# fix that returns the right 503, the right error code and a Retry-After while still sending
+# the query — which is the whole reason it counts RPCs instead of asserting a status code.
+#
+# Measured on the dev stack this was written against, with three of seven task queues
+# unstaffed and two backends run side by side on the same Temporal (one at integration/console,
+# one with this fix) so the numbers differ only by the fix:
+#
+#     service_errors_resource_exhausted{operation="QueryWorkflow",
+#                                       resource_exhausted_cause="BusyWorkflow"}
+#
+#     unstaffed, unfixed    84 concurrent requests  ->  +260   (each request hung ~30s)
+#     unstaffed, fixed     216 concurrent requests  ->    +0   (whole batch under 1s)
+#     unstaffed, fixed     7 minutes of a console-shaped 10s poll  ->  +0
+#
+# Two details that matter if this is ever re-measured. The counter only moves under
+# CONCURRENT queries to one workflow — the buffer has to overflow — so a strictly sequential
+# poller reproduces nothing and proves nothing. And shutting down idle workers does not help:
+# across the reaping that preceded this work the counter went 281 -> 349 -> 621, climbing
+# throughout, which is what makes the pair above attributable to the fix rather than to a
+# quieter machine.
 
 from __future__ import annotations
 
