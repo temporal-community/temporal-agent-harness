@@ -89,14 +89,14 @@
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .icon-button:hover:not(:disabled) {
+    .icon-button:hover:not(:disabled, [aria-disabled="true"]) {
       color: var(--text-1);
       border-color: var(--border-strong);
       background: var(--surface-3);
     }
   }
 
-  .icon-button:active:not(:disabled) {
+  .icon-button:active:not(:disabled, [aria-disabled="true"]) {
     transform: scale(0.97);
   }
 
@@ -114,13 +114,23 @@
     border-color: color-mix(in srgb, var(--success) 45%, transparent);
   }
 
-  .icon-button:disabled {
+  /* `aria-disabled` reads as inert too — same dimming, same dead hover and
+     press, since the look IS the message and a control that says "nothing left
+     to do" must not also say "press me". It arrives through `rest`, so this
+     block is the whole of what the primitive owes it.
+     What the two states do not share is the tab order, which is the only reason
+     a caller would pick one over the other: `disabled` takes the button out of
+     it and takes the tip with it, so a control whose tip is worth reading in
+     exactly the state that stops it working wants `aria-disabled` instead.
+     One selector list rather than a second block, so they cannot drift. */
+  .icon-button:disabled,
+  .icon-button[aria-disabled="true"] {
     opacity: var(--disabled-opacity);
     cursor: default;
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .icon-button:active:not(:disabled) {
+    .icon-button:active:not(:disabled, [aria-disabled="true"]) {
       transform: none;
     }
   }

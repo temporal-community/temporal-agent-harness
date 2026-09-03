@@ -1711,7 +1711,11 @@ export class AgentRunController {
 
   nextTurn(): void {
     this.pause();
-    const target = this.turnMarkers.find((marker) => marker.index >= this.viewIndex);
+    /* Strictly past the cursor. `>=` matched the marker the cursor was standing
+       on, so at the start of any turn — which is exactly where this button and
+       previousTurn leave you — it re-seeked to the same index and the control
+       did nothing at all. */
+    const target = this.turnMarkers.find((marker) => marker.index > this.viewIndex);
     this.goTo(target?.index ?? this.total);
   }
 
