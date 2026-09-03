@@ -1,7 +1,6 @@
 import type {
   AgentInboundMessage,
   AgentInterfaceFunction,
-  AgentMessageObject,
   AgentSseFrame,
   OperatorCommand,
   OperatorCommandResponse,
@@ -15,6 +14,12 @@ import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
 import { chooseBootSession } from "./bootSession";
 import {
+  readCachedFrames,
+  readStoredActiveSessionId,
+  writeCachedFrames,
+  writeStoredActiveSessionId
+} from "./agentRunStorage";
+import {
   buildAgentTreeGraph,
   type AgentGraphSource
 } from "./flowProjection";
@@ -25,8 +30,14 @@ import {
   framePublishChunkSize,
   publishAtChunkBoundary
 } from "./hydration";
+import {
+  displayTextForMessage,
+  isAgentMessageObject,
+  renderUserMessage
+} from "./inboundMessageText";
 import { buildReplayLog, buildReplayMarkers } from "./replayLog";
-import { buildStepTimeline, type StepTimelineFrame } from "./stepTimeline";
+import { buildReplayTimeline } from "./replayTimeline";
+import { buildStepTimeline } from "./stepTimeline";
 import { buildTranscript } from "./transcript";
 
 export type PlaybackSpeed = 1 | 2 | 5 | 10;
@@ -59,49 +70,7 @@ export interface OperatorTarget {
   closed: boolean;
 }
 
-type ReplayTimelineRole = "parent" | "subagent";
-
-interface ReplayTimelineEntry extends StepTimelineFrame {
-  workflowId: string;
-  role: ReplayTimelineRole;
-  frame: AgentSseFrame;
-}
-
 const basePlaybackDelayMs = 700;
-const activeSessionStorageKey = "temporal-agent-ui.active-session.v1";
-const frameCacheStorageKeyPrefix = "temporal-agent-ui.frames.v1:";
-
-function frameCacheStorageKey(sessionId: string): string {
-  return `${frameCacheStorageKeyPrefix}${sessionId}`;
-}
-
-function readStoredActiveSessionId(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const value = window.localStorage.getItem(activeSessionStorageKey);
-    return value && value.trim() ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredActiveSessionId(sessionId: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(activeSessionStorageKey, sessionId);
-  } catch {
-    // Ignore storage failures; active session persistence is a UI convenience.
-  }
-}
-
-function removeStoredActiveSessionId(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(activeSessionStorageKey);
-  } catch {
-    // Ignore storage failures.
-  }
-}
 
 function now(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -158,93 +127,6 @@ function yieldToMain(): Promise<void> {
     }
     setTimeout(resolve, 0);
   });
-}
-
-function readCachedFrames(sessionId: string): AgentSseFrame[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.sessionStorage.getItem(frameCacheStorageKey(sessionId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as { frames?: unknown };
-    return Array.isArray(parsed.frames) ? (parsed.frames as AgentSseFrame[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeCachedFrames(sessionId: string, frames: AgentSseFrame[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.setItem(
-      frameCacheStorageKey(sessionId),
-      JSON.stringify({ frames, savedAt: Date.now() })
-    );
-  } catch {
-    try {
-      window.sessionStorage.removeItem(frameCacheStorageKey(sessionId));
-    } catch {
-      // Ignore storage failures.
-    }
-  }
-}
-
-function renderUserMessage(value: string): string {
-  if (!value.startsWith("{")) return value;
-  try {
-    const message = JSON.parse(value) as {
-      type?: string;
-      payload?: { name?: string; arg?: string; text?: string; script?: string };
-      script?: string;
-    };
-    if (typeof message.payload?.text === "string") return message.payload.text;
-    if (typeof message.payload?.script === "string") return message.payload.script;
-    if (typeof message.script === "string") return message.script;
-    if (
-      (message.type !== "slash" && message.type !== "slash_command") ||
-      !message.payload?.name
-    ) {
-      return value;
-    }
-    return slashCommandDisplayText(message.payload.name, message.payload.arg);
-  } catch {
-    return value;
-  }
-}
-
-function isAgentMessageObject(message: AgentInboundMessage): message is AgentMessageObject {
-  return typeof message === "object" && message !== null;
-}
-
-function slashCommandDisplayText(name: string, arg?: string): string {
-  const command = name === "set-model" ? "model" : name;
-  return `/${command}${arg ? ` ${arg}` : ""}`;
-}
-
-function displayTextForMessage(message: AgentInboundMessage): string {
-  if (typeof message === "string") return message.trim();
-  if (
-    message.type === "slash" &&
-    typeof message.payload === "object" &&
-    message.payload != null &&
-    "name" in message.payload &&
-    typeof message.payload.name === "string"
-  ) {
-    const arg =
-      "arg" in message.payload && typeof message.payload.arg === "string"
-        ? message.payload.arg
-        : undefined;
-    return slashCommandDisplayText(message.payload.name, arg);
-  }
-  if (
-    message.type === "run_script" &&
-    typeof message.payload === "object" &&
-    message.payload != null &&
-    "script" in message.payload &&
-    typeof message.payload.script === "string"
-  ) {
-    return message.payload.script.trim();
-  }
-  return JSON.stringify(message);
 }
 
 /**
@@ -440,7 +322,14 @@ export class AgentRunController {
     });
   };
 
-  replayTimeline = $derived(this.#replayTimeline());
+  replayTimeline = $derived(
+    buildReplayTimeline(
+      this.session,
+      this.frames,
+      this.observedSubagents,
+      this.runInfo.agentLabel
+    )
+  );
   visibleReplayTimeline = $derived(this.replayTimeline.slice(0, this.viewIndex));
   allReplayFrames = $derived(this.replayTimeline.map((entry) => entry.frame));
   visibleReplayFrames = $derived(
@@ -489,7 +378,7 @@ export class AgentRunController {
   );
 
   get total(): number {
-    // #replayTimeline() emits exactly one entry per frame, so this matches
+    // buildReplayTimeline() emits exactly one entry per frame, so this matches
     // replayTimeline.length without forcing that projection to rebuild. Reading
     // the projection here made appending one frame O(n), and hydrating a cached
     // session O(n^2) — 1,583 frames cost 10.2s of rebuilds before this.
@@ -517,64 +406,6 @@ export class AgentRunController {
 
   #isCurrentConnection(connectionVersion: number): boolean {
     return connectionVersion === this.#connectionVersion;
-  }
-
-  #replayTimeline(): ReplayTimelineEntry[] {
-    const session = this.session;
-    if (!session) return [];
-    const observedBySubagentId = new Map(
-      this.observedSubagents.map((agent) => [agent.subagentId, agent])
-    );
-    const parentTurnBySubagentTurn = new Map<string, number>();
-    const timeline: ReplayTimelineEntry[] = [];
-
-    for (const frame of this.frames) {
-      if (!("type" in frame.data)) {
-        timeline.push({
-          workflowId: session.workflow_id,
-          role: "parent",
-          label: this.runInfo.agentLabel,
-          frame
-        });
-        continue;
-      }
-
-      const observedSubagent = observedBySubagentId.get(frame.data.agent_id);
-      const parentTurnNumber =
-        observedSubagent == null
-          ? undefined
-          : parentTurnBySubagentTurn.get(
-              `${frame.data.agent_id}:${frame.data.turn_number}`
-            );
-      const role: ReplayTimelineRole = observedSubagent == null ? "parent" : "subagent";
-      timeline.push({
-        workflowId: observedSubagent?.workflowId ?? session.workflow_id,
-        role,
-        label: observedSubagent?.label ?? this.runInfo.agentLabel,
-        parentTurnNumber,
-        frame
-      });
-
-      if (frame.event === "subagent_message_sent") {
-        const enclosingParentTurn =
-          role === "subagent" && parentTurnNumber != null
-            ? parentTurnNumber
-            : frame.data.turn_number;
-        parentTurnBySubagentTurn.set(
-          `${frame.data.subagent_id}:${frame.data.subagent_turn}`,
-          enclosingParentTurn
-        );
-      }
-    }
-
-    if (import.meta.env.DEV && timeline.length !== this.frames.length) {
-      console.error(
-        `replayTimeline emitted ${timeline.length} entries for ${this.frames.length} frames. ` +
-          "get total() returns frames.length to avoid rebuilding this projection on every " +
-          "appended frame, and that shortcut is now wrong."
-      );
-    }
-    return timeline;
   }
 
   #graphAgents(): AgentGraphSource[] {
