@@ -14,7 +14,11 @@
   import Badge from "$lib/components/primitives/Badge.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import MetricStrip from "$lib/components/primitives/MetricStrip.svelte";
-  import type { AgentGraph, AgentNodeData } from "$lib/state/flowProjection";
+  import type {
+    AgentGraph,
+    AgentNodeContext,
+    AgentNodeData
+  } from "$lib/state/flowProjection";
   import AgentStateNode from "./AgentStateNode.svelte";
   import AgentWorkflowNode from "./AgentWorkflowNode.svelte";
   import AutoFitView from "./AutoFitView.svelte";
@@ -92,29 +96,18 @@
     };
   });
 
-  function detailText(data: AgentNodeData): { label: string; text: string; kind: "code" | "json" | "text" } {
-    const detail = data.detail;
-    if (typeof detail !== "string" || !detail.trim()) {
-      return { label: "Context", text: "No additional context captured for this node.", kind: "text" };
-    }
-
-    try {
-      const parsed = JSON.parse(detail);
-      const script =
-        typeof parsed?.script === "string"
-          ? parsed.script
-          : typeof parsed?.payload?.script === "string"
-            ? parsed.payload.script
-            : null;
-      if (script) return { label: "Script", text: script, kind: "code" };
-      return { label: "Context", text: JSON.stringify(parsed, null, 2), kind: "json" };
-    } catch {
-      return { label: "Context", text: detail, kind: looksLikeCode(detail) ? "code" : "text" };
-    }
-  }
-
-  function looksLikeCode(value: string): boolean {
-    return /^\s*(def |class |import |from |async def |value\s*=|answer\s*=|\{)/m.test(value);
+  /**
+   * The sections come from flowProjection, which is the only layer that can see
+   * the frames. This used to read `data.detail` and nothing else, and print "No
+   * additional context captured for this node." whenever it was unset — which is
+   * every model interaction ever rendered, because nodeDataFor has never given
+   * that kind a `detail`. contextFor() now guarantees a non-empty list for every
+   * node kind, so there is no empty case left to write a message for.
+   */
+  function sectionsFor(data: AgentNodeData): AgentNodeContext[] {
+    return Array.isArray(data.context) && data.context.length > 0
+      ? data.context
+      : [{ label: "Node", text: JSON.stringify(data, null, 2), kind: "json" }];
   }
 
   function inspectNode(node: Node<AgentNodeData>): void {
@@ -160,7 +153,7 @@
 
   {#if inspectedNode}
     {@const data = inspectedNode.data}
-    {@const detail = detailText(data)}
+    {@const sections = sectionsFor(data)}
     <!-- The scrim is the dialog's own ::backdrop now, so there is no element
          between the canvas and the dialog to catch the click. A click that lands
          on the dialog itself can only have come from the backdrop, because the
@@ -195,12 +188,18 @@
           <MetricStrip metrics={data.metrics} />
         {/if}
 
+        <!-- Scrolls as one column: the reply the node card had to clip belongs
+             here in full, and it is routinely longer than the dialog is tall. -->
         <div class="inspector-content">
-          <div class="kicker">{detail.label}</div>
-          <pre
-            class={`expanded-detail ${detail.kind}`}
-            data-language={detail.kind === "json" ? "json" : detail.kind === "code" ? "code" : undefined}
-          ><code>{detail.text}</code></pre>
+          {#each sections as section (section.label)}
+            <div class="inspector-section">
+              <div class="kicker">{section.label}</div>
+              <pre
+                class={`expanded-detail ${section.kind}`}
+                data-language={section.kind === "text" ? undefined : section.kind}
+              ><code>{section.text}</code></pre>
+            </div>
+          {/each}
         </div>
       </div>
     </dialog>
@@ -220,9 +219,11 @@
      the other thing the top layer hands over for free. */
   .node-inspector {
     --tone-color: var(--text-3);
+    display: flex;
     width: min(760px, calc(100% - var(--gutter) * 4));
     max-height: min(720px, calc(100% - var(--gutter) * 4));
     padding: 0;
+    overflow: hidden;
     border: 1px solid color-mix(in srgb, var(--tone-color) 72%, white 6%);
     background: color-mix(in srgb, var(--tone-color) 9%, var(--surface-2));
     color: var(--text-1);
@@ -236,6 +237,8 @@
   /* The inset lives here, not on the dialog, so the dialog's own box is only
      ever the backdrop's click target. */
   .inspector-body {
+    flex: 1;
+    min-width: 0;
     min-height: 0;
     display: flex;
     flex-direction: column;
@@ -312,8 +315,18 @@
     flex: 0 0 auto;
   }
 
+  /* The column scrolls, not each section: several bodies of very different
+     lengths, and a reply that is routinely taller than the dialog. */
   .inspector-content {
+    flex: 1;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gutter);
+    overflow-y: auto;
+  }
+
+  .inspector-section {
     display: flex;
     flex-direction: column;
     gap: var(--gap-sm);
@@ -321,11 +334,9 @@
 
   .expanded-detail {
     position: relative;
-    min-height: 180px;
-    max-height: min(520px, calc(100vh - 260px));
     margin: 0;
     padding: var(--gutter);
-    overflow: auto;
+    overflow-x: auto;
     border: 1px solid color-mix(in srgb, var(--tone-color) 22%, var(--border));
     background: color-mix(in srgb, var(--surface-0) 86%, black 10%);
     color: var(--text-2);
