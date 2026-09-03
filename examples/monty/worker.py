@@ -32,6 +32,7 @@ import sys
 from google.genai import Client as GeminiClient
 from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
+from temporal_agent_harness.utils.worker import run_worker
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
@@ -112,15 +113,14 @@ async def main() -> None:
             subagents.run_subagent_turn,
         ],
     )
-    print(
+    await run_worker(
+        worker,
         f"Monty dynamic agent worker ready: "
         f"profile={os.environ.get('TEMPORAL_PROFILE', 'default')!r} "
         f"address={connect_config.get('target_host')} "
         f"namespace={connect_config.get('namespace')} "
         f"taskQueue={task_queue}",
-        flush=True,
     )
-    await worker.run()
 
 
 if __name__ == "__main__":

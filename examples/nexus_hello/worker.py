@@ -33,6 +33,7 @@ from temporal_agent_harness.ai_sdks.openai_agents_harness import (
     harness_observer_factory,
     stream_to_provider,
 )
+from temporal_agent_harness.utils.worker import run_worker
 
 from .workflow import TASK_QUEUE, NexusHelloAgentWorkflow
 
@@ -65,15 +66,14 @@ async def main() -> None:
         task_queue=task_queue,
         workflows=[NexusHelloAgentWorkflow],
     )
-    print(
+    await run_worker(
+        worker,
         f"Nexus hello agent worker ready: "
         f"profile={os.environ.get('TEMPORAL_PROFILE', 'default')!r} "
         f"address={connect_config.get('target_host')} "
         f"namespace={connect_config.get('namespace')} "
         f"taskQueue={task_queue}",
-        flush=True,
     )
-    await worker.run()
 
 
 if __name__ == "__main__":

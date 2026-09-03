@@ -17,6 +17,8 @@ from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
+from temporal_agent_harness.utils.worker import run_worker
+
 from .handler import AgentServiceHandler, Config
 
 logger = logging.getLogger(__name__)
@@ -56,16 +58,13 @@ async def main() -> None:
         nexus_service_handlers=[AgentServiceHandler(client, config)],
     )
 
-    logger.info(
-        "nexus-agent-py ready: namespace=%s nexusQueue=%s agentQueue=%s "
-        "workflow=%s idPrefix=%s",
-        agent_namespace,
-        nexus_task_queue,
-        agent_task_queue,
-        agent_workflow_name,
-        workflow_id_prefix,
+    await run_worker(
+        worker,
+        f"nexus-agent-py ready: address={address} namespace={agent_namespace} "
+        f"nexusQueue={nexus_task_queue} agentQueue={agent_task_queue} "
+        f"workflow={agent_workflow_name} idPrefix={workflow_id_prefix}",
+        logger.info,
     )
-    await worker.run()
 
 
 if __name__ == "__main__":

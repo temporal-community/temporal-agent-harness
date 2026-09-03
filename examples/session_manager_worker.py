@@ -21,6 +21,7 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
 
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
+from temporal_agent_harness.utils.worker import run_worker
 from temporal_agent_harness.web import (
     SESSION_MANAGER_TASK_QUEUE,
     create_session_manager_worker,
@@ -41,12 +42,12 @@ async def main() -> None:
     )
 
     worker = create_session_manager_worker(client)
-    print(
+    await run_worker(
+        worker,
         f"Session manager worker ready: taskQueue={SESSION_MANAGER_TASK_QUEUE!r} "
+        f"address={connect_config.get('target_host')} "
         f"namespace={connect_config.get('namespace')}",
-        flush=True,
     )
-    await worker.run()
 
 
 if __name__ == "__main__":

@@ -40,6 +40,7 @@ from temporal_agent_harness.ai_sdks.openai_agents_harness import (
     harness_observer_factory,
     stream_to_provider,
 )
+from temporal_agent_harness.utils.worker import run_worker
 
 from .workflow import TASK_QUEUE, OpenAIHelloAgentWorkflow
 
@@ -80,15 +81,14 @@ async def main() -> None:
         # activities (incl. invoke_model_activity_streaming) are registered by the plugin.
         activities=[],
     )
-    print(
+    await run_worker(
+        worker,
         f"OpenAI hello agent worker ready: "
         f"profile={os.environ.get('TEMPORAL_PROFILE', 'default')!r} "
         f"address={connect_config.get('target_host')} "
         f"namespace={connect_config.get('namespace')} "
         f"taskQueue={task_queue}",
-        flush=True,
     )
-    await worker.run()
 
 
 if __name__ == "__main__":

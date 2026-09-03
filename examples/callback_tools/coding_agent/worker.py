@@ -32,6 +32,7 @@ from temporalio.worker import Worker
 
 from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
+from temporal_agent_harness.utils.worker import run_worker
 
 from .workflow import TASK_QUEUE, CodingAgentWorkflow
 
@@ -69,15 +70,14 @@ async def main() -> None:
         # Gemini interactions activity is registered by the plugin above.
         activities=[],
     )
-    print(
+    await run_worker(
+        worker,
         f"Coding agent worker ready: "
         f"profile={os.environ.get('TEMPORAL_PROFILE', 'default')!r} "
         f"address={connect_config.get('target_host')} "
         f"namespace={connect_config.get('namespace')} "
         f"taskQueue={task_queue}",
-        flush=True,
     )
-    await worker.run()
 
 
 if __name__ == "__main__":

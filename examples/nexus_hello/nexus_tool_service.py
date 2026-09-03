@@ -18,6 +18,8 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
+from temporal_agent_harness.utils.worker import run_worker
+
 from authoring import MCPOverNexusServiceHandler, nexus_mcp_tool
 
 # The Nexus endpoint name this service is reached through — created (if missing) by
@@ -50,12 +52,13 @@ async def main() -> None:
         task_queue=NEXUS_TASK_QUEUE,
         nexus_service_handlers=[DemoNexusToolsServiceHandler()],
     )
-    print(
+    await run_worker(
+        worker,
         f"Demo Nexus tool service ready: endpoint={NEXUS_ENDPOINT!r} "
+        f"address={connect_config.get('target_host')} "
+        f"namespace={connect_config.get('namespace')} "
         f"taskQueue={NEXUS_TASK_QUEUE!r}.",
-        flush=True,
     )
-    await worker.run()
 
 
 if __name__ == "__main__":
