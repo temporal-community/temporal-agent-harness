@@ -65,6 +65,10 @@ DEGRADED_STATUSES = [
     (RPCStatusCode.RESOURCE_EXHAUSTED, 429, "temporal_throttled"),
     (RPCStatusCode.UNAVAILABLE, 503, "temporal_unavailable"),
     (RPCStatusCode.DEADLINE_EXCEEDED, 504, "temporal_timeout"),
+    # A query held open until something cuts it reports CANCELLED, not DEADLINE_EXCEEDED,
+    # and the remedy is the one 504 already carries. Unmapped it reached Starlette's
+    # default handler: a plain-text 500 with no error code for the console to read.
+    (RPCStatusCode.CANCELLED, 504, "temporal_timeout"),
 ]
 
 

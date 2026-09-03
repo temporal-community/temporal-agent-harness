@@ -88,6 +88,13 @@ _RPC_ERROR_RESPONSES: dict[RPCStatusCode, tuple[int, str]] = {
     RPCStatusCode.RESOURCE_EXHAUSTED: (429, "temporal_throttled"),
     RPCStatusCode.UNAVAILABLE: (503, "temporal_unavailable"),
     RPCStatusCode.DEADLINE_EXCEEDED: (504, "temporal_timeout"),
+    # Same remedy as the deadline above, so the same entry. A query nothing is there to
+    # serve does not always expire as DEADLINE_EXCEEDED — held open until the SDK stops
+    # retrying it, it surfaces as CANCELLED, and unmapped that reached Starlette's default
+    # handler as a plain-text 500 with no code the console could read. CANCELLED also means
+    # the CALLER hung up, but that reading needs no status of its own: nobody is left to
+    # read one. 504 is chosen for the reading where someone still is.
+    RPCStatusCode.CANCELLED: (504, "temporal_timeout"),
 }
 
 # The failures whose cure is waiting rather than sending a different request, so they are
@@ -704,9 +711,10 @@ def create_agent_harness_app(
         which is the same misdiagnosis in the other direction.
 
         ``UNAVAILABLE`` and ``DEADLINE_EXCEEDED`` do mean what 503 and 504 mean —
-        nothing answered, or nothing answered in time — so they keep those.
-        Anything else is a genuine fault and is left to propagate with its 500
-        and its traceback.
+        nothing answered, or nothing answered in time — so they keep those, and
+        ``CANCELLED`` joins the 504 because a query cut off unanswered leaves the
+        caller in the same place a deadline does. Anything else is a genuine fault
+        and is left to propagate with its 500 and its traceback.
         """
         mapped = _RPC_ERROR_RESPONSES.get(exc.status)
         if mapped is None:
@@ -1043,6 +1051,15 @@ def _unknown_execution_state(session: Session) -> dict[str, object]:
     return {**asdict(session), "execution_status": "UNKNOWN", "closed": False}
 
 
+# The remedy for a query nothing served, whichever way it ended: expired as
+# DEADLINE_EXCEEDED, or held open and then cut as CANCELLED. Named because both keys point
+# at it — a second copy of the sentence is a second place to fix when the wording changes.
+_NO_WORKER_ADVICE = (
+    "Nothing answered in time. Check that a worker is polling this agent's task "
+    "queue — a query with no worker to serve it expires exactly like this — then "
+    "refresh to retry."
+)
+
 # Where a failed attach should send the reader, grouped by remedy rather than by status.
 # A throttle and an outage are opposite diagnoses and only the status tells them apart.
 _ATTACH_ERROR_ADVICE = {
@@ -1056,11 +1073,8 @@ _ATTACH_ERROR_ADVICE = {
         "Nothing answered. Check that Temporal is reachable and that a worker is "
         "polling this agent's task queue, then refresh to retry."
     ),
-    RPCStatusCode.DEADLINE_EXCEEDED: (
-        "Nothing answered in time. Check that a worker is polling this agent's task "
-        "queue — a query with no worker to serve it expires exactly like this — then "
-        "refresh to retry."
-    ),
+    RPCStatusCode.DEADLINE_EXCEEDED: _NO_WORKER_ADVICE,
+    RPCStatusCode.CANCELLED: _NO_WORKER_ADVICE,
 }
 
 # For causes that are neither a throttle nor a reachability problem — a query a worker
