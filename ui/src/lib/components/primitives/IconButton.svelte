@@ -27,6 +27,8 @@
     type?: "button" | "submit";
     onclick?: (event: MouseEvent) => void;
     children?: Snippet;
+    /** Merged with the button's own classes rather than replacing them. */
+    class?: string;
     /** Everything else (aria-*, title, data-*) lands on the rendered element. */
     [key: string]: unknown;
   }
@@ -40,6 +42,7 @@
     type = "button",
     onclick,
     children,
+    class: extraClass = "",
     ...rest
   }: Props = $props();
 </script>
@@ -49,10 +52,13 @@
      sweeps across never says anything at all. `aria-label` keeps the name. -->
 <!-- Callers own description, the primitive owns behaviour: `rest` is spread
      first, so everything this button is answerable for is written after it and
-     wins. Chip spreads in the same order, for the same reason. -->
+     wins. Chip spreads in the same order, for the same reason. `class` is the
+     one attribute that must not follow that rule — a caller adding one has
+     nothing to say about `type` — so it is pulled out of `rest` and merged
+     rather than overridden. -->
 <button
   {...rest}
-  class={`icon-button ${tone} ${pressed ? "pressed" : ""}`}
+  class={["icon-button", tone, pressed && "pressed", extraClass]}
   {type}
   aria-label={label}
   aria-pressed={pressed}

@@ -3,6 +3,7 @@
   import type { AgentDescriptor, Session } from "$lib/api/types";
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
+  import IconButton from "$lib/components/primitives/IconButton.svelte";
   import StatusChip, {
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
@@ -235,14 +236,14 @@
             <Plus size={15} />
             <span>New session</span>
           </span>
-          <button
-            type="button"
-            class="new-session-close"
-            aria-label="Close new session menu"
+          <IconButton
+            label="Close new session menu"
+            data-tip-below
+            data-tip-align="end"
             onclick={() => (newSessionMenuOpen = false)}
           >
             <X size={15} />
-          </button>
+          </IconButton>
         </header>
 
         <div class="agent-list" role="menu">
@@ -304,25 +305,25 @@
         </span>
         <div class="session-popover-actions">
           {#if onRefreshSessions}
-            <button
-              type="button"
-              class="session-popover-refresh"
-              class:spinning={refreshingSessions}
-              aria-label="Refresh sessions"
+            <IconButton
+              class={refreshingSessions ? "session-refresh spinning" : "session-refresh"}
+              label="Refresh sessions"
+              data-tip-below
+              data-tip-align="end"
               disabled={refreshingSessions}
               onclick={() => void refreshSessions()}
             >
               <RefreshCw size={14} />
-            </button>
+            </IconButton>
           {/if}
-          <button
-            type="button"
-            class="session-popover-close"
-            aria-label="Close sessions"
+          <IconButton
+            label="Close sessions"
+            data-tip-below
+            data-tip-align="end"
             onclick={() => (sessionDrawerOpen = false)}
           >
             <X size={15} />
-          </button>
+          </IconButton>
         </div>
       </header>
 
@@ -498,43 +499,12 @@
     gap: 6px;
   }
 
-  .session-popover-refresh,
-  .session-popover-close,
-  .new-session-close {
-    width: 28px;
-    height: 28px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--control-bg);
-    color: var(--text-3);
-    cursor: pointer;
-  }
-
-  .session-popover-refresh:focus-visible:not(:disabled),
-  .session-popover-close:focus-visible,
-  .new-session-close:focus-visible {
-    color: var(--text-1);
-    border-color: var(--border-strong);
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .session-popover-refresh:hover:not(:disabled),
-    .session-popover-close:hover,
-    .new-session-close:hover {
-      color: var(--text-1);
-      border-color: var(--border-strong);
-    }
-  }
-
-  .session-popover-refresh:disabled {
-    cursor: default;
-    opacity: var(--disabled-opacity);
-  }
-
-  .session-popover-refresh.spinning :global(svg) {
+  /* All three header buttons are IconButtons, so the box, the hover, the focus
+     ring and the disabled dimming are the app's. The one thing left here is the
+     spin, which is why IconButton takes a `class` that merges instead of one
+     that replaces. `:global` because the class rides across a component
+     boundary and so carries none of this file's scoping. */
+  :global(.session-refresh.spinning svg) {
     animation: session-refresh-spin 800ms linear infinite;
   }
 
@@ -747,7 +717,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     /* Still reads as busy, by dimming rather than by spinning. */
-    .session-popover-refresh.spinning :global(svg) {
+    :global(.session-refresh.spinning svg) {
       animation: none;
       opacity: 0.6;
     }

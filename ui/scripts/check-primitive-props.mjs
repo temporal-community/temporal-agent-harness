@@ -5,6 +5,8 @@
 // after the attributes, or re-seals IconButton: the composer's send button is a real submit button
 // only because IconButton can say so, and Enter-to-send is native implicit submission, which
 // silently stops working the moment that button stops being type="submit". No type checker sees it.
+// `class` is the documented exception, and the second half of this check: it is destructured out
+// of `rest` and merged, so a caller can add one without being able to take the primitive's away.
 //   node ui/scripts/check-primitive-props.mjs
 
 import assert from "node:assert/strict";
@@ -66,5 +68,49 @@ assert.match(html(Chip, { label: "Usage", onclick: () => {}, "data-tip": "Open" 
 assert.doesNotMatch(html(IconButton, { label: "Send" }), /aria-pressed/);
 assert.match(html(IconButton, { label: "Follow", pressed: false }), /aria-pressed="false"/);
 assert.match(html(IconButton, { label: "Follow", pressed: true }), /aria-pressed="true"/);
+
+/* --- except `class`, which merges ---------------------------------------- */
+
+// The one attribute the spread order got wrong. A caller adding a class has
+// nothing to say about `type`, so `class` is pulled out of `rest` and merged
+// with the primitive's own instead of being beaten by it. Without this the
+// session popover's refresh button cannot be an IconButton and still spin, and
+// three adoption attempts hand-rolled the CSS again rather than reshape a
+// primitive from a call site.
+// Read as a class LIST, not as a substring: `chip-label` on the inner span
+// contains "chip" and would vouch for a root element that had lost it.
+const rootClasses = (markup) => (markup.match(/class="([^"]*)"/)?.[1] ?? "").split(/\s+/);
+
+for (const [name, Component, own, props] of [
+  ["Chip", Chip, "chip", { label: "Tag" }],
+  ["IconButton", IconButton, "icon-button", { label: "Refresh" }]
+]) {
+  const classes = rootClasses(html(Component, { ...props, class: "spinning" }));
+  assert.ok(classes.includes("spinning"), `${name} dropped the caller's class: ${classes}`);
+  assert.ok(classes.includes(own), `${name} let the caller's class replace its own: ${classes}`);
+}
+
+// ...and a call that carries a class is still a call `rest` is spread from, so
+// merging must not reopen the door the spread order closed.
+const dressedChip = html(Chip, {
+  label: "Approve",
+  onclick: () => {},
+  class: "wide",
+  type: "submit"
+});
+assert.match(dressedChip, /\bwide\b/);
+assert.match(dressedChip, /type="button"/, "a class in the same call let rest choose Chip's type");
+
+const dressedButton = html(IconButton, {
+  label: "Refresh",
+  class: "spinning",
+  "aria-pressed": "true"
+});
+assert.match(dressedButton, /\bspinning\b/);
+assert.doesNotMatch(
+  dressedButton,
+  /aria-pressed/,
+  "a class in the same call let rest invent a toggle state"
+);
 
 console.log("primitive props: chip and icon button agree");

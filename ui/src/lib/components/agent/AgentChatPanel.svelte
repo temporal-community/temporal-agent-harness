@@ -1613,14 +1613,14 @@
             <History size={15} />
             <span>Sessions</span>
           </span>
-          <button
-            type="button"
-            class="session-drawer-close"
-            aria-label="Close sessions"
+          <IconButton
+            label="Close sessions"
+            data-tip-below
+            data-tip-align="end"
             onclick={() => (sessionDrawerOpen = false)}
           >
             <X size={15} />
-          </button>
+          </IconButton>
         </header>
 
         <label class="session-drawer-search">
@@ -2413,31 +2413,6 @@
     color: var(--text-1);
     font-size: var(--font-lg);
     font-weight: 700;
-  }
-
-  .session-drawer-close {
-    width: 28px;
-    height: 28px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--control-bg);
-    color: var(--text-3);
-    cursor: pointer;
-  }
-
-  .session-drawer-close:focus-visible {
-    color: var(--text-1);
-    border-color: var(--border-strong);
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .session-drawer-close:hover {
-      color: var(--text-1);
-      border-color: var(--border-strong);
-    }
   }
 
   .session-drawer-search {
