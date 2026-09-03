@@ -90,6 +90,9 @@ async def test_list_agent_entries_output_serializes_over_the_wire(_mock_info: Ma
     decoded = _round_trip(output, ListAgentEntriesOutput)
     tools = decoded.remote_tools.additional_properties["weather"]
     assert tools[0].additional_properties["name"] == "weather_get_forecast"
+    options = client.execute_activity.await_args.kwargs
+    assert options["schedule_to_close_timeout"].total_seconds() == 60
+    assert options["retry_policy"].maximum_attempts == 3
 
 
 @patch("temporalio.nexus.info", return_value=_FAKE_NEXUS_INFO)

@@ -17,20 +17,24 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import timedelta
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
+from nexus_a2a import SubscribeToTaskInput
 from pydantic import BaseModel
 from temporalio import workflow
 from temporalio.client import Client, WorkflowHandle, WorkflowUpdateFailedError
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStream
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from temporal_agent_harness.harness import AgentWorkflowRunner, agent, slash_commands
+from temporal_agent_harness.harness.agent_client import AgentClient
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
@@ -42,21 +46,21 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
     AgentEventType,
     AgentMessage,
+    AgentMessageReply,
     AgentStatus,
     OperatorCommand,
     OperatorCommandRequest,
     OperatorCommandResult,
+    SlashCommand,
     SubagentReplyReceived,
     TextMessage,
     TextReply,
     ToolApprovalPolicy,
-    AgentMessageReply,
-    SlashCommand,
 )
-from temporalio.exceptions import ApplicationError
-
-from temporal_agent_harness.harness.agent_client import AgentClient
 from temporal_agent_harness.harness.agent_workflow import _discover_handlers
+from temporal_agent_harness.harness.child_workflow_subagent_transport import (
+    ChildWorkflowTransport,
+)
 
 # ---------------------------------------------------------------------------
 # Message models + probe workflows
@@ -929,7 +933,9 @@ def test_errored_subagent_turn_closes_bracket_on_actual_accepted_turn(offline_bu
         AgentMessage(type="x", payload={}, expected_turn=1), "turn-1"
     )
     runner._status.start_next_turn()
-    inst = runner._status.register_subagent("aaaaaa-bbbbbb", "child-wf-1", "k")
+    inst = runner._status.register_subagent(
+        "aaaaaa-bbbbbb", "child-wf-1", "k", ChildWorkflowTransport("unused", "unused")
+    )
 
     # The activity raises with the child's ACTUAL accepted turn number (7) in the details —
     # deliberately different from the ``expected``/default we pass (2), so the assertion proves we
@@ -963,6 +969,39 @@ def test_accepted_turn_from_error_falls_back_when_detail_absent():
     the parent falls back to the supplied ``default`` (``expected``) rather than failing."""
     err = ApplicationError("no reply", type="SubagentNoReply", non_retryable=True)
     assert AgentWorkflowRunner._accepted_turn_from_error(err, default=3) == 3
+
+
+async def test_close_stops_all_active_subagents(offline_build):
+    runner = offline_build(AgentConfig())
+    first = MagicMock()
+    first.stop = AsyncMock()
+    second = MagicMock()
+    second.stop = AsyncMock()
+    runner._status.register_subagent("first", "target-1", "writer", first)
+    runner._status.register_subagent("second", "target-2", "writer", second)
+
+    await runner._stop_all_subagents()
+
+    first.stop.assert_awaited_once_with(target="target-1")
+    second.stop.assert_awaited_once_with(target="target-2")
+    assert runner.current_status.subagents == []
+
+
+async def test_a2a_stream_poll_uses_requested_timeout(offline_build, monkeypatch):
+    import temporal_agent_harness.harness.agent_workflow as aw
+
+    runner = offline_build(AgentConfig())
+    runner._stream._on_offset.return_value = 4
+    wait_condition = AsyncMock(side_effect=TimeoutError)
+    monkeypatch.setattr(aw.workflow, "wait_condition", wait_condition)
+    result = await runner._handle_a2a_stream_poll(
+        SubscribeToTaskInput(id="agent-1", cursor=4, timeout_seconds=0.01)
+    )
+
+    assert wait_condition.await_args.kwargs["timeout"] == timedelta(seconds=0.01)
+    assert result.items == []
+    assert result.next_cursor == 4
+    assert not result.closed
 
 
 # ---------------------------------------------------------------------------

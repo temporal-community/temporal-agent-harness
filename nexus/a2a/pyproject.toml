@@ -1,0 +1,29 @@
+[project]
+name = "nexus-a2a"
+version = "0.1.0"
+description = "A Temporal Nexus transport binding for the A2A protocol"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "a2a-sdk>=1.1.2",
+    "nexus-rpc>=1.1.0",
+    "pydantic>=2.0",
+    "temporalio>=1.31.0",
+]
+
+[build-system]
+requires = ["setuptools>=83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nexus_a2a*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+]
