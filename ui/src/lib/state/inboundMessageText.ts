@@ -10,9 +10,27 @@
  *
  * NOTE: transcript.ts and replayLog.ts each carry their own older copy of
  * renderUserMessage() — identical to each other, narrower than this one (no
- * `script` payload, and their own inline slash formatting). Not consolidated
+ * `payload.script`, and their own inline slash formatting). Not consolidated
  * here because doing so would change what those two render, which is a
  * behaviour change rather than a move.
+ *
+ * That divergence is a live rendering bug, not a harmless difference, and it is
+ * this copy that is right. A MontyDynamicAgent session wraps a typed line as
+ * `{type:"run_script", payload:{script}}` (see #messageForSession), and the
+ * workflow echoes that envelope back verbatim as `turn_started.user_message`
+ * (agent_workflow.py `_render_message`). Because the narrow copies check
+ * top-level `script` but not `payload.script`, and the type is "run_script"
+ * rather than a slash, they fall through to returning the raw value: the chat
+ * bubble and the replay log both show
+ * `{"type":"run_script","payload":{"script":"book_flight(\"SFO\", \"LHR\")"}}`
+ * where the session list shows `book_flight("SFO", "LHR")`. Escaped quotes and
+ * all, so it does not even read as the script it is. Slash commands render
+ * identically on all three, which is why this hid.
+ *
+ * The server agrees with this copy, not with them: web/app.py's
+ * `_display_user_message` checks `payload.script` in the same order. So the fix
+ * is to widen those two, not to narrow this one — left as a decision to make
+ * deliberately rather than as a side effect of a move.
  */
 import type { AgentInboundMessage, AgentMessageObject } from "$lib/api/types";
 
