@@ -294,6 +294,34 @@ identifiers do not have to match.
 The extra installs the local `temporal-nexus-mcp` distribution. Do not run
 `pip install nexus-mcp`. That command installs an unrelated project from PyPI.
 
+### Browser UI tunnel
+
+This example deliberately opts the packaged browser UI into the same Nexus/A2A
+foundation. The scoped `session-manager` and `server` recipes set the endpoint for
+you. Each send/control is a standalone Nexus operation; the UI still receives SSE
+while one bounded per-turn connector workflow gets the complete A2A task snapshot
+and owns the bounded A2A subscription only when the task is live.
+The Nexus binding carries requests and responses as standard A2A JSON so its Go
+connector and Python agent backends share one package-independent wire contract.
+
+```mermaid
+flowchart LR
+    Browser[Browser UI] <-->|HTTP and SSE| Driver[Web driver]
+    Driver -->|standalone A2A and controls over Nexus| Agent[Nexus Hello agent]
+    Driver <-->|mount accepted turn| Tunnel[Bounded UI tunnel]
+    Tunnel -->|GetTask replay over Nexus| Agent
+    Tunnel -->|Subscribe from cursor when live| Agent
+```
+
+Four Temporal namespaces show cross-namespace Nexus calls:
+
+| Namespace | Hosts |
+|---|---|
+| `default` | The agent (`worker.py`) and session-manager Nexus front door. |
+| `gateway` | The Durable Tools Gateway and shared UI tunnel. Brokers both `demo` (tool) and `writer` (subagent). |
+| `nexus-mcp-server` | The demo native Nexus tool service. |
+| `nexus-subagent-server` | The demo native subagent's own agent workflow. |
+
 ### Start the services
 
 Change to the example directory:
@@ -315,6 +343,7 @@ just nexus-subagent
 just register-third-party-mcp-server
 just register-third-party-subagent
 just session-manager
+just ui-tunnel
 just server
 just worker
 ```

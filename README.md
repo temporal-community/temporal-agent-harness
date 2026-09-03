@@ -131,8 +131,65 @@ description = "A short description shown in the UI."
 ```
 
 The app factory serves both `/api/*` and the packaged Svelte UI. The helper
-`create_session_manager_worker` only registers the packaged session-manager
-workflow; run your own agent workflows on their own workers and task queues.
+`create_session_manager_worker` registers the packaged session-manager workflow; run
+your own agent workflows on their own workers and task queues. By default, the web UI
+uses the existing direct `AgentClient` and workflow-stream path—no Nexus endpoint or
+connector worker is required.
+
+### Optional Nexus UI transport
+
+To route the same browser UI through the A2A/Nexus connector, pass the same
+endpoint name to both helpers:
+
+```python
+worker = create_session_manager_worker(
+    client,
+    nexus_endpoint="agent-harness-ui-endpoint",
+)
+app = create_agent_harness_app(
+    registry_path="agents.toml",
+    nexus_endpoint="agent-harness-ui-endpoint",
+)
+```
+
+The client passed to a worker that hosts an A2A Nexus front door must use the
+cross-SDK A2A JSON converter:
+
+```python
+from temporal_agent_harness.a2a import a2a_nexus_data_converter
+
+client = await Client.connect(
+    "localhost:7233",
+    data_converter=a2a_nexus_data_converter,
+)
+```
+
+The packaged `session_manager_worker` selects this converter automatically whenever
+`NEXUS_UI_ENDPOINT` is set. Direct UI deployments keep their existing converter.
+
+For the bundled examples, add the endpoint to the repository's `.env.local` to opt
+both processes in without changing their code:
+
+```bash
+NEXUS_UI_ENDPOINT=agent-harness-ui-endpoint
+```
+
+Then, from the repository root after starting Temporal, provision the endpoint once
+and run each remaining long-lived command in its own terminal:
+
+```bash
+just setup-nexus       # one-shot namespace and endpoint provisioning
+just session-manager   # A2A/HarnessControl front door plus session manager
+just ui-tunnel         # Go worker for bounded per-turn stream tunnels
+just server            # ordinary FastAPI/browser process
+```
+
+Each UI message/control is a standalone Nexus operation. Its stream is then relayed
+by one bounded workflow for the accepted agent turn, rather than a long-lived
+per-agent connector workflow. Without `NEXUS_UI_ENDPOINT`, `just session-manager`
+and `just server` retain their direct behavior. See
+[`nexus/ui_connector`](nexus/ui_connector/README.md) for the connector design and
+additional drivers.
 
 ## Versioning and stability
 
@@ -158,11 +215,11 @@ can wait minutes or days for an external event without holding a process open; a
 tool call, and decision is recorded and replayable.
 
 ### 📊 Standardized agents, fully observable
-The interface to agents built on this harness is **carefully standardized**. Every agent takes the
-same configuration contract and emits the same structured **event stream**: a protocol (under
-active development) that captures an agent's entire lifecycle — every turn, model interaction, tool
-call (start / end / error), reply token, citation, approval decision, subagent hand-off, and
-token-usage tally.
+Agents expose standard A2A tasks, messages, artifacts, and status updates over Nexus. The harness
+adds a lossless metadata extension containing its richer event stream—every turn, model
+interaction, tool call (start / end / error), reply token, citation, approval decision, subagent
+hand-off, and token-usage tally. Generic A2A clients can ignore the extension; harness-aware UI
+drivers can render the complete debugging experience.
 
 That one standardized stream is the foundation of **observability and analytics** for every agent
 you build. **Watch an agent live** as it works, or **replay exactly what happened** afterward —

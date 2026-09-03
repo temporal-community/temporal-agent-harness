@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/agent"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack/inbound"
 	"go.temporal.io/sdk/client"
@@ -17,7 +19,8 @@ type flags struct {
 	temporalAddress    string
 	connectorNamespace string
 	taskQueue          string
-	identity           string
+	deliveryTaskQueue  string
+	nexusEndpoint      string
 	webhookPort        string
 	slashCommandPrefix string
 	allowedBotIDs      []string
@@ -55,13 +58,16 @@ func ensureFlags() *flags {
 	}
 	taskQueue := os.Getenv("CONNECTOR_TASK_QUEUE")
 	if taskQueue == "" {
-		taskQueue = "nexus-connector-slack"
+		taskQueue = "nexus-ui-tunnel"
 	}
-	// Distinguishes this server's router workflows from any other identity
-	// sharing the same connectorNamespace (e.g. running multiple environments
-	// against one Temporal namespace). Empty defers to inbound.NewServer's
-	// own default.
-	identity := os.Getenv("CONNECTOR_IDENTITY")
+	deliveryTaskQueue := os.Getenv("SLACK_DRIVER_TASK_QUEUE")
+	if deliveryTaskQueue == "" {
+		deliveryTaskQueue = "nexus-connector-slack"
+	}
+	nexusEndpoint := os.Getenv("NEXUS_AGENT_ENDPOINT")
+	if nexusEndpoint == "" {
+		log.Fatal("NEXUS_AGENT_ENDPOINT is required")
+	}
 	webhookPort := os.Getenv("WEBHOOK_PORT")
 	if webhookPort == "" {
 		webhookPort = "8080"
@@ -78,7 +84,8 @@ func ensureFlags() *flags {
 		temporalAddress:    temporalAddress,
 		connectorNamespace: connectorNamespace,
 		taskQueue:          taskQueue,
-		identity:           identity,
+		deliveryTaskQueue:  deliveryTaskQueue,
+		nexusEndpoint:      nexusEndpoint,
 		webhookPort:        webhookPort,
 		slashCommandPrefix: slashCommandPrefix,
 		allowedBotIDs:      allowedBotIDs,
@@ -105,7 +112,8 @@ func main() {
 		log.Printf("Slack bot user ID: %s (forwarding mentions, plus replies in threads the bot was mentioned in)", bot.UserID)
 	}
 
-	handler := slackinbound.NewServer(tc, flags.taskQueue, flags.identity, flags.slackSigningSecret, bot.UserID, flags.slashCommandPrefix, flags.allowedBotIDs)
+	tunnel := router.NewClient(tc, flags.taskQueue, flags.nexusEndpoint, agent.NewA2AActions(tc, flags.nexusEndpoint))
+	handler := slackinbound.NewServer(tunnel, flags.deliveryTaskQueue, flags.slackSigningSecret, bot.UserID, flags.slashCommandPrefix, flags.allowedBotIDs)
 	addr := ":" + flags.webhookPort
 	log.Printf("Slack webhook server listening on %s", addr)
 	if err := http.ListenAndServe(addr, handler); err != nil {

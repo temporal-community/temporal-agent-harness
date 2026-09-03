@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
 
+from temporal_agent_harness.a2a import a2a_nexus_data_converter
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
 from temporal_agent_harness.web import (
     SESSION_MANAGER_TASK_QUEUE,
@@ -35,15 +37,19 @@ async def main() -> None:
     )
 
     connect_config = ClientConfig.load_client_connect_config()
+    nexus_endpoint = os.environ.get("NEXUS_UI_ENDPOINT", "").strip() or None
     client = await Client.connect(
         **connect_config,
-        data_converter=await with_large_payload_offload(pydantic_data_converter),
+        data_converter=await with_large_payload_offload(
+            a2a_nexus_data_converter if nexus_endpoint else pydantic_data_converter
+        ),
     )
 
-    worker = create_session_manager_worker(client)
+    worker = create_session_manager_worker(client, nexus_endpoint=nexus_endpoint)
     print(
         f"Session manager worker ready: taskQueue={SESSION_MANAGER_TASK_QUEUE!r} "
-        f"namespace={connect_config.get('namespace')}",
+        f"namespace={connect_config.get('namespace')} "
+        f"uiTransport={'nexus:' + nexus_endpoint if nexus_endpoint else 'direct'}",
         flush=True,
     )
     await worker.run()
