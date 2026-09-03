@@ -45,7 +45,6 @@ export type PlaybackSpeed = 1 | 2 | 5 | 10;
 export interface RunInfo {
   sessionId: string;
   agentLabel: string;
-  models: string[];
   startedAt: number;
 }
 
@@ -385,6 +384,23 @@ export class AgentRunController {
     return this.session ? this.frames.length : 0;
   }
 
+  /**
+   * Names for the run in hand: cheap to read, and it has to stay that way.
+   *
+   * It used to carry `models: summarizeCost(this.frames).modelBreakdown...`,
+   * which nothing read — so every access paid a full pass over every frame to
+   * fill a field with no reader. That is how the replay timeline went quadratic
+   * merely by labelling its rows, and why five reads in App.svelte's markup
+   * cost five passes over the session. Deleted rather than memoized: caching it
+   * would have kept the work and added staleness to reason about, for an answer
+   * nobody wanted.
+   *
+   * Keep it that way. Sitting beside `total`, `connectionError` and
+   * `runUnmeasured` — all field reads — a getter that summarizes frames is
+   * indistinguishable from one that does not, and the call sites are loops and
+   * markup. Anything derived belongs in a `$derived`, which is cached; that is
+   * why every other heavy projection on this class is one.
+   */
   get runInfo(): RunInfo {
     const session = this.session ?? realisticQaScenario.sessions[0];
     const agent = this.agents.find(
@@ -395,7 +411,6 @@ export class AgentRunController {
     return {
       sessionId: session?.workflow_id ?? "unknown-session",
       agentLabel: agent?.label ?? "Agent",
-      models: summarizeCost(this.frames).modelBreakdown.map((item) => item.model),
       startedAt: session?.created_at ?? 0
     };
   }
