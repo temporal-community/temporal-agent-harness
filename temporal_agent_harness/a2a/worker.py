@@ -1,6 +1,6 @@
-# ABOUTME: Standalone Nexus worker exposing AgentService on its own task queue.
+# ABOUTME: Standalone worker exposing A2A plus harness controls over Nexus.
 #
-# Optional: AgentServiceHandler can instead be added to an agent's own Worker (same
+# Optional: the service handlers can instead be added to an agent's own Worker (same
 # process, same task queue as the workflow) — use this only if you want Nexus traffic
 # scaled independently.
 #
@@ -13,11 +13,17 @@ import asyncio
 import logging
 import os
 
+from nexus_a2a import a2a_nexus_data_converter
 from temporalio.client import Client
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
-from .handler import AgentServiceHandler, Config
+from temporal_agent_harness.a2a.adapter import (
+    A2AHandlerConfig,
+    A2AServiceHandler,
+    make_agent_card,
+)
+
+from .control_handler import HarnessControlConfig, HarnessControlServiceHandler
 
 logger = logging.getLogger(__name__)
 
@@ -41,19 +47,34 @@ async def main() -> None:
     client = await Client.connect(
         address,
         namespace=agent_namespace,
-        data_converter=pydantic_data_converter,
+        data_converter=a2a_nexus_data_converter,
     )
 
-    config = Config(
-        agent_task_queue=agent_task_queue,
-        workflow_name=agent_workflow_name,
-        workflow_id_prefix=workflow_id_prefix,
-        is_message_queuing_enabled=True,
-    )
+    control_config = HarnessControlConfig(workflow_id_prefix=workflow_id_prefix)
     worker = Worker(
         client,
         task_queue=nexus_task_queue,
-        nexus_service_handlers=[AgentServiceHandler(client, config)],
+        nexus_service_handlers=[
+            A2AServiceHandler(
+                client,
+                A2AHandlerConfig(
+                    agent_task_queue=agent_task_queue,
+                    workflow_name=agent_workflow_name,
+                    workflow_id_prefix=workflow_id_prefix,
+                    is_message_queuing_enabled=True,
+                    agent_card=make_agent_card(
+                        name=_env_or_default("AGENT_NAME", agent_workflow_name),
+                        description=_env_or_default(
+                            "AGENT_DESCRIPTION", "Temporal Agent Harness agent."
+                        ),
+                        endpoint=_env_or_default(
+                            "NEXUS_AGENT_ENDPOINT", "agent-endpoint"
+                        ),
+                    ),
+                ),
+            ),
+            HarnessControlServiceHandler(client, control_config),
+        ],
     )
 
     logger.info(

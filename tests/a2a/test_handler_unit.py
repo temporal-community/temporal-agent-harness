@@ -1,6 +1,6 @@
 # ABOUTME: Fast, no-server unit tests for handler.py's pure helper logic.
 #
-# Run with: uv run pytest tests/nexus_agent_adapter/test_handler_unit.py -v
+# Run with: uv run pytest tests/a2a/test_handler_unit.py -v
 
 from __future__ import annotations
 
@@ -8,14 +8,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from temporalio.converter import DataConverter
 
-from temporal_agent_harness.harness.agent_protocol.agent_interface import CallbackResultAck
-from temporal_agent_harness.nexus_agent_adapter.generated import (
+from temporal_agent_harness.a2a.control_handler import (
+    HarnessControlServiceHandler,
+    _is_workflow_not_found,
+)
+from temporal_agent_harness.a2a.generated import (
     ProvideCallbackResultInput,
     ProvideCallbackResultInputResult,
 )
-from temporal_agent_harness.nexus_agent_adapter.handler import (
-    AgentServiceHandler,
-    _is_workflow_already_completed,
+from temporal_agent_harness.harness.agent_protocol.agent_interface import (
+    CallbackResultAck,
 )
 
 _payload_converter = DataConverter.default.payload_converter
@@ -42,7 +44,7 @@ def test_provide_callback_result_input_result_round_trips() -> None:
     assert decoded.result.additional_properties == {"ok": True}
 
 
-@patch("temporal_agent_harness.nexus_agent_adapter.handler.AgentClient")
+@patch("temporal_agent_harness.a2a.control_handler.AgentClient")
 async def test_provide_callback_result_unwraps_result_before_forwarding(
     mock_agent_client_cls: MagicMock,
 ) -> None:
@@ -53,14 +55,16 @@ async def test_provide_callback_result_unwraps_result_before_forwarding(
     mock_agent_client.provide_callback_result = AsyncMock(
         return_value=CallbackResultAck(tool_id="t1", accepted=True)
     )
-    handler = AgentServiceHandler(client=MagicMock(), config=MagicMock())
+    handler = HarnessControlServiceHandler(client=MagicMock(), config=MagicMock())
 
     await handler.provide_callback_result(
         MagicMock(),
         ProvideCallbackResultInput(
             session_id="s1",
             tool_id="t1",
-            result=ProvideCallbackResultInputResult(additional_properties={"answer": 42}),
+            result=ProvideCallbackResultInputResult(
+                additional_properties={"answer": 42}
+            ),
         ),
     )
 
@@ -69,21 +73,13 @@ async def test_provide_callback_result_unwraps_result_before_forwarding(
     }
 
 
-def test_is_workflow_already_completed_true() -> None:
+def test_is_workflow_not_found_recognizes_temporal_error() -> None:
     err = MagicMock()
-    err.__str__.return_value = (
-        "rpc error: workflow execution already completed for id 'x'"
-    )
-    assert _is_workflow_already_completed(err) is True
+    err.__str__.return_value = "workflow not found for ID: missing-agent"
+    assert _is_workflow_not_found(err) is True
 
 
-def test_is_workflow_already_completed_case_insensitive() -> None:
-    err = MagicMock()
-    err.__str__.return_value = "Workflow Execution Already Completed"
-    assert _is_workflow_already_completed(err) is True
-
-
-def test_is_workflow_already_completed_false_for_unrelated_error() -> None:
+def test_is_workflow_not_found_false_for_unrelated_error() -> None:
     err = MagicMock()
     err.__str__.return_value = "deadline exceeded"
-    assert _is_workflow_already_completed(err) is False
+    assert _is_workflow_not_found(err) is False

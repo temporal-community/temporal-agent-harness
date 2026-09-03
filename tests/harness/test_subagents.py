@@ -22,6 +22,10 @@ from temporal_agent_harness.harness.agent_protocol import (
     ToolApprovalPolicy,
 )
 from temporal_agent_harness.harness.agent_workflow import _SubagentInstance, _WorkflowStatus
+from temporal_agent_harness.harness.subagent_transport import ChildWorkflowTransport
+
+# These tests do not dispatch through the transport.
+_FAKE_TRANSPORT = ChildWorkflowTransport("unused-workflow-type", "unused-task-queue")
 
 
 # A minimal child agent for exercising the toolset generator. No @workflow.defn is needed —
@@ -73,14 +77,14 @@ def _status() -> _WorkflowStatus:
 
 
 def test_gate_hands_out_tickets_in_call_order():
-    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k")
+    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k", transport=_FAKE_TRANSPORT)
     # Tickets are monotonic so gathered callers are ordered by the order they call take_ticket
     # (i.e. the model's call order), not by await scheduling.
     assert [inst.take_ticket() for _ in range(3)] == [0, 1, 2]
 
 
 def test_gate_serves_one_ticket_at_a_time_in_order():
-    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k")
+    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k", transport=_FAKE_TRANSPORT)
     t0, t1, t2 = inst.take_ticket(), inst.take_ticket(), inst.take_ticket()
 
     # Only the first ticket is admitted initially.
@@ -99,7 +103,7 @@ def test_gate_serves_one_ticket_at_a_time_in_order():
 
 
 def test_gate_sequential_take_serve_release_never_blocks():
-    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k")
+    inst = _SubagentInstance(handle="h", workflow_id="wf", agent_key="k", transport=_FAKE_TRANSPORT)
     # The common (non-concurrent) path: take → already serving → release, repeatedly. Each
     # ticket is served the moment it is taken (no waiting), since the prior one released.
     for expected in range(3):
@@ -114,7 +118,7 @@ def test_gate_sequential_take_serve_release_never_blocks():
 
 def test_register_keys_by_handle_and_stores_workflow_id():
     st = _status()
-    inst = st.register_subagent("a3f9c2", "sample-subagent-<uuid>", "sample")
+    inst = st.register_subagent("a3f9c2", "sample-subagent-<uuid>", "sample", _FAKE_TRANSPORT)
     assert inst.handle == "a3f9c2"
     assert inst.workflow_id == "sample-subagent-<uuid>"  # the real child id, hidden from the model
     assert inst.agent_key == "sample"
@@ -137,7 +141,7 @@ def test_lookup_unknown_subagent_raises_typed_error():
 
 def test_remove_subagent_is_idempotent_and_then_unknown():
     st = _status()
-    st.register_subagent("a3f9c2", "wf", "sample")
+    st.register_subagent("a3f9c2", "wf", "sample", _FAKE_TRANSPORT)
     st.remove_subagent("a3f9c2")
     with pytest.raises(ApplicationError):
         st.subagent("a3f9c2")
@@ -147,7 +151,7 @@ def test_remove_subagent_is_idempotent_and_then_unknown():
 
 def test_agent_status_lists_subagents_without_gate_internals():
     st = _status()
-    inst = st.register_subagent("a3f9c2", "sample-subagent-wf", "sample")
+    inst = st.register_subagent("a3f9c2", "sample-subagent-wf", "sample", _FAKE_TRANSPORT)
     inst.next_expected_turn = 4
     # Hand out a couple of gate tickets so the internal counters are non-default.
     inst.take_ticket()
@@ -273,14 +277,14 @@ def test_toolset_requires_at_least_one_handler():
     class _NoHandlers:
         pass
 
-    with pytest.raises(TypeError, match="no @agent.accepts handlers"):
+    with pytest.raises(TypeError, match="declares no callable handlers"):
         agent.subagent_toolset(_NoHandlers, key="x", task_queue="q")
 
 
 def test_distinct_subagents_have_independent_gates_and_counters():
     st = _status()
-    a = st.register_subagent("aaa111", "wf-a", "sample")
-    b = st.register_subagent("bbb222", "wf-b", "sample")
+    a = st.register_subagent("aaa111", "wf-a", "sample", _FAKE_TRANSPORT)
+    b = st.register_subagent("bbb222", "wf-b", "sample", _FAKE_TRANSPORT)
     # Same agent_key, but independent instances/gates so different subagents run concurrently.
     assert a is not b
     a.take_ticket()

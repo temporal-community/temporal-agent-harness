@@ -1,32 +1,29 @@
 # Scoped justfile for the Nexus-hello example (examples/nexus_hello).
 # Run from this directory: `just <recipe>`.
 #
-# Three separate Temporal namespaces, each with its own worker, so Nexus is actually brokering
-# real namespace boundaries rather than everything living in one namespace:
-#   default            the agent (this example's worker, session-manager, FastAPI/UI)
-#   gateway             the durable tools gateway (ToolRegistryWorkflow + its worker)
-#   nexus-mcp-server   the demo Nexus-native tool service (nexus_tool_service.py)
+# The example uses four Temporal namespaces:
+#   default                agent, session manager, API, and UI
+#   gateway                Durable Tools Gateway
+#   nexus-mcp-server       native MCP service
+#   nexus-subagent-server  native subagent
 #
-# workflow.py's mcp_servers=[nexus_gateway.mcp_server(["demo"]), nexus_native_mcp_server(...)]:
-# the 3rd-party tool ("demo") is proxied through the gateway and must be registered first
-# (register-third-party below, a plain `temporal workflow signal`, no SDK code). The native
-# tool ("demo-nexus") is called directly, no gateway, no registration at all. Tool lists are
-# fetched live, never cached. The gateway dispatches 3rd-party tool calls as standalone
-# Nexus activities (Nexus + SAA, experimental).
+# Native resources use Nexus directly. HTTP resources use the gateway and require
+# registration. The gateway uses standalone activities for HTTP calls.
 #
 # Self-contained local stack (each in its own terminal, in this order):
-#   just temporal             # 1. local Temporal dev server
-#   just setup-nexus          # 2. ONE-SHOT: creates the 3 namespaces + the 2 Nexus endpoints
-#   just tool-server          # 3. the demo 3rd-party (HTTP) MCP tool server
-#   just registry             # 4. durable tools gateway (no seed config -- starts empty)
-#   just nexus-tool-service   # 5. the demo Nexus-native tool service, on "nexus-mcp-server"
-#   just register-third-party # 6. ONE-SHOT: tags demo under agent_id "NexusHelloAgent"
-#                             #    (needs tool-server up -- the gateway fetches its tools)
-#   just session-manager      # 7. packaged session-manager worker
-#   just server               # 8. FastAPI API + UI on :8000
-#   just worker               # 9. this example's agent worker, on "default"
-#
-# Open the UI and start chatting -- both tools work immediately.
+#   just temporal                        # 1. local Temporal dev server
+#   just setup-nexus                     # 2. ONE-SHOT: creates the 4 namespaces + the 3 Nexus endpoints
+#   just third-party-mcp-server          # 3. the demo 3rd-party (HTTP) MCP tool server
+#   just third-party-subagent            # 4. the demo 3rd-party (HTTP) subagent
+#   just registry                        # 5. durable tools gateway (no seed config -- starts empty)
+#   just nexus-tool-service              # 6. the demo Nexus-native tool service, on "nexus-mcp-server"
+#   just nexus-subagent                  # 7. native subagent workflow and Nexus service
+#   just register-third-party-mcp-server # 8. ONE-SHOT: tags demo under agent_id "NexusHelloAgent"
+#                                        #    (needs third-party-mcp-server up -- the gateway fetches its tools)
+#   just register-third-party-subagent   # 9. ONE-SHOT: tags writer under agent_id "NexusHelloAgent"
+#   just session-manager                 # 10. packaged session-manager worker
+#   just server                          # 11. FastAPI API + UI on :8000
+#   just worker                          # 12. this example's agent worker, on "default"
 #
 # Requires the `nexus-mcp` extra (Python >=3.13): `uv sync --extra nexus-mcp` (or a plain
 # `uv sync` picks it up too, since the repo's `dev` group includes it on 3.13+).
@@ -52,10 +49,13 @@ set working-directory := "../.."
 default_namespace := "default"
 gateway_namespace := "gateway"
 nexus_mcp_server_namespace := "nexus-mcp-server"
+nexus_subagent_server_namespace := "nexus-subagent-server"
 registry_endpoint := "mcp-registry-endpoint"
 demo_nexus_endpoint := "nexus-hello-demo-endpoint"
-# Gateway registrations are keyed by agent_id -- this must match workflow.py's
-# @workflow.defn(name=...) (nexus_tools_gateway() infers agent_id from workflow_type).
+subagent_nexus_endpoint := "nexus-hello-subagent-endpoint"
+# The native subagent workflow and Nexus service share this task queue.
+subagent_task_queue := "nexus-hello-subagent"
+# This must match the workflow type because the gateway infers the agent ID from it.
 agent_id := "NexusHelloAgent"
 
 # List available recipes (bare `just`).
@@ -82,18 +82,19 @@ temporal:
         --dynamic-config-value 'nexusoperation.enableStandalone=true' \
         --dynamic-config-value 'activity.enableStandalone=true'
 
-# ONE-SHOT: create the "gateway" and "nexus-mcp-server" namespaces (the agent's own "default"
-# namespace already exists on a fresh dev server) and the two Nexus endpoints that let the
-# agent (default) reach across namespace boundaries:
-#   mcp-registry-endpoint     -> gateway            (reaching the gateway)
-#   nexus-hello-demo-endpoint -> nexus-mcp-server    (calling the demo Nexus tool)
-# Safe to re-run — failures from things already existing are printed and ignored.
+# Create the four namespaces and three Nexus endpoints:
+#   mcp-registry-endpoint        -> gateway               (reaching the gateway, both kinds)
+#   nexus-hello-demo-endpoint    -> nexus-mcp-server       (calling the demo Nexus tool)
+#   nexus-hello-subagent-endpoint -> nexus-subagent-server (calling the demo Nexus subagent)
+# Existing resources cause warnings and do not stop the recipe.
 setup-nexus:
     temporal operator namespace create --namespace {{default_namespace}} \
         || echo "(namespace create failed — probably already exists; continuing)"
     temporal operator namespace create --namespace {{gateway_namespace}} \
         || echo "(namespace create failed — probably already exists; continuing)"
     temporal operator namespace create --namespace {{nexus_mcp_server_namespace}} \
+        || echo "(namespace create failed — probably already exists; continuing)"
+    temporal operator namespace create --namespace {{nexus_subagent_server_namespace}} \
         || echo "(namespace create failed — probably already exists; continuing)"
     temporal operator nexus endpoint create \
         --name {{registry_endpoint}} \
@@ -105,15 +106,23 @@ setup-nexus:
         --target-namespace {{nexus_mcp_server_namespace}} \
         --target-task-queue nexus-hello-nexus-tools \
         || echo "(endpoint create failed — probably already exists; continuing)"
+    temporal operator nexus endpoint create \
+        --name {{subagent_nexus_endpoint}} \
+        --target-namespace {{nexus_subagent_server_namespace}} \
+        --target-task-queue {{subagent_task_queue}} \
+        || echo "(endpoint create failed — probably already exists; continuing)"
 
-# The durable tool call gateway, on its own "gateway" namespace: a plain Nexus service worker.
-# No seed config -- see register-third-party below for the one-shot registration step.
+# Run the gateway for both HTTP resource types.
 registry:
     cd "{{root}}" && TEMPORAL_NAMESPACE={{gateway_namespace}} uv run --extra nexus-mcp --group examples python -m nexus_mcp.durable_tools_gateway.worker
 
 # The demo 3rd-party MCP tool server this example's agent calls through the gateway.
-tool-server:
+third-party-mcp-server:
     cd "{{root}}" && uv run --extra nexus-mcp python -m examples.nexus_hello.tool_server
+
+# Run the HTTP subagent used through the gateway.
+third-party-subagent:
+    cd "{{root}}" && uv run --extra nexus-mcp --group examples python -m examples.nexus_hello.subagent_server
 
 # The demo Nexus-native tool service, on its own "nexus-mcp-server" namespace. Calls to its
 # tool are dispatched via workflow.create_nexus_client() from the agent's "default" namespace
@@ -121,11 +130,15 @@ tool-server:
 nexus-tool-service:
     cd "{{root}}" && TEMPORAL_NAMESPACE={{nexus_mcp_server_namespace}} uv run --extra nexus-mcp python -m examples.nexus_hello.nexus_tool_service
 
+# Run the native subagent workflow and Nexus service in one worker.
+nexus-subagent:
+    cd "{{root}}" && TEMPORAL_NAMESPACE={{nexus_subagent_server_namespace}} uv run --group examples python -m examples.nexus_hello.native_subagent worker
+
 # ONE-SHOT: registers "demo" under agent_id "NexusHelloAgent" with the gateway. Plain
-# signal straight to ToolRegistryWorkflow, no SDK code needed. Validates tool-server is
+# signal straight to ToolRegistryWorkflow, no SDK code needed. Validates third-party-mcp-server is
 # reachable; tools are fetched live later. Run after setup-nexus, registry, and
-# tool-server are up. Safe to re-run.
-register-third-party:
+# third-party-mcp-server are up. Safe to re-run.
+register-third-party-mcp-server:
     temporal workflow signal \
         --namespace {{gateway_namespace}} \
         --workflow-id mcp-tool-registry \
@@ -133,6 +146,16 @@ register-third-party:
         --input '"{{agent_id}}"' \
         --input '"demo"' \
         --input '"http://127.0.0.1:8765/mcp"'
+
+# Register the HTTP subagent after the gateway and server start.
+register-third-party-subagent:
+    temporal workflow signal \
+        --namespace {{gateway_namespace}} \
+        --workflow-id mcp-tool-registry \
+        --name register_subagent \
+        --input '"{{agent_id}}"' \
+        --input '"writer"' \
+        --input '"http://127.0.0.1:8766"'
 
 # Run the shared session-manager worker (examples/session_manager_worker.py).
 session-manager:

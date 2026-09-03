@@ -703,6 +703,52 @@ class ApproveToolCallOutput:
     """
 
 
+class _CloseSessionOutputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["CloseSessionOutput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["CloseSessionOutput"]
+    ) -> "CloseSessionOutput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        closed_value: bool = typing.cast("typing.Any", None)
+        if "closed" not in raw or raw["closed"] is None:
+            violations.append(Violation(path="closed", reason="required"))
+        else:
+            closed_value_raw = raw["closed"]
+            if not isinstance(closed_value_raw, bool):
+                violations.append(Violation(path="closed", reason="expected boolean"))
+            else:
+                closed_value = closed_value_raw
+
+        for key in raw:
+            if key != "closed":
+                violations.append(Violation(path=key, reason="unknown field"))
+        if violations:
+            raise ValidationError(violations)
+        return CloseSessionOutput(
+            closed=closed_value,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "CloseSessionOutput") -> typing.Any:
+        out: dict[str, typing.Any] = {}
+        out["closed"] = value.closed
+        return out
+
+
+@_transfer_type_convertible(_CloseSessionOutputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class CloseSessionOutput:
+
+    closed: bool
+    """Always true on success"""
+
+
 class _ExecuteOperatorCommandInputTransferTypeConverter(
     temporalio.converter.TransferTypeConverter["ExecuteOperatorCommandInput", typing.Any]
 ):
@@ -1892,8 +1938,18 @@ class _SendAgentMessageInputTransferTypeConverter(
             else:
                 payload_value = payload_value_raw
 
+        expected_turn_value: int | None = None
+        if "expectedTurn" in raw:
+            expected_turn_value_raw = raw["expectedTurn"]
+            if expected_turn_value_raw is None:
+                violations.append(Violation(path="expectedTurn", reason="explicit null not allowed"))
+            else:
+                expected_turn_value_parsed = _parse_spec_integer(expected_turn_value_raw, "expectedTurn", violations)
+                if expected_turn_value_parsed is not None:
+                    expected_turn_value = expected_turn_value_parsed
+
         for key in raw:
-            if key != "sessionId" and key != "msgType" and key != "payload":
+            if key != "sessionId" and key != "msgType" and key != "payload" and key != "expectedTurn":
                 violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
@@ -1901,6 +1957,7 @@ class _SendAgentMessageInputTransferTypeConverter(
             session_id=session_id_value,
             msg_type=msg_type_value,
             payload=payload_value,
+            expected_turn=expected_turn_value,
         )
 
     @typing_extensions.override
@@ -1909,6 +1966,8 @@ class _SendAgentMessageInputTransferTypeConverter(
         out["sessionId"] = value.session_id
         out["msgType"] = value.msg_type
         out["payload"] = value.payload
+        if value.expected_turn is not None:
+            out["expectedTurn"] = value.expected_turn
         return out
 
 
@@ -1925,6 +1984,13 @@ class SendAgentMessageInput:
     payload: str
     """JSON-encoded input matching the target handler's input model (e.g.
     '{"text":"hello"}' for the 'ask' handler)
+    """
+
+    expected_turn: int | None = None
+    """Caller-known next turn number. Set this when the caller already tracks turn state
+    (e.g. a subagent-driving parent) - the send fails fast with StaleTurn on a mismatch
+    instead of guessing. Omit to fall back to guess-and-retry (e.g. Slack, which has no
+    local turn state).
     """
 
 

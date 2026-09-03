@@ -11,13 +11,18 @@ workflow_type = "NexusHelloAgent"
 task_queue = "nexus-hello"
 label = "Nexus Hello"
 description = """
-A hello-world OpenAI Agents SDK agent using nexus_tools_gateway() (agent_id inferred
-from this workflow_type, "NexusHelloAgent") and nexus_native_mcp_server():
+A hello-world OpenAI Agents SDK agent using nexus_tools_gateway() / nexus_native_mcp_server()
+for tools, and agent.nexus_subagent_gateway() / agent.nexus_native_subagent() for subagents
+(agent_id inferred from this workflow_type, "NexusHelloAgent"):
 
 - demo_get_fun_fact (a 3rd-party MCP server, proxied through the Durable Tools Gateway
   -- registered ahead of time under agent_id "NexusHelloAgent")
 - demo-nexus_get_lucky_number (a Nexus-native MCP server, reached directly -- no
   gateway, no registration)
+- research (a Nexus-native SUBAGENT, reached directly -- no gateway, no registration)
+- writer (a 3rd-party SUBAGENT, proxied through the SAME Durable Tools Gateway as
+  demo_get_fun_fact -- registered ahead of time under agent_id "NexusHelloAgent")
 
-Needs `just setup-nexus`, the gateway, both tool services/servers, and `just
-register-third-party` run first — see examples/nexus_hello/README.md."""
+Needs `just setup-nexus`, the gateway, all four tool/subagent services, and `just
+register-third-party-mcp-server` + `just register-third-party-subagent` run first — see
+examples/nexus_hello/README.md."""

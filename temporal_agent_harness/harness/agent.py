@@ -57,13 +57,24 @@ from temporal_agent_harness.harness.agent_workflow import (
     tool_defn,
 )
 from temporal_agent_harness.harness.code_mode import code_mode_tool
-from temporal_agent_harness.harness.subagent_toolset import subagent_toolset
+from temporal_agent_harness.harness.subagent_nexus_transport import NexusTransport
+from temporal_agent_harness.harness.subagent_toolset import (
+    SubagentGateway,
+    declared_handler,
+    nexus_native_subagent,
+    nexus_subagent_gateway,
+    subagent_toolset,
+)
+from temporal_agent_harness.harness.subagent_transport import ChildWorkflowTransport
 
 __all__ = [
     "AgentToolContext",
     "CallbackToolError",
+    "ChildWorkflowTransport",
     "CustomApprovalFallback",
     "Injected",
+    "NexusTransport",
+    "SubagentGateway",
     "ToolApprovalContext",
     "ToolApprovalDenied",
     "ToolApprovalPolicy",
@@ -71,7 +82,10 @@ __all__ = [
     "activity_tool_defn",
     "callback_tool_defn",
     "code_mode_tool",
+    "declared_handler",
     "defn",
+    "nexus_native_subagent",
+    "nexus_subagent_gateway",
     "subagent_toolset",
     "tool_activity",
     "tool_defn",

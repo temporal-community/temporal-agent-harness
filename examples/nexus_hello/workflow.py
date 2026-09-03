@@ -1,19 +1,7 @@
-"""Hello-world OpenAI Agents SDK agent with two tools reached over Nexus.
+"""OpenAI Agents SDK example with native and gateway Nexus resources.
 
-    nexus_gateway = nexus_tools_gateway()  # agent_id inferred from workflow_type
-    mcp_servers=[
-        nexus_gateway.mcp_servers("demo"),
-        nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
-    ]
-
-For this demo, the tools are:
-  - demo_get_fun_fact: a 3rd-party (non-Nexus) MCP server, proxied through the Durable
-    Tools Gateway ("demo" -> http://127.0.0.1:8765/mcp). Registered under agent_id
-    "NexusHelloAgent" (this workflow's type) with the gateway ahead of time.
-  - demo-nexus_get_lucky_number: a Nexus-native MCP server, called directly -- no
-    gateway, no registration ("demo-nexus" -> "nexus-hello-demo-endpoint").
-
-The agent only knows about them when listing tools via the MCP protocol.
+The agent has one native MCP tool, one gateway MCP tool, one native subagent, and one
+gateway subagent. The model decides when to call each resource.
 """
 
 from __future__ import annotations
@@ -26,6 +14,7 @@ with workflow.unsafe.imports_passed_through():
     from agents import Runner, TResponseInputItem
 
     from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+        harness_tool_as_openai_tool,
         nexus_native_mcp_server,
         nexus_tools_gateway,
     )
@@ -38,18 +27,26 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
+    from .native_subagent import NativeResearchSubagentWorkflow
+
 TASK_QUEUE = "nexus-hello"
+WORKFLOW_NAME = "NexusHelloAgent"
 DEFAULT_MODEL = "gpt-5.1"
 
 SYSTEM_INSTRUCTION = """\
 You are a friendly assistant. Answer the user in brief, natural prose.
 """
 
+RESEARCH_SUBAGENT_ENDPOINT = "nexus-hello-subagent-endpoint"
+RESEARCH_KEY = "research"
+WRITER_KEY = "writer"
+WRITER_ALIAS = "writer"
 
-@workflow.defn(name="NexusHelloAgent")
+
+@workflow.defn(name=WORKFLOW_NAME)
 @agent.defn
 class NexusHelloAgentWorkflow:
-    """A conversational agent with two tools reached over Nexus."""
+    """A conversational agent with two tools and two subagents, all reached over Nexus."""
 
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
@@ -67,8 +64,27 @@ class NexusHelloAgentWorkflow:
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
-        """Ask the agent a question; it may use its Nexus-brokered tools to answer."""
+        """Ask a question. The model can use Nexus tools and subagents."""
         nexus_gateway = nexus_tools_gateway()
+        subagent_gateway = agent.nexus_subagent_gateway()
+
+        research_tools = agent.nexus_native_subagent(
+            NativeResearchSubagentWorkflow, RESEARCH_SUBAGENT_ENDPOINT, key=RESEARCH_KEY
+        )
+        writer_tools = subagent_gateway.subagent(
+            [
+                agent.declared_handler(
+                    "ask",
+                    "Ask the writer subagent a question.",
+                    TextMessage,
+                    TextReply,
+                    param_name="message",
+                )
+            ],
+            WRITER_ALIAS,
+            key=WRITER_KEY,
+        )
+
         sdk_agent = OpenAIAgent(
             name="NexusHello",
             instructions=SYSTEM_INSTRUCTION,
@@ -76,6 +92,10 @@ class NexusHelloAgentWorkflow:
             mcp_servers=[
                 nexus_gateway.mcp_servers("demo"),
                 nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
+            ],
+            tools=[
+                harness_tool_as_openai_tool(fn)
+                for fn in [*research_tools, *writer_tools]
             ],
         )
         input_items: list[TResponseInputItem] = [
