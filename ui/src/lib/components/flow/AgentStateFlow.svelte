@@ -375,6 +375,22 @@
     z-index: 2;
   }
 
+  /* Puts back the baseline ring app.css gives every other focusable thing. A
+     node was the one focusable element on the page with none: the library's own
+     stylesheet sets `outline: none` on .svelte-flow__node.selectable:focus-visible,
+     so tabbing the canvas moved an invisible cursor. Nested under .flow-wrap
+     rather than written flat, because that rule is three classes deep and a
+     flat :global() would lose to it — the scoped ancestor is how this file
+     outranks a vendor stylesheet without a specificity hack.
+
+     Offset outward, because a flush outline is what selection draws: a keyboard
+     user who has focused a node without selecting it must not be shown the
+     selected mark, and a node that is both wears the two rings concentrically. */
+  .flow-wrap :global(.svelte-flow__node:focus-visible) {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
   :global(.svelte-flow__edge-text) {
     fill: var(--text-2);
     font-size: var(--font-sm);

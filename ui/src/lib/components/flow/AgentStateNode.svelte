@@ -247,9 +247,21 @@
     outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
   }
 
+  /* Same three cues the transcript spends on the row at the playhead
+     (.turn-group.active-turn): the hairline brightens neutrally, the surface
+     lifts, and the left edge marker fills in. Not a brighter edge in the tone,
+     which is what this used to be — colour on this card already names the
+     node's KIND, so a lit-up kind hue has to say "current" through a channel
+     that is taken, and the only way it could be heard over eight equally
+     colourful siblings was to get thick. A surface that is simply lighter than
+     every other card is findable at a glance and adds no stroke at all. */
   .state-node.active {
-    border-color: color-mix(in srgb, var(--tone-color, var(--accent)) 72%, white 8%);
-    box-shadow: var(--shadow-node-raised);
+    border-color: var(--border-strong);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--tone-color, var(--text-2)) 14%, var(--surface-2)),
+      var(--surface-1)
+    );
   }
 
   .state-node.active::before {
@@ -317,11 +329,6 @@
   .title-dot.reasoning { background: var(--reasoning); }
   .title-dot.tool { background: var(--warning); }
   .title-dot.approval { background: var(--queue); }
-
-  .state-node.model.active {
-    border-color: color-mix(in srgb, var(--model) 72%, white 8%);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--model) 45%, transparent);
-  }
 
   :global(.node-handle) {
     width: 1px;
