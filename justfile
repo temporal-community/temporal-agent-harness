@@ -67,7 +67,7 @@ temporal-latest-ui:
         -e TEMPORAL_ADDRESS=host.docker.internal:7233 \
         temporalio/ui
 
-# Create/update the namespaces and Nexus endpoint needed by the chat connector.
+# Create/update the namespaces and Nexus endpoint used by the packaged browser UI.
 setup-nexus:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -84,28 +84,41 @@ setup-nexus:
 
     endpoint_args=(
         --address "${address}"
-        --name nexus-agent-endpoint
+        --name agent-harness-ui-endpoint
         --target-namespace default
-        --target-task-queue nexus-agent-go
+        --target-task-queue session-manager
     )
-
-    if temporal operator nexus endpoint get --address "${address}" --name nexus-agent-endpoint >/dev/null 2>&1; then
-        echo "Updating Nexus endpoint nexus-agent-endpoint..."
+    if temporal operator nexus endpoint get --address "${address}" --name agent-harness-ui-endpoint >/dev/null 2>&1; then
+        echo "Updating Nexus endpoint agent-harness-ui-endpoint..."
         temporal operator nexus endpoint update "${endpoint_args[@]}"
     else
-        echo "Creating Nexus endpoint nexus-agent-endpoint..."
-        # The server validates the target namespace against a registry cache that
-        # can lag a few seconds behind namespace creation, so retry until it lands.
+        echo "Creating Nexus endpoint agent-harness-ui-endpoint..."
+        # Namespace registration can take a moment to become visible to the
+        # endpoint API on a freshly started local server.
+        endpoint_created=false
         for attempt in {1..30}; do
             if temporal operator nexus endpoint create "${endpoint_args[@]}" 2>/dev/null; then
-                exit 0
+                endpoint_created=true
+                break
             fi
             sleep 1
         done
-        echo "error: failed to create Nexus endpoint nexus-agent-endpoint after 30s" >&2
-        # Run once more without suppressing stderr so the real error is shown.
-        temporal operator nexus endpoint create "${endpoint_args[@]}"
+        if ${endpoint_created}; then
+            echo "Created Nexus endpoint agent-harness-ui-endpoint."
+        else
+            echo "error: failed to create Nexus endpoint agent-harness-ui-endpoint after 30s" >&2
+            temporal operator nexus endpoint create "${endpoint_args[@]}"
+        fi
     fi
+
+# Run the shared session-scoped UI tunnel. Slack, Teams, and browser drivers all
+# mount this workflow; it polls A2A once and multicasts the rich stream.
+ui-tunnel:
+    cd "{{nexus_dir}}/ui_connector" && \
+    TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
+    CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
+    CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-ui-tunnel}" \
+    go run ./cmd/tunnel/
 
 # Run the Slack connector worker. Safe to run multiple instances.
 # Requires: SLACK_BOT_TOKEN
@@ -114,27 +127,20 @@ slack-connector:
     SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN}" \
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
-    CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-slack}" \
+    SLACK_DRIVER_TASK_QUEUE="${SLACK_DRIVER_TASK_QUEUE:-nexus-connector-slack}" \
     go run ./slack/cmd/worker/
 
 # Run the Slack webhook server.
-# Requires: SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET
+# Requires: SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET, NEXUS_AGENT_ENDPOINT
 slack-webhook:
     cd "{{nexus_dir}}/ui_connector" && \
     SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN}" \
     SLACK_SIGNING_SECRET="${SLACK_SIGNING_SECRET}" \
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
-    CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-slack}" \
+    CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-ui-tunnel}" \
+    SLACK_DRIVER_TASK_QUEUE="${SLACK_DRIVER_TASK_QUEUE:-nexus-connector-slack}" \
     go run ./slack/cmd/webhook/
-
-# Run the Teams Connector workflow worker. Safe to run multiple instances.
-teams-connector:
-    cd "{{nexus_dir}}/ui_connector" && \
-    TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
-    CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
-    CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \
-    go run ./teams/cmd/worker/
 
 # Run the Python Teams SDK activity worker. Safe to run multiple instances.
 # Requires: MICROSOFT_TENANT_ID, MICROSOFT_APP_ID, MICROSOFT_APP_PASSWORD
@@ -146,15 +152,16 @@ teams-activities-worker:
     TEAMS_SERVICE_URL="${TEAMS_SERVICE_URL:-}" \
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
-    CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \
+    TEAMS_DRIVER_TASK_QUEUE="${TEAMS_DRIVER_TASK_QUEUE:-nexus-connector-teams}" \
     uv run python -m teams_activity_worker.worker
 
-# Run the Teams webhook server.
+# Run the Teams webhook server. Requires: NEXUS_AGENT_ENDPOINT
 teams-webhook:
     cd "{{nexus_dir}}/ui_connector" && \
     TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
     CONNECTOR_NAMESPACE="${CONNECTOR_NAMESPACE:-connector}" \
-    CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-connector-teams}" \
+    CONNECTOR_TASK_QUEUE="${CONNECTOR_TASK_QUEUE:-nexus-ui-tunnel}" \
+    TEAMS_DRIVER_TASK_QUEUE="${TEAMS_DRIVER_TASK_QUEUE:-nexus-connector-teams}" \
     go run ./teams/cmd/webhook/
 
 # ===== Run ALL example agents behind one UI (each example is still runnable from its own dir) =====
@@ -258,10 +265,10 @@ coding-shim *ARGS:
 reset-manager:
     temporal workflow terminate -w session-manager || true
 
-# Run the standalone Nexus worker exposing AgentService. AGENT_WORKFLOW_NAME is required —
+# Run the standalone Nexus worker exposing A2A plus harness-specific controls. AGENT_WORKFLOW_NAME is required —
 # see worker.py for the rest of the env vars.
 nexus-agent-worker:
-    uv run python -m temporal_agent_harness.nexus_agent_adapter.worker
+    uv run python -m temporal_agent_harness.a2a.worker
 
 # Installs the newest nex-gen release into ~/.local/bin. Tracks latest, not a pinned
 # version, while nex-gen is under active development.
@@ -284,10 +291,10 @@ install-nexgen:
     echo "Installing nex-gen $TAG ($TARGET) to $BINDIR..."
     mkdir -p "$BINDIR" && curl -sL "$URL" | tar xz -C "$BINDIR" nexgen && chmod +x "$BINDIR/nexgen"
 
-# Gets the contract from remote and regenerates the Python AgentService bindings.
+# Regenerates the Python harness-control bindings. Agent traffic itself uses A2A.
 nexus-agent-generate: install-nexgen
-    "$HOME/.local/bin/nexgen" python temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml \
-        --output temporal_agent_harness/nexus_agent_adapter/generated
+    "$HOME/.local/bin/nexgen" python temporal_agent_harness/a2a/harness_control.nexusrpc.yaml \
+        --output temporal_agent_harness/a2a/generated
 
 # Gets the contract from local and regenerates the Durable Tools Gateway's Python bindings.
 generate-registry-contract: install-nexgen

@@ -8,36 +8,20 @@ from .models import (
     AgentStatusOutput,
     ApproveToolCallInput,
     ApproveToolCallOutput,
-    CloseSessionOutput,
     ExecuteOperatorCommandInput,
     ExecuteOperatorCommandOutput,
-    PollMessagesInput,
-    PollMessagesOutput,
     ProvideCallbackResultInput,
     ProvideCallbackResultOutput,
     QueryOperatorInterfaceOutput,
     QuerySessionInput,
-    SendAgentMessageInput,
-    SendMessageOutput,
 )
 
 
 @service
-class AgentService:
-    """Nexus service that exposes an agent session to external callers (e.g. the Slack
-    connector). The connector calls sendAgentMessage to deliver user input and
-    pollMessages to consume the agent's response stream.
+class HarnessControlService:
+    """Harness-specific approval, callback, status, and operator controls that
+    intentionally sit outside the standard A2A data plane.
     """
-    send_agent_message: Operation[
-        SendAgentMessageInput,
-        SendMessageOutput,
-    ] = Operation(name="SendAgentMessage")
-    """Start or reuse an agent workflow session and deliver a message to a named
-    @agent.accepts handler. Mirrors AgentClient.send_message() - msgType is the handler
-    name (e.g. 'ask', 'slash'), payload is its JSON-encoded input model. Returns the
-    turn output for polling via pollMessages.
-    """
-
     execute_operator_command: Operation[
         ExecuteOperatorCommandInput,
         ExecuteOperatorCommandOutput,
@@ -60,8 +44,8 @@ class AgentService:
         AgentInterfaceOutput,
     ] = Operation(name="QueryAgentInterface")
     """Return the list of @agent.accepts handlers the agent exposes - name, description,
-    and input/output schemas - mirroring AgentClient.get_agent_interface(). Use this to
-    construct valid sendAgentMessage payloads or to model the agent as a subagent tool.
+    and input/output schemas - mirroring AgentClient.get_agent_interface().
+    Harness-aware UIs may use this to construct A2A messages for a named handler.
     """
 
     query_operator_interface: Operation[
@@ -82,16 +66,6 @@ class AgentService:
     AgentClient.get_status().
     """
 
-    poll_messages: Operation[
-        PollMessagesInput,
-        PollMessagesOutput,
-    ] = Operation(name="PollMessages")
-    """Async operation - attaches a completion callback to WorkflowStream's built-in poll
-    update so reply_delta events published from the agent workflow are delivered.
-    Returns a batch of stream items (WorkflowStream PollResult wire format) plus the
-    next cursor.
-    """
-
     provide_callback_result: Operation[
         ProvideCallbackResultInput,
         ProvideCallbackResultOutput,
@@ -99,12 +73,4 @@ class AgentService:
     """Fulfill a pending callback tool call (a tool with no worker-side body - an attached
     client executes it and submits the outcome here). Mirrors
     AgentClient.provide_callback_result(). Exactly one of result/error should be set.
-    """
-
-    close_session: Operation[
-        QuerySessionInput,
-        CloseSessionOutput,
-    ] = Operation(name="CloseSession")
-    """Signal the target agent workflow to close gracefully. Mirrors AgentClient.close() /
-    the harness 'close' signal a human/UI uses.
     """

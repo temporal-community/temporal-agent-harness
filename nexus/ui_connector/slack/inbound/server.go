@@ -14,21 +14,17 @@ import (
 	"github.com/slack-go/slack/slackevents"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	slackoutbound "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/slack/outbound"
-	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/sdk/client"
 )
 
 const (
 	routeEvents       = "/slack/events"
 	routeInteractions = "/slack/interactions"
 	routeCommands     = "/slack/commands"
-	defaultIdentity   = "default"
 )
 
 type webhookServer struct {
-	tc                 client.Client
-	taskQueue          string
-	identity           string
+	tunnel             router.Client
+	deliveryTaskQueue  string
 	signingSecret      string
 	botUserID          string
 	slashCommandPrefix string
@@ -52,18 +48,14 @@ type webhookServer struct {
 // allowedBotIDs are other bots allowed to trigger this server. Every other
 // bot message is still ignored, including this bot's own echoes. Pass nil
 // or empty to allow none (today's behavior).
-func NewServer(tc client.Client, taskQueue, identity, signingSecret, botUserID, slashCommandPrefix string, allowedBotIDs []string) *webhookServer {
-	if identity == "" {
-		identity = defaultIdentity
-	}
+func NewServer(tunnel router.Client, deliveryTaskQueue, signingSecret, botUserID, slashCommandPrefix string, allowedBotIDs []string) *webhookServer {
 	allowedBotIDSet := make(map[string]struct{}, len(allowedBotIDs))
 	for _, id := range allowedBotIDs {
 		allowedBotIDSet[id] = struct{}{}
 	}
 	s := &webhookServer{
-		tc:                 tc,
-		taskQueue:          taskQueue,
-		identity:           identity,
+		tunnel:             tunnel,
+		deliveryTaskQueue:  deliveryTaskQueue,
 		signingSecret:      signingSecret,
 		botUserID:          botUserID,
 		slashCommandPrefix: slashCommandPrefix,
@@ -138,9 +130,9 @@ func (s *webhookServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 				mentioned := s.isMentioned(ev)
 				switch {
 				case mentioned:
-					s.signalIncomingMessage(r.Context(), ev, mentioned)
+					s.signalIncomingMessage(r.Context(), ev)
 				case ev.ThreadTimeStamp != "" && s.threadHasBotSession(r.Context(), ev.Channel, ev.ThreadTimeStamp):
-					s.signalIncomingMessage(r.Context(), ev, mentioned)
+					s.signalIncomingMessage(r.Context(), ev)
 				}
 			}
 		}
@@ -164,54 +156,32 @@ func threadSessionID(channel, threadRoot string) string {
 	return fmt.Sprintf("slack:%s:%s", channel, threadRoot)
 }
 
-// threadHasBotSession reports whether any router workflow was ever started for this
-// thread - which only happens when some message in it mentioned the bot, since a
-// mention-free message only reaches signalIncomingMessage once this check already
-// passed. The bot may have been mentioned on the thread root or on any reply deep in
-// the thread, so the triggering message's own ts (baked into the trailing segment of
-// its workflow ID) isn't known in advance; every router workflow for this thread
-// shares the same "connector-<identity>-<sessionID>-" prefix though, since sessionID
-// is scoped to the thread rather than the message. A prefix search on that avoids
-// starting a router workflow, and querying the backend, for every reply in threads
-// that never involved the bot.
+// threadHasBotSession asks the A2A/HarnessControl front door whether this thread's
+// agent task exists. Mention-free replies only continue threads that already mounted
+// the bot; checking the agent avoids retaining a connector workflow between turns.
 func (s *webhookServer) threadHasBotSession(ctx context.Context, channel, threadRoot string) bool {
-	prefix := router.RouterWorkflowIDPrefix(s.identity, threadSessionID(channel, threadRoot))
-	resp, err := s.tc.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{
-		Query:    fmt.Sprintf("WorkflowId STARTS_WITH %q", prefix),
-		PageSize: 1,
-	})
-	if err != nil {
-		log.Printf("threadHasBotSession: list workflows for prefix %s failed: %v", prefix, err)
-		return false
-	}
-	return len(resp.GetExecutions()) > 0
+	return s.tunnel.Exists(ctx, threadSessionID(channel, threadRoot))
 }
 
-func (s *webhookServer) signalIncomingMessage(ctx context.Context, ev *slackevents.MessageEvent, mentioned bool) {
+func (s *webhookServer) signalIncomingMessage(ctx context.Context, ev *slackevents.MessageEvent) {
 	threadRoot := ev.ThreadTimeStamp
 	if threadRoot == "" {
 		threadRoot = ev.TimeStamp
 	}
 	sessionID := threadSessionID(ev.Channel, threadRoot)
-	msg := router.IncomingMessage{
-		MessageID:               ev.TimeStamp,
-		Sender:                  ev.User,
-		Text:                    ev.Text,
-		Timestamp:               ev.TimeStamp,
-		ThreadID:                threadRoot,
-		RequiresExistingSession: !mentioned,
-	}
-	wfID := router.RouterWorkflowID(s.identity, sessionID, ev.TimeStamp)
-	if _, err := s.tc.ExecuteWorkflow(ctx,
-		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
-		router.WorkflowName,
-		router.Input{
-			Identity:  s.identity,
-			SessionID: sessionID,
-			Message:   &msg,
-		},
-	); err != nil {
-		log.Printf("Failed to start connector workflow: %v", err)
+	metadata := router.TextMetadata{SenderID: ev.User, SessionID: sessionID, ThreadID: threadRoot}
+	context, _ := json.Marshal(slackoutbound.DeliveryContext{Metadata: metadata})
+	_, err := s.tunnel.SendAndMount(ctx, sessionID, "slack-message-"+ev.TimeStamp,
+		router.SendAndMountInput{
+			Subscriber: router.Subscriber{
+				ID:       "slack:" + sessionID,
+				Mode:     router.Participant,
+				Delivery: &router.DeliveryTarget{Activity: slackoutbound.DeliverA2AActivity, TaskQueue: s.deliveryTaskQueue, Context: context},
+			},
+			Message: router.SendMessageInput{MessageType: "ask", Payload: map[string]any{"text": ev.Text}},
+		})
+	if err != nil {
+		log.Printf("Failed to submit Slack message through UI tunnel: %v", err)
 	}
 }
 
@@ -239,26 +209,29 @@ func (s *webhookServer) handleSlashCommands(w http.ResponseWriter, r *http.Reque
 	}
 
 	sessionID := fmt.Sprintf("slack:%s", channelID)
-
-	wfID := router.RouterWorkflowID(s.identity, sessionID, triggerID)
-	if _, err := s.tc.ExecuteWorkflow(r.Context(),
-		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
-		router.WorkflowName,
-		router.Input{
-			Identity:  s.identity,
-			SessionID: sessionID,
-			Slash: &router.SlashCommand{
-				Name:     command,
-				Arg:      arg,
-				ThreadID: threadTS,
-				SenderID: userID,
+	if threadTS != "" {
+		sessionID += ":" + threadTS
+	}
+	metadata := router.TextMetadata{SenderID: userID, SessionID: sessionID, ThreadID: threadTS}
+	deliveryContext, _ := json.Marshal(slackoutbound.DeliveryContext{Metadata: metadata})
+	accepted, err := s.tunnel.SendAndMount(r.Context(), sessionID, "slack-command-"+triggerID,
+		router.SendAndMountInput{
+			Subscriber: router.Subscriber{
+				ID:       "slack:" + sessionID,
+				Mode:     router.Participant,
+				Delivery: &router.DeliveryTarget{Activity: slackoutbound.DeliverA2AActivity, TaskQueue: s.deliveryTaskQueue, Context: deliveryContext},
 			},
-		},
-	); err != nil {
-		log.Printf("Failed to start connector workflow for slash command: %v", err)
+			Message: router.SendMessageInput{MessageType: "slash", Payload: map[string]any{"name": command, "arg": arg}},
+		})
+	if err != nil {
+		log.Printf("Failed to submit slash command through UI tunnel: %v", err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	if accepted.Reply != "" {
+		_ = json.NewEncoder(w).Encode(map[string]string{"response_type": "ephemeral", "text": accepted.Reply})
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -286,22 +259,10 @@ func (s *webhookServer) handleInteractions(w http.ResponseWriter, r *http.Reques
 			continue
 		}
 
-		// Start a dedicated workflow to call approveToolCall via Nexus.
-		wfID := router.RouterWorkflowID(s.identity, val.SessionID, "approval-"+val.ToolID)
-		if _, err := s.tc.ExecuteWorkflow(r.Context(),
-			client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
-			router.WorkflowName,
-			router.Input{
-				SessionID: val.SessionID,
-				Identity:  s.identity,
-				Approval: &router.ApprovalDecision{
-					ToolID:   val.ToolID,
-					ToolName: val.ToolName,
-					Approved: val.Approved,
-				},
-			},
-		); err != nil {
-			log.Printf("handleInteractions: failed to start connector workflow for approval: %v", err)
+		approval, _ := json.Marshal(map[string]any{"toolId": val.ToolID, "approved": val.Approved})
+		if _, err := s.tunnel.Control(r.Context(), val.SessionID, "slack-approval-"+val.ToolID,
+			router.ControlInput{Kind: "approve-tool-call", Payload: approval}); err != nil {
+			log.Printf("handleInteractions: failed to resolve approval through UI tunnel: %v", err)
 		}
 
 		// Replace the approval prompt via response_url so the buttons can't be clicked again.
