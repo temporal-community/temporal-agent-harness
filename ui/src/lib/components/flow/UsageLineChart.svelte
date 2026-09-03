@@ -116,7 +116,12 @@
                 ...(lastElapsed > 0
                   ? { values: niceTimeTicks(lastElapsed, Math.max(4, Math.min(8, Math.round(width / 60)))) }
                   : { values: [0] }),
-                format: formatDuration
+                /* Axis ticks land on whole steps, so the shared formatter's trailing
+                   zero fields are dead weight there: "1h 00m 00s" is eleven characters
+                   on a 240px axis, wide enough that the thinner drops a neighbour to
+                   fit it. The header keeps the full form, where the seconds matter. */
+                format: (seconds: number) =>
+                  formatDuration(seconds).replace(/( 00m)? 00s$/, "")
               },
               tickLabels: { thin: { minGap: 12, priority: "ends" } }
             }

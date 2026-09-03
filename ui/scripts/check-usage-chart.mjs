@@ -258,6 +258,24 @@ assert.equal(formatDuration(90.4), "1m 30s", "fractional seconds round rather th
 assert.equal(formatDuration(605), "10m 05s", "the seconds field is zero-padded");
 assert.equal(formatDuration(3725), "1h 02m 05s", "the minutes field is zero-padded too");
 
+// --- the axis tick form -------------------------------------------------------------------------
+
+// Mirrors the x axis tick format in UsageLineChart.svelte: ticks sit on whole time steps, so the
+// trailing zero fields are dead weight on a narrow axis. The header keeps the full form.
+const tickLabel = (seconds) => formatDuration(seconds).replace(/( 00m)? 00s$/, "");
+
+assert.equal(tickLabel(0), "0s", "the origin tick keeps its unit rather than reading as bare 0");
+assert.equal(tickLabel(3600), "1h", "a whole hour tick drops both zero fields");
+assert.equal(tickLabel(10800), "3h", "…at every hour");
+assert.equal(tickLabel(120), "2m", "a whole minute tick drops its zero seconds");
+assert.equal(tickLabel(45), "45s", "a sub-minute tick is untouched");
+assert.equal(tickLabel(3660), "1h 01m", "a tick with real minutes keeps them");
+assert.equal(tickLabel(105), "1m 45s", "a tick with real seconds keeps them");
+// Only a *trailing* run of zeros goes; a zero field with something after it has to stay, or the
+// label would claim the wrong time.
+assert.equal(tickLabel(3605), "1h 00m 05s", "a zero minutes field survives when seconds follow");
+assert.equal(tickLabel(1800), "30m", "the half-hour step reads as minutes");
+
 // The invariant behind all of the above, swept rather than sampled: no field may ever hold a value
 // that belongs in the next one up. This is exactly what the old two-field version violated.
 for (let seconds = 0; seconds <= 100_000; seconds += 7) {
