@@ -14,6 +14,10 @@
 // The `>=` -> `>` revert is what this file is calibrated against: with it restored, the per-marker
 // case fails on the first marker and the forward walk exhausts its step budget without leaving
 // index 0.
+//
+// Also pins the two properties StepController's jump-to-latest button rests on, since it is
+// `aria-disabled` rather than `disabled` and so stays pressable: that `following` means exactly
+// `viewIndex === total`, and that pressing it at the live edge changes nothing.
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
@@ -125,6 +129,34 @@ for (let i = 0; i < markers.length - 1; i += 1) {
   assert.equal(run.viewIndex, total, "from the last turn, Next turn must run to the live edge");
   assert.equal(run.following, true, "arriving at the end is what following means");
   invariantHolds("after nextTurn from the last marker");
+}
+
+// --- the live edge absorbs a second press ------------------------------------------------------
+// StepController marks the jump-to-latest button `aria-disabled` while following, which leaves it
+// focusable and therefore pressable — a keyboard user can and will press it. Nothing guards the
+// handler, and this is why: from the live edge jumpToLive() is goTo(total) from total, so the clamp
+// returns the same index, the flag recomputes to the same true, and pause() finds playback already
+// stopped. If this ever fails, the button needs a guard and the comment in StepController that says
+// it does not is wrong.
+{
+  run.goTo(total);
+  const snapshot = () => ({
+    viewIndex: run.viewIndex,
+    following: run.following,
+    playing: run.playing,
+    total: run.total
+  });
+  const atEdge = snapshot();
+  assert.deepEqual(atEdge, { viewIndex: total, following: true, playing: false, total }, "setup");
+
+  for (let press = 1; press <= 3; press += 1) {
+    run.jumpToLive();
+    assert.deepEqual(
+      snapshot(),
+      atEdge,
+      `press ${press} of Jump to latest step at the live edge must change nothing`
+    );
+  }
 }
 
 // --- from between two markers, forward still reaches the next one ------------------------------

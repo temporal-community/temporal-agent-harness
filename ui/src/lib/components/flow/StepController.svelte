@@ -250,15 +250,25 @@
     <!-- Not a toggle, so no `pressed`: this only ever seeks to the end, and
          pressing it while it was showing pressed left following true — there
          was no second state to reach. What it announced as a toggle state was
-         really "the cursor is at the end", which is what disabling it says, in
-         the same way Next event says it one step earlier. The tailing that
+         really "the cursor is at the end", which is what the inert state says,
+         in the same way Next event says it one step earlier. The tailing that
          follows from being there is the part nobody could see, so the tip is
-         where it gets said. -->
+         where it gets said.
+
+         `aria-disabled` rather than `disabled`, and the tip is the whole
+         reason: the dimming exists to explain that the view is already at the
+         live edge and will stay there, and `disabled` would drop the button out
+         of the tab order — deleting that explanation for a keyboard user at
+         precisely the moment it becomes true. So the button stays reachable and
+         announces itself as unavailable, which is what it is. Nothing guards
+         the handler because there is nothing to guard: jumpToLive() from the
+         live edge is goTo(total) from total, which moves no cursor and changes
+         no flag (pinned in check-turn-navigation.mjs). -->
     <IconButton
       label="Jump to latest step"
       tip="Jump to latest step — new events keep the view here"
       tone="follow"
-      disabled={following}
+      aria-disabled={following}
       onclick={onJumpToLive}
     >
       <SkipForward size={14} />
