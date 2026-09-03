@@ -11,6 +11,8 @@
  * the guard testable in a script with no browser.
  */
 
+import type { AgentRunController } from "./agentRun.svelte";
+
 export type ReplayAction =
   | "stepBack"
   | "stepForward"
@@ -18,7 +20,6 @@ export type ReplayAction =
   | "nextTurn"
   | "first"
   | "last"
-  | "jumpToLive"
   | "togglePlay"
   | "toggleHelp"
   | "closeHelp";
@@ -51,9 +52,10 @@ export const REPLAY_BINDINGS: readonly ReplayBinding[] = [
   },
   { action: "nextTurn", key: "ArrowRight", shift: true, chord: "Shift →", label: "Next turn" },
   { action: "first", key: "Home", shift: null, chord: "Home", label: "First event" },
-  { action: "last", key: "End", shift: null, chord: "End", label: "Latest event" },
+  /* Landing on the last event *is* following the live edge: goTo() sets `following` from
+     `viewIndex === total`, so there is one behaviour here and one row for it. */
+  { action: "last", key: "End", shift: null, chord: "End", label: "Latest event, and follow live" },
   { action: "togglePlay", key: " ", shift: false, chord: "Space", label: "Play / pause" },
-  { action: "jumpToLive", key: "l", shift: false, chord: "L", label: "Follow the live edge" },
   { action: "toggleHelp", key: "?", shift: null, chord: "?", label: "Show this list" },
   { action: "closeHelp", key: "Escape", shift: null, chord: "Esc", label: "Close this list" }
 ];
@@ -169,4 +171,57 @@ export function resolveReplayAction(context: ReplayKeyContext): ReplayAction | n
   );
 
   return binding?.action ?? null;
+}
+
+/**
+ * Everything a replay key can touch. The run holds the transport state; the overlay flag
+ * belongs to the app shell, which passes it in as an accessor.
+ */
+export interface ReplaySurface {
+  run: AgentRunController;
+  helpOpen: boolean;
+}
+
+/**
+ * What a key does, in one place. The window handler calls this and so does
+ * `check-replay-hotkeys.mjs`, which is the only way that check can compare what two bindings
+ * *do* rather than what they are named.
+ */
+export function applyReplayAction(action: ReplayAction, surface: ReplaySurface): void {
+  const { run } = surface;
+
+  switch (action) {
+    case "stepBack":
+      run.stepBack();
+      return;
+    case "stepForward":
+      run.stepForward();
+      return;
+    case "previousTurn":
+      run.previousTurn();
+      return;
+    case "nextTurn":
+      run.nextTurn();
+      return;
+    case "first":
+      run.goTo(0);
+      return;
+    case "last":
+      run.goTo(run.total);
+      return;
+    case "togglePlay":
+      if (run.playing) run.pause();
+      else run.play();
+      return;
+    case "toggleHelp":
+      surface.helpOpen = !surface.helpOpen;
+      return;
+    case "closeHelp":
+      surface.helpOpen = false;
+      return;
+    default: {
+      const unhandled: never = action;
+      void unhandled;
+    }
+  }
 }

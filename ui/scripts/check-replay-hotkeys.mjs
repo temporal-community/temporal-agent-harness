@@ -1,13 +1,32 @@
-/**
- * The replay hotkeys must stay quiet while the user is typing, and must stay
- * out of the way of controls that already handle the same keys. Both are pure
- * decisions, so they are checked here against the real table rather than a copy
- * of it — Node strips the types on import.
- */
+// ABOUTME: Checks the replay hotkeys on both halves of a binding — when it is allowed to fire, and
+// what it then does. The second half is why this file was rewritten: it used to assert only that
+// two keys resolved to two different action *names*, which `End` and `L` did while both ran
+// `goTo(total)` and landed on identical state. A name is not a behaviour, so the help overlay
+// advertised two shortcuts that were one, and this check passed.
+//   node ui/scripts/check-replay-hotkeys.mjs
+//
+// The guards are pure decisions and are checked as such. The behaviour half drives the shipped
+// `applyReplayAction` — the same function App.svelte's window handler calls — against a real
+// `AgentRunController` filled from `realisticQaScenario`, and compares state read back from the
+// controller rather than hardcoded indices. Every pair of rows in the overlay must be told apart
+// by some starting position. Re-add `{ action: "jumpToLive", key: "l", ... }` and this file fails
+// on that pair, naming both rows.
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
+import { createServer } from "vite";
 
-const { REPLAY_BINDINGS, resolveReplayAction } = await import(
-  new URL("../src/lib/state/replayHotkeys.ts", import.meta.url).href
+/* Loaded through vite for the reason check-turn-navigation.mjs records: the state modules use
+   runes and extensionless relative imports, so they need compileModule() and a resolver, both of
+   which vite already owns here. One server for the whole file also means the table the guards read
+   is the same object the actions below are driven from. */
+const vite = await createServer({
+  root: fileURLToPath(new URL("..", import.meta.url)),
+  server: { middlewareMode: true },
+  appType: "custom",
+  logLevel: "silent"
+});
+const { REPLAY_BINDINGS, resolveReplayAction, applyReplayAction } = await vite.ssrLoadModule(
+  "/src/lib/state/replayHotkeys.ts"
 );
 
 /** A key press on nothing in particular: no modifiers, no focused control. */
@@ -36,12 +55,11 @@ assert.equal(
 assert.equal(resolveReplayAction(press({ key: "Home" })), "first");
 assert.equal(resolveReplayAction(press({ key: "End" })), "last");
 assert.equal(resolveReplayAction(press({ key: " " })), "togglePlay");
-assert.equal(resolveReplayAction(press({ key: "L" })), "jumpToLive", "letters match either case");
 assert.equal(resolveReplayAction(press({ key: "?" })), "toggleHelp");
 assert.equal(resolveReplayAction(press({ key: "q" })), null, "unbound keys do nothing");
 
 // Nothing fires while the user is typing. This is the property that matters.
-for (const key of ["ArrowLeft", "ArrowRight", "Home", "End", " ", "l", "?"]) {
+for (const key of ["ArrowLeft", "ArrowRight", "Home", "End", " ", "?"]) {
   assert.equal(
     resolveReplayAction(press({ key, typing: true })),
     null,
@@ -56,7 +74,7 @@ for (const key of ["ArrowLeft", "ArrowRight", "Home", "End", " ", "l", "?"]) {
 
 // Browser and OS chords are left alone.
 assert.equal(resolveReplayAction(press({ key: "ArrowRight", modified: true })), null);
-assert.equal(resolveReplayAction(press({ key: "l", modified: true })), null);
+assert.equal(resolveReplayAction(press({ key: " ", modified: true })), null);
 
 // The focused scrubber keeps its free native stepping, with no second step.
 for (const key of ["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]) {
@@ -67,8 +85,8 @@ for (const key of ["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown
   );
 }
 assert.equal(
-  resolveReplayAction(press({ key: "l", rangeFocused: true })),
-  "jumpToLive",
+  resolveReplayAction(press({ key: "?", rangeFocused: true })),
+  "toggleHelp",
   "keys the range input ignores still work while it is focused"
 );
 
@@ -107,4 +125,171 @@ for (const binding of REPLAY_BINDINGS) {
   chords.add(binding.chord);
 }
 
-console.log(`replay hotkeys: ${REPLAY_BINDINGS.length} bindings, guards hold`);
+// --- what the keys actually do -----------------------------------------------------------------
+
+function memoryStorage() {
+  const map = new Map();
+  return {
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => map.set(k, String(v)),
+    removeItem: (k) => map.delete(k),
+    clear: () => map.clear(),
+    key: (i) => [...map.keys()][i] ?? null,
+    get length() {
+      return map.size;
+    }
+  };
+}
+
+const storage = { local: memoryStorage(), session: memoryStorage() };
+globalThis.window = {
+  get localStorage() {
+    return storage.local;
+  },
+  get sessionStorage() {
+    return storage.session;
+  },
+  setTimeout: (...a) => setTimeout(...a),
+  clearTimeout: (...a) => clearTimeout(...a),
+  setInterval: (...a) => setInterval(...a),
+  clearInterval: (...a) => clearInterval(...a),
+  addEventListener: () => {},
+  removeEventListener: () => {}
+};
+globalThis.localStorage = new Proxy({}, { get: (_, p) => storage.local[p] });
+globalThis.sessionStorage = new Proxy({}, { get: (_, p) => storage.session[p] });
+globalThis.requestAnimationFrame = (fn) => setTimeout(() => fn(Date.now()), 0);
+globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+
+const { AgentRunController } = await vite.ssrLoadModule("/src/lib/state/agentRun.svelte.ts");
+const { realisticQaScenario } = await vite.ssrLoadModule("/src/lib/mock/scenarios.ts");
+
+const api = new Proxy({}, { get: () => async () => [] });
+const run = new AgentRunController(api);
+run.sessions = realisticQaScenario.sessions;
+run.session = realisticQaScenario.sessions[0];
+run.frames = realisticQaScenario.frames;
+
+const total = run.total;
+const markers = run.turnMarkers.map((marker) => marker.index);
+assert.ok(total > 4, `the scenario must carry a run to move around in (saw ${total} events)`);
+assert.ok(markers.length >= 3, `the scenario must carry turns to navigate (saw ${markers.length})`);
+
+/* The overlay flag lives in App.svelte and is passed to the action the same way here: a surface
+   the action writes through. That is what keeps `?` and `Esc` inside this comparison. */
+const surface = { run, helpOpen: false };
+
+/* Positions a person can be standing at when they reach for a key, stated against the markers the
+   scenario actually produces. Two bindings only have to differ somewhere, not everywhere — `Home`
+   and `←` agree from index 1, which is fine — so a pair is condemned only when no position here
+   tells them apart. */
+const positions = [
+  ["at the first event", () => run.goTo(0)],
+  ["one event in", () => run.goTo(1)],
+  ["at the start of a turn", () => run.goTo(markers[1])],
+  ["mid-turn", () => run.goTo(markers[1] + 1)],
+  ["at the start of a later turn", () => run.goTo(markers[2])],
+  ["at the last turn", () => run.goTo(markers.at(-1))],
+  ["one before the live edge", () => run.goTo(total - 1)],
+  ["at the live edge", () => run.goTo(total)],
+  [
+    "playing, mid-run",
+    () => {
+      run.goTo(markers[1]);
+      run.play();
+    }
+  ]
+];
+const probes = positions.flatMap(([where, seek]) =>
+  [false, true].map((helpOpen) => [
+    `${where}${helpOpen ? ", overlay open" : ""}`,
+    () => {
+      run.pause();
+      seek();
+      surface.helpOpen = helpOpen;
+    }
+  ])
+);
+
+const state = () => ({
+  viewIndex: run.viewIndex,
+  following: run.following,
+  playing: run.playing,
+  playbackSpeed: run.playbackSpeed,
+  helpOpen: surface.helpOpen
+});
+
+/* One press of `action` from `probe`, measured. Playback is stopped straight after so the 700ms
+   auto-advance timer can never fire between two probes and make this file flaky. */
+function outcome([, setUp], action) {
+  setUp();
+  const before = JSON.stringify(state());
+  applyReplayAction(action, surface);
+  const after = JSON.stringify(state());
+  run.pause();
+  return { before, after };
+}
+
+/* The defect, stated directly: the one live-edge binding lands on the end, follows it, and stops
+   playback. This is the whole of what `L` used to promise separately. */
+{
+  const [, setUp] = probes[0];
+  setUp();
+  applyReplayAction("last", surface);
+  assert.deepEqual(state(), {
+    viewIndex: total,
+    following: true,
+    playing: false,
+    playbackSpeed: run.playbackSpeed,
+    helpOpen: false
+  });
+}
+
+/* `following` means "the cursor is at the end" and nothing else: goTo() assigns it that way and
+   every transport action routes through goTo, so it is asserted after every press below rather
+   than trusted once. */
+for (const probe of probes) {
+  for (const binding of REPLAY_BINDINGS) {
+    outcome(probe, binding.action);
+    assert.equal(
+      run.following,
+      run.viewIndex === total,
+      `following must mean viewIndex === total (${binding.chord} ${probe[0]}: ` +
+        `following=${run.following}, viewIndex=${run.viewIndex}, total=${total})`
+    );
+  }
+}
+
+/* The check the old one should have been. Every row in the overlay promises a behaviour of its
+   own; a row that cannot be told from another row promises something the app does not have.
+   Compared by effect, so what the two actions are named does not enter into it. */
+for (let i = 0; i < REPLAY_BINDINGS.length; i += 1) {
+  for (let j = i + 1; j < REPLAY_BINDINGS.length; j += 1) {
+    const [a, b] = [REPLAY_BINDINGS[i], REPLAY_BINDINGS[j]];
+    assert.ok(
+      probes.some((probe) => outcome(probe, a.action).after !== outcome(probe, b.action).after),
+      `"${a.chord} — ${a.label}" and "${b.chord} — ${b.label}" leave the replay in the same ` +
+        `state from all ${probes.length} starting positions: one behaviour, two rows in the help ` +
+        `overlay. Drop a binding, or merge them into a single row that lists both keys.`
+    );
+  }
+}
+
+/* A key that changes nothing anywhere is the same broken promise with one row instead of two. */
+for (const binding of REPLAY_BINDINGS) {
+  assert.ok(
+    probes.some((probe) => {
+      const { before, after } = outcome(probe, binding.action);
+      return before !== after;
+    }),
+    `"${binding.chord} — ${binding.label}" never changes anything the user can see`
+  );
+}
+
+run.pause();
+await vite.close();
+console.log(
+  `replay hotkeys: ${REPLAY_BINDINGS.length} bindings, guards hold, every pair distinguishable ` +
+    `over ${probes.length} starting positions (${total} events, ${markers.length} turns)`
+);
+process.exit(0);

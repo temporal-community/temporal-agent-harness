@@ -13,7 +13,12 @@
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
   import HotkeyHelp from "$lib/components/flow/HotkeyHelp.svelte";
   import { createAgentRunController } from "$lib/state/agentRun.svelte";
-  import { describeReplayKeyEvent, resolveReplayAction } from "$lib/state/replayHotkeys";
+  import {
+    applyReplayAction,
+    describeReplayKeyEvent,
+    resolveReplayAction,
+    type ReplaySurface
+  } from "$lib/state/replayHotkeys";
 
   type RightPanelView = "chat" | "latency" | "logs";
 
@@ -139,48 +144,23 @@
     rightPanelWidth = Math.round(clampRightPanelWidth(nextWidth));
   }
 
+  /* The keys act through `applyReplayAction`, which is also what the hotkey check drives, so
+     what a key does here is what the check measures. */
+  const replaySurface: ReplaySurface = {
+    run,
+    get helpOpen() {
+      return hotkeyHelpOpen;
+    },
+    set helpOpen(open: boolean) {
+      hotkeyHelpOpen = open;
+    }
+  };
+
   function handleReplayHotkey(event: KeyboardEvent): void {
     const action = resolveReplayAction(describeReplayKeyEvent(event));
     if (action == null) return;
     event.preventDefault();
-
-    switch (action) {
-      case "stepBack":
-        run.stepBack();
-        break;
-      case "stepForward":
-        run.stepForward();
-        break;
-      case "previousTurn":
-        run.previousTurn();
-        break;
-      case "nextTurn":
-        run.nextTurn();
-        break;
-      case "first":
-        run.goTo(0);
-        break;
-      case "last":
-        run.goTo(run.total);
-        break;
-      case "jumpToLive":
-        run.jumpToLive();
-        break;
-      case "togglePlay":
-        if (run.playing) run.pause();
-        else run.play();
-        break;
-      case "toggleHelp":
-        hotkeyHelpOpen = !hotkeyHelpOpen;
-        break;
-      case "closeHelp":
-        hotkeyHelpOpen = false;
-        break;
-      default: {
-        const unhandled: never = action;
-        void unhandled;
-      }
-    }
+    applyReplayAction(action, replaySurface);
   }
 </script>
 
