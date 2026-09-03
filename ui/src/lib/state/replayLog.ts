@@ -53,7 +53,10 @@ export interface ReplayLogRow {
   model?: string | null;
   toolId?: ToolId;
   toolName?: string;
-  input?: JsonRecord;
+  /** Absent means the frame carried no `tool_input`; `null` means it carried one and it was
+   *  unknown (arguments streamed but unparseable), which is not the same as `{}`. The two
+   *  render differently — see formatLogValue in $lib/state/logValue. */
+  input?: JsonRecord | null;
   output?: string;
   citations: FileCitationAnnotation[];
   usage?: UsageTotals;

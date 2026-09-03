@@ -63,6 +63,7 @@
   import Badge from "$lib/components/primitives/Badge.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
+  import { formatLogValue } from "$lib/state/logValue";
   import { formatDuration, statusNote, type TurnLogGroup } from "$lib/state/replayLog";
   import { formatTokens } from "$lib/cost/pricing";
 
@@ -109,12 +110,6 @@
     label: string;
     text: string;
     kind: "block" | "text";
-  }
-
-  function formatLogValue(value: unknown): string {
-    if (value == null) return "";
-    if (typeof value === "string") return value.trim();
-    return JSON.stringify(value, null, 2);
   }
 
   function inputText(row: ReplayLogRow): string {
@@ -889,6 +884,11 @@
   .full-details pre {
     margin-top: 6px;
     color: var(--text-2);
+    /* A bare `pre` clips rather than scrolls in a pane this narrow, so anything past the
+       fold was silently gone. AgentChatPanel's equivalent block already wraps; this one
+       only got away with it while every value here was short. */
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
   }
 
   .citations {

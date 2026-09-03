@@ -6,6 +6,7 @@ import type {
   ToolId
 } from "$lib/api/types";
 import { formatTokens, summarizeCost, type CostSummary } from "$lib/cost/pricing";
+import { UNKNOWN_TOOL_INPUT } from "$lib/state/logValue";
 
 export type AgentNodeTone =
   | "neutral"
@@ -787,7 +788,13 @@ export function buildAgentGraph(
         runtime.subtitle = "Code Mode script";
       }
       if ("tool_input" in frame.data) {
-        runtime.detail = JSON.stringify(frame.data.tool_input);
+        // tool_requested carries null when the model streamed arguments the backend could not
+        // parse. Stringifying that puts the literal text "null" on the node, which reads as a
+        // value the model sent rather than as one we lost.
+        runtime.detail =
+          frame.data.tool_input === null
+            ? UNKNOWN_TOOL_INPUT
+            : JSON.stringify(frame.data.tool_input);
       }
       if (frame.event === "tool_requested") {
         runtime.status = "requested by model";

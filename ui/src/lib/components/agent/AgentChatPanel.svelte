@@ -37,6 +37,7 @@
   import StatusChip, {
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
+  import { formatLogValue } from "$lib/state/logValue";
   import type { ReplayLogRow } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
@@ -716,12 +717,6 @@
 
   function turnMessagePreview(value: string): string {
     return value.trim().replace(/\s+/g, " ") || "No user message";
-  }
-
-  function formatLogValue(value: unknown): string {
-    if (value == null) return "";
-    if (typeof value === "string") return value.trim();
-    return JSON.stringify(value, null, 2);
   }
 
   function scriptPreview(script: string): string {

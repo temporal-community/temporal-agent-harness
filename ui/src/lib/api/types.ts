@@ -353,7 +353,12 @@ export interface ToolEventDataBase<TType extends AgentEventType>
 
 export interface ToolRequestedEvent
   extends ToolEventDataBase<"tool_requested"> {
-  tool_input: JsonRecord;
+  /** `null` means the model streamed arguments the backend could not parse — a stream cut
+   *  mid-JSON leaves a truncated buffer — as distinct from `{}`, which asserts the call
+   *  genuinely takes no arguments. Unknown is not empty, so the two must not render alike.
+   *  Only this event widened server-side; the approval and start events still promise a
+   *  record, and widening them here would claim something the backend does not say. */
+  tool_input: JsonRecord | null;
 }
 
 export interface ToolApprovalRequestedEvent

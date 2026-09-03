@@ -24,7 +24,9 @@ export type TranscriptItem =
       toolId: string;
       toolName: string;
       status: "requested" | "awaiting" | "approved" | "running" | "done" | "failed" | "denied";
-      input?: Record<string, unknown>;
+      /** Absent means no `tool_input` on the frame; `null` means the frame carried one and it
+       *  was unknown (arguments streamed but unparseable), which is not the same as `{}`. */
+      input?: Record<string, unknown> | null;
       output?: string;
       message?: string;
       timestamp: number;
