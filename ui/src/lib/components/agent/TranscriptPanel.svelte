@@ -64,6 +64,7 @@
   import Chip from "$lib/components/primitives/Chip.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
   import { formatLogValue } from "$lib/state/logValue";
+  import { keyboardSeekCount } from "$lib/state/replayHotkeys";
   import { formatDuration, statusNote, type TurnLogGroup } from "$lib/state/replayLog";
   import { formatTokens } from "$lib/cost/pricing";
 
@@ -202,6 +203,16 @@
     visibleGroups.reduce((sum, group) => sum + group.rows.length, 0)
   );
 
+  /* The keyboard seek count as of the last row this panel followed. Plain `let`
+     on purpose: `$state` would make the comparison below a dependency of the
+     effect, and the active row is the only thing that should run it. */
+  let followedKeyboardSeeks = keyboardSeekCount();
+
+  function reducedMotion(): boolean {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
   $effect(() => {
     const rowId = activeRowId;
     if (rowId == null) {
@@ -209,10 +220,24 @@
       return;
     }
     expandedRows = { [rowId]: true };
+    /* Asked here, not inside the tick below: by then the keystroke's task is
+       over and another one may have counted. */
+    const seeks = keyboardSeekCount();
+    const fromKeyboard = seeks !== followedKeyboardSeeks;
+    followedKeyboardSeeks = seeks;
     tick().then(() => {
-      document
-        .getElementById(`log-row-${rowId}`)
-        ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      document.getElementById(`log-row-${rowId}`)?.scrollIntoView({
+        block: "nearest",
+        /* Stepping with the keys should feel like a caret in an editor: the row
+           is already there when the eye arrives. An animated scroll makes the
+           log lag a key held down. Clicking is a slower, aimed gesture and keeps
+           the follow-along that shows which way the run moved.
+
+           "instant" and not "auto": "auto" defers to the container's
+           `scroll-behavior`, which is unset today, so it would read as instant
+           by luck and turn smooth again the day a stylesheet sets it. */
+        behavior: fromKeyboard || reducedMotion() ? "instant" : "smooth"
+      });
     });
   });
 
