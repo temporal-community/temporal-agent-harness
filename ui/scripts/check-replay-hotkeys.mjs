@@ -23,6 +23,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import * as fs from "node:fs/promises";
 import { createServer } from "vite";
 
 /* Loaded through vite for the reason check-turn-navigation.mjs records: the state modules use
@@ -35,8 +36,13 @@ const vite = await createServer({
   appType: "custom",
   logLevel: "silent"
 });
-const { REPLAY_BINDINGS, resolveReplayAction, applyReplayAction, keyboardSeekCount } =
-  await vite.ssrLoadModule("/src/lib/state/replayHotkeys.ts");
+const {
+  REPLAY_BINDINGS,
+  resolveReplayAction,
+  applyReplayAction,
+  keyboardSeekCount,
+  noteKeyboardSeek
+} = await vite.ssrLoadModule("/src/lib/state/replayHotkeys.ts");
 
 /** A key press on nothing in particular: no modifiers, no focused control. */
 function press(overrides = {}) {
@@ -325,6 +331,94 @@ run.play();
 assert.equal(seekDelta(() => run.stepForward()), 0, "playback advancing is not a key press");
 run.pause();
 console.log("  keyboard seeks counted on moving keys only, never on the click path");
+
+/* The scrubber's own arrow keys are the one keyboard seek that does not come through
+   `applyReplayAction`. `resolveReplayAction` declines the navigation keys while a range input is
+   focused — deliberately, so the native control keeps stepping itself — which means that movement
+   reaches the run through `onScrub`, and before this it was the only key press the Logs pane
+   scrolled smoothly for. StepController reports it through `noteKeyboardSeek` instead.
+
+   So `noteKeyboardSeek` is asserted to be the same counter and the same rule, not a second one
+   beside it: a reported move is worth exactly what an arrow key is worth, and a reported non-move
+   is worth exactly what `→` at the live edge is worth. Change the guard inside it to count
+   unconditionally and the fourth assertion below fails; delete the increment and the first two
+   fail, along with every `applyReplayAction` assertion above, because that is the same rule. */
+run.goTo(markerMid);
+const arrowKeyWorth = seekDelta(() => applyReplayAction("stepForward", surface));
+assert.equal(
+  seekDelta(() => noteKeyboardSeek(markerMid, markerMid + 1)),
+  arrowKeyWorth,
+  "a scrubber arrow that moved the playhead must count for what a window arrow counts for"
+);
+assert.equal(
+  seekDelta(() => noteKeyboardSeek(0, total)),
+  arrowKeyWorth,
+  "how far the scrubber jumped is not the question — PageUp and a drag cover the same distance"
+);
+/* A range fires no `input` when an arrow cannot move it, but Home at index 0 and End at the live
+   edge do fire one, carrying the value the scrubber already had. Those must leave no mark, for the
+   same reason the window's `→` at the live edge must not: the next drag would inherit it. */
+assert.equal(
+  seekDelta(() => noteKeyboardSeek(0, 0)),
+  0,
+  "Home on a scrubber already at the first event moves nothing and must not arm the next drag"
+);
+assert.equal(
+  seekDelta(() => noteKeyboardSeek(total, total)),
+  0,
+  "End on a scrubber already at the live edge moves nothing and must not arm the next drag"
+);
+console.log("  scrubber arrow keys count through the same rule as the window bindings");
+
+/* What the count is *for*: choosing a scroll behaviour. `"auto"` is not a way to spell instant —
+   it defers to the container's `scroll-behavior`, which is unset everywhere in this tree today, so
+   it reads as instant by luck and would turn smooth again the day any stylesheet sets it. Both
+   scroll callers here have a branch that must never animate — one because a key press should land
+   like a caret, one because the reader asked for reduced motion — and `"instant"` is the only value
+   that ignores CSS. Measured, not assumed: ui/tools/scroll-probe/probe.mjs forces
+   `scroll-behavior: smooth` on the real scroller and watches `"auto"` animate over ~113 frames
+   while `"instant"` lands in one.
+
+   Swept over the whole tree rather than pinned to the two known callers, because the failure mode
+   is a third caller written later that copies the wrong word from a sibling. */
+const scrollBehaviours = [];
+for (const file of await fs.readdir(new URL("../src", import.meta.url), {
+  recursive: true,
+  withFileTypes: true
+})) {
+  if (!file.isFile() || !/\.(svelte|ts)$/.test(file.name)) continue;
+  const path = `${file.parentPath}/${file.name}`;
+  const source = await fs.readFile(path, "utf8");
+  if (!/\.(scrollIntoView|scrollTo|scrollBy)\(/.test(source)) continue;
+  /* The value is taken as the whole rest of the line and then scanned for every keyword in it,
+     rather than the first one: both callers spell it as a ternary, so a `"smooth" : "auto"` would
+     hide from a pattern that stopped at the first quoted word. */
+  for (const [, expression] of source.matchAll(/behavior:\s*([^\n]*)/g)) {
+    for (const [, quoted] of expression.matchAll(/["'](auto|instant|smooth)["']/g)) {
+      scrollBehaviours.push({ file: path.replace(/.*\/src\//, "src/"), value: quoted });
+    }
+  }
+}
+assert.ok(
+  scrollBehaviours.length >= 2,
+  `expected to find the scroll callers' behaviours and found ${scrollBehaviours.length} — the ` +
+    "sweep above has gone stale, so it is guarding nothing"
+);
+for (const { file, value } of scrollBehaviours) {
+  assert.notEqual(
+    value,
+    "auto",
+    `${file} passes behavior: "auto" to a scroll call. "auto" asks the container's CSS, which is ` +
+      'the one thing a "do not animate this" branch cannot depend on: nothing sets ' +
+      "`scroll-behavior` in ui/ today, so it happens to be instant, and the first stylesheet to " +
+      'set `scroll-behavior: smooth` turns it into an animation. Say "instant", which never ' +
+      "consults CSS."
+  );
+}
+console.log(
+  `  ${scrollBehaviours.length} scroll behaviours across ${new Set(scrollBehaviours.map((b) => b.file)).size} ` +
+    'files, none of them "auto"'
+);
 
 /* `following` means "the cursor is at the end" and nothing else: goTo() assigns it that way and
    every transport action routes through goTo, so it is asserted after every press below rather

@@ -6,6 +6,7 @@
   import type { CostSummary, UsageTimelinePoint } from "$lib/cost/pricing";
   import type { PlaybackSpeed } from "$lib/state/agentRun.svelte";
   import { eventVelocity, velocityPath } from "$lib/state/eventVelocity";
+  import { noteKeyboardSeek } from "$lib/state/replayHotkeys";
   import type { ReplayLogRow, ReplayMarker } from "$lib/state/replayLog";
 
   interface Props {
@@ -168,8 +169,32 @@
         })
   );
 
+  /**
+   * Whether the next `input` from the range is an arrow key's doing.
+   *
+   * A range input reports a key press and a drag as the same `input` event, and
+   * the element is focused either way, because a mousedown on it focuses it too.
+   * So the event carries nothing to separate them and the answer has to come
+   * from what arrived immediately before it — `keydown` or `pointerdown`.
+   *
+   * Consumed on read, and cleared by `pointerdown` as well, so it cannot be
+   * wrong in a sticky way from either side. `→` at the live edge is the case
+   * that needs the second half: the range moves nothing and fires no `input` at
+   * all, so the record it leaves is one the next grab clears rather than
+   * inherits. A plain `let` and not `$state`, because nothing renders from it.
+   */
+  let scrubbedByKey = false;
+
   function handleInput(event: Event): void {
-    onScrub(Number((event.currentTarget as HTMLInputElement).value));
+    const index = Number((event.currentTarget as HTMLInputElement).value);
+    /* Arrow keys on a focused scrubber are native range behaviour that
+       `resolveReplayAction` declines on purpose, so this movement never passes
+       through `applyReplayAction` and has to report the seek itself. Reported
+       rather than acted on: `onScrub` still does the moving, so the run-state
+       API learns nothing about keyboards. */
+    if (scrubbedByKey) noteKeyboardSeek(viewIndex, index);
+    scrubbedByKey = false;
+    onScrub(index);
   }
 
   function handleKeydown(event: KeyboardEvent): void {
@@ -320,6 +345,8 @@
       max={scale}
       value={viewIndex}
       oninput={handleInput}
+      onkeydown={() => (scrubbedByKey = true)}
+      onpointerdown={() => (scrubbedByKey = false)}
     />
 
     <!-- Anomalies keep their own marks: they are the reason to scrub at all.

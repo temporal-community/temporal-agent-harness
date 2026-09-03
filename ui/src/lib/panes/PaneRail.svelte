@@ -94,7 +94,7 @@
     const target = paneElement(id);
     if (!target) return;
     target.scrollIntoView({
-      behavior: reducedMotion() ? "auto" : "smooth",
+      behavior: reducedMotion() ? "instant" : "smooth",
       block: "nearest",
       inline: "nearest"
     });
