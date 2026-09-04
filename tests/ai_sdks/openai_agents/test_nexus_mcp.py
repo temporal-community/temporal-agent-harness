@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from nexus_mcp.durable_tools_gateway.generated import (
@@ -67,7 +68,11 @@ async def test_list_tools_unwraps_remote_tools(mock_create_client: MagicMock) ->
 
 
 @patch("temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.create_nexus_client")
-async def test_call_tool_wraps_arguments_and_unwraps_result(mock_create_client: MagicMock) -> None:
+@patch("temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp.workflow.info")
+async def test_call_tool_wraps_arguments_and_unwraps_result(
+    mock_info: MagicMock, mock_create_client: MagicMock
+) -> None:
+    mock_info.return_value = SimpleNamespace(workflow_id="workflow-1")
     mock_client = MagicMock()
     mock_client.execute_operation = AsyncMock(
         return_value=CallToolOutput(
@@ -86,5 +91,6 @@ async def test_call_tool_wraps_arguments_and_unwraps_result(mock_create_client: 
     result = await server.call_tool("weather_get_forecast", {"city": "NYC"})
 
     call_tool_input = mock_client.execute_operation.await_args.args[1]
+    assert call_tool_input.caller_workflow_id == "workflow-1"
     assert call_tool_input.arguments.additional_properties == {"city": "NYC"}
     assert result.content[0].text == "42"

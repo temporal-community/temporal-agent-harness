@@ -60,7 +60,19 @@ class AccountEntries:
     """Account-owned external routes. MCP tool definitions are fetched live."""
 
     remote_servers: dict[str, str] = field(default_factory=dict)
+    nexus_servers: dict[str, NexusMCPServerRegistration] = field(
+        default_factory=dict
+    )
     subagent_providers: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class NexusMCPServerRegistration:
+    """Read-only discovery metadata for a directly invoked Nexus MCP service."""
+
+    name: str
+    endpoint: str
+    service: str
 
 
 @dataclass(frozen=True)
@@ -139,6 +151,7 @@ class ToolRegistryWorkflow:
     def __init__(self, account_id: str) -> None:
         self._account_id = account_id
         self._remote_entries: dict[str, str] = {}
+        self._nexus_mcp_entries: dict[str, NexusMCPServerRegistration] = {}
         self._subagent_entries: dict[str, str] = {}
         self._subagent_instances: dict[str, SubagentInstanceRoute] = {}
         self._agents: dict[str, AgentRegistration] = {}
@@ -196,6 +209,7 @@ class ToolRegistryWorkflow:
     def clear_all(self) -> None:
         """Remove every tool, subagent, agent, and session registration in this account."""
         self._remote_entries.clear()
+        self._nexus_mcp_entries.clear()
         self._subagent_entries.clear()
         self._subagent_instances.clear()
         self._agents.clear()
@@ -214,6 +228,27 @@ class ToolRegistryWorkflow:
         """Remove one account-owned subagent provider."""
         if self._subagent_entries.pop(alias, None) is not None:
             workflow.logger.info("[registry] deregistered subagent %r", alias)
+
+    @workflow.update
+    def register_nexus_mcp_server(
+        self, registration: NexusMCPServerRegistration
+    ) -> NexusMCPServerRegistration:
+        """Register metadata without changing the service's direct Nexus route."""
+        if not all(
+            value.strip()
+            for value in (
+                registration.name,
+                registration.endpoint,
+                registration.service,
+            )
+        ):
+            raise ApplicationError(
+                "name, endpoint, and service are required",
+                type="InvalidNexusMCPRegistration",
+                non_retryable=True,
+            )
+        self._nexus_mcp_entries[registration.name] = registration
+        return registration
 
     @workflow.update
     def register_agent(self, registration: AgentRegistration) -> AgentRegistration:
@@ -529,6 +564,7 @@ class ToolRegistryWorkflow:
     def list_account_entries(self) -> AccountEntries:
         return AccountEntries(
             remote_servers=dict(self._remote_entries),
+            nexus_servers=dict(self._nexus_mcp_entries),
             subagent_providers=dict(self._subagent_entries),
         )
 

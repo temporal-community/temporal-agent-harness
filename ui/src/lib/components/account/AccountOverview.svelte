@@ -1,12 +1,15 @@
 <script lang="ts">
-  import { ChevronDown, History, RefreshCw, Search, X } from "@lucide/svelte";
+  import { Braces, ChevronDown, History, RefreshCw, Search, X } from "@lucide/svelte";
   import { SubagentCloseDecisionRequiredError } from "$lib/api/httpClient";
   import type {
     AccountOverview as AccountOverviewData,
+    AccountResource,
     Session,
     SubagentCloseResolution,
-    SubagentInfo
+    SubagentInfo,
+    ToolCallRecord
   } from "$lib/api/types";
+  import ToolCallHistory from "$lib/components/account/ToolCallHistory.svelte";
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
   import StatusChip, {
     type StatusKind
@@ -26,6 +29,7 @@
       sessionId: string,
       resolution?: SubagentCloseResolution
     ) => void | Promise<void>;
+    onLoadToolCalls?: (serverName: string) => Promise<ToolCallRecord[]>;
   }
 
   let {
@@ -38,7 +42,8 @@
     onMountAgent,
     onSelectSession,
     onRefreshSessions,
-    onCloseSession
+    onCloseSession,
+    onLoadToolCalls
   }: Props = $props();
 
   let sessionScope = $state<string | null>(null);
@@ -52,8 +57,25 @@
   } | null>(null);
   let sessionPopoverLeft = $state(16);
   let sessionPopoverTop = $state(0);
+  let toolCallServerName = $state<string | null>(null);
+  let toolCalls = $state<ToolCallRecord[]>([]);
+  let loadingToolCalls = $state(false);
+  let toolCallError = $state<string | null>(null);
+  let toolHistoryLeft = $state(16);
+  let toolHistoryTop = $state(16);
+  let toolCallRequestVersion = 0;
 
   const sortedSessions = $derived([...sessions].sort((a, b) => b.created_at - a.created_at));
+  const sortedAgents = $derived(
+    [...account.agents].sort(
+      (a, b) => Number(a.kind !== "harness_nexus") - Number(b.kind !== "harness_nexus")
+    )
+  );
+  const sortedMcpServers = $derived(
+    [...account.mcp_servers].sort(
+      (a, b) => Number(a.kind !== "nexus") - Number(b.kind !== "nexus")
+    )
+  );
   const scopedSessions = $derived(
     sessionScope === "account" || sessionScope == null
       ? sortedSessions
@@ -73,6 +95,9 @@
       ? "Account sessions"
       : `${scopedAgent?.label ?? sessionScope} sessions`
   );
+  const toolCallServer = $derived(
+    account.mcp_servers.find((server) => server.name === toolCallServerName) ?? null
+  );
 
   function kindLabel(kind: string): string {
     return kind === "harness_nexus" ? "Harness · Nexus" : "External · HTTP";
@@ -91,8 +116,46 @@
       Math.min(triggerRect.top, window.innerHeight - 576)
     );
     sessionScope = scope;
+    toolCallRequestVersion += 1;
+    toolCallServerName = null;
     sessionSearch = "";
     closeDecision = null;
+  }
+
+  async function loadToolCalls(serverName: string): Promise<void> {
+    if (!onLoadToolCalls) return;
+    const requestVersion = ++toolCallRequestVersion;
+    loadingToolCalls = true;
+    toolCallError = null;
+    try {
+      const loaded = await onLoadToolCalls(serverName);
+      if (requestVersion === toolCallRequestVersion) toolCalls = loaded;
+    } catch (error) {
+      if (requestVersion === toolCallRequestVersion) {
+        toolCallError =
+          error instanceof Error ? error.message : "Failed to read retained tool calls.";
+      }
+    } finally {
+      if (requestVersion === toolCallRequestVersion) loadingToolCalls = false;
+    }
+  }
+
+  function toggleToolCalls(server: AccountResource, event: MouseEvent): void {
+    if (toolCallServerName === server.name) {
+      toolCallServerName = null;
+      toolCallRequestVersion += 1;
+      return;
+    }
+    const triggerRect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    toolHistoryLeft = triggerRect.right + 10;
+    toolHistoryTop = Math.max(
+      16,
+      Math.min(triggerRect.top, window.innerHeight - 736)
+    );
+    sessionScope = null;
+    toolCallServerName = server.name;
+    toolCalls = [];
+    void loadToolCalls(server.name);
   }
 
   function sessionCreatedAt(value: number): string {
@@ -202,8 +265,10 @@
     <span class="eyebrow">Account</span>
     <strong>{account.account_id}</strong>
     <span class="summary">
-      {account.agents.length} agents · {account.active_session_count}/{account.session_count}
-      active sessions
+      {account.agents.length} agents · {account.mcp_servers.length} MCP servers
+    </span>
+    <span class="summary">
+      {account.active_session_count}/{account.session_count} active sessions
     </span>
     <button
       type="button"
@@ -225,7 +290,7 @@
         <span>Registered agents will appear here automatically.</span>
       </div>
     {/if}
-    {#each account.agents as agent (agent.agent_id)}
+    {#each sortedAgents as agent (agent.agent_id)}
       <article class:active={agent.agent_id === activeAgentId} class="agent-card">
         <div class="agent-copy">
           <span class="agent-kind">{kindLabel(agent.kind)}</span>
@@ -265,16 +330,32 @@
     {/each}
   </div>
 
-  <div class="resource-strip" aria-label="Account toolbox">
-    <span class="resource-label">Toolbox</span>
-    {#each account.mcp_servers as resource (`mcp-${resource.name}`)}
-      <span class="resource" title={resource.endpoint}>MCP · {resource.name}</span>
+  <div class="resource-strip" aria-label="Account MCP servers">
+    <span class="resource-label">MCP servers</span>
+    {#each sortedMcpServers as resource (`mcp-${resource.name}`)}
+      <article class="resource-card">
+        <span>{resource.kind === "nexus" ? "Nexus · MCP" : "External · MCP"}</span>
+        <strong>{resource.name}</strong>
+        <small title={resource.endpoint}>{resource.endpoint}</small>
+        <button
+          type="button"
+          class:active={toolCallServerName === resource.name}
+          class="tool-calls-trigger"
+          aria-expanded={toolCallServerName === resource.name}
+          onclick={(event) => toggleToolCalls(resource, event)}
+        >
+          <Braces size={10} />
+          <span>Tool calls</span>
+          <ChevronDown
+            size={10}
+            class={toolCallServerName === resource.name ? "rotated" : ""}
+          />
+        </button>
+      </article>
     {/each}
-    {#each account.subagent_providers as resource (`subagent-${resource.name}`)}
-      <span class="resource" title={resource.endpoint}>Subagent · {resource.name}</span>
-    {/each}
-    {#if account.mcp_servers.length === 0 && account.subagent_providers.length === 0}
-      <span class="empty">No external resources registered</span>
+
+    {#if account.mcp_servers.length === 0}
+      <span class="empty">No MCP servers registered</span>
     {/if}
   </div>
 
@@ -421,6 +502,22 @@
         </div>
       </div>
     </section>
+  {/if}
+
+  {#if toolCallServer}
+    <ToolCallHistory
+      server={toolCallServer}
+      calls={toolCalls}
+      loading={loadingToolCalls}
+      error={toolCallError}
+      left={toolHistoryLeft}
+      top={toolHistoryTop}
+      onRefresh={() => loadToolCalls(toolCallServer.name)}
+      onClose={() => {
+        toolCallServerName = null;
+        toolCallRequestVersion += 1;
+      }}
+    />
   {/if}
 </section>
 
@@ -638,17 +735,70 @@
     width: 100%;
   }
 
-  .resource {
-    max-width: none;
-    overflow: hidden;
-    padding: 3px 6px;
+  .resource-card {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+    padding: 9px;
     border: 1px solid var(--border);
-    border-radius: 999px;
-    color: var(--text-2);
-    background: var(--control-bg);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--surface-2) 48%, var(--surface-1));
+  }
+
+  .resource-card > span {
+    color: var(--text-3);
     font-size: 9px;
+    font-weight: 750;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .resource-card > strong,
+  .resource-card > small {
+    overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .resource-card > strong {
+    color: var(--text-1);
+    font-size: 11px;
+  }
+
+  .resource-card > small {
+    color: var(--text-3);
+    font-size: 9px;
+  }
+
+  .tool-calls-trigger {
+    width: fit-content;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 5px;
+    padding: 0 7px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text-2);
+    background: var(--control-bg);
+    cursor: pointer;
+    font: inherit;
+    font-size: 9px;
+    font-weight: 700;
+  }
+
+  .tool-calls-trigger:hover,
+  .tool-calls-trigger:focus-visible,
+  .tool-calls-trigger.active {
+    border-color: color-mix(in srgb, var(--warning) 45%, var(--border-strong));
+    color: var(--text-1);
+    background: color-mix(in srgb, var(--warning) 8%, var(--control-hover));
+    outline: 0;
+  }
+
+  .tool-calls-trigger :global(.rotated) {
+    transform: rotate(180deg);
   }
 
   .session-popover {

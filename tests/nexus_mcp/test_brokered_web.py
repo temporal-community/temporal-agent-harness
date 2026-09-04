@@ -8,6 +8,7 @@ from a2a.types import AgentCard, AgentSkill, SendMessageResponse, Task
 from nexus_mcp.durable_tools_gateway.registry import (
     AccountEntries,
     AgentRegistration,
+    NexusMCPServerRegistration,
     SessionEvent,
     SessionRecord,
     ToolRegistryWorkflow,
@@ -16,6 +17,7 @@ from nexus_mcp.durable_tools_gateway.registry_service_handler import (
     SubagentDispatchInput,
     SubagentDispatchOutput,
 )
+from nexus_mcp.durable_tools_gateway.tool_history import ToolCallRecord
 from nexus_mcp.durable_tools_gateway.web import (
     _replay_external_activity_turn,
     create_account_agent_app,
@@ -30,6 +32,7 @@ def _app_client(
     session_override: SessionRecord | None = None,
     agent_override: AgentRegistration | None = None,
     session_events: list[SessionEvent] | None = None,
+    entries_override: AccountEntries | None = None,
 ) -> tuple[TestClient, MagicMock, MagicMock]:
     agent = agent_override or AgentRegistration(
         agent_id="assistant",
@@ -59,7 +62,7 @@ def _app_client(
         if method is ToolRegistryWorkflow.list_sessions:
             return [session]
         if method is ToolRegistryWorkflow.list_account_entries:
-            return AccountEntries(
+            return entries_override or AccountEntries(
                 remote_servers={"weather": "http://weather"},
                 subagent_providers={"writer": "http://writer"},
             )
@@ -71,6 +74,8 @@ def _app_client(
         if method is ToolRegistryWorkflow.create_session:
             return session
         if method is ToolRegistryWorkflow.register_agent:
+            return args[0]
+        if method is ToolRegistryWorkflow.register_nexus_mcp_server:
             return args[0]
         if method is ToolRegistryWorkflow.mark_session_started:
             update_args = kwargs["args"]
@@ -128,6 +133,106 @@ def test_account_agents_and_sessions_come_from_the_registry() -> None:
     assert account.json()["account_id"] == "account-1"
     assert account.json()["agents"][0]["active_session_count"] == 1
     assert account.json()["mcp_servers"][0]["name"] == "weather"
+
+
+def test_native_mcp_history_is_scoped_through_registered_metadata() -> None:
+    registration = NexusMCPServerRegistration(
+        name="native-demo",
+        endpoint="native-demo-endpoint",
+        service="demo-nexus",
+    )
+    client, handle, _ = _app_client(
+        entries_override=AccountEntries(
+            remote_servers={"weather": "http://weather"},
+            nexus_servers={"native-demo": registration},
+        )
+    )
+    call = ToolCallRecord(
+        call_id="nexus:default:session-1:12",
+        server_name="native-demo",
+        transport="nexus",
+        tool_name="get_lucky_number",
+        status="completed",
+        scheduled_at=123.0,
+        namespace="default",
+        execution_id="12",
+        workflow_id="session-1",
+        agent_id="assistant",
+        input={"topic": "Temporal"},
+        output="7",
+    )
+
+    with patch(
+        "nexus_mcp.durable_tools_gateway.web.scan_native_tool_calls",
+        new=AsyncMock(return_value=[call]),
+    ) as scan, client:
+        registered = client.post(
+            "/api/account/mcp-servers",
+            json={
+                "name": "native-demo",
+                "endpoint": "native-demo-endpoint",
+                "service": "demo-nexus",
+            },
+        )
+        account = client.get("/api/account")
+        history = client.get("/api/mcp-servers/native-demo/tool-calls")
+
+    assert registered.status_code == 200
+    assert registered.json() == {
+        "name": "native-demo",
+        "endpoint": "native-demo-endpoint",
+        "service": "demo-nexus",
+    }
+    assert account.json()["mcp_servers"] == [
+        {
+            "name": "native-demo",
+            "endpoint": "native-demo-endpoint",
+            "kind": "nexus",
+            "service": "demo-nexus",
+        },
+        {
+            "name": "weather",
+            "endpoint": "http://weather",
+            "kind": "external_http",
+            "service": None,
+        },
+    ]
+    assert history.status_code == 200
+    assert history.json()[0]["tool_name"] == "get_lucky_number"
+    scan.assert_awaited_once()
+    assert any(
+        call.args[0] is ToolRegistryWorkflow.register_nexus_mcp_server
+        for call in handle.execute_update.await_args_list
+    )
+
+
+def test_external_mcp_history_uses_the_gateway_activity_reader() -> None:
+    client, _, _ = _app_client()
+    call = ToolCallRecord(
+        call_id="activity:gateway:mcp-proxy-1",
+        server_name="weather",
+        transport="external_http",
+        tool_name="forecast",
+        status="completed",
+        scheduled_at=123.0,
+        namespace="gateway",
+        execution_id="mcp-proxy-1",
+        input={"city": "New York"},
+        output={"temperature": 70},
+    )
+
+    with patch(
+        "nexus_mcp.durable_tools_gateway.web.scan_external_tool_calls",
+        new=AsyncMock(return_value=[call]),
+    ) as scan, client:
+        history = client.get("/api/mcp-servers/weather/tool-calls")
+
+    assert history.status_code == 200
+    assert history.json()[0]["execution_id"] == "mcp-proxy-1"
+    assert scan.await_args.kwargs == {
+        "account_id": "account-1",
+        "server_name": "weather",
+    }
 
 
 def test_fresh_native_session_is_created_without_a_provider_workflow() -> None:

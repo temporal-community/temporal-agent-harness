@@ -36,8 +36,8 @@ with workflow.unsafe.imports_passed_through():
 
     from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
         harness_tool_as_openai_tool,
-        nexus_native_mcp_server,
         nexus_gateway,
+        nexus_native_mcp_server,
     )
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
@@ -49,6 +49,7 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
     from .native_subagent import NativeResearchSubagentWorkflow
+    from .whimsical_workflow import WhimsicalAgentWorkflow
 
 TASK_QUEUE = "nexus-hello"
 WORKFLOW_NAME = "NexusHelloAgent"
@@ -61,6 +62,8 @@ You are a friendly assistant. Answer the user in brief, natural prose.
 
 RESEARCH_SUBAGENT_ENDPOINT = "nexus-hello-subagent-endpoint"
 RESEARCH_KEY = "research"
+WHIMSICAL_SUBAGENT_ENDPOINT = "nexus-hello-whimsical-agent-endpoint"
+WHIMSICAL_KEY = "whimsical-agent"
 WRITER_KEY = "writer"
 WRITER_ALIAS = "writer"
 
@@ -99,6 +102,11 @@ class NexusHelloAgentWorkflow:
         research_tools = agent.nexus_native_subagent(
             NativeResearchSubagentWorkflow, RESEARCH_SUBAGENT_ENDPOINT, key=RESEARCH_KEY
         )
+        whimsical_tools = agent.nexus_native_subagent(
+            WhimsicalAgentWorkflow,
+            WHIMSICAL_SUBAGENT_ENDPOINT,
+            key=WHIMSICAL_KEY,
+        )
         writer_tools = subagent_gateway.subagent(
             [
                 agent.declared_handler(
@@ -123,7 +131,7 @@ class NexusHelloAgentWorkflow:
             ],
             tools=[
                 harness_tool_as_openai_tool(fn)
-                for fn in [*research_tools, *writer_tools]
+                for fn in [*research_tools, *whimsical_tools, *writer_tools]
             ],
         )
         input_items: list[TResponseInputItem] = [

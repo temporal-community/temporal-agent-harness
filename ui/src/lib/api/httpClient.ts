@@ -16,6 +16,7 @@ import type {
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
+  ToolCallRecord,
   WorkflowExecutionState,
   WorkflowId
 } from "./types";
@@ -79,6 +80,12 @@ async function* readSse(response: Response): AsyncIterable<AgentSseFrame> {
 export class HttpAgentApi implements AgentApi {
   async accountOverview(): Promise<AccountOverview> {
     return json<AccountOverview>(apiPath("account"));
+  }
+
+  async listToolCalls(serverName: string): Promise<ToolCallRecord[]> {
+    return json<ToolCallRecord[]>(
+      apiPath(`mcp-servers/${encodeURIComponent(serverName)}/tool-calls`)
+    );
   }
 
   async listAgents(): Promise<AgentRegistryResponse> {
