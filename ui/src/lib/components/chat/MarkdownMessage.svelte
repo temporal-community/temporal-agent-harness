@@ -1189,7 +1189,8 @@
     color: var(--code-block-text);
     line-height: 1.55;
     tab-size: 2;
-    white-space: pre;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
   }
 
   .markdown-message :global(.md-syntax-comment) {
