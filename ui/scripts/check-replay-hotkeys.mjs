@@ -617,8 +617,8 @@ assert.equal(seekDelta(() => run.nextTurn()), 0, "the next-turn button is not a 
 assert.equal(seekDelta(() => run.previousTurn()), 0, "the previous-turn button is not a key");
 assert.equal(seekDelta(() => run.goTo(markers[2])), 0, "dragging the scrubber is not a key");
 assert.equal(seekDelta(() => run.jumpToLive()), 0, "the live button is not a key");
-/* What the playback timer does every 700ms once Space has been pressed. Following the live edge
-   is exactly the case the smooth scroll is for, so those frames must not read as keyboard. */
+/* What the playback timer does every 700ms once Space has been pressed. A timer tick is not a key
+   press whatever it moves, so those frames must not read as keyboard. */
 run.goTo(markerMid);
 run.play();
 assert.equal(seekDelta(() => run.stepForward()), 0, "playback advancing is not a key press");
@@ -663,18 +663,22 @@ assert.equal(
 );
 console.log("  scrubber arrow keys count through the same rule as the window bindings");
 
-/* What the count is *for*: choosing a scroll behaviour. `"auto"` is not a way to spell instant —
-   it defers to the container's `scroll-behavior`, which is unset everywhere in this tree today, so
-   it reads as instant by luck and would turn smooth again the day any stylesheet sets it. Both
-   scroll callers here have a branch that must never animate — one because a key press should land
-   like a caret, one because the reader asked for reduced motion — and `"instant"` is the only value
-   that ignores CSS. Measured, not assumed: forcing `scroll-behavior: smooth` on the real scroller
-   and counting frames showed `"auto"` animate over ~113 of them while `"instant"` landed in one.
-   The probe that measured it was a throwaway and is gone; the number is kept and the path is not,
-   because a citation pointing at a file no clone has is the worse of the two.
+/* Which word a scroll call is allowed to animate with. `"auto"` is not a way to spell instant — it
+   defers to the container's `scroll-behavior`, which is unset everywhere in this tree today, so it
+   reads as instant by luck and would turn smooth again the day any stylesheet sets it. `"instant"`
+   is the only value that ignores CSS. Measured, not assumed: forcing `scroll-behavior: smooth` on
+   the real scroller and counting frames showed `"auto"` animate over ~113 of them while `"instant"`
+   landed in one. The probe that measured it was a throwaway and is gone; the number is kept and the
+   path is not, because a citation pointing at a file no clone has is the worse of the two.
 
-   Swept over the whole tree rather than pinned to the two known callers, because the failure mode
-   is a third caller written later that copies the wrong word from a sibling. */
+   This used to be what the seek count above was FOR: the two panes that follow the playhead picked
+   their easing from it. They no longer scroll that way at all — followScroll.ts writes `scrollTop`,
+   which is instant by construction and has no word to get wrong — so one caller is left, PaneRail's,
+   which animates unless the reader asked it not to. The floor is therefore one caller's worth and
+   not two; it reads as two because that caller spells it as a ternary and both words count.
+
+   Swept over the whole tree rather than pinned to the known caller, because the failure mode is a
+   second caller written later that copies the wrong word from a sibling. */
 const scrollBehaviours = [];
 for (const file of await fs.readdir(new URL("../src", import.meta.url), {
   recursive: true,
@@ -694,8 +698,8 @@ for (const file of await fs.readdir(new URL("../src", import.meta.url), {
   }
 }
 assert.ok(
-  scrollBehaviours.length >= 2,
-  `expected to find the scroll callers' behaviours and found ${scrollBehaviours.length} — the ` +
+  scrollBehaviours.length >= 1,
+  `expected to find a scroll caller's behaviour and found ${scrollBehaviours.length} — the ` +
     "sweep above has gone stale, so it is guarding nothing"
 );
 for (const { file, value } of scrollBehaviours) {

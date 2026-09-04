@@ -88,10 +88,9 @@
 </script>
 
 <script lang="ts">
-  import { tick } from "svelte";
   import { ChevronDown, ChevronRight, Cpu, ShieldCheck, Wrench } from "@lucide/svelte";
+  import { scrollFollower } from "$lib/state/followScroll";
   import { formatDuration } from "$lib/state/replayLog";
-  import { keyboardSeekCount } from "$lib/state/replayHotkeys";
   import { niceTimeTicks } from "$lib/state/timeTicks";
   /* `turnScale` is not here: the module block above imports it for the collapse
      predicate, and that binding is in scope for this one. */
@@ -259,44 +258,22 @@
     }));
   }
 
-  /* The keyboard seek count as of the last row this pane followed. Plain `let` on
-     purpose, exactly as in TranscriptPanel: `$state` would make the comparison below
-     a dependency of the effect, and the playhead moving is the only thing that
-     should run it. */
-  let followedKeyboardSeeks = keyboardSeekCount();
-
-  function reducedMotion(): boolean {
-    if (typeof window === "undefined") return false;
-    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  }
+  /* This pane's own scroller, and the only box the follow below may move. */
+  let turnsElement = $state<HTMLElement | null>(null);
+  const follower = scrollFollower(() => turnsElement);
 
   /**
    * Keep the row holding the playhead on screen.
    *
    * The pane had no scroll-follow of any kind, so past a dozen turns `→` or `.` moved
-   * a line in a row eighty screens away with no way to reach it. Same shape as the
-   * Logs pane's follow: `block: "nearest"` is what stops it fighting a reader
-   * scrolling by hand, since a row already in view is not moved at all, and the seek
-   * count keeps a held-down key from lagging an animation while a click keeps the
-   * follow-along that shows which way the run went.
+   * a line in a row eighty screens away with no way to reach it. Still the same shape
+   * as the Logs pane's follow, because it is now literally the same code: see
+   * followScroll.ts for why `scrollIntoView` had to go from both of them.
    */
   $effect(() => {
     const followed = timeline.turns.find((turn) => playheadFraction(turn, viewIndex) != null);
     if (!followed) return;
-    /* Asked here, not inside the tick below: by then the keystroke's task is over
-       and another one may have counted. */
-    const seeks = keyboardSeekCount();
-    const fromKeyboard = seeks !== followedKeyboardSeeks;
-    followedKeyboardSeeks = seeks;
-    tick().then(() => {
-      document.getElementById(`waterfall-turn-${followed.turnNumber}`)?.scrollIntoView({
-        block: "nearest",
-        /* "instant" and not "auto": "auto" defers to the container's
-           `scroll-behavior`, which is unset today, so it would read as instant by
-           luck and turn smooth the day a stylesheet sets it. */
-        behavior: fromKeyboard || reducedMotion() ? "instant" : "smooth"
-      });
-    });
+    follower.to(`waterfall-turn-${followed.turnNumber}`);
   });
 </script>
 
@@ -413,7 +390,7 @@
     </div>
   </header>
 
-  <div class="turns">
+  <div class="turns" bind:this={turnsElement} onscroll={follower.handleScroll}>
     {#if timeline.turns.length === 0}
       <p class="empty">Step through the stream to chart per-step latency.</p>
     {:else}
