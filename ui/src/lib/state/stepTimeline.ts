@@ -1,5 +1,6 @@
 import type { AgentSseFrame } from "$lib/api/types";
 import { formatTokens, type UsageTotals } from "$lib/cost/pricing";
+import { findHistoryGaps } from "$lib/state/historyGap";
 
 export type SpanKind = "model" | "tool" | "approval";
 export type SpanTone = "model" | "tool" | "approval" | "error" | "done";
@@ -58,6 +59,17 @@ export interface SubagentTurnTimeline extends TimelineTurnBase {
 export interface TurnTimeline extends TimelineTurnBase {
   role: "parent";
   subagentTurns: SubagentTurnTimeline[];
+  /**
+   * This turn's frames straddle a seam in the run's history — some of it was
+   * already trimmed out of the stream when this view resumed (see historyGap.ts).
+   *
+   * Parent-only, because the seam is a discontinuity in the ROOT log's offsets
+   * and a parent turn is the coarsest thing that can own one. It says where the
+   * hole is and nothing about its size, so a turn carrying it must not be read as
+   * having lost any particular step — only as not being able to account for the
+   * steps it does not show.
+   */
+  historyGap: boolean;
 }
 
 export interface StepTimeline {
@@ -122,7 +134,8 @@ export function buildStepTimeline(input: Array<AgentSseFrame | StepTimelineFrame
         preview: "",
         spans: [],
         laneCount: 1,
-        subagentTurns: []
+        subagentTurns: [],
+        historyGap: false
       };
       turns.set(turnNumber, turn);
     }
@@ -261,7 +274,15 @@ export function buildStepTimeline(input: Array<AgentSseFrame | StepTimelineFrame
     }
   }
 
+  const gapPositions = findHistoryGaps(input);
+  /* Held rather than applied where it is found, because the frame just past a seam
+     may be one this projection skips — a `turn: 0` session frame or a stream error
+     — and dropping the seam with it would leave the gap unreported. It lands on the
+     first turn that can own it instead. */
+  let pendingGap = false;
+
   input.forEach((item, position) => {
+    if (gapPositions.has(position)) pendingGap = true;
     const entry = frameFor(item);
     const { frame } = entry;
     if (!("type" in frame.data)) return;
@@ -270,6 +291,10 @@ export function buildStepTimeline(input: Array<AgentSseFrame | StepTimelineFrame
     const { turn_number: turnNumber, timestamp } = frame.data;
     const scope = scopeFor(entry, turnNumber);
     if (scope.role === "parent") turnFor(scope, timestamp);
+    if (pendingGap) {
+      parentTurnFor(scope.parentTurnNumber, timestamp).historyGap = true;
+      pendingGap = false;
+    }
     lastSeenByScope.set(scope.key, { timestamp, index });
     if (scope.role === "subagent") {
       lastSeenByScope.set(parentScopeKey(scope.parentTurnNumber), { timestamp, index });

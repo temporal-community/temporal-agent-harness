@@ -29,6 +29,12 @@
    */
   export function turnHeldOpen(turn: TurnTimeline, viewIndex: number): boolean {
     if (playheadFraction(turn, viewIndex) != null) return true;
+    /* A seam in the run's history is held open for the same reason a failure is: the
+       fold's own argument is that a row with nothing to relate says as much folded,
+       and a turn that cannot account for its own steps is precisely the row where
+       that is untrue. Folded, its note would be the one thing the reader needed and
+       the proportion bar would present the surviving fraction as the whole turn. */
+    if (turn.historyGap) return true;
     return [...turn.spans, ...turn.subagentTurns.flatMap((sub) => sub.spans)].some(
       (span) => span.tone === "error" || span.ongoing
     );
@@ -94,6 +100,7 @@
   import { niceTimeTicks } from "$lib/state/timeTicks";
   /* `turnScale` is not here: the module block above imports it for the collapse
      predicate, and that binding is in scope for this one. */
+  import { HISTORY_GAP_NOTE } from "$lib/state/historyGap";
   import { aggregateSpans, type SpanKind, type TimelineSpan } from "$lib/state/stepTimeline";
 
   interface Props {
@@ -117,6 +124,12 @@
     subagent: boolean;
     /** Prepended to every bar's tooltip, naming the subagent a nested row belongs to. */
     prefix?: string;
+    /**
+     * This track's turn straddles a seam in the run's history, so "no spans" here is
+     * not evidence that nothing ran. Parent tracks only — the seam is a root-log
+     * discontinuity and has no meaning inside a child's own offsets.
+     */
+    gap?: boolean;
   }
 
   let { timeline, viewIndex, onScrub }: Props = $props();
@@ -343,7 +356,11 @@
         </button>
       {/each}
 
-      {#if track.spans.length === 0}
+      <!-- Suppressed over a seam, because there it is the bug: "no measured parent
+           steps" reads as a turn that ran none, which is the one thing this track
+           cannot tell apart from a turn whose steps were trimmed away. The note
+           above the track says which this is. -->
+      {#if track.spans.length === 0 && !track.gap}
         <span class="track-empty">
           no measured {track.subagent ? "subagent" : "parent"} steps
         </span>
@@ -461,6 +478,14 @@
                 </div>
               </div>
 
+              <!-- One note at the seam, on the turn that straddles it, rather than a
+                   badge on every turn the missing events might have touched: the
+                   offsets say where the history breaks and nothing about what was in
+                   the hole, so anything wider would be claiming more than is known. -->
+              {#if turn.historyGap}
+                <p class="history-gap">{HISTORY_GAP_NOTE}</p>
+              {/if}
+
               {@render laneTrack({
                 key: `turn-${turn.turnNumber}`,
                 spans: turn.spans,
@@ -468,7 +493,8 @@
                 scale,
                 turnStart: turn.startTs,
                 head,
-                subagent: false
+                subagent: false,
+                gap: turn.historyGap
               })}
 
               {#if turn.subagentTurns.length > 0}
@@ -953,6 +979,20 @@
     position: absolute;
     left: 8px;
     top: 6px;
+  }
+
+  /* Toned like an error because a hole in the history is a degradation, matching the
+     subagent_stream_unavailable marker that says the same kind of thing; not shouted,
+     because nothing here is broken now and there is nothing to act on. */
+  .history-gap {
+    margin: 0 0 6px;
+    padding: 5px 8px;
+    border-left: 2px solid var(--error);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--error) 8%, transparent);
+    color: var(--text-2);
+    font-size: var(--font-xs);
+    line-height: 1.45;
   }
 
   .empty {

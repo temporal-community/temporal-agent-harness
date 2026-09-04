@@ -345,6 +345,12 @@
 
           <div class="log-lines" id={`turn-${group.turnNumber}-logs`}>
             {#each group.rows as row}
+              <!-- A seam, drawn where it is rather than as a badge on the rows around
+                   it: the log's whole claim is that consecutive lines are consecutive
+                   events, and this is the one place that is untrue. -->
+              {#if row.gapBefore}
+                <p class="history-gap">{row.gapBefore}</p>
+              {/if}
               {@const expanded = isRowExpanded(row.id)}
               {@const status = statusNote(row)}
               {@const tool = toolNote(row)}
@@ -685,6 +691,19 @@
     padding: 8px 9px;
     border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
     background: transparent;
+  }
+
+  /* Same tone and the same words as the waterfall's seam, so the two surfaces are
+     read as one fact about the run rather than two coincidences. */
+  .history-gap {
+    margin: 0;
+    padding: 7px 9px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    border-left: 2px solid var(--error);
+    background: color-mix(in srgb, var(--error) 8%, transparent);
+    color: var(--text-2);
+    font-size: var(--font-xs);
+    line-height: 1.45;
   }
 
   .log-line.nested-subagent {

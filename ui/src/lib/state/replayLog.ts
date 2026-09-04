@@ -7,6 +7,7 @@ import type {
 } from "$lib/api/types";
 import { formatTokens, summarizeCost, type UsageTotals } from "$lib/cost/pricing";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
+import { HISTORY_GAP_NOTE, findHistoryGaps } from "$lib/state/historyGap";
 import { thoughtDeltaText } from "$lib/state/thoughtSummary";
 
 export type ReplayActor =
@@ -65,6 +66,16 @@ export interface ReplayLogRow {
   estimatedCostUsd?: number | null;
   marker?: ReplayMarkerTone;
   markerLabel?: string;
+  /**
+   * The run's history is discontinuous immediately BEFORE this row — set to
+   * HISTORY_GAP_NOTE, which is the whole of what is known (see historyGap.ts).
+   *
+   * On the row after the seam rather than the one before it, because the seam is
+   * read going forwards: "what follows is not continuous with what precedes it"
+   * is a statement about this row, and the row before it is a complete event that
+   * nothing is wrong with.
+   */
+  gapBefore?: string;
 }
 
 export interface TurnLogSummary {
@@ -554,9 +565,22 @@ function buildSummary(turnNumber: number, rows: ReplayLogRow[]): TurnLogSummary 
 }
 
 export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): ReplayLog {
-  const rows = input
-    .map((item, index) => rowFromFrame(normalizeReplayLogFrame(item), index))
-    .filter((row): row is ReplayLogRow => row != null);
+  const gapPositions = findHistoryGaps(input);
+  /* Carried forward for the same reason the waterfall carries it: `rowFromFrame`
+     answers null for an event kind this log does not render, and a seam attached to
+     a frame that draws no row would never be seen. */
+  let pendingGap = false;
+  const rows: ReplayLogRow[] = [];
+  input.forEach((item, index) => {
+    if (gapPositions.has(index)) pendingGap = true;
+    const row = rowFromFrame(normalizeReplayLogFrame(item), index);
+    if (!row) return;
+    if (pendingGap) {
+      row.gapBefore = HISTORY_GAP_NOTE;
+      pendingGap = false;
+    }
+    rows.push(row);
+  });
 
   const groupedRows = new Map<number, ReplayLogRow[]>();
   for (const row of rows) {
