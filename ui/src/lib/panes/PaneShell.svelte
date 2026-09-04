@@ -424,6 +424,20 @@
     z-index: 3;
   }
 
+  /* The 5px that put a permanent horizontal scrollbar under both rails. Centring
+     the handle on the seam is right between two columns and wrong for the last
+     column in a rail: there is no seam out there, so half the handle hangs past
+     the rail's content edge and the rail — which scrolls horizontally on purpose
+     when columns genuinely outgrow it — was obliged to make those pixels
+     reachable. Sitting the handle inside its own pane keeps all 12px draggable
+     and removes the overflow rather than clipping it; `overflow-x: hidden` on the
+     rail would have hidden the real bar with the phantom one. Every pane in a
+     slot spans the slot's full width — a split stacks COLUMN-wise — so every
+     gutter in the last slot is on the rail's edge and none is on an inner seam. */
+  :global(.rail-slot:last-child) .resize-gutter {
+    right: 0;
+  }
+
   .resize-gutter:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: -4px;
