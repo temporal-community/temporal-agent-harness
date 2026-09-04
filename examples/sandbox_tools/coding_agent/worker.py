@@ -67,6 +67,23 @@ def worker_activities(client: Client) -> list:
     ]
 
 
+def openai_agents_plugin() -> OpenAIAgentsPlugin:
+    """The plugin this worker runs with — and so the one a replay of its history needs.
+
+    Wired for the HARNESS STREAMING PATH (see the module docstring). It also decides that model
+    calls leave the workflow as activities at all, which is half of any recorded session's
+    command sequence, so a replay test that built its own would be replaying a different worker.
+    """
+    return OpenAIAgentsPlugin(
+        model_params=ModelActivityParameters(
+            start_to_close_timeout=timedelta(minutes=3),
+            heartbeat_timeout=timedelta(seconds=30),
+            stream_to_provider=stream_to_provider,
+        ),
+        observer_factory=harness_observer_factory,
+    )
+
+
 async def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -79,14 +96,7 @@ async def main() -> None:
     if not os.environ.get("OPENAI_API_KEY"):
         sys.exit("error: OPENAI_API_KEY env var not set")
 
-    plugin = OpenAIAgentsPlugin(
-        model_params=ModelActivityParameters(
-            start_to_close_timeout=timedelta(minutes=3),
-            heartbeat_timeout=timedelta(seconds=30),
-            stream_to_provider=stream_to_provider,
-        ),
-        observer_factory=harness_observer_factory,
-    )
+    plugin = openai_agents_plugin()
 
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(**connect_config, plugins=[plugin])
