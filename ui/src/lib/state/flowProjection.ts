@@ -228,6 +228,18 @@ function runtimeBoundaryHeight(count: number): number {
   );
 }
 
+/**
+ * What `.workflow-head` occupies in AgentWorkflowNode, mirrored here for the same
+ * reason embeddedToolHeaderHeight is: this file computes geometry from data and
+ * never measures the DOM. Measured at 88px in a browser — its `min-height`, which
+ * binds even in the variant that fills it most (title, subtitle and an ACCEPTS
+ * row), and the 120px above the first card is this plus 32px of breathing room.
+ *
+ * It is also the whole height of a boundary with nothing inside it, because the
+ * insets on either side of the card grid have no grid to sit around.
+ */
+const runtimeHeaderHeight = 88;
+
 function outputPosition(boundaryWidth: number): { x: number; y: number } {
   return {
     x: layout.runtime.x + boundaryWidth + layout.outputGap,
@@ -1468,6 +1480,22 @@ function scopedGraph(
 ): AgentGraph {
   const scopedNodeId = (id: string) =>
     id.includes("::") ? id : scopedId(agent.workflowId, id);
+  /**
+   * A boundary with nothing inside it is its header, and nothing else.
+   *
+   * runtimeLayoutFor seeds contentWidth/contentHeight with one nominal card
+   * before its loop runs, so a runtime that contributed NO nodes still reserved
+   * room for one: 290px around an 88px header, which is the 202px of nothing
+   * under a stopped subagent whose own stream was never readable.
+   *
+   * Stopped, because empty has to mean empty and not "empty yet". A child enters
+   * the graph the moment the parent announces it and is legitimately childless
+   * until its own first frame is merged — and since `frames` here is scoped to
+   * the replay cursor, that is a position anyone scrubbing the run parks on, not
+   * a flicker at mount. Collapsing there would drop the card and then jump it.
+   * A stopped child with no nodes has none coming.
+   */
+  const emptyBoundary = agent.stopped === true && graph.nodes.length === 1;
   const nodes = graph.nodes.map((item) => ({
     ...item,
     id: scopedNodeId(item.id),
@@ -1482,6 +1510,7 @@ function scopedGraph(
             tone: agent.stopped ? "done" : item.data.tone,
             runtimeRole: agent.role,
             state: agent.stopped ? "stopped" : item.data.state,
+            boundaryHeight: emptyBoundary ? runtimeHeaderHeight : item.data.boundaryHeight,
             title: `${graphSourceLabel(agent)} runtime`,
             subtitle: [graphSourceSubtitle(agent), item.data.subtitle]
               .filter(Boolean)
