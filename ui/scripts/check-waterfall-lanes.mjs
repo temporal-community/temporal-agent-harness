@@ -25,7 +25,7 @@ const { buildStepTimeline, playheadFraction, turnScale } = await import(
 /* From the component, the way check-status-note.mjs reads statusKind() out of
    TranscriptPanel: the rule belongs where it is used, and a copy of it here would
    pass forever while the real one rotted. */
-const { COLLAPSE_THRESHOLD, turnExpanded, turnHeldOpen } = await import(
+const { COLLAPSE_THRESHOLD, turnExpanded, turnHeldOpen, turnWorthDrawing } = await import(
   "../src/lib/components/flow/LatencyWaterfall.svelte"
 );
 
@@ -236,6 +236,44 @@ const laneOf = (turn, label) => turn.spans.find((span) => span.label.includes(la
     return buildStepTimeline(frames);
   }
 
+  /* Three turns, one of each shape the rule sorts: a turn whose spans relate to each
+     other, a turn that is one model call and nothing else, and a turn that happened
+     at a single instant. The last two are the rows the screenshot was full of. */
+  function trivialRunFrames() {
+    clock = 0;
+    const frames = [];
+    const push = (event, turnNumber, data = {}) =>
+      frames.push({
+        event,
+        data: { type: event, agent_id: "root", turn_number: turnNumber, timestamp: clock, ...data }
+      });
+
+    push("turn_started", 1, { user_message: "rich" });
+    push("model_interaction_started", 1, { model: "gpt-5.1" });
+    clock += 5;
+    push("model_interaction_ended", 1);
+    push("tool_start", 1, { tool_id: "a", tool_name: "read_file" });
+    clock += 4;
+    push("tool_end", 1, { tool_id: "a" });
+
+    push("turn_started", 2, { user_message: "one call" });
+    push("model_interaction_started", 2, { model: "gpt-5.1" });
+    clock += 13;
+    push("model_interaction_ended", 2);
+
+    /* No clock movement at all, which is what a 0s turn is. */
+    push("turn_started", 3, { user_message: "instant" });
+    push("model_interaction_started", 3, { model: "gpt-5.1" });
+    push("model_interaction_ended", 3);
+    push("tool_start", 3, { tool_id: "b", tool_name: "read_file" });
+    push("tool_end", 3, { tool_id: "b" });
+
+    return frames;
+  }
+
+  /** An index the playhead reaches inside a given turn, whatever its spans. */
+  const insideTurn = (turn) => turn.startIndex;
+
   const none = new Set();
   /* An index past every turn's frames, so `turnHeldOpen` can only be answering the
      failure question — with the cursor parked in a turn, that turn passes for the
@@ -244,16 +282,70 @@ const laneOf = (turn, label) => turn.spans.find((span) => span.label.includes(la
 
   assert.equal(COLLAPSE_THRESHOLD, 12, "the collapse threshold is twelve turns");
 
-  // Below the line nothing folds, which is what keeps today's short sessions untouched.
+  // Below the line a turn with a shape still draws it, however many such turns there are.
   {
     const timeline = run(COLLAPSE_THRESHOLD);
     for (const turn of timeline.turns) {
       assert.ok(
+        turnWorthDrawing(turn),
+        `sanity: the fixture's turns have a model and a tool to relate; turn ` +
+          `${turn.turnNumber} does not`
+      );
+      assert.ok(
         turnExpanded(turn, PARKED, timeline.turns.length, none),
-        `at exactly ${COLLAPSE_THRESHOLD} turns every row still draws its tracks; turn ` +
-          `${turn.turnNumber} did not`
+        `at exactly ${COLLAPSE_THRESHOLD} turns a row with a shape still draws its tracks; ` +
+          `turn ${turn.turnNumber} did not`
       );
     }
+  }
+
+  /* The second reason to fold, and the one the count never reached: a short session
+     whose rows are mostly empty. Three turns is nowhere near the threshold, so every
+     fold here is the shape rule doing it. */
+  {
+    const timeline = buildStepTimeline(trivialRunFrames());
+    const [rich, single, instant] = timeline.turns;
+    const count = timeline.turns.length;
+    assert.equal(count, 3, "sanity: the fixture built three turns");
+    assert.ok(count < COLLAPSE_THRESHOLD, "sanity: and stayed well under the threshold");
+
+    assert.ok(turnWorthDrawing(rich), "a turn whose spans relate to each other is worth a row");
+    assert.ok(turnExpanded(rich, PARKED, count, none), "and it draws them");
+
+    assert.equal(
+      turnWorthDrawing(single),
+      false,
+      "one span has nothing to relate it to, so the row buys nothing"
+    );
+    assert.equal(turnExpanded(single, PARKED, count, none), false, "and it folds");
+
+    assert.equal(
+      turnWorthDrawing(instant),
+      false,
+      "a turn of no duration has no ruler to place anything along"
+    );
+    assert.equal(turnExpanded(instant, PARKED, count, none), false, "and it folds too");
+
+    // Folded by shape is still a turn the reader can open, and the one they open only.
+    assert.ok(
+      turnExpanded(single, PARKED, count, new Set([single.turnNumber])),
+      "a folded-by-shape turn opens by hand"
+    );
+    assert.equal(
+      turnExpanded(instant, PARKED, count, new Set([single.turnNumber])),
+      false,
+      "and opening it leaves its neighbour folded"
+    );
+
+    /* The guarantee that matters most for the new rule: the rows it folds are exactly
+       the rows a reader would never miss — until one of them is where the cursor is,
+       or where something broke. Both outrank it, in a session too short to fold. */
+    const inside = insideTurn(instant);
+    assert.ok(
+      turnHeldOpen(instant, inside),
+      "an empty turn holding the cursor is held open against the shape rule"
+    );
+    assert.ok(turnExpanded(instant, inside, count, none), "and it draws its tracks");
   }
 
   // One turn over it, and the rows that have nothing to say fold.
@@ -380,5 +472,5 @@ const laneOf = (turn, label) => turn.spans.find((span) => span.label.includes(la
 
 console.log(
   "check-waterfall-lanes: kind lanes, per-turn scale, the playhead mapping and the collapse " +
-    "threshold's two auto-expand rules hold"
+    "collapse rules' two auto-expand guarantees hold"
 );

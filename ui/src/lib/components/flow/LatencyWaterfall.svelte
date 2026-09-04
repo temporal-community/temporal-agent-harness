@@ -1,6 +1,7 @@
 <script lang="ts" module>
   import {
     playheadFraction,
+    turnScale,
     type StepTimeline,
     type TurnTimeline
   } from "$lib/state/stepTimeline";
@@ -34,10 +35,43 @@
   }
 
   /**
+   * Whether a turn has a shape that a full row would show and a folded one would not.
+   *
+   * What the tall row buys is relationships: which lane a span is in, where it sits
+   * along the turn's ruler, what it overlaps. A turn with one span has no relationship
+   * to draw — the folded bar says "all of it, one kind" just as well — and a turn of
+   * zero duration has no ruler to place anything on, so every bar in it stacks at the
+   * left edge whatever the height. Those rows cost 152px and answer nothing, which is
+   * what "past turns take up so much room" is pointing at: a 13s single-call turn and
+   * two 0s turns were each as tall as an eight-minute one.
+   *
+   * Subagent spans count, because they are drawn on the parent's row.
+   */
+  export function turnWorthDrawing(turn: TurnTimeline): boolean {
+    /* `turnScale` floors at a second so a row always has a ruler to draw, which means
+       it cannot answer this question by itself: a turn that took no time at all still
+       scales to 1. Above the floor the scale is real, and at the floor the turn's own
+       duration is what says whether anything happened between its ends. */
+    if (turnScale(turn) <= 1 && turn.durationSeconds <= 0) return false;
+    const spans =
+      turn.spans.length + turn.subagentTurns.reduce((total, sub) => total + sub.spans.length, 0);
+    return spans > 1;
+  }
+
+  /**
    * Whether a turn draws its tracks. `opened` holds the turns the reader opened by
    * hand — the only state this feature keeps, and deliberately not in the URL: `?p=`
    * encodes which panes are where, and a stale link that re-folded a turn which had
    * auto-opened for an error is the exact failure the rule above exists to prevent.
+   *
+   * Two independent reasons to fold, and the held-open rules outrank both. The count
+   * bounds a long session, where even rows worth reading have to give way to there
+   * being two hundred of them. The shape rule bounds a short one, where the total is
+   * fine and the problem is that a third of the rows are empty. Recency is not a rule
+   * here on purpose: the newest turn of a live run is still running, so `ongoing`
+   * already holds it open, and the turn the reader is actually reading is the one
+   * under the playhead — both are covered above. Folding by age alone would have kept
+   * an empty 0s turn open for being last while folding the rich one before it.
    */
   export function turnExpanded(
     turn: TurnTimeline,
@@ -46,9 +80,9 @@
     opened: ReadonlySet<number>
   ): boolean {
     return (
-      turnCount <= COLLAPSE_THRESHOLD ||
       turnHeldOpen(turn, viewIndex) ||
-      opened.has(turn.turnNumber)
+      opened.has(turn.turnNumber) ||
+      (turnCount <= COLLAPSE_THRESHOLD && turnWorthDrawing(turn))
     );
   }
 </script>
@@ -59,12 +93,9 @@
   import { formatDuration } from "$lib/state/replayLog";
   import { keyboardSeekCount } from "$lib/state/replayHotkeys";
   import { niceTimeTicks } from "$lib/state/timeTicks";
-  import {
-    aggregateSpans,
-    turnScale,
-    type SpanKind,
-    type TimelineSpan
-  } from "$lib/state/stepTimeline";
+  /* `turnScale` is not here: the module block above imports it for the collapse
+     predicate, and that binding is in scope for this one. */
+  import { aggregateSpans, type SpanKind, type TimelineSpan } from "$lib/state/stepTimeline";
 
   interface Props {
     timeline: StepTimeline;
@@ -386,28 +417,26 @@
     {#if timeline.turns.length === 0}
       <p class="empty">Step through the stream to chart per-step latency.</p>
     {:else}
-      <!-- The ruler used to live here, one for every row. It cannot any more: each
-           row is scaled to its own turn, so there is no single ruler that would be
-           true of all of them. What is left in the sticky slot is the note that says
-           so, because a reader who takes two rows for comparable has been misled by
-           the drawing and nothing else on screen would correct them — the per-row
-           rulers below show THAT the scales differ, but no number forbids the
-           comparison, and that failure is silent. -->
-      <div class="turn-row axis-row">
-        <div class="axis-spacer"></div>
-        <p class="scale-note">Per-row scale · not comparable</p>
-      </div>
-
+      <!-- No shared ruler heads these rows, because each is scaled to its own turn
+           and no single ruler would be true of all of them. A sentence saying so
+           used to sit in the sticky slot; it spanned the full width of a row, which
+           put it across the track rather than beside it, and a caption lying over
+           the bars it captions reads as a drawing error rather than a warning. The
+           per-row rulers carry it now — they are next to the bars, and a reader
+           comparing 0s–40s against 0s–8m has the answer in the same glance. -->
       {#each timeline.turns as turn (turn.turnNumber)}
         {@const scale = turnScale(turn)}
         {@const ticks = niceTimeTicks(scale, 5)}
         {@const head = playheadFraction(turn, viewIndex)}
         {@const expanded = turnExpanded(turn, viewIndex, timeline.turns.length, openedTurns)}
         <!-- A turn held open by the rules above offers no toggle, because a control
-             promising to fold away the failure would be lying; below the threshold
-             there is nothing to fold and the affordance does not exist at all. -->
+             promising to fold away the failure would be lying. Otherwise the toggle
+             appears exactly where the default would fold the row — which is both how
+             a folded turn is opened by hand and how one opened by hand is put back. A
+             row the default leaves open has nothing to offer and stays a plain label. -->
         {@const canFold =
-          timeline.turns.length > COLLAPSE_THRESHOLD && !turnHeldOpen(turn, viewIndex)}
+          !turnHeldOpen(turn, viewIndex) &&
+          !(timeline.turns.length <= COLLAPSE_THRESHOLD && turnWorthDrawing(turn))}
         <article
           id={`waterfall-turn-${turn.turnNumber}`}
           class="turn-row"
@@ -581,30 +610,6 @@
     align-items: start;
     padding: 8px 0;
     border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  }
-
-  /* The note carries .turn-row so it inherits whatever column layout the host has
-     imposed on the rows it heads — the narrow pane collapses them to one column, and
-     a header that did not follow would sit over the wrong place. The spacer occupies
-     the label column when there are two, and collapses to nothing when there is one. */
-  .turn-row.axis-row {
-    position: sticky;
-    top: 0;
-    z-index: 3;
-    align-items: end;
-    padding: 0 0 6px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-0);
-  }
-
-  .axis-spacer {
-    height: 0;
-  }
-
-  .scale-note {
-    margin: 0;
-    color: var(--text-3);
-    font-size: var(--font-xs);
   }
 
   /* The glyph rail and the thing it labels, so a ruler and the track under it start

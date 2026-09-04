@@ -56,6 +56,10 @@
      on a trace that fits, and during a live run this is where the next turn
      appears before anything has to move. */
   const DRAWER_FIT_SLACK = 12;
+  /* An unattended fit stops well short of the row's own ceiling. Nothing that happens
+     without being asked for should be able to take three fifths of the window; the
+     reader who wants that drags for it, and the gutter goes all the way to 60vh. */
+  const DRAWER_FIT_MAX_FRACTION = 0.5;
 
   let rail = $state<PaneRail | null>(null);
   let drawerRail = $state<PaneRail | null>(null);
@@ -295,10 +299,10 @@
    * single pixel, because `PaneRail` and `PaneShell` fill their box top-down and an
    * indefinite row leaves every one of them nothing to fill.
    */
-  function fitDrawerToContent(): boolean {
+  function fitDrawerToContent(): number | null {
     const turns = drawerElement?.querySelector(".turns");
     const last = turns?.lastElementChild;
-    if (!drawerElement || !turns || !last) return false;
+    if (!drawerElement || !turns || !last) return null;
 
     /* `scrollHeight` is useless in the direction that matters, because it never
        reports less than the box: a trace with room to spare measures as exactly the
@@ -318,10 +322,39 @@
     drawerHeight = Math.round(
       Math.min(
         Math.max(chrome + content + DRAWER_FIT_SLACK, DRAWER_MIN_H),
-        window.innerHeight * 0.6
+        window.innerHeight * DRAWER_FIT_MAX_FRACTION
       )
     );
-    return true;
+    return drawerHeight;
+  }
+
+  /**
+   * Measure again until the answer stops changing, then never again.
+   *
+   * This is the whole of the refit policy, and it exists because the two failures are
+   * opposite. Freezing on the first measurement locks a 102px drawer around a trace
+   * that has not arrived, because a link naming the drawer restores the pane before
+   * the session behind it streams anything. Subscribing to content height instead
+   * grows the drawer by a row every turn until it has eaten the rail, which is not a
+   * height anyone asked for. Convergence is the thing both want: a trace still
+   * arriving measures differently every time and keeps the fit honest, a trace that
+   * has arrived measures the same twice and the question is closed for good. A turn
+   * added later is content changing after the answer was settled, and is ignored.
+   *
+   * ponytail: a poll, not an observer. Ceiling is `DRAWER_FIT_TRIES` measurements —
+   * a run that changes shape faster than that for eight seconds straight stops
+   * getting fitted rather than following forever. A ResizeObserver on the last row
+   * would be exact; this is four lines and the same answer everywhere it matters.
+   */
+  function settleDrawerFit(previous: number | null, tries = 0): void {
+    if (drawerFitTimer != null) clearTimeout(drawerFitTimer);
+    drawerFitTimer = window.setTimeout(() => {
+      drawerFitTimer = null;
+      if (drawerSized || tries >= DRAWER_FIT_TRIES) return;
+      const measured = fitDrawerToContent();
+      if (measured != null && measured === previous) return;
+      settleDrawerFit(measured, tries + 1);
+    }, DRAWER_FIT_SETTLE_MS);
   }
 
   function startDrawerResize(event: PointerEvent): void {
@@ -355,10 +388,12 @@
   /* Plain fields, not `$state`: bookkeeping about whether a fit is owed, which
      nothing on screen reads and no fit should re-trigger. */
   let drawerSized = false;
+  let drawerFitTimer: number | null = null;
   /* Long enough for the rows to be in the DOM after the events that made them —
      a warm load delivers a whole trace faster than it renders one, so the fit
      taken on the last event can still be a fit taken on half a trace. */
   const DRAWER_FIT_SETTLE_MS = 400;
+  const DRAWER_FIT_TRIES = 20;
 
   /**
    * Fit when the drawer opens, and then leave it alone.
@@ -370,23 +405,17 @@
    * Collapsing or expanding a turn is the same argument: the reader asked to see a
    * turn, not to have the desk resize under them, and `.turns` scrolls.
    *
-   * What stops it is the reader, not a lock on the first measurement. Locking was
-   * the first attempt and it is wrong in the case that matters: a link naming the
-   * drawer restores the pane before the session behind it has streamed anything,
-   * so whichever measurement is declared final is taken against half a trace.
-   *
-   * Re-measuring on every event sounds like the twitch, and is not, because of
-   * what the waterfall is: turns are fixed-height rows of fixed kind lanes, so
-   * events landing in the turn already on screen make its spans longer and the
-   * trace no taller. The height changes when a turn does, minutes apart, and the
-   * drawer following its trace at a turn boundary is the drawer doing its job.
-   * Anything the reader does to the height ends this for good, which is the part
-   * that matters: nothing moves under a cursor that has been put on it.
+   * Asked once per open, and once per session, because those are the two moments the
+   * question is new: a drawer being opened has no height yet, and a different run is
+   * a different trace. A turn arriving in the run already on screen is not either of
+   * those, which is why `run.total` is deliberately not read here — subscribing to it
+   * made the drawer climb a row every turn until it had taken the rail, and a height
+   * that grows while you watch is not a height anyone chose. `settleDrawerFit` is
+   * what keeps that from meaning "measure once, too early".
    */
   $effect(() => {
     const holding = drawer.groups.length > 0;
     void run.session?.workflow_id;
-    void run.total;
 
     if (!holding) {
       /* An emptied drawer has no height anyone chose. The next open is a fresh
@@ -396,16 +425,16 @@
     }
     if (drawerSized) return;
 
-    /* Twice: on the next frame, so a drawer opened onto a loaded session is never
-       seen at the wrong size, and once more after the rows have had time to catch
-       up with the events that made them. */
+    /* On the next frame, so a drawer opened onto a loaded session is never seen at
+       the wrong size, and then until the measurement holds still. */
     requestAnimationFrame(() => {
       if (!drawerSized) fitDrawerToContent();
     });
-    const settle = setTimeout(() => {
-      if (!drawerSized) fitDrawerToContent();
-    }, DRAWER_FIT_SETTLE_MS);
-    return () => clearTimeout(settle);
+    settleDrawerFit(null);
+    return () => {
+      if (drawerFitTimer != null) clearTimeout(drawerFitTimer);
+      drawerFitTimer = null;
+    };
   });
 
   /* The drawer's whole chrome, now that the pane header down there is hidden. One
@@ -624,9 +653,10 @@
         onpointerup={stopDrawerResize}
         onpointercancel={stopDrawerResize}
         ondblclick={() => {
-          /* The way back from a height you chose and no longer want. */
+          /* The way back from a height you chose and no longer want, and the only way
+             to ask the question again once it has settled. */
           drawerSized = false;
-          if (!fitDrawerToContent()) drawerHeight = DRAWER_DEFAULT_H;
+          if (fitDrawerToContent() == null) drawerHeight = DRAWER_DEFAULT_H;
         }}
       ></button>
 
@@ -734,34 +764,6 @@
 
   .drawer :global(.turns) {
     padding-top: 4px;
-  }
-
-  /* The scale note survives, in the smallest form that still says it. The per-row
-     rulers prove the scales differ, but nothing else on screen forbids reading a
-     47% bar in one row against an 18% bar in another, and that reader gets no
-     correction — the failure is silent, which is why the sentence was added. It
-     moves into the label column, which was empty anyway, so the honesty costs a
-     line of the smallest type and no trace height at all. */
-  .drawer :global(.axis-spacer) {
-    display: none;
-  }
-
-  .drawer :global(.turn-row.axis-row) {
-    padding: 0 0 3px;
-  }
-
-  .drawer :global(.scale-note) {
-    color: var(--text-4);
-    font-size: var(--font-2xs);
-    letter-spacing: var(--label-tracking);
-    text-transform: uppercase;
-    white-space: nowrap;
-  }
-
-  /* Spanning both columns keeps the note out of the label column's width, which the
-     rule below cuts to the two strings that actually have to fit. */
-  .drawer :global(.axis-row .scale-note) {
-    grid-column: 1 / -1;
   }
 
   /* The label column is sized for a rail, where 240px is the pane's own left half.
@@ -959,8 +961,8 @@
      wide, was forced into the waterfall's one-column form, so a turn's label sat
      above its track and the axis followed it there. The label column comes back
      the moment there is room for it — which in a bottom drawer there always is.
-     LatencyWaterfall's `.axis-row` deliberately follows whatever the host imposes,
-     and still does; it just now gets told the truth about the room. */
+     Every row follows whatever the host imposes, and still does; they just now get
+     told the truth about the room. */
   @container (max-width: 640px) {
     .pane-content :global(.turn-row) {
       grid-template-columns: minmax(0, 1fr);

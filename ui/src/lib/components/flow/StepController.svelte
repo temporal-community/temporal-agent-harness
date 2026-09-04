@@ -380,21 +380,6 @@
     </div>
   </div>
 
-  <div class="aside">
-    <!-- The drawer's whole chrome. It replaces the pane header down there, which
-         is why it is a real toggle with a pressed state rather than an opener:
-         it is now the only thing that says whether the drawer is holding
-         anything, and the only way to shut it that does not involve dragging. -->
-    <IconButton
-      label={drawerOpen ? "Close the bottom drawer" : "Open the bottom drawer"}
-      tip={drawerOpen ? "Close the bottom drawer" : "Open the bottom drawer — latency trace"}
-      pressed={drawerOpen}
-      onclick={onToggleDrawer}
-    >
-      <PanelBottom size={14} />
-    </IconButton>
-  </div>
-
   <div class="now" bind:this={nowElement}>
     <Chip
       class="readout"
@@ -438,6 +423,27 @@
         {/if}
       </div>
     {/if}
+  </div>
+
+  <!-- The drawer's whole chrome. It replaces the pane header down there, which is
+       why it is a real toggle with a pressed state rather than an opener: it is
+       the only thing that says whether the drawer is holding anything, and the
+       only way to shut it that does not involve dragging.
+
+       Last, behind the readout, because that is how every other strip in this
+       console orders itself — a pane header puts its name first and its icons
+       against the trailing edge, the minimap puts the run first and its launcher
+       last. It also puts the drawer's control in the window's corner, which is
+       the one target a pointer cannot overshoot. -->
+  <div class="aside">
+    <IconButton
+      label={drawerOpen ? "Close the bottom drawer" : "Open the bottom drawer"}
+      tip={drawerOpen ? "Close the bottom drawer" : "Open the bottom drawer — latency trace"}
+      pressed={drawerOpen}
+      onclick={onToggleDrawer}
+    >
+      <PanelBottom size={14} />
+    </IconButton>
   </div>
 </footer>
 
