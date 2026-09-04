@@ -584,8 +584,8 @@ export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): Re
   return { rows, groups };
 }
 
-export function buildReplayMarkers(input: Array<AgentSseFrame | ReplayLogFrame>): ReplayMarker[] {
-  return buildReplayLog(input).rows
+export function buildReplayMarkers(log: ReplayLog): ReplayMarker[] {
+  return log.rows
     .filter((row) => row.marker)
     .map((row) => ({
       id: `marker-${row.ordinal}`,

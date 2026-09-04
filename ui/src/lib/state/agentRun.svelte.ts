@@ -37,7 +37,7 @@ import {
 } from "./inboundMessageText";
 import { buildReplayLog, buildReplayMarkers } from "./replayLog";
 import { buildReplayTimeline } from "./replayTimeline";
-import { buildStepTimeline } from "./stepTimeline";
+import { buildStepBoundaries, buildStepTimeline } from "./stepTimeline";
 import { buildTranscript } from "./transcript";
 
 export type PlaybackSpeed = 1 | 2 | 5 | 10;
@@ -362,8 +362,12 @@ export class AgentRunController {
   sessionClosed = $derived(
     this.session != null && this.#isWorkflowClosed(this.session.workflow_id)
   );
-  replayLog = $derived(buildReplayLog(this.visibleReplayTimeline));
   fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
+  replayLog = $derived(
+    this.viewIndex === this.replayTimeline.length
+      ? this.fullReplayLog
+      : buildReplayLog(this.visibleReplayTimeline)
+  );
   chatTranscript = $derived(
     buildTranscript(
       this.replayTimeline
@@ -377,7 +381,8 @@ export class AgentRunController {
   usage = $derived(summarizeCost(this.visibleReplayFrames));
   usageTimeline = $derived(buildUsageTimeline(this.allReplayFrames));
   stepTimeline = $derived(buildStepTimeline(this.replayTimeline));
-  anomalyMarkers = $derived(buildReplayMarkers(this.replayTimeline));
+  stepBoundaries = $derived(buildStepBoundaries(this.stepTimeline));
+  anomalyMarkers = $derived(buildReplayMarkers(this.fullReplayLog));
   turnMarkers = $derived(
     this.replayTimeline
       .map((entry, index) =>
@@ -1479,7 +1484,7 @@ export class AgentRunController {
       this.#frameCacheTimer = null;
       if (this.session?.workflow_id !== sessionId) return;
       writeCachedFrames(sessionId, this.frames);
-    }, 250);
+    }, 750);
   }
 
   #resetSessionView(): void {
