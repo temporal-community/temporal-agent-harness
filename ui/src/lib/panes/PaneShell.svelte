@@ -292,8 +292,16 @@
     border-bottom-color: var(--border-strong);
   }
 
-  /* Landing here by keyboard needs a ring the head tint alone does not give. */
-  .pane:focus-visible {
+  /* Click focuses the section (`tabindex=-1`) and the UA paints a ring around
+     the whole pane. Keyboard walk still needs a ring the head tint does not
+     give; `:focus-visible` is that path. */
+  .pane:focus,
+  .pane-head:focus {
+    outline: none;
+  }
+
+  .pane:focus-visible,
+  .pane-head:focus-visible {
     outline: 2px solid var(--focus-ring);
     outline-offset: -2px;
   }

@@ -235,7 +235,13 @@ select {
 }
 
 /* Baseline ring so a control can never end up with no visible focus; component
-   rules with a class selector outrank it and can move the ring inward. */
+   rules with a class selector outrank it and can move the ring inward.
+   `:focus` without `:focus-visible` is the browser's click ring — a tabindex=-1
+   pane would otherwise outline the whole column when its head is pressed. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
 :focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
