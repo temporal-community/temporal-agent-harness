@@ -275,7 +275,6 @@ server: app-build
         examples/monty/agents.toml \
         examples/callback_tools/wiki_agent/agents.toml \
         examples/callback_tools/coding_agent/agents.toml \
-        examples/sandbox_tools/coding_agent/agents.toml \
         --host 0.0.0.0 --port 8000
 
 # Run the Svelte Vite dev server with /api proxied to the server on :8000.
@@ -301,10 +300,7 @@ worker-wiki:
 worker-coding:
     cd "{{justfile_directory()}}/examples/callback_tools/coding_agent" && just worker
 
-worker-sandbox-coding:
-    cd "{{justfile_directory()}}/examples/sandbox_tools/coding_agent" && just worker
-
-# Co-launch all seven agent workers in one terminal (Ctrl-C stops them all; logs interleave).
+# Co-launch all six agent workers in one terminal (Ctrl-C stops them all; logs interleave).
 # Requires every agent's prerequisites at once (both API keys, the F1 MCP server, etc.).
 workers:
     #!/usr/bin/env bash
@@ -320,7 +316,6 @@ workers:
     just worker-monty &
     just worker-wiki &
     just worker-coding &
-    just worker-sandbox-coding &
     wait
 
 # --- Clients / external processes for the human-in-the-loop & callback agents ---

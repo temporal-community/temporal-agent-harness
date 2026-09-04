@@ -42,5 +42,3 @@ nexus/devserver/temporal-server
 .claude/
 .cursor/
 
-# Sandbox agent runtime output
-examples/sandbox_tools/coding_agent/workspace/

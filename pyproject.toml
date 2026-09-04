@@ -63,10 +63,6 @@ nexus-mcp = [
     "mcp>=1.13.0,<2",
     "temporalio[opentelemetry]>=1.31.0",
 ]
-# Microsandbox-native harness sandbox adapter (local in-process fallback for CI).
-sandbox = [
-    "microsandbox>=0.6.15",
-]
 
 [dependency-groups]
 # Everything needed to RUN the bundled Monty example from a checkout. Not part of the
@@ -79,7 +75,6 @@ examples = [
     "openai-agents>=0.17.5",  # the OpenAI Agents SDK example (examples/openai_hello, examples/react_agent)
     "pydantic-ai-slim[temporal]>=2.13",  # the Pydantic AI example (examples/pydantic_ai_hello)
     "httpx>=0.27",  # the react_agent example's tools call real weather / geo / IP APIs
-    "microsandbox>=0.6.15",  # the sandboxed coding agent demo
 ]
 # Test + lint tooling. The full tests/ suite imports both the Gemini SDK (the ai_sdks plugin
 # tests) and pydantic-monty (the monty example tests), which live in the `examples` group —
