@@ -32,6 +32,9 @@
 # `uv sync` picks it up too, since the repo's `dev` group includes it on 3.13+).
 # First-time setup: `cp .env.example .env.local` from the repo root and fill in OPENAI_API_KEY.
 
+# Shows a notice when running from an untagged commit (silent on a release archive).
+import '../../scripts/untagged-notice.just'
+
 set dotenv-path := "../../.env.local"
 set dotenv-load := true
 
@@ -135,9 +138,11 @@ register-third-party:
 session-manager:
     cd "{{root}}" && uv run --group examples python -m examples.session_manager_worker
 
-# Serve the packaged FastAPI API + UI on http://localhost:8000, pointed at this example's
-# registry. Builds the Svelte UI first (app-build).
-server: app-build
+# Serves the COMMITTED UI build in temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
+# a downloaded release archive runs as-is. Rebuild with `just app-build` if you changed ui/.
+#
+# Serve the packaged FastAPI API + UI on http://localhost:8000, pointed at this example's registry.
+server:
     cd "{{root}}" && uv run --group examples python -m examples.app "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
 
 # Build the shared Svelte UI into temporal_agent_harness/ui/dist for the server to serve.

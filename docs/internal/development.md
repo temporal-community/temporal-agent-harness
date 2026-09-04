@@ -43,10 +43,16 @@ Local stack recipes delegate into `examples/monty`:
 ```bash
 just temporal          # local Temporal dev server
 just session-manager   # packaged session-manager worker
-just server            # built Svelte UI + FastAPI API on http://localhost:8000
+just server            # serves the COMMITTED UI build + FastAPI API on http://localhost:8000
+just dev-server        # rebuild the UI first, then serve (use after editing ui/)
 just monty-worker      # Monty agent worker
 just ui-dev            # Vite hot reload on http://127.0.0.1:5173
 ```
+
+`just server` deliberately does **not** rebuild the UI: it serves the committed
+`temporal_agent_harness/ui/dist`, so a downloaded release archive runs with no Node/pnpm
+installed. That makes the committed build load-bearing — after changing anything under `ui/`,
+run `just app-build` (or `just dev-server`) and commit the result.
 
 All example recipes read one shared env file, `.env.local` at the repo root: the root
 justfile loads it directly, and `examples/*/justfile` read the same root file (via
