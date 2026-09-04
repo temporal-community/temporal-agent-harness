@@ -130,7 +130,7 @@ assert.ok(
    A flaky gate is worse than no gate, and this file is the proof: it is the
    check that exists to catch a superlinear projection, and a genuinely quadratic
    one lived in the tree while it passed. A check people learn to re-run until it
-   goes green is a check nobody reads the output of. check-file-size.mjs already
+   goes green is a check nobody reads the output of. report-file-size.mjs already
    sets the local precedent — report, do not gate.
 
    What that costs, honestly: the ratio cannot see a uniformly slower rebuild,

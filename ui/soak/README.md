@@ -33,7 +33,7 @@ bun ui/soak/soak-dom-ceiling.mjs   # needs Chrome / Playwright chromium
 ## Budgets
 
 Timing uses best-of-3 (fastest round). Correctness failures are hard. Timing
-ceilings are CI-tolerant multiples of quiet-machine baselines — see each file’s
+ceilings are CI-tolerant multiples of quiet-machine baselines — see each file's
 header comment for the measured numbers and why the gate is where it is.
 
 Quiet-machine baselines (2026-09-04, arm64):
@@ -48,9 +48,9 @@ Quiet-machine baselines (2026-09-04, arm64):
 ## Chrome requirement (DOM only)
 
 `soak-dom-ceiling.mjs` uses `Bun.WebView({ backend: "chrome" })`. Bun resolves
-Chrome, Chromium, Edge, Brave, or Playwright’s cache (`chromium-*` / 
+Chrome, Chromium, Edge, Brave, or Playwright's cache (`chromium-*` / 
 `chrome-headless-shell`, or `BUN_CHROME_PATH`). If spawn fails, that soak exits
 loudly with an install hint; Node soaks still run and must pass.
 
 Note: spawning Chrome needs a normal (non-sandbox) process environment — a
-restricted sandbox can SEGV Chromium and surface as “Chrome process closed the pipe”.
+restricted sandbox can SEGV Chromium and surface as "Chrome process closed the pipe".

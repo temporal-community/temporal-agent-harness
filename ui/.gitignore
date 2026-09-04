@@ -37,7 +37,3 @@ tools/scroll-probe/*
 # question, and the guard's other half — that a bare digit still types one — has no meaning
 # outside a real text field. Nine claims, non-zero exit.
 !tools/slot-keys-verify.mjs
-# The badge harnesses, tracked with the fix they measure: a language tag pinned against
-# a scroller is a thing no assertion about styles can see.
-!tools/codebadge-shots/
-!tools/scriptbadge-shots/

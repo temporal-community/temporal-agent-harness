@@ -1,12 +1,12 @@
 @import "@fontsource-variable/inter";
-@import "@fontsource-variable/noto-sans-mono";
+@import "@fontsource/noto-sans-mono";
 
 :root {
   color-scheme: dark;
   /* Instrument, not terminal: sans carries content, mono is reserved for chrome
      labels, identifiers, and anything tabular. */
   --font-mono:
-    "Noto Sans Mono Variable", "SFMono-Regular", ui-monospace, Consolas,
+    "Noto Sans Mono", "SFMono-Regular", ui-monospace, Consolas,
     "Liberation Mono", Menlo, monospace;
   --font-sans:
     "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", sans-serif;

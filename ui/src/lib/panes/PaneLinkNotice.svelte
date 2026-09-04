@@ -3,10 +3,10 @@
    * What the desk says about a link that asked for a pane it does not have.
    *
    * One line under the status line, in the chrome rather than in a pane: the pane
-   * a bad token was meant to be is by definition not on screen, and the link may
-   * not have opened the guide either, so there is nowhere inside the rail this
-   * could reliably be read. A strip that only exists while there is something
-   * wrong with the link costs the desk no permanent chrome.
+   * a bad token was meant to be is by definition not on screen, so there is
+   * nowhere inside the rail this could reliably be read. A strip that only
+   * exists while there is something wrong with the link costs the desk no
+   * permanent chrome.
    *
    * It states the token as written and, when the token is a typo away from
    * exactly one kind, what it was probably reaching for. The guess is never

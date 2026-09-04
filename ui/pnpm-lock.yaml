@@ -11,8 +11,8 @@ importers:
       '@fontsource-variable/inter':
         specifier: ^5.3.0
         version: 5.3.0
-      '@fontsource-variable/noto-sans-mono':
-        specifier: ^5.3.0
+      '@fontsource/noto-sans-mono':
+        specifier: ^5.2.0
         version: 5.3.0
       '@lucide/svelte':
         specifier: ^1.0.1
@@ -204,8 +204,8 @@ packages:
   '@fontsource-variable/inter@5.3.0':
     resolution: {integrity: sha512-OupL48va4JNofb97w6NYeF9S7W/kHNKM0Er8Dem5nqi4jeOLrVJDoE8tZEpnMJmtkvNbB1EIPPwHcdkF6b1oUA==}
 
-  '@fontsource-variable/noto-sans-mono@5.3.0':
-    resolution: {integrity: sha512-EgozyWG4nG2U1OT+zfdyHP1L8O0fUFMUBOilVF9urTshqIdfeGV9/FUQxaNHdPvHtV1cQCs1Ql0W1q93SiPK2w==}
+  '@fontsource/noto-sans-mono@5.3.0':
+    resolution: {integrity: sha512-DPZ+/Ng9HP5UKiALCKtoeGfA7zJzEjHFB/18OU/c3+4I9zZ3eMVAuFZb0SqzT89Yj7KNhJFYnYjyDaVKhdRuUg==}
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -890,7 +890,7 @@ snapshots:
 
   '@fontsource-variable/inter@5.3.0': {}
 
-  '@fontsource-variable/noto-sans-mono@5.3.0': {}
+  '@fontsource/noto-sans-mono@5.3.0': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:

@@ -420,13 +420,8 @@ export class PaneStack {
         kept.map((pane) => ({
           ...pane,
           /* Params only ever point into the run being left, so a graph focused on
-             one of its subagents comes back up to the session level. The field is
-             the exception, for the same reason it survives the switch at all: its
-             `focus` names a use case spanning every session, so blanking it threw
-             away the level the reader chose for a reason that never applied to
-             it — and left a change of session looking like it had reset the board
-             rather than moved the mark on it. */
-          params: pane.kind === "field" ? pane.params : {},
+             one of its subagents comes back up to the session level. */
+          params: {},
           joinedAt: ++touchCounter,
           /* A column that lost panes is no longer the arrangement it was. */
           split: shared && pane.split,
@@ -537,12 +532,11 @@ export class PaneStack {
    * tab cannot be the thing filling the screen.
    *
    * Any pane, not just a canvas. The kind gate this used to carry argued that a
-   * document handed the whole width only grows a line length nobody wants —
-   * true of the guide, and an odd thing to decide on the reader's behalf for the
-   * log, the transcript and the waterfall, all of which are wide things in a
-   * narrow column. What it produced in practice was a key that did nothing at
-   * all on four of the six kinds this build renders, with no way to tell that
-   * from a key that was broken.
+   * document handed the whole width only grows a line length nobody wants — an
+   * odd thing to decide on the reader's behalf for the log, the transcript and
+   * the waterfall, all of which are wide things in a narrow column. What it
+   * produced in practice was a key that did nothing at all on most of the kinds
+   * this build renders, with no way to tell that from a key that was broken.
    */
   toggleBleed(id: string | null = this.focusedId): void {
     if (!id) return;

@@ -202,11 +202,6 @@
     return "--text-3";
   }
 
-  /**
-   * The four kinds this build renders. Every other kind keeps its registry label,
-   * which is what a pane restored from a stale link is titled while its body
-   * explains that it is not here yet.
-   */
   function describePane(pane: Pane): PaneDescription {
     switch (pane.kind) {
       case "chat":
@@ -225,8 +220,12 @@
         return { title: "Replay log" };
       case "latency":
         return { title: "Latency waterfall" };
-      default:
-        return { title: PANE_META[pane.kind].kindLabel };
+      case "usage":
+        return { title: PANE_META.usage.kindLabel };
+      default: {
+        const _exhaustive: never = pane.kind;
+        throw new Error(`unhandled pane kind: ${_exhaustive}`);
+      }
     }
   }
 
@@ -645,10 +644,6 @@
           filter={transcriptFilter}
           onFilterChange={(next) => (transcriptFilter = next)}
         />
-      {:else}
-        <!-- A link can name a kind the registry knows and this build does not
-             render. Saying so beats a pane that is simply blank. -->
-        <p class="pane-todo">Not available yet.</p>
       {/if}
     </div>
   {/snippet}
@@ -968,13 +963,6 @@
        got rather than to the window. A pane in a 200px rail column and the same pane
        filling a bottom drawer are the same viewport and very different rooms. */
     container-type: inline-size;
-  }
-
-  .pane-todo {
-    margin: 0;
-    padding: var(--gutter);
-    color: var(--text-3);
-    font-size: var(--font-md);
   }
 
   /* Re-homed from the deleted `.right-pane-body`. TranscriptPanel and
