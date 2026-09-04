@@ -40,6 +40,7 @@ nexus/devserver/temporal-server
 
 # Local LLM configs
 .claude/
+.cursor/
 
 # Sandbox agent runtime output
 examples/sandbox_tools/coding_agent/workspace/

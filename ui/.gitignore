@@ -1,3 +1,34 @@
 node_modules/
 dist/
 .svelte-kit/
+
+# tools/ is scratch by default, and the exceptions are listed rather than the scratch,
+# because scratch is what keeps arriving: these are one-off probes and screenshot
+# harnesses written to answer a single question, and once it is answered nobody runs
+# them again. They need a browser binary at a hardcoded path and a running stack, so
+# they can never join `just app-check` (which globs ui/scripts/check-*.mjs) and a
+# reader who found one would have no way to tell whether it still passes.
+#
+# What earns an exception is being able to FAIL: a file that exits non-zero can catch a
+# regression, and one that prints a JSON report for a human to read cannot. Durable
+# checks belong in ui/scripts/ and stay tracked there; the four below are the ones that
+# have to live here because of what they need at runtime, or because something tracked
+# already depends on them.
+tools/*
+# Pins the drawer's fit rule (9 claims, non-zero exit), and the shared CDP plumbing it
+# imports — a tracked file's import cannot be ignored or the next clone cannot run it.
+!tools/verify-drawer-settle.mjs
+!tools/scroll-probe/
+tools/scroll-probe/*
+!tools/scroll-probe/cdp.mjs
+# Assert-based guard for src/lib/cost/pricing.ts, which the app no longer renders and
+# nothing else covers. Needs no browser; deliberately outside the check-*.mjs glob so
+# it does not gate the build, which tracking it does not change.
+!tools/pricing-self-check.mjs
+# Cited by ui/scripts/check-replay-hotkeys.mjs as where its focus claim was measured,
+# so ignoring it would leave a tracked check pointing at nothing.
+!tools/scrub-focus-keys.mjs
+# The badge harnesses, tracked with the fix they measure: a language tag pinned against
+# a scroller is a thing no assertion about styles can see.
+!tools/codebadge-shots/
+!tools/scriptbadge-shots/
