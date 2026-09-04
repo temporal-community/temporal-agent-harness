@@ -205,7 +205,7 @@
   {/if}
   {#if data.metrics?.length}
     <div class="metrics kicker">
-      {#each data.metrics as metric}
+      {#each data.metrics as metric (metric.label)}
         <span><strong>{metric.value}</strong>{metric.label}</span>
       {/each}
     </div>
@@ -307,9 +307,21 @@
     min-width: 0;
   }
 
+  /* Chip is nowrap + uppercase; a long state used to paint past the 230px
+     border. Shrink the chip first so the title stays a word and the label
+     ellipsizes inside the card instead of the canvas. */
+  .topline :global(.chip) {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+
   .title {
+    overflow: hidden;
     font-size: var(--font-lg);
     font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .title-wrap {

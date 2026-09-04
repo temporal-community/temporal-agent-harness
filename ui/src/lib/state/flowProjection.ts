@@ -789,7 +789,7 @@ export function buildAgentGraph(
     return {
       id: toolId,
       name,
-      status: "requested by model",
+      status: "requested",
       tone: "tool",
       statusTone: "queue",
       subtitle: parentToolId ? "Code Mode host call" : "waiting to dispatch",
@@ -927,7 +927,7 @@ export function buildAgentGraph(
         runtime.input = runtime.detail;
       }
       if (frame.event === "tool_requested") {
-        runtime.status = "requested by model";
+        runtime.status = "requested";
         runtime.tone = "tool";
         runtime.statusTone = "queue";
         runtime.subtitle = runtime.isCodeMode
@@ -1005,7 +1005,9 @@ export function buildAgentGraph(
         runtime.script = script;
       }
       if (frame.event === "tool_approval_requested") {
-        runtime.status = "awaiting approval";
+        /* Chip uppercases this on a 230px card; "awaiting approval" overflowed
+           the header the same way "requested by model" did. */
+        runtime.status = "awaiting";
         runtime.tone = "approval";
         runtime.statusTone = "approval";
         runtime.subtitle = runtime.isCodeMode

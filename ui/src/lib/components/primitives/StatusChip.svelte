@@ -149,8 +149,9 @@
 
 <style>
   .status-text {
-    flex: none;
-    overflow: visible;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .status-detail {

@@ -606,6 +606,7 @@ const IMPLIED_STATUS_STEMS: Record<string, string[]> = {
   idle: ["end"],
   dispatched: ["sent"],
   approved: ["grant"],
+  awaiting: ["request"],
   degraded: ["unavailable"]
 };
 

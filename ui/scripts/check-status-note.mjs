@@ -33,7 +33,7 @@ const ROWS = [
   ["Model started", "running", null],
   ["Model completed", "completed", null],
   ["Tool requested", "requested", null],
-  ["Approval requested", "awaiting", "awaiting"],
+  ["Approval requested", "awaiting", null],
   ["Approval granted", "approved", null],
   ["Approval denied", "denied", null],
   ["Tool started", "running", null],
@@ -67,7 +67,7 @@ for (const [label, status, expected] of ROWS) {
 const suppressed = ROWS.filter(([, , expected]) => expected === null).length;
 assert.equal(
   suppressed,
-  19,
+  20,
   "the count is part of the claim: if a row moved between suppressed and surviving, say so here"
 );
 
@@ -96,16 +96,14 @@ assert.equal(
 
 /* --- statusKind: the colour the surviving chip is drawn in ---------------- */
 
-/* The three rows that still draw a chip after the suppression above. These are
+/* The two rows that still draw a chip after the suppression above. These are
    the only statusKind() answers a reader can actually see, so they are the ones
    worth pinning. */
 const ok = { actor: "subagent", tone: "done", status: "ok", label: "Subagent reply received" };
 const failed = { actor: "subagent", tone: "error", status: "error", label: "Subagent reply received" };
-const awaiting = { actor: "approval", tone: "approval", status: "awaiting", label: "Approval requested" };
 
 assert.equal(statusKind(ok), "complete", "a subagent reply that succeeded reads as complete");
 assert.equal(statusKind(failed), "error", "a subagent reply that failed reads as an error");
-assert.equal(statusKind(awaiting), "approval", "an approval still waiting reads as an approval");
 
 /* The regression this ordering fixes: `if (actor === "subagent") return
    "delegating"` used to sit above the outcome tests and swallow them, so ok,
