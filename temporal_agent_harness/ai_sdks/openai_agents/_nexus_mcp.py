@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from agents.mcp import MCPServer
@@ -22,17 +24,39 @@ _INSTALL_MESSAGE = (
 
 try:
     with workflow.unsafe.imports_passed_through():
+        from a2a.types import AgentCard
+        from google.protobuf.json_format import ParseDict
         from nexus_mcp.durable_tools_gateway.generated import (
             CallToolInput,
             CallToolInputArguments,
             ListAccountEntriesInput,
             RegistryService,
+            ResolveAccountToolboxInput,
+        )
+        from nexus_mcp.durable_tools_gateway.resources import (
+            ResourceDescriptor,
+            descriptor_from_dict,
         )
         from nexus_mcp.execution import WorkflowNexusExecutor
         from nexus_mcp.resolver import (
             NexusToolResolver,
             UnknownToolError,
             coerce_call_tool_result,
+        )
+
+        from temporal_agent_harness.a2a.subagent_transport import (
+            NexusA2ASubagentTransport,
+        )
+        from temporal_agent_harness.harness.agent_protocol import (
+            TextMessage,
+            TextReply,
+        )
+        from temporal_agent_harness.harness.subagent_gateway_transport import (
+            GatewayTransport,
+        )
+        from temporal_agent_harness.harness.subagent_toolset import (
+            declared_handler,
+            subagent_toolset,
         )
 except ModuleNotFoundError as exc:
     raise RuntimeError(_INSTALL_MESSAGE) from exc
@@ -101,7 +125,10 @@ class _NexusNativeMCPServer(_BaseNexusMCPServer):
         return await self._resolver.list_tools()
 
     async def call_tool(
-        self, tool_name: str, arguments: dict[str, Any] | None, meta: dict[str, Any] | None = None
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        meta: dict[str, Any] | None = None,
     ) -> CallToolResult:
         try:
             return await self._resolver.call_tool(tool_name, arguments)
@@ -129,7 +156,9 @@ class NexusGateway:
         single Nexus call. An alias that isn't actually registered is silently skipped
         for now (no error handling yet -- this is a prototype).
         """
-        display_name = f"{self._account_id}-{self._gateway_name}-{self._gateway_endpoint}"
+        display_name = (
+            f"{self._account_id}-{self._gateway_name}-{self._gateway_endpoint}"
+        )
         return _NexusGatewayMCPServer(
             self._account_id,
             frozenset(aliases),
@@ -137,6 +166,126 @@ class NexusGateway:
             self._gateway_endpoint,
             display_name,
         )
+
+    async def resolve_toolbox(
+        self,
+        *,
+        caller_agent_id: str,
+        lineage: tuple[str, ...] = (),
+        delegation_depth: int = 0,
+        max_delegation_depth: int = 5,
+    ) -> ResolvedAccountToolbox:
+        """Resolve and materialize the account's resources for one agent turn."""
+        client = workflow.create_nexus_client(
+            service=self._gateway_name, endpoint=self._gateway_endpoint
+        )
+        output = await client.execute_operation(
+            RegistryService.resolve_account_toolbox,
+            ResolveAccountToolboxInput(
+                account_id=self._account_id,
+                caller_agent_id=caller_agent_id,
+                lineage=list(lineage),
+                delegation_depth=delegation_depth,
+                max_delegation_depth=max_delegation_depth,
+            ),
+        )
+        descriptors = [
+            descriptor_from_dict(item) for item in json.loads(output.manifest)
+        ]
+        return _materialize_toolbox(
+            descriptors,
+            account_id=self._account_id,
+            gateway_name=self._gateway_name,
+            gateway_endpoint=self._gateway_endpoint,
+            version=output.version,
+        )
+
+
+@dataclass(frozen=True)
+class ResolvedAccountToolbox:
+    """SDK objects built from one versioned account-registry snapshot."""
+
+    version: str
+    mcp_servers: tuple[MCPServer, ...]
+    subagent_tools: tuple[Any, ...]
+
+
+def _declared_handlers(
+    resource: ResourceDescriptor,
+) -> list[Any]:
+    if resource.agent_card is None:
+        raise ValueError(f"agent {resource.resource_id!r} has no A2A AgentCard")
+    card = ParseDict(resource.agent_card, AgentCard())
+    return [
+        declared_handler(
+            skill.id,
+            skill.description,
+            TextMessage,
+            TextReply,
+            param_name="message",
+        )
+        for skill in card.skills
+    ]
+
+
+def _materialize_toolbox(
+    descriptors: list[ResourceDescriptor],
+    *,
+    account_id: str,
+    gateway_name: str,
+    gateway_endpoint: str,
+    version: str,
+) -> ResolvedAccountToolbox:
+    mcp_servers: list[MCPServer] = []
+    subagent_tools: list[Any] = []
+    external_mcp_aliases: list[str] = []
+    for resource in descriptors:
+        if resource.category == "mcp":
+            if resource.transport == "nexus":
+                assert resource.service is not None
+                mcp_servers.append(
+                    _NexusNativeMCPServer(
+                        {resource.service: resource.endpoint},
+                        name=resource.service,
+                    )
+                )
+            else:
+                external_mcp_aliases.append(resource.resource_id)
+            continue
+
+        transport = (
+            NexusA2ASubagentTransport(resource.endpoint)
+            if resource.transport == "nexus"
+            else GatewayTransport(
+                account_id,
+                resource.resource_id,
+                gateway_name,
+                gateway_endpoint,
+            )
+        )
+        subagent_tools.extend(
+            subagent_toolset(
+                _declared_handlers(resource),
+                key=resource.resource_id,
+                transport=transport,
+            )
+        )
+    if external_mcp_aliases:
+        display_name = f"{account_id}-{gateway_name}-{gateway_endpoint}"
+        mcp_servers.append(
+            _NexusGatewayMCPServer(
+                account_id,
+                frozenset(external_mcp_aliases),
+                gateway_name,
+                gateway_endpoint,
+                display_name,
+            )
+        )
+    return ResolvedAccountToolbox(
+        version=version,
+        mcp_servers=tuple(mcp_servers),
+        subagent_tools=tuple(subagent_tools),
+    )
 
 
 class _NexusGatewayMCPServer(_BaseNexusMCPServer):
@@ -167,14 +316,17 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
     def name(self) -> str:
         return self._display_name
 
-    async def list_tools(self, run_context: Any = None, agent: Any = None) -> list[MCPTool]:
+    async def list_tools(
+        self, run_context: Any = None, agent: Any = None
+    ) -> list[MCPTool]:
         from mcp import types
 
         gateway_client = workflow.create_nexus_client(
             service=self._gateway_name, endpoint=self._gateway_endpoint
         )
         entries = await gateway_client.execute_operation(
-            RegistryService.list_account_entries, ListAccountEntriesInput(account_id=self._account_id)
+            RegistryService.list_account_entries,
+            ListAccountEntriesInput(account_id=self._account_id),
         )
         # nex-gen wraps map-shaped (additionalProperties) fields in a named type instead
         # of a plain dict.
@@ -196,7 +348,10 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
         return [types.Tool(**d) for d in tool_dicts]
 
     async def call_tool(
-        self, tool_name: str, arguments: dict[str, Any] | None, meta: dict[str, Any] | None = None
+        self,
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        meta: dict[str, Any] | None = None,
     ) -> CallToolResult:
         from mcp import types
 
@@ -221,7 +376,9 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
                     alias=alias,
                     name=tool_name,
                     caller_workflow_id=workflow.info().workflow_id,
-                    arguments=CallToolInputArguments(additional_properties=arguments or {}),
+                    arguments=CallToolInputArguments(
+                        additional_properties=arguments or {}
+                    ),
                 ),
             )
             result = (

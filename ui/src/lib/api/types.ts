@@ -73,6 +73,22 @@ export interface AccountOverview {
   active_session_count: number;
 }
 
+export interface CatalogResource {
+  resource_id: string;
+  revision: number;
+  category: "agent" | "mcp";
+  transport: "nexus" | "external_http";
+  label: string;
+  description: string;
+  endpoint: string;
+  service?: string | null;
+  installed: boolean;
+}
+
+export interface CatalogResponse {
+  resources: CatalogResource[];
+}
+
 export interface Session {
   workflow_id: WorkflowId;
   created_at: UnixEpochSeconds;

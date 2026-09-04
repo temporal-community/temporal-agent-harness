@@ -136,6 +136,15 @@ class HarnessA2ABackend:
 
         config = AgentConfig(
             is_message_queuing_enabled=self._config.is_message_queuing_enabled,
+            account_id=metadata.get("account_id"),
+            registered_agent_id=metadata.get("registered_agent_id"),
+            delegation_lineage=(
+                tuple(metadata["delegation_lineage"])
+                if isinstance(metadata.get("delegation_lineage"), list)
+                else None
+            ),
+            delegation_depth=metadata.get("delegation_depth"),
+            max_delegation_depth=metadata.get("max_delegation_depth"),
         )
         expected = metadata.get("expected_turn")
         # A generic A2A caller may not know expected_turn; guess 1, then re-derive from status on

@@ -12,10 +12,12 @@ with workflow.unsafe.imports_passed_through():
         RegistryService,
     )
     from .registry import (
+        GLOBAL_CATALOG_WORKFLOW_ID,
         REGISTRY_TASK_QUEUE,
         REGISTRY_WORKFLOW_ID_PREFIX,
         AccountEntries,
         AgentRegistration,
+        GlobalCatalogWorkflow,
         PendingSessionEvent,
         SessionEvent,
         SessionRecord,
@@ -30,6 +32,10 @@ with workflow.unsafe.imports_passed_through():
         RegistryServiceHandler,
         mcp_proxy_activity,
     )
+    from .resources import (
+        AccountResourceRegistration,
+        ResourceDescriptor,
+    )
 
 # The gateway's real Nexus service name -- callers reach it via this name + a Nexus
 # endpoint, not by importing this module directly.
@@ -40,23 +46,27 @@ assert _registry_service_definition is not None, (
 REGISTRY_SERVICE_NAME = _registry_service_definition.name
 
 __all__ = [
+    "GLOBAL_CATALOG_WORKFLOW_ID",
     "REGISTRY_NEXUS_ENDPOINT",
     "REGISTRY_SERVICE_NAME",
     "REGISTRY_TASK_QUEUE",
     "REGISTRY_WORKFLOW_ID_PREFIX",
     "AccountEntries",
+    "AccountResourceRegistration",
     "AgentRegistration",
     "CallToolInput",
     "CallToolOutput",
     "DeregisterInput",
     "ExternalMCPCallInput",
     "GatewayA2ABackend",
+    "GlobalCatalogWorkflow",
     "ListAccountEntriesInput",
     "ListAccountEntriesOutput",
     "PendingSessionEvent",
     "RegisterExternalInput",
     "RegistryService",
     "RegistryServiceHandler",
+    "ResourceDescriptor",
     "SessionEvent",
     "SessionRecord",
     "ToolRegistryWorkflow",

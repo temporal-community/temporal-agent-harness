@@ -200,6 +200,9 @@
         onRefreshSessions={() => run.refreshSessions()}
         onCloseSession={(sessionId, resolution) => run.closeSession(sessionId, resolution)}
         onLoadToolCalls={(serverName) => run.loadToolCalls(serverName)}
+        onLoadCatalog={() => run.loadCatalog()}
+        onInstallCatalogResource={(resourceId) => run.installCatalogResource(resourceId)}
+        onRemoveCatalogResource={(resourceId) => run.removeCatalogResource(resourceId)}
       />
     {/if}
 

@@ -1383,6 +1383,11 @@ class AgentWorkflowRunner:
         # generates its own. workflow.uuid4 is deterministic in-workflow (offline unit tests patch
         # it). Distinct from the full workflow_id, which the model/UI never needs to reproduce.
         self._agent_id: str = config.agent_id or workflow.uuid4().hex[:AGENT_ID_LENGTH]
+        self._account_id = config.account_id
+        self._registered_agent_id = config.registered_agent_id
+        self._delegation_lineage = config.delegation_lineage or ()
+        self._delegation_depth = config.delegation_depth or 0
+        self._max_delegation_depth = config.max_delegation_depth
         # Retain the WorkflowStream itself (not just the topic handle) so the runner can read
         # the stream's current head offset in-workflow — see ``_handle_send_agent_message``,
         # which returns it as ``AgentMessageReply.accepted_offset`` for the client stream-merge.
@@ -1605,20 +1610,14 @@ class AgentWorkflowRunner:
         ``tool_approval_resolved`` is causally ordered before the events of any call the
         cascade auto-resolves as a consequence (see :meth:`_resolve_and_publish`)."""
         entry = self._status.approval_entry(decision.tool_id)
-        remember = decision.remember and not (
-            entry is not None and entry.policy_exempt
-        )
+        remember = decision.remember and not (entry is not None and entry.policy_exempt)
         self._resolve_and_publish(
             decision.tool_id,
             approved=decision.approved,
             reason=decision.reason,
             remember=remember,
         )
-        if (
-            decision.approved
-            and remember
-            and entry is not None
-        ):
+        if decision.approved and remember and entry is not None:
             self._apply_policy_update(
                 self._status.approval_policy.with_tool_allowed(entry.tool_name)
             )
@@ -2059,7 +2058,9 @@ class AgentWorkflowRunner:
             is_closed=lambda: self._closed,
         )
 
-    def _handle_stream_replay(self, input: AgentStreamPollInput) -> AgentStreamPollResult:
+    def _handle_stream_replay(
+        self, input: AgentStreamPollInput
+    ) -> AgentStreamPollResult:
         """Read a bounded stream page through a query, including after completion."""
         return replay_stream_state(self._stream.get_state(), input)
 
@@ -2227,16 +2228,34 @@ class AgentWorkflowRunner:
             if existing is not None:
                 self._status.mark_subagent_used(existing)
                 return existing.handle
+        if (
+            self._max_delegation_depth is not None
+            and self._delegation_depth >= self._max_delegation_depth
+        ):
+            raise ApplicationError(
+                f"maximum delegation depth {self._max_delegation_depth} reached",
+                type="DelegationDepthExceeded",
+                non_retryable=True,
+            )
         handle = self._fresh_subagent_handle()
+        lineage = self._delegation_lineage
+        if self._registered_agent_id:
+            lineage = (*lineage, self._registered_agent_id)
         # Push the handle down as the subagent's own agent_id so a harness-native target stamps it
         # on every event it publishes — unifying "the id the parent references this subagent by"
-        # with "the id on the subagent's own stream", which is what lets a client merge the two
-        # streams coherently (and, since the handle is tree-unique, group by agent_id without
-        # collisions). This is the one config field the parent overrides per-subagent (everything
-        # else passes through unchanged); a caller-supplied agent_id would not match the parent's
-        # handle.
+        # with "the id on the subagent's own stream", which lets a client merge and group streams
+        # without collisions. Local and Nexus subagents also receive identical account/lineage
+        # context. A caller-supplied config may override policy knobs, but not these routing
+        # identities.
         child_config = (config if config is not None else AgentConfig()).model_copy(
-            update={"agent_id": handle}
+            update={
+                "agent_id": handle,
+                "account_id": self._account_id,
+                "registered_agent_id": agent_key,
+                "delegation_lineage": lineage,
+                "delegation_depth": self._delegation_depth + 1,
+                "max_delegation_depth": self._max_delegation_depth,
+            }
         )
         target = await transport.start(agent_key=agent_key, config=child_config)
         self._status.register_subagent(handle, target, agent_key, transport)
