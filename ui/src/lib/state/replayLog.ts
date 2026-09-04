@@ -7,6 +7,7 @@ import type {
 } from "$lib/api/types";
 import { formatTokens, summarizeCost, type UsageTotals } from "$lib/cost/pricing";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
+import { thoughtDeltaText } from "$lib/state/thoughtSummary";
 
 export type ReplayActor =
   | "user"
@@ -107,14 +108,6 @@ export interface ReplayLogFrame {
   role?: "parent" | "subagent";
   label?: string;
   parentTurnNumber?: number;
-}
-
-function thoughtText(delta: JsonRecord): string {
-  const content = delta.content;
-  if (typeof content === "object" && content != null && "text" in content) {
-    return String((content as { text?: unknown }).text ?? "");
-  }
-  return "";
 }
 
 function textFromReply(data: { text?: unknown; output?: unknown }): string {
@@ -473,7 +466,7 @@ function rowFromFrame(
       actor: "reasoning",
       tone: "model",
       label: "Reasoning summary",
-      body: thoughtText(frame.data.delta)
+      body: thoughtDeltaText(frame.data.delta)
     };
   }
 

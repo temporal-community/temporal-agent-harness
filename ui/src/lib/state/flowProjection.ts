@@ -8,6 +8,8 @@ import type {
 import { formatTokens, summarizeCost, type CostSummary } from "$lib/cost/pricing";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
 import { UNKNOWN_TOOL_INPUT } from "$lib/state/logValue";
+import { formatDuration } from "$lib/state/replayLog";
+import { NO_THOUGHT_SUMMARY, thoughtDeltaText } from "$lib/state/thoughtSummary";
 
 export type AgentNodeTone =
   | "neutral"
@@ -287,14 +289,6 @@ function edge(
     class: `edge-${kind}`,
     zIndex: 1
   };
-}
-
-function thoughtText(delta: { [key: string]: unknown }): string {
-  const content = delta.content;
-  if (typeof content === "object" && content != null && "text" in content) {
-    return String((content as { text?: unknown }).text ?? "");
-  }
-  return "";
 }
 
 function scopedId(workflowId: string, localId: string): string {
@@ -694,6 +688,11 @@ export function buildAgentGraph(
   let modelState = "idle";
   let reasoningState = "idle";
   let reasoningDetail = "";
+  /* When the model call that is doing the thinking opened, and when the last thought
+     fragment landed — the two ends of "Thought for 4s". Both are frame timestamps the
+     stream already stamps; nothing new is measured here. */
+  let reasoningStartTs: number | null = null;
+  let reasoningEndTs: number | null = null;
   let replyText = "";
   let replyState = "waiting";
   let queued = 0;
@@ -848,6 +847,8 @@ export function buildAgentGraph(
       modelState = "waiting";
       reasoningState = "waiting";
       reasoningDetail = "";
+      reasoningStartTs = null;
+      reasoningEndTs = null;
       replyText = "";
       replyState = "waiting";
       resetTurnTools();
@@ -858,6 +859,7 @@ export function buildAgentGraph(
       currentModel = frame.data.model ?? "unknown model";
       modelState = "running";
       reasoningState = "waiting";
+      reasoningStartTs = frame.data.timestamp;
     } else if (frame.event === "model_interaction_ended") {
       markRuntimeNode("model");
       currentModel = frame.data.model ?? currentModel;
@@ -867,9 +869,14 @@ export function buildAgentGraph(
       }
     } else if (frame.event === "thought_summary") {
       markRuntimeNode("reasoning");
-      const text = thoughtText(frame.data.delta);
+      /* Accumulated, not assigned: every producer streams thought text in fragments, so
+         the last frame holds the last few words rather than the thought. Assigning is
+         what made a Gemini card look right — its mock summary arrives whole — while a
+         real one showed its own tail. */
+      reasoningDetail += thoughtDeltaText(frame.data.delta);
       reasoningState = "running";
-      if (text) reasoningDetail = text;
+      reasoningStartTs ??= frame.data.timestamp;
+      reasoningEndTs = frame.data.timestamp;
     } else if (frame.event === "reply_delta") {
       markOutput();
       replyText += frame.data.text;
@@ -891,7 +898,10 @@ export function buildAgentGraph(
       activeTurn = frame.data.turn_number;
       status = "idle";
       modelState = "idle";
-      reasoningState = reasoningDetail ? "captured" : "idle";
+      /* A run that thought without summarizing has already been marked captured by the
+         model_interaction_ended above, and downgrading it here would drop the note the
+         card shows in place of the summary it never got. */
+      reasoningState = reasoningDetail || reasoningState === "captured" ? "captured" : "idle";
       runtimeHeaderPrefix = "Turn end";
       latestNodeId = null;
     } else if (
@@ -1066,6 +1076,25 @@ export function buildAgentGraph(
   const usage = summarizeCost(frames);
 
   /**
+   * What the thought card says when the thinking produced no text.
+   *
+   * Keyed on the card existing at all, which is the only state that can render blank: this
+   * node is drawn because a thought_summary frame arrived, so a frame arrived and carried
+   * nothing readable — a Pydantic AI signature-only delta, or a shape newer than the
+   * extractor. A run that asks for no summary (`Reasoning(summary=None)`, which is what
+   * examples/sandbox_tools/coding_agent runs on) streams no such frame and draws no card,
+   * so it is already distinguishable; what was not distinguishable is this.
+   */
+  const reasoningSummary =
+    reasoningDetail || (runtimeNodeOrder.includes("reasoning") ? NO_THOUGHT_SUMMARY : "");
+  /* Only once the thinking is over: while fragments are still arriving the end moves, and a
+     number that climbs while you read it is not a duration. */
+  const reasoningSeconds =
+    reasoningState === "captured" && reasoningStartTs != null && reasoningEndTs != null
+      ? Math.max(0, reasoningEndTs - reasoningStartTs)
+      : null;
+
+  /**
    * What the inspector shows, per node kind. Every branch here ends with the
    * frame that last touched the node, so the list is never empty: a node exists
    * because a frame put it there, and printing that frame beats printing a
@@ -1088,11 +1117,11 @@ export function buildAgentGraph(
          inspector only ever read `detail`, and this node has never had one. */
       sections.push(
         textSection("Model output", replyText),
-        textSection("Thought summary", reasoningDetail),
+        textSection("Thought summary", reasoningSummary),
         textSection("Model", currentModel)
       );
     } else if (id === "reasoning") {
-      sections.push(textSection("Thought summary", reasoningDetail));
+      sections.push(textSection("Thought summary", reasoningSummary));
     } else if (id === "output") {
       sections.push(textSection("Reply", replyText));
     } else if (id === "subagent") {
@@ -1171,11 +1200,15 @@ export function buildAgentGraph(
         dotTone: "reasoning",
         title: "Thought summary",
         state: reasoningState,
+        /* How long it thought, once that is a settled number, because that is the question
+           a finished thought card is asked; the token count is what it answers until then. */
         subtitle:
-          usage.tokens.thought > 0
-            ? `${formatTokens(usage.tokens.thought)} thought tokens`
-            : "thinking trace",
-        detail: reasoningDetail,
+          reasoningSeconds != null && reasoningSeconds >= 1
+            ? `Thought for ${formatDuration(reasoningSeconds)}`
+            : usage.tokens.thought > 0
+              ? `${formatTokens(usage.tokens.thought)} thought tokens`
+              : "thinking trace",
+        detail: reasoningSummary,
         nodeHeight: resultNodeHeight,
         active: latestNodeId === id
       };

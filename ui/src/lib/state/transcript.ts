@@ -1,5 +1,6 @@
 import type { AgentSseFrame, FileCitationAnnotation } from "$lib/api/types";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
+import { thoughtDeltaText } from "$lib/state/thoughtSummary";
 
 export type TranscriptItem =
   | {
@@ -140,11 +141,7 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
     }
 
     if (frame.event === "thought_summary") {
-      const content = frame.data.delta.content;
-      const text =
-        typeof content === "object" && content != null && "text" in content
-          ? String((content as { text?: unknown }).text ?? "")
-          : "";
+      const text = thoughtDeltaText(frame.data.delta);
       if (text) {
         items.push({
           kind: "thought",
