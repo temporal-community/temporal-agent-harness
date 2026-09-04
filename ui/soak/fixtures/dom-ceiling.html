@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>soak-dom-ceiling fixture</title>
+    <style>
+      body { margin: 0; font: 14px/1.4 system-ui, sans-serif; }
+      .layout { display: grid; grid-template-columns: 240px 1fr 1fr; height: 100vh; }
+      .session-list, .message-list, .log-lines { overflow: auto; border-right: 1px solid #ccc; }
+      .session-row, .message, .log-line { padding: 6px 10px; border-bottom: 1px solid #eee; }
+      .session-row.active { background: #e8f0fe; }
+      .message.user { background: #f7f7f7; }
+      .message .bubble { white-space: pre-wrap; }
+      .log-line { font-family: ui-monospace, monospace; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="layout">
+      <div class="session-list" id="sessions" aria-label="Sessions"></div>
+      <div class="message-list" id="messages" aria-label="Chat"></div>
+      <div class="log-lines" id="logs" aria-label="Transcript"></div>
+    </div>
+    <script>
+      const params = new URLSearchParams(location.search);
+      const sessionCount = Number(params.get("sessions") || 200);
+      const messageCount = Number(params.get("messages") || 500);
+      const logCount = Number(params.get("logs") || 2000);
+
+      const sessions = document.getElementById("sessions");
+      for (let i = 0; i < sessionCount; i++) {
+        const row = document.createElement("div");
+        row.className = "session-row" + (i === 0 ? " active" : "");
+        row.textContent = `Session ${i}`;
+        sessions.appendChild(row);
+      }
+
+      const messages = document.getElementById("messages");
+      for (let i = 0; i < messageCount; i++) {
+        const article = document.createElement("article");
+        article.className = "message " + (i % 2 === 0 ? "user" : "assistant");
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.textContent = `Message ${i}`;
+        article.appendChild(bubble);
+        messages.appendChild(article);
+      }
+
+      const logs = document.getElementById("logs");
+      for (let i = 0; i < logCount; i++) {
+        const line = document.createElement("div");
+        line.className = "log-line";
+        line.id = `log-row-${i}`;
+        line.textContent = `log ${i}`;
+        logs.appendChild(line);
+      }
+
+      window.__soakCounts = { sessionCount, messageCount, logCount };
+    </script>
+  </body>
+</html>

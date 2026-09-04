@@ -45,6 +45,15 @@ app-check:
 app-build:
     pnpm --dir "{{ui}}" run build
 
+# Slow frontend soaks (Node controller + Bun.WebView DOM). Outside app-check on
+# purpose: machine-noisy and not part of the check-*.mjs package glob.
+soak-ui:
+    node "{{ui}}/soak/soak-live-hitch.mjs"
+    node "{{ui}}/soak/soak-sessions-load.mjs"
+    node "{{ui}}/soak/soak-catchup-reopen.mjs"
+    node "{{ui}}/soak/soak-session-switch.mjs"
+    bun "{{ui}}/soak/soak-dom-ceiling.mjs"
+
 # Build, test, and create the wheel/sdist in dist/.
 package: app-build app-check
     uv run pytest
