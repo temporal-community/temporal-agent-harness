@@ -119,6 +119,24 @@
     inspectedNode = null;
   }
 
+  function mapMarkClass(node: Node): string {
+    const tone = (node.data as AgentNodeData | undefined)?.tone;
+    if (tone === "error") return "mm-fail";
+    if (tone === "queue" || tone === "approval") return "mm-wait";
+    if (tone === "done") return "mm-done";
+    return "mm-run";
+  }
+
+  function mapMarkColor(node: Node): string {
+    const tone = (node.data as AgentNodeData | undefined)?.tone;
+    if (tone === "done") return "var(--success)";
+    if (tone === "error") return "var(--error)";
+    if (tone === "model" || tone === "reasoning") return "var(--model)";
+    if (tone === "tool") return "var(--warning)";
+    if (tone === "queue" || tone === "approval") return "var(--queue)";
+    return "var(--accent)";
+  }
+
   /* showModal() rather than the `open` attribute, which is what this used to
      set. The top layer is what grants a dialog its focus trap, its Escape, its
      focus restore, and a real ::backdrop; with `open` alone the browser gives
@@ -148,6 +166,14 @@
   >
     <AutoFitView signature={fitSignature} {fitViewOptions} />
     <Controls {fitViewOptions} />
+    <MiniMap
+      pannable
+      zoomable
+      nodeColor={mapMarkColor}
+      nodeClass={mapMarkClass}
+      nodeBorderRadius={5}
+      ariaLabel="Flow overview"
+    />
     <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
   </SvelteFlow>
 
@@ -439,5 +465,20 @@
   :global(.svelte-flow__minimap) {
     background: var(--surface-1);
     border: 1px solid var(--border);
+  }
+
+  /* Shape is the second channel: colour alone smears at MiniMap size.
+     Diamond = failed, pill = waiting, square = done, rounded = running.
+     clip-path on the SVG rect, so the MiniMap's own packing is left alone. */
+  :global(.svelte-flow__minimap-node.mm-fail) {
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  }
+
+  :global(.svelte-flow__minimap-node.mm-wait) {
+    clip-path: circle(50%);
+  }
+
+  :global(.svelte-flow__minimap-node.mm-done) {
+    clip-path: inset(12% round 1px);
   }
 </style>
