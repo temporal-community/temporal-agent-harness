@@ -1,5 +1,4 @@
 import {
-  canBleed,
   defaultPaneParams,
   nearestPaneKind,
   PANE_META,
@@ -80,6 +79,14 @@ export interface UnknownPaneReport {
   fellBack: boolean;
 }
 
+/**
+ * The four query keys, before a stack's own suffix is put on them.
+ *
+ * A second stack — the bottom drawer — needs its own four, and the first stack's
+ * must not change by a byte: every link ever shared out of this console spells
+ * them `p`, `c`, `i`, `b`, so the default suffix is empty and those links keep
+ * meaning exactly what they meant.
+ */
 const QUERY_PANES = "p";
 const QUERY_COLLAPSED = "c";
 const QUERY_CURSOR = "i";
@@ -180,8 +187,15 @@ export function isSplit(group: Pane[]): boolean {
   return group.length > 1 && group[0].split;
 }
 
-export function createPaneStack() {
-  return new PaneStack();
+export interface PaneStackOptions {
+  /** Suffix on this stack's query keys. Empty is the console's original desk. */
+  queryPrefix?: string;
+  /** The arrangement this stack opens on, and falls back to. Empty for a drawer. */
+  initial?: Pane[][];
+}
+
+export function createPaneStack(options?: PaneStackOptions) {
+  return new PaneStack(options);
 }
 
 export class PaneStack {
@@ -195,9 +209,28 @@ export class PaneStack {
    * readers wanted was always the same one — columns, with the state flow given
    * the whole width when it is the only thing open.
    */
-  groups = $state<Pane[][]>(defaultGroups());
+  groups = $state<Pane[][]>([]);
   /* The narration, because it is the column that says what to read next. */
   focusedId = $state<string | null>("graph");
+
+  /* Held rather than re-derived, so a drawer that empties stays empty instead of
+     conjuring the console's default desk out of the fallback path. */
+  readonly #initial: Pane[][];
+  readonly #keys: { panes: string; collapsed: string; cursor: string; bleed: string };
+
+  constructor(options?: PaneStackOptions) {
+    const suffix = options?.queryPrefix ?? "";
+    this.#keys = {
+      panes: QUERY_PANES + suffix,
+      collapsed: QUERY_COLLAPSED + suffix,
+      cursor: QUERY_CURSOR + suffix,
+      bleed: QUERY_BLEED + suffix
+    };
+    this.#initial = options?.initial ?? defaultGroups();
+    this.groups = this.#initial;
+    if (this.groups.length === 0) this.focusedId = null;
+  }
+
   /**
    * Replay index taken from a shared link. Held until enough of the timeline has
    * streamed in to honour it, then cleared.
@@ -221,8 +254,8 @@ export class PaneStack {
    * Held as an id rather than a flag so that focusing another pane while bled
    * does not silently swap what is on screen underneath the reader. Everything
    * reads `bleedingPane` instead, which is what makes a stale id — a pane since
-   * closed, or one carried in on a link that cannot bleed — mean the desk rather
-   * than an empty screen.
+   * closed, or one named by a link that no longer matches the desk — mean the
+   * desk rather than an empty screen.
    */
   bleeding = $state<string | null>(null);
 
@@ -230,17 +263,17 @@ export class PaneStack {
      address bar, and nothing on screen reads it. */
   private urlWrittenAt = 0;
   private urlTimer: number | null = null;
-  private urlPending: string | null = null;
+  /* The cursor a held-back write is for, not the string it produced: two stacks
+     now share this query string, so a deferred write has to be rebuilt against
+     whatever the other one has since put in the address bar. */
+  private urlPending: number | null = null;
 
   panes = $derived(this.groups.flat());
   expandedPanes = $derived(this.panes.filter((pane) => !pane.collapsed));
   collapsedPanes = $derived(this.panes.filter((pane) => pane.collapsed));
-  bleedingPane = $derived.by(() => {
-    const pane = this.bleeding
-      ? (this.panes.find((item) => item.id === this.bleeding) ?? null)
-      : null;
-    return pane && canBleed(pane.kind) ? pane : null;
-  });
+  bleedingPane = $derived(
+    this.bleeding ? (this.panes.find((item) => item.id === this.bleeding) ?? null) : null
+  );
 
   /** The session the desk on screen belongs to. */
   activeSessionId = $state<string | null>(null);
@@ -351,8 +384,9 @@ export class PaneStack {
         }))
       );
     }
-    /* Closing the last drill-in must not leave the reader facing an empty rail. */
-    return carried.length > 0 ? carried : defaultGroups();
+    /* Closing the last drill-in must not leave the reader facing an empty rail —
+       unless empty is what this stack opens on, which is what a drawer is. */
+    return carried.length > 0 ? carried : this.#initial;
   }
 
   /**
@@ -451,11 +485,18 @@ export class PaneStack {
    * is the arrangement the reader left rather than one rebuilt around them.
    * Folding the pane also brings it forward, because a canvas hidden behind a
    * tab cannot be the thing filling the screen.
+   *
+   * Any pane, not just a canvas. The kind gate this used to carry argued that a
+   * document handed the whole width only grows a line length nobody wants —
+   * true of the guide, and an odd thing to decide on the reader's behalf for the
+   * log, the transcript and the waterfall, all of which are wide things in a
+   * narrow column. What it produced in practice was a key that did nothing at
+   * all on four of the six kinds this build renders, with no way to tell that
+   * from a key that was broken.
    */
   toggleBleed(id: string | null = this.focusedId): void {
     if (!id) return;
-    const pane = this.panes.find((item) => item.id === id);
-    if (!pane || !canBleed(pane.kind)) return;
+    if (!this.panes.some((item) => item.id === id)) return;
     if (this.bleeding === id) {
       this.bleeding = null;
       return;
@@ -715,10 +756,12 @@ export class PaneStack {
       this.commitQuery(next);
       return;
     }
-    this.urlPending = next;
+    this.urlPending = cursor;
     this.urlTimer ??= window.setTimeout(() => {
       this.urlTimer = null;
-      if (this.urlPending) this.commitQuery(this.urlPending);
+      const pending = this.urlPending;
+      this.urlPending = null;
+      if (pending != null) this.commitQuery(this.queryFor(pending));
     }, wait);
   }
 
@@ -743,7 +786,7 @@ export class PaneStack {
        rather than the leftmost tab of every column. */
     if (this.groups.length > 0) {
       params.set(
-        QUERY_PANES,
+        this.#keys.panes,
         this.groups
           .map((group) => {
             if (isSplit(group)) return group.map((pane) => pane.id).join(SPLIT_JOIN);
@@ -755,20 +798,20 @@ export class PaneStack {
           .join(",")
       );
     } else {
-      params.delete(QUERY_PANES);
+      params.delete(this.#keys.panes);
     }
 
     const collapsed = this.collapsedPanes.map((pane) => pane.id);
-    if (collapsed.length > 0) params.set(QUERY_COLLAPSED, collapsed.join(","));
-    else params.delete(QUERY_COLLAPSED);
+    if (collapsed.length > 0) params.set(this.#keys.collapsed, collapsed.join(","));
+    else params.delete(this.#keys.collapsed);
 
     /* Written from the resolved pane rather than the raw id, so a link never
        carries a bleed that would open on the desk anyway. */
-    if (this.bleedingPane) params.set(QUERY_BLEED, this.bleedingPane.id);
-    else params.delete(QUERY_BLEED);
+    if (this.bleedingPane) params.set(this.#keys.bleed, this.bleedingPane.id);
+    else params.delete(this.#keys.bleed);
 
-    if (cursor > 0) params.set(QUERY_CURSOR, String(cursor));
-    else params.delete(QUERY_CURSOR);
+    if (cursor > 0) params.set(this.#keys.cursor, String(cursor));
+    else params.delete(this.#keys.cursor);
 
     const query = params.toString();
     return `${window.location.pathname}${query ? `?${query}` : ""}`;
@@ -778,10 +821,10 @@ export class PaneStack {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
 
-    const raw = params.get(QUERY_PANES);
+    const raw = params.get(this.#keys.panes);
     if (raw) {
       const collapsed = new Set(
-        (params.get(QUERY_COLLAPSED) ?? "").split(",").filter(Boolean)
+        (params.get(this.#keys.collapsed) ?? "").split(",").filter(Boolean)
       );
       const seen = new Set<string>();
       const restored: Pane[][] = [];
@@ -826,12 +869,11 @@ export class PaneStack {
       if (unknown.length > 0) this.noteUnknownPanes(unknown, restored.length === 0);
     }
 
-    /* Read after the panes, and left unchecked: a pane that is not on the desk,
-       or one whose kind cannot bleed, resolves to no bleeding pane and the next
-       write drops it from the link. */
-    this.bleeding = params.get(QUERY_BLEED);
+    /* Read after the panes, and left unchecked: an id that is not on the desk
+       resolves to no bleeding pane and the next write drops it from the link. */
+    this.bleeding = params.get(this.#keys.bleed);
 
-    const cursor = Number.parseInt(params.get(QUERY_CURSOR) ?? "", 10);
+    const cursor = Number.parseInt(params.get(this.#keys.cursor) ?? "", 10);
     if (Number.isFinite(cursor) && cursor > 0) this.pendingCursor = cursor;
   }
 

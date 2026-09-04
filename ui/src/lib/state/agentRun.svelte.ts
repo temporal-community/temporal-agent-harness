@@ -1838,6 +1838,21 @@ export class AgentRunController {
     this.goTo(target?.index ?? this.total);
   }
 
+  /* Both strictly past the cursor, so standing on a boundary the key moves off
+     it rather than re-seeking where you already are — the defect nextTurn's
+     comment above records, avoided here by construction. */
+  previousStep(): void {
+    this.pause();
+    const target = [...this.stepBoundaries].reverse().find((index) => index < this.viewIndex);
+    this.goTo(target ?? 0);
+  }
+
+  nextStep(): void {
+    this.pause();
+    const target = this.stepBoundaries.find((index) => index > this.viewIndex);
+    this.goTo(target ?? this.total);
+  }
+
   jumpToLive(): void {
     this.goTo(this.total);
     this.following = true;

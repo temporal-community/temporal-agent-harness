@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { REPLAY_BINDINGS } from "$lib/state/replayHotkeys";
+  import { REPLAY_BINDINGS, type ReplayScope } from "$lib/state/replayHotkeys";
 
   interface Props {
     open: boolean;
@@ -7,6 +7,18 @@
   }
 
   let { open, onClose }: Props = $props();
+
+  /* Two sections, because the table now holds two kinds of key and twenty
+     undifferentiated rows is a list nobody reads to the end of. Derived from the
+     bindings rather than listed here, so a new scope cannot go unrendered. */
+  const SCOPE_TITLE: Record<ReplayScope, string> = {
+    replay: "Moving through the run",
+    rail: "Moving around the desk"
+  };
+  const sections = Object.entries(SCOPE_TITLE).map(([scope, title]) => ({
+    title,
+    bindings: REPLAY_BINDINGS.filter((binding) => binding.scope === scope)
+  }));
 
   /* Escape is bound globally alongside every other replay key, so this surface
      does not repeat the handler — it only has to close on the scrim. */
@@ -22,16 +34,22 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="scrim" onclick={handleScrimClick}>
     <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="hotkey-help-title">
-      <h2 id="hotkey-help-title">Replay shortcuts</h2>
-      <dl>
-        {#each REPLAY_BINDINGS as binding (binding.action)}
-          <div class="row">
-            <dt><kbd>{binding.chord}</kbd></dt>
-            <dd>{binding.label}</dd>
-          </div>
-        {/each}
-      </dl>
-      <p class="note">Keys stay quiet while you are typing in a message or on a form field.</p>
+      <h2 id="hotkey-help-title">Keyboard shortcuts</h2>
+      {#each sections as section (section.title)}
+        <h3>{section.title}</h3>
+        <dl>
+          {#each section.bindings as binding (binding.action)}
+            <div class="row">
+              <dt><kbd>{binding.chord}</kbd></dt>
+              <dd>{binding.label}</dd>
+            </div>
+          {/each}
+        </dl>
+      {/each}
+      <p class="note">
+        Every key here stays quiet while you are typing in a message or on a form field, so
+        Option and the arrows keep meaning what they mean in a text field.
+      </p>
     </div>
   </div>
 {/if}
@@ -70,6 +88,19 @@
     font-weight: 650;
   }
 
+  h3 {
+    margin: var(--gutter) 0 var(--gap-xs);
+    color: var(--text-3);
+    font-size: var(--font-sm);
+    font-weight: 650;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  h3:first-of-type {
+    margin-top: 0;
+  }
+
   dl {
     margin: 0;
     display: grid;
@@ -78,7 +109,8 @@
 
   .row {
     display: grid;
-    grid-template-columns: 92px minmax(0, 1fr);
+    /* Wide enough for the longest chord in the table, "Cmd Shift ←". */
+    grid-template-columns: 116px minmax(0, 1fr);
     gap: var(--gap-lg);
     align-items: center;
     padding: var(--gap-xs) var(--gap-sm);

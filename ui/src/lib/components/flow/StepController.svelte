@@ -1,9 +1,7 @@
 <script lang="ts">
-  import { Pause, Play, SkipBack, SkipForward } from "@lucide/svelte";
+  import { PanelBottom, Pause, Play, SkipBack, SkipForward } from "@lucide/svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
-  import UsagePopover from "$lib/components/flow/UsagePopover.svelte";
-  import type { CostSummary, UsageTimelinePoint } from "$lib/cost/pricing";
   import type { PlaybackSpeed } from "$lib/state/agentRun.svelte";
   import { eventVelocity, velocityPath } from "$lib/state/eventVelocity";
   import { noteKeyboardSeek } from "$lib/state/replayHotkeys";
@@ -16,10 +14,6 @@
     following: boolean;
     playbackSpeed: PlaybackSpeed;
     currentEvent: ReplayLogRow | null;
-    usage: CostSummary;
-    usageTimeline: UsageTimelinePoint[];
-    /** Passed straight to UsagePopover, which explains what it means. */
-    unmeasured?: boolean;
     turnMarkers: Array<{ index: number; turnNumber: number }>;
     anomalyMarkers: ReplayMarker[];
     /**
@@ -28,6 +22,14 @@
      * lane costs no second pass over the log.
      */
     eventRows: ReplayLogRow[];
+    /**
+     * Whether the bottom drawer is showing anything. Its control lives here
+     * because the transport is the drawer's top edge — the drawer collapses
+     * down onto this bar, so this bar is the lid, and the handle belongs on the
+     * lid rather than inside the box.
+     */
+    drawerOpen: boolean;
+    onToggleDrawer: () => void;
     onPlay: () => void;
     onPause: () => void;
     onSpeedChange: (speed: PlaybackSpeed) => void;
@@ -43,12 +45,11 @@
     following,
     playbackSpeed,
     currentEvent,
-    usage,
-    usageTimeline,
-    unmeasured = false,
     turnMarkers,
     anomalyMarkers,
     eventRows,
+    drawerOpen,
+    onToggleDrawer,
     onPlay,
     onPause,
     onSpeedChange,
@@ -187,11 +188,17 @@
 
   function handleInput(event: Event): void {
     const index = Number((event.currentTarget as HTMLInputElement).value);
-    /* Arrow keys on a focused scrubber are native range behaviour that
-       `resolveReplayAction` declines on purpose, so this movement never passes
-       through `applyReplayAction` and has to report the seek itself. Reported
+    /* A focused scrubber still moves itself for the keys the binding table does
+       not spell — up, down, PageUp, PageDown — which are left native for screen
+       reader users by omission rather than by a list. That movement never passes
+       through `applyReplayAction`, so it has to report the seek itself. Reported
        rather than acted on: `onScrub` still does the moving, so the run-state
-       API learns nothing about keyboards. */
+       API learns nothing about keyboards.
+
+       The keys the table does spell no longer arrive here at all: deference used
+       to be decided by key name, which handed `Shift+←` to the slider as if it
+       were a bare arrow and stepped one event where the reader asked for one
+       turn. Those keys now win and cancel the native step. */
     if (scrubbedByKey) noteKeyboardSeek(viewIndex, index);
     scrubbedByKey = false;
     onScrub(index);
@@ -374,7 +381,18 @@
   </div>
 
   <div class="aside">
-    <UsagePopover {usage} {usageTimeline} {viewIndex} {unmeasured} />
+    <!-- The drawer's whole chrome. It replaces the pane header down there, which
+         is why it is a real toggle with a pressed state rather than an opener:
+         it is now the only thing that says whether the drawer is holding
+         anything, and the only way to shut it that does not involve dragging. -->
+    <IconButton
+      label={drawerOpen ? "Close the bottom drawer" : "Open the bottom drawer"}
+      tip={drawerOpen ? "Close the bottom drawer" : "Open the bottom drawer — latency trace"}
+      pressed={drawerOpen}
+      onclick={onToggleDrawer}
+    >
+      <PanelBottom size={14} />
+    </IconButton>
   </div>
 
   <div class="now" bind:this={nowElement}>
@@ -713,6 +731,9 @@
     background: var(--success);
   }
 
+  /* Holds the drawer's handle, and used to hold the token chip beside it. The
+     chip went when tokens became a pane of their own, so this is back to one
+     item — the gap and the rule that separated them went with it. */
   .aside {
     flex: none;
     display: flex;

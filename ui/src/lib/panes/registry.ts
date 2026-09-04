@@ -203,24 +203,10 @@ const PANE_KINDS = Object.keys(PANE_META) as PaneKind[];
 export const SPINE_SIZE = 42;
 
 /**
- * Kinds that can take the whole screen on their own.
- *
- * A canvas is the only thing worth bleeding: it is laid out in two dimensions,
- * so every pixel it is given is read, and a session with a dozen tool calls in
- * it does not fit a column. A document handed the same width just grows a line
- * length nobody wants, which is why the guide and the log are not here.
- */
-const BLEED_KINDS = new Set<PaneKind>(["graph", "subagent"]);
-
-export function canBleed(kind: PaneKind): boolean {
-  return BLEED_KINDS.has(kind);
-}
-
-/**
  * Views with no parent to drill in from, so they need a launcher of their own.
  * Everything else is reached by clicking the thing it describes.
  */
-export const ROOT_KINDS: PaneKind[] = ["chat", "graph", "logs", "latency"];
+export const ROOT_KINDS: PaneKind[] = ["chat", "graph", "logs", "latency", "usage"];
 
 /**
  * Kinds that exist at most once. Logs and latency are deliberately absent: they

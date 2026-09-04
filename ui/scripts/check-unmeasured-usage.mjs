@@ -1,9 +1,10 @@
-// ABOUTME: Asserts the one property the usage chip has to hold for a run this console read no
-// events of: it must not render a zero. Every figure in UsagePopover is a sum over the frames in
+// ABOUTME: Asserts the one property the token reading has to hold for a run this console read no
+// events of: it must not render a zero. Every figure in UsageReading is a sum over the frames in
 // hand, and a finished run whose stream Temporal cannot replay leaves none — so the sums are empty
-// and `0 tok` in a green success chip is a confident measurement of nothing, sitting beside runs
-// that really did the work. Zero is a fact; "we cannot know" is a different fact. This is the check
-// that fails when a figure stops going through figure(), or when the success tone comes back.
+// and `0 tok` drawn in the affirmative accent is a confident measurement of nothing, sitting beside
+// runs that really did the work. Zero is a fact; "we cannot know" is a different fact. This is the
+// check that fails when a figure stops going through figure(), or when the affirmative tone comes
+// back.
 //
 // It also pins the second half of that reading: the money is off the screen. The estimate came from
 // a hardcoded per-million price table nobody wants to maintain in the frontend, so pricing.ts keeps
@@ -20,10 +21,10 @@ import "./svelteLoader.mjs";
 import { render } from "svelte/server";
 
 const COMPONENT = fileURLToPath(
-  new URL("../src/lib/components/flow/UsagePopover.svelte", import.meta.url)
+  new URL("../src/lib/components/flow/UsageReading.svelte", import.meta.url)
 );
 
-const UsagePopover = (await import("../src/lib/components/flow/UsagePopover.svelte")).default;
+const UsageReading = (await import("../src/lib/components/flow/UsageReading.svelte")).default;
 const { summarizeCost, buildUsageTimeline } = await import("../src/lib/cost/pricing.ts");
 
 const PRICED = "gemini-3.5-flash";
@@ -47,30 +48,36 @@ const spent = {
 /* An unmeasured run's `frames` are empty, so its summary is the empty sum — which
    is exactly the summary of a run that made no model calls at all. That the two
    are indistinguishable in the data is the whole reason the flag has to be passed
-   in separately, and the reason the popover cannot work this out for itself. */
+   in separately, and the reason the reading cannot work this out for itself. */
 const NOTHING_READ = summarizeCost([]);
 const REAL_SPEND = summarizeCost([ended(PRICED, spent)]);
 const UNPRICED_SPEND = summarizeCost([ended(UNPRICED, spent)]);
 
 const shown = (props) =>
-  render(UsagePopover, {
+  render(UsageReading, {
     props: { usageTimeline: buildUsageTimeline([]), viewIndex: 0, ...props }
   }).body;
 
-/* ponytail: ceiling = SSR renders the popover CLOSED (`open` is component state,
-   not a prop), so what these renders see is the chip — which is where the
-   reported bug is visible and the only part of this component a reader meets
-   without clicking. The headline and breakdown strips inside the panel are
-   covered by the source claim at the bottom instead. Upgrade path = a check that
-   can open it, once anything in this repo can drive a component's state. */
-const figures = (html) => [
-  ...html.matchAll(/<span class="usage-chip-tokens[^"]*"[^>]*>([^<]*)</g)
-].map((match) => match[1].trim());
+/* All six figures, in DOM order: the headline total, then the four overlapping
+   parts under it. Nothing else in the reading renders a `dd` — the per-model list
+   is a `ul` of spans — so this is every figure on screen.
+
+   This used to reach only ONE of them. The reading lived inside UsagePopover,
+   whose panel is behind component state SSR cannot set, so a closed render showed
+   just the chip and the other five were covered by a source claim standing in for
+   them. Splitting the reading out for the TOKENS pane retired that ceiling: it has
+   no open/closed state, so the figures are simply there to be read. */
+const figures = (html) => [...html.matchAll(/<dd[^>]*>([^<]*)</g)].map((m) => m[1].trim());
+
+/* The tone on the headline metric, which is the first one and the affirmative one.
+   The delimiter matters: the compiler appends its scoped hash inside the same
+   attribute, so an anchored closing quote matches nothing. */
+const headlineTone = (html) => html.match(/class="metric ([a-z]+)[\s"]/)?.[1] ?? null;
 
 /* What a reader actually sees: text nodes only. Everything the compiler adds
-   carries digits of its own — scoped class hashes, hydration markers, the icon's
-   viewBox, the per-instance popover id — so "no zero anywhere" has to be asserted
-   over the words rather than over the markup around them. */
+   carries digits of its own — scoped class hashes, hydration markers — so "no zero
+   anywhere" has to be asserted over the words rather than over the markup around
+   them. */
 const text = (html) =>
   html
     .replace(/<!--[\s\S]*?-->/g, "")
@@ -83,8 +90,16 @@ const text = (html) =>
 // every assertion below.
 {
   const html = shown({ usage: REAL_SPEND });
-  assert.deepEqual(figures(html), ["2,090"], "a measured run reports its real token count");
-  assert.match(html, /chip[^"]*\bsuccess\b/, "and keeps the success tone it has earned");
+  assert.deepEqual(
+    figures(html),
+    ["2,090", "1,000", "400", "600", "250"],
+    "a measured run reports its real token counts: total, then the overlapping parts"
+  );
+  assert.equal(
+    headlineTone(html),
+    "strong",
+    "and keeps the affirmative tone it has earned — `strong` draws the total in --accent"
+  );
   assert.doesNotMatch(
     text(html),
     /\$/,
@@ -99,7 +114,7 @@ const text = (html) =>
 {
   assert.deepEqual(
     figures(shown({ usage: NOTHING_READ })),
-    ["0"],
+    ["0", "0", "0", "0", "0"],
     "a run with no model calls yet has measured nothing; that is a fact"
   );
 }
@@ -109,24 +124,28 @@ const text = (html) =>
 {
   const html = shown({ usage: NOTHING_READ, unmeasured: true });
 
-  assert.deepEqual(figures(html), ["—"], "the chip's figure for an unmeasured run is absent");
-  /* The sentence used to hang off the cost span, which is gone. A bare dash on a
-     closed chip is a broken panel until something says otherwise, and the panel's
-     copy is a click away. */
+  assert.deepEqual(
+    figures(html),
+    ["—", "—", "—", "—", "—"],
+    "every figure for an unmeasured run is absent, not zero"
+  );
+  /* A panel of bare dashes is a broken panel until something says otherwise. In
+     the popover this sentence was a click away and the chip carried it as a tip;
+     here it takes the space the chart and the model list have vacated. */
   assert.match(
-    html,
-    /usage-chip-tokens[^>]*data-tip="Unknown, not zero/,
-    "the dash on the closed chip must carry the sentence that explains it"
+    text(html),
+    /Unknown, not zero/,
+    "the dashes must be accompanied by the sentence that explains them"
   );
   assert.doesNotMatch(
     text(html),
     /\d/,
     "an unmeasured run must not render a digit anywhere: the totals are unknown, not zero"
   );
-  assert.doesNotMatch(
-    html,
-    /chip[^"]*\bsuccess\b/,
-    "a green chip is an affirmative claim, and an unmeasured run has nothing to affirm"
+  assert.notEqual(
+    headlineTone(html),
+    "strong",
+    "the affirmative accent is a claim about a figure, and an unmeasured run has none to make"
   );
 }
 
@@ -136,7 +155,7 @@ const text = (html) =>
 {
   assert.deepEqual(
     figures(shown({ usage: REAL_SPEND, unmeasured: true })),
-    ["—"],
+    ["—", "—", "—", "—", "—"],
     "a partially cached unmeasured run shows a lower bound as a figure, so it shows no figure"
   );
 }
@@ -150,7 +169,7 @@ const text = (html) =>
   const unpriced = shown({ usage: UNPRICED_SPEND });
   assert.deepEqual(
     figures(unpriced),
-    ["2,090"],
+    ["2,090", "1,000", "400", "600", "250"],
     "a model we hold no price for still has an exact token count"
   );
   assert.doesNotMatch(
@@ -165,11 +184,11 @@ const text = (html) =>
 }
 
 /* --- every figure goes through figure() ----------------------------------- */
-// The two strips inside the panel are past what an SSR render of a closed popover
-// can see, and they are five of the six call sites. What holds them is that the
-// formatter is only ever PASSED to figure(), never called: a seventh figure added
-// straight from formatTokens() would render a zero the renders above cannot
-// reach, and this is what fails instead.
+// The renders above now reach all five figures, so this is no longer standing in
+// for the ones they could not see. It is kept for what it still catches that they
+// cannot: a SIXTH figure added later. The formatter is only ever PASSED to
+// figure(), never called, so a new reading taken straight from formatTokens()
+// fails here rather than waiting for someone to notice a zero.
 {
   const source = readFileSync(COMPONENT, "utf8");
   assert.equal(
@@ -179,19 +198,19 @@ const text = (html) =>
   );
   assert.equal(
     source.match(/\bfigure\(/g).length,
-    6,
-    "the count is part of the claim: 1 chip span, 1 headline metric and 4 breakdown rows. " +
-      "If a figure was added or removed here, say so"
+    5,
+    "the count is part of the claim: 1 headline metric and 4 breakdown rows. If a figure was " +
+      "added or removed here, say so — and add it to the deepEqual assertions above"
   );
   assert.doesNotMatch(
     source,
     /formatCost|unpricedNote|unpricedModels|estimatedCostUsd/,
-    "the popover reaches for a cost figure again; pricing.ts still computes one, on purpose, " +
+    "the reading reaches for a cost figure again; pricing.ts still computes one, on purpose, " +
       "but nothing here may render it"
   );
 }
 
 console.log(
-  "check-unmeasured-usage: an unmeasured run renders no zero and keeps no success tone; no cost " +
-    "figure is rendered at all"
+  "check-unmeasured-usage: an unmeasured run renders no zero and keeps no affirmative tone; no " +
+    "cost figure is rendered at all"
 );
