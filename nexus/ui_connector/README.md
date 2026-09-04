@@ -1,153 +1,185 @@
-# ui_connector
+# Nexus UI connector
 
-Connects chat platforms (Slack, Teams, ...) to the temporal-agent-harness agent, through
-one Temporal workflow: `RouterWorkflow`.
+The connector is a durable, platform-neutral tunnel between user interfaces and an
+A2A-compatible agent backend. Its middle layer is a Go Temporal workflow; Slack,
+Teams, and the packaged browser UI are replaceable edge drivers. A backend is not a
+connector-specific interface: it is the standard A2A service reached over Nexus.
 
-## Data flow
+```mermaid
+flowchart LR
+    subgraph Drivers[Replaceable UI drivers]
+        Browser[Browser / SSE]
+        Slack[Slack]
+        Teams[Teams]
+    end
 
-```
-platform event -> inbound (webhook) -> RouterWorkflow -> backend (agent) -> RouterWorkflow -> outbound (post/stream reply)
-```
+    subgraph Connector[connector namespace]
+        Actions[Standalone Nexus actions]
+        Tunnel[UIAgentTunnelWorkflow<br/>one per agent turn]
+    end
 
-1. **inbound** receives the platform event over HTTP and starts `RouterWorkflow` via
-   `client.ExecuteWorkflow`.
-2. `RouterWorkflow.Run` calls **backend**.`StartTurn` to get a reply (or a handle to poll).
-3. If a handle came back, `RouterWorkflow` polls **backend**.`PollTurn` in a loop and
-   forwards each delta to **outbound**, which posts/streams it back to the platform.
+    subgraph Agent[agent namespace]
+        A2A[A2AService]
+        Workflow[Agent workflow]
+    end
 
-`router` never inspects the platform-specific shape of a request/response - that's
-entirely the job of `backend` (interpreting input) and `outbound` (rendering deltas).
-
-## Directory layout
-
-One folder per platform. Contracts + orchestration live in `router/`.
-
-```
-router/            core: workflow + the ports + shared request type
-  workflow.go        RouterWorkflow.Run, WorkflowName, RouterWorkflowID
-  interfaces.go       OutboundDriver, Streamer, BackendDriver (the ports)
-  wire.go             Input (the RouterWorkflow argument type)
-
-slack/             everything Slack
-  bot.go             SlackBot: shared auth bootstrap (used by both binaries below)
-  inbound/           pkg slackinbound - webhook HTTP server -> starts RouterWorkflow
-  outbound/          pkg slackoutbound - OutboundDriver impl + SlackPlatform (real API calls)
-  cmd/{webhook,worker}/  the two binaries
-  slack_app_manifest.yaml
-
-teams/             everything Teams (same inbound/outbound split)
-  inbound/           pkg teamsinbound
-  outbound/          pkg teamsoutbound - dispatches to the Python Teams activity worker
-                     (no Go SDK for Teams)
-  cmd/{webhook,worker}/  the two binaries
-
-agent/             the one BackendDriver impl: Nexus caller into temporal-agent-harness
+    Browser -->|SendMessage / controls| Actions
+    Slack -->|SendMessage / controls| Actions
+    Teams -->|SendMessage / controls| Actions
+    Actions -->|A2A + HarnessControl over Nexus| A2A
+    Browser <-->|pull cursor| Tunnel
+    Slack <-->|push delivery| Tunnel
+    Teams <-->|push delivery| Tunnel
+    Tunnel -->|repeated SubscribeToTask over Nexus| A2A
+    A2A <--> Workflow
 ```
 
-**Dependency direction:** `slack/*`, `teams/*`, `agent` all import `router`. `router`
-imports nothing platform-specific. Never add a `router` -> platform import.
+Nexus operation inputs and outputs use standard A2A JSON, which interoperates across
+the official Go and Python SDKs without depending on their protobuf package names.
+The tunnel stores each streamed event as the untouched base64-encoded protobuf
+`a2a.v1.StreamResponse`. It never projects that stream into Slack text, browser SSE,
+or Teams cards. A driver may interpret the Temporal Agent Harness metadata extension,
+render ordinary A2A messages/artifacts, or forward the complete A2A record to another
+consumer. This lossless seam is what makes a new driver possible without changing the
+agent or the tunnel.
 
-**Two binaries per platform**, under that platform's own folder (`slack/cmd/`, `teams/cmd/`):
-- `cmd/webhook` - HTTP server + Temporal client only. No workflow/worker.
-- `cmd/worker` - registers `RouterWorkflow` + the outbound driver's activities.
+## Runtime shape
 
-## Writing a new driver (e.g. Discord)
+Each message/control is a standalone Nexus operation. Once `SendMessage` returns the
+accepted turn number and stream-head offset, the driver mounts a deterministic
+`UIAgentTunnelWorkflow` for that one agent turn. The tunnel:
 
-You're implementing `OutboundDriver` in `router/interfaces.go`, and `BackendDriver` too
-if you're also adding a new agent backend.
+- performs one repeated `A2AService.SubscribeToTask` Nexus operation for the turn;
+- multicasts each resulting A2A record to every mounted subscriber;
+- keeps an independent durable cursor and opaque driver state per subscriber;
+- allows `observer`, `turn-owner`, and `participant` subscriber modes;
+- runs push deliveries in separate workflow coroutines, so a slow Slack or Teams
+  subscriber does not stop polling or another subscriber;
+- replays a lagging subscriber from the agent's durable stream when it falls behind
+  the tunnel's bounded in-memory window;
+- completes after the turn's terminal record is delivered and subscribers drain.
 
-### 1. `OutboundDriver` - deliver replies to the platform
+The connector therefore does not retain a second long-lived copy of an agent's
+history. The A2A task/Temporal agent remains the durable source; a later mount starts
+a new bounded tunnel and replays from the requested cursor.
 
-One interface, fully required - the compiler checks all of it at once:
+Browser/SSE is a pull driver: HTTP requests issue bounded `readEvents` updates and
+render records at the FastAPI edge. Slack and Teams are push drivers: the tunnel calls
+a platform activity with a page of raw records and opaque state. Teams may return a
+private task queue so its in-memory native stream remains pinned to the worker that
+opened it.
 
-```go
-type OutboundDriver interface {
-    Streamer // SupportsStreaming, BeginStream, UpdateStream, FinishStream, StreamPollInterval
+Messages use standalone A2A `SendMessage`; cancellation uses `CancelTask`. Harness-only
+controls such as tool approval and operator commands remain in `HarnessControlService`
+because they are not generic A2A concerns.
 
-    PostMessage(ctx workflow.Context, input TextMetadata) error
-    PostApprovalPrompt(ctx workflow.Context, input ApprovalPromptInput) error
-    AcknowledgeApproval(ctx workflow.Context, input ApprovalAcknowledgementInput) error
-}
+Drivers may attach arbitrary A2A request metadata to a send. The tunnel forwards it
+without defining its schema, so account, delegation, tracing, and future protocol
+extensions remain edge concerns rather than another tunnel-specific model.
+
+## Run the packaged browser UI
+
+The packaged browser UI uses its direct `AgentClient` transport by default. To opt
+the bundled examples into this Nexus tunnel, add this to the repo-root `.env.local`:
+
+```bash
+NEXUS_UI_ENDPOINT=agent-harness-ui-endpoint
 ```
 
-Can your platform do incremental message edits?
+Then run the local stack from the repository root, with each long-lived command in
+its own terminal:
 
-- **Yes** - implement `Streamer`'s five methods yourself (see `slack/outbound/driver.go`).
-  `SupportsStreaming` can vary per input: Teams returns `true` for a personal chat,
-  `false` for a shared channel/group one, and falls back to `PostMessage` for the
-  latter. `StreamPollInterval` sets how long router waits between poll calls so text
-  can build up into fewer, larger `UpdateStream` calls - return 0 if you don't need
-  this (most don't; only Slack does today, since `chat.appendStream` is a
-  rate-limited call per delta).
-- **No** - embed `router.NoStreaming` in your `Driver` struct instead of writing those
-  five methods:
-
-  ```go
-  type Driver struct {
-      router.NoStreaming
-      // ... your fields
-  }
-  ```
-
-Either way, add `var _ router.OutboundDriver = (*Driver)(nil)` in your package. That's
-what actually catches a missing method - the compiler flags it right there, at the
-point your `Driver` is supposed to satisfy the whole interface.
-
-Other notes:
-- Real platform I/O is non-deterministic -> **must run as Activities**, not directly in
-  the interface methods. Pattern (see `slack/outbound/driver.go`):
-  - `Driver` struct: thin dispatcher, only calls `workflow.ExecuteActivity`.
-  - Separate `Platform` struct: the actual SDK calls, registered as activities via your
-    own `RegisterActivities(w worker.Worker, platform *Platform)`.
-- `AcknowledgeApproval` can be a no-op if your platform resolves the prompt some other
-  way (Slack does - see its comment for why).
-- `PostApprovalPrompt` posts approve/deny buttons. The decision comes back through
-  **your inbound webhook**, not through this interface - you decode it and call
-  `client.ExecuteWorkflow` with `Input.Approval` set.
-
-### 2. `BackendDriver` - only needed if you're adding a new agent backend, not a new platform
-
-```go
-type BackendDriver interface {
-    StartTurn(ctx workflow.Context, input Input) (StartResult, error)
-    PollTurn(ctx workflow.Context, handle TurnHandle, cursor int64) (PollResult, error)
-}
+```bash
+just temporal
+just setup-nexus
+just session-manager
+just workers      # or run one example's `just worker`
+just ui-tunnel
+just server
 ```
 
-All input interpretation (what a slash command means, how approvals resolve) lives
-here. Router just forwards `Input` unexamined. See `agent/driver.go`.
+The browser still talks HTTP/SSE to its local driver. A send goes directly through a
+standalone A2A-over-Nexus operation, then the driver mounts a bounded Go workflow in
+the `connector` namespace for the accepted turn. That workflow reaches the selected
+agent only through repeated A2A `SubscribeToTask` operations over Nexus.
 
-### 3. Inbound - no interface, just a convention
+Unset `NEXUS_UI_ENDPOINT` to run the same UI through its original direct transport;
+in that mode, omit both `just setup-nexus` and `just ui-tunnel`.
 
-Not an interface because it starts the `RouterWorkflow` via `client.ExecuteWorkflow`, not something `router` calls back into. In our example drivers, these are webhooks that:
-1. Parses the platform's HTTP payload.
-2. Builds a `router.Input` (`Message`, `Slash`, or `Approval` - exactly one non-nil).
-3. Calls `tc.ExecuteWorkflow(ctx, client.StartWorkflowOptions{ID: wfID, TaskQueue: ...}, router.WorkflowName, input)`.
-   Use `router.RouterWorkflowID(identity, sessionID, interactionID)` for `wfID`.
+## Slack and Teams
 
-See `slack/inbound/server.go` or `teams/inbound/server.go`. HTTP is not the only way to write an inbound driver, these examples only serve to demonstrate how we can map HTTP to Temporal primitives.
+Both webhooks use the same tunnel task queue (`nexus-ui-tunnel`). Set
+`NEXUS_AGENT_ENDPOINT` to an endpoint backed by an `A2AServiceHandler` configured to
+start the selected agent workflow: a Slack thread or Teams conversation becomes the
+A2A task ID, so these drivers do not rely on a browser-created session.
 
-### 4. Wire it up
+The packaged `agent-harness-ui-endpoint` is intentionally different: it targets the
+session-manager worker and mounts only sessions that the browser API has already
+created. Do not point a chat webhook at it.
 
-Put both binaries under your new platform's own folder: `yourplatform/cmd/worker/main.go`
-and `yourplatform/cmd/webhook/main.go` (see `slack/cmd/` for the pattern).
+Before starting either chat driver:
 
-In `yourplatform/cmd/worker/main.go`:
-```go
-outboundDriver := yourplatform.NewDriver(...)
-backendDriver := &agent.Driver{}
-w := worker.New(tc, taskQueue, worker.Options{})
-rw := router.NewRouterWorkflow(outboundDriver, backendDriver)
-w.RegisterWorkflowWithOptions(rw.Run, workflow.RegisterOptions{Name: router.WorkflowName})
-yourplatform.RegisterActivities(w, platform) // if you have real Activities to register
+1. Start Temporal and the agent workflow worker.
+2. Run `just setup-nexus` once so the local `connector` namespace exists.
+3. Start an A2A Nexus worker for that workflow (the packaged
+   `temporal_agent_harness.a2a.worker` is one option).
+4. Create a Nexus endpoint targeting that A2A worker's namespace and task queue.
+5. Export that endpoint name as `NEXUS_AGENT_ENDPOINT`.
+6. Start `just ui-tunnel` in the `connector` namespace.
+
+For example, this exposes `OpenAIHelloAgent` through a dedicated A2A task queue
+(run the long-lived worker command in its own terminal):
+
+```bash
+AGENT_WORKFLOW_NAME=OpenAIHelloAgent \
+AGENT_TASK_QUEUE=openai-hello \
+NEXUS_AGENT_TASK_QUEUE=my-agent-a2a \
+just nexus-agent-worker
 ```
 
-In `yourplatform/cmd/webhook/main.go`: just the HTTP server + Temporal client, pointing at
-the same `taskQueue`.
+Provision the matching endpoint and export its name to the webhook processes:
 
-## Gotchas
+```bash
+temporal operator nexus endpoint create \
+  --name my-agent-endpoint \
+  --target-namespace default \
+  --target-task-queue my-agent-a2a
+export NEXUS_AGENT_ENDPOINT=my-agent-endpoint
+```
 
-- Streaming can be interrupted mid-turn by a tool-approval prompt. If your platform
-  can't post a message while a stream is open, set `StreamHandle.CloseBeforeApproval =
-  true` in `BeginStream` - router will finish the stream before posting the prompt and
-  reopen it after.
+The webhook processes fail fast when `NEXUS_AGENT_ENDPOINT` is absent, rather than
+silently routing to an endpoint that may not exist.
+
+Slack needs:
+
+```bash
+just ui-tunnel
+just slack-connector   # Slack delivery activities
+just slack-webhook
+```
+
+Teams needs:
+
+```bash
+just ui-tunnel
+just teams-activities-worker
+just teams-webhook
+```
+
+The platform delivery queues are independently configurable with
+`SLACK_DRIVER_TASK_QUEUE` and `TEAMS_DRIVER_TASK_QUEUE`.
+
+## Adding a driver
+
+An inbound driver constructs a `router.Subscriber` and calls `router.Client` to mount,
+send, or invoke a harness control. A pull driver calls `readEvents`; a push driver
+provides a `DeliveryTarget` activity. The delivery activity receives:
+
+- the driver-specific opaque context;
+- its prior opaque state;
+- a page of unmodified A2A `StreamItem` records;
+- the next cursor and closed state.
+
+Only the driver decides how to decode and display those records. Do not add
+platform-specific rendering fields to `TunnelWorkflow` or replace the raw A2A payload
+with a lowest-common-denominator delta.

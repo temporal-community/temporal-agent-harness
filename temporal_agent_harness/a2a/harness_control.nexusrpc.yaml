@@ -1,14 +1,10 @@
 nexusrpc: "1.0.0"
 
 services:
-  AgentService:
-    fqn: AgentService
-    description: "Nexus service that exposes an agent session to external callers (e.g. the Slack connector). The connector calls sendAgentMessage to deliver user input and pollMessages to consume the agent's response stream."
+  HarnessControlService:
+    fqn: HarnessControlService
+    description: "Harness-specific approval, callback, status, and operator controls that intentionally sit outside the standard A2A data plane."
     operations:
-      sendAgentMessage:
-        description: "Start or reuse an agent workflow session and deliver a message to a named @agent.accepts handler. Mirrors AgentClient.send_message() - msgType is the handler name (e.g. 'ask', 'slash'), payload is its JSON-encoded input model. Returns the turn output for polling via pollMessages."
-        input: { $ref: "#/$defs/SendAgentMessageInput" }
-        output: { $ref: "#/$defs/SendMessageOutput" }
       executeOperatorCommand:
         description: "Execute a harness-level operator command (e.g. /approvals, /stop, /status). Does not create a turn - the harness applies the change directly and returns a reply string synchronously."
         input: { $ref: "#/$defs/ExecuteOperatorCommandInput" }
@@ -18,7 +14,7 @@ services:
         input: { $ref: "#/$defs/ApproveToolCallInput" }
         output: { $ref: "#/$defs/ApproveToolCallOutput" }
       queryAgentInterface:
-        description: "Return the list of @agent.accepts handlers the agent exposes - name, description, and input/output schemas - mirroring AgentClient.get_agent_interface(). Use this to construct valid sendAgentMessage payloads or to model the agent as a subagent tool."
+        description: "Return the list of @agent.accepts handlers the agent exposes - name, description, and input/output schemas - mirroring AgentClient.get_agent_interface(). Harness-aware UIs may use this to construct A2A messages for a named handler."
         input: { $ref: "#/$defs/QuerySessionInput" }
         output: { $ref: "#/$defs/AgentInterfaceOutput" }
       queryOperatorInterface:
@@ -29,61 +25,12 @@ services:
         description: "Return a snapshot of the agent session's current state: turn counter, whether a turn is active, pending tool approvals, and message-queuing configuration. Mirrors AgentClient.get_status()."
         input: { $ref: "#/$defs/QuerySessionInput" }
         output: { $ref: "#/$defs/AgentStatusOutput" }
-      pollMessages:
-        description: "Async operation - attaches a completion callback to WorkflowStream's built-in poll update so reply_delta events published from the agent workflow are delivered. Returns a batch of stream items (WorkflowStream PollResult wire format) plus the next cursor."
-        input: { $ref: "#/$defs/PollMessagesInput" }
-        output: { $ref: "#/$defs/PollMessagesOutput" }
       provideCallbackResult:
         description: "Fulfill a pending callback tool call (a tool with no worker-side body - an attached client executes it and submits the outcome here). Mirrors AgentClient.provide_callback_result(). Exactly one of result/error should be set."
         input: { $ref: "#/$defs/ProvideCallbackResultInput" }
         output: { $ref: "#/$defs/ProvideCallbackResultOutput" }
-      closeSession:
-        description: "Signal the target agent workflow to close gracefully. Mirrors AgentClient.close() / the harness 'close' signal a human/UI uses."
-        input: { $ref: "#/$defs/QuerySessionInput" }
-        output: { $ref: "#/$defs/CloseSessionOutput" }
 
 $defs:
-  SendAgentMessageInput:
-    type: object
-    properties:
-      sessionId:
-        type: string
-        description: "Provider-prefixed session identifier (e.g. slack:C12345)"
-      msgType:
-        type: string
-        description: "Target @agent.accepts handler name (e.g. 'ask', 'slash')"
-      payload:
-        type: string
-        description: "JSON-encoded input matching the target handler's input model (e.g. '{\"text\":\"hello\"}' for the 'ask' handler)"
-      expectedTurn:
-        type: integer
-        description: "Caller-known next turn number. Set this when the caller already tracks turn state (e.g. a subagent-driving parent) - the send fails fast with StaleTurn on a mismatch instead of guessing. Omit to fall back to guess-and-retry (e.g. Slack, which has no local turn state)."
-    required:
-      - sessionId
-      - msgType
-      - payload
-    additionalProperties: false
-
-  SendMessageOutput:
-    type: object
-    properties:
-      turnNumber:
-        type: integer
-        description: "Monotonic turn counter for this session"
-      turnId:
-        type: string
-        description: "Unique ID for this turn"
-      streamHeadOffset:
-        type: integer
-        description: "Stream log offset at message-accept time; start the first pollMessages call from this offset to skip prior-turn history"
-      pending:
-        type: boolean
-        description: "True if the message was queued behind an active turn rather than dispatched immediately"
-    required:
-      - turnNumber
-      - turnId
-    additionalProperties: false
-
   ExecuteOperatorCommandInput:
     type: object
     properties:
@@ -159,16 +106,6 @@ $defs:
       - sessionId
     additionalProperties: false
 
-  CloseSessionOutput:
-    type: object
-    properties:
-      closed:
-        type: boolean
-        description: "Always true on success"
-    required:
-      - closed
-    additionalProperties: false
-
   AgentInterfaceOutput:
     type: object
     properties:
@@ -187,7 +124,7 @@ $defs:
     properties:
       name:
         type: string
-        description: "Handler name - the value to pass as msgType in sendAgentMessage"
+        description: "Handler name carried by the harness extension on an A2A message"
       description:
         type: string
         description: "Handler docstring describing when and how to use it"
@@ -222,12 +159,20 @@ $defs:
       name:
         type: string
         description: "Canonical command name used as the routing key (e.g. 'scope')"
+      payloadName:
+        type: string
+        description: "Wire payload name accepted by the harness operator channel"
       label:
         type: string
         description: "Display label including the slash (e.g. '/scope')"
       description:
         type: string
         description: "Human-readable description suitable for a Slack manifest entry"
+      aliases:
+        type: array
+        items:
+          type: string
+        description: "Alternative command names accepted by the harness"
       source:
         type: string
         description: "'harness' for built-in commands, 'agent' for agent-registered ones"
@@ -235,8 +180,10 @@ $defs:
         $ref: "#/$defs/OperatorCommandArgument"
     required:
       - name
+      - payloadName
       - label
       - description
+      - aliases
       - source
     additionalProperties: false
 
@@ -436,65 +383,6 @@ $defs:
       - dangerouslySkipAllApprovals
       - autoApproveInherentlySafe
       - autoApproveTools
-    additionalProperties: false
-
-  PollMessagesInput:
-    type: object
-    properties:
-      sessionId:
-        type: string
-        description: "Provider-prefixed session identifier"
-      cursor:
-        type: integer
-      timeoutSeconds:
-        type: number
-        description: "How long the WorkflowStream poll update waits for new events before returning empty"
-    required:
-      - sessionId
-      - cursor
-    additionalProperties: false
-
-  PollMessagesOutput:
-    type: object
-    description: "Mirrors WorkflowStream PollResult wire format so the async update-with-callback payload decodes correctly without transformation."
-    properties:
-      items:
-        type: array
-        items:
-          $ref: "#/$defs/StreamItem"
-        description: "Stream events since cursor; decode each as TurnEvent and map to Slack output"
-      next_offset:
-        type: integer
-        description: "Next cursor value to use in the following pollMessages call"
-      more_ready:
-        type: boolean
-        description: "True when more items are immediately available (batch was capped)"
-      closed:
-        type: boolean
-        description: "True only in the sync error path when the agent workflow has already completed"
-    required:
-      - items
-      - next_offset
-      - more_ready
-    additionalProperties: false
-
-  StreamItem:
-    type: object
-    description: "One event from WorkflowStream._log. Data is base64(proto Payload{encoding:json/plain, data:TurnEvent JSON})."
-    properties:
-      topic:
-        type: string
-        description: "Stream topic name (turn_events)"
-      data:
-        type: string
-        description: "base64-encoded proto Payload containing a TurnEvent"
-      offset:
-        type: integer
-        description: "Absolute position of this item in the stream"
-    required:
-      - topic
-      - data
-      - offset
     additionalProperties: false
 
   ProvideCallbackResultInput:

@@ -24,6 +24,7 @@ from temporalio.envconfig import ClientConfig
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
+from temporal_agent_harness.a2a import a2a_nexus_data_converter
 from temporal_agent_harness.harness.agent_client import (
     AgentBusyError,
     AgentClient,
@@ -35,6 +36,7 @@ from temporal_agent_harness.harness.agent_client import (
     ToolApprovalError,
 )
 from temporal_agent_harness.harness.agent_protocol import (
+    SEND_AGENT_MESSAGE_UPDATE,
     AgentConfig,
     AgentEvent,
     AgentEventType,
@@ -42,7 +44,6 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentStatus,
     OperatorCommand,
     OperatorCommandResult,
-    SEND_AGENT_MESSAGE_UPDATE,
 )
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.utils.large_payload import with_large_payload_offload
@@ -51,10 +52,13 @@ from temporal_agent_harness.web.session_manager import (
     SESSION_MANAGER_ID,
     SESSION_MANAGER_TASK_QUEUE,
     AgentRegistry,
-    CreateSessionRequest as ManagerCreateSessionRequest,
     Session,
     SessionManagerWorkflow,
 )
+from temporal_agent_harness.web.session_manager import (
+    CreateSessionRequest as ManagerCreateSessionRequest,
+)
+from temporal_agent_harness.web.tunnel_driver import WebTunnelDriver
 
 RegistrySource = AgentRegistry | Callable[[], AgentRegistry]
 _SESSION_PREVIEW_HISTORY_PAGE_SIZE = 16
@@ -109,6 +113,9 @@ def create_agent_harness_app(
     registry_path: Path | str | None = None,
     manager_workflow_id: str = SESSION_MANAGER_ID,
     manager_task_queue: str = SESSION_MANAGER_TASK_QUEUE,
+    nexus_endpoint: str | None = None,
+    connector_namespace: str = "connector",
+    connector_task_queue: str = "nexus-ui-tunnel",
     static_dir: Path | str | None = None,
     index_file: str = "index.html",
     states_file: str | None = None,
@@ -120,6 +127,13 @@ def create_agent_harness_app(
         registry_path: TOML registry path. Mutually exclusive with ``registry``.
         manager_workflow_id: Deterministic workflow ID for the session manager.
         manager_task_queue: Task queue where the session manager worker polls.
+        nexus_endpoint: Opt into the Nexus UI transport with this A2A/HarnessControl
+            endpoint. When omitted, the existing direct ``AgentClient`` transport is
+            used and no connector worker or Nexus endpoint is required.
+        connector_namespace: Namespace containing the bounded Go UI tunnel workflows
+            when ``nexus_endpoint`` is set.
+        connector_task_queue: Task queue polled by the Go UI tunnel worker when
+            ``nexus_endpoint`` is set.
         static_dir: Optional directory containing static UI assets. When omitted,
             the packaged Vite UI is served if it is present in the installed package.
         index_file: File in ``static_dir`` served from ``/``.
@@ -135,6 +149,21 @@ def create_agent_harness_app(
             **connect_config,
             data_converter=await with_large_payload_offload(pydantic_data_converter),
         )
+        app.state.web_tunnel = None
+        if nexus_endpoint is not None:
+            connector_config = dict(connect_config)
+            connector_config["namespace"] = connector_namespace
+            app.state.connector_temporal = await Client.connect(
+                **connector_config,
+                data_converter=await with_large_payload_offload(
+                    a2a_nexus_data_converter
+                ),
+            )
+            app.state.web_tunnel = WebTunnelDriver(
+                app.state.connector_temporal,
+                task_queue=connector_task_queue,
+                nexus_endpoint=nexus_endpoint,
+            )
 
         resolved_registry = _resolve_registry(registry, registry_path)
 
@@ -208,9 +237,12 @@ def create_agent_harness_app(
 
     @app.get("/api/status/{session_id}")
     async def get_status(session_id: str):
-        client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
-        status = await client.get_status()
-        content = TypeAdapter(AgentStatus).dump_python(status, mode="json")
+        if app.state.web_tunnel is None:
+            client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
+            status = await client.get_status()
+            content = TypeAdapter(AgentStatus).dump_python(status, mode="json")
+        else:
+            content = await app.state.web_tunnel.controls().status(session_id)
         return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.post("/api/sessions/{session_id}/close")
@@ -218,54 +250,104 @@ def create_agent_harness_app(
         """Gracefully stop the agent workflow via the harness ``close`` signal: it winds down its
         turn loop and auto-denies any pending approvals/callbacks. Lets a client implement abort
         (stop the durable agent), rather than only dropping its own stream."""
-        handle = app.state.temporal.get_workflow_handle(session_id)
-        await handle.signal("close")
-        return JSONResponse(content={"ok": True}, headers={"Cache-Control": "no-store"})
+        if app.state.web_tunnel is None:
+            handle = app.state.temporal.get_workflow_handle(session_id)
+            await handle.signal("close")
+            content = {"ok": True}
+        else:
+            content = await app.state.web_tunnel.controls().close(session_id)
+        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/agent-interface/{session_id}")
     async def agent_interface(session_id: str):
-        # A gateway subagent alias has no agent workflow to query.
-        client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
         try:
-            functions = await client.get_agent_interface()
+            if app.state.web_tunnel is None:
+                client = AgentClient(
+                    temporal=app.state.temporal, workflow_id=session_id
+                )
+                functions = [
+                    function.model_dump(mode="json")
+                    for function in await client.get_agent_interface()
+                ]
+            else:
+                functions = await app.state.web_tunnel.controls().agent_interface(
+                    session_id
+                )
         except RPCError as exc:
             if exc.status != RPCStatusCode.NOT_FOUND:
                 raise
             return JSONResponse(content=[])
-        return JSONResponse(content=[fn.model_dump(mode="json") for fn in functions])
+        return JSONResponse(content=functions)
 
     @app.get("/api/operator-interface/{session_id}")
     async def operator_interface(session_id: str):
-        # A gateway subagent alias has no agent workflow to query.
-        client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
         try:
-            commands = await client.get_operator_interface()
+            if app.state.web_tunnel is None:
+                client = AgentClient(
+                    temporal=app.state.temporal, workflow_id=session_id
+                )
+                raw_commands = await client.get_operator_interface()
+                commands = TypeAdapter(list[OperatorCommand]).dump_python(
+                    raw_commands, mode="json"
+                )
+            else:
+                commands = await app.state.web_tunnel.controls().operator_interface(
+                    session_id
+                )
         except RPCError as exc:
             if exc.status != RPCStatusCode.NOT_FOUND:
                 raise
             return JSONResponse(content=[], headers={"Cache-Control": "no-store"})
-        content = TypeAdapter(list[OperatorCommand]).dump_python(commands, mode="json")
-        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
+        return JSONResponse(content=commands, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/attach")
     async def attach(session_id: str, from_offset: int = 0) -> StreamingResponse:
-        client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
+        if app.state.web_tunnel is None:
+            client = AgentClient(temporal=app.state.temporal, workflow_id=session_id)
+            stream = await client.attach(on_item=_yield_item, from_offset=from_offset)
+        else:
+            mounted = await app.state.web_tunnel.mount(
+                session_id, cursor=from_offset, mode="observer"
+            )
+            if mounted is None:
+                stream = _empty_tunnel_stream()
+            else:
+                subscriber_id, turn_number = mounted
+                stream = app.state.web_tunnel.stream(
+                    session_id,
+                    turn_number,
+                    subscriber_id,
+                    cursor=from_offset,
+                    stop_at_turn_end=False,
+                )
         return StreamingResponse(
-            await client.attach(on_item=_yield_item, from_offset=from_offset),
+            stream,
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
 
     @app.post("/api/approve")
     async def approve_tool(req: ToolApprovalRequestBody):
-        client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
-        result = await client.approve_tool(
-            req.tool_id,
-            approved=req.approved,
-            reason=req.reason,
-            remember=req.remember,
-        )
-        return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
+        if app.state.web_tunnel is None:
+            client = AgentClient(
+                temporal=app.state.temporal, workflow_id=req.session_id
+            )
+            result = await client.approve_tool(
+                req.tool_id,
+                approved=req.approved,
+                reason=req.reason,
+                remember=req.remember,
+            )
+            content = asdict(result)
+        else:
+            content = await app.state.web_tunnel.controls().approve(
+                req.session_id,
+                req.tool_id,
+                approved=req.approved,
+                reason=req.reason,
+                remember=req.remember,
+            )
+        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.post("/api/callback-result")
     async def provide_callback_result(req: CallbackResultRequestBody):
@@ -273,29 +355,58 @@ def create_agent_harness_app(
         machine submits the result (or an error), keyed by the ``tool_id`` from the
         ``callback_requested`` event. Forwards to the workflow's ``provide_callback_result``
         update; the result is validated against the tool's declared output type there."""
-        client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
-        result = await client.provide_callback_result(
-            req.tool_id, result=req.result, error=req.error
-        )
-        return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
+        if app.state.web_tunnel is None:
+            client = AgentClient(
+                temporal=app.state.temporal, workflow_id=req.session_id
+            )
+            result = await client.provide_callback_result(
+                req.tool_id, result=req.result, error=req.error
+            )
+            content = asdict(result)
+        else:
+            content = await app.state.web_tunnel.controls().callback(
+                req.session_id, req.tool_id, result=req.result, error=req.error
+            )
+        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.post("/api/operator-commands")
     async def execute_operator_command(req: OperatorCommandRequestBody):
-        client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
-        result = await client.execute_operator_command(req.name, arg=req.arg)
-        content = TypeAdapter(OperatorCommandResult).dump_python(result, mode="json")
+        if app.state.web_tunnel is None:
+            client = AgentClient(
+                temporal=app.state.temporal, workflow_id=req.session_id
+            )
+            result = await client.execute_operator_command(req.name, arg=req.arg)
+            content = TypeAdapter(OperatorCommandResult).dump_python(
+                result, mode="json"
+            )
+        else:
+            content = await app.state.web_tunnel.controls().operator_command(
+                req.session_id, req.name, req.arg
+            )
         return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.post("/api/messages")
     async def submit_message(req: ChatRequestBody):
-        client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
         if isinstance(req.message, str):
             msg_type, payload = "ask", {"text": req.message}
         else:
             msg_type, payload = req.message["type"], req.message.get("payload") or {}
 
-        result = await client.submit_message(msg_type, payload, req.expected_turn)
-        return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
+        if app.state.web_tunnel is None:
+            client = AgentClient(
+                temporal=app.state.temporal, workflow_id=req.session_id
+            )
+            result = await client.submit_message(msg_type, payload, req.expected_turn)
+            content = asdict(result)
+        else:
+            result = await app.state.web_tunnel.send(
+                req.session_id,
+                message_type=msg_type,
+                payload=payload,
+                expected_turn=req.expected_turn,
+            )
+            content = _turn_result(result)
+        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.post("/api/chat")
     async def chat(req: ChatRequestBody):
@@ -316,19 +427,37 @@ def create_agent_harness_app(
                 case _:
                     return _yield_item(item, resume_offset)
 
-        client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
         if isinstance(req.message, str):
             msg_type, payload = "ask", {"text": req.message}
         else:
             msg_type, payload = req.message["type"], req.message.get("payload") or {}
 
-        return StreamingResponse(
-            await client.send_message(
+        if app.state.web_tunnel is None:
+            client = AgentClient(
+                temporal=app.state.temporal, workflow_id=req.session_id
+            )
+            stream = await client.send_message(
                 msg_type,
                 payload,
                 req.expected_turn,
                 on_item=on_item,
-            ),
+            )
+        else:
+            subscriber_id, accepted = await app.state.web_tunnel.send_and_mount(
+                req.session_id,
+                message_type=msg_type,
+                payload=payload,
+                expected_turn=req.expected_turn,
+            )
+            stream = app.state.web_tunnel.stream(
+                req.session_id,
+                int(accepted["turnNumber"]),
+                subscriber_id,
+                cursor=int(accepted.get("streamHeadOffset", 0)),
+                stop_at_turn_end=True,
+            )
+        return StreamingResponse(
+            stream,
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
@@ -368,6 +497,15 @@ def create_agent_harness_app(
         )
 
     return app
+
+
+def _turn_result(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "turn_number": result.get("turnNumber"),
+        "turn_id": result.get("turnId"),
+        "accepted_offset": result.get("streamHeadOffset"),
+        "pending": result.get("pending", False),
+    }
 
 
 def _resolve_registry(
@@ -438,8 +576,12 @@ async def _discover_untracked_sessions(
     if not registry.agents:
         return []
 
-    escaped_types = [agent.workflow_type.replace("'", "''") for agent in registry.agents]
-    types_filter = " OR ".join(f"WorkflowType='{workflow_type}'" for workflow_type in escaped_types)
+    escaped_types = [
+        agent.workflow_type.replace("'", "''") for agent in registry.agents
+    ]
+    types_filter = " OR ".join(
+        f"WorkflowType='{workflow_type}'" for workflow_type in escaped_types
+    )
     query = f"ExecutionStatus='Running' AND ({types_filter})"
 
     discovered: list[Session] = []
@@ -493,7 +635,7 @@ async def _session_initial_user_message(
                 return _display_user_message(user_message.model_dump_json())
             if scanned_events >= _SESSION_PREVIEW_HISTORY_MAX_EVENTS:
                 break
-    except Exception:
+    except Exception:  # noqa: BLE001 - session previews are best-effort
         return None
     return None
 
@@ -507,9 +649,7 @@ async def _session_user_message_from_history_event(
     if not event.HasField("workflow_execution_update_accepted_event_attributes"):
         return None
 
-    request = (
-        event.workflow_execution_update_accepted_event_attributes.accepted_request
-    )
+    request = event.workflow_execution_update_accepted_event_attributes.accepted_request
     if request.input.name != SEND_AGENT_MESSAGE_UPDATE:
         return None
     if not request.input.args.payloads:
@@ -520,7 +660,7 @@ async def _session_user_message_from_history_event(
             request.input.args.payloads,
             [AgentMessage],
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - malformed historic payloads are skipped
         return None
     if not decoded or not isinstance(decoded[0], AgentMessage):
         return None
@@ -590,8 +730,7 @@ async def _ensure_session_manager_workflow(
     except WorkflowAlreadyStartedError:
         handle = temporal.get_workflow_handle(manager_workflow_id)
         print(
-            "Connected to session manager started concurrently: "
-            f"{manager_workflow_id}"
+            f"Connected to session manager started concurrently: {manager_workflow_id}"
         )
     else:
         print(f"Ensured session manager is running: {manager_workflow_id}")
@@ -636,6 +775,12 @@ def _sse(event: str, data: dict, resume_offset: int | None = None) -> bytes:
     if resume_offset is not None:
         payload["resume_offset"] = resume_offset
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
+
+
+async def _empty_tunnel_stream():
+    """Emit one valid SSE comment when an idle agent has no turn to mount."""
+
+    yield b": no active turn\n\n"
 
 
 def _yield_item(item, resume_offset: int | None = None) -> bytes:

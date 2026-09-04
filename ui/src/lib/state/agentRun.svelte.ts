@@ -749,7 +749,10 @@ export class AgentRunController {
 
       if (!this.#isCurrentConnection(connectionVersion)) return;
       if (this.#isWorkflowClosed(this.session.workflow_id)) return;
-      await this.attach(this.lastResumeOffset);
+      this.#attachInBackground(
+        this.lastResumeOffset,
+        "Failed to attach to agent session."
+      );
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
@@ -812,7 +815,7 @@ export class AgentRunController {
       await this.#refreshWorkflowExecutionState(session.workflow_id);
       if (!this.#isCurrentConnection(connectionVersion)) return;
       if (this.#isWorkflowClosed(session.workflow_id)) return;
-      await this.attach(0);
+      this.#attachInBackground(0, "Failed to attach to new agent session.");
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
@@ -851,7 +854,10 @@ export class AgentRunController {
       await this.#refreshWorkflowExecutionState(session.workflow_id);
       if (!this.#isCurrentConnection(connectionVersion)) return;
       if (this.#isWorkflowClosed(session.workflow_id)) return;
-      await this.attach(this.lastResumeOffset);
+      this.#attachInBackground(
+        this.lastResumeOffset,
+        "Failed to attach to selected agent session."
+      );
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
@@ -889,6 +895,21 @@ export class AgentRunController {
       }
       this.#finishStream(controller);
     }
+  }
+
+  #attachInBackground(
+    fromOffset: number,
+    failureMessage: string,
+    options: { clearSendingOnIdle?: boolean } = {}
+  ): void {
+    const workflowId = this.session?.workflow_id;
+    if (!workflowId || this.#streamAbort != null) return;
+    void this.attach(fromOffset, options).catch((error: unknown) => {
+      if (!isAbortError(error) && this.session?.workflow_id === workflowId) {
+        this.connectionError = error instanceof Error ? error.message : failureMessage;
+        if (options.clearSendingOnIdle) this.sending = false;
+      }
+    });
   }
 
   async #attachWorkflow(
@@ -967,14 +988,10 @@ export class AgentRunController {
     try {
       await submitted;
       if (this.session?.workflow_id !== session.workflow_id) return;
-      void this.attach(this.lastResumeOffset, { clearSendingOnIdle: true }).catch(
-        (error: unknown) => {
-          if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
-            this.connectionError =
-              error instanceof Error ? error.message : "Failed to stream messages.";
-            this.sending = false;
-          }
-        }
+      this.#attachInBackground(
+        this.lastResumeOffset,
+        "Failed to stream messages.",
+        { clearSendingOnIdle: true }
       );
     } catch (error) {
       if (isAbortError(error) || this.session?.workflow_id !== session.workflow_id) {
@@ -984,7 +1001,10 @@ export class AgentRunController {
       this.connectionError =
         error instanceof Error ? error.message : "Failed to send message.";
       this.sending = false;
-      await this.attach(this.lastResumeOffset);
+      this.#attachInBackground(
+        this.lastResumeOffset,
+        "Failed to reattach after sending the message."
+      );
     }
   }
 
@@ -1025,15 +1045,11 @@ export class AgentRunController {
       }
       if (targetWorkflowId === session.workflow_id) {
         const shouldClearSendingOnIdle = this.sending;
-        void this.attach(this.lastResumeOffset, {
-          clearSendingOnIdle: shouldClearSendingOnIdle
-        }).catch((error: unknown) => {
-          if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
-            this.connectionError =
-              error instanceof Error ? error.message : "Failed to stream operator events.";
-            if (shouldClearSendingOnIdle) this.sending = false;
-          }
-        });
+        this.#attachInBackground(
+          this.lastResumeOffset,
+          "Failed to stream operator events.",
+          { clearSendingOnIdle: shouldClearSendingOnIdle }
+        );
       } else {
         void this.#attachWorkflow(
           targetWorkflowId,
@@ -1204,6 +1220,14 @@ export class AgentRunController {
       this.#markWorkflowClosed(publisherWorkflowId);
       if (!isRootFrame) this.#markObservedSubagentStopped(publisherWorkflowId);
       if (isRootFrame) this.sending = false;
+    }
+    if (
+      isRootFrame &&
+      (frame.event === "turn_end" ||
+        frame.event === "operator_command_completed" ||
+        frame.event === "operator_command_failed")
+    ) {
+      this.sending = false;
     }
     this.#handleSubagentEvent(frame, publisherWorkflowId);
     if (options.persist !== false) this.#scheduleFrameCacheWrite();

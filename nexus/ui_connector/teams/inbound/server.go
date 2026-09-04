@@ -9,12 +9,10 @@ import (
 	"strings"
 
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
-	"go.temporal.io/sdk/client"
 )
 
 const (
-	routeMessages   = "/teams/messages"
-	defaultIdentity = "default"
+	routeMessages = "/teams/messages"
 )
 
 // teamMessageActivity contains only the incoming Bot Framework fields needed
@@ -51,16 +49,16 @@ type approvalButtonValue struct {
 }
 
 type webhookServer struct {
-	tc        client.Client
-	taskQueue string
-	mux       *http.ServeMux
+	tunnel            router.Client
+	deliveryTaskQueue string
+	mux               *http.ServeMux
 }
 
-func NewServer(tc client.Client, taskQueue string) *webhookServer {
+func NewServer(tunnel router.Client, deliveryTaskQueue string) *webhookServer {
 	s := &webhookServer{
-		tc:        tc,
-		taskQueue: taskQueue,
-		mux:       http.NewServeMux(),
+		tunnel:            tunnel,
+		deliveryTaskQueue: deliveryTaskQueue,
+		mux:               http.NewServeMux(),
 	}
 	s.mux.HandleFunc(routeMessages, s.handleMessages)
 	return s
@@ -88,10 +86,8 @@ func (s *webhookServer) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var wfID string
-	var input router.Input
 	if val, ok := decodeApprovalValue(act.Value); ok {
-		wfID, input = approvalWorkflowInput(act, val)
+		s.resolveApproval(r.Context(), act, val)
 	} else {
 		if conversationID(act) == "" || senderID(act) == "" || strings.TrimSpace(act.Text) == "" {
 			http.Error(w, "missing required fields", http.StatusBadRequest)
@@ -101,49 +97,55 @@ func (s *webhookServer) handleMessages(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "missing activity id or timestamp", http.StatusBadRequest)
 			return
 		}
-		wfID, input = messageWorkflowInput(act)
+		s.submitMessage(r.Context(), act)
 	}
-
-	s.startConnectorWorkflow(r.Context(), wfID, input)
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *webhookServer) startConnectorWorkflow(ctx context.Context, wfID string, input router.Input) {
-	if _, err := s.tc.ExecuteWorkflow(ctx,
-		client.StartWorkflowOptions{ID: wfID, TaskQueue: s.taskQueue},
-		router.WorkflowName,
-		input,
-	); err != nil {
-		log.Printf("Failed to start connector workflow: %v", err)
-	}
-}
-
-func messageWorkflowInput(act teamMessageActivity) (string, router.Input) {
+func (s *webhookServer) submitMessage(ctx context.Context, act teamMessageActivity) {
 	sessionID := fmt.Sprintf("teams:%s", conversationID(act))
 	interactionID := act.ID
 	if interactionID == "" {
 		interactionID = act.Timestamp
 	}
-
-	timestamp := act.Timestamp
-	if act.ID != "" {
-		timestamp = act.ID
+	metadata := map[string]any{
+		"SenderID": senderID(act), "SessionID": sessionID, "ThreadID": act.ID,
+		"Text": "", "ServiceURL": act.ServiceURL, "ChannelID": act.ChannelID,
 	}
-
-	msg := router.IncomingMessage{
-		MessageID:        act.ID,
-		Sender:           senderID(act),
-		Text:             act.Text,
-		Timestamp:        timestamp,
-		ConversationType: act.Conversation.ConversationType,
-		ServiceURL:       act.ServiceURL,
-		ChannelID:        act.ChannelID,
+	deliveryContext, _ := json.Marshal(map[string]any{
+		"metadata":         metadata,
+		"conversationType": act.Conversation.ConversationType,
+	})
+	_, err := s.tunnel.SendAndMount(ctx, sessionID, "teams-message-"+interactionID,
+		router.SendAndMountInput{
+			Subscriber: router.Subscriber{
+				ID:       "teams:" + sessionID,
+				Mode:     router.Participant,
+				Delivery: &router.DeliveryTarget{Activity: "TeamsDeliverA2A", TaskQueue: s.deliveryTaskQueue, Context: deliveryContext},
+			},
+			Message: router.SendMessageInput{MessageType: "ask", Payload: map[string]any{"text": act.Text}},
+		})
+	if err != nil {
+		log.Printf("Failed to submit Teams message through UI tunnel: %v", err)
 	}
-	wfID := router.RouterWorkflowID(defaultIdentity, sessionID, interactionID)
-	return wfID, router.Input{
-		Identity:  defaultIdentity,
-		SessionID: sessionID,
-		Message:   &msg,
+}
+
+func (s *webhookServer) resolveApproval(ctx context.Context, act teamMessageActivity, val approvalButtonValue) {
+	payload, _ := json.Marshal(map[string]any{"toolId": val.ToolID, "approved": val.Approved})
+	metadata := map[string]any{
+		"SenderID": senderID(act), "SessionID": val.SessionID, "ThreadID": act.ReplyToID,
+		"Text": "", "ServiceURL": act.ServiceURL, "ChannelID": act.ChannelID,
+	}
+	deliveryContext, _ := json.Marshal(map[string]any{
+		"metadata": metadata, "activityId": act.ReplyToID, "toolName": val.ToolName, "approved": val.Approved,
+	})
+	_, err := s.tunnel.Control(ctx, val.SessionID, "teams-approval-"+val.ToolID,
+		router.ControlInput{
+			Kind: "approve-tool-call", Payload: payload,
+			Delivery: &router.DeliveryTarget{Activity: "TeamsAcknowledgeApproval", TaskQueue: s.deliveryTaskQueue, Context: deliveryContext},
+		})
+	if err != nil {
+		log.Printf("Failed to resolve Teams approval through UI tunnel: %v", err)
 	}
 }
 
@@ -161,22 +163,6 @@ func decodeApprovalValue(raw json.RawMessage) (approvalButtonValue, bool) {
 		return val, false
 	}
 	return val, true
-}
-
-func approvalWorkflowInput(act teamMessageActivity, val approvalButtonValue) (string, router.Input) {
-	wfID := router.RouterWorkflowID(defaultIdentity, val.SessionID, "approval-"+val.ToolID)
-	return wfID, router.Input{
-		Identity:  defaultIdentity,
-		SessionID: val.SessionID,
-		Approval: &router.ApprovalDecision{
-			ToolID:     val.ToolID,
-			ToolName:   val.ToolName,
-			Approved:   val.Approved,
-			ActivityID: act.ReplyToID,
-			ServiceURL: act.ServiceURL,
-			ChannelID:  act.ChannelID,
-		},
-	}
 }
 
 func conversationID(act teamMessageActivity) string {

@@ -9,7 +9,7 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -99,6 +99,67 @@ def test_packaged_svelte_ui_works_under_path_prefix() -> None:
     assert client.get("/harness/states").status_code == 404
 
 
+def test_web_app_uses_direct_transport_by_default() -> None:
+    temporal = object()
+    connect = AsyncMock(return_value=temporal)
+    ensure_manager = AsyncMock(return_value=object())
+
+    with (
+        patch("temporal_agent_harness.web.app.Client.connect", connect),
+        patch(
+            "temporal_agent_harness.web.app._ensure_session_manager_workflow",
+            ensure_manager,
+        ),
+        patch(
+            "temporal_agent_harness.web.app.with_large_payload_offload",
+            AsyncMock(return_value=object()),
+        ),
+        patch("temporal_agent_harness.web.app.WebTunnelDriver") as tunnel_driver,
+    ):
+        app = create_agent_harness_app(registry=AgentRegistry())
+        with TestClient(app):
+            pass
+
+    assert connect.await_count == 1
+    tunnel_driver.assert_not_called()
+
+
+def test_web_app_uses_nexus_transport_only_when_enabled() -> None:
+    agent_temporal = object()
+    connector_temporal = object()
+    connect = AsyncMock(side_effect=[agent_temporal, connector_temporal])
+    ensure_manager = AsyncMock(return_value=object())
+
+    with (
+        patch("temporal_agent_harness.web.app.Client.connect", connect),
+        patch(
+            "temporal_agent_harness.web.app._ensure_session_manager_workflow",
+            ensure_manager,
+        ),
+        patch(
+            "temporal_agent_harness.web.app.with_large_payload_offload",
+            AsyncMock(return_value=object()),
+        ),
+        patch("temporal_agent_harness.web.app.WebTunnelDriver") as tunnel_driver,
+    ):
+        app = create_agent_harness_app(
+            registry=AgentRegistry(),
+            nexus_endpoint="agent-harness-ui-endpoint",
+            connector_namespace="ui-connector",
+            connector_task_queue="ui-tunnel",
+        )
+        with TestClient(app):
+            pass
+
+    assert connect.await_count == 2
+    assert connect.await_args_list[1].kwargs["namespace"] == "ui-connector"
+    tunnel_driver.assert_called_once_with(
+        connector_temporal,
+        task_queue="ui-tunnel",
+        nexus_endpoint="agent-harness-ui-endpoint",
+    )
+
+
 def test_chat_request_rejects_client_supplied_from_offset() -> None:
     app = create_agent_harness_app(registry=AgentRegistry())
     client = TestClient(app)
@@ -168,12 +229,31 @@ def test_create_session_manager_worker_registers_packaged_workflow() -> None:
         worker = create_session_manager_worker(client, identity="session-manager-test")
 
     assert worker is worker_cls.return_value
-    worker_cls.assert_called_once_with(
-        client,
-        task_queue=SESSION_MANAGER_TASK_QUEUE,
-        workflows=[SessionManagerWorkflow],
-        identity="session-manager-test",
-    )
+    args, kwargs = worker_cls.call_args
+    assert args == (client,)
+    assert kwargs["task_queue"] == SESSION_MANAGER_TASK_QUEUE
+    assert kwargs["workflows"] == [SessionManagerWorkflow]
+    assert kwargs["identity"] == "session-manager-test"
+    assert "nexus_service_handlers" not in kwargs
+
+
+def test_create_session_manager_worker_registers_nexus_front_door_when_enabled() -> (
+    None
+):
+    client = object()
+
+    with patch("temporal_agent_harness.web.worker.Worker") as worker_cls:
+        create_session_manager_worker(
+            client,
+            nexus_endpoint="agent-harness-ui-endpoint",
+        )
+
+    args, kwargs = worker_cls.call_args
+    assert args == (client,)
+    assert [type(handler).__name__ for handler in kwargs["nexus_service_handlers"]] == [
+        "NexusA2AServiceHandler",
+        "HarnessControlServiceHandler",
+    ]
 
 
 def test_create_session_manager_worker_allows_custom_task_queue() -> None:
@@ -182,11 +262,20 @@ def test_create_session_manager_worker_allows_custom_task_queue() -> None:
     with patch("temporal_agent_harness.web.worker.Worker") as worker_cls:
         create_session_manager_worker(client, task_queue="custom-session-manager")
 
-    worker_cls.assert_called_once_with(
-        client,
-        task_queue="custom-session-manager",
-        workflows=[SessionManagerWorkflow],
-    )
+    args, kwargs = worker_cls.call_args
+    assert args == (client,)
+    assert kwargs["task_queue"] == "custom-session-manager"
+    assert kwargs["workflows"] == [SessionManagerWorkflow]
+    assert "nexus_service_handlers" not in kwargs
+
+
+def test_direct_session_manager_worker_allows_custom_nexus_handlers() -> None:
+    custom_handler = object()
+
+    with patch("temporal_agent_harness.web.worker.Worker") as worker_cls:
+        create_session_manager_worker(object(), nexus_service_handlers=[custom_handler])
+
+    assert worker_cls.call_args.kwargs["nexus_service_handlers"] == [custom_handler]
 
 
 def test_create_session_manager_worker_rejects_owned_worker_registration() -> None:
@@ -195,6 +284,13 @@ def test_create_session_manager_worker_rejects_owned_worker_registration() -> No
 
     with pytest.raises(ValueError, match="activities"):
         create_session_manager_worker(object(), activities=[])
+
+    with pytest.raises(ValueError, match="nexus_service_handlers"):
+        create_session_manager_worker(
+            object(),
+            nexus_endpoint="agent-harness-ui-endpoint",
+            nexus_service_handlers=[],
+        )
 
 
 async def test_session_manager_startup_attaches_to_running_workflow() -> None:
