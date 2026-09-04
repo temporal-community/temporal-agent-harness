@@ -10,6 +10,7 @@ import type {
   OperatorCommandRequest,
   OperatorCommandResponse,
   Session,
+  SessionsExistenceResponse,
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -20,6 +21,8 @@ import type {
 export interface AgentApi {
   listAgents(): Promise<AgentRegistryResponse>;
   listSessions(): Promise<Session[]>;
+  listSessionsExistence(includeArchived?: boolean): Promise<SessionsExistenceResponse>;
+  getSession(sessionId: WorkflowId): Promise<Session>;
   createSession(request: CreateSessionRequest): Promise<CreateSessionResponse>;
   workflowStatus(workflowId: WorkflowId): Promise<WorkflowExecutionState>;
   acceptedMessageTypes(sessionId: WorkflowId): Promise<AcceptedMessageTypesResponse>;

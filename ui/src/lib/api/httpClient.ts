@@ -10,6 +10,7 @@ import type {
   OperatorCommandRequest,
   OperatorCommandResponse,
   Session,
+  SessionsExistenceResponse,
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -106,6 +107,16 @@ export class HttpAgentApi implements AgentApi {
 
   async listSessions(): Promise<Session[]> {
     return json<Session[]>(apiPath("sessions"));
+  }
+
+  async listSessionsExistence(includeArchived = false): Promise<SessionsExistenceResponse> {
+    const query = new URLSearchParams({ view: "ids" });
+    if (includeArchived) query.set("include_archived", "true");
+    return json<SessionsExistenceResponse>(apiPath(`sessions?${query}`));
+  }
+
+  async getSession(sessionId: WorkflowId): Promise<Session> {
+    return json<Session>(apiPath(`sessions/${encodeURIComponent(sessionId)}`));
   }
 
   async createSession(

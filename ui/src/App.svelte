@@ -18,6 +18,10 @@
   import { createAgentRunController } from "$lib/state/agentRun.svelte";
   import { createPaneStack, type Pane } from "$lib/state/paneStack.svelte";
   import {
+    readOperatorPrefs,
+    writeOperatorPrefs
+  } from "$lib/state/agentRunStorage";
+  import {
     applyReplayAction,
     describeReplayKeyEvent,
     resolveReplayAction,
@@ -25,6 +29,7 @@
   } from "$lib/state/replayHotkeys";
 
   const SESSION_SYNC_INTERVAL_MS = 10_000;
+  const savedPrefs = readOperatorPrefs();
 
   const run = createAgentRunController();
   const stack = createPaneStack();
@@ -64,13 +69,26 @@
   let rail = $state<PaneRail | null>(null);
   let drawerRail = $state<PaneRail | null>(null);
   let drawerElement = $state<HTMLElement | null>(null);
-  let drawerHeight = $state(DRAWER_DEFAULT_H);
+  let drawerHeight = $state(
+    typeof savedPrefs.drawerHeight === "number" ? savedPrefs.drawerHeight : DRAWER_DEFAULT_H
+  );
   let resizingDrawer = $state(false);
   /* Which of the two rails the arrows, F and Escape act on: the last one touched,
      because both are on screen at once and neither is "the" rail any more. */
   let drawerActive = $state(false);
-  let transcriptFilter = $state<TranscriptFilter>("all");
+  let transcriptFilter = $state<TranscriptFilter>(
+    savedPrefs.transcriptFilter === "model" ||
+      savedPrefs.transcriptFilter === "tool" ||
+      savedPrefs.transcriptFilter === "approval" ||
+      savedPrefs.transcriptFilter === "all"
+      ? savedPrefs.transcriptFilter
+      : "all"
+  );
   let hotkeyHelpOpen = $state(false);
+
+  if (savedPrefs.followDefault === false) {
+    run.following = false;
+  }
 
   const activeStack = $derived(drawerActive && drawer.groups.length > 0 ? drawer : stack);
   const activeRail = $derived(drawerActive && drawer.groups.length > 0 ? drawerRail : rail);
@@ -79,10 +97,9 @@
     void run.initialize();
   });
 
-  /* Sessions this UI did not start still belong in the list, so it is re-read on a
-     timer instead of only when someone reaches for refresh. A hidden tab is
-     skipped and caught up the moment it comes back: nobody is reading it, and
-     every read costs the server a describe and a history scan per session. */
+  /* Sessions this UI did not start still belong in the list. The timer polls the
+     cheap existence view; a full enrich runs only when that revision changes
+     (see syncSessions). A hidden tab is skipped and caught up on return. */
   $effect(() => {
     const syncIfVisible = () => {
       if (document.visibilityState === "visible") void run.syncSessions();
@@ -100,6 +117,20 @@
   $effect(() => {
     const sessionId = run.session?.workflow_id;
     if (sessionId) stack.enterSession(sessionId);
+  });
+
+  /* Keep the active desk durable across reload without waiting for a session switch. */
+  $effect(() => {
+    void stack.groups;
+    stack.persistActiveDesk();
+  });
+
+  $effect(() => {
+    writeOperatorPrefs({
+      transcriptFilter,
+      drawerHeight,
+      followDefault: run.following
+    });
   });
 
   /* Layout and moment both live in the URL, so a link restores the whole desk.
@@ -506,10 +537,12 @@
           closed={run.sessionClosed}
           closedWorkflowIds={run.closedWorkflowIds}
           error={run.connectionError}
+          sessionsError={run.sessionsError}
           {pendingApprovalCount}
           onNewSession={(workflowType) => run.startNewSession(workflowType)}
           onSelectSession={(sessionId) => run.selectSession(sessionId)}
           onRefreshSessions={() => run.refreshSessions()}
+          onEnsureSessions={() => run.ensureSessionsEnriched()}
         />
       {/snippet}
 

@@ -10,6 +10,12 @@ import {
   type PaneKind
 } from "$lib/panes/registry";
 import { edgeShares, SPLIT_MIN, type PaneDropEdge } from "$lib/panes/paneDrop";
+import {
+  readStoredDesk,
+  writeStoredDesk,
+  type StoredDesk,
+  type StoredPane
+} from "$lib/state/agentRunStorage";
 
 export type { PaneDropEdge };
 
@@ -340,17 +346,61 @@ export class PaneStack {
   enterSession(sessionId: string): void {
     if (this.activeSessionId === sessionId) return;
     if (this.activeSessionId == null) {
+      /* First session of a visit: URL / defaults already built the desk. Park it. */
       this.activeSessionId = sessionId;
+      this.#desks.set(sessionId, this.groups);
+      writeStoredDesk(sessionId, this.groups as StoredDesk);
       return;
     }
 
     this.#desks.set(this.activeSessionId, this.groups);
-    this.groups = this.#desks.get(sessionId) ?? this.#carriedOver();
+    writeStoredDesk(this.activeSessionId, this.groups as StoredDesk);
+    const restored =
+      this.#desks.get(sessionId) ?? this.#deskFromStorage(sessionId) ?? this.#carriedOver();
+    if (!this.#desks.has(sessionId)) this.#desks.set(sessionId, restored);
+    this.groups = restored;
     this.activeSessionId = sessionId;
     /* The pane that had focus may have been one of the leftovers. */
     if (!this.focusedId || !this.has(this.focusedId)) {
       this.focusedId = (this.expandedPanes[0] ?? this.panes[0])?.id ?? null;
     }
+  }
+
+  /** Write the active desk so a reload mid-session restores it. */
+  persistActiveDesk(): void {
+    if (!this.activeSessionId) return;
+    this.#desks.set(this.activeSessionId, this.groups);
+    writeStoredDesk(this.activeSessionId, this.groups as StoredDesk);
+  }
+
+  #deskFromStorage(sessionId: string): Pane[][] | null {
+    const stored = readStoredDesk(sessionId);
+    if (!stored) return null;
+    return stored
+      .map((group) =>
+        group
+          .map((pane) => this.#paneFromStored(pane))
+          .filter((pane): pane is Pane => pane != null)
+      )
+      .filter((group) => group.length > 0);
+  }
+
+  #paneFromStored(stored: StoredPane): Pane | null {
+    const parsed = parsePaneId(stored.id);
+    if (!parsed) return null;
+    const pane = makePane({
+      kind: parsed.kind,
+      key: parsed.key,
+      params: stored.params
+    });
+    pane.collapsed = Boolean(stored.collapsed);
+    pane.pinned = Boolean(stored.pinned);
+    pane.size = typeof stored.size === "number" ? stored.size : null;
+    pane.touchedAt = typeof stored.touchedAt === "number" ? stored.touchedAt : pane.touchedAt;
+    pane.joinedAt = typeof stored.joinedAt === "number" ? stored.joinedAt : pane.joinedAt;
+    pane.split = Boolean(stored.split);
+    pane.share = typeof stored.share === "number" ? stored.share : null;
+    return pane;
   }
 
   /**

@@ -10,6 +10,7 @@ import type {
   OperatorCommandRequest,
   OperatorCommandResponse,
   Session,
+  SessionsExistenceResponse,
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -140,6 +141,21 @@ export class MockAgentApi implements AgentApi {
 
   async listSessions(): Promise<Session[]> {
     return this.#sessions;
+  }
+
+  async listSessionsExistence(): Promise<SessionsExistenceResponse> {
+    const sessions = this.#sessions.map((session) => ({ ...session }));
+    const revision = sessions
+      .map((session) => `${session.workflow_id}:0`)
+      .sort()
+      .join("|");
+    return { revision, sessions };
+  }
+
+  async getSession(sessionId: WorkflowId): Promise<Session> {
+    const session = this.#sessions.find((item) => item.workflow_id === sessionId);
+    if (!session) throw new Error(`No session ${sessionId}`);
+    return session;
   }
 
   async createSession(

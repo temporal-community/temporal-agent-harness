@@ -51,12 +51,21 @@ export interface Session {
   agent_workflow_type: AgentWorkflowType;
   is_message_queuing_enabled: boolean;
   is_discovered?: boolean;
+  is_archived?: boolean;
   initial_user_message?: string | null;
   execution_status?: string | null;
   closed?: boolean;
+  worker_available?: boolean | null;
+  task_queue?: string | null;
 }
 
 export type SessionsResponse = Session[];
+
+/** Manager-only existence read — no describe / discovery / archive. */
+export interface SessionsExistenceResponse {
+  revision: string;
+  sessions: Session[];
+}
 
 export interface WorkflowExecutionState {
   workflow_id: WorkflowId;

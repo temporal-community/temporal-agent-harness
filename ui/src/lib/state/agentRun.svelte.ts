@@ -16,8 +16,10 @@ import { chooseBootSession } from "./bootSession";
 import {
   readCachedFrames,
   readStoredActiveSessionId,
+  readUrlSessionId,
   writeCachedFrames,
-  writeStoredActiveSessionId
+  writeStoredActiveSessionId,
+  writeUrlSessionId
 } from "./agentRunStorage";
 import {
   buildAgentTreeGraph,
@@ -219,6 +221,8 @@ export class AgentRunController {
   sending = $state(false);
   creatingSession = $state(false);
   refreshingSessions = $state(false);
+  /** List-load failure for the picker; never the stream connection banner. */
+  sessionsError = $state<string | null>(null);
   #connectionError = $state<string | null>(null);
   #connectionErrorCode = $state<string | null>(null);
   playbackSpeed = $state<PlaybackSpeed>(1);
@@ -234,6 +238,12 @@ export class AgentRunController {
   /** Epoch ms before which a session poll must not be sent, set by a 429/503. */
   #sessionSyncBlockedUntil = 0;
   #sessionSyncThrottleStreak = 0;
+  /** Last seen manager existence revision from ``view=ids``. */
+  #sessionsRevision: string | null = null;
+  /** Single-flight promise for full enriched list loads. */
+  #sessionsLoad: Promise<void> | null = null;
+  /** When the last full enrich finished (ms). */
+  #sessionsLoadedAt = 0;
   #streamAbort: AbortController | null = null;
   #interfaceRequests = new Set<string>();
   #operatorInterfaceRequests = new Set<string>();
@@ -794,15 +804,17 @@ export class AgentRunController {
       const defaultAgent = agents.find((agent) => agent.key === "qa") ?? agents[0];
       if (!defaultAgent) throw new Error("No agent is registered.");
 
-      const sessions = await this.#api.listSessions();
-      this.sessions = sessions;
-      this.#applySessionExecutionStates(sessions);
-      const storedSessionId = readStoredActiveSessionId();
-      const openable = chooseBootSession(
-        sessions,
-        storedSessionId,
+      await this.#loadSessions();
+      const wantedSessionId = readUrlSessionId() ?? readStoredActiveSessionId();
+      let openable = chooseBootSession(
+        this.sessions,
+        wantedSessionId,
         defaultAgent.workflow_type
       );
+
+      if (!openable && wantedSessionId) {
+        openable = await this.#resolveSessionById(wantedSessionId);
+      }
 
       if (openable) {
         this.session = openable;
@@ -813,7 +825,7 @@ export class AgentRunController {
         });
         this.sessions = [...this.sessions, this.session];
       }
-      writeStoredActiveSessionId(this.session.workflow_id);
+      this.#rememberActiveSession(this.session.workflow_id);
       void this.#fetchAgentInterface(this.session.workflow_id);
       void this.#fetchOperatorInterface(this.session.workflow_id);
       /* Awaited so the cache lands before the live stream opens: interleaving
@@ -834,19 +846,64 @@ export class AgentRunController {
     }
   }
 
+  #rememberActiveSession(sessionId: string): void {
+    writeStoredActiveSessionId(sessionId);
+    writeUrlSessionId(sessionId);
+  }
+
+  /**
+   * Deep-link / URL session that is not in the enriched list yet.
+   * Archives still resolve; NOT_FOUND does not.
+   */
+  async #resolveSessionById(sessionId: string): Promise<Session | null> {
+    try {
+      const fetched = await this.#api.getSession(sessionId);
+      if (fetched.execution_status === "NOT_FOUND") return null;
+      this.#upsertSession(fetched);
+      return fetched;
+    } catch {
+      return null;
+    }
+  }
+
+  #upsertSession(session: Session): void {
+    const index = this.sessions.findIndex((item) => item.workflow_id === session.workflow_id);
+    if (index < 0) {
+      this.sessions = [...this.sessions, session];
+      return;
+    }
+    const next = this.sessions.slice();
+    next[index] = { ...next[index], ...session };
+    this.sessions = next;
+  }
+
   async #loadSessions(): Promise<void> {
-    const sessions = await this.#api.listSessions();
-    this.sessions = sessions;
-    this.#applySessionExecutionStates(sessions);
+    if (this.#sessionsLoad) return this.#sessionsLoad;
+    this.#sessionsLoad = (async () => {
+      const sessions = await this.#api.listSessions();
+      this.sessions = sessions;
+      this.#applySessionExecutionStates(sessions);
+      this.#sessionsLoadedAt = Date.now();
+      try {
+        const existence = await this.#api.listSessionsExistence();
+        this.#sessionsRevision = existence.revision;
+      } catch {
+        // Revision is best-effort; enrich already succeeded.
+      }
+    })().finally(() => {
+      this.#sessionsLoad = null;
+    });
+    return this.#sessionsLoad;
   }
 
   async refreshSessions(): Promise<void> {
     if (this.refreshingSessions) return;
     this.refreshingSessions = true;
+    this.sessionsError = null;
     try {
       await this.#loadSessions();
     } catch (error) {
-      this.connectionError =
+      this.sessionsError =
         error instanceof Error ? error.message : "Failed to refresh sessions.";
     } finally {
       this.refreshingSessions = false;
@@ -854,35 +911,40 @@ export class AgentRunController {
   }
 
   /**
-   * Re-read the session list on the reader's behalf rather than at their request.
+   * Enrich for the picker without a global connection error. Skips if a fresh
+   * enrich already landed within ``maxAgeMs`` so open/close spam is cheap.
+   */
+  async ensureSessionsEnriched(maxAgeMs = 5_000): Promise<void> {
+    if (this.refreshingSessions || this.#sessionsLoad) return;
+    if (this.#sessionsLoadedAt > 0 && Date.now() - this.#sessionsLoadedAt < maxAgeMs) {
+      return;
+    }
+    try {
+      await this.#loadSessions();
+    } catch {
+      // Quiet: the next open or the refresh button can surface a failure.
+    }
+  }
+
+  /**
+   * Poll manager existence (cheap). Enrich the full list only when the revision
+   * changes — that is how sessions created by another process show up without a
+   * page reload, without a ten-second full-enrich storm.
    *
-   * Anything holding a Temporal client can start a session, so the list this UI
-   * created is only ever part of the picture. Quiet on purpose: a tick nobody
-   * asked for must not spin the refresh control or raise the connection banner
-   * over a blip the next tick would have covered.
-   *
-   * A tick is skipped while either read is still in flight. `/api/sessions` costs
-   * a describe plus a history scan per session and has been measured at twelve
-   * seconds against a registry of twenty stale entries, so a sync outlasting the
-   * ten-second interval is the expected case, not the pathological one; without
-   * this the ticks would overlap and pile up on a server already struggling.
-   *
-   * A tick is also skipped while a `Retry-After` from a previous 429 is still
-   * running. That guard is NOT the in-flight one above: the in-flight guard stops
-   * two syncs overlapping, but a throttled server is asking this client to send
-   * fewer requests, and one-at-a-time is still one every ten seconds.
-   *
-   * The backoff lives here rather than in the backend on purpose. The Temporal SDK
-   * already retries a query internally for about ten seconds before our handler is
-   * reached at all, so a server-side retry would add concurrent attempts to the very
-   * workflow that is shedding them — spending the throttle to make the throttle worse.
+   * Quiet on purpose: a tick nobody asked for must not spin the refresh control
+   * or raise the connection banner.
    */
   async syncSessions(): Promise<void> {
     if (this.refreshingSessions || this.#syncingSessions) return;
     if (Date.now() < this.#sessionSyncBlockedUntil) return;
     this.#syncingSessions = true;
     try {
-      await this.#loadSessions();
+      const existence = await this.#api.listSessionsExistence();
+      if (existence.revision !== this.#sessionsRevision) {
+        this.#mergeExistence(existence.sessions);
+        this.#sessionsRevision = existence.revision;
+        await this.#loadSessions();
+      }
       this.#sessionSyncBlockedUntil = 0;
       this.#sessionSyncThrottleStreak = 0;
     } catch (error) {
@@ -891,6 +953,27 @@ export class AgentRunController {
     } finally {
       this.#syncingSessions = false;
     }
+  }
+
+  /**
+   * Fold manager-only rows into the sidebar immediately when the revision moves,
+   * before the slower enrich returns. Discovered sessions are not in the lite
+   * list and must not be dropped here.
+   */
+  #mergeExistence(lite: Session[]): void {
+    const liteIds = new Set(lite.map((session) => session.workflow_id));
+    const byId = new Map(this.sessions.map((session) => [session.workflow_id, session]));
+    for (const row of lite) {
+      const existing = byId.get(row.workflow_id);
+      byId.set(row.workflow_id, existing ? { ...existing, ...row } : { ...row });
+    }
+    const activeId = this.session?.workflow_id;
+    this.sessions = [...byId.values()].filter(
+      (session) =>
+        liteIds.has(session.workflow_id) ||
+        session.is_discovered ||
+        session.workflow_id === activeId
+    );
   }
 
   /**
@@ -979,7 +1062,7 @@ export class AgentRunController {
       this.#initialized = true;
       this.#resetSessionView();
       this.session = session;
-      writeStoredActiveSessionId(session.workflow_id);
+      this.#rememberActiveSession(session.workflow_id);
       void this.#fetchAgentInterface(session.workflow_id);
       void this.#fetchOperatorInterface(session.workflow_id);
       await this.#refreshWorkflowExecutionState(session.workflow_id);
@@ -1006,11 +1089,17 @@ export class AgentRunController {
 
   async selectSession(sessionId: string): Promise<void> {
     if (this.session?.workflow_id === sessionId) {
-      writeStoredActiveSessionId(sessionId);
+      this.#rememberActiveSession(sessionId);
       return;
     }
-    const session = this.sessions.find((item) => item.workflow_id === sessionId);
-    if (!session) return;
+    let session = this.sessions.find((item) => item.workflow_id === sessionId) ?? null;
+    if (!session) {
+      session = await this.#resolveSessionById(sessionId);
+    }
+    if (!session) {
+      this.sessionsError = `No session ${sessionId} in the session manager.`;
+      return;
+    }
 
     const connectionVersion = this.#beginConnection();
     this.#sendVersion += 1;
@@ -1018,9 +1107,10 @@ export class AgentRunController {
     this.connecting = true;
     this.sending = false;
     this.connectionError = null;
+    this.sessionsError = null;
     this.#resetSessionView();
     this.session = session;
-    writeStoredActiveSessionId(session.workflow_id);
+    this.#rememberActiveSession(session.workflow_id);
     void this.#fetchAgentInterface(session.workflow_id);
     void this.#fetchOperatorInterface(session.workflow_id);
     await this.#hydrateCachedFrames(session.workflow_id);

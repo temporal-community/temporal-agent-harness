@@ -41,8 +41,8 @@ export function chooseBootSession(
  * frames" as the session list can answer for free: the preview is the memo the
  * agent upserts on its first message, and it rides on the describe the list
  * already makes. An exact event count is a workflow query per session
- * (`_published_event_count`, web/app.py) and this list is polled every ten
- * seconds, so it may not be spent here.
+ * (`_published_event_count`, web/app.py) and must not be spent on the existence
+ * poll — that path is a manager query only.
  */
 function hasNothingToShow(session: Session): boolean {
   return session.initial_user_message == null;

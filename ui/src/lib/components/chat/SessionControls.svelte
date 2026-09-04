@@ -33,10 +33,14 @@
     closed?: boolean;
     closedWorkflowIds?: string[];
     error?: string | null;
+    /** List refresh failure — shown in the popover, not as stream "Needs attention". */
+    sessionsError?: string | null;
     pendingApprovalCount?: number;
     onNewSession?: (workflowType: string) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
     onRefreshSessions?: () => void | Promise<void>;
+    /** Quiet enrich when the picker opens (age-gated). */
+    onEnsureSessions?: () => void | Promise<void>;
   }
 
   let {
@@ -50,10 +54,12 @@
     closed = false,
     closedWorkflowIds = [],
     error = null,
+    sessionsError = null,
     pendingApprovalCount = 0,
     onNewSession,
     onSelectSession,
-    onRefreshSessions
+    onRefreshSessions,
+    onEnsureSessions
   }: Props = $props();
 
   /**
@@ -216,7 +222,11 @@
   }
 
   function toggleMenu(): void {
-    menuOpen = !menuOpen;
+    const opening = !menuOpen;
+    menuOpen = opening;
+    if (opening && menuTab === "sessions") {
+      void onEnsureSessions?.();
+    }
   }
 
   /**
@@ -241,6 +251,9 @@
        the one state where its tip is worth reading. */
     if (tab === "new" && !canCreateSession) return;
     menuTab = tab;
+    if (menuOpen && tab === "sessions") {
+      void onEnsureSessions?.();
+    }
   }
 
   /* Arrows move between the tabs, and the one that is on is the only one in the
@@ -426,10 +439,13 @@
           </label>
 
           <div class="session-list">
+            {#if sessionsError}
+              <p class="session-empty">{sessionsError}</p>
+            {/if}
             {#if filteredSessionItems.length === 0}
               <p class="session-empty">No matching sessions.</p>
             {/if}
-            {#each filteredSessionItems as item}
+            {#each filteredSessionItems as item (item.workflow_id)}
               <button
                 type="button"
                 class={`session-row ${item.workflow_id === sessionId ? "active" : ""}`}
