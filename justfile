@@ -8,6 +8,9 @@
 # F1_MCP_SERVER_HOME, ...). Prerequisites + run order: see the "Run everything" section in README.md.
 # Build/package + Nexus/Slack/Teams connector recipes follow the run recipes.
 
+# Shows a notice when running from an untagged commit (silent on a release archive).
+import 'scripts/untagged-notice.just'
+
 ui := justfile_directory() / "ui"
 monty := justfile_directory() / "examples" / "monty"
 nexus_dir := justfile_directory() / "nexus"
@@ -169,9 +172,13 @@ session-manager:
     set -a; [ -f .env.local ] && . ./.env.local; set +a
     uv run --group examples python -m examples.session_manager_worker
 
-# Build the UI, then serve EVERY example's agents.toml merged on http://localhost:8000, so the UI
-# lists all agents. (An agent only runs if its worker is up — see the worker recipes below.)
-server: app-build
+# Serves the COMMITTED UI build in temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
+# a downloaded release archive runs as-is. If you changed anything under ui/, rebuild it first
+# with `just app-build`, or use `just dev-server` (build + serve). An agent only runs if its
+# worker is up — see the worker recipes below.
+#
+# Serve EVERY example's agents.toml merged on http://localhost:8000, so the UI lists all agents.
+server:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{justfile_directory()}}"
@@ -184,6 +191,9 @@ server: app-build
         examples/callback_tools/wiki_agent/agents.toml \
         examples/callback_tools/coding_agent/agents.toml \
         --host 0.0.0.0 --port 8000
+
+# Rebuild the Svelte UI, then serve — the contributor loop after editing ui/ (needs pnpm).
+dev-server: app-build server
 
 # Run the Svelte Vite dev server with /api proxied to the server on :8000.
 ui-dev:

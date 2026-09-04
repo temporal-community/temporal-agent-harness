@@ -55,10 +55,16 @@ code-mode = [
 # nexus_brokered_mcp_server. Lets an Agent reach an MCP tool over a Temporal Nexus endpoint,
 # one server per Nexus service, passed directly via Agent(mcp_servers=[...]). Needs the
 # `openai-agents` extra's deps too (restated here so this extra is self-sufficient), and
-# Python >=3.13 (nexus-mcp's own floor). Only resolvable from an editable checkout of this
-# repo — nexus-mcp isn't published to PyPI.
+# Python >=3.13 (temporal-nexus-mcp's own floor). Only resolvable from an editable checkout of
+# this repo — temporal-nexus-mcp isn't published to PyPI.
+#
+# NOTE: the distribution is named `temporal-nexus-mcp`, NOT `nexus-mcp`. An unrelated
+# third-party project already owns `nexus-mcp` on PyPI, so a bare `nexus-mcp` requirement here
+# would resolve to that stranger's package for anyone installing outside a checkout of this repo
+# (the [tool.uv.sources] path below is workspace-local and does NOT travel in built metadata).
+# The extra keeps the short `nexus-mcp` name; only the dependency changed.
 nexus-mcp = [
-    "nexus-mcp; python_version >= '3.13'",
+    "temporal-nexus-mcp; python_version >= '3.13'",
     "openai-agents>=0.17.5",
     "mcp>=1.13.0,<2",
     "temporalio[opentelemetry]>=1.31.0",
@@ -93,9 +99,9 @@ dev = [
     "temporalio[opentelemetry]>=1.31.0",
     # Pydantic AI integration (the ai_sdks glue + its tests) — mirrors the `pydantic-ai` extra.
     "pydantic-ai-slim[temporal]>=2.13",
-    # Nexus-brokered MCP server tests — only on Python >=3.13, nexus-mcp's own floor, so
-    # `uv sync`/`pytest` on older Pythons just skip it.
-    "nexus-mcp; python_version >= '3.13'",
+    # Nexus-brokered MCP server tests — only on Python >=3.13, temporal-nexus-mcp's own floor,
+    # so `uv sync`/`pytest` on older Pythons just skip it.
+    "temporal-nexus-mcp; python_version >= '3.13'",
     { include-group = "examples" },
 ]
 
@@ -114,15 +120,15 @@ include = ["temporal_agent_harness*"]
 ]
 
 [tool.uv]
-# nexus-mcp declares multiple top-level packages (transport, durable_tools_gateway,
+# temporal-nexus-mcp declares multiple top-level packages (transport, durable_tools_gateway,
 # authoring -- see its own pyproject.toml). Setuptools' default editable install for that
 # shape uses a PEP 660 custom MetaPathFinder that pyright can't follow. "compat" mode
 # emits a plain .pth file instead, which pyright (and any tool that reads .pth files) can
 # follow directly. No import paths change.
-config-settings-package = { "nexus-mcp" = { "editable_mode" = "compat" } }
+config-settings-package = { "temporal-nexus-mcp" = { "editable_mode" = "compat" } }
 
 [tool.uv.sources]
-nexus-mcp = { path = "nexus/mcp", editable = true }
+temporal-nexus-mcp = { path = "nexus/mcp", editable = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

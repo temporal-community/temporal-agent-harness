@@ -1,0 +1,71 @@
+name: UI dist
+
+# The browser UI is committed prebuilt to temporal_agent_harness/ui/dist so that a downloaded
+# release archive runs with no Node toolchain at all (see the Installation section of README.md).
+# That makes the committed build load-bearing: if it drifts from ui/, a release ships a stale UI
+# and nothing catches it — the server happily serves whatever is in dist/, and the tests only
+# assert that the assets exist and are wired up, not that they match the current source.
+#
+# This job rebuilds the UI and fails if the result differs from what is committed.
+#
+# Deliberately NOT filtered by changed paths: a filter that misses a file is precisely the silent
+# staleness this guards against, and the whole job runs in well under a minute.
+
+on:
+  pull_request:
+  # Also on main so a direct push can't slip a stale build into the commit a release is cut from.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-dist-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Committed dist matches ui/ source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Must come BEFORE setup-node: `cache: pnpm` needs the pnpm binary to resolve the store
+      # path. With no `version` input, action-setup reads package.json's "packageManager" field,
+      # so the pnpm pin stays in exactly one place.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Install UI dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: ui
+
+      # vite.config.ts writes to ../temporal_agent_harness/ui/dist with emptyOutDir, so this
+      # overwrites the committed build in place. The git check below is what compares them.
+      # Asset filenames are content-hashed, so a source change shows up as new untracked files
+      # plus deletions of the old ones rather than as modified content.
+      - name: Rebuild the UI
+        run: pnpm run build
+        working-directory: ui
+
+      - name: Verify the committed build is current
+        run: |
+          set -euo pipefail
+          changes="$(git status --porcelain -- temporal_agent_harness/ui/dist)"
+          if [ -n "$changes" ]; then
+            echo "::error::temporal_agent_harness/ui/dist is out of date with the source in ui/."
+            echo
+            echo "Rebuild it and commit the result:"
+            echo "    just app-build        # or: pnpm --dir ui run build"
+            echo
+            echo "Differences (?? = new, D = removed, M = changed):"
+            echo "$changes"
+            exit 1
+          fi
+          echo "Committed UI build matches ui/ source."
