@@ -30,6 +30,17 @@
 
   const PLOT_HEIGHT = 132;
 
+  /* The renderer sizes its own SVG from this number and writes the result inline,
+     which outranks any height the stylesheet asks for. Inside the popover this
+     never showed, because that card was only ever about as tall as the fixed
+     figure. A pane is resizable, so the card stretches and a fixed plot would sit
+     in the top 132px of a 500px box under a lake of empty. Measure the box and
+     hand the renderer the height it actually has; the fixed figure stays as the
+     floor for the stacked form, where the card is auto-height and takes its size
+     from the plot rather than the other way round. */
+  let plotBox = $state(0);
+  const plotHeight = $derived(Math.max(PLOT_HEIGHT, Math.round(plotBox)));
+
   const chartPoints = $derived(tokenWindow(points));
   const originTimestamp = $derived(
     chartPoints.length ? Math.min(...chartPoints.map((point) => point.timestamp)) : 0
@@ -57,7 +68,7 @@
      otherwise collapse the range and divide by zero when the scale interpolates.
      Token counts are zero-based on purpose: the series is cumulative, so a clipped
      baseline would overstate growth. The headroom keeps a flat series off the frame
-     edge, and the all-zero floor of 4 keeps the niced ticks on whole tokens. */
+     edge, and the all-zero floor of 4 keeps its two ticks on whole tokens. */
   const yDomain = $derived<[number, number]>([
     0,
     peakTokens > 0 ? peakTokens * 1.08 : 4
@@ -128,10 +139,18 @@
           },
           y: {
             scale: scaleLinear().domain(yDomain),
-            nice: true,
+            /* Not niced, for the reason the x axis is not: nicing rounds the TOP of
+               the domain out to a whole tick, so a run peaking at 430k grew a
+               600,000 axis and drew the series in the bottom 70% of the box. The
+               domain is already floored and has its own headroom; the ticks below
+               land on round tokens inside it instead. */
+            nice: false,
             grid: true,
             axis: {
-              ticks: { count: 3, format: (value: number) => formatTokens(value) },
+              ticks: {
+                values: niceTokenTicks(peakTokens),
+                format: (value: number) => formatTokens(value)
+              },
               tickLabels: { thin: { minGap: 8 } }
             }
           }
@@ -185,6 +204,29 @@
     return collapsed;
   }
 
+  /* Round token counts from 0 up to the peak, on the 1/2/5 steps a reader
+     recognises — the linear twin of niceTimeTicks, and the reason the y domain
+     can stop asking the library to nice it. Every tick sits AT OR BELOW the
+     peak, so the axis never grows to reach its own last label. */
+  function niceTokenTicks(peak: number, targetCount = 3): number[] {
+    /* A run that billed nothing has no peak to step towards; the ends of the
+       all-zero domain floor above are the only two labels available. */
+    if (!Number.isFinite(peak) || peak <= 0) return [0, 4];
+    const rough = peak / Math.max(2, targetCount);
+    const magnitude = 10 ** Math.floor(Math.log10(rough));
+    const step =
+      [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= rough) ??
+      magnitude * 10;
+
+    const ticks: number[] = [];
+    /* Re-derived from the index rather than accumulated, so float drift cannot
+       shift a late tick off a round number. */
+    while (ticks.length * step <= peak + 1e-9 && ticks.length <= 64) {
+      ticks.push(Number((ticks.length * step).toPrecision(12)));
+    }
+    return ticks.length >= 2 ? ticks : [0, peak];
+  }
+
   function latestSampleAtOrBefore(source: Sample[], index: number): Sample | undefined {
     let found: Sample | undefined;
     for (const sample of source) {
@@ -221,10 +263,14 @@
   {#if samples.length === 0}
     <p class="chart-empty">Step through the stream to chart token usage.</p>
   {:else}
-    <div class="plot" style={`--plot-height: ${PLOT_HEIGHT}px`}>
+    <div
+      class="plot"
+      style={`--plot-height: ${PLOT_HEIGHT}px`}
+      bind:clientHeight={null, (value) => (plotBox = value ?? 0)}
+    >
       <Chart
         {definition}
-        height={PLOT_HEIGHT}
+        height={plotHeight}
         class="usage-plot"
         ariaLabel="Cumulative token usage over run time"
         ariaDescription={summary}
@@ -258,8 +304,9 @@
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
     gap: 6px;
-    align-self: start;
-    padding: 8px 10px;
+    /* Same inset as the cards beside and below it, so the three headings share
+       one baseline. */
+    padding: var(--gutter);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--surface-2);
@@ -282,10 +329,14 @@
     white-space: nowrap;
   }
 
+  /* Grows into whatever height the card is stretched to, with the fixed height as
+     a floor. The renderer does not measure this box, so the script reads it and
+     passes the height down; these two rules only make the box itself stretch. */
   .plot {
     position: relative;
     min-width: 0;
-    height: var(--plot-height);
+    height: 100%;
+    min-height: var(--plot-height);
   }
 
   /* The adapter renders its own SVG, so the token layer reaches it through

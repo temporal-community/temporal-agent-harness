@@ -28,18 +28,20 @@
     </div>
   {:else}
     <ul class="model-strip">
-      {#each rows as row}
-        <li>
-          <div class="row-top">
-            <span class="name">{row.model}</span>
-          </div>
-          <div class="bar-track" aria-hidden="true">
-            <span class="bar" style={`width: ${(row.tokens.total / maxTokens) * 100}%`}></span>
-          </div>
-          <div class="row-meta">
-            <span>{formatTokens(row.tokens.total)} tok</span>
-            <span>{formatTokens(row.tokens.input)} in · {formatTokens(row.tokens.output)} out</span>
-          </div>
+      {#each rows as row (row.model)}
+        <li data-tip={`${formatTokens(row.tokens.input)} in · ${formatTokens(row.tokens.output)} out`}>
+          <span class="name">{row.model}</span>
+          <!-- A lone model spent every token in the run, so its bar is always
+               full and its figure is the total already printed beside this card.
+               Naming it is the whole reading; the rest is repetition. -->
+          {#if rows.length > 1}
+            <div class="row-meta">
+              <span class="bar-track" aria-hidden="true">
+                <span class="bar" style={`width: ${(row.tokens.total / maxTokens) * 100}%`}></span>
+              </span>
+              <span class="value">{formatTokens(row.tokens.total)}</span>
+            </div>
+          {/if}
         </li>
       {/each}
     </ul>
@@ -49,12 +51,13 @@
 <style>
   .model-breakdown {
     min-width: 0;
-    height: 88px;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
     align-content: start;
-    gap: 7px;
-    padding: 10px 12px;
+    gap: var(--gutter-tight);
+    /* Same inset as the metrics card and the chart beside it, so the three
+       headings sit on one baseline instead of three. */
+    padding: var(--gutter);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--surface-2);
@@ -69,6 +72,9 @@
     white-space: nowrap;
   }
 
+  /* Wraps into as many tracks as fit rather than scrolling sideways. The
+     scrolling version hid the second model entirely with no affordance, which
+     is the same lie as a truncated number. */
   .model-strip {
     margin: 0;
     padding: 0;
@@ -76,34 +82,20 @@
     min-width: 0;
     min-height: 0;
     display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(154px, 1fr);
-    gap: 8px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: thin;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    align-content: start;
+    gap: var(--gutter-tight) var(--gutter);
   }
 
   li {
     min-width: 0;
     display: grid;
     align-content: start;
-    padding-right: 8px;
-    border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  }
-
-  li:last-child {
-    border-right: 0;
-  }
-
-  .row-top {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 10px;
+    gap: 4px;
   }
 
   .name {
+    display: block;
     overflow: hidden;
     color: var(--text-1);
     font-size: var(--font-md);
@@ -111,9 +103,13 @@
     white-space: nowrap;
   }
 
+  /* The bar takes whatever the figure leaves. The figure is never squeezed:
+     a shortened token count is worse than no bar at all. */
   .bar-track {
+    display: block;
+    flex: 1;
+    min-width: 0;
     height: 5px;
-    margin: 5px 0 4px;
     border-radius: var(--radius-chip);
     background: color-mix(in srgb, var(--surface-0) 70%, transparent);
     overflow: hidden;
@@ -128,18 +124,15 @@
 
   .row-meta {
     display: flex;
-    justify-content: space-between;
-    gap: 10px;
-    overflow: hidden;
-    color: var(--text-3);
-    font-size: var(--font-xs);
-    font-variant-numeric: tabular-nums;
+    align-items: center;
+    gap: 8px;
   }
 
-  .row-meta span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .value {
+    flex: none;
+    color: var(--text-2);
+    font-size: var(--font-xs);
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 

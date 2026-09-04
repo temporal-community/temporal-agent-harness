@@ -66,6 +66,21 @@ function domains(samples) {
   };
 }
 
+function niceTokenTicks(peak, targetCount = 3) {
+  if (!Number.isFinite(peak) || peak <= 0) return [0, 4];
+  const rough = peak / Math.max(2, targetCount);
+  const magnitude = 10 ** Math.floor(Math.log10(rough));
+  const step =
+    [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= rough) ??
+    magnitude * 10;
+
+  const ticks = [];
+  while (ticks.length * step <= peak + 1e-9 && ticks.length <= 64) {
+    ticks.push(Number((ticks.length * step).toPrecision(12)));
+  }
+  return ticks.length >= 2 ? ticks : [0, peak];
+}
+
 function latestSampleAtOrBefore(source, index) {
   let found;
   for (const sample of source) {
@@ -288,6 +303,58 @@ for (let seconds = 0; seconds <= 100_000; seconds += 7) {
   /* The label has to be the number it was given, not merely well shaped. */
   const round = Number(hours ?? 0) * 3600 + Number(minutes ?? 0) * 60 + Number(secs);
   assert.equal(round, seconds, `${label} does not read back as ${seconds}s`);
+}
+
+// --- the y axis ticks -----------------------------------------------------------------------------
+
+// The regression this section exists for: `nice: true` rounds the TOP of the domain out to a whole
+// tick, so a run peaking at 430,000 tokens grew a 600,000 axis and drew its series in the bottom
+// 72% of the plot. Ticks are now chosen INSIDE the domain instead, and the domain keeps only its
+// own 8% headroom.
+{
+  const ticks = niceTokenTicks(430_000);
+  assert.deepEqual(ticks, [0, 200_000, 400_000], "a 430k peak reads on 200k steps, not a 600k axis");
+
+  /* The property, swept rather than sampled: no tick may exceed the peak (that is exactly what
+     grew the axis), the ticks must be evenly spaced from zero, and the series must end up using
+     most of the box it is drawn in. */
+  for (let peak = 1; peak < 2_000_000; peak = Math.ceil(peak * 1.37)) {
+    const swept = niceTokenTicks(peak);
+    const top = swept[swept.length - 1];
+    assert.ok(swept.length >= 2, `peak ${peak}: an axis needs at least two labels, got ${swept}`);
+    assert.equal(swept[0], 0, `peak ${peak}: the axis is zero-based, the series being cumulative`);
+    assert.ok(top <= peak + 1e-9, `peak ${peak}: tick ${top} sits above the peak it labels`);
+
+    const step = swept[1] - swept[0];
+    for (let i = 1; i < swept.length; i += 1) {
+      assert.ok(
+        Math.abs(swept[i] - swept[i - 1] - step) < 1e-6,
+        `peak ${peak}: ticks are not evenly spaced (${swept})`
+      );
+    }
+    /* Round in the 1/2/5 family a reader recognises, so no label reads 143,333. */
+    const mantissa = step / 10 ** Math.floor(Math.log10(step));
+    assert.ok(
+      [1, 2, 2.5, 5, 10].some((m) => Math.abs(m - mantissa) < 1e-9),
+      `peak ${peak}: step ${step} is not a round one`
+    );
+    /* The whole point: the domain top is the peak plus its headroom, and the series has to fill
+       most of that. 1/1.08 = 92.6% is the ceiling; anything under 80% is the old bug back. */
+    const domainTop = peak * 1.08;
+    assert.ok(
+      peak / domainTop > 0.8,
+      `peak ${peak}: the series only reaches ${((peak / domainTop) * 100).toFixed(0)}% of its box`
+    );
+    /* Two ticks minimum is not enough on its own — an axis of [0, step] with the peak far above
+       is unreadable. Three or four labels is the target. */
+    assert.ok(swept.length <= 6, `peak ${peak}: ${swept.length} labels is a crowded axis`);
+  }
+
+  // A run that billed nothing has no peak; the ends of the all-zero domain floor are all there is.
+  assert.deepEqual(niceTokenTicks(0), [0, 4], "an unbilled run labels the domain floor, not NaN");
+  assert.deepEqual(niceTokenTicks(-1), [0, 4], "a negative peak cannot reach Math.log10");
+  // Small counts must still land on whole tokens rather than fractions of one.
+  assert.deepEqual(niceTokenTicks(9), [0, 5], "a nine-token run steps in fives");
 }
 
 console.log("usage chart mapping ok");
