@@ -35,4 +35,8 @@
   };
 </script>
 
-<Chip {label} {size} tone={TONES[tone]} pip />
+<!-- No pip: a filled chip already states its tone in the border, the wash and the
+     text, and the log row states it a fourth time on the actor glyph. The pip is
+     for chips whose words are not the status — the session anchor, which is
+     named after the agent — and those pass it themselves. -->
+<Chip {label} {size} tone={TONES[tone]} />
