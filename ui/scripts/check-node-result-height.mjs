@@ -100,10 +100,12 @@ function geometry(graph) {
    lands on — and it does not execute the component's own guard on whether the
    region renders at all, because AgentStateNode imports @xyflow/svelte, which
    does not resolve under plain node (ERR_UNSUPPORTED_DIR_IMPORT: it ships
-   extensionless directory imports for a bundler to fix up). Both gaps are
-   measured in ui/tools/nodereply/probe.mjs, which needs a browser and a dev
-   server and so cannot live in `just app-check`. Upgrade path = move these
-   assertions there if a headless browser ever becomes a dependency of this UI. */
+   extensionless directory imports for a bundler to fix up).    Both gaps were
+   closed by measuring the rendered node in a browser, which needs a dev server and so
+   cannot live in `just app-check`; the throwaway probe that did it is long gone, and
+   naming a file that no clone has is worse than naming none. Upgrade path = move these
+   assertions into a browser check if a headless browser ever becomes a dependency of
+   this UI. */
 {
   const source = readFileSync(
     new URL("../src/lib/components/flow/AgentStateNode.svelte", import.meta.url),

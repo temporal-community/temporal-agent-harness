@@ -1,9 +1,9 @@
 /**
  * Does the language badge stay pinned when a code block scrolls sideways?
  *
- * Same CDP-over-chrome-headless-shell approach as ui/tools/shots/shoot.mjs.
  * Measures the badge's right edge against the pre's right edge at scrollLeft 0
- * and at the far right, and shoots both.
+ * and at the far right, and shoots both, over CDP against chrome-headless-shell.
+ * Its sibling scriptbadge-shots/ is a copy of this pointed at the activity pane.
  *
  * Usage: node ui/tools/codebadge-shots/shoot.mjs <label>
  */

@@ -668,9 +668,10 @@ console.log("  scrubber arrow keys count through the same rule as the window bin
    it reads as instant by luck and would turn smooth again the day any stylesheet sets it. Both
    scroll callers here have a branch that must never animate — one because a key press should land
    like a caret, one because the reader asked for reduced motion — and `"instant"` is the only value
-   that ignores CSS. Measured, not assumed: ui/tools/scroll-probe/probe.mjs forces
-   `scroll-behavior: smooth` on the real scroller and watches `"auto"` animate over ~113 frames
-   while `"instant"` lands in one.
+   that ignores CSS. Measured, not assumed: forcing `scroll-behavior: smooth` on the real scroller
+   and counting frames showed `"auto"` animate over ~113 of them while `"instant"` landed in one.
+   The probe that measured it was a throwaway and is gone; the number is kept and the path is not,
+   because a citation pointing at a file no clone has is the worse of the two.
 
    Swept over the whole tree rather than pinned to the two known callers, because the failure mode
    is a third caller written later that copies the wrong word from a sibling. */
