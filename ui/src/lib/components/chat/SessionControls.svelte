@@ -477,13 +477,12 @@
     align-items: center;
   }
 
-  /* The anchor is a Chip, so its box, its tone and its press are the app's. Only
-     the width it may take needs saying, because the name of an agent is the one
-     label in the chrome that can run to any length, and the map beside it must
-     not be pushed off the row by one. Stated as a share of the window as well as
-     in characters: at 760px the characters alone would spend most of the row. */
+  /* The anchor is a Chip, so its box, its tone and its press are the app's. Width
+     follows the session name; one existing ceiling so a pathological name cannot
+     push the map off the row. 38vw was already the viewport half of this cap. */
   :global(.session-anchor) {
-    max-width: min(34ch, 38vw);
+    width: auto;
+    max-width: min(100%, 38vw);
   }
 
   .session-name {
