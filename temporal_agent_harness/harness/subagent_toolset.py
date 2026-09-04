@@ -120,11 +120,13 @@ def _make_send_tool(
     output_type = handler.output_type
     param_name = _handler_param_name(handler)
 
-    async def _send(subagent: str, **model_kwargs: Any) -> BaseModel:
-        # The model passes the input under ``param_name`` as a raw dict; coerce + validate.
-        payload = input_type.model_validate(model_kwargs.get(param_name, {}))
+    async def _send(subagent: str, payload: Any = None, **model_kwargs: Any) -> BaseModel:
+        # Advertised as ``(subagent, <param>)``. OpenAI ``to_call_args`` passes those as
+        # positionals; Gemini / Pydantic AI / Monty unpack the JSON as keywords. Accept both.
+        raw = model_kwargs.pop(param_name, payload)
+        validated = input_type.model_validate({} if raw is None else raw)
         output = await _current_runner().run_subagent_turn(
-            subagent, fn_name, payload.model_dump(mode="json")
+            subagent, fn_name, validated.model_dump(mode="json")
         )
         return output_type.model_validate(output)
 

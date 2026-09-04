@@ -235,6 +235,12 @@ def test_toolset_hides_operator_slash_handler():
     assert [t.__name__ for t in tools] == ["start_sample", "sample_ask", "stop_sample"]
 
 
+def _tool_user_fn(tool):
+    """The inner ``@tool_defn`` body. ``__signature__`` is the model schema; arity lives here."""
+    names = tool.__code__.co_freevars
+    return tool.__closure__[names.index("user_fn")].cell_contents
+
+
 def test_send_tool_signature_uses_the_childs_real_models():
     tools = {t.__name__: t for t in agent.subagent_toolset(
         _SampleChildAgent, key="sample", task_queue="sample-q"
@@ -250,6 +256,24 @@ def test_send_tool_signature_uses_the_childs_real_models():
     # emitted schema is the child's real input model (nested, descriptions preserved) and the
     # return type is the real output model.
     assert ask.__annotations__ == {"subagent": str, "q": _Question, "return": _Answer}
+
+
+def test_send_tool_accepts_two_positionals():
+    """OpenAI ``to_call_args`` passes POSITIONAL_OR_KEYWORD as positionals.
+
+    Live bug: ``task_ask() takes 1 positional argument but 2 were given``. The advertised
+    schema is ``(subagent, payload)``; the inner fn must actually accept that call. Keyword
+    form (Monty / Gemini ``**arguments``) must keep working too. Arity is checked at call
+    time — we do not await (that needs a runner).
+    """
+    tools = {t.__name__: t for t in agent.subagent_toolset(
+        _SampleChildAgent, key="sample", task_queue="sample-q"
+    )}
+    send = _tool_user_fn(tools["sample_ask"])
+    positional = send("abc123", _Question(text="brief"))
+    keyword = send(subagent="abc123", q={"text": "brief"})
+    positional.close()
+    keyword.close()
 
 
 def test_send_tool_docstring_carries_the_handler_description():
