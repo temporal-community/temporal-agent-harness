@@ -32,9 +32,12 @@ jobs:
       - uses: actions/checkout@v4
 
       # Must come BEFORE setup-node: `cache: pnpm` needs the pnpm binary to resolve the store
-      # path. With no `version` input, action-setup reads package.json's "packageManager" field,
-      # so the pnpm pin stays in exactly one place.
+      # path. With no `version` input, action-setup reads the "packageManager" field, so the pnpm
+      # pin stays in exactly one place — but it looks in the repo ROOT by default, and this repo's
+      # only package.json is ui/package.json, so the path has to be given explicitly.
       - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui/package.json
 
       - uses: actions/setup-node@v4
         with:
