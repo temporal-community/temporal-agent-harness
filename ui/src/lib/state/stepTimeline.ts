@@ -17,7 +17,12 @@ export interface TimelineSpan {
   /** 1-based frame position, aligned with AgentRunController.viewIndex. */
   startIndex: number;
   endIndex: number;
-  /** 0-based visual lane, assigned so overlapping spans do not obscure each other. */
+  /**
+   * 0-based visual lane. Lanes are fixed by kind — model, then tool, then
+   * approval — so a row is read structurally rather than by whatever order a
+   * greedy packer filled. Same-kind overlap still gets a sub-lane inside its
+   * kind's block, so two tools running at once never paint over each other.
+   */
   lane: number;
   /** Started but not resolved within the supplied frames. */
   ongoing: boolean;
@@ -57,8 +62,6 @@ export interface TurnTimeline extends TimelineTurnBase {
 
 export interface StepTimeline {
   turns: TurnTimeline[];
-  /** Longest turn wall-clock, used as the shared horizontal scale. */
-  maxTurnDuration: number;
 }
 
 interface OpenSpan {
@@ -378,13 +381,13 @@ export function buildStepTimeline(input: Array<AgentSseFrame | StepTimelineFrame
   const orderedTurns = [...turns.values()]
     .filter((turn) => turn.turnNumber > 0)
     .map((turn) => {
-      const packed = packSpans(turn.spans);
+      const packed = laneSpans(turn.spans);
       const subagentTurns = turn.subagentTurns
         .filter(
           (subagentTurn) => subagentTurn.turnNumber > 0 && subagentTurn.spans.length > 0
         )
         .map((subagentTurn) => {
-          const subagentPacked = packSpans(subagentTurn.spans);
+          const subagentPacked = laneSpans(subagentTurn.spans);
           return {
             ...subagentTurn,
             durationSeconds: Math.max(0, subagentTurn.endTs - subagentTurn.startTs),
@@ -403,35 +406,130 @@ export function buildStepTimeline(input: Array<AgentSseFrame | StepTimelineFrame
     })
     .sort((a, b) => a.turnNumber - b.turnNumber);
 
-  const maxTurnDuration = orderedTurns.reduce((max, turn) => {
-    const nestedMax = turn.subagentTurns.reduce(
-      (nested, subagentTurn) => Math.max(nested, subagentTurn.endTs - turn.startTs),
-      0
-    );
-    return Math.max(max, turn.durationSeconds, nestedMax);
-  }, 1);
-
-  return { turns: orderedTurns, maxTurnDuration };
+  return { turns: orderedTurns };
 }
 
 function spanOrder(a: TimelineSpan, b: TimelineSpan): number {
   return a.startTs - b.startTs || a.startIndex - b.startIndex || a.endTs - b.endTs;
 }
 
-function packSpans(spans: TimelineSpan[]): { spans: TimelineSpan[]; laneCount: number } {
-  const laneEnds: number[] = [];
-  const packed = [...spans].sort(spanOrder).map((span) => {
-    let lane = laneEnds.findIndex((endTs) => span.startTs >= endTs);
-    if (lane === -1) {
-      lane = laneEnds.length;
-      laneEnds.push(span.endTs);
-    } else {
-      laneEnds[lane] = span.endTs;
-    }
-    return { ...span, lane };
-  });
+/** Top to bottom in every track, so a turn is compared to a turn lane by lane. */
+const LANE_ORDER: SpanKind[] = ["model", "tool", "approval"];
 
-  return { spans: packed, laneCount: Math.max(1, laneEnds.length) };
+/**
+ * Named swimlanes, one block per kind, packed greedily *within* the kind.
+ *
+ * The greedy packer this replaced assigned lanes by overlap alone, so the same
+ * model span landed on row 0 in one turn and row 2 in the next, and three
+ * concurrent approvals read as three unrelated blobs. A kind owns its rows, and
+ * only widens its block when two of its own spans genuinely overlap.
+ *
+ * A kind with no spans in this track takes no rows at all: an empty approval
+ * lane in every turn is height spent saying nothing.
+ */
+function laneSpans(spans: TimelineSpan[]): { spans: TimelineSpan[]; laneCount: number } {
+  const ordered = [...spans].sort(spanOrder);
+  const laned: TimelineSpan[] = [];
+  let base = 0;
+
+  for (const kind of LANE_ORDER) {
+    const laneEnds: number[] = [];
+    for (const span of ordered) {
+      if (span.kind !== kind) continue;
+      let lane = laneEnds.findIndex((endTs) => span.startTs >= endTs);
+      if (lane === -1) {
+        lane = laneEnds.length;
+        laneEnds.push(span.endTs);
+      } else {
+        laneEnds[lane] = span.endTs;
+      }
+      laned.push({ ...span, lane: base + lane });
+    }
+    base += laneEnds.length;
+  }
+
+  return { spans: laned, laneCount: Math.max(1, base) };
+}
+
+/**
+ * The horizontal scale for one turn's row: its own wall-clock, not the run's.
+ *
+ * Every row used to be drawn against the longest turn, which turned a 45s turn
+ * beside an 8m35s one into a sliver of hairlines nobody could read or hit. Rows
+ * are no longer comparable by width, which is why each carries its own ruler and
+ * its own duration in the label.
+ *
+ * A subagent that outlives its parent turn's last frame still has to fit, so its
+ * end is part of the span the row is scaled to.
+ */
+export function turnScale(turn: TurnTimeline): number {
+  const nested = turn.subagentTurns.reduce(
+    (max, subagentTurn) => Math.max(max, subagentTurn.endTs - turn.startTs),
+    0
+  );
+  return Math.max(turn.durationSeconds, nested, 1);
+}
+
+/**
+ * Where the replay cursor falls inside one turn's row, as 0..1 of its scale, or
+ * null when the cursor is not inside this turn at all.
+ *
+ * The player is linear in event index and the row is linear in wall-clock, so
+ * the two are bridged through the (index, timestamp) pairs the spans already
+ * carry rather than by pretending they share a domain. Between two known points
+ * the reading is interpolated; outside the turn's own frames there is nothing
+ * honest to draw.
+ */
+export function playheadFraction(turn: TurnTimeline, viewIndex: number): number | null {
+  const points: Array<[index: number, ts: number]> = [];
+  for (const span of [...turn.spans, ...turn.subagentTurns.flatMap((sub) => sub.spans)]) {
+    points.push([span.startIndex, span.startTs], [span.endIndex, span.endTs]);
+  }
+  if (points.length === 0) return null;
+  points.sort((a, b) => a[0] - b[0]);
+
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (viewIndex < first[0] || viewIndex > last[0]) return null;
+
+  let ts = first[1];
+  for (let i = 1; i < points.length; i += 1) {
+    const [fromIndex, fromTs] = points[i - 1];
+    const [toIndex, toTs] = points[i];
+    if (viewIndex > toIndex) continue;
+    ts =
+      toIndex === fromIndex
+        ? toTs
+        : fromTs + ((viewIndex - fromIndex) / (toIndex - fromIndex)) * (toTs - fromTs);
+    break;
+  }
+
+  return Math.min(1, Math.max(0, (ts - turn.startTs) / turnScale(turn)));
+}
+
+/**
+ * Every index at which a span opens or closes, ascending and deduplicated.
+ *
+ * The step-sized jump the transport was missing. `←`/`→` move one frame, which
+ * is finer than anything a reader is looking for, and `Shift`+those move a whole
+ * turn, which in a run of any length is most of it. A span edge is the middle
+ * granularity, and it is not a new one: a span *is* what the state-flow graph
+ * draws as a card — one model interaction, one tool call, one approval wait — so
+ * walking this list steps between the things already on the canvas.
+ *
+ * Subagent spans are in, for the same reason they are in the waterfall: a
+ * delegated tool call is a step of the run whoever is reading it cares about.
+ */
+export function buildStepBoundaries(timeline: StepTimeline): number[] {
+  const indices = new Set<number>();
+  for (const turn of timeline.turns) {
+    const spans = [...turn.spans, ...turn.subagentTurns.flatMap((sub) => sub.spans)];
+    for (const span of spans) {
+      indices.add(span.startIndex);
+      indices.add(span.endIndex);
+    }
+  }
+  return [...indices].sort((a, b) => a - b);
 }
 
 export interface SpanAggregate {

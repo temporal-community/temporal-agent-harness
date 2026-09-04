@@ -1,11 +1,68 @@
+<script lang="ts" module>
+  import {
+    playheadFraction,
+    type StepTimeline,
+    type TurnTimeline
+  } from "$lib/state/stepTimeline";
+
+  /**
+   * Turns above which a row folds to a proportion bar instead of drawing its tracks.
+   *
+   * Row pitch is about 152px — track, ruler, gap, padding, border — so 200 turns is
+   * 30,000px, or 89 screens of a 340px drawer. Twelve is where that starts to bite,
+   * and high enough that today's two-turn sessions never meet the affordance.
+   *
+   * Module scope and exported, the way TranscriptPanel exports statusKind(), so
+   * check-waterfall-lanes.mjs asserts this number and the two rules below rather
+   * than a copy that would pass forever while these rotted.
+   */
+  export const COLLAPSE_THRESHOLD = 12;
+
+  /**
+   * A turn the fold may not touch, whatever the threshold says: the cursor is inside
+   * it, or something in it failed or is still in flight. A collapsed view that folds
+   * away the turn that went wrong is worse than no collapse — the reader does not get
+   * a worse answer, they get no sign the answer is there.
+   *
+   * Subagent spans count as their parent's, because that is the row they are drawn on.
+   */
+  export function turnHeldOpen(turn: TurnTimeline, viewIndex: number): boolean {
+    if (playheadFraction(turn, viewIndex) != null) return true;
+    return [...turn.spans, ...turn.subagentTurns.flatMap((sub) => sub.spans)].some(
+      (span) => span.tone === "error" || span.ongoing
+    );
+  }
+
+  /**
+   * Whether a turn draws its tracks. `opened` holds the turns the reader opened by
+   * hand — the only state this feature keeps, and deliberately not in the URL: `?p=`
+   * encodes which panes are where, and a stale link that re-folded a turn which had
+   * auto-opened for an error is the exact failure the rule above exists to prevent.
+   */
+  export function turnExpanded(
+    turn: TurnTimeline,
+    viewIndex: number,
+    turnCount: number,
+    opened: ReadonlySet<number>
+  ): boolean {
+    return (
+      turnCount <= COLLAPSE_THRESHOLD ||
+      turnHeldOpen(turn, viewIndex) ||
+      opened.has(turn.turnNumber)
+    );
+  }
+</script>
+
 <script lang="ts">
-  import { Cpu, ShieldCheck, Wrench } from "@lucide/svelte";
+  import { tick } from "svelte";
+  import { ChevronDown, ChevronRight, Cpu, ShieldCheck, Wrench } from "@lucide/svelte";
   import { formatDuration } from "$lib/state/replayLog";
+  import { keyboardSeekCount } from "$lib/state/replayHotkeys";
   import { niceTimeTicks } from "$lib/state/timeTicks";
   import {
     aggregateSpans,
+    turnScale,
     type SpanKind,
-    type StepTimeline,
     type TimelineSpan
   } from "$lib/state/stepTimeline";
 
@@ -13,6 +70,23 @@
     timeline: StepTimeline;
     viewIndex: number;
     onScrub: (index: number) => void;
+  }
+
+  /** One track's worth of everything the shared lane snippet needs to draw it. */
+  interface TrackView {
+    /** Stable key for the measured width of this track. */
+    key: string;
+    spans: TimelineSpan[];
+    laneCount: number;
+    /** Seconds across the full width — the owning TURN's scale, not the track's. */
+    scale: number;
+    /** Time at x=0, always the parent turn's start, so nested rows line up with it. */
+    turnStart: number;
+    /** 0..1 along the scale, or null when the cursor is not in this turn. */
+    head: number | null;
+    subagent: boolean;
+    /** Prepended to every bar's tooltip, naming the subagent a nested row belongs to. */
+    prefix?: string;
   }
 
   let { timeline, viewIndex, onScrub }: Props = $props();
@@ -25,34 +99,64 @@
     timeline.turns.reduce((sum, turn) => sum + turn.subagentTurns.length, 0)
   );
 
-  /* The shared horizontal scale every track is drawn against. */
-  const scale = $derived(Math.max(timeline.maxTurnDuration, 1));
+  /**
+   * Each track's rendered width in px, measured rather than assumed.
+   *
+   * Whether a label fits is a question in pixels — "gpt-5.1 · 1m 12s" needs about
+   * a hundred of them — and the bar only knows its width as a percentage of a
+   * scale that now differs per row. One number per track answers it for every bar
+   * in that track.
+   */
+  let trackWidths = $state<Record<string, number>>({});
 
-  /* The panel's header has always claimed the bars share one time scale; these are the
-     ticks that let a duration actually be read off it. Evenly spaced by construction,
-     which is what lets the track guides be a single repeating gradient. */
-  const ticks = $derived(niceTimeTicks(scale, 6));
+  /* Roughly one character of --font-xs tabular text, plus the bar's own padding.
+     ponytail: an estimate rather than a canvas measurement — being a few pixels
+     pessimistic costs a label that would just have fitted, which lands on hover
+     anyway; being optimistic is the truncation this replaced, so it rounds up. */
+  const CHAR_PX = 6.6;
+  const LABEL_PAD_PX = 16;
 
-  /* A bar narrower than this cannot hold even a couple of characters, and CSS clipping
-     turns its label into a one-character stub. Bare is more legible; the title still
-     answers for it. */
-  const MIN_LABEL_WIDTH_PCT = 7;
-
-  function pct(span: TimelineSpan, turnStart: number): { left: number; width: number } {
+  function pct(
+    span: TimelineSpan,
+    turnStart: number,
+    scale: number
+  ): { left: number; width: number } {
     const left = Math.min(99.5, Math.max(0, ((span.startTs - turnStart) / scale) * 100));
-    const rawWidth = (span.durationSeconds / scale) * 100;
-    return {
-      left,
-      width: Math.min(100 - left, Math.max(rawWidth, 1.5))
-    };
+    /* No floor. A width floor is a lie about duration told in the one place a
+       reader goes to read duration; the bar's CSS min-width keeps it visible and
+       its hit slop keeps it clickable, without widening the claim. */
+    return { left, width: Math.max(0, Math.min(100 - left, (span.durationSeconds / scale) * 100)) };
   }
 
   function trackHeight(laneCount: number): number {
     return 6 + laneCount * 24;
   }
 
-  function laneTop(span: TimelineSpan): number {
-    return 3 + span.lane * 24;
+  function laneTop(lane: number): number {
+    return 3 + lane * 24;
+  }
+
+  /**
+   * The first lane each kind owns, which is where its rail glyph goes, and how many
+   * spans of that kind this track holds.
+   *
+   * The count rides along because the instrument form drops the rollup cards, and a
+   * glyph that can answer "how many tool calls in this turn" costs no pixels to ask.
+   */
+  function laneKinds(spans: TimelineSpan[]): { kind: SpanKind; lane: number; count: number }[] {
+    const found = new Map<SpanKind, { lane: number; count: number }>();
+    for (const span of spans) {
+      const seen = found.get(span.kind);
+      if (seen) {
+        seen.lane = Math.min(seen.lane, span.lane);
+        seen.count += 1;
+      } else {
+        found.set(span.kind, { lane: span.lane, count: 1 });
+      }
+    }
+    return [...found]
+      .map(([kind, seen]) => ({ kind, ...seen }))
+      .sort((a, b) => a.lane - b.lane);
   }
 
   function spanState(span: TimelineSpan): "past" | "active" | "future" {
@@ -61,22 +165,33 @@
     return "past";
   }
 
-  function barClass(span: TimelineSpan, width: number): string {
+  function barText(span: TimelineSpan): string {
+    return `${span.label} · ${formatDuration(span.durationSeconds)}`;
+  }
+
+  /** Stolen from TanStack's `eventBarCanFitLabel`, in pixels rather than data units. */
+  function fitsLabel(span: TimelineSpan, widthPct: number, trackPx: number): boolean {
+    return (widthPct / 100) * trackPx >= barText(span).length * CHAR_PX + LABEL_PAD_PX;
+  }
+
+  function barClass(span: TimelineSpan, fits: boolean, left: number): string {
     const tone = span.tone === "error" ? "error" : span.kind;
     return [
       "bar",
       tone,
       spanState(span),
       span.ongoing ? "ongoing" : "",
-      width < MIN_LABEL_WIDTH_PCT ? "unlabelled" : ""
+      fits ? "" : "unlabelled",
+      /* An overflow label on a bar near the right edge would hang off the track. */
+      !fits && left > 55 ? "flip" : ""
     ]
       .filter(Boolean)
       .join(" ");
   }
 
-  function spanTitle(span: TimelineSpan): string {
+  function spanTitle(span: TimelineSpan, prefix?: string): string {
     const detail = span.detail ? ` · ${span.detail}` : "";
-    return `${span.label} · ${formatDuration(span.durationSeconds)}${detail}`;
+    return `${prefix ? `${prefix} · ` : ""}${barText(span)}${detail}`;
   }
 
   const kindLabel: Record<SpanKind, string> = {
@@ -84,7 +199,150 @@
     tool: "tool",
     approval: "approval"
   };
+
+  /** Turns the reader opened by hand. Ephemeral — see the note on `turnExpanded`. */
+  let openedTurns = $state<ReadonlySet<number>>(new Set());
+
+  function toggleTurn(turnNumber: number): void {
+    const next = new Set(openedTurns);
+    if (!next.delete(turnNumber)) next.add(turnNumber);
+    openedTurns = next;
+  }
+
+  /**
+   * One turn's time by kind, as a share of its own duration.
+   *
+   * `aggregateSpans` takes a timeline and one turn is a one-turn timeline, so the
+   * folded row is the same arithmetic as the rollup rather than a second opinion. The
+   * shares need not sum to 100%: the aggregate is exclusive, so time the turn spent
+   * in none of the three leaves the remainder blank, truthfully.
+   */
+  function proportions(turn: TurnTimeline): { kind: SpanKind; width: number; title: string }[] {
+    const scale = Math.max(turn.durationSeconds, 1);
+    return aggregateSpans({ turns: [turn] }).map((agg) => ({
+      kind: agg.kind,
+      width: Math.min(100, (agg.totalSeconds / scale) * 100),
+      title:
+        `${kindLabel[agg.kind]} · ${formatDuration(agg.totalSeconds)} · ${agg.count}× · ` +
+        `${Math.round((agg.totalSeconds / scale) * 100)}% of turn ${turn.turnNumber}`
+    }));
+  }
+
+  /* The keyboard seek count as of the last row this pane followed. Plain `let` on
+     purpose, exactly as in TranscriptPanel: `$state` would make the comparison below
+     a dependency of the effect, and the playhead moving is the only thing that
+     should run it. */
+  let followedKeyboardSeeks = keyboardSeekCount();
+
+  function reducedMotion(): boolean {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  /**
+   * Keep the row holding the playhead on screen.
+   *
+   * The pane had no scroll-follow of any kind, so past a dozen turns `→` or `.` moved
+   * a line in a row eighty screens away with no way to reach it. Same shape as the
+   * Logs pane's follow: `block: "nearest"` is what stops it fighting a reader
+   * scrolling by hand, since a row already in view is not moved at all, and the seek
+   * count keeps a held-down key from lagging an animation while a click keeps the
+   * follow-along that shows which way the run went.
+   */
+  $effect(() => {
+    const followed = timeline.turns.find((turn) => playheadFraction(turn, viewIndex) != null);
+    if (!followed) return;
+    /* Asked here, not inside the tick below: by then the keystroke's task is over
+       and another one may have counted. */
+    const seeks = keyboardSeekCount();
+    const fromKeyboard = seeks !== followedKeyboardSeeks;
+    followedKeyboardSeeks = seeks;
+    tick().then(() => {
+      document.getElementById(`waterfall-turn-${followed.turnNumber}`)?.scrollIntoView({
+        block: "nearest",
+        /* "instant" and not "auto": "auto" defers to the container's
+           `scroll-behavior`, which is unset today, so it would read as instant by
+           luck and turn smooth the day a stylesheet sets it. */
+        behavior: fromKeyboard || reducedMotion() ? "instant" : "smooth"
+      });
+    });
+  });
 </script>
+
+<!-- The turn number over its duration — the whole summary a folded row needs, and
+     already what the label said. Written once because the label is a `<button>` when
+     the row can fold and a `<div>` when it cannot. -->
+{#snippet turnHeading(turn: TurnTimeline, canFold: boolean, expanded: boolean)}
+  <span class="turn-no">
+    Turn {turn.turnNumber}
+    {#if canFold}
+      <span class="turn-chevron" aria-hidden="true">
+        {#if expanded}
+          <ChevronDown size={13} />
+        {:else}
+          <ChevronRight size={13} />
+        {/if}
+      </span>
+    {/if}
+  </span>
+  <span class="turn-dur">{formatDuration(turn.durationSeconds)}</span>
+{/snippet}
+
+<!-- Both tracks in a turn — the parent's and each subagent's — are the same
+     object: named lanes down the left, bars against the turn's scale, one
+     playhead. Written once and rendered twice. -->
+{#snippet laneTrack(track: TrackView)}
+  <div class="track-wrap">
+    <div class="lane-rail" style={`height: ${trackHeight(track.laneCount)}px`}>
+      {#each laneKinds(track.spans) as entry (entry.kind)}
+        <span
+          class={`lane-mark ${entry.kind}`}
+          style={`top: ${laneTop(entry.lane)}px`}
+          title={`${kindLabel[entry.kind]} lane · ${entry.count} ${entry.count === 1 ? "span" : "spans"}`}
+        >
+          {#if entry.kind === "model"}
+            <Cpu size={11} />
+          {:else if entry.kind === "tool"}
+            <Wrench size={11} />
+          {:else}
+            <ShieldCheck size={11} />
+          {/if}
+        </span>
+      {/each}
+    </div>
+
+    <div
+      class="track"
+      class:parent-track={!track.subagent}
+      class:subagent-track={track.subagent}
+      style={`height: ${trackHeight(track.laneCount)}px`}
+      bind:clientWidth={null, (value) => (trackWidths[track.key] = value ?? 0)}
+    >
+      {#if track.head != null}
+        <span class="playhead" style={`left: ${track.head * 100}%`} aria-hidden="true"></span>
+      {/if}
+
+      {#each track.spans as span (span.id)}
+        {@const box = pct(span, track.turnStart, track.scale)}
+        {@const fits = fitsLabel(span, box.width, trackWidths[track.key] ?? 0)}
+        <button
+          class={barClass(span, fits, box.left)}
+          style={`left: ${box.left}%; width: ${box.width}%; top: ${laneTop(span.lane)}px`}
+          title={spanTitle(span, track.prefix)}
+          onclick={() => onScrub(span.startIndex)}
+        >
+          <span class="bar-text">{barText(span)}</span>
+        </button>
+      {/each}
+
+      {#if track.spans.length === 0}
+        <span class="track-empty">
+          no measured {track.subagent ? "subagent" : "parent"} steps
+        </span>
+      {/if}
+    </div>
+  </div>
+{/snippet}
 
 <section class="waterfall" aria-label="Latency waterfall">
   <header class="waterfall-head">
@@ -95,7 +353,7 @@
         {#if subagentTurnCount > 0}
           · {subagentTurnCount} nested subagent turns
         {/if}
-        · bars share one time scale
+        · each row on its own scale
       </p>
     </div>
     <div class="rollup" aria-label="Time by step kind">
@@ -124,77 +382,114 @@
     </div>
   </header>
 
-  <div class="turns" style={`--tick-gap: ${100 / Math.max(ticks.length - 1, 1)}%`}>
+  <div class="turns">
     {#if timeline.turns.length === 0}
       <p class="empty">Step through the stream to chart per-step latency.</p>
     {:else}
+      <!-- The ruler used to live here, one for every row. It cannot any more: each
+           row is scaled to its own turn, so there is no single ruler that would be
+           true of all of them. What is left in the sticky slot is the note that says
+           so, because a reader who takes two rows for comparable has been misled by
+           the drawing and nothing else on screen would correct them — the per-row
+           rulers below show THAT the scales differ, but no number forbids the
+           comparison, and that failure is silent. -->
       <div class="turn-row axis-row">
         <div class="axis-spacer"></div>
-        <div class="axis" role="presentation">
-          {#each ticks as tick, i (tick)}
-            <span class="tick" style={`left: ${(tick / scale) * 100}%`} data-last={i === ticks.length - 1 ? "true" : undefined}>
-              {formatDuration(tick)}
-            </span>
-          {/each}
-        </div>
+        <p class="scale-note">Per-row scale · not comparable</p>
       </div>
 
       {#each timeline.turns as turn (turn.turnNumber)}
-        <article class="turn-row">
-          <div class="turn-label">
-            <p class="turn-no">Turn {turn.turnNumber}</p>
-            <p class="turn-dur">{formatDuration(turn.durationSeconds)}</p>
-          </div>
-          <div class="turn-body">
-            <div class="track parent-track" style={`height: ${trackHeight(turn.laneCount)}px`}>
-              {#each turn.spans as span (span.id)}
-                {@const box = pct(span, turn.startTs)}
-                <button
-                  class={barClass(span, box.width)}
-                  style={`left: ${box.left}%; width: ${box.width}%; top: ${laneTop(span)}px`}
-                  title={spanTitle(span)}
-                  onclick={() => onScrub(span.startIndex)}
-                >
-                  <span class="bar-text">{span.label} · {formatDuration(span.durationSeconds)}</span>
-                </button>
-              {/each}
-              {#if turn.spans.length === 0}
-                <span class="track-empty">no measured parent steps</span>
-              {/if}
-            </div>
-
-            {#if turn.subagentTurns.length > 0}
-              <div class="subagent-stack" aria-label={`Subagent latency for turn ${turn.turnNumber}`}>
-                {#each turn.subagentTurns as subagent (`${subagent.workflowId}:${subagent.turnNumber}`)}
-                  <div class="subagent-row">
-                    <div class="subagent-label">
-                      <span>Subagent</span>
-                      <strong title={subagent.label}>{subagent.label}</strong>
-                      <small>
-                        turn {subagent.turnNumber} · {formatDuration(subagent.durationSeconds)}
-                      </small>
-                    </div>
-                    <div class="track subagent-track" style={`height: ${trackHeight(subagent.laneCount)}px`}>
-                      {#each subagent.spans as span (span.id)}
-                        {@const box = pct(span, turn.startTs)}
-                        <button
-                          class={barClass(span, box.width)}
-                          style={`left: ${box.left}%; width: ${box.width}%; top: ${laneTop(span)}px`}
-                          title={`${subagent.label} · ${spanTitle(span)}`}
-                          onclick={() => onScrub(span.startIndex)}
-                        >
-                          <span class="bar-text">
-                            {span.label} · {formatDuration(span.durationSeconds)}
-                          </span>
-                        </button>
-                      {/each}
-                      {#if subagent.spans.length === 0}
-                        <span class="track-empty">no measured subagent steps</span>
-                      {/if}
-                    </div>
-                  </div>
+        {@const scale = turnScale(turn)}
+        {@const ticks = niceTimeTicks(scale, 5)}
+        {@const head = playheadFraction(turn, viewIndex)}
+        {@const expanded = turnExpanded(turn, viewIndex, timeline.turns.length, openedTurns)}
+        <!-- A turn held open by the rules above offers no toggle, because a control
+             promising to fold away the failure would be lying; below the threshold
+             there is nothing to fold and the affordance does not exist at all. -->
+        {@const canFold =
+          timeline.turns.length > COLLAPSE_THRESHOLD && !turnHeldOpen(turn, viewIndex)}
+        <article
+          id={`waterfall-turn-${turn.turnNumber}`}
+          class="turn-row"
+          class:collapsed={!expanded}
+          style={`--tick-gap: ${100 / Math.max(ticks.length - 1, 1)}%`}
+        >
+          {#if canFold}
+            <button
+              class="turn-label turn-toggle"
+              type="button"
+              aria-expanded={expanded}
+              aria-controls={`waterfall-turn-${turn.turnNumber}-body`}
+              onclick={() => toggleTurn(turn.turnNumber)}
+            >
+              {@render turnHeading(turn, true, expanded)}
+            </button>
+          {:else}
+            <div class="turn-label">{@render turnHeading(turn, false, expanded)}</div>
+          {/if}
+          <div class="turn-body" id={`waterfall-turn-${turn.turnNumber}-body`}>
+            {#if !expanded}
+              <!-- The whole row body, folded: where this turn's time went, on the
+                   turn's own duration. The label already carries the two things worth
+                   reading at this size, so nothing here repeats them. -->
+              <div class="proportion" aria-hidden="true">
+                {#each proportions(turn) as slice (slice.kind)}
+                  <span class={`slice ${slice.kind}`} style={`width: ${slice.width}%`} title={slice.title}></span>
                 {/each}
               </div>
+            {:else}
+              <!-- One ruler per row, ending at that row's own duration: the axis is
+                   where the difference between two rows' scales is actually read. -->
+              <div class="track-wrap">
+                <div class="lane-rail"></div>
+                <div class="axis" role="presentation">
+                  {#each ticks as tick, i (tick)}
+                    <span
+                      class="tick"
+                      style={`left: ${(tick / scale) * 100}%`}
+                      data-last={i === ticks.length - 1 ? "true" : undefined}
+                    >
+                      {formatDuration(tick)}
+                    </span>
+                  {/each}
+                </div>
+              </div>
+
+              {@render laneTrack({
+                key: `turn-${turn.turnNumber}`,
+                spans: turn.spans,
+                laneCount: turn.laneCount,
+                scale,
+                turnStart: turn.startTs,
+                head,
+                subagent: false
+              })}
+
+              {#if turn.subagentTurns.length > 0}
+                <div class="subagent-stack" aria-label={`Subagent latency for turn ${turn.turnNumber}`}>
+                  {#each turn.subagentTurns as subagent (`${subagent.workflowId}:${subagent.turnNumber}`)}
+                    <div class="subagent-row">
+                      <div class="subagent-label">
+                        <span>Subagent</span>
+                        <strong title={subagent.label}>{subagent.label}</strong>
+                        <small>
+                          turn {subagent.turnNumber} · {formatDuration(subagent.durationSeconds)}
+                        </small>
+                      </div>
+                      {@render laneTrack({
+                        key: `sub-${subagent.workflowId}-${subagent.turnNumber}`,
+                        spans: subagent.spans,
+                        laneCount: subagent.laneCount,
+                        scale,
+                        turnStart: turn.startTs,
+                        head,
+                        subagent: true,
+                        prefix: subagent.label
+                      })}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             {/if}
           </div>
         </article>
@@ -288,17 +583,17 @@
     border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   }
 
-  /* The ruler carries .turn-row so it inherits whatever column layout the host has
-     imposed on the rows it measures — the right pane collapses them to one column, and
-     an axis that did not follow would point at the wrong place. The spacer occupies the
-     label column when there are two, and collapses to nothing when there is one. */
+  /* The note carries .turn-row so it inherits whatever column layout the host has
+     imposed on the rows it heads — the narrow pane collapses them to one column, and
+     a header that did not follow would sit over the wrong place. The spacer occupies
+     the label column when there are two, and collapses to nothing when there is one. */
   .turn-row.axis-row {
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: 3;
     align-items: end;
-    padding: 0 0 4px;
-    border-bottom: none;
+    padding: 0 0 6px;
+    border-bottom: 1px solid var(--border);
     background: var(--surface-0);
   }
 
@@ -306,10 +601,59 @@
     height: 0;
   }
 
+  .scale-note {
+    margin: 0;
+    color: var(--text-3);
+    font-size: var(--font-xs);
+  }
+
+  /* The glyph rail and the thing it labels, so a ruler and the track under it start
+     at the same x and a tick lands where the bar it measures does. */
+  .track-wrap {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr);
+    gap: 2px;
+    align-items: start;
+  }
+
+  .lane-rail {
+    position: relative;
+  }
+
+  /* Named lanes: which row is model, which is tool, which is approval, said once
+     down the side rather than inferred from the colour of whatever happens to be
+     in it. A kind with nothing in this track has no lane and no glyph. */
+  .lane-mark {
+    position: absolute;
+    left: 0;
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    opacity: 0.75;
+  }
+
+  .lane-mark.model { color: var(--model); }
+  .lane-mark.tool { color: var(--warning); }
+  .lane-mark.approval { color: var(--queue); }
+
   .axis {
     position: relative;
     height: 16px;
     border-bottom: 1px solid var(--border);
+  }
+
+  /* Where the transport's cursor falls in this row's wall-clock. Decorative: the
+     scrubber under the rail is the control, and a second draggable time cursor on a
+     different domain would be two answers to "where am I". */
+  .playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 2;
+    width: 1px;
+    background: var(--text-1);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface-0) 60%, transparent);
+    pointer-events: none;
   }
 
   .tick {
@@ -339,6 +683,49 @@
     padding-top: 4px;
   }
 
+  /* The label is the disclosure control: it is already the biggest target in the row
+     and the one thing a folded row is read by, so a separate chevron button beside it
+     would be a second, smaller target for the same job. The rules below only undo the
+     UA button, as .line-toggle does in TranscriptPanel; the grid still comes from
+     .turn-label and from the host, which narrows this column to 68px in the drawer. */
+  .turn-toggle {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+  }
+
+  .turn-toggle:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    outline-offset: 2px;
+    border-radius: var(--radius-xs);
+  }
+
+  /* Inside .turn-no rather than a third grid child: the drawer narrows this label to
+     one 68px column, where a third child would take a row of its own and hand the
+     folded row back the height the fold just saved. */
+  .turn-chevron {
+    display: inline-flex;
+    color: var(--text-3);
+    vertical-align: -2px;
+  }
+
+  .turn-toggle:focus-visible .turn-chevron {
+    color: var(--text-1);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .turn-toggle:hover .turn-chevron {
+      color: var(--text-1);
+    }
+  }
+
+  /* Spans, not the paragraphs these were: the label is a `<button>` when the row can
+     fold, and a `<p>` inside one is not allowed markup. That also retires the
+     `margin: 0` these carried to stop two stacked UA margins putting 24px between a
+     turn and its own duration in the drawer's narrow column. */
   .turn-no {
     color: var(--text-1);
     font-size: var(--font-md);
@@ -351,6 +738,24 @@
     font-size: var(--font-md);
     font-variant-numeric: tabular-nums;
   }
+
+  /* The folded row's entire body: one 20px bar, three segments, on the turn's own
+     duration. Row pitch goes from about 152px to about 46px. */
+  .proportion {
+    height: 20px;
+    display: flex;
+    overflow: hidden;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+  }
+
+  /* The kind tokens, stated the third time in this file after .lane-mark and .roll —
+     a segment is not a `.bar`, which is absolutely positioned on a track and carries
+     10px of hit slop, and inheriting all that to reuse three background declarations
+     would cost more lines than repeating the triple the way the file already does. */
+  .slice.model { background: var(--model); }
+  .slice.tool { background: var(--warning); }
+  .slice.approval { background: var(--queue); }
 
   .turn-preview {
     grid-column: 1 / -1;
@@ -440,11 +845,14 @@
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
   }
 
+  /* Painted at its true width, down to the 2px that keeps a sub-second span on
+     screen at all. The old 1.5%-of-the-run floor made every short span claim a
+     duration it did not have, in the one pane whose whole job is duration. */
   .bar {
     position: absolute;
     top: 3px;
     height: 20px;
-    min-width: 6px;
+    min-width: 2px;
     display: inline-flex;
     align-items: center;
     padding: 0 7px;
@@ -455,23 +863,66 @@
     font: inherit;
     font-size: var(--font-xs);
     font-variant-numeric: tabular-nums;
-    overflow: hidden;
+    /* Visible, so the hit slop below and an overflow label can leave the bar. The
+       text is still held inside it by the flex box, not by clipping. */
+    overflow: visible;
     transition: filter var(--duration-fast) var(--ease-ui), opacity var(--duration-fast) var(--ease-ui), outline-color var(--duration-fast) var(--ease-ui);
   }
 
+  /* Hit slop, TanStack example 91's 44px handle target adapted: the TARGET grows,
+     the bar does not. A 2px bar is a 22px-wide, 24px-tall thing to point at, which
+     is the difference between a span you can read about and one you cannot catch.
+     Kept inside the lane pitch so slop never steals the lane above or below. */
+  .bar::before {
+    content: "";
+    position: absolute;
+    inset: -2px -10px;
+  }
+
   .bar-text {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  /* Too narrow to read: drop the text rather than clip it to a stub. */
+  /* Too narrow for its string. Rather than clip it to `gpt-5.1 · 1...`, the label
+     comes out of the bar and sits beside it on hover or focus — the whole name and
+     the whole duration, or nothing. */
   .bar.unlabelled {
     padding: 0;
   }
 
   .bar.unlabelled .bar-text {
-    display: none;
+    position: absolute;
+    top: 50%;
+    left: calc(100% + 6px);
+    z-index: 9;
+    padding: 1px 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-xs);
+    background: var(--surface-3);
+    color: var(--text-1);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-50%);
+    transition: opacity var(--duration-fast) var(--ease-ui);
+  }
+
+  /* Near the right-hand end there is no room to the right. */
+  .bar.unlabelled.flip .bar-text {
+    left: auto;
+    right: calc(100% + 6px);
+  }
+
+  .bar.unlabelled:hover,
+  .bar.unlabelled:focus-visible {
+    z-index: 8;
+  }
+
+  .bar.unlabelled:hover .bar-text,
+  .bar.unlabelled:focus-visible .bar-text {
+    opacity: 1;
   }
 
   .bar.model {
@@ -493,9 +944,12 @@
     opacity: 0.32;
   }
 
+  /* Was a 2px outline offset by one, which on a hairline bar drew a white box
+     several times the size of the thing it was pointing at. The playhead is what
+     says where the cursor is now; this only has to say which span holds it. */
   .bar.active {
-    outline: 2px solid var(--text-1);
-    outline-offset: 1px;
+    outline: 1px solid var(--text-1);
+    outline-offset: 0;
   }
 
   /* Guarded rather than left decorative: the bar is a button that scrubs, and a
@@ -526,7 +980,8 @@
   @media (prefers-reduced-motion: reduce) {
     /* Nothing here moves, but a bar's filter/opacity fade is still a change
        the setting asks us not to animate. */
-    .bar {
+    .bar,
+    .bar .bar-text {
       transition: none;
     }
   }
