@@ -37,20 +37,17 @@ from examples.monty.workflow import MontyDynamicAgentWorkflow
 
 @pytest_asyncio.fixture
 async def client_and_queue():
-    env = await WorkflowEnvironment.start_time_skipping(
+    async with await WorkflowEnvironment.start_time_skipping(
         data_converter=pydantic_data_converter
-    )
-    task_queue = f"monty-agent-test-{uuid.uuid4()}"
-    async with Worker(
-        env.client,
-        task_queue=task_queue,
-        workflows=[MontyDynamicAgentWorkflow],
-        activities=[*activities.ALL_ACTIVITIES, *CODE_MODE_ACTIVITIES],
-    ):
-        try:
+    ) as env:
+        task_queue = f"monty-agent-test-{uuid.uuid4()}"
+        async with Worker(
+            env.client,
+            task_queue=task_queue,
+            workflows=[MontyDynamicAgentWorkflow],
+            activities=[*activities.ALL_ACTIVITIES, *CODE_MODE_ACTIVITIES],
+        ):
             yield env.client, task_queue
-        finally:
-            await env.shutdown()
 
 
 async def _reply_text(client: Client, workflow_id: str) -> str:
