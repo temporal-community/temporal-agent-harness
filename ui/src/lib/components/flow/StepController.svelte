@@ -3,6 +3,7 @@
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import type { PlaybackSpeed } from "$lib/state/agentRun.svelte";
+  import { dismissable } from "$lib/state/dismissable.svelte";
   import { eventVelocity, velocityPath } from "$lib/state/eventVelocity";
   import { noteKeyboardSeek } from "$lib/state/replayHotkeys";
   import type { ReplayLogRow, ReplayMarker } from "$lib/state/replayLog";
@@ -61,7 +62,6 @@
   const playbackSpeeds: PlaybackSpeed[] = [1, 2, 5, 10];
 
   let detailOpen = $state(false);
-  let nowElement = $state<HTMLElement | null>(null);
   /* The lane already carries one floating label. A cue gets its name by taking
      that label over while the pointer is on it, rather than opening a second
      bubble in the same 18px of vertical space.
@@ -204,28 +204,12 @@
     onScrub(index);
   }
 
-  function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape" && detailOpen) detailOpen = false;
-  }
-
-  /* ponytail: ceiling = Escape and outside-click are handled inline, one copy for
-     one card. This repo has no shared dismissable behaviour yet, so a second
-     dismissable surface would copy these two handlers rather than share them.
-     Upgrade path = lift both into a shared attachment once one exists. */
-  function handleBodyPointerDown(event: PointerEvent): void {
-    if (!detailOpen) return;
-    const target = event.target as Node | null;
-    /* Keep the helper open while scrubbing or using transport in this footer;
-       only a pointerdown outside `.step-controller` dismisses it. Escape and
-       the readout toggle still close it. */
-    const footer = nowElement?.closest(".step-controller");
-    if (target && footer?.contains(target)) return;
-    detailOpen = false;
-  }
+  /* Escape and press-outside come from the shared attachment, which is attached to the
+     card itself: the card is rendered only while it is open, so mounting is opening and
+     there is no second copy of `detailOpen` to keep in sync. `keep` is the whole footer
+     because the reader goes on scrubbing while the card reports the scrub — a press on
+     the transport is not a press somewhere else. */
 </script>
-
-<svelte:window onkeydown={handleKeydown} />
-<svelte:body onpointerdown={handleBodyPointerDown} />
 
 <footer class="step-controller">
   <!-- Three controls, and what is missing is the point. Relative movement — one
@@ -380,7 +364,7 @@
     </div>
   </div>
 
-  <div class="now" bind:this={nowElement}>
+  <div class="now">
     <Chip
       class="readout"
       active={detailOpen}
@@ -406,7 +390,11 @@
     </Chip>
 
     {#if detailOpen && hasDetail}
-      <div class="now-card" id="now-card">
+      <div
+        class="now-card"
+        id="now-card"
+        {@attach dismissable({ ondismiss: () => (detailOpen = false), keep: ".step-controller" })}
+      >
         <div class="now-head">
           <span class={`dot ${tone}`}></span>
           <strong>{eventTitle}</strong>

@@ -18,6 +18,7 @@
     STATUS_TONES,
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
+  import { dismissable } from "$lib/state/dismissable.svelte";
 
   type MenuTab = "sessions" | "new";
 
@@ -76,7 +77,6 @@
   let menuOpen = $state(false);
   let menuTab = $state<MenuTab>("sessions");
   let sessionSearch = $state("");
-  let rootElement = $state<HTMLElement | undefined>();
   let searchElement = $state<HTMLInputElement | undefined>();
   let agentListElement = $state<HTMLElement | undefined>();
 
@@ -219,18 +219,20 @@
     menuOpen = !menuOpen;
   }
 
-  /** Leaves the menu the way it was reached, so the keyboard is never stranded. */
-  function closeMenu({ restoreFocus = true }: { restoreFocus?: boolean } = {}): void {
+  /**
+   * Whether the keyboard is put back on the anchor is not decided here.
+   *
+   * It used to be, by a `restoreFocus` flag every caller had to get right: Escape wanted
+   * the anchor back, a press on something else wanted to be left alone. That is the same
+   * rule for every layer in the app, and `dismissable` states it once — focus returns only
+   * if the layer still had it — so the flag and the two callers that had to pass it go.
+   */
+  function closeMenu(): void {
     if (!menuOpen) return;
     menuOpen = false;
     /* Closing ends the errand, so the next press is the same press as the last
        one: the list of sessions, which is what the anchor is asked for. */
     menuTab = "sessions";
-    /* The anchor is a Chip, which owns its own element, so it is found rather
-       than held. */
-    if (restoreFocus) {
-      rootElement?.querySelector<HTMLElement>(".session-anchor")?.focus();
-    }
   }
 
   function selectTab(tab: MenuTab): void {
@@ -258,19 +260,6 @@
     else agentListElement?.querySelector<HTMLElement>(".agent-row")?.focus();
   });
 
-  function handleWindowKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape" && menuOpen) closeMenu();
-  }
-
-  function handleWindowPointerDown(event: PointerEvent): void {
-    if (!menuOpen) return;
-    const target = event.target;
-    if (target instanceof Node && rootElement?.contains(target)) return;
-    /* A press elsewhere is a press on something else, so focus goes there
-       rather than being pulled back to the anchor. */
-    closeMenu({ restoreFocus: false });
-  }
-
   async function startNewSession(workflowType: string): Promise<void> {
     if (!workflowType || !onNewSession || creatingSession) return;
     await onNewSession(workflowType);
@@ -291,9 +280,7 @@
   }
 </script>
 
-<svelte:window onkeydown={handleWindowKeydown} onpointerdown={handleWindowPointerDown} />
-
-<div class="session-controls" bind:this={rootElement}>
+<div class="session-controls">
   <!-- The pip is the Chip's own, tinted by the status tone, so the mark that
        says how the run is doing cannot drift from the chip that says it in
        words inside the menu. -->
@@ -322,7 +309,13 @@
   </Chip>
 
   {#if menuOpen}
-    <section class="session-popover" aria-label="Session menu">
+    <!-- `keep` is the whole control, so the anchor's own toggle is not fought over: a press
+         on it would otherwise dismiss here and reopen there, in one press. -->
+    <section
+      class="session-popover"
+      aria-label="Session menu"
+      {@attach dismissable({ ondismiss: closeMenu, keep: ".session-controls" })}
+    >
       <!-- The status in words, once, where there is room for the whole sentence
            the anchor's pip stands in for. -->
       <header class="session-popover-head">

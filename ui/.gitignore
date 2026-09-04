@@ -28,6 +28,10 @@ tools/scroll-probe/*
 # Cited by ui/scripts/check-replay-hotkeys.mjs as where its focus claim was measured,
 # so ignoring it would leave a tracked check pointing at nothing.
 !tools/scrub-focus-keys.mjs
+# Drives the three layers that adopted `dismissable`. check-dismissable.mjs pins the logic
+# against a stubbed DOM; only a browser can say whether each site's `keep` selector matches
+# the surface it meant, and that the desk's own Escape is still unclaimed.
+!tools/verify-dismissable.mjs
 # The badge harnesses, tracked with the fix they measure: a language tag pinned against
 # a scroller is a thing no assertion about styles can see.
 !tools/codebadge-shots/

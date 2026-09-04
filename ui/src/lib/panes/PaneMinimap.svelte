@@ -20,6 +20,7 @@
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import type { PaneDescription } from "$lib/panes/PaneRail.svelte";
   import { PANE_META, ROOT_KINDS, type PaneKind } from "$lib/panes/registry";
+  import { dismissable } from "$lib/state/dismissable.svelte";
   import {
     activeIn,
     isSplit,
@@ -59,8 +60,6 @@
   const closable = $derived(ROOT_KINDS.filter((kind) => !stack.has(kind)));
 
   let launcherOpen = $state(false);
-  let launcherElement = $state<HTMLElement | null>(null);
-
   /* The marker is one box that slides between cells rather than an outline that
      blinks on and off, so it has to be measured: cells share a budget, so their
      width is whatever is left after the row is laid out, not a constant. */
@@ -116,20 +115,10 @@
     stack.openPane({ kind }, stack.focusedId);
   }
 
-  function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape" && launcherOpen) launcherOpen = false;
-  }
-
-  function handleBodyPointerDown(event: PointerEvent): void {
-    if (!launcherOpen) return;
-    const target = event.target as Node | null;
-    if (target && launcherElement?.contains(target)) return;
-    launcherOpen = false;
-  }
+  /* Escape and press-outside are the shared attachment's, on the popover itself; `keep` is
+     the wrapper so the `+` that opened it can shut it again on one press rather than
+     racing its own toggle. */
 </script>
-
-<svelte:window onkeydown={handleKeydown} />
-<svelte:body onpointerdown={handleBodyPointerDown} />
 
 <nav class="minimap" aria-label="Session and open panes">
   {#if lead}
@@ -193,7 +182,7 @@
        of prose restating either is how the name of the agent ended up on screen
        three times. -->
   <div class="controls">
-    <div class="launcher" bind:this={launcherElement}>
+    <div class="launcher">
       <IconButton
         class="rail-icon"
         label="Open a view"
@@ -208,7 +197,12 @@
       </IconButton>
 
       {#if launcherOpen}
-        <div class="launch-menu" role="menu" aria-label="Open a view">
+        <div
+          class="launch-menu"
+          role="menu"
+          aria-label="Open a view"
+          {@attach dismissable({ ondismiss: () => (launcherOpen = false), keep: ".launcher" })}
+        >
           {#each closable as kind (kind)}
             <button type="button" role="menuitem" onclick={() => openKind(kind)}>
               <span class="kicker">{PANE_META[kind].kindLabel}</span>
