@@ -9,10 +9,11 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from temporal_agent_harness.harness.agent_protocol.agent_interface import AgentConfig
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
 # The registered name of the subagent-turn activity. Used by the activity's ``@activity.defn``
@@ -101,3 +102,30 @@ class SubagentTurnResult(BaseModel):
         "stores it and threads it back as the next turn's from_offset, so each turn streams "
         "from where the last one ended (cheap resume, no full-history replay)."
     )
+
+
+class SubagentTransport(Protocol):
+    """Start a subagent, dispatch one turn, and stop the subagent."""
+
+    async def start(self, *, agent_key: str, config: AgentConfig) -> str:
+        """Start a subagent and return its transport target ID."""
+        ...
+
+    async def dispatch(
+        self,
+        *,
+        target: str,
+        msg_type: str,
+        payload: dict[str, Any],
+        expected_turn: int,
+        from_offset: int,
+        handle: str,
+        agent_key: str,
+        parent_stream_context: TurnStreamContext,
+    ) -> SubagentTurnResult:
+        """Send one message and wait for its reply."""
+        ...
+
+    async def stop(self, *, target: str) -> None:
+        """Close the subagent instance."""
+        ...

@@ -1,0 +1,267 @@
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import nexusrpc
+import pytest
+import temporalio.nexus
+from a2a.types import Message, Part, Role, SendMessageRequest
+from nexus_a2a import NexusA2AServiceHandler
+from nexus_mcp.durable_tools_gateway.generated import (
+    DispatchSubagentTurnInput,
+    StartSubagentInput,
+    StopSubagentInput,
+)
+from nexus_mcp.durable_tools_gateway.registry import (
+    SubagentInstanceRoute,
+    ToolRegistryWorkflow,
+)
+from nexus_mcp.durable_tools_gateway.registry_service_handler import (
+    GatewayA2ABackend,
+    RegistryServiceHandler,
+    SubagentDispatchOutput,
+    SubagentStartResult,
+    SubagentStopInput,
+    _check_subagent_response,
+    subagent_proxy_activity,
+    subagent_start_activity,
+    subagent_stop_activity,
+)
+from temporalio.exceptions import ApplicationError
+
+_FAKE_NEXUS_INFO = temporalio.nexus.Info(
+    endpoint="test-endpoint", namespace="test-namespace", task_queue="test-task-queue"
+)
+
+
+def _context(request_id: str = "request-1") -> MagicMock:
+    return MagicMock(
+        request_id=request_id,
+        service="A2AService",
+        operation="SendMessage",
+        headers={},
+        request_deadline=None,
+    )
+
+
+def _client(
+    *, provider_instance_id: str = "provider-instance-1", turn_number: int = 1
+) -> MagicMock:
+    client = MagicMock()
+    handle = MagicMock()
+
+    async def query(method, *args, **kwargs):
+        if method is ToolRegistryWorkflow.find_subagent:
+            return "http://provider"
+        if method is ToolRegistryWorkflow.find_subagent_instance:
+            return SubagentInstanceRoute(
+                alias="writer",
+                url="http://provider-v1",
+                provider_instance_id=provider_instance_id,
+            )
+        raise AssertionError(f"unexpected query: {method}")
+
+    async def execute_activity(activity, input, **kwargs):
+        if activity is subagent_start_activity:
+            return SubagentStartResult(instance_id=provider_instance_id)
+        if activity is subagent_proxy_activity:
+            return SubagentDispatchOutput(
+                output='{"text":"done"}',
+                turn_id="turn-1",
+                turn_number=turn_number,
+                provider_instance_id=provider_instance_id,
+            )
+        if activity is subagent_stop_activity:
+            assert isinstance(input, SubagentStopInput)
+            return None
+        raise AssertionError(f"unexpected activity: {activity}")
+
+    handle.query = AsyncMock(side_effect=query)
+    handle.execute_update = AsyncMock()
+    client.get_workflow_handle.return_value = handle
+    client.execute_activity = AsyncMock(side_effect=execute_activity)
+    return client
+
+
+def test_instance_route_survives_factory_reregistration() -> None:
+    registry = ToolRegistryWorkflow()
+    route = SubagentInstanceRoute(
+        alias="writer",
+        url="http://provider-v1",
+        provider_instance_id="provider-instance-1",
+    )
+    with patch("nexus_mcp.durable_tools_gateway.registry.workflow.logger"):
+        registry.register_subagent("agent-1", "writer", "http://provider-v1")
+        registry.bind_subagent_instance("agent-1", "gateway-instance-1", route)
+        registry.register_subagent("agent-1", "writer", "http://provider-v2")
+
+    assert (
+        registry.find_subagent_instance("agent-1", "gateway-instance-1") == route
+    )
+    registry.unbind_subagent_instance("agent-1", "gateway-instance-1")
+    assert registry.find_subagent_instance("agent-1", "gateway-instance-1") is None
+
+
+def test_lazy_a2a_route_promotes_provider_instance_once() -> None:
+    registry = ToolRegistryWorkflow()
+    provisional = SubagentInstanceRoute(
+        alias="writer", url="http://provider", provider_instance_id=""
+    )
+    resolved = SubagentInstanceRoute(
+        alias="writer", url="http://provider", provider_instance_id="provider-1"
+    )
+
+    registry.bind_subagent_instance("agent-1", "gateway-task-1", provisional)
+    registry.bind_subagent_instance("agent-1", "gateway-task-1", resolved)
+    # A retried lazy-start request must not erase the resolved provider task ID.
+    registry.bind_subagent_instance("agent-1", "gateway-task-1", provisional)
+
+    assert registry.find_subagent_instance("agent-1", "gateway-task-1") == resolved
+
+
+def test_lazy_a2a_route_rejects_provider_replacement() -> None:
+    registry = ToolRegistryWorkflow()
+    registry.bind_subagent_instance(
+        "agent-1",
+        "gateway-task-1",
+        SubagentInstanceRoute(
+            alias="writer", url="http://provider", provider_instance_id="provider-1"
+        ),
+    )
+
+    with pytest.raises(ApplicationError, match="different route"):
+        registry.bind_subagent_instance(
+            "agent-1",
+            "gateway-task-1",
+            SubagentInstanceRoute(
+                alias="writer",
+                url="http://provider",
+                provider_instance_id="provider-2",
+            ),
+        )
+
+
+@patch("temporalio.nexus.info", return_value=_FAKE_NEXUS_INFO)
+async def test_gateway_routes_a2a_message_to_registered_agent(
+    _mock_info: MagicMock,
+) -> None:
+    client = _client(provider_instance_id="provider-task-1")
+    response = await NexusA2AServiceHandler(GatewayA2ABackend(client)).send_message(
+        _context("message-request"),
+        SendMessageRequest(
+            message=Message(
+                message_id="message-1",
+                task_id="gateway-task-1",
+                context_id="gateway-task-1",
+                role=Role.ROLE_USER,
+                parts=[Part(text="hello")],
+                metadata={"temporal.io/message-type": "ask"},
+            ),
+            metadata={
+                "owner_id": "agent-1",
+                "agent_id": "writer",
+                "expected_turn": 1,
+            },
+        ),
+    )
+
+    assert response.task.id == "gateway-task-1"
+    assert response.task.artifacts[0].parts[0].text == "done"
+    activity_input = client.execute_activity.await_args.args[1]
+    assert activity_input.url == "http://provider-v1"
+    assert activity_input.instance_id == "provider-task-1"
+
+
+@patch("temporalio.nexus.info", return_value=_FAKE_NEXUS_INFO)
+async def test_start_binds_a_gateway_instance(_mock_info: MagicMock) -> None:
+    client = _client(provider_instance_id="provider-instance-7")
+    output = await RegistryServiceHandler(client).start_subagent(
+        _context("start-request"),
+        StartSubagentInput(agent_id="agent-1", alias="writer"),
+    )
+
+    activity_input = client.execute_activity.await_args.args[1]
+    bind_args = client.get_workflow_handle.return_value.execute_update.await_args.kwargs[
+        "args"
+    ]
+    assert output.instance_id == bind_args[1]
+    assert bind_args[2] == SubagentInstanceRoute(
+        alias="writer",
+        url="http://provider",
+        provider_instance_id="provider-instance-7",
+    )
+    assert activity_input.idempotency_key == "agent-1:writer:start:start-request"
+    assert client.execute_activity.await_args.kwargs[
+        "schedule_to_close_timeout"
+    ].total_seconds() == 50
+
+
+@patch("temporalio.nexus.info", return_value=_FAKE_NEXUS_INFO)
+async def test_dispatch_key_includes_instance_id(_mock_info: MagicMock) -> None:
+    client = _client()
+    output = await RegistryServiceHandler(client).dispatch_subagent_turn(
+        _context("turn-request"),
+        DispatchSubagentTurnInput(
+            agent_id="agent-1",
+            instance_id="gateway-instance-1",
+            msg_type="ask",
+            payload='{"text":"hello"}',
+            expected_turn=1,
+        ),
+    )
+
+    activity_input = client.execute_activity.await_args.args[1]
+    assert activity_input.idempotency_key == "agent-1:gateway-instance-1:1"
+    assert activity_input.instance_id == "provider-instance-1"
+    assert activity_input.url == "http://provider-v1"
+    assert output.turn_number == 1
+    assert client.execute_activity.await_args.kwargs[
+        "schedule_to_close_timeout"
+    ].total_seconds() == 300
+
+
+@patch("temporalio.nexus.info", return_value=_FAKE_NEXUS_INFO)
+async def test_dispatch_rejects_wrong_remote_turn(_mock_info: MagicMock) -> None:
+    client = _client(turn_number=2)
+    with pytest.raises(nexusrpc.HandlerError):
+        await RegistryServiceHandler(client).dispatch_subagent_turn(
+            _context(),
+            DispatchSubagentTurnInput(
+                agent_id="agent-1",
+                instance_id="gateway-instance-1",
+                msg_type="ask",
+                payload="{}",
+                expected_turn=1,
+            ),
+        )
+
+
+@patch("temporalio.nexus.info", return_value=_FAKE_NEXUS_INFO)
+async def test_stop_targets_one_instance(_mock_info: MagicMock) -> None:
+    client = _client()
+    await RegistryServiceHandler(client).stop_subagent(
+        _context("stop-request"),
+        StopSubagentInput(
+            agent_id="agent-1", instance_id="gateway-instance-1"
+        ),
+    )
+
+    activity_input = client.execute_activity.await_args.args[1]
+    assert activity_input.instance_id == "provider-instance-1"
+    update = client.get_workflow_handle.return_value.execute_update
+    assert update.await_args.args[0] is ToolRegistryWorkflow.unbind_subagent_instance
+    assert update.await_args.kwargs["args"] == ["agent-1", "gateway-instance-1"]
+    assert client.execute_activity.await_args.kwargs[
+        "schedule_to_close_timeout"
+    ].total_seconds() == 50
+
+
+def test_provider_rate_limit_remains_retryable() -> None:
+    response = httpx.Response(
+        429,
+        request=httpx.Request("POST", "http://provider/sessions"),
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        _check_subagent_response(response)
