@@ -223,6 +223,7 @@ _OPENAI_EXAMPLES = [
     ("examples.openai_hello.workflow", "OpenAIHelloAgentWorkflow"),
     ("examples.react_agent.workflow", "ReactAgentWorkflow"),
     ("examples.nexus_hello.workflow", "NexusHelloAgentWorkflow"),
+    ("examples.sandbox_tools.coding_agent.workflow", "SandboxedCodingAgentWorkflow"),
 ]
 
 
@@ -264,8 +265,13 @@ async def test_an_openai_example_still_knows_what_was_said(build, module, name):
             "MontyChatSubagentWorkflow",
             "gemini-3.1-flash-lite",
         ),
+        (
+            "examples.sandbox_tools.coding_agent.workflow",
+            "SandboxedCodingAgentWorkflow",
+            "gpt-4.1",
+        ),
     ],
-    ids=["monty-gemini", "monty-gemini-subagent"],
+    ids=["monty-gemini", "monty-gemini-subagent", "sandbox-coding"],
 )
 async def test_a_model_chosen_with_a_slash_command_survives_the_rollover(
     build, module, name, chosen
@@ -394,5 +400,29 @@ async def test_the_coding_agent_comes_back_knowing_what_it_was_part_way_through(
     ]
     # Rebuilt as TodoItems, not left as the dicts the converter delivers: `todowrite` replaces
     # this list in place with typed items and `todoread` renders `t.status` off them.
+    assert all(isinstance(t, TodoItem) for t in target._todos)
+    assert [t.content for t in target._todos] == [t.content for t in source._todos]
+
+
+async def test_the_sandbox_coding_agent_comes_back_knowing_what_it_was_part_way_through(build):
+    """Same plan-survival claim as the callback coding agent, for the sandboxed twin."""
+    from examples.coding_agent_common.todo_tools import TodoItem
+    from examples.sandbox_tools.coding_agent.workflow import (
+        SandboxedCodingAgentWorkflow as cls,
+    )
+
+    source = build(cls)
+    source._todos = [
+        TodoItem(content="Read config.py", status="completed"),
+        TodoItem(content="Add a test for the parser", status="in_progress"),
+        TodoItem(content="Wire the flag through"),
+    ]
+
+    target = build(cls)
+    await _roll_over(cls, source, target)
+
+    assert [t.content for t in target._todos if t.status == "in_progress"] == [
+        "Add a test for the parser"
+    ]
     assert all(isinstance(t, TodoItem) for t in target._todos)
     assert [t.content for t in target._todos] == [t.content for t in source._todos]

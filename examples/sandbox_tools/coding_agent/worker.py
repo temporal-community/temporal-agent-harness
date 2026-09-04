@@ -4,7 +4,8 @@ Run from the repo root with:
     uv run --extra sandbox --group examples python -m examples.sandbox_tools.coding_agent.worker
 
 Hosts SandboxedCodingAgentWorkflow plus its sandbox lifecycle activities (and the microsandbox
-egress backend provider stub) and its six sandboxed tools' activities (bash/read/write/edit/grep/glob).
+egress backend provider stub), its six sandboxed tools' activities (bash/read/write/edit/grep/glob),
+and ``run_subagent_turn`` so a parent can drive another instance of this same workflow as a child.
 The OpenAI Agents plugin is registered because the agent drives the OpenAI Agents SDK; the plugin
 auto-registers its model activities (including the streaming one). Run `just build-sandbox` once
 before starting this worker — runtime never builds the sandbox image implicitly
@@ -46,10 +47,24 @@ from temporal_agent_harness.ai_sdks.openai_agents_harness import (
 )
 from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.sandbox.activities import sandbox_activities
+from temporal_agent_harness.harness.subagent_activities import SubagentActivities
 
 from .egress import PROVIDER_NAME, microsandbox_openai_egress
 from .tools import SANDBOX, SANDBOXED_CODING_TOOLS
 from .workflow import TASK_QUEUE, SandboxedCodingAgentWorkflow
+
+
+def worker_activities(client: Client) -> list:
+    """Activities this worker hosts, beside the ones the OpenAI Agents plugin registers.
+
+    ``run_subagent_turn`` is how one agent drives another. Subagents are this same workflow
+    on this same queue, so registering it once serves every tier the depth cap allows.
+    """
+    return [
+        *sandbox_activities({PROVIDER_NAME: microsandbox_openai_egress}),
+        *(agent.tool_activity(tool) for tool in SANDBOXED_CODING_TOOLS),
+        SubagentActivities(client).run_subagent_turn,
+    ]
 
 
 async def main() -> None:
@@ -80,10 +95,7 @@ async def main() -> None:
         client,
         task_queue=task_queue,
         workflows=[SandboxedCodingAgentWorkflow],
-        activities=[
-            *sandbox_activities({PROVIDER_NAME: microsandbox_openai_egress}),
-            *(agent.tool_activity(tool) for tool in SANDBOXED_CODING_TOOLS),
-        ],
+        activities=worker_activities(client),
     )
     sandbox_backend = (
         "local"
