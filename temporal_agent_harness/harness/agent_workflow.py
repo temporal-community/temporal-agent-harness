@@ -80,8 +80,10 @@ from temporal_agent_harness.harness.agent_protocol import (
     PendingCallback,
     PendingTurn,
     SlashCommand,
+    SubagentClosePolicy,
     SubagentInfo,
     SubagentReplyReceived,
+    SubagentReusePolicy,
     SubagentStarted,
     SubagentStopped,
     SubagentTransport,
@@ -304,7 +306,11 @@ def _current_runner() -> AgentWorkflowRunner:
 
 
 async def _apply_approval_policy(
-    tool_name: str, tool_input: dict[str, Any], *, inherently_safe: bool
+    tool_name: str,
+    tool_input: dict[str, Any],
+    *,
+    inherently_safe: bool,
+    force: bool = False,
 ) -> None:
     """Enforce the agent's tool-approval policy for the in-flight tool call.
 
@@ -312,7 +318,9 @@ async def _apply_approval_policy(
     First consults the runner's live :class:`ToolApprovalPolicy` plus optional custom
     fallback via :meth:`AgentWorkflowRunner._auto_approves`:
 
-      * auto-approved → returns immediately; the tool dispatches with no human gate.
+      * auto-approved → returns immediately; the tool dispatches with no human gate
+        (unless ``force`` is true for a more specific policy such as ``ask-user`` child
+        closure).
       * otherwise → registers the call as PENDING (also exposed via the ``agent_status``
         query), publishes :class:`ToolApprovalRequested`, then waits — indefinitely, on a
         ``wait_condition`` so no activity timeout is consumed — for a ``tool_approval``
@@ -337,7 +345,9 @@ async def _apply_approval_policy(
             f"tool {tool_name!r} has no active runner — it must be invoked via "
             f"run_tool within an active turn"
         )
-    if runner._auto_approves(tool_name, tool_input, inherently_safe=inherently_safe):
+    if not force and runner._auto_approves(
+        tool_name, tool_input, inherently_safe=inherently_safe
+    ):
         return  # policy (or custom fallback) approves — dispatch without gating.
     tool_id = _current_tool_id()
     ctx = runner.current_stream_context
@@ -353,6 +363,7 @@ async def _apply_approval_policy(
         ctx.turn_number,
         ctx.turn_id,
         inherently_safe=inherently_safe,
+        policy_exempt=force,
     )
     runner._pub(
         ctx.turn_id,
@@ -752,6 +763,9 @@ class _ApprovalEntry:
     # The tool's static ``inherently_safe`` self-assertion, retained so a runtime policy
     # change can re-evaluate this still-PENDING call against the new policy.
     inherently_safe: bool
+    # A more specific harness policy requires an explicit human decision, so general
+    # policy updates and "remember" allow-listing must not auto-resolve this entry.
+    policy_exempt: bool = False
     status: _ApprovalStatus = _ApprovalStatus.PENDING
     reason: str | None = None
     # Whether the resolving decision asked to be remembered (allow-list this tool). False
@@ -847,6 +861,7 @@ class _SubagentInstance:
     transport: SubagentTransport
     next_expected_turn: int = 1
     last_consumed_offset: int = 0
+    last_used_sequence: int = 0
     # FIFO gate: tickets handed out in call order; the holder whose ticket == _serving runs.
     _next_ticket: int = 0
     _serving: int = 0
@@ -890,6 +905,8 @@ class _WorkflowStatus:
         agent_id: str,
         is_message_queuing_enabled: bool,
         approval_policy: ToolApprovalPolicy,
+        subagent_close_policy: SubagentClosePolicy = SubagentClosePolicy.ASK_USER,
+        subagent_reuse_policy: SubagentReusePolicy = SubagentReusePolicy.USE_EXISTING,
         has_custom_approval_fallback: bool = False,
     ) -> None:
         # This agent's own short id — stamped on every event (via current_stream_context for
@@ -901,6 +918,8 @@ class _WorkflowStatus:
         self._pending_turns: list[tuple[AgentMessage, str]] = []
         self._is_message_queuing_enabled: bool = is_message_queuing_enabled
         self._approval_policy: ToolApprovalPolicy = approval_policy
+        self._subagent_close_policy = subagent_close_policy
+        self._subagent_reuse_policy = subagent_reuse_policy
         self._has_custom_approval_fallback: bool = has_custom_approval_fallback
         # Gated tool calls awaiting a human decision, keyed by per-call tool id.
         # Entries are retained after resolution (status flips) for idempotency.
@@ -910,6 +929,7 @@ class _WorkflowStatus:
         self._callbacks: dict[str, _CallbackEntry] = {}
         # Subagents this agent is driving, keyed by their model-facing ``subagent_id``.
         self._subagents: dict[str, _SubagentInstance] = {}
+        self._subagent_use_sequence = 0
 
     @property
     def current_turn(self) -> int:
@@ -976,6 +996,7 @@ class _WorkflowStatus:
         turn_id: str,
         *,
         inherently_safe: bool,
+        policy_exempt: bool = False,
     ) -> None:
         """Record a gated tool call as PENDING approval. Called by the gate when the
         active policy does not auto-approve the call."""
@@ -986,6 +1007,7 @@ class _WorkflowStatus:
             turn_number=turn_number,
             turn_id=turn_id,
             inherently_safe=inherently_safe,
+            policy_exempt=policy_exempt,
         )
 
     def approval_entry(self, tool_id: str) -> _ApprovalEntry | None:
@@ -999,7 +1021,12 @@ class _WorkflowStatus:
         return entry is not None and entry.status is not _ApprovalStatus.PENDING
 
     def resolve_approval(
-        self, tool_id: str, *, approved: bool, reason: str | None, remember: bool = False
+        self,
+        tool_id: str,
+        *,
+        approved: bool,
+        reason: str | None,
+        remember: bool = False,
     ) -> None:
         """Apply a human decision to a PENDING approval. The update validator has
         already rejected unknown / already-resolved ids, so this just flips status.
@@ -1056,6 +1083,20 @@ class _WorkflowStatus:
         """Replace the live approval policy. The runner re-evaluates pending approvals
         against it — see :meth:`AgentWorkflowRunner._apply_policy_update`."""
         self._approval_policy = policy
+
+    @property
+    def subagent_close_policy(self) -> SubagentClosePolicy:
+        return self._subagent_close_policy
+
+    def set_subagent_close_policy(self, policy: SubagentClosePolicy) -> None:
+        self._subagent_close_policy = policy
+
+    @property
+    def subagent_reuse_policy(self) -> SubagentReusePolicy:
+        return self._subagent_reuse_policy
+
+    def set_subagent_reuse_policy(self, policy: SubagentReusePolicy) -> None:
+        self._subagent_reuse_policy = policy
 
     # -- Callback-tool registry ---------------------------------------------
 
@@ -1149,14 +1190,34 @@ class _WorkflowStatus:
         return handle in self._subagents
 
     def register_subagent(
-        self, handle: str, workflow_id: str, agent_key: str, transport: SubagentTransport
+        self,
+        handle: str,
+        workflow_id: str,
+        agent_key: str,
+        transport: SubagentTransport,
     ) -> _SubagentInstance:
         """Record a freshly-started subagent under its short ``handle`` and return its entry."""
+        self._subagent_use_sequence += 1
         inst = _SubagentInstance(
-            handle=handle, workflow_id=workflow_id, agent_key=agent_key, transport=transport
+            handle=handle,
+            workflow_id=workflow_id,
+            agent_key=agent_key,
+            transport=transport,
+            last_used_sequence=self._subagent_use_sequence,
         )
         self._subagents[handle] = inst
         return inst
+
+    def reusable_subagent(self, agent_key: str) -> _SubagentInstance | None:
+        """Return the most recently used matching child, if one is still tracked."""
+        matches = (
+            inst for inst in self._subagents.values() if inst.agent_key == agent_key
+        )
+        return max(matches, key=lambda inst: inst.last_used_sequence, default=None)
+
+    def mark_subagent_used(self, inst: _SubagentInstance) -> None:
+        self._subagent_use_sequence += 1
+        inst.last_used_sequence = self._subagent_use_sequence
 
     def subagent(self, handle: str) -> _SubagentInstance:
         """The tracking entry for ``handle``, or raise if the parent never started it.
@@ -1216,6 +1277,8 @@ class _WorkflowStatus:
             subagents=self.active_subagents(),
             approval_policy=self._approval_policy,
             has_custom_approval_fallback=self._has_custom_approval_fallback,
+            subagent_close_policy=self._subagent_close_policy,
+            subagent_reuse_policy=self._subagent_reuse_policy,
         )
 
 
@@ -1245,6 +1308,8 @@ class AgentWorkflowRunner:
         stream: WorkflowStream,
         approval_policy_default: ToolApprovalPolicy,
         enable_message_queuing_default: bool = False,
+        subagent_close_policy_default: SubagentClosePolicy = SubagentClosePolicy.ASK_USER,
+        subagent_reuse_policy_default: SubagentReusePolicy = SubagentReusePolicy.USE_EXISTING,
         custom_approval_fallback: CustomApprovalFallback | None = None,
         slash_commands: Iterable[SlashCommandDefinition] | None = None,
     ) -> None:
@@ -1294,6 +1359,16 @@ class AgentWorkflowRunner:
             if config.is_message_queuing_enabled is not None
             else enable_message_queuing_default
         )
+        subagent_close_policy = (
+            config.subagent_close_policy
+            if config.subagent_close_policy is not None
+            else subagent_close_policy_default
+        )
+        subagent_reuse_policy = (
+            config.subagent_reuse_policy
+            if config.subagent_reuse_policy is not None
+            else subagent_reuse_policy_default
+        )
         # This agent's short id, stamped on every event it publishes and reported on its status
         # query. A parent assigns it when starting a subagent (pushing down the same short handle
         # it references the subagent by — see start_subagent); a top-level agent left with no id
@@ -1312,6 +1387,8 @@ class AgentWorkflowRunner:
             agent_id=self._agent_id,
             is_message_queuing_enabled=is_message_queuing_enabled,
             approval_policy=approval_policy,
+            subagent_close_policy=subagent_close_policy,
+            subagent_reuse_policy=subagent_reuse_policy,
             has_custom_approval_fallback=custom_approval_fallback is not None,
         )
         self._closed = False
@@ -1377,7 +1454,9 @@ class AgentWorkflowRunner:
 
     # -- Protocol handlers --------------------------------------------------
 
-    async def _handle_send_agent_message(self, message: AgentMessage) -> AgentMessageReply:
+    async def _handle_send_agent_message(
+        self, message: AgentMessage
+    ) -> AgentMessageReply:
         # Capture the stream head BEFORE publishing anything for this message: it is the
         # client stream-merge's read-start hint (``accepted_offset``). The handler body is
         # synchronous (no await that yields), so this runs atomically before the turn loop can
@@ -1510,13 +1589,20 @@ class AgentWorkflowRunner:
         ``tool_approval_resolved`` is causally ordered before the events of any call the
         cascade auto-resolves as a consequence (see :meth:`_resolve_and_publish`)."""
         entry = self._status.approval_entry(decision.tool_id)
+        remember = decision.remember and not (
+            entry is not None and entry.policy_exempt
+        )
         self._resolve_and_publish(
             decision.tool_id,
             approved=decision.approved,
             reason=decision.reason,
-            remember=decision.remember,
+            remember=remember,
         )
-        if decision.approved and decision.remember and entry is not None:
+        if (
+            decision.approved
+            and remember
+            and entry is not None
+        ):
             self._apply_policy_update(
                 self._status.approval_policy.with_tool_allowed(entry.tool_name)
             )
@@ -1612,6 +1698,20 @@ class AgentWorkflowRunner:
         """
         self._apply_policy_update(policy)
 
+    @property
+    def current_subagent_close_policy(self) -> SubagentClosePolicy:
+        return self._status.subagent_close_policy
+
+    def set_subagent_close_policy(self, policy: SubagentClosePolicy) -> None:
+        self._status.set_subagent_close_policy(policy)
+
+    @property
+    def current_subagent_reuse_policy(self) -> SubagentReusePolicy:
+        return self._status.subagent_reuse_policy
+
+    def set_subagent_reuse_policy(self, policy: SubagentReusePolicy) -> None:
+        self._status.set_subagent_reuse_policy(policy)
+
     def _auto_approves(
         self, tool_name: str, tool_input: dict[str, Any], *, inherently_safe: bool
     ) -> bool:
@@ -1648,7 +1748,7 @@ class AgentWorkflowRunner:
         calls pending (they still need an explicit decision)."""
         self._status.set_approval_policy(new_policy)
         for entry in self._status.pending_approval_entries():
-            if self._auto_approves(
+            if not entry.policy_exempt and self._auto_approves(
                 entry.tool_name, entry.tool_input, inherently_safe=entry.inherently_safe
             ):
                 self._resolve_and_publish(
@@ -1912,7 +2012,11 @@ class AgentWorkflowRunner:
         return SlashCommandContext(
             current_status=self.current_status,
             current_approval_policy=self.current_approval_policy,
+            current_subagent_close_policy=self.current_subagent_close_policy,
+            current_subagent_reuse_policy=self.current_subagent_reuse_policy,
             set_approval_policy=self.set_approval_policy,
+            set_subagent_close_policy=self.set_subagent_close_policy,
+            set_subagent_reuse_policy=self.set_subagent_reuse_policy,
             close=self._handle_close,
         )
 
@@ -1970,7 +2074,9 @@ class AgentWorkflowRunner:
             envelope, turn_id = self._status.start_next_turn()
             turn_number = self._status.current_turn
             self._pub(
-                turn_id, turn_number, TurnStarted(user_message=_render_message(envelope))
+                turn_id,
+                turn_number,
+                TurnStarted(user_message=_render_message(envelope)),
             )
             try:
                 result = await self._dispatch_turn(agent, envelope)
@@ -1987,14 +2093,20 @@ class AgentWorkflowRunner:
                 # end-of-turn signal) before looping back to wait for the next message.
                 self._status.complete_turn()
                 self._pub(turn_id, turn_number, TurnEnded())
-        await self._stop_all_subagents()
+        await self._apply_subagent_close_policy()
+
+    async def _apply_subagent_close_policy(self) -> None:
+        """Apply the effective policy after this parent's turn loop closes."""
+        if self.current_subagent_close_policy is SubagentClosePolicy.CLOSE:
+            await self._stop_all_subagents()
 
     async def _stop_all_subagents(self) -> None:
         """Stop every active subagent through its transport when this agent closes normally.
 
-        A failure to stop one target is logged but cannot prevent cleanup of the others. The
-        concrete child-workflow transport separately pins Temporal's parent-close policy for
-        abnormal parent exits, where this normal runner finalizer may not complete.
+        This runs only for the ``close`` lifecycle policy. A failure to stop one target is logged
+        but cannot prevent cleanup of the others. ``keep-open`` and ``ask-user`` intentionally
+        leave children running, which is why the concrete child-workflow transport uses
+        :attr:`~temporalio.workflow.ParentClosePolicy.ABANDON`.
         """
         for inst in self._status.subagent_instances():
             try:
@@ -2027,7 +2139,7 @@ class AgentWorkflowRunner:
                 f"expected {handler.output_type.__name__}",
                 type="BadHandlerReturn",
                 non_retryable=True,
-        )
+            )
         return result
 
     def _handle_slash_command(self, command: SlashCommand) -> TextReply | None:
@@ -2077,6 +2189,11 @@ class AgentWorkflowRunner:
         instance in later ``send_<function>`` / ``stop_<key>`` calls (a parent may run several
         instances of one ``agent_key``); the workflow-side resolves ``handle`` → transport +
         target internally."""
+        if self.current_subagent_reuse_policy is SubagentReusePolicy.USE_EXISTING:
+            existing = self._status.reusable_subagent(agent_key)
+            if existing is not None:
+                self._status.mark_subagent_used(existing)
+                return existing.handle
         handle = self._fresh_subagent_handle()
         # Push the handle down as the subagent's own agent_id so a harness-native target stamps it
         # on every event it publishes — unifying "the id the parent references this subagent by"
@@ -2116,6 +2233,36 @@ class AgentWorkflowRunner:
         )
         self._status.remove_subagent(handle)
 
+    async def authorize_subagent_stop(self, tool_name: str, handle: str) -> None:
+        """Apply lifecycle policy before a generated ``stop_<agent>`` tool runs.
+
+        This policy is authoritative: ``ask-user`` must still ask when the general
+        tool policy skips approvals, while ``close`` must not acquire an unrelated
+        approval gate. Validate ownership first so an unknown child never produces a
+        misleading approval request.
+        """
+        self._status.subagent(handle)
+        if self.current_subagent_close_policy is SubagentClosePolicy.ASK_USER:
+            await _apply_approval_policy(
+                tool_name,
+                {"subagent": handle},
+                inherently_safe=False,
+                force=True,
+            )
+
+    async def request_subagent_stop(self, handle: str) -> bool:
+        """Apply the current close policy to an already-authorized model request.
+
+        Returns whether the child was stopped. The policy is read again after a
+        possibly long human-approval wait, so a concurrent operator change to
+        ``keep-open`` wins safely.
+        """
+        self._status.subagent(handle)
+        if self.current_subagent_close_policy is SubagentClosePolicy.KEEP_OPEN:
+            return False
+        await self.stop_subagent(handle)
+        return True
+
     async def run_subagent_turn(
         self, handle: str, msg_type: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -2134,9 +2281,7 @@ class AgentWorkflowRunner:
         for a turn the subagent accepted-but-errored, so the next send isn't spuriously stale."""
         inst = self._status.subagent(handle)  # raises UnknownSubagent
         ticket = inst.take_ticket()  # synchronous → FIFO admission in call order
-        await workflow.wait_condition(
-            lambda: inst.is_serving(ticket) or self._closed
-        )
+        await workflow.wait_condition(lambda: inst.is_serving(ticket) or self._closed)
         if not inst.is_serving(ticket):
             # Woke on agent close while still queued behind an earlier turn.
             raise ApplicationError(
@@ -2146,6 +2291,7 @@ class AgentWorkflowRunner:
             )
         try:
             expected = inst.next_expected_turn
+            self._status.mark_subagent_used(inst)
             # The dispatch marker (SubagentMessageSent) is published by the transport WHEN it
             # actually sends the message to the subagent — not here before ``dispatch`` (there can
             # be a real gap before an activity or Nexus operation runs). The parent turn context +
@@ -2301,7 +2447,9 @@ class AgentWorkflowRunner:
         """
         client = WorkflowStreamClient.from_within_activity(
             batch_interval=(
-                DEFAULT_PUBLISH_BATCH_INTERVAL if batch_interval is None else batch_interval
+                DEFAULT_PUBLISH_BATCH_INTERVAL
+                if batch_interval is None
+                else batch_interval
             ),
         )
         # ``from_within_activity`` targets the workflow that SCHEDULED this activity (always the
@@ -2490,8 +2638,9 @@ def _tool_signatures(user_fn: Callable[..., Any]) -> _ToolSig:
     )
 
 
-def _apply_model_facing_views(wrapper: Any, user_fn: Callable[..., Any], sig: _ToolSig,
-                              tool_name: str) -> None:
+def _apply_model_facing_views(
+    wrapper: Any, user_fn: Callable[..., Any], sig: _ToolSig, tool_name: str
+) -> None:
     """Stamp the wrapper with the MODEL-facing name/doc/signature/annotations.
 
     Deliberately does NOT set ``__wrapped__``: the schema builder (the plugin's
@@ -2574,7 +2723,9 @@ def activity_tool_defn(
                 except Exception as e:
                     pub.publish(
                         ToolErrorEvent(
-                            tool_id=tool_ctx.tool_id, tool_name=tool_name, message=str(e)
+                            tool_id=tool_ctx.tool_id,
+                            tool_name=tool_name,
+                            message=str(e),
                         )
                     )
                     raise
@@ -2677,7 +2828,9 @@ def tool_activity(tool: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def tool_defn(
-    *, inherently_safe: bool = False
+    *,
+    inherently_safe: bool = False,
+    _approval_gate: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
 ) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
     """Define an agent tool that runs INLINE in the workflow (no activity)::
 
@@ -2696,6 +2849,10 @@ def tool_defn(
     deterministic, side-effect-free-ish work that belongs in the workflow itself; reach for
     :func:`activity_tool_defn` when the work must cross into an activity (I/O,
     nondeterminism, long-running).
+
+    ``_approval_gate`` is reserved for harness-provided tools whose more specific policy
+    replaces the general tool policy. It runs before ``tool_start`` so an approval remains
+    a true pre-execution gate.
     """
 
     def decorator(user_fn: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
@@ -2725,9 +2882,12 @@ def tool_defn(
                 ) from None
 
             model_input = _tool_input(sig.model_sig, args, kwargs)
-            await _apply_approval_policy(
-                tool_name, model_input, inherently_safe=inherently_safe
-            )
+            if _approval_gate is None:
+                await _apply_approval_policy(
+                    tool_name, model_input, inherently_safe=inherently_safe
+                )
+            else:
+                await _approval_gate(tool_name, model_input)
 
             runner._pub(
                 ctx.turn_id,
@@ -2779,7 +2939,11 @@ def _assert_callback_stub(stub_fn: Callable[..., Any]) -> None:
     except (OSError, TypeError, SyntaxError):
         return  # source unavailable — can't verify the stub shape; skip.
     node = next(
-        (n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))),
+        (
+            n
+            for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ),
         None,
     )
     if node is None:

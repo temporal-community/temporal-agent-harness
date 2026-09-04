@@ -224,6 +224,8 @@ class HarnessControlServiceHandler:
             subagents=[_nexus_subagent_info(item) for item in status.subagents],
             approval_policy=_nexus_approval_policy(status.approval_policy),
             has_custom_approval_fallback=status.has_custom_approval_fallback,
+            subagent_close_policy=status.subagent_close_policy.value,
+            subagent_reuse_policy=status.subagent_reuse_policy.value,
         )
 
     # -----------------------------------------------------------------------
