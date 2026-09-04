@@ -699,9 +699,20 @@ export class PaneStack {
       this.focusAdjacent(delta);
       return;
     }
-    const next = loc.group + delta;
-    if (next < 0 || next >= this.groups.length) return;
-    const group = this.groups[next];
+    this.focusColumnAt(loc.group + delta);
+  }
+
+  /**
+   * Land on the column at a place along the rail, on whichever of its tabs is in front.
+   *
+   * Shared with `focusAlongRail` rather than written twice, which is what keeps stepping
+   * to a column and jumping straight to it landing in the same place — including the
+   * unfolding, which a jump that skipped it would leave the reader focused on a spine.
+   * Out of range is nothing at all: there is no column there to land on.
+   */
+  focusColumnAt(index: number): void {
+    const group = this.groups[index];
+    if (!group) return;
     for (const pane of group) pane.collapsed = false;
     this.focusPane(activeIn(group).id);
   }

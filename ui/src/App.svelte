@@ -234,6 +234,14 @@
         if (axis === "along") activeStack.movePane(id, delta);
         else activeStack.movePaneAcross(id, delta);
       },
+      /* The rail the reader last touched, like every other pane key — the drawer is a rail
+         and its columns are countable the same way. `9` is read here rather than in the
+         table because how many columns there are is the desk's fact, not the key's. */
+      focusSlot(slot) {
+        const last = activeStack.groups.length - 1;
+        activeStack.focusColumnAt(slot === 9 ? last : slot - 1);
+        activeRail?.focusCurrent();
+      },
       toggleBleed: () => activeStack.toggleBleed(),
       /* Both, not the active one. A bled drawer hides the rail above it, so the
          only thing left to click is the transport — which moves the active rail

@@ -32,6 +32,11 @@ tools/scroll-probe/*
 # against a stubbed DOM; only a browser can say whether each site's `keep` selector matches
 # the surface it meant, and that the desk's own Escape is still unclaimed.
 !tools/verify-dismissable.mjs
+# Drives the digit keys, which resolve to a rail slot in a table this repo can check purely
+# and reach a column only in a browser: which rail of the two they land on is App.svelte's
+# question, and the guard's other half — that a bare digit still types one — has no meaning
+# outside a real text field. Nine claims, non-zero exit.
+!tools/slot-keys-verify.mjs
 # The badge harnesses, tracked with the fix they measure: a language tag pinned against
 # a scroller is a thing no assertion about styles can see.
 !tools/codebadge-shots/

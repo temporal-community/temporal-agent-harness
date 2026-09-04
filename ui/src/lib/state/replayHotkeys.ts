@@ -41,7 +41,20 @@ export type ReplayAction =
   | "railMoveNext"
   | "railMovePreviousTab"
   | "railMoveNextTab"
-  | "railToggleBleed";
+  | "railToggleBleed"
+  | `railFocusSlot${RailSlot}`;
+
+/**
+ * The digits a column can be reached by, and the whole of what a digit means here.
+ *
+ * `9` is the last column rather than the ninth, which is what every browser and every
+ * editor that binds these keys does, and the only reading that is useful on a rail whose
+ * length changes all day. Everything between is the column's place along the rail,
+ * counted from the left.
+ */
+export type RailSlot = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+
+const RAIL_SLOTS: readonly RailSlot[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 /** Which surface a binding drives, and the heading it is filed under in help. */
 export type ReplayScope = "replay" | "rail";
@@ -57,6 +70,16 @@ export interface ReplayBinding {
   alt?: boolean;
   /** Required Ctrl-or-Meta state — one field, because they are one chord on two platforms. */
   mod?: boolean;
+  /**
+   * Ctrl specifically, and not Meta. The one place the two have to be told apart.
+   *
+   * `mod` is right for every chord a platform spells with its own command key, and wrong
+   * for the digits: Cmd+1 is "first tab" on macOS and Ctrl+1 is "first tab" on Windows, so
+   * `mod` would collide with the browser on both. Ctrl is bound to nothing at all on macOS
+   * — it is not in Chromium's mac shortcut table and not in Safari's menus — which is why
+   * it is the one digit chord that is free rather than merely contested.
+   */
+  ctrl?: boolean;
   /** How the chord reads in the help overlay. */
   chord: string;
   label: string;
@@ -128,7 +151,23 @@ export const REPLAY_BINDINGS: readonly ReplayBinding[] = [
   { action: "railMovePreviousTab", scope: "rail", key: "ArrowUp", shift: true, mod: true, chord: "Cmd Shift ↑", label: "Move the focused pane up, or into the column before" },
   { action: "railMoveNextTab", scope: "rail", key: "ArrowDown", shift: true, mod: true, chord: "Cmd Shift ↓", label: "Move the focused pane down, or into the column after" },
   /* Unmodified, because Cmd+F is the browser's and Alt+F is a menu. */
-  { action: "railToggleBleed", scope: "rail", key: "f", shift: false, chord: "F", label: "Full-screen the focused pane, and back" }
+  { action: "railToggleBleed", scope: "rail", key: "f", shift: false, chord: "F", label: "Full-screen the focused pane, and back" },
+
+  /* The digits, one row each because the table matches on the key and the dispatcher is
+     handed the action alone. Written out rather than hand-listed nine times over: the
+     only thing that differs between them is the number, and a hand-written list is nine
+     chances to typo one. */
+  ...RAIL_SLOTS.map(
+    (slot): ReplayBinding => ({
+      action: `railFocusSlot${slot}`,
+      scope: "rail",
+      key: String(slot),
+      shift: false,
+      ctrl: true,
+      chord: `Ctrl ${slot}`,
+      label: slot === 9 ? "Focus the last column" : `Focus column ${slot}`
+    })
+  )
 ];
 
 /**
@@ -140,6 +179,9 @@ export interface ReplayKeyContext {
   altKey: boolean;
   /** Ctrl or Meta is down. One flag, because they are one chord on two platforms. */
   modKey: boolean;
+  /** Ctrl and Meta apart, which only the digit rows have any use for. */
+  ctrlKey: boolean;
+  metaKey: boolean;
   /** An IME is composing a character and these keystrokes are spelling it. */
   composing: boolean;
   /** Focus is in a text field, a select, or a contenteditable region. */
@@ -212,6 +254,8 @@ export function describeReplayKeyEvent(
     shiftKey: event.shiftKey,
     altKey: event.altKey,
     modKey: event.ctrlKey || event.metaKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
     helpOpen: surfaces.helpOpen,
     bleeding: surfaces.bleeding,
     /* `isComposing` is the right question, but Chromium answers it late for the
@@ -277,7 +321,12 @@ export function resolveReplayAction(context: ReplayKeyContext): ReplayAction | n
       candidate.key === key &&
       (candidate.shift === null || candidate.shift === context.shiftKey) &&
       (candidate.alt ?? false) === context.altKey &&
-      (candidate.mod ?? false) === context.modKey &&
+      /* A row that names Ctrl wants Ctrl on its own: Ctrl+Cmd+1 is Safari's bookmarks
+         sidebar, and a match on Ctrl alone would take it. Everything else asks the
+         union, which is the whole point of `mod`. */
+      (candidate.ctrl
+        ? context.ctrlKey && !context.metaKey
+        : (candidate.mod ?? false) === context.modKey) &&
       isLive(candidate, context)
   );
 
@@ -301,6 +350,18 @@ export interface RailSurface {
   focus(axis: RailAxis, delta: -1 | 1): void;
   /** Carry the focused pane one place the same two ways. */
   move(axis: RailAxis, delta: -1 | 1): void;
+  /**
+   * Land on a column by its place along the rail, and put DOM focus there.
+   *
+   * A place, not a pane and not a kind. A stable per-pane number would have to be kept
+   * somewhere and would turn over every time a pane closed, and a number per kind cannot
+   * address the second log. What a reader points at is the column they can see, counted
+   * from the left, which is the same thing `focus("along", …)` walks one step at a time.
+   *
+   * A slot with no column behind it does nothing at all — no wrap, no nearest match. The
+   * rail is short and the reader can see how short it is.
+   */
+  focusSlot(slot: RailSlot): void;
   toggleBleed(): void;
   exitBleed(): void;
 }
@@ -315,6 +376,11 @@ export interface ReplaySurface {
   rail: RailSurface;
 }
 
+/** Nine rows that differ only by a number, told apart from the rest before the switch. */
+function isRailSlotAction(action: ReplayAction): action is `railFocusSlot${RailSlot}` {
+  return action.startsWith("railFocusSlot");
+}
+
 /**
  * What a key does, in one place. The window handler calls this and so does
  * `check-replay-hotkeys.mjs`, which is the only way that check can compare what two bindings
@@ -322,6 +388,14 @@ export interface ReplaySurface {
  */
 export function applyReplayAction(action: ReplayAction, surface: ReplaySurface): void {
   const { run, rail } = surface;
+
+  /* Ahead of the switch rather than as nine cases of it. A type predicate rather than a
+     plain string test, so the union the switch sees below is narrowed by exactly these
+     nine and `default` still narrows to `never`. */
+  if (isRailSlotAction(action)) {
+    rail.focusSlot(Number(action.slice(-1)) as RailSlot);
+    return;
+  }
 
   /* Every case breaks rather than returning, which is left as it is now that nothing runs after
      the switch: `default` narrowing `action` to `never` is what makes an unhandled action a

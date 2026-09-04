@@ -44,6 +44,8 @@ function press(overrides = {}) {
     shiftKey: false,
     altKey: false,
     modKey: false,
+    ctrlKey: false,
+    metaKey: false,
     composing: false,
     typing: false,
     spaceActivates: false,
@@ -89,6 +91,42 @@ assert.equal(resolveReplayAction(press({ key: "F" })), "railToggleBleed", "caps 
 assert.equal(resolveReplayAction(press({ key: "f", modKey: true })), null, "Cmd+F is browser find");
 assert.equal(resolveReplayAction(press({ key: "f", altKey: true })), null, "Alt+F is a menu");
 
+/* The digits, which address a column by its place along the rail. Ctrl and not Cmd, and that
+   is the whole reason the two are separate fields in the context: Cmd+1 is "first tab" on
+   macOS and Ctrl+1 is "first tab" on Windows, so the chord `mod` spells is the browser's on
+   whichever platform it lands. Ctrl on macOS is bound to nothing — it appears nowhere in
+   Chromium's mac shortcut table and nowhere in Safari's menus — so it is the one digit chord
+   that is free rather than merely contested. */
+const ctrl = (key) => press({ key, modKey: true, ctrlKey: true });
+/* What a digit reaches once it has resolved — which column of which of the two rails — is
+   App.svelte's question and not this table's, so it is measured in a browser by
+   ui/tools/slot-keys-verify.mjs, along with the half of the typing guard that only means
+   anything in a real text field: that a bare 1 still types a 1. */
+assert.equal(resolveReplayAction(ctrl("1")), "railFocusSlot1");
+assert.equal(resolveReplayAction(ctrl("2")), "railFocusSlot2");
+assert.equal(resolveReplayAction(ctrl("9")), "railFocusSlot9");
+assert.equal(
+  resolveReplayAction(press({ key: "1" })),
+  null,
+  "a bare digit is the page's — it must still type a 1"
+);
+assert.equal(
+  resolveReplayAction(press({ key: "1", modKey: true, metaKey: true })),
+  null,
+  "Cmd+1 stays the browser's tab switcher"
+);
+assert.equal(
+  resolveReplayAction(press({ key: "1", modKey: true, ctrlKey: true, metaKey: true })),
+  null,
+  "Ctrl+Cmd+1 is Safari's bookmarks sidebar, and a Ctrl row must not take it"
+);
+assert.equal(
+  resolveReplayAction(press({ key: "1", modKey: true, ctrlKey: true, shiftKey: true })),
+  null,
+  "Ctrl+Shift+1 is nobody's here"
+);
+assert.equal(resolveReplayAction(ctrl("0")), null, "there is no zeroth column");
+
 /* Escape resolves against what is actually on screen, which is why it is one row and not two.
    With neither surface up the key is nobody's and the browser keeps it — a Escape that is always
    swallowed is one that cannot cancel a drag or dismiss a native prompt. */
@@ -106,7 +144,8 @@ for (const binding of REPLAY_BINDINGS) {
     key: binding.key,
     shiftKey: binding.shift === true,
     altKey: binding.alt === true,
-    modKey: binding.mod === true,
+    modKey: binding.mod === true || binding.ctrl === true,
+    ctrlKey: binding.ctrl === true,
     helpOpen: true,
     bleeding: true
   });
@@ -168,7 +207,7 @@ for (const binding of REPLAY_BINDINGS) {
       key: binding.key,
       shiftKey: binding.shift === true,
       altKey: binding.alt === true,
-      ctrlKey: binding.mod === true
+      ctrlKey: binding.mod === true || binding.ctrl === true
     }),
     helpOpen: true,
     bleeding: true
@@ -322,7 +361,22 @@ function stubRail() {
     tab: 0,
     bleeding: null,
     reset({ column, tab }) {
-      rail.columns = [["a1", "a2"], ["b1"], ["c1", "c2", "c3"]];
+      /* Ten columns, because nine digits have to be able to differ from each other and from
+         "the last one". On a three-column rail Ctrl+3 and Ctrl+9 land in the same place and
+         Ctrl+4 through Ctrl+8 land nowhere, which is honest behaviour on a short desk and
+         useless as a way to tell nine rows apart. */
+      rail.columns = [
+        ["a1", "a2"],
+        ["b1"],
+        ["c1", "c2", "c3"],
+        ["d1"],
+        ["e1"],
+        ["f1"],
+        ["g1"],
+        ["h1"],
+        ["i1"],
+        ["j1"]
+      ];
       rail.column = column;
       rail.tab = tab;
       rail.bleeding = null;
@@ -335,6 +389,15 @@ function stubRail() {
         return;
       }
       rail.tab = clamp(rail.tab + delta, rail.columns[rail.column].length - 1);
+    },
+    /* `9` is the last column and everything else is counted from the left, which is the
+       app's own reading of the digit — App.svelte resolves it against the rail's length
+       for the same reason this stub does: the table hands over a number, not a place. */
+    focusSlot(slot) {
+      const index = slot === 9 ? rail.columns.length - 1 : slot - 1;
+      if (index < 0 || index >= rail.columns.length) return;
+      rail.column = index;
+      rail.tab = 0;
     },
     move(axis, delta) {
       const id = rail.focusedId();
