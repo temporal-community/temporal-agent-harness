@@ -315,49 +315,6 @@ export interface ReplaySurface {
   rail: RailSurface;
 }
 
-let keyboardSeeks = 0;
-
-/**
- * How many times a replay *key* has moved the playhead.
- *
- * The number itself means nothing; a change in it does. Keyboard and click both
- * end up calling the same `goTo()`, so a view that follows the cursor cannot ask
- * the run how the cursor got there — and this module is the one place that
- * knows, because every key that seeks reports through `noteKeyboardSeek`. A
- * follower remembers the count it last acted on and compares: a different
- * number means the movement it is reacting to came from a key. TranscriptPanel
- * reads it to scroll instantly for keys and keep the smooth follow-along for
- * clicks.
- *
- * Deliberately not a rune. Reading it must not subscribe the reader to it, or
- * the count would drive the effect instead of merely colouring what it does.
- */
-export function keyboardSeekCount(): number {
-  return keyboardSeeks;
-}
-
-/**
- * Report that a key, not a pointer, just moved the playhead from `from` to `to`.
- *
- * The cursor having moved is the whole test, rather than a list of which
- * gestures are the seeking ones. It answers three awkward cases for free: `→` at
- * the live edge and `←` at the first event move nothing, so they must not leave
- * a mark for the next click to trip over; `?` and `Esc` never touch the
- * playhead; and Space only counts on the press that rewinds a finished run, not
- * for the frames the playback timer then advances through, which are a
- * follow-along and stay smooth.
- *
- * Two callers, one rule. `applyReplayAction` below is the window handler's
- * path. The other is the scrubber, whose arrow keys `resolveReplayAction`
- * deliberately declines so the native range input keeps stepping itself: that
- * movement reaches the run through `onScrub`, never through an action, and
- * without this it would be the one keyboard seek the Logs pane scrolled
- * smoothly for.
- */
-export function noteKeyboardSeek(from: number, to: number): void {
-  if (from !== to) keyboardSeeks += 1;
-}
-
 /**
  * What a key does, in one place. The window handler calls this and so does
  * `check-replay-hotkeys.mjs`, which is the only way that check can compare what two bindings
@@ -365,8 +322,10 @@ export function noteKeyboardSeek(from: number, to: number): void {
  */
 export function applyReplayAction(action: ReplayAction, surface: ReplaySurface): void {
   const { run, rail } = surface;
-  const before = run.viewIndex;
 
+  /* Every case breaks rather than returning, which is left as it is now that nothing runs after
+     the switch: `default` narrowing `action` to `never` is what makes an unhandled action a
+     compile error, and that only holds while every case falls out of the bottom. */
   switch (action) {
     case "stepBack":
       run.stepBack();
@@ -438,6 +397,4 @@ export function applyReplayAction(action: ReplayAction, surface: ReplaySurface):
       void unhandled;
     }
   }
-
-  noteKeyboardSeek(before, run.viewIndex);
 }

@@ -16,10 +16,10 @@
 // by some starting position. Re-add `{ action: "jumpToLive", key: "l", ... }` and this file fails
 // on that pair, naming both rows.
 //
-// A third thing is checked between those two: the keyboard seek count the Logs pane reads to
-// scroll instantly for keys and smoothly for clicks. Measured as a delta over the shipped dispatch
-// and the shipped run methods, so it fails if a key stops counting, if a key that moves nothing
-// starts counting, or if the click path ever counts.
+// A third thing is checked between those two: which keys may move the playhead. `?`, `Esc` and the
+// rail keys must leave the cursor alone, and both ends of the run must clamp. Driven through the
+// shipped dispatch and measured on `viewIndex` itself, with positive controls first so a broken
+// measurement cannot pass every claim by seeing nothing move.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import * as fs from "node:fs/promises";
@@ -34,9 +34,7 @@ const {
   REPLAY_BINDINGS,
   describeReplayKeyEvent,
   resolveReplayAction,
-  applyReplayAction,
-  keyboardSeekCount,
-  noteKeyboardSeek
+  applyReplayAction
 } = await vite.ssrLoadModule("/src/lib/state/replayHotkeys.ts");
 
 /** A key press on nothing in particular: no modifiers, no focused control. */
@@ -548,120 +546,63 @@ function outcome([, setUp], action) {
   run.pause();
 }
 
-// --- keys are told apart from clicks ----------------------------------------------------------
+// --- which keys are allowed to move the playhead at all ---------------------------------------
 
-/* The Logs pane scrolls instantly when a key moved the playhead and smoothly when a click did,
-   and the only thing it has to tell them apart is this count. So the count is checked on the
-   property the pane depends on — it advances for keys that move, and for nothing else. Asserted
-   as deltas through the shipped `applyReplayAction` and the shipped run methods, because "the
-   transport button path" is nothing more than calling those methods without going through it. */
-function seekDelta(move) {
-  const before = keyboardSeekCount();
+/* This section used to measure a keyboard-seek counter, which existed so the Logs pane could scroll
+   instantly for a key and smoothly for a click. The panes write `scrollTop` now, which is instant
+   for everyone, so the counter and its machinery are gone.
+
+   What it was incidentally the only proof of stays, said directly about the cursor rather than about
+   a counter: which keys may move the playhead and which may not. The state-comparison checks below
+   cannot cover this — they assert that two bindings differ, and a rail key that also dragged the
+   playhead would differ from its neighbours just fine. */
+function seek(move) {
+  const before = run.viewIndex;
   move();
+  /* Playback stopped straight after, so the 700ms auto-advance timer can never fire between two
+     assertions and make this file flaky. */
   run.pause();
-  return keyboardSeekCount() - before;
+  return run.viewIndex - before;
 }
 
 const markerMid = markers[1];
 
-// A key that moves the cursor is one seek, once.
+/* Positive controls first. Without them every "moves nothing" below would also pass if `seek` were
+   broken, or if these actions had stopped working entirely. */
 run.goTo(markerMid);
-assert.equal(seekDelta(() => applyReplayAction("stepForward", surface)), 1, "→ that moves counts");
-assert.equal(seekDelta(() => applyReplayAction("stepBack", surface)), 1, "← that moves counts");
+assert.equal(seek(() => applyReplayAction("stepForward", surface)), 1, "→ moves one event");
+assert.equal(seek(() => applyReplayAction("stepBack", surface)), -1, "← moves one event back");
 run.goTo(markerMid);
-assert.equal(seekDelta(() => applyReplayAction("nextTurn", surface)), 1);
-assert.equal(seekDelta(() => applyReplayAction("previousTurn", surface)), 1);
-assert.equal(seekDelta(() => applyReplayAction("first", surface)), 1);
-assert.equal(seekDelta(() => applyReplayAction("last", surface)), 1);
+assert.ok(seek(() => applyReplayAction("nextTurn", surface)) > 0, "next turn moves forward");
+assert.ok(seek(() => applyReplayAction("previousTurn", surface)) < 0, "previous turn moves back");
+assert.ok(seek(() => applyReplayAction("first", surface)) < 0, "Home moves back to the start");
+assert.ok(seek(() => applyReplayAction("last", surface)) > 0, "End moves on to the live edge");
 
-/* A key that lands where the cursor already was must leave no mark, or the next *click* inherits
-   it and scrolls instantly. `←` at the first event and `→` at the live edge are where a reader
-   holding a key ends up, so this is the ordinary case, not an exotic one. */
-run.goTo(0);
-assert.equal(
-  seekDelta(() => applyReplayAction("stepBack", surface)),
-  0,
-  "← at the first event moves nothing and must not arm the next click"
-);
-assert.equal(seekDelta(() => applyReplayAction("first", surface)), 0, "Home when already first");
-run.goTo(total);
-assert.equal(
-  seekDelta(() => applyReplayAction("stepForward", surface)),
-  0,
-  "→ at the live edge moves nothing and must not arm the next click"
-);
-assert.equal(seekDelta(() => applyReplayAction("last", surface)), 0, "End when already at the end");
-
-// Keys that are not about position at all.
+/* Keys that are not about position, which must leave the cursor exactly where the reader put it.
+   The rail keys are the ones worth the assertion: walking or rearranging panes is a gesture about
+   the desk, and a reader doing it in the middle of reading a turn must not find the run has moved
+   underneath them. */
 run.goTo(markerMid);
-assert.equal(seekDelta(() => applyReplayAction("toggleHelp", surface)), 0, "? moves nothing");
-assert.equal(seekDelta(() => applyReplayAction("escape", surface)), 0, "Esc moves nothing");
-/* Neither do the pane keys. The Logs pane reads this count to choose a scroll behaviour, so a
-   rail walk that armed it would make the next click jump instead of glide. */
+assert.equal(seek(() => applyReplayAction("toggleHelp", surface)), 0, "? moves no playhead");
+assert.equal(seek(() => applyReplayAction("escape", surface)), 0, "Esc moves no playhead");
 for (const action of ["railFocusNext", "railMoveNext", "railToggleBleed"]) {
-  assert.equal(seekDelta(() => applyReplayAction(action, surface)), 0, `${action} moves no playhead`);
+  assert.equal(seek(() => applyReplayAction(action, surface)), 0, `${action} moves no playhead`);
 }
 assert.equal(
-  seekDelta(() => applyReplayAction("togglePlay", surface)),
+  seek(() => applyReplayAction("togglePlay", surface)),
   0,
   "Space mid-run starts playback where the cursor already is"
 );
 
-/* The click path, which is every transport control and the scrubber: the same methods, reached
-   without a key. None of them may count, or clicking would scroll instantly too and the smooth
-   follow-along this whole distinction exists to keep would be gone. */
-run.goTo(markerMid);
-assert.equal(seekDelta(() => run.stepForward()), 0, "the step-forward button is not a key");
-assert.equal(seekDelta(() => run.stepBack()), 0, "the step-back button is not a key");
-assert.equal(seekDelta(() => run.nextTurn()), 0, "the next-turn button is not a key");
-assert.equal(seekDelta(() => run.previousTurn()), 0, "the previous-turn button is not a key");
-assert.equal(seekDelta(() => run.goTo(markers[2])), 0, "dragging the scrubber is not a key");
-assert.equal(seekDelta(() => run.jumpToLive()), 0, "the live button is not a key");
-/* What the playback timer does every 700ms once Space has been pressed. A timer tick is not a key
-   press whatever it moves, so those frames must not read as keyboard. */
-run.goTo(markerMid);
-run.play();
-assert.equal(seekDelta(() => run.stepForward()), 0, "playback advancing is not a key press");
-run.pause();
-console.log("  keyboard seeks counted on moving keys only, never on the click path");
-
-/* The scrubber's own arrow keys are the one keyboard seek that does not come through
-   `applyReplayAction`. `resolveReplayAction` declines the navigation keys while a range input is
-   focused — deliberately, so the native control keeps stepping itself — which means that movement
-   reaches the run through `onScrub`, and before this it was the only key press the Logs pane
-   scrolled smoothly for. StepController reports it through `noteKeyboardSeek` instead.
-
-   So `noteKeyboardSeek` is asserted to be the same counter and the same rule, not a second one
-   beside it: a reported move is worth exactly what an arrow key is worth, and a reported non-move
-   is worth exactly what `→` at the live edge is worth. Change the guard inside it to count
-   unconditionally and the fourth assertion below fails; delete the increment and the first two
-   fail, along with every `applyReplayAction` assertion above, because that is the same rule. */
-run.goTo(markerMid);
-const arrowKeyWorth = seekDelta(() => applyReplayAction("stepForward", surface));
-assert.equal(
-  seekDelta(() => noteKeyboardSeek(markerMid, markerMid + 1)),
-  arrowKeyWorth,
-  "a scrubber arrow that moved the playhead must count for what a window arrow counts for"
-);
-assert.equal(
-  seekDelta(() => noteKeyboardSeek(0, total)),
-  arrowKeyWorth,
-  "how far the scrubber jumped is not the question — PageUp and a drag cover the same distance"
-);
-/* A range fires no `input` when an arrow cannot move it, but Home at index 0 and End at the live
-   edge do fire one, carrying the value the scrubber already had. Those must leave no mark, for the
-   same reason the window's `→` at the live edge must not: the next drag would inherit it. */
-assert.equal(
-  seekDelta(() => noteKeyboardSeek(0, 0)),
-  0,
-  "Home on a scrubber already at the first event moves nothing and must not arm the next drag"
-);
-assert.equal(
-  seekDelta(() => noteKeyboardSeek(total, total)),
-  0,
-  "End on a scrubber already at the live edge moves nothing and must not arm the next drag"
-);
-console.log("  scrubber arrow keys count through the same rule as the window bindings");
+/* Both ends clamp. This is where a reader holding a key down ends up, so it is the ordinary case
+   rather than an exotic one, and an off-by-one here would run the cursor off the end of the run. */
+run.goTo(0);
+assert.equal(seek(() => applyReplayAction("stepBack", surface)), 0, "← at the first event holds");
+assert.equal(seek(() => applyReplayAction("first", surface)), 0, "Home when already first holds");
+run.goTo(total);
+assert.equal(seek(() => applyReplayAction("stepForward", surface)), 0, "→ at the live edge holds");
+assert.equal(seek(() => applyReplayAction("last", surface)), 0, "End when already at the end holds");
+console.log("  only position keys move the playhead, and both ends clamp");
 
 /* Which word a scroll call is allowed to animate with. `"auto"` is not a way to spell instant — it
    defers to the container's `scroll-behavior`, which is unset everywhere in this tree today, so it
@@ -671,11 +612,11 @@ console.log("  scrubber arrow keys count through the same rule as the window bin
    landed in one. The probe that measured it was a throwaway and is gone; the number is kept and the
    path is not, because a citation pointing at a file no clone has is the worse of the two.
 
-   This used to be what the seek count above was FOR: the two panes that follow the playhead picked
-   their easing from it. They no longer scroll that way at all — followScroll.ts writes `scrollTop`,
-   which is instant by construction and has no word to get wrong — so one caller is left, PaneRail's,
-   which animates unless the reader asked it not to. The floor is therefore one caller's worth and
-   not two; it reads as two because that caller spells it as a ternary and both words count.
+   One caller is left, PaneRail's, which animates unless the reader asked it not to. The two panes
+   that follow the playhead used to be the others, picking between instant and smooth by asking
+   whether a key or a click had moved the cursor; followScroll.ts writes `scrollTop` for them now,
+   which is instant by construction and has no word to get wrong. So the floor is one caller's worth
+   and not two; it reads as two because that caller spells it as a ternary and both words count.
 
    Swept over the whole tree rather than pinned to the known caller, because the failure mode is a
    second caller written later that copies the wrong word from a sibling. */

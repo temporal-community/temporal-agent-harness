@@ -5,7 +5,6 @@
   import type { PlaybackSpeed } from "$lib/state/agentRun.svelte";
   import { dismissable } from "$lib/state/dismissable.svelte";
   import { eventVelocity, velocityPath } from "$lib/state/eventVelocity";
-  import { noteKeyboardSeek } from "$lib/state/replayHotkeys";
   import type { ReplayLogRow, ReplayMarker } from "$lib/state/replayLog";
 
   interface Props {
@@ -170,37 +169,17 @@
         })
   );
 
-  /**
-   * Whether the next `input` from the range is an arrow key's doing.
-   *
-   * A range input reports a key press and a drag as the same `input` event, and
-   * the element is focused either way, because a mousedown on it focuses it too.
-   * So the event carries nothing to separate them and the answer has to come
-   * from what arrived immediately before it — `keydown` or `pointerdown`.
-   *
-   * Consumed on read, and cleared by `pointerdown` as well, so it cannot be
-   * wrong in a sticky way from either side. `→` at the live edge is the case
-   * that needs the second half: the range moves nothing and fires no `input` at
-   * all, so the record it leaves is one the next grab clears rather than
-   * inherits. A plain `let` and not `$state`, because nothing renders from it.
-   */
-  let scrubbedByKey = false;
-
   function handleInput(event: Event): void {
     const index = Number((event.currentTarget as HTMLInputElement).value);
     /* A focused scrubber still moves itself for the keys the binding table does
        not spell — up, down, PageUp, PageDown — which are left native for screen
-       reader users by omission rather than by a list. That movement never passes
-       through `applyReplayAction`, so it has to report the seek itself. Reported
-       rather than acted on: `onScrub` still does the moving, so the run-state
-       API learns nothing about keyboards.
+       reader users by omission rather than by a list. `onScrub` does the moving,
+       so the run-state API learns nothing about keyboards.
 
        The keys the table does spell no longer arrive here at all: deference used
        to be decided by key name, which handed `Shift+←` to the slider as if it
        were a bare arrow and stepped one event where the reader asked for one
        turn. Those keys now win and cancel the native step. */
-    if (scrubbedByKey) noteKeyboardSeek(viewIndex, index);
-    scrubbedByKey = false;
     onScrub(index);
   }
 
@@ -336,8 +315,6 @@
       max={scale}
       value={viewIndex}
       oninput={handleInput}
-      onkeydown={() => (scrubbedByKey = true)}
-      onpointerdown={() => (scrubbedByKey = false)}
     />
 
     <!-- Anomalies keep their own marks: they are the reason to scrub at all.
