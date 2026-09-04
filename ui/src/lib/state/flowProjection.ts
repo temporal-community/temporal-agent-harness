@@ -933,7 +933,7 @@ export function buildAgentGraph(
         runtime.detail =
           frame.data.tool_input === null
             ? UNKNOWN_TOOL_INPUT
-            : JSON.stringify(frame.data.tool_input);
+            : JSON.stringify(frame.data.tool_input, null, 2);
         runtime.input = runtime.detail;
       }
       if (frame.event === "tool_requested") {
@@ -1025,7 +1025,7 @@ export function buildAgentGraph(
           : parentToolId
             ? "host call approval gate"
             : "human approval gate";
-        runtime.detail = JSON.stringify(frame.data.tool_input);
+        runtime.detail = JSON.stringify(frame.data.tool_input, null, 2);
         runtime.input = runtime.detail;
       } else {
         runtime.status = frame.data.approved ? "approved" : "denied";
