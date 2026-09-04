@@ -690,6 +690,37 @@ def create_agent_harness_app(
             headers={"Retry-After": str(_RPC_RETRY_AFTER_SECONDS)},
         )
 
+    @app.exception_handler(WorkflowQueryFailedError)
+    async def query_failed_handler(request, exc: WorkflowQueryFailedError):
+        """502, because the worker answered and what it answered was a failure.
+
+        This is the one query outcome that was reaching Starlette's default handler: the
+        SDK does not raise the underlying ``RPCError`` for a rejected query, it wraps it in
+        ``WorkflowQueryFailedError``, which shares no ancestry with ``RPCError`` and so
+        slipped past ``rpc_error_handler`` into a plain-text 500 with no error code for the
+        console to read. The attach path already caught the pair together
+        (``except (RPCError, WorkflowQueryFailedError)``); every non-streaming route that
+        queries a workflow did not.
+
+        502 rather than 500 because nothing here is broken: this process, Temporal, and the
+        request are all fine, and the failure is an upstream one being relayed. Rather than
+        404, because the workflow exists and its history is intact. Rather than 503 and a
+        ``Retry-After``, because the two things that produce this — a worker wedged on a
+        nondeterminism error, or one running code without the query handler — are not
+        cleared by waiting, and inviting the console to poll would turn a legible failure
+        into a loop. The message is passed through verbatim: it is the only place the
+        actual cause is named.
+
+        Deliberately not ``mark_unserviceable``: that cooldown exists to stop queries that
+        HANG from filling Temporal's per-workflow query buffer, and this one does not hang.
+        Temporal answers it with a failure, so suppressing later requests would buy nothing
+        and would replace this cause with a less specific one.
+        """
+        return JSONResponse(
+            status_code=502,
+            content={"error": "agent_query_failed", "message": str(exc)},
+        )
+
     @app.exception_handler(RPCError)
     async def rpc_error_handler(request, exc: RPCError):
         """Answer an RPC failure with the status that names the remedy.

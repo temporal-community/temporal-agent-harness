@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from temporalio.client import WorkflowQueryFailedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_harness.web import AgentRegistry, create_agent_harness_app
@@ -114,3 +115,30 @@ def test_throttle_tells_the_caller_to_come_back(route: str) -> None:
         response = _client().get(route)
 
     assert response.headers["Retry-After"] == "1"
+
+
+@pytest.mark.parametrize("route", INTERFACE_ROUTES)
+def test_refused_query_answers_502_not_500(route: str) -> None:
+    """A query the worker rejected is relayed, not reported as a fault of this server.
+
+    The SDK wraps the rejection in ``WorkflowQueryFailedError``, which is not an
+    ``RPCError``, so it used to slip past every handler and reach the browser as a
+    plain-text 500 carrying no error code. A worker wedged on a nondeterminism error
+    against a live RUNNING session is enough to produce it.
+    """
+    refused = WorkflowQueryFailedError(
+        "[TMPRL1100] Nondeterminism error: Activity machine does not handle this event"
+    )
+
+    with patch(
+        "temporal_agent_harness.web.app.AgentClient",
+        side_effect=refused,
+    ):
+        response = _client().get(route)
+
+    assert response.status_code == 502, f"{route} answered {response.status_code}"
+    assert response.json()["error"] == "agent_query_failed"
+    # The cause is only named in the message, so losing it would leave nothing to debug.
+    assert "Nondeterminism" in response.json()["message"]
+    # Waiting does not clear a wedged worker; a Retry-After would invite a poll loop.
+    assert "Retry-After" not in response.headers
