@@ -102,6 +102,8 @@ interface ToolRuntime {
   script?: string;
   parentToolId?: ToolId;
   flowGroup?: number;
+  /** Consecutive identical failures stacked onto this node. Absent / 1 = not stacked. */
+  retryCount?: number;
 }
 
 interface AgentGraphOptions {
@@ -307,6 +309,49 @@ function isToolRuntimeNodeId(id: string): id is ToolRuntimeNodeId {
   return id.startsWith("tool:");
 }
 
+function sameFailedRetry(a: ToolRuntime | undefined, b: ToolRuntime | undefined): boolean {
+  return Boolean(
+    a &&
+      b &&
+      a.name === b.name &&
+      a.status === "failed" &&
+      b.status === "failed" &&
+      a.detail === b.detail
+  );
+}
+
+/**
+ * Consecutive identical failures (same tool name + same error) become one card
+ * with a count. Successful / distinct tools stay in order — not a focus-view fold.
+ */
+function collapseConsecutiveFailedRetries(
+  order: RuntimeNodeId[],
+  tools: Map<ToolId, ToolRuntime>
+): Map<RuntimeNodeId, RuntimeNodeId> {
+  const redirect = new Map<RuntimeNodeId, RuntimeNodeId>();
+  const kept: RuntimeNodeId[] = [];
+  for (const id of order) {
+    const prev = kept.at(-1);
+    if (
+      prev &&
+      isToolRuntimeNodeId(id) &&
+      isToolRuntimeNodeId(prev) &&
+      sameFailedRetry(tools.get(toolIdFromRuntimeNodeId(prev)), tools.get(toolIdFromRuntimeNodeId(id)))
+    ) {
+      const head = tools.get(toolIdFromRuntimeNodeId(prev))!;
+      const next = tools.get(toolIdFromRuntimeNodeId(id))!;
+      head.retryCount = (head.retryCount ?? 1) + 1;
+      head.detail = next.detail;
+      head.output = next.output;
+      redirect.set(id, prev);
+      continue;
+    }
+    kept.push(id);
+  }
+  order.splice(0, order.length, ...kept);
+  return redirect;
+}
+
 function toolIdFromRuntimeNodeId(id: ToolRuntimeNodeId): ToolId {
   return id.slice("tool:".length);
 }
@@ -335,6 +380,20 @@ function dimensionsForData(data: AgentNodeData): NodeDimensions {
   };
 }
 
+/**
+ * Where each row of a grid starts: under the tallest box in the row above it,
+ * not under a nominal one.
+ */
+function rowTops(heights: readonly number[], columns: number, gap: number): number[] {
+  const tops: number[] = [];
+  let y = 0;
+  for (let start = 0; start < heights.length; start += columns) {
+    tops.push(y);
+    y += Math.max(...heights.slice(start, start + columns)) + gap;
+  }
+  return tops;
+}
+
 function runtimeLayoutFor(
   order: RuntimeNodeId[],
   dataById: Map<RuntimeNodeId, AgentNodeData>
@@ -344,31 +403,38 @@ function runtimeLayoutFor(
     ? order.filter((id) => id !== "reasoning")
     : order;
   const positions = new Map<RuntimeNodeId, { x: number; y: number }>();
-  let nextX = layout.gridStartX;
-  let contentWidth = stateNodeWidth;
-  let contentHeight = stateNodeHeight;
-
-  for (const id of flowOrder) {
+  const sizes = flowOrder.map((id) => {
     const data = dataById.get(id);
-    const dimensions = data ? dimensionsForData(data) : {
-      width: stateNodeWidth,
-      height: stateNodeHeight
-    };
+    const dimensions = data
+      ? dimensionsForData(data)
+      : { width: stateNodeWidth, height: stateNodeHeight };
+    if (!(attachReasoning && id === "model")) return dimensions;
     const reasoningData = dataById.get("reasoning");
     const reasoningDimensions = reasoningData
       ? dimensionsForData(reasoningData)
       : dimensions;
-    const effectiveDimensions =
-      attachReasoning && id === "model"
-        ? {
-            width: Math.max(dimensions.width, reasoningDimensions.width),
-            height: dimensions.height + modelReasoningGap + reasoningDimensions.height
-          }
-        : dimensions;
-    positions.set(id, { x: nextX, y: layout.gridStartY });
-    contentHeight = Math.max(contentHeight, effectiveDimensions.height);
-    contentWidth = nextX - layout.gridStartX + effectiveDimensions.width;
-    nextX += effectiveDimensions.width + runtimeColumnGap;
+    return {
+      width: Math.max(dimensions.width, reasoningDimensions.width),
+      height: dimensions.height + modelReasoningGap + reasoningDimensions.height
+    };
+  });
+  const tops = rowTops(
+    sizes.map((size) => size.height),
+    layout.columns,
+    runtimeRowGap
+  );
+  let contentWidth = stateNodeWidth;
+  let contentHeight = stateNodeHeight;
+
+  for (let slot = 0; slot < flowOrder.length; slot += 1) {
+    const dimensions = sizes[slot];
+    const col = slot % layout.columns;
+    const row = Math.floor(slot / layout.columns);
+    const x = layout.gridStartX + col * (stateNodeWidth + runtimeColumnGap);
+    const y = layout.gridStartY + tops[row];
+    positions.set(flowOrder[slot], { x, y });
+    contentWidth = Math.max(contentWidth, x - layout.gridStartX + dimensions.width);
+    contentHeight = Math.max(contentHeight, y - layout.gridStartY + dimensions.height);
   }
   if (attachReasoning) {
     const modelPosition = positions.get("model");
@@ -986,6 +1052,11 @@ export function buildAgentGraph(
     }
   }
 
+  const retryRedirect = collapseConsecutiveFailedRetries(runtimeNodeOrder, tools);
+  if (latestNodeId && retryRedirect.has(latestNodeId)) {
+    latestNodeId = retryRedirect.get(latestNodeId)!;
+  }
+
   const embeddedToolLayout = layoutEmbeddedToolGraphs(options.embeddedToolGraphs ?? []);
   if (embeddedToolLayout && !runtimeNodeOrder.includes("tool-container")) {
     runtimeNodeOrder.push("tool-container");
@@ -1117,11 +1188,13 @@ export function buildAgentGraph(
         runtime?.isCodeMode && childCount > 0
           ? codeModeContainerDimensions(childCount)
           : null;
+      const toolStatus = runtime?.status ?? "idle";
+      const retryCount = runtime?.retryCount ?? 1;
       return {
         tone: runtime?.tone ?? "neutral",
         dotTone: "tool",
         title: runtime?.name ?? "Tool",
-        state: runtime?.status ?? "idle",
+        state: retryCount > 1 ? `${toolStatus} ×${retryCount}` : toolStatus,
         statusTone: runtime?.statusTone,
         subtitle: runtime?.subtitle ?? "tool lifecycle",
         detail,
