@@ -1,122 +1,174 @@
-"""Internal implementation details backing `authoring_helpers`, not intended to be exported.
-"""
+"""Internal helpers for Nexus MCP authoring."""
 
 from __future__ import annotations
 
 import inspect
 import re
 from collections.abc import Callable
-from typing import Any, get_type_hints
+from typing import TYPE_CHECKING, Any, get_type_hints
 
 import mcp.types
 import nexusrpc
 import pydantic
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
-# Basic tool/function name constraint: ^[a-zA-Z0-9_-]{1,64}$
-# (only alphanums, underscore, and dash; 1–64 chars).
-# Inspired by OpenAI's tool name constraints -- maybe similar tool name restrictions in
-# other agents SDK.
-# TODO(long-nt-tran): Consider making this more restrictive/permissive depending on
-#                     what the LLM agents SDKs generally expect.
+if TYPE_CHECKING:
+    from .authoring_helpers import MCPToolConfig
+
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
-
-# The operation name every MCP-over-Nexus service reserves for tool discovery per MCP protocol.
 LIST_TOOLS_OPERATION = "list_tools"
-
-# Stamped by nexus_mcp_tool (authoring_helpers.py) onto the callable it returns, so
-# build_tool_dicts can tell a nexus_mcp_tool-authored operation apart from one declared by
-# hand with a bare @nexusrpc.handler.sync_operation -- only the former should be
-# auto-listed as an LLM tool.
 _NEXUS_MCP_TOOL_MARKER = "_nexus_mcp_tool"
 
 
 def validate_service_name(name: str) -> None:
-    """Check a service name is valid.
-
-    Raises:
-        ValueError: if `name` doesn't match `_NAME_RE`.
-    """
+    """Check that a service name can be part of an MCP tool name."""
     if not _NAME_RE.match(name):
         raise ValueError(f"Service name {name!r} must match [a-zA-Z0-9_-]{{1,64}}")
 
 
-def build_tool_dicts(
+def _annotations_dict(value: mcp.types.ToolAnnotations | None) -> dict[str, Any]:
+    if value is None:
+        return {}
+    return value.model_dump(exclude_none=True)
+
+
+def _merge_config(defaults: MCPToolConfig, tool: MCPToolConfig) -> MCPToolConfig:
+    from .authoring_helpers import MCPToolConfig
+
+    annotation_values = {
+        **_annotations_dict(defaults.annotations),
+        **_annotations_dict(tool.annotations),
+    }
+    annotations = (
+        mcp.types.ToolAnnotations.model_validate(annotation_values)
+        if annotation_values
+        else None
+    )
+    metadata = {**dict(defaults.meta or {}), **dict(tool.meta or {})}
+    return MCPToolConfig(
+        name=tool.name,
+        title=tool.title if tool.title is not None else defaults.title,
+        description=(
+            tool.description if tool.description is not None else defaults.description
+        ),
+        annotations=annotations,
+        icons=tool.icons if tool.icons is not None else defaults.icons,
+        meta=metadata or None,
+    )
+
+
+def _object_schema(annotation: Any) -> dict[str, Any] | None:
+    if annotation in (None, Any):
+        return None
+    try:
+        schema = TypeAdapter(annotation).json_schema()
+    except (pydantic.PydanticUserError, TypeError, ValueError):
+        return None
+    return schema if schema.get("type") == "object" else None
+
+
+def _build_tool_entries(
     handler_class: type,
     *,
-    inherently_safe: bool = False,
     exclude_operations: frozenset[str] = frozenset({LIST_TOOLS_OPERATION}),
-) -> list[dict[str, Any]]:
-    """Build serialised `mcp.types.Tool` dicts from a Nexus service handler class.
+) -> list[tuple[dict[str, Any], str]]:
+    """Build MCP definitions and their Nexus operation names."""
+    from .authoring_helpers import MCPToolConfig
 
-    Extracts operation names, docstrings, and Pydantic input schemas directly from the
-    handler class.
-    
-    Only operations authored via `nexus_mcp_tool` are included. Other Nexus operation declared
-    without `@nexus_mcp_tool` are not listed as an LLM tool.
-
-    Args:
-        handler_class: A `@service_handler`-decorated class.
-        inherently_safe: If `True`, tools are tagged `readOnlyHint=True` so approval
-            policies can auto-approve them.
-        exclude_operations: Operation names to omit from the result, on top of the
-            nexus_mcp_tool-only filter above. Defaults to just `list_tools`; pass an empty
-            `frozenset` to include it too.
-
-    Returns:
-        A list of dicts, each a `mcp.types.Tool.model_dump()` with the tool name already
-        prefixed as `{service_name}_{op_name}`.
-    """
     defn = nexusrpc.get_service_definition(handler_class)
     if defn is None:
         raise ValueError(f"{handler_class.__name__} is not a Nexus service handler")
 
     validate_service_name(defn.name)
+    defaults = getattr(handler_class, "mcp_tool_defaults", MCPToolConfig())
+    if not isinstance(defaults, MCPToolConfig):
+        raise TypeError("mcp_tool_defaults must be an MCPToolConfig")
+    if defaults.name is not None:
+        raise ValueError("mcp_tool_defaults cannot set a tool name")
 
-    tools: list[dict[str, Any]] = []
+    entries: list[tuple[dict[str, Any], str]] = []
     for op in defn.operation_definitions.values():
         if op.name in exclude_operations:
             continue
-        attr_name = op.method_name or op.name
-        func = getattr(handler_class, attr_name, None)
-        if func is None or not callable(func):
+        func = getattr(handler_class, op.method_name or op.name, None)
+        marker = getattr(func, _NEXUS_MCP_TOOL_MARKER, None)
+        if not isinstance(marker, MCPToolConfig):
             continue
-        if not getattr(func, _NEXUS_MCP_TOOL_MARKER, False):
-            continue
+        config = _merge_config(defaults, marker)
 
         name = f"{defn.name}_{op.name}"
         if not _NAME_RE.match(name):
             raise ValueError(f"Generated tool name {name!r} is not LLM-compatible")
 
-        schema: dict[str, Any] = {}
-        if op.input_type is not None and issubclass(op.input_type, pydantic.BaseModel):
-            schema = op.input_type.model_json_schema()
+        input_schema = _object_schema(op.input_type) or {}
+        output_schema = _object_schema(op.output_type)
+        description = config.description
+        if description is None and func.__doc__:
+            description = inspect.cleandoc(func.__doc__)
 
-        annotations = (
-            mcp.types.ToolAnnotations(readOnlyHint=True) if inherently_safe else None
-        )
         tool = mcp.types.Tool(
             name=name,
-            description=func.__doc__.strip() if func.__doc__ else None,
-            inputSchema=schema,
-            annotations=annotations,
+            title=config.title,
+            description=description,
+            input_schema=input_schema,
+            output_schema=output_schema,
+            icons=list(config.icons) if config.icons is not None else None,
+            annotations=config.annotations,
+            _meta=dict(config.meta) if config.meta is not None else None,
         )
-        tools.append(tool.model_dump())
+        entries.append(
+            (
+                tool.model_dump(mode="json", by_alias=True, exclude_none=True),
+                op.name,
+            )
+        )
+    return entries
 
-    return tools
+
+def build_tool_dicts(
+    handler_class: type,
+    *,
+    exclude_operations: frozenset[str] = frozenset({LIST_TOOLS_OPERATION}),
+) -> list[dict[str, Any]]:
+    """Build MCP tool definitions from marked operations on a Nexus service."""
+    return [
+        tool
+        for tool, _ in _build_tool_entries(
+            handler_class,
+            exclude_operations=exclude_operations,
+        )
+    ]
+
+
+def build_tool_routes(
+    handler_class: type,
+    *,
+    exclude_operations: frozenset[str] = frozenset({LIST_TOOLS_OPERATION}),
+) -> dict[str, str]:
+    """Map each public MCP tool name to its Nexus operation name."""
+    return {
+        tool["name"]: operation
+        for tool, operation in _build_tool_entries(
+            handler_class,
+            exclude_operations=exclude_operations,
+        )
+    }
 
 
 def _pydantic_model_from_signature(fn: Callable[..., Any]) -> type[BaseModel]:
-    """Synthesize a Pydantic model from a function's own parameter list (skipping `self`)."""
+    """Create a Pydantic input model from method parameters after ``self``."""
     sig = inspect.signature(fn)
     hints = get_type_hints(fn)
     fields: dict[str, Any] = {}
     for name, param in sig.parameters.items():
         if name == "self":
             continue
-        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
             raise TypeError(
-                f"nexus_mcp_tool does not support *args/**kwargs parameters "
+                "nexus_mcp_tool does not support *args or **kwargs "
                 f"(found {name!r} on {fn.__qualname__})"
             )
         annotation = hints.get(name, Any)

@@ -16,8 +16,10 @@ from this workflow_type, "NexusHelloAgent") and nexus_native_mcp_server():
 
 - demo_get_fun_fact (a 3rd-party MCP server, proxied through the Durable Tools Gateway
   -- registered ahead of time under agent_id "NexusHelloAgent")
-- demo-nexus_get_lucky_number (a Nexus-native MCP server, reached directly -- no
+- demo-nexus_get_lucky_number (a native Nexus tool service, reached directly -- no
   gateway, no registration)
+- demo-nexus_get_delayed_lucky_number (a workflow-backed Nexus operation, reached
+  through the same direct service route)
 
 Needs `just setup-nexus`, the gateway, both tool services/servers, and `just
 register-third-party` run first — see examples/nexus_hello/README.md."""

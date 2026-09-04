@@ -1,108 +1,230 @@
-"""Public-facing helpers to author a Nexus service that implements MCP contracts.
+"""Public helpers for authoring Nexus services that expose MCP tools.
 
-MCPOverNexusServiceHandler: a base class that implements a `list_tools` operation based on introspecting
-                            the service's other operations. This allows authors to only need to implement
-                            their business logic.
+Use ``MCPOverNexusServiceHandler`` as the base class for a Nexus tool service.
+It adds the ``list_tools`` operation and builds the tool manifest from marked
+operations.
 
-@nexus_mcp_tool: a decorator that allows authors to write a plain async method with typed
-                 parameters and a docstring, and have it automatically wired as a Nexus operation
-                 with a Pydantic input model derived from the method's own signature, and discoverable
-                 via `list_tools`.
-                 This allows authors to annotate only a subset of their service as MCP tools, and also
-                 allow them to use a single decorator that handles the MCP in/out data modeling for them.
+Use ``@nexus_mcp_tool`` on a typed ``def`` or ``async def`` method. It creates
+the Pydantic input model and the synchronous Nexus operation.
+
+Use ``@nexus_mcp_operation`` on an existing Nexus operation. The Nexus
+decorator continues to control its input, output, name, and execution behavior.
+
+Use ``MCPToolConfig`` to set MCP names, descriptions, annotations, icons, and
+metadata on a service or tool.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, TypeVar, cast, get_type_hints
+import inspect
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from functools import wraps
+from typing import Any, TypeVar, cast, get_type_hints, overload
 
+import mcp.types
 import nexusrpc
 import nexusrpc.handler
 from nexusrpc.handler import StartOperationContext
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .internal_utils import (
     _NEXUS_MCP_TOOL_MARKER,
     LIST_TOOLS_OPERATION,
     _pydantic_model_from_signature,
     build_tool_dicts,
+    build_tool_routes,
 )
 
 __all__ = [
     "LIST_TOOLS_OPERATION",
     "ListToolsOutput",
     "MCPOverNexusServiceHandler",
+    "MCPToolConfig",
+    "nexus_mcp_operation",
     "nexus_mcp_tool",
 ]
 
 
+@dataclass(frozen=True)
+class MCPToolConfig:
+    """Configure the MCP definition for one Nexus tool."""
+
+    name: str | None = None
+    title: str | None = None
+    description: str | None = None
+    annotations: mcp.types.ToolAnnotations | None = None
+    icons: Sequence[mcp.types.Icon] | None = None
+    meta: Mapping[str, Any] | None = None
+
+
 class ListToolsOutput(BaseModel):
-    """All tools one MCP-over-Nexus service exposes."""
+    """Contain the tools that one MCP-over-Nexus service exposes."""
 
-    tools: list[dict[str, Any]] = []
-    """Serialised mcp.types.Tool dicts, names already prefixed with the service name."""
-
+    tools: list[dict[str, Any]] = Field(default_factory=list)
+    routes: dict[str, str] = Field(default_factory=dict)
 
 
 class MCPOverNexusServiceHandler:
-    """Base handler class giving concrete MCP-over-Nexus handlers a default `list_tools()`
-    implementation that derives the list of tools from methods that are decorated with `@nexus_mcp_tool`.
-    """
+    """Add a generated ``list_tools`` operation to a Nexus service handler."""
 
-    #: Forwarded to build_tool_dicts' inherently_safe. Override on your subclass if your
-    #: tools should be tagged readOnlyHint=True (letting approval policies auto-approve them).
-    _mcp_over_nexus_inherently_safe: bool = False
+    mcp_tool_defaults = MCPToolConfig()
 
     @nexusrpc.handler.sync_operation
-    async def list_tools(self, ctx: StartOperationContext, input: None) -> ListToolsOutput:
-        """Return this service's own tools, derived from its other Nexus operations."""
-        tools = build_tool_dicts(
-            type(self), inherently_safe=self._mcp_over_nexus_inherently_safe
+    async def list_tools(
+        self, ctx: StartOperationContext, input: None
+    ) -> ListToolsOutput:
+        """Return the tools that this service exposes."""
+        handler_type = type(self)
+        return ListToolsOutput(
+            tools=build_tool_dicts(handler_type),
+            routes=build_tool_routes(handler_type),
         )
-        return ListToolsOutput(tools=tools)
 
 
 _NexusMcpToolFunc = TypeVar("_NexusMcpToolFunc", bound=Callable[..., Any])
 
 
-def nexus_mcp_tool(fn: _NexusMcpToolFunc) -> _NexusMcpToolFunc:
-    """A decorator to turn a plain typed async method into a fully-wired Nexus operation. When
-    combined with MCPOverNexusServiceHandler, this allows authors to write a Nexus service
-    that implements MCP contracts, without the author needing to hand-write a lot of the
-    boilerplate code. Example usage:
+def _config(
+    *,
+    name: str | None,
+    title: str | None,
+    description: str | None,
+    annotations: mcp.types.ToolAnnotations | None,
+    icons: Sequence[mcp.types.Icon] | None,
+    meta: Mapping[str, Any] | None,
+) -> MCPToolConfig:
+    return MCPToolConfig(
+        name=name,
+        title=title,
+        description=description,
+        annotations=annotations,
+        icons=icons,
+        meta=meta,
+    )
 
-    import nexusrpc.handler
-    from nexus_mcp.authoring import MCPOverNexusServiceHandler, nexus_mcp_tool
 
-    @nexusrpc.handler.service_handler(name="weather-tools")
-    class WeatherToolServer(MCPOverNexusServiceHandler):
-    
-        # Here lies a tool that gets the weather forecast.
-        @nexus_mcp_tool
-        async def get_forecast(self, city: str, days: int = 3) -> str:
-            ...
+@overload
+def nexus_mcp_tool(fn: _NexusMcpToolFunc, /) -> _NexusMcpToolFunc: ...
 
-    In the Temporal worker file, pass this `WeatherToolServer()` instance like so:
-    `Worker(nexus_service_handlers=[WeatherToolServer(), ...])`
+
+@overload
+def nexus_mcp_tool(
+    *,
+    name: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    annotations: mcp.types.ToolAnnotations | None = None,
+    icons: Sequence[mcp.types.Icon] | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> Callable[[_NexusMcpToolFunc], _NexusMcpToolFunc]: ...
+
+
+def nexus_mcp_tool(
+    fn: _NexusMcpToolFunc | None = None,
+    /,
+    *,
+    name: str | None = None,
+    title: str | None = None,
+    description: str | None = None,
+    annotations: mcp.types.ToolAnnotations | None = None,
+    icons: Sequence[mcp.types.Icon] | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> _NexusMcpToolFunc | Callable[[_NexusMcpToolFunc], _NexusMcpToolFunc]:
+    """Convert a typed Python method into a synchronous Nexus MCP operation.
+
+    The method can use ``def`` or ``async def``. Its parameters become a Pydantic
+    input model. Use :func:`nexus_mcp_operation` for an existing Nexus operation.
     """
-    input_model = _pydantic_model_from_signature(fn)
-    return_type = get_type_hints(fn).get("return", Any)
+    tool_config = _config(
+        name=name,
+        title=title,
+        description=description,
+        annotations=annotations,
+        icons=icons,
+        meta=meta,
+    )
 
-    async def operation_method(self: Any, ctx: StartOperationContext, input: Any) -> Any:
-        return await fn(self, **input.model_dump())
+    def decorate(method: _NexusMcpToolFunc) -> _NexusMcpToolFunc:
+        input_model = _pydantic_model_from_signature(method)
+        return_type = get_type_hints(method).get("return", Any)
 
-    operation_method.__name__ = fn.__name__
-    operation_method.__doc__ = fn.__doc__
-    operation_method.__annotations__ = {
-        "ctx": StartOperationContext,
-        "input": input_model,
-        "return": return_type,
-    }
+        @wraps(method)
+        async def operation_method(
+            self: Any, ctx: StartOperationContext, input: BaseModel
+        ) -> Any:
+            arguments = {
+                field_name: getattr(input, field_name)
+                for field_name in type(input).model_fields
+            }
+            result = method(self, **arguments)
+            if inspect.isawaitable(result):
+                return await result
+            return result
 
-    # TODO: Handle async nexus operations as well.
-    operation = nexusrpc.handler.sync_operation(operation_method)
-    # Stamped on sync_operation's OWN return value -- see _NEXUS_MCP_TOOL_MARKER's comment
-    # for why -- so build_tool_dicts can tell this apart from a hand-declared operation.
-    setattr(operation, _NEXUS_MCP_TOOL_MARKER, True)
-    return cast("_NexusMcpToolFunc", operation)
+        operation_method.__annotations__ = {
+            "ctx": StartOperationContext,
+            "input": input_model,
+            "return": return_type,
+        }
+
+        operation_decorator = nexusrpc.handler.sync_operation(name=tool_config.name)
+        operation = operation_decorator(cast(Any, operation_method))
+        setattr(operation, _NEXUS_MCP_TOOL_MARKER, tool_config)
+        return cast("_NexusMcpToolFunc", operation)
+
+    if fn is None:
+        return decorate
+    return decorate(fn)
+
+
+@overload
+def nexus_mcp_operation(fn: _NexusMcpToolFunc, /) -> _NexusMcpToolFunc: ...
+
+
+@overload
+def nexus_mcp_operation(
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    annotations: mcp.types.ToolAnnotations | None = None,
+    icons: Sequence[mcp.types.Icon] | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> Callable[[_NexusMcpToolFunc], _NexusMcpToolFunc]: ...
+
+
+def nexus_mcp_operation(
+    fn: _NexusMcpToolFunc | None = None,
+    /,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    annotations: mcp.types.ToolAnnotations | None = None,
+    icons: Sequence[mcp.types.Icon] | None = None,
+    meta: Mapping[str, Any] | None = None,
+) -> _NexusMcpToolFunc | Callable[[_NexusMcpToolFunc], _NexusMcpToolFunc]:
+    """Expose an existing Nexus operation as an MCP tool.
+
+    Place this decorator above the Nexus operation decorator. The Nexus decorator
+    controls the operation name, input type, output type, and execution behavior.
+    """
+    tool_config = _config(
+        name=None,
+        title=title,
+        description=description,
+        annotations=annotations,
+        icons=icons,
+        meta=meta,
+    )
+
+    def decorate(operation: _NexusMcpToolFunc) -> _NexusMcpToolFunc:
+        if nexusrpc.get_operation(operation) is None:
+            raise TypeError(
+                "nexus_mcp_operation must be above a Nexus operation decorator"
+            )
+        setattr(operation, _NEXUS_MCP_TOOL_MARKER, tool_config)
+        return operation
+
+    if fn is None:
+        return decorate
+    return decorate(fn)

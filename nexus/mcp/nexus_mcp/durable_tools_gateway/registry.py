@@ -15,8 +15,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client import Client as MCPClient
 from temporalio import activity, workflow
 
 REGISTRY_WORKFLOW_ID = "mcp-tool-registry"
@@ -29,15 +28,15 @@ async def fetch_external_tools(name: str, url: str) -> list[dict[str, Any]]:
     activity.logger.info("[registry] fetching tools from %s", url)
     activity.heartbeat()
 
-    async with streamable_http_client(url) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.list_tools()
+    async with MCPClient(url, mode="auto") as client:
+        result = await client.list_tools()
 
     tools = []
     for tool in result.tools:
         prefixed = tool.model_copy(update={"name": f"{name}_{tool.name}"})
-        tools.append(prefixed.model_dump())
+        tools.append(
+            prefixed.model_dump(mode="json", by_alias=True, exclude_none=True)
+        )
 
     activity.logger.info("[registry] fetched %d tool(s) from %s", len(tools), url)
     return tools

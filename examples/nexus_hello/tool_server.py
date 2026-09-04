@@ -12,17 +12,11 @@ from __future__ import annotations
 
 import random
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 PORT = 8765
 
-mcp = FastMCP(
-    "demo-tools",
-    host="127.0.0.1",
-    port=PORT,
-    streamable_http_path="/mcp",
-    stateless_http=True,
-)
+mcp = MCPServer("demo-tools")
 
 
 @mcp.tool()
@@ -39,4 +33,10 @@ def get_fun_fact(topic: str) -> str:
 
 if __name__ == "__main__":
     print(f"Demo MCP tool server ready: http://127.0.0.1:{PORT}/mcp", flush=True)
-    mcp.run(transport="streamable-http")
+    mcp.run(
+        transport="streamable-http",
+        host="127.0.0.1",
+        port=PORT,
+        streamable_http_path="/mcp",
+        stateless_http=True,
+    )
