@@ -28,15 +28,38 @@ agent development, so you get the power without hand-rolling the orchestration.
 
 ## Installation
 
-Add it to your project as a **git dependency**. In a [`uv`](https://docs.astral.sh/uv/)-managed project, the quickest way is `uv add`:
+There are two ways in, depending on what you want to do. Both pin to a **tagged release** —
+see [Versioning and stability](#versioning-and-stability) for why that matters.
+
+### Try it — run the example agents
+
+Clone at a release tag. No Node/pnpm needed: the browser UI ships prebuilt.
+
+```bash
+git clone --branch 0.1.0 https://github.com/temporal-community/temporal-agent-harness.git
+cd temporal-agent-harness
+```
+
+Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
+the tag rather than on a branch. Later, move to a newer release with
+`git fetch --tags && git checkout <version>`, or see what changed between two of them with
+`git diff 0.1.0 0.2.0`.
+
+Then jump to [Run the examples](#run-the-examples). You'll need
+[uv](https://docs.astral.sh/uv/), [just](https://just.systems/), and the Temporal cli (or Temporal Cloud).
+
+### Build with it — add the harness to your own project
+
+Add it as a **git dependency pinned to a tag**. In a [`uv`](https://docs.astral.sh/uv/)-managed
+project:
 
 ```bash
 # core harness — define and run agent workflows
-uv add "temporal-agent-harness @ git+https://github.com/temporal-community/temporal-agent-harness.git"
+uv add "temporal-agent-harness @ git+https://github.com/temporal-community/temporal-agent-harness.git@0.1.0"
 ```
 
 Or declare it in `pyproject.toml` — depend on the package (with any extras you need) and point
-its source at the git repository:
+its source at the tag:
 
 ```toml
 [project]
@@ -45,11 +68,10 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-temporal-agent-harness = { git = "https://github.com/temporal-community/temporal-agent-harness.git", branch = "main" }
+temporal-agent-harness = { git = "https://github.com/temporal-community/temporal-agent-harness.git", tag = "0.1.0" }
 ```
 
-Then run `uv sync`. (Pin to a specific `rev = "..."` instead of `branch = "main"` for a
-reproducible build.)
+Then run `uv sync`.
 
 **Extras:**
 
@@ -111,6 +133,20 @@ description = "A short description shown in the UI."
 The app factory serves both `/api/*` and the packaged Svelte UI. The helper
 `create_session_manager_worker` only registers the packaged session-manager
 workflow; run your own agent workflows on their own workers and task queues.
+
+## Versioning and stability
+
+**Install from a tagged release.** Every release is listed on the
+[releases page](https://github.com/temporal-community/temporal-agent-harness/releases), and each
+tag marks a commit that is known-good at the moment it was cut: the tests passed, and the
+prebuilt browser UI matches the source it was built from.
+
+**This project is very early and experimental - `main` may break at any time.** 
+
+Releases are cut manually, when the maintainers judge the state stable. This project is 
+**experimental** and pre-1.0: APIs will change between releases, without warning. Pinning to a 
+tag is what keeps that churn from reaching you unannounced — so pin, and upgrade deliberately 
+when you want to try out new harness capabilities.
 
 ## What you get
 
@@ -382,17 +418,22 @@ self._runner = AgentWorkflowRunner(
 - Python **3.11+**
 - [uv](https://docs.astral.sh/uv/) for dependency management
 - [just](https://just.systems/) for the example recipes
-- [pnpm](https://pnpm.io/) for building or developing the Svelte UI
 - A Temporal service. `just temporal` starts a local dev server if you have the `temporal`
   CLI installed.
 
+[pnpm](https://pnpm.io/) is **not** required to run anything: the browser UI ships prebuilt in
+`temporal_agent_harness/ui/dist`, both in release archives and in the repo. You only need it to
+*change* the UI — see [UI development](docs/internal/development.md#ui-development).
+
 ## Run the examples
 
-One `.env.local` at the **repo root** serves every example. Create it and install the UI deps once:
+These run from a checkout or an unpacked
+[release archive](#try-it--run-the-example-agents) — the steps are identical.
+
+One `.env.local` at the **project root** serves every example. Create it once:
 
 ```bash
 cp .env.example .env.local
-just app-install
 ```
 
 Set the creds for whichever agents you'll run: `OPENAI_API_KEY` (react_agent, openai_hello,
@@ -408,18 +449,18 @@ conversational Code Mode travel agent + a subagent variant) is the best starting
 cd examples/monty
 just temporal          # local Temporal dev server; skip if you bring your own
 just session-manager   # worker hosting the packaged SessionManagerWorkflow
-just server            # builds + serves the Svelte UI + /api on :8000 (this example's agents only)
+just server            # serves the Svelte UI + /api on :8000 (this example's agents only)
 just worker            # this example's agent worker
 ```
 
 Open <http://localhost:8000> and pick an agent. Every example follows the same recipe set
 (`temporal` / `session-manager` / `server` / `worker`, plus `client` where noted). `just server`
-runs `app-build` first, so :8000 serves the freshly built UI from
-`temporal_agent_harness/ui/dist`.
+serves the prebuilt UI from `temporal_agent_harness/ui/dist`, so it needs no Node/pnpm. If you're
+changing the UI, use `just dev-server` (rebuild + serve) instead.
 
 ### All examples behind one UI
 
-The **root** justfile runs every example agent at once so the UI lists them all. From the repo root,
+The **root** justfile runs every example agent at once so the UI lists them all. From the project root,
 each in its own terminal:
 
 ```bash
@@ -448,8 +489,9 @@ its worker.
 
 ## Status & docs
 
-This is experimental and under active development; expect breaking changes. Deeper design
-documentation — the agent protocol, the streaming model, human-in-the-loop approvals, and
+This is experimental and under active development; expect breaking changes — see
+[Versioning and stability](#versioning-and-stability) for what that means for installs. Deeper
+design documentation — the agent protocol, the streaming model, human-in-the-loop approvals, and
 agents-as-subagents — lives under [`docs/internal/`](docs/internal). Contributor setup
 (repository layout, the root `justfile`, UI development, and packaging) is in
 [`docs/internal/development.md`](docs/internal/development.md).

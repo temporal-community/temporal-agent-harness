@@ -12,6 +12,9 @@
 # demand, so there's no separate install step. First-time setup: `cp .env.example .env.local`
 # and fill it in (Temporal connection + GEMINI_API_KEY). See README.md.
 
+# Shows a notice when running from an untagged commit (silent on a release archive).
+import '../../scripts/untagged-notice.just'
+
 # Read the single shared env file at the repo root (resolved relative to this justfile).
 set dotenv-path := "../../.env.local"
 set dotenv-load := true
@@ -36,9 +39,11 @@ temporal:
 session-manager:
     cd "{{root}}" && uv run --group examples python -m examples.session_manager_worker
 
-# Build and serve the Svelte UI + FastAPI API on http://localhost:8000. The shared examples app
-# entrypoint is pointed at this example's registry.
-server: app-build
+# Serves the COMMITTED UI build in temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
+# a downloaded release archive runs as-is. Rebuild with `just app-build` if you changed ui/.
+#
+# Serve the Svelte UI + FastAPI API on http://localhost:8000, pointed at this example's registry.
+server:
     cd "{{root}}" && uv run --group examples python -m examples.app "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
 
 # Install the shared Svelte UI dependencies.

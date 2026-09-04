@@ -19,17 +19,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import temporalio.nexus
 from mcp.types import CallToolResult, TextContent
-from temporalio.converter import DataConverter
-
-from durable_tools_gateway.generated import (
+from nexus_mcp.durable_tools_gateway.generated import (
     CallToolInput,
     CallToolInputArguments,
     CallToolOutput,
     ListAgentEntriesInput,
     ListAgentEntriesOutput,
 )
-from durable_tools_gateway.registry import AgentEntries, ToolRegistryWorkflow, fetch_external_tools
-from durable_tools_gateway.registry_service_handler import RegistryServiceHandler, mcp_proxy_activity
+from nexus_mcp.durable_tools_gateway.registry import (
+    AgentEntries,
+    ToolRegistryWorkflow,
+    fetch_external_tools,
+)
+from nexus_mcp.durable_tools_gateway.registry_service_handler import (
+    RegistryServiceHandler,
+    mcp_proxy_activity,
+)
+from temporalio.converter import DataConverter
 
 _payload_converter = DataConverter.default.payload_converter
 _FAKE_NEXUS_INFO = temporalio.nexus.Info(

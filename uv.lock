@@ -1695,33 +1695,6 @@ wheels = [
 ]
 
 [[package]]
-name = "nexus-mcp"
-version = "0.1.0"
-source = { editable = "nexus/mcp" }
-dependencies = [
-    { name = "anyio", marker = "python_full_version >= '3.13'" },
-    { name = "mcp", marker = "python_full_version >= '3.13'" },
-    { name = "nexus-rpc", marker = "python_full_version >= '3.13'" },
-    { name = "pydantic", marker = "python_full_version >= '3.13'" },
-    { name = "temporalio", marker = "python_full_version >= '3.13'" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "anyio", specifier = ">=4.0.0" },
-    { name = "mcp", specifier = ">=1.28.1" },
-    { name = "nexus-rpc", specifier = ">=1.1.0" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "temporalio", specifier = ">=1.15.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.0" },
-    { name = "pytest-asyncio", specifier = ">=1.0" },
-]
-
-[[package]]
 name = "nexus-rpc"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2985,8 +2958,8 @@ genai = [
 ]
 nexus-mcp = [
     { name = "mcp" },
-    { name = "nexus-mcp", marker = "python_full_version >= '3.13'" },
     { name = "openai-agents" },
+    { name = "temporal-nexus-mcp", marker = "python_full_version >= '3.13'" },
     { name = "temporalio", extra = ["opentelemetry"] },
 ]
 openai-agents = [
@@ -3012,13 +2985,13 @@ dev = [
     { name = "httpx" },
     { name = "mcp" },
     { name = "moto", extra = ["server"] },
-    { name = "nexus-mcp", marker = "python_full_version >= '3.13'" },
     { name = "openai-agents" },
     { name = "pydantic-ai-slim", extra = ["temporal"] },
     { name = "pydantic-monty" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "setuptools" },
+    { name = "temporal-nexus-mcp", marker = "python_full_version >= '3.13'" },
     { name = "temporalio", extra = ["aioboto3", "opentelemetry"] },
 ]
 examples = [
@@ -3038,12 +3011,12 @@ requires-dist = [
     { name = "google-genai", marker = "extra == 'genai'", specifier = ">=2.0.0" },
     { name = "mcp", marker = "extra == 'nexus-mcp'", specifier = ">=1.13.0,<2" },
     { name = "mcp", marker = "extra == 'openai-agents'", specifier = ">=1.9.4,<2" },
-    { name = "nexus-mcp", marker = "python_full_version >= '3.13' and extra == 'nexus-mcp'", editable = "nexus/mcp" },
     { name = "openai-agents", marker = "extra == 'nexus-mcp'", specifier = ">=0.17.5" },
     { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.17.5" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], marker = "extra == 'pydantic-ai'", specifier = ">=2.13" },
     { name = "pydantic-monty", marker = "extra == 'code-mode'", specifier = ">=0.0.18" },
+    { name = "temporal-nexus-mcp", marker = "python_full_version >= '3.13' and extra == 'nexus-mcp'", editable = "nexus/mcp" },
     { name = "temporalio", specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["aioboto3"], marker = "extra == 's3'", specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'nexus-mcp'", specifier = ">=1.31.0" },
@@ -3059,13 +3032,13 @@ dev = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", specifier = ">=1.9.4,<2" },
     { name = "moto", extras = ["server"], specifier = ">=5.2.1" },
-    { name = "nexus-mcp", marker = "python_full_version >= '3.13'", editable = "nexus/mcp" },
     { name = "openai-agents", specifier = ">=0.17.5" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
     { name = "pydantic-monty", specifier = ">=0.0.18" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "setuptools", specifier = ">=83.0.0" },
+    { name = "temporal-nexus-mcp", marker = "python_full_version >= '3.13'", editable = "nexus/mcp" },
     { name = "temporalio", extras = ["aioboto3"], specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], specifier = ">=1.31.0" },
 ]
@@ -3077,6 +3050,33 @@ examples = [
     { name = "openai-agents", specifier = ">=0.17.5" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
     { name = "pydantic-monty", specifier = ">=0.0.18" },
+]
+
+[[package]]
+name = "temporal-nexus-mcp"
+version = "0.1.0"
+source = { editable = "nexus/mcp" }
+dependencies = [
+    { name = "anyio", marker = "python_full_version >= '3.13'" },
+    { name = "mcp", marker = "python_full_version >= '3.13'" },
+    { name = "nexus-rpc", marker = "python_full_version >= '3.13'" },
+    { name = "pydantic", marker = "python_full_version >= '3.13'" },
+    { name = "temporalio", marker = "python_full_version >= '3.13'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anyio", specifier = ">=4.0.0" },
+    { name = "mcp", specifier = ">=1.28.1" },
+    { name = "nexus-rpc", specifier = ">=1.1.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "temporalio", specifier = ">=1.15.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-asyncio", specifier = ">=1.0" },
 ]
 
 [[package]]

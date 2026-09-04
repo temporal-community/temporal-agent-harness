@@ -24,12 +24,15 @@ _INSTALL_MESSAGE = (
 
 try:
     with workflow.unsafe.imports_passed_through():
-        from transport.workflow_transport import WorkflowTransport, _coerce_call_tool_result
-        from durable_tools_gateway.generated import (
+        from nexus_mcp.durable_tools_gateway.generated import (
             CallToolInput,
             CallToolInputArguments,
             ListAgentEntriesInput,
             RegistryService,
+        )
+        from nexus_mcp.transport.workflow_transport import (
+            WorkflowTransport,
+            _coerce_call_tool_result,
         )
 except ModuleNotFoundError as exc:
     raise RuntimeError(_INSTALL_MESSAGE) from exc

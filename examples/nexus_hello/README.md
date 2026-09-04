@@ -158,7 +158,7 @@ Without `just` (from the repo root):
 
 ```sh
 uv run --extra nexus-mcp python -m examples.nexus_hello.tool_server
-TEMPORAL_NAMESPACE=gateway uv run --extra nexus-mcp --group examples python -m durable_tools_gateway.worker
+TEMPORAL_NAMESPACE=gateway uv run --extra nexus-mcp --group examples python -m nexus_mcp.durable_tools_gateway.worker
 TEMPORAL_NAMESPACE=nexus-mcp-server uv run --extra nexus-mcp python -m examples.nexus_hello.nexus_tool_service
 temporal workflow signal --namespace gateway --workflow-id mcp-tool-registry --name register_external \
     --input '"NexusHelloAgent"' --input '"demo"' --input '"http://127.0.0.1:8765/mcp"'

@@ -1,5 +1,10 @@
 [project]
-name = "nexus-mcp"
+# Named `temporal-nexus-mcp`, not `nexus-mcp`: an unrelated third-party project already owns
+# `nexus-mcp` on PyPI, and this package is consumed by the root pyproject's `nexus-mcp` extra.
+# A bare `nexus-mcp` requirement there resolves to that stranger's package anywhere the
+# workspace-local [tool.uv.sources] path isn't in effect. The import names (transport,
+# durable_tools_gateway, authoring) are unaffected by the distribution name.
+name = "temporal-nexus-mcp"
 version = "0.1.0"
 description = "Bridge MCP tools with Temporal's reliable workflow execution via Nexus RPC"
 requires-python = ">=3.13"
@@ -17,7 +22,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["transport*", "durable_tools_gateway*", "authoring*"]
+include = ["nexus_mcp*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -15,6 +15,9 @@
 # First-time setup: create the shared repo-root .env.local (`cp .env.example .env.local` from the
 # repo root) and set GEMINI_API_KEY. See README.md.
 
+# Shows a notice when running from an untagged commit (silent on a release archive).
+import '../../../scripts/untagged-notice.just'
+
 # Read the single shared env file at the repo root (resolved relative to this justfile).
 set dotenv-path := "../../../.env.local"
 set dotenv-load := true
