@@ -540,11 +540,29 @@ function codeModeChildPosition(index: number): { x: number; y: number } {
   };
 }
 
+/**
+ * One graph paints as a ladder: boundary 0, its own flow edges 1, its cards 10,
+ * a Code Mode host's children 14. A graph embedded in a card climbs that ladder
+ * whole — and its edges have further to climb than its nodes.
+ *
+ * Nodes lift by 4, which is enough to clear the enclosing graph's boundary and
+ * no more, so the translucent Subagent activity container at 10 still tints the
+ * subagent boundary drawn inside it. An edge lifted by the same 4 lands at 5,
+ * under that container, so the arrows between a subagent's Input, Model
+ * interaction and Output were drawn at the right coordinates and painted over —
+ * the parent's identical arrows survive only because the parent's boundary is 0.
+ * Edges clear the container outright and still pass under the nested cards, at
+ * 10 + 4, that they run between.
+ */
+const nestedNodeZIndexBoost = 4;
+const nestedEdgeZIndexBoost = 11;
+
 function offsetGraph(
   graph: AgentGraph,
   xOffset: number,
   yOffset: number,
-  zIndexBoost = 0
+  zIndexBoost = 0,
+  edgeZIndexBoost = zIndexBoost
 ): AgentGraph {
   return {
     ...graph,
@@ -556,7 +574,10 @@ function offsetGraph(
       },
       zIndex: (item.zIndex ?? 0) + zIndexBoost
     })),
-    edges: graph.edges.map((item) => ({ ...item }))
+    edges: graph.edges.map((item) => ({
+      ...item,
+      zIndex: (item.zIndex ?? 0) + edgeZIndexBoost
+    }))
   };
 }
 
@@ -1397,7 +1418,8 @@ export function buildAgentGraph(
         placement.graph,
         toolPosition.x + placement.x,
         toolPosition.y + placement.y,
-        4
+        nestedNodeZIndexBoost,
+        nestedEdgeZIndexBoost
       );
       nodes.push(...embeddedGraph.nodes);
       edges.push(...embeddedGraph.edges);

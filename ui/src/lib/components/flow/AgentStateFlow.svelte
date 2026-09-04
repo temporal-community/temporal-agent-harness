@@ -400,13 +400,17 @@
     right: var(--gap-md);
   }
 
-  :global(.svelte-flow__edges) {
-    z-index: 1;
-  }
-
-  :global(.svelte-flow__nodes) {
-    z-index: 2;
-  }
+  /* Deliberately no z-index on either layer, which is what these two rules used
+     to set. The library positions .svelte-flow__edges absolutely and leaves
+     .svelte-flow__nodes static, so those rules were not the symmetric pair they
+     read as: the nodes one was inert (a static box ignores z-index), while the
+     edges one opened a stacking context that flattened every edge in the canvas
+     onto a single rung at 1. Each node's own z-index then competed against that
+     one number, and any node above it — an embedded subagent's boundary at 4,
+     the Subagent activity container at 10 — painted over edges that were drawn,
+     at the right coordinates, underneath it. Left to `auto`, both layers stay
+     transparent to stacking and flowProjection's per-element z-index decides,
+     which is the ordering it has always described. */
 
   /* Puts back the baseline ring app.css gives every other focusable thing. A
      node was the one focusable element on the page with none: the library's own
