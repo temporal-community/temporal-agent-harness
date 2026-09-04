@@ -14,9 +14,11 @@
     sending?: boolean;
     creatingSession?: boolean;
     refreshingSessions?: boolean;
+    showSessionPicker?: boolean;
     closed?: boolean;
     closedWorkflowIds?: string[];
     error?: string | null;
+    awaitingRegistration?: boolean;
     pendingApprovalCount?: number;
     onNewSession?: (workflowType: string) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
@@ -31,9 +33,11 @@
     sending = false,
     creatingSession = false,
     refreshingSessions = false,
+    showSessionPicker = true,
     closed = false,
     closedWorkflowIds = [],
     error = null,
+    awaitingRegistration = false,
     pendingApprovalCount = 0,
     onNewSession,
     onSelectSession,
@@ -75,6 +79,8 @@
             ? "Thinking"
             : error
               ? "Needs attention"
+              : awaitingRegistration
+                ? "Waiting for agent"
               : "Available"
   );
   const statusDetail = $derived(
@@ -82,6 +88,8 @@
       ? "stopped"
       : error
       ? "intervention"
+      : awaitingRegistration
+        ? "account registry"
       : pendingApprovalCount > 0
         ? "human gate"
         : connecting
@@ -107,7 +115,10 @@
   }
 
   function sessionInitialMessage(session: Session): string {
-    return session.initial_user_message?.trim() || "No user message yet";
+    return (
+      session.initial_user_message?.trim() ||
+      (session.is_spawned ? session.label : "No user message yet")
+    );
   }
 
   function sessionAgentLabel(session: Session): string {
@@ -120,6 +131,7 @@
   function currentStatusKind(): StatusKind {
     if (closed) return "closed";
     if (error) return "error";
+    if (awaitingRegistration) return "idle";
     if (pendingApprovalCount > 0) return "approval";
     if (creatingSession) return "starting";
     if (connecting) return "connecting";
@@ -206,6 +218,20 @@
 </script>
 
 <div class="session-controls">
+  {#if onRefreshSessions}
+    <button
+      type="button"
+      class="session-refresh"
+      class:spinning={refreshingSessions}
+      aria-label="Refresh all sessions"
+      title="Refresh all sessions"
+      disabled={refreshingSessions}
+      onclick={() => void refreshSessions()}
+    >
+      <RefreshCw size={14} />
+    </button>
+  {/if}
+
   <div class="new-session-anchor">
     <button
       type="button"
@@ -266,19 +292,21 @@
     {/if}
   </div>
 
-  <button
-    type="button"
-    class="session-drawer-button"
-    class:active={sessionDrawerOpen}
-    aria-pressed={sessionDrawerOpen}
-    onclick={toggleSessionPopover}
-  >
-    <History size={13} />
-    <span>Sessions</span>
-    <span class="control-chevron" aria-hidden="true">
-      <ChevronDown size={13} />
-    </span>
-  </button>
+  {#if showSessionPicker}
+    <button
+      type="button"
+      class="session-drawer-button"
+      class:active={sessionDrawerOpen}
+      aria-pressed={sessionDrawerOpen}
+      onclick={toggleSessionPopover}
+    >
+      <History size={13} />
+      <span>Sessions</span>
+      <span class="control-chevron" aria-hidden="true">
+        <ChevronDown size={13} />
+      </span>
+    </button>
+  {/if}
 
   <StatusChip
     label={statusLabel}
@@ -287,7 +315,7 @@
     active={statusKind === "thinking" || statusKind === "connecting"}
   />
 
-  {#if sessionDrawerOpen}
+  {#if showSessionPicker && sessionDrawerOpen}
     <section class="session-popover" aria-label="Sessions">
       <header class="session-popover-head">
         <span class="session-popover-title">
@@ -346,7 +374,7 @@
             <span class="session-copy">
               <time>{sessionCreatedAt(item.created_at)}</time>
               <strong>{sessionInitialMessage(item)}</strong>
-              <small>{sessionAgentLabel(item)}{item.is_discovered ? " · discovered" : ""}</small>
+              <small>{sessionAgentLabel(item)}{item.is_spawned ? " · spawned" : ""}</small>
             </span>
             <StatusChip
               label={sessionStatusLabel(item)}
@@ -377,6 +405,7 @@
     display: inline-flex;
   }
 
+  .session-refresh,
   .session-add,
   .session-drawer-button {
     --control-accent: var(--accent);
@@ -404,6 +433,14 @@
       box-shadow 140ms ease;
   }
 
+  .session-refresh {
+    width: 32px;
+    min-width: 32px;
+    display: inline-flex;
+    justify-content: center;
+    padding: 0;
+  }
+
   .session-add {
     flex: 0 0 auto;
   }
@@ -412,6 +449,8 @@
     --control-accent: var(--reasoning);
   }
 
+  .session-refresh:hover:not(:disabled),
+  .session-refresh:focus-visible:not(:disabled),
   .session-add:hover:not(.disabled),
   .session-add:focus-visible:not(.disabled),
   .session-add.active,
@@ -425,6 +464,15 @@
       inset 0 1px 0 rgb(255 255 255 / 0.06),
       0 0 0 3px color-mix(in srgb, var(--control-accent) 16%, transparent);
     outline: 0;
+  }
+
+  .session-refresh:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+
+  .session-refresh.spinning :global(svg) {
+    animation: session-refresh-spin 800ms linear infinite;
   }
 
   .control-chevron {

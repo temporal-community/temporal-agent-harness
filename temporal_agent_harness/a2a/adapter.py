@@ -40,6 +40,7 @@ from temporal_agent_harness.harness.agent_protocol import AgentConfig
 
 from .stream import (
     A2A_STREAM_POLL_UPDATE,
+    A2A_STREAM_REPLAY_QUERY,
 )
 
 HARNESS_HANDLER_METADATA_KEY = "temporal.io/message-type"
@@ -297,11 +298,12 @@ class HarnessA2ABackend:
             )
         except RPCError as exc:
             if _is_completed(exc):
-                return nexus.TemporalOperationResult.sync(
-                    SubscribeToTaskOutput(
-                        items=[], next_cursor=request.cursor, closed=True
-                    )
+                replay = await self._client.get_workflow_handle(workflow_id).query(
+                    A2A_STREAM_REPLAY_QUERY,
+                    request,
+                    result_type=SubscribeToTaskOutput,
                 )
+                return nexus.TemporalOperationResult.sync(replay)
             if _is_not_found(exc):
                 return nexus.TemporalOperationResult.sync(
                     SubscribeToTaskOutput(

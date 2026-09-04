@@ -4,7 +4,7 @@
 # arguments, result -- in a named dataclass instead of a plain dict. This is the
 # client-side counterpart to RegistryServiceHandler's own bugs (see
 # tests/nexus_mcp/test_registry_wire_shapes.py): reading a wrapper as a plain dict
-# fails with e.g. "'ListAgentEntriesOutputRemoteTools' object has no attribute 'get'",
+# fails with e.g. "'ListAccountEntriesOutputRemoteTools' object has no attribute 'get'",
 # and constructing a wrapper-typed field from a plain dict crashes on the real wire.
 #
 # workflow.create_nexus_client() only works inside a real workflow, so it's mocked here
@@ -17,9 +17,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from nexus_mcp.durable_tools_gateway.generated import (
     CallToolOutput,
     CallToolOutputResult,
-    ListAgentEntriesOutput,
-    ListAgentEntriesOutputRemoteTools,
-    ListAgentEntriesOutputRemoteToolsValueItem,
+    ListAccountEntriesOutput,
+    ListAccountEntriesOutputRemoteTools,
+    ListAccountEntriesOutputRemoteToolsValueItem,
 )
 
 from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
@@ -29,7 +29,7 @@ from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
 
 def _server() -> _NexusGatewayMCPServer:
     return _NexusGatewayMCPServer(
-        agent_id="agent-1",
+        account_id="agent-1",
         aliases=frozenset({"weather"}),
         gateway_name="RegistryService",
         gateway_endpoint="mcp-registry-endpoint",
@@ -41,11 +41,11 @@ def _server() -> _NexusGatewayMCPServer:
 async def test_list_tools_unwraps_remote_tools(mock_create_client: MagicMock) -> None:
     mock_client = MagicMock()
     mock_client.execute_operation = AsyncMock(
-        return_value=ListAgentEntriesOutput(
-            remote_tools=ListAgentEntriesOutputRemoteTools(
+        return_value=ListAccountEntriesOutput(
+            remote_tools=ListAccountEntriesOutputRemoteTools(
                 additional_properties={
                     "weather": [
-                        ListAgentEntriesOutputRemoteToolsValueItem(
+                        ListAccountEntriesOutputRemoteToolsValueItem(
                             additional_properties={
                                 "name": "weather_get_forecast",
                                 "description": "fake",
