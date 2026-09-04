@@ -79,6 +79,9 @@ _SESSION_PREVIEW_HISTORY_RPC_TIMEOUT = timedelta(seconds=1)
 _WORKFLOW_NOT_FOUND = "NOT_FOUND"
 # How long to leave the archive sweep alone after an update it could not land.
 _ARCHIVE_RETRY_SECONDS = 60.0
+# Housekeeping cadence for vanished sessions. Lives off the list-read path so slowing or
+# splitting `/api/sessions` cannot grow a corpse backlog that the next enrich pays for.
+_ARCHIVE_SWEEP_INTERVAL_SECONDS = 30.0
 
 # An RPC failure grouped by what the caller should DO about it, not by which gRPC status
 # produced it. Each entry is the HTTP status that carries that remedy and the error code
@@ -292,7 +295,17 @@ def create_agent_harness_app(
             manager_workflow_id=manager_workflow_id,
             manager_task_queue=manager_task_queue,
         )
-        yield
+        sweep_task = asyncio.create_task(
+            _archive_sweep_loop(app), name="session-archive-sweep"
+        )
+        try:
+            yield
+        finally:
+            sweep_task.cancel()
+            try:
+                await sweep_task
+            except asyncio.CancelledError:
+                pass
 
     app = FastAPI(lifespan=lifespan)
     # Set here rather than in the lifespan so the endpoints behave the same when the app is
@@ -360,15 +373,24 @@ def create_agent_harness_app(
         return asdict(registry_result)
 
     @app.get("/api/sessions")
-    async def list_sessions(include_archived: bool = False):
+    async def list_sessions(include_archived: bool = False, view: str | None = None):
         """Every session this manager knows about, with each one's execution state.
 
+        ``view=ids`` is the cheap existence read: one manager query, no discovery, no
+        describe, no archive write. The console polls that to learn about sessions another
+        process created. The default (full) view still enriches — discovery, describe,
+        worker presence — and is for picker open / refresh / when the id set changes.
+
         Archived entries are left out by default, and dropped BEFORE the enrichment rather
-        than after: the enrichment is what this endpoint costs. Each session is a describe
-        plus a history scan paging up to 96 events, so a list nothing ever shed had grown to
-        roughly 283 RPCs per poll — every ten seconds, per visible tab, most of it spent on
-        workflows the namespace's retention deleted hours ago.
+        than after: the enrichment is what this endpoint costs. Vanished tracked sessions
+        are hidden from the default full list here; archiving them is a separate periodic
+        sweep so the read path no longer piles updates onto the manager.
         """
+        if view == "ids":
+            return await _sessions_existence(
+                app, include_archived=include_archived
+            )
+
         sessions: list[Session] = await app.state.manager_handle.query(
             SessionManagerWorkflow.list_sessions,
             result_type=list[Session],
@@ -403,8 +425,37 @@ def create_agent_harness_app(
         if include_archived:
             # An explicit look at the archived state should not also change it.
             return listed
-        swept = await _archive_vanished_sessions(app, _vanished_workflow_ids(listed))
-        return [item for item in listed if item["workflow_id"] not in swept]
+        # Hide corpses from the sidebar; the periodic sweep archives them off this path.
+        return [
+            item
+            for item in listed
+            if item.get("execution_status") != _WORKFLOW_NOT_FOUND
+        ]
+
+    @app.get("/api/sessions/{session_id}")
+    async def get_session(session_id: str):
+        """One session by id, including archived, for deep links that skip the list.
+
+        Looks in the manager first (the session another process created is there even when
+        this browser never listed it). 404 only when the manager has no entry — attach may
+        still work for a raw workflow id, but the console needs a ``Session`` row to select.
+        """
+        sessions: list[Session] = await app.state.manager_handle.query(
+            SessionManagerWorkflow.list_sessions,
+            result_type=list[Session],
+        )
+        match = next((item for item in sessions if item.workflow_id == session_id), None)
+        if match is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "session_not_found",
+                    "message": f"No session {session_id!r} in the session manager.",
+                },
+            )
+        listed = await _session_with_execution_state(app.state.temporal, match)
+        await _annotate_worker_presence(app, [listed])
+        return listed
 
     @app.post("/api/sessions")
     async def create_session(req: CreateSessionRequestBody):
@@ -813,21 +864,77 @@ def _vanished_workflow_ids(listed: list[dict[str, object]]) -> list[str]:
     ]
 
 
+def _sessions_revision(sessions: list[Session]) -> str:
+    """Stable fingerprint of which sessions the manager is holding (and archived flags)."""
+    parts = sorted(
+        f"{session.workflow_id}:{int(session.is_archived)}" for session in sessions
+    )
+    return blake2s("|".join(parts).encode(), digest_size=8).hexdigest()
+
+
+async def _sessions_existence(
+    app: FastAPI, *, include_archived: bool
+) -> dict[str, object]:
+    """Manager-only session existence: what another process created, without enrichment.
+
+    One query. No visibility scan, no describe, no archive write. The ``revision`` changes
+    exactly when the set of (id, archived) pairs changes, so the console can poll this and
+    only pay for a full enrich when something actually appeared or left.
+    """
+    sessions: list[Session] = await app.state.manager_handle.query(
+        SessionManagerWorkflow.list_sessions,
+        result_type=list[Session],
+    )
+    revision = _sessions_revision(sessions)
+    if not include_archived:
+        sessions = [session for session in sessions if not session.is_archived]
+    return {
+        "revision": revision,
+        "sessions": [asdict(session) for session in sessions],
+    }
+
+
+async def _archive_sweep_loop(app: FastAPI) -> None:
+    """Periodically archive tracked sessions whose workflows are gone."""
+    while True:
+        await asyncio.sleep(_ARCHIVE_SWEEP_INTERVAL_SECONDS)
+        try:
+            await _run_archive_sweep(app)
+        except Exception:  # noqa: BLE001 — housekeeping must not crash the app
+            continue
+
+
+async def _run_archive_sweep(app: FastAPI) -> None:
+    """Describe non-archived tracked sessions and archive the ones Temporal no longer has."""
+    if not getattr(app.state, "manager_handle", None) or not getattr(
+        app.state, "temporal", None
+    ):
+        return
+    sessions: list[Session] = await app.state.manager_handle.query(
+        SessionManagerWorkflow.list_sessions,
+        result_type=list[Session],
+    )
+    tracked = [
+        session
+        for session in sessions
+        if not session.is_archived and not session.is_discovered
+    ]
+    if not tracked:
+        return
+    listed = await _sessions_with_execution_state(app.state.temporal, tracked)
+    await _archive_vanished_sessions(app, _vanished_workflow_ids(listed))
+
+
 async def _archive_vanished_sessions(app: FastAPI, workflow_ids: list[str]) -> set[str]:
     """Flag sessions whose workflows are gone, in one bulk update, one sweep at a time.
 
-    This is a write on the read path, which is only defensible because it is self-limiting:
-    an archived session is filtered out before the enrichment that would describe it, so it
-    can never be seen NOT_FOUND again. The sweep therefore fires once for a given corpse and
-    the steady state is zero updates, no matter how many tabs are polling.
-
-    That steady state is the point. Every open tab polls this endpoint every ten seconds
-    against a single manager workflow, and Temporal caps concurrent updates per workflow at
-    ten — the same pileup ``stream_merge.gates.UnmountChild`` exists to prevent. Three things
-    keep this under that: one bulk update rather than one per session, a lock so a second
-    request skips rather than queues behind the first, and a cooling-off period after a
-    failure so an update that cannot succeed (a manager whose worker predates the handler) is
-    retried on a timer instead of on every poll from every tab.
+    Runs from the periodic archive sweep (not from ``GET /api/sessions``), so listing can be
+    slowed or split into a cheap existence poll without growing a corpse backlog on every
+    interactive enrich. Three things keep concurrent updates under Temporal's per-workflow
+    cap of ten: one bulk update rather than one per session, a lock so a second request
+    skips rather than queues behind the first, and a cooling-off period after a failure so
+    an update that cannot succeed (a manager whose worker predates the handler) is retried
+    on a timer instead of on every sweep tick.
 
     The lock is checked rather than waited on, so the worst a race can produce is a second
     sweep that finds the work already done — ``set_sessions_archived`` reports only what it

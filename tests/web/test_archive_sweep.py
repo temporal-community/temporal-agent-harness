@@ -1,7 +1,7 @@
-# ABOUTME: The archive sweep is a WRITE on a read path that every open tab hits every ten seconds,
-# against a single workflow Temporal caps at ten concurrent updates. These pin the three things that
-# make that defensible: it archives only on an unambiguous NOT_FOUND, it never writes twice for the
-# same session, and a room full of tabs cannot turn one sweep into a pileup.
+# ABOUTME: Archive sweep used to ride every GET /api/sessions poll. It now runs off the read
+# path so a cheap existence poll cannot pile updates onto the manager. These pin: GET hides
+# NOT_FOUND without writing; the sweep archives only on unambiguous NOT_FOUND; concurrent
+# sweeps skip rather than queue; a failed update backs off.
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_harness.web import AgentRegistry, create_agent_harness_app
-from temporal_agent_harness.web.app import _archive_vanished_sessions
+from temporal_agent_harness.web.app import _archive_vanished_sessions, _run_archive_sweep
 from temporal_agent_harness.web.session_manager import Session, SetSessionsArchivedRequest
 
 GONE = "agent-session-gone"
@@ -89,12 +89,20 @@ def _ids(response) -> set[str]:
     return {item["workflow_id"] for item in response.json()}
 
 
-def test_a_vanished_session_is_archived_and_gone_from_the_same_response() -> None:
+def test_list_hides_vanished_sessions_without_archiving() -> None:
     with _client([_session(LIVE), _session(GONE)]) as (client, app):
         listed = client.get("/api/sessions")
 
     assert _ids(listed) == {LIVE}
+    assert app.state.manager_handle.updates == []
+
+
+def test_sweep_archives_a_vanished_session() -> None:
+    with _client([_session(LIVE), _session(GONE)]) as (_client_unused, app):
+        asyncio.run(_run_archive_sweep(app))
+
     assert app.state.manager_handle.updates[0].workflow_ids == [GONE]
+    assert next(s for s in app.state.manager_handle.sessions if s.workflow_id == GONE).is_archived
 
 
 def test_an_ambiguous_describe_is_never_archived() -> None:
@@ -102,53 +110,61 @@ def test_an_ambiguous_describe_is_never_archived() -> None:
     # about the workflow, and a slow describe is the expected case on this endpoint.
     with _client([_session(LIVE), _session(SLOW)]) as (client, app):
         listed = client.get("/api/sessions")
+        asyncio.run(_run_archive_sweep(app))
 
     assert _ids(listed) == {LIVE, SLOW}
     assert app.state.manager_handle.updates == []
 
 
 def test_nothing_to_archive_writes_nothing() -> None:
-    with _client([_session(LIVE)]) as (client, app):
-        client.get("/api/sessions")
+    with _client([_session(LIVE)]) as (_c, app):
+        asyncio.run(_run_archive_sweep(app))
 
     assert app.state.manager_handle.updates == []
 
 
 def test_the_sweep_does_not_repeat_itself() -> None:
-    # Self-limiting by construction: once archived, the session is filtered out before the
-    # enrichment that would describe it, so it can never be seen NOT_FOUND again.
-    with _client([_session(LIVE), _session(GONE)]) as (client, app):
+    # Self-limiting: once archived, the session is skipped by the sweep's tracked filter.
+    with _client([_session(LIVE), _session(GONE)]) as (_c, app):
         for _ in range(5):
-            client.get("/api/sessions")
+            asyncio.run(_run_archive_sweep(app))
 
     assert len(app.state.manager_handle.updates) == 1
 
 
 def test_many_corpses_become_one_update_not_one_each() -> None:
     # 28 is what this dev stack actually had. One update each would be 28 writes on one
-    # workflow from one poll, against a concurrent-update cap of ten.
-    corpses = [_session(GONE) for _ in range(28)]
-    with _client([_session(LIVE), *corpses]) as (client, app):
-        client.get("/api/sessions")
+    # workflow from one sweep, against a concurrent-update cap of ten.
+    corpses = [_session(f"{GONE}-{i}") for i in range(28)]
+
+    async def _state(_temporal, session: Session):
+        status = "NOT_FOUND" if session.workflow_id.startswith(GONE) else "RUNNING"
+        return {
+            **session.__dict__,
+            "execution_status": status,
+            "closed": status != "RUNNING",
+        }
+
+    app = create_agent_harness_app(registry=AgentRegistry())
+    app.state.temporal = object()
+    app.state.manager_handle = _Manager([_session(LIVE), *corpses])
+    with patch("temporal_agent_harness.web.app._session_with_execution_state", _state):
+        asyncio.run(_run_archive_sweep(app))
 
     (update,) = app.state.manager_handle.updates
     assert len(update.workflow_ids) == 28
 
 
 def test_an_already_archived_session_is_not_archived_again() -> None:
-    with _client([_session(LIVE), _session(GONE, archived=True)]) as (client, app):
-        client.get("/api/sessions")
+    with _client([_session(LIVE), _session(GONE, archived=True)]) as (_c, app):
+        asyncio.run(_run_archive_sweep(app))
 
     assert app.state.manager_handle.updates == []
 
 
 def test_concurrent_sweeps_skip_rather_than_queueing_behind_each_other() -> None:
-    # N tabs polling one manager is the same shape as the update pileup gates.py exists to
-    # prevent, so a sweep already in flight must make the others do nothing at all.
-    #
-    # Driven against the sweep directly rather than through TestClient, which does not give
-    # concurrent requests one event loop to contend on — and an asyncio.Lock only means
-    # anything within one.
+    # N tabs / ticks against one manager is the same shape as the update pileup gates.py
+    # exists to prevent, so a sweep already in flight must make the others do nothing at all.
     async def drive() -> int:
         app = create_agent_harness_app(registry=AgentRegistry())
         app.state.archive_sweep = asyncio.Lock()
@@ -169,24 +185,25 @@ def test_concurrent_sweeps_skip_rather_than_queueing_behind_each_other() -> None
     assert asyncio.run(drive()) == 1
 
 
-def test_an_update_that_cannot_land_backs_off_instead_of_retrying_every_poll() -> None:
+def test_an_update_that_cannot_land_backs_off_instead_of_retrying_every_tick() -> None:
     # A manager whose worker predates set_sessions_archived would otherwise be hammered once
-    # per poll per tab, forever, with an update that can never succeed.
+    # per sweep forever, with an update that can never succeed.
     with _client([_session(LIVE), _session(GONE)], update_fails=True) as (client, app):
         for _ in range(5):
-            listed = client.get("/api/sessions")
+            asyncio.run(_run_archive_sweep(app))
+        listed = client.get("/api/sessions")
 
     assert len(app.state.manager_handle.updates) == 1
-    # And the failure costs nothing else: the list is still served, corpse included.
-    assert _ids(listed) == {LIVE, GONE}
+    # List still serves: the corpse is hidden from the default view even before archive lands.
+    assert _ids(listed) == {LIVE}
 
 
 def test_the_backoff_expires_so_a_recovered_manager_is_swept() -> None:
-    with _client([_session(LIVE), _session(GONE)], update_fails=True) as (client, app):
-        client.get("/api/sessions")
+    with _client([_session(LIVE), _session(GONE)], update_fails=True) as (_c, app):
+        asyncio.run(_run_archive_sweep(app))
         app.state.manager_handle.update_fails = False
         app.state.archive_retry_after = 0.0
-        client.get("/api/sessions")
+        asyncio.run(_run_archive_sweep(app))
 
     assert len(app.state.manager_handle.updates) == 2
 
@@ -197,3 +214,27 @@ def test_looking_at_the_archived_state_does_not_change_it() -> None:
 
     assert _ids(listed) == {LIVE, GONE}
     assert app.state.manager_handle.updates == []
+
+
+def test_existence_view_is_manager_only() -> None:
+    with _client([_session(LIVE), _session(GONE)]) as (client, app):
+        body = client.get("/api/sessions?view=ids").json()
+
+    assert body["revision"]
+    assert {row["workflow_id"] for row in body["sessions"]} == {LIVE, GONE}
+    assert app.state.manager_handle.updates == []
+
+
+def test_get_session_by_id_includes_archived() -> None:
+    with _client([_session(LIVE), _session(GONE, archived=True)]) as (client, _app):
+        body = client.get(f"/api/sessions/{GONE}").json()
+
+    assert body["workflow_id"] == GONE
+    assert body["is_archived"] is True
+
+
+def test_get_session_unknown_id_is_404() -> None:
+    with _client([_session(LIVE)]) as (client, _app):
+        response = client.get("/api/sessions/agent-session-missing")
+
+    assert response.status_code == 404
