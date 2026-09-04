@@ -1191,6 +1191,39 @@ async def test_a2a_stream_poll_uses_requested_timeout(offline_build, monkeypatch
     assert not result.closed
 
 
+async def test_live_stream_poll_applies_the_agent_service_payload_budget(
+    offline_build, monkeypatch
+):
+    import temporal_agent_harness.harness.agent_workflow as aw
+    import temporal_agent_harness.a2a.stream as a2a_stream
+
+    runner = offline_build(AgentConfig())
+    monkeypatch.setattr(aw.workflow, "wait_condition", AsyncMock())
+    monkeypatch.setattr(
+        a2a_stream,
+        "subscription_page",
+        lambda result: result,
+    )
+    runner._stream._on_poll = AsyncMock(
+        return_value=MagicMock(
+            items=[
+                MagicMock(topic="turn_events", data="a" * 140_000, offset=4),
+                MagicMock(topic="turn_events", data="b" * 140_000, offset=5),
+            ],
+            next_offset=6,
+            more_ready=False,
+        )
+    )
+
+    result = await runner._handle_a2a_stream_poll(
+        SubscribeToTaskInput(id="agent-1", cursor=4, timeout_seconds=30)
+    )
+
+    assert [item.offset for item in result.items] == [4]
+    assert result.next_offset == 5
+    assert result.more_ready
+
+
 # ---------------------------------------------------------------------------
 # Offline build fixtures (workflow APIs __init__ touches are patched out)
 # ---------------------------------------------------------------------------

@@ -116,7 +116,6 @@ from temporal_agent_harness.harness.stream_poll import (
     AgentStreamPollResult,
     replay_stream_state,
 )
-
 with workflow.unsafe.imports_passed_through():
     from nexus_a2a import SubscribeToTaskInput, SubscribeToTaskOutput
 
@@ -2067,7 +2066,6 @@ class AgentWorkflowRunner:
     def _handle_a2a_stream_replay(
         self, input: SubscribeToTaskInput
     ) -> SubscribeToTaskOutput:
-        """Replay retained workflow events as a bounded A2A subscription page."""
         result = self._handle_stream_replay(
             AgentStreamPollInput(
                 from_offset=input.cursor,
