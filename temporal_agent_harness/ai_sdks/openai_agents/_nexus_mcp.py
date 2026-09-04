@@ -1,7 +1,4 @@
-"""MCP server backed by Nexus.
-
-Wraps nexus_mcp's WorkflowTransport to satisfy agents.mcp.MCPServer's ABC contract.
-"""
+"""OpenAI Agents MCP server adapters backed by Nexus."""
 
 from __future__ import annotations
 
@@ -16,10 +13,11 @@ if TYPE_CHECKING:
     from mcp.types import Tool as MCPTool
 
 _INSTALL_MESSAGE = (
-    "Nexus-brokered MCP support requires the optional `nexus-mcp` extra, which is only "
-    "resolvable from an editable checkout of this repo (it path-depends on "
-    "nexus/mcp) and requires Python >=3.13. "
-    "Install it with `uv sync --extra nexus-mcp`."
+    "Nexus-brokered MCP support requires the root project's optional `nexus-mcp` "
+    "extra and Python >=3.13. The extra installs the local `temporal-nexus-mcp` "
+    "distribution from nexus/mcp. Install it from an editable checkout of this "
+    "repository with `uv sync --extra nexus-mcp`. Do not run `pip install nexus-mcp`; "
+    "that name belongs to an unrelated PyPI project."
 )
 
 try:
@@ -30,19 +28,24 @@ try:
             ListAgentEntriesInput,
             RegistryService,
         )
-        from nexus_mcp.transport.workflow_transport import (
-            WorkflowTransport,
-            _coerce_call_tool_result,
+        from nexus_mcp.execution import WorkflowNexusExecutor
+        from nexus_mcp.resolver import (
+            NexusToolResolver,
+            UnknownToolError,
+            coerce_call_tool_result,
         )
 except ModuleNotFoundError as exc:
     raise RuntimeError(_INSTALL_MESSAGE) from exc
 
 
 def _error_result(exc: Exception) -> CallToolResult:
-    """Wrap a caught exception as an isError=True CallToolResult."""
+    """Wrap a caught exception as a tool error result."""
     from mcp import types
 
-    return types.CallToolResult(content=[types.TextContent(type="text", text=str(exc))], isError=True)
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=str(exc))],
+        is_error=True,
+    )
 
 
 class _BaseNexusMCPServer(MCPServer):  # type: ignore[misc]
@@ -72,8 +75,8 @@ class _BaseNexusMCPServer(MCPServer):  # type: ignore[misc]
         raise NotImplementedError(f"MCP server {self.name!r} does not support prompts.")
 
 
-class _NexusTransportMCPServer(_BaseNexusMCPServer):
-    """MCP server backed by nexus_mcp's WorkflowTransport. See module docstring."""
+class _NexusNativeMCPServer(_BaseNexusMCPServer):
+    """Expose native Nexus tools through the OpenAI Agents MCP interface."""
 
     def __init__(
         self,
@@ -83,23 +86,27 @@ class _NexusTransportMCPServer(_BaseNexusMCPServer):
         **kwargs: Any,
     ) -> None:
         MCPServer.__init__(self, **kwargs)
-        self._transport = WorkflowTransport(
+        self._resolver = NexusToolResolver(
             registered_servers,
-            name=name or "nexus-transport",
+            WorkflowNexusExecutor(),
+            name=name or "nexus-native",
             allowed_servers=allowed_servers,
         )
 
     @property
     def name(self) -> str:
-        return self._transport.name
+        return self._resolver.name
 
     async def list_tools(self, run_context: Any = None, agent: Any = None) -> list[MCPTool]:
-        return await self._transport.list_tools()
+        return await self._resolver.list_tools()
 
     async def call_tool(
         self, tool_name: str, arguments: dict[str, Any] | None, meta: dict[str, Any] | None = None
     ) -> CallToolResult:
-        return await self._transport.call_tool(tool_name, arguments, meta)
+        try:
+            return await self._resolver.call_tool(tool_name, arguments)
+        except UnknownToolError as exc:
+            return _error_result(exc)
 
 
 class NexusGateway:
@@ -199,7 +206,7 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
                 content=[types.TextContent(
                     type="text", text=f"Unknown tool {tool_name!r} for agent {self._agent_id!r}."
                 )],
-                isError=True,
+                is_error=True,
             )
 
         try:
@@ -220,6 +227,6 @@ class _NexusGatewayMCPServer(_BaseNexusMCPServer):
                 if call_result.result is not None
                 else None
             )
-            return _coerce_call_tool_result(result)
+            return coerce_call_tool_result(result)
         except Exception as exc:
             return _error_result(exc)

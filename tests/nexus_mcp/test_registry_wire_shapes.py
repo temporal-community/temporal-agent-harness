@@ -115,3 +115,4 @@ async def test_call_tool_forwards_arguments_and_serializes_result(_mock_info: Ma
 
     decoded = _round_trip(output, CallToolOutput)
     assert decoded.result.additional_properties["content"][0]["text"] == "42"
+    assert decoded.result.additional_properties["isError"] is False

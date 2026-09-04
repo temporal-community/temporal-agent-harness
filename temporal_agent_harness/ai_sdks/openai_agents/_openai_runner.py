@@ -136,7 +136,7 @@ class TemporalOpenAIRunner(AgentRunner):
             )
             from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
                 _NexusGatewayMCPServer,
-                _NexusTransportMCPServer,
+                _NexusNativeMCPServer,
             )
 
             for s in starting_agent.mcp_servers:
@@ -145,7 +145,7 @@ class TemporalOpenAIRunner(AgentRunner):
                     (
                         _StatelessMCPServerReference,
                         _StatefulMCPServerReference,
-                        _NexusTransportMCPServer,
+                        _NexusNativeMCPServer,
                         _NexusGatewayMCPServer,
                     ),
                 ):

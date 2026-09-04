@@ -4,7 +4,7 @@ Run from the repo root with:
     uv run --extra nexus-mcp --group examples python -m examples.nexus_hello.worker
 
 No Nexus-related plugin config here. workflow.py wires its own tools directly via
-nexus_brokered_mcp_server(...).
+nexus_native_mcp_server(...) and nexus_tools_gateway().
 
 Env vars (set in .env.local - see .env.example):
     TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE   Temporal connection profile (this worker's own

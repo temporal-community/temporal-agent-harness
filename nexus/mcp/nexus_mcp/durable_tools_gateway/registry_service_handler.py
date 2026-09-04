@@ -27,8 +27,7 @@ from typing import Any
 import nexusrpc
 import nexusrpc.handler
 import temporalio.nexus
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client import Client as MCPClient
 from mcp.types import CallToolResult
 from nexusrpc.handler import StartOperationContext
 from pydantic import BaseModel
@@ -80,23 +79,21 @@ async def _heartbeat_every(seconds: float) -> None:
 async def mcp_proxy_activity(input: ExternalMCPCallInput) -> CallToolResult:
     """Call one tool on an external MCP server over Streamable HTTP.
 
-    Returns CallToolResult as-is: a tool-level error (isError=True) is data, not
+    Returns CallToolResult as-is: a tool-level error (is_error=True) is data, not
     raised. Only a real RPC/transport failure raises.
     """
     activity.logger.info("[proxy-activity] calling %r on %s", input.tool_name, input.server_url)
     heartbeat_task = asyncio.create_task(_heartbeat_every(15))
     try:
-        async with streamable_http_client(input.server_url) as (read, write, _):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.call_tool(input.tool_name, input.arguments)
+        async with MCPClient(input.server_url, mode="auto") as client:
+            result = await client.call_tool(input.tool_name, input.arguments)
     finally:
         heartbeat_task.cancel()
         try:
             await heartbeat_task
         except asyncio.CancelledError:
             pass
-    activity.logger.info("[proxy-activity] %r completed  is_error=%s", input.tool_name, result.isError)
+    activity.logger.info("[proxy-activity] %r completed  is_error=%s", input.tool_name, result.is_error)
     return result
 
 
@@ -237,5 +234,9 @@ class RegistryServiceHandler:
                 str(exc.cause or exc), type=nexusrpc.HandlerErrorType.INTERNAL, retryable_override=False
             ) from exc
         return CallToolOutput(
-            result=CallToolOutputResult(additional_properties=result.model_dump(mode="json"))
+            result=CallToolOutputResult(
+                additional_properties=result.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                )
+            )
         )

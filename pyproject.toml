@@ -30,8 +30,8 @@ s3 = [
 # (vendored from temporalio.contrib.openai_agents @ sdk-python main). The trace interceptor
 # imports opentelemetry at module load, so this extra pulls temporalio's opentelemetry extra.
 openai-agents = [
-    "openai-agents>=0.17.5",
-    "mcp>=1.9.4,<2",
+    "openai-agents>=0.22.0",
+    "mcp>=2.1.1,<3",
     "temporalio[opentelemetry]>=1.31.0",
 ]
 # The Pydantic AI integration: temporal_agent_harness.ai_sdks.pydantic_ai_harness. Unlike the
@@ -65,8 +65,8 @@ code-mode = [
 # The extra keeps the short `nexus-mcp` name; only the dependency changed.
 nexus-mcp = [
     "temporal-nexus-mcp; python_version >= '3.13'",
-    "openai-agents>=0.17.5",
-    "mcp>=1.13.0,<2",
+    "openai-agents>=0.22.0",
+    "mcp>=2.1.1,<3",
     "temporalio[opentelemetry]>=1.31.0",
 ]
 
@@ -78,7 +78,7 @@ examples = [
     "google-auth>=2.53.0",
     "pydantic-monty>=0.0.18",  # the Monty sandbox the monty example runs scripts in
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
-    "openai-agents>=0.17.5",  # the OpenAI Agents SDK example (examples/openai_hello, examples/react_agent)
+    "openai-agents>=0.22.0",  # the OpenAI Agents SDK example (examples/openai_hello, examples/react_agent)
     "pydantic-ai-slim[temporal]>=2.13",  # the Pydantic AI example (examples/pydantic_ai_hello)
     "httpx>=0.27",  # the react_agent example's tools call real weather / geo / IP APIs
 ]
@@ -94,8 +94,8 @@ dev = [
     "temporalio[aioboto3]>=1.31.0",  # S3 storage driver under test (mirrors the `s3` extra)
     # OpenAI Agents integration + its opentelemetry/mcp deps, so the vendored plugin and its
     # tests import under a plain `uv run pytest` (mirrors the `openai-agents` extra).
-    "openai-agents>=0.17.5",
-    "mcp>=1.9.4,<2",
+    "openai-agents>=0.22.0",
+    "mcp>=2.1.1,<3",
     "temporalio[opentelemetry]>=1.31.0",
     # Pydantic AI integration (the ai_sdks glue + its tests) — mirrors the `pydantic-ai` extra.
     "pydantic-ai-slim[temporal]>=2.13",

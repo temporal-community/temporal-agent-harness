@@ -1,4 +1,4 @@
-"""Hello-world OpenAI Agents SDK agent with two tools reached over Nexus.
+"""Hello-world OpenAI Agents SDK agent with three tools reached over Nexus.
 
     nexus_gateway = nexus_tools_gateway()  # agent_id inferred from workflow_type
     mcp_servers=[
@@ -10,8 +10,10 @@ For this demo, the tools are:
   - demo_get_fun_fact: a 3rd-party (non-Nexus) MCP server, proxied through the Durable
     Tools Gateway ("demo" -> http://127.0.0.1:8765/mcp). Registered under agent_id
     "NexusHelloAgent" (this workflow's type) with the gateway ahead of time.
-  - demo-nexus_get_lucky_number: a Nexus-native MCP server, called directly -- no
+  - demo-nexus_get_lucky_number: a native Nexus tool service, called directly -- no
     gateway, no registration ("demo-nexus" -> "nexus-hello-demo-endpoint").
+  - demo-nexus_get_delayed_lucky_number: a workflow-backed Nexus operation, called
+    through the same direct service route.
 
 The agent only knows about them when listing tools via the MCP protocol.
 """
@@ -49,7 +51,7 @@ You are a friendly assistant. Answer the user in brief, natural prose.
 @workflow.defn(name="NexusHelloAgent")
 @agent.defn
 class NexusHelloAgentWorkflow:
-    """A conversational agent with two tools reached over Nexus."""
+    """A conversational agent with three tools reached over Nexus."""
 
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:

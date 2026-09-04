@@ -350,10 +350,12 @@ def nexus_native_mcp_server(
     endpoint: str,
     **kwargs: Any,
 ) -> "MCPServer":
-    """MCP server for ONE Nexus-native service. Pass directly to Agent(mcp_servers=[...]).
+    """OpenAI Agents MCP adapter for one native Nexus tool service.
 
-    The service identified by `name` and `endpoint` must be an MCP server that is reachable
-    by Nexus with the provided `name` + `endpoint`.
+    Pass the result directly to ``Agent(mcp_servers=[...])``.
+
+    The service identified by `name` and `endpoint` must be a native Nexus tool
+    service that is reachable with the provided `name` and `endpoint`.
 
     Requires the `nexus-mcp` package.
 
@@ -363,16 +365,16 @@ def nexus_native_mcp_server(
         **kwargs: Forwarded to agents.mcp.MCPServer.__init__.
 
     Example:
-        # Using an MCP server "demo-nexus" hosted at the Nexus endpoint "nexus-hello-demo-endpoint"
+        # Use the "demo-nexus" service at the "nexus-hello-demo-endpoint" endpoint.
         Agent(mcp_servers=[
             nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
         ])
     """
     from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
-        _NexusTransportMCPServer,
+        _NexusNativeMCPServer,
     )
 
-    return _NexusTransportMCPServer({name: endpoint}, name=name, **kwargs)
+    return _NexusNativeMCPServer({name: endpoint}, name=name, **kwargs)
 
 
 def nexus_tools_gateway(

@@ -5,12 +5,12 @@
 # real namespace boundaries rather than everything living in one namespace:
 #   default            the agent (this example's worker, session-manager, FastAPI/UI)
 #   gateway             the durable tools gateway (ToolRegistryWorkflow + its worker)
-#   nexus-mcp-server   the demo Nexus-native tool service (nexus_tool_service.py)
+#   nexus-mcp-server   the demo native Nexus tool service (nexus_tool_service.py)
 #
-# workflow.py's mcp_servers=[nexus_gateway.mcp_server(["demo"]), nexus_native_mcp_server(...)]:
+# workflow.py's mcp_servers=[nexus_gateway.mcp_servers("demo"), nexus_native_mcp_server(...)]:
 # the 3rd-party tool ("demo") is proxied through the gateway and must be registered first
 # (register-third-party below, a plain `temporal workflow signal`, no SDK code). The native
-# tool ("demo-nexus") is called directly, no gateway, no registration at all. Tool lists are
+# tools ("demo-nexus") are called directly, no gateway, no registration at all. Tool lists are
 # fetched live, never cached. The gateway dispatches 3rd-party tool calls as standalone
 # Nexus activities (Nexus + SAA, experimental).
 #
@@ -19,14 +19,14 @@
 #   just setup-nexus          # 2. ONE-SHOT: creates the 3 namespaces + the 2 Nexus endpoints
 #   just tool-server          # 3. the demo 3rd-party (HTTP) MCP tool server
 #   just registry             # 4. durable tools gateway (no seed config -- starts empty)
-#   just nexus-tool-service   # 5. the demo Nexus-native tool service, on "nexus-mcp-server"
+#   just nexus-tool-service   # 5. the demo native Nexus tool service, on "nexus-mcp-server"
 #   just register-third-party # 6. ONE-SHOT: tags demo under agent_id "NexusHelloAgent"
 #                             #    (needs tool-server up -- the gateway fetches its tools)
 #   just session-manager      # 7. packaged session-manager worker
 #   just server               # 8. FastAPI API + UI on :8000
 #   just worker               # 9. this example's agent worker, on "default"
 #
-# Open the UI and start chatting -- both tools work immediately.
+# Open the UI and start chatting. All three tools are available.
 #
 # Requires the `nexus-mcp` extra (Python >=3.13): `uv sync --extra nexus-mcp` (or a plain
 # `uv sync` picks it up too, since the repo's `dev` group includes it on 3.13+).
@@ -115,8 +115,8 @@ registry:
 tool-server:
     cd "{{root}}" && uv run --extra nexus-mcp python -m examples.nexus_hello.tool_server
 
-# The demo Nexus-native tool service, on its own "nexus-mcp-server" namespace. Calls to its
-# tool are dispatched via workflow.create_nexus_client() from the agent's "default" namespace
+# The demo native Nexus tool service, on its own "nexus-mcp-server" namespace. Calls to its
+# tools are dispatched via workflow.create_nexus_client() from the agent's "default" namespace
 # — a real cross-namespace Nexus call, no activity hop.
 nexus-tool-service:
     cd "{{root}}" && TEMPORAL_NAMESPACE={{nexus_mcp_server_namespace}} uv run --extra nexus-mcp python -m examples.nexus_hello.nexus_tool_service
