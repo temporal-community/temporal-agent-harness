@@ -1013,7 +1013,7 @@
         const languageClass = language ? ` class="language-${escapeAttribute(language)}"` : "";
         const languageAttribute = label ? ` data-language="${escapeAttribute(label)}"` : "";
         blocks.push(
-          `<pre class="md-code-block"${languageAttribute}><code${languageClass}>${highlightCode(codeLines.join("\n"), language)}</code></pre>`
+          `<div class="md-code-wrap"><pre class="md-code-block"${languageAttribute}><code${languageClass}>${highlightCode(codeLines.join("\n"), language)}</code></pre></div>`
         );
         continue;
       }
@@ -1155,8 +1155,12 @@
     box-shadow: var(--code-block-shadow);
   }
 
-  .markdown-message :global(pre.md-code-block[data-language]) {
+  .markdown-message :global(.md-code-wrap) {
     position: relative;
+    min-width: 0;
+  }
+
+  .markdown-message :global(pre.md-code-block[data-language]) {
     padding-top: 34px;
   }
 

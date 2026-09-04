@@ -1643,7 +1643,7 @@
 
                       {#if rowExpanded}
                         {#if scriptDetail}
-                          <pre class="activity-script-detail" data-language="python"><code>{scriptDetail}</code></pre>
+                          <div class="script-detail-wrap"><pre class="activity-script-detail" data-language="python"><code>{scriptDetail}</code></pre></div>
                         {/if}
                         <pre class="activity-detail">{fullDetail}</pre>
                       {/if}
@@ -2586,8 +2586,17 @@
     white-space: pre-wrap;
   }
 
-  .activity-script-detail {
+  /* The language tag is absolutely positioned, so its containing block must not
+     be the scroller — laid out in scrolled coordinates it would ride the content
+     out of view. The wrapper positions it instead; min-width: 0 keeps the grid
+     column off the code's min-content width, which the scroller no longer
+     reports for itself. */
+  .script-detail-wrap {
     position: relative;
+    min-width: 0;
+  }
+
+  .activity-script-detail {
     min-width: 0;
     max-height: 320px;
     overflow: auto;

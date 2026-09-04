@@ -220,10 +220,10 @@
           {#each sections as section (section.label)}
             <div class="inspector-section">
               <div class="kicker">{section.label}</div>
-              <pre
-                class={`expanded-detail ${section.kind}`}
-                data-language={section.kind === "text" ? undefined : section.kind}
-              ><code>{section.text}</code></pre>
+              <div class="expanded-detail-wrap"><pre
+                  class={`expanded-detail ${section.kind}`}
+                  data-language={section.kind === "text" ? undefined : section.kind}
+                ><code>{section.text}</code></pre></div>
             </div>
           {/each}
         </div>
@@ -358,8 +358,15 @@
     gap: var(--gap-sm);
   }
 
-  .expanded-detail {
+  /* Positions the language tag from outside the scroller: an absolutely
+     positioned box whose containing block is the scroll container is laid out in
+     scrolled coordinates and slides away with the code. */
+  .expanded-detail-wrap {
     position: relative;
+    min-width: 0;
+  }
+
+  .expanded-detail {
     margin: 0;
     padding: var(--gutter);
     overflow-x: auto;
