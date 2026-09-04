@@ -5,7 +5,7 @@ Requires server-side dynamic config: `activity.enableStandalone`,
 `nexusoperation.enableStandalone`. See examples/nexus_hello/justfile's `temporal` recipe.
 
 Usage (from repo root):
-    uv run --extra nexus-mcp --group examples python -m durable_tools_gateway.worker
+    uv run --extra nexus-mcp --group examples python -m nexus_mcp.durable_tools_gateway.worker
 
 Env vars:
     GATEWAY_SEED_EXTERNAL_SERVERS   JSON {"name": "url", ...} to register on startup.

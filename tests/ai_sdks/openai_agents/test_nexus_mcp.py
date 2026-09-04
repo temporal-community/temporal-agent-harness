@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from durable_tools_gateway.generated import (
+from nexus_mcp.durable_tools_gateway.generated import (
     CallToolOutput,
     CallToolOutputResult,
     ListAgentEntriesOutput,
@@ -22,7 +22,9 @@ from durable_tools_gateway.generated import (
     ListAgentEntriesOutputRemoteToolsValueItem,
 )
 
-from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import _NexusGatewayMCPServer
+from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
+    _NexusGatewayMCPServer,
+)
 
 
 def _server() -> _NexusGatewayMCPServer:

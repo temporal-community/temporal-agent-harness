@@ -73,7 +73,7 @@ def nexus_mcp_tool(fn: _NexusMcpToolFunc) -> _NexusMcpToolFunc:
     boilerplate code. Example usage:
 
     import nexusrpc.handler
-    from authoring import MCPOverNexusServiceHandler, nexus_mcp_tool
+    from nexus_mcp.authoring import MCPOverNexusServiceHandler, nexus_mcp_tool
 
     @nexusrpc.handler.service_handler(name="weather-tools")
     class WeatherToolServer(MCPOverNexusServiceHandler):

@@ -1,7 +1,7 @@
 """Demo 3rd-party MCP server for the Nexus-hello example.
 
 Stands in for a real external MCP server. Registered with the Durable Tools Gateway's
-ToolRegistryWorkflow (seeded on gateway startup — see durable_tools_gateway/worker.py)
+ToolRegistryWorkflow (seeded on gateway startup — see nexus_mcp/durable_tools_gateway/worker.py)
 and reached at call time through mcp_proxy_activity.
 
 Run with (from the repo root):
