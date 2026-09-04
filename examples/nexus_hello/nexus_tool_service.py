@@ -14,11 +14,10 @@ import asyncio
 import random
 
 import nexusrpc.handler
+from nexus_mcp.authoring import MCPOverNexusServiceHandler, nexus_mcp_tool
 from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
-
-from authoring import MCPOverNexusServiceHandler, nexus_mcp_tool
 
 # The Nexus endpoint name this service is reached through — created (if missing) by
 # `just setup-nexus`, which maps it to NEXUS_TASK_QUEUE on this namespace.

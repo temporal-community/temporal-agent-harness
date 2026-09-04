@@ -109,7 +109,7 @@ setup-nexus:
 # The durable tool call gateway, on its own "gateway" namespace: a plain Nexus service worker.
 # No seed config -- see register-third-party below for the one-shot registration step.
 registry:
-    cd "{{root}}" && TEMPORAL_NAMESPACE={{gateway_namespace}} uv run --extra nexus-mcp --group examples python -m durable_tools_gateway.worker
+    cd "{{root}}" && TEMPORAL_NAMESPACE={{gateway_namespace}} uv run --extra nexus-mcp --group examples python -m nexus_mcp.durable_tools_gateway.worker
 
 # The demo 3rd-party MCP tool server this example's agent calls through the gateway.
 tool-server:

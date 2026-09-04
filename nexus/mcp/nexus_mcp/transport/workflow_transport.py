@@ -17,9 +17,10 @@ from collections.abc import Mapping
 from typing import Any
 
 import pydantic
-from authoring import LIST_TOOLS_OPERATION
 from mcp import types
 from temporalio import workflow
+
+from nexus_mcp.authoring import LIST_TOOLS_OPERATION
 
 
 class WorkflowTransport:

@@ -22,7 +22,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["transport*", "durable_tools_gateway*", "authoring*"]
+include = ["nexus_mcp*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

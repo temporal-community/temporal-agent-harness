@@ -36,13 +36,8 @@ from temporalio import activity
 from temporalio.client import ActivityFailureError, Client
 from temporalio.common import RetryPolicy
 
-from authoring import validate_service_name
+from nexus_mcp.authoring import validate_service_name
 
-from .registry import (
-    REGISTRY_WORKFLOW_ID,
-    ToolRegistryWorkflow,
-    fetch_external_tools,
-)
 from .generated import (
     CallToolInput,
     CallToolOutput,
@@ -54,6 +49,11 @@ from .generated import (
     ListAgentEntriesOutputRemoteToolsValueItem,
     RegisterExternalInput,
     RegistryService,
+)
+from .registry import (
+    REGISTRY_WORKFLOW_ID,
+    ToolRegistryWorkflow,
+    fetch_external_tools,
 )
 
 REGISTRY_NEXUS_ENDPOINT = "mcp-registry-endpoint"

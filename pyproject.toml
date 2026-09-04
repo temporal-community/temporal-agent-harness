@@ -119,14 +119,6 @@ include = ["temporal_agent_harness*"]
     "dist/assets/*",
 ]
 
-[tool.uv]
-# temporal-nexus-mcp declares multiple top-level packages (transport, durable_tools_gateway,
-# authoring -- see its own pyproject.toml). Setuptools' default editable install for that
-# shape uses a PEP 660 custom MetaPathFinder that pyright can't follow. "compat" mode
-# emits a plain .pth file instead, which pyright (and any tool that reads .pth files) can
-# follow directly. No import paths change.
-config-settings-package = { "temporal-nexus-mcp" = { "editable_mode" = "compat" } }
-
 [tool.uv.sources]
 temporal-nexus-mcp = { path = "nexus/mcp", editable = true }
 
