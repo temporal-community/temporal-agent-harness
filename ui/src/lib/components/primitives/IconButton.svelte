@@ -3,59 +3,101 @@
 
   interface Props {
     label: string;
-    title?: string;
+    /**
+     * The hover hint. Defaults to the accessible name, which is the whole point
+     * of an icon-only control: the word it does not show, shown on hover.
+     * Name the keyboard shortcut here too where one exists — an icon that has
+     * to be discovered by hovering may as well teach the faster way at the same
+     * time.
+     */
+    tip?: string;
     disabled?: boolean;
+    /**
+     * Left undefined for the buttons that are not toggles, so they do not
+     * announce themselves as an unpressed one. A toggle passes it either way
+     * and gets both states.
+     */
     pressed?: boolean;
-    tone?: "default" | "primary" | "live";
-    onclick?: () => void;
+    tone?: "default" | "primary" | "follow";
+    /**
+     * `submit` is the one behaviour a caller may change, and it is a named prop
+     * rather than something reachable through `rest` because it decides what
+     * the button *does* — a composer needs it to keep native Enter-to-send.
+     */
+    type?: "button" | "submit";
+    onclick?: (event: MouseEvent) => void;
     children?: Snippet;
+    /** Merged with the button's own classes rather than replacing them. */
+    class?: string;
+    /** Everything else (aria-*, title, data-*) lands on the rendered element. */
+    [key: string]: unknown;
   }
 
   let {
     label,
-    title = label,
+    tip = label,
     disabled = false,
-    pressed = false,
+    pressed,
     tone = "default",
+    type = "button",
     onclick,
-    children
+    children,
+    class: extraClass = "",
+    ...rest
   }: Props = $props();
 </script>
 
+<!-- `data-tip` rather than `title`: the browser waits about a second on one
+     element before showing a `title`, so a row of transport buttons the pointer
+     sweeps across never says anything at all. `aria-label` keeps the name. -->
+<!-- Callers own description, the primitive owns behaviour: `rest` is spread
+     first, so everything this button is answerable for is written after it and
+     wins. Chip spreads in the same order, for the same reason. `class` is the
+     one attribute that must not follow that rule — a caller adding one has
+     nothing to say about `type` — so it is pulled out of `rest` and merged
+     rather than overridden. -->
 <button
-  class={`icon-button ${tone} ${pressed ? "pressed" : ""}`}
-  type="button"
+  {...rest}
+  class={["icon-button", tone, pressed && "pressed", extraClass]}
+  {type}
   aria-label={label}
   aria-pressed={pressed}
-  {title}
+  data-tip={tip}
   {disabled}
-  onclick={() => onclick?.()}
+  onclick={(event) => onclick?.(event)}
 >
   {@render children?.()}
 </button>
 
 <style>
   .icon-button {
-    width: 34px;
-    height: 34px;
+    width: var(--control-height);
+    height: var(--control-height);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-md);
     background: var(--surface-2);
     color: var(--text-2);
     cursor: pointer;
     transition:
-      color 120ms ease,
-      border-color 120ms ease,
-      background 120ms ease;
+      transform var(--duration-press) var(--ease-out),
+      color var(--duration-fast) var(--ease-ui),
+      border-color var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui);
   }
 
-  .icon-button:hover:not(:disabled) {
-    color: var(--text-1);
-    border-color: var(--border-strong);
-    background: var(--surface-3);
+  @media (hover: hover) and (pointer: fine) {
+    .icon-button:hover:not(:disabled, [aria-disabled="true"]) {
+      color: var(--text-1);
+      border-color: var(--border-strong);
+      background: var(--surface-3);
+    }
+  }
+
+  .icon-button:active:not(:disabled, [aria-disabled="true"]) {
+    transform: scale(0.97);
   }
 
   .icon-button.primary,
@@ -65,13 +107,31 @@
     background: color-mix(in srgb, var(--accent) 13%, var(--surface-2));
   }
 
-  .icon-button.live {
+  /* Named for what it does, not for the hue it borrows: --live is reserved for
+     work that needs a human, and tailing the stream does not. */
+  .icon-button.follow {
     color: var(--success);
     border-color: color-mix(in srgb, var(--success) 45%, transparent);
   }
 
-  .icon-button:disabled {
-    opacity: 0.45;
+  /* `aria-disabled` reads as inert too — same dimming, same dead hover and
+     press, since the look IS the message and a control that says "nothing left
+     to do" must not also say "press me". It arrives through `rest`, so this
+     block is the whole of what the primitive owes it.
+     What the two states do not share is the tab order, which is the only reason
+     a caller would pick one over the other: `disabled` takes the button out of
+     it and takes the tip with it, so a control whose tip is worth reading in
+     exactly the state that stops it working wants `aria-disabled` instead.
+     One selector list rather than a second block, so they cannot drift. */
+  .icon-button:disabled,
+  .icon-button[aria-disabled="true"] {
+    opacity: var(--disabled-opacity);
     cursor: default;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .icon-button:active:not(:disabled, [aria-disabled="true"]) {
+      transform: none;
+    }
   }
 </style>

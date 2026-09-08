@@ -12,6 +12,54 @@
 
   let { data, selected = false }: Props = $props();
 
+  let resultBody = $state<HTMLElement | null>(null);
+  /**
+   * Mirrors the replay transport's own following/pinned distinction rather than
+   * inventing a second vocabulary for it. There, `following` is `viewIndex ===
+   * total` — a fact about where the cursor IS, recomputed on every goTo, not a
+   * mode anyone toggles. Here it is `scrollTop + clientHeight === scrollHeight`,
+   * recomputed on every scroll, and arriving text is allowed to move the box
+   * only while it holds. cursorAfterPublish() is the same decision one layer up:
+   * following means tail the live edge, not following means someone scrolled
+   * back to read something and must not be dragged off it.
+   */
+  let following = $state(true);
+  /* A fade on the edge that is hiding something, so the region reads as clipped
+     rather than as mysteriously ending. Each edge separately: while following,
+     the newest text is against the bottom and a fade there would dim the one
+     line the reader is waiting for. */
+  let clippedTop = $state(false);
+  let clippedBottom = $state(false);
+
+  function atEnd(element: HTMLElement): boolean {
+    /* Two pixels of slack: line boxes land on fractional heights, so an exact
+       comparison reports "not at the end" while sitting at the end. */
+    return element.scrollHeight - element.scrollTop - element.clientHeight <= 2;
+  }
+
+  function syncEdges(element: HTMLElement): void {
+    clippedTop = element.scrollTop > 2;
+    clippedBottom = !atEnd(element);
+  }
+
+  function handleScroll(): void {
+    const element = resultBody;
+    if (!element) return;
+    following = atEnd(element);
+    syncEdges(element);
+  }
+
+  /* Jumped, never animated. This runs once per streamed delta — a smooth scroll
+     that is restarted every few milliseconds never arrives, and reads as lag
+     rather than as smoothness. */
+  $effect(() => {
+    data.detail;
+    const element = resultBody;
+    if (!element) return;
+    if (following) element.scrollTop = element.scrollHeight;
+    syncEdges(element);
+  });
+
   function scriptFromDetail(detail: unknown): string | null {
     if (typeof detail !== "string") return null;
     try {
@@ -34,6 +82,14 @@
   );
   const detailScript = $derived(scriptFromDetail(data.detail));
   const statusKind = $derived(kindFromState(data.state, data.statusTone ?? data.tone));
+  /* Present, not truthy. An empty reply is still a reply slot, and rendering the
+     region only once text arrives is what made the card grow mid-turn. */
+  const hasResult = $derived(typeof data.detail === "string");
+  /* Same vocabulary kindFromState reads, and only for the node the cursor is on,
+     so exactly one caret blinks during a scrub. */
+  const streaming = $derived(
+    data.active === true && /streaming|running/.test(data.state.toLowerCase())
+  );
 
   function kindFromState(
     state: string,
@@ -115,14 +171,41 @@
   {#if data.subtitle}
     <div class="subtitle">{data.subtitle}</div>
   {/if}
-  {#if detailScript}
-    <pre class="detail code-detail" data-language="python"><code>{detailScript}</code></pre>
-  {:else if data.detail}
-    <div class="detail">{data.detail}</div>
+  {#if hasResult}
+    <div
+      class="result"
+      class:code={detailScript != null}
+      class:clipped-top={clippedTop}
+      class:clipped-bottom={clippedBottom}
+    >
+      <div class="result-head">
+        <span class="kicker">Result</span>
+        <!-- The chip above already says "streaming" in words; this is the same
+             fact where the text is, so an in-progress reply is distinguishable
+             from a finished one without reading the status. -->
+        {#if streaming}
+          <span class="caret" aria-hidden="true"></span>
+        {/if}
+      </div>
+      {#if detailScript}
+        <pre
+          class="result-body code"
+          data-language="python"
+          bind:this={resultBody}
+          onscroll={handleScroll}
+        ><code>{detailScript}</code></pre>
+      {:else}
+        <div
+          class="result-body"
+          bind:this={resultBody}
+          onscroll={handleScroll}
+        >{data.detail}</div>
+      {/if}
+    </div>
   {/if}
   {#if data.metrics?.length}
-    <div class="metrics">
-      {#each data.metrics as metric}
+    <div class="metrics kicker">
+      {#each data.metrics as metric (metric.label)}
         <span><strong>{metric.value}</strong>{metric.label}</span>
       {/each}
     </div>
@@ -140,7 +223,7 @@
     padding: 12px;
     overflow: hidden;
     border: 1px solid color-mix(in srgb, var(--tone-color, var(--text-2)) 18%, var(--border));
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background:
       linear-gradient(
         180deg,
@@ -148,34 +231,46 @@
         color-mix(in srgb, var(--surface-1) 88%, black)
       );
     color: var(--text-1);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
-  }
-
-  .state-node::before {
-    content: "";
-    position: absolute;
-    inset: 0 auto 0 0;
-    width: 3px;
-    background: color-mix(in srgb, var(--tone-color, var(--text-2)) 86%, white 4%);
-    opacity: 0.78;
+    box-shadow: var(--shadow-node);
   }
 
   .state-node.selected {
     outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
   }
 
+  /* Same three cues the transcript spends on the row at the playhead
+     (.turn-group.active-turn): the hairline brightens neutrally, the surface
+     lifts, and the left edge marker appears.
+
+     Appears, not brightens — and that is the whole difference from the version
+     this replaces. The bar used to sit on every card and step 3px/0.78 to
+     4px/1 on the current one, which is a comparative signal: it cannot be read
+     without finding a neighbour to compare against, and the only way it could
+     win that comparison over eight equally colourful siblings was to get thick.
+     No idle card carries one now, so presence IS the signal and a single card
+     in isolation answers the question. That is also why a tone-coloured edge is
+     the right channel here when it was the wrong one before — the hue is no
+     longer busy naming the node's kind on every sibling at once.
+
+     It is the loudest channel the active state has, measured against the same
+     card one frame earlier: 55 units of RGB, against ~10 for the lifted surface
+     and ~11 for the neutralised hairline. */
   .state-node.active {
-    border-color: color-mix(in srgb, var(--tone-color, var(--accent)) 72%, white 8%);
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--tone-color, var(--accent)) 30%, transparent),
-      0 0 22px color-mix(in srgb, var(--tone-color, var(--accent)) 42%, transparent),
-      0 18px 42px rgba(0, 0, 0, 0.34);
+    border-color: var(--border-strong);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--tone-color, var(--text-2)) 14%, var(--surface-2)),
+      var(--surface-1)
+    );
   }
 
   .state-node.active::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
     width: 4px;
+    background: color-mix(in srgb, var(--tone-color, var(--text-2)) 86%, white 4%);
     opacity: 1;
-    box-shadow: 0 0 18px color-mix(in srgb, var(--tone-color, var(--accent)) 58%, transparent);
   }
 
   .state-node.large {
@@ -185,13 +280,13 @@
 
   .state-node.container {
     background: color-mix(in srgb, var(--tone-color, var(--warning)) 12%, transparent);
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--tone-color, var(--warning)) 18%, transparent),
-      0 18px 42px rgba(0, 0, 0, 0.22);
+    box-shadow: var(--shadow-node-soft);
   }
 
-  .state-node.container .detail {
-    max-height: 34px;
+  /* A container's own body has to fit above the children laid out inside it,
+     which start at codeModeHeaderHeight (126px) in flowProjection. */
+  .state-node.container {
+    --result-height: 26px;
   }
 
   .neutral { --tone-color: var(--text-3); }
@@ -212,9 +307,21 @@
     min-width: 0;
   }
 
+  /* Chip is nowrap + uppercase; a long state used to paint past the 230px
+     border. Shrink the chip first so the title stays a word and the label
+     ellipsizes inside the card instead of the canvas. */
+  .topline :global(.chip) {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+
   .title {
-    font-size: 13px;
+    overflow: hidden;
+    font-size: var(--font-lg);
     font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .title-wrap {
@@ -228,7 +335,7 @@
     flex: 0 0 auto;
     width: 8px;
     height: 8px;
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     background: var(--text-3);
     box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 10%, transparent);
   }
@@ -237,14 +344,6 @@
   .title-dot.reasoning { background: var(--reasoning); }
   .title-dot.tool { background: var(--warning); }
   .title-dot.approval { background: var(--queue); }
-
-  .state-node.model.active {
-    border-color: color-mix(in srgb, var(--model) 72%, white 8%);
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--model) 30%, transparent),
-      0 0 24px color-mix(in srgb, var(--model) 48%, transparent),
-      0 18px 42px rgba(0, 0, 0, 0.34);
-  }
 
   :global(.node-handle) {
     width: 1px;
@@ -259,9 +358,7 @@
     height: 9px;
     border: 1px solid color-mix(in srgb, var(--queue) 76%, white 10%);
     background: var(--queue);
-    box-shadow:
-      0 0 0 3px color-mix(in srgb, var(--queue) 18%, transparent),
-      0 0 16px color-mix(in srgb, var(--queue) 44%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--queue) 24%, transparent);
     opacity: 1;
   }
 
@@ -269,76 +366,160 @@
     top: 72px;
   }
 
+  /* One line, always. A card's height is reserved by flowProjection from data,
+     so anything above the Result region that can wrap makes the card outgrow its
+     reservation for some values and not others — which is the same content-driven
+     geometry the fixed region exists to remove. What gets clipped here is
+     readable in full in the node inspector. */
   .subtitle {
     margin-top: 7px;
-    color: var(--text-2);
-    font-size: 12px;
-    line-height: 1.35;
-    word-break: break-word;
-  }
-
-  .detail {
-    margin-top: 8px;
-    max-height: 58px;
     overflow: hidden;
-    color: var(--text-3);
-    font-size: 11px;
+    color: var(--text-2);
+    font-size: var(--font-md);
     line-height: 1.35;
-    word-break: break-word;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .code-detail {
+  /**
+   * FIXED, not content-sized, and deliberately not animated.
+   *
+   * The graph re-renders on every streamed delta while someone scrubs, so a
+   * region that grew with its text would relayout the card hundreds of times a
+   * turn and the node would move under the cursor. Measured on the run this came
+   * from (1,805 reply deltas), the old `max-height: 58px` card stepped 96px ->
+   * 137px as the reply crossed four lines; every other node held still. So the
+   * height is a constant, the overflow scrolls, and the fade says it is clipped.
+   *
+   * 132px holds ~8 lines at the 11px/1.35 body scale — roughly a paragraph,
+   * against the ~4 lines that were visible before. It lands the card at 231px,
+   * which flowProjection reserves as resultNodeHeight; measured on the same run,
+   * the graph's bounds are still set by the runtime boundary, so auto-fit holds
+   * the same zoom it did at 137px and the extra height costs no type size.
+   */
+  .result {
+    --result-top: calc(16px + var(--gap-xs));
     position: relative;
-    max-height: 156px;
+    margin-top: 8px;
+  }
+
+  /* A definite height, so the card's own height stays a constant the projection
+     can reserve — and so the fades know where the body starts. */
+  .result-head {
+    display: flex;
+    align-items: center;
+    gap: var(--gap-sm);
+    height: 16px;
+    margin-bottom: var(--gap-xs);
+    color: var(--text-4);
+  }
+
+  /* A terminal caret, because that is what the region behaves like. */
+  .caret {
+    width: 2px;
+    height: 9px;
+    background: var(--tone-color, var(--text-2));
+    animation: caret-blink 1.1s steps(2, jump-none) infinite;
+  }
+
+  @keyframes caret-blink {
+    to {
+      opacity: 0.15;
+    }
+  }
+
+  .result-body {
+    height: var(--result-height, 132px);
     max-width: 100%;
-    padding: 32px 12px 12px;
-    overflow: auto;
-    border: 1px solid var(--code-block-border);
-    border-radius: 8px;
-    background: var(--code-block-bg);
+    margin: 0;
+    padding: var(--gap-sm);
+    overflow-y: auto;
+    overflow-x: hidden;
+    border: 1px solid color-mix(in srgb, var(--tone-color, var(--text-3)) 20%, var(--border));
+    background: var(--result-bg);
+    color: var(--text-3);
+    font-size: var(--font-sm);
+    line-height: 1.35;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overscroll-behavior: contain;
+  }
+
+  .state-node {
+    --result-bg: var(--surface-0);
+  }
+
+  /* Inside the border, so a fade ends where the box does. Only on the edge that
+     is actually hiding something — see clippedTop/clippedBottom above. */
+  .result::before,
+  .result::after {
+    content: "";
+    position: absolute;
+    right: 1px;
+    left: 1px;
+    height: 20px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .result::before {
+    top: calc(var(--result-top) + 1px);
+    background: linear-gradient(to bottom, var(--result-bg), transparent);
+  }
+
+  .result::after {
+    bottom: 1px;
+    background: linear-gradient(to top, var(--result-bg), transparent);
+  }
+
+  .result.clipped-top::before,
+  .result.clipped-bottom::after {
+    opacity: 1;
+  }
+
+  /* app.css owns how a code block looks; this only says where the language tag
+     goes and that it keeps the region's height contract. On the wrapper, not the
+     `pre`, because the fade above reads --result-bg from `.result`. */
+  .result.code {
+    --result-bg: var(--code-block-bg);
+  }
+
+  .result-body.code {
+    border-color: var(--code-block-border);
     color: var(--code-block-text);
     box-shadow: var(--code-block-shadow);
-    font-family:
-      SFMono-Regular,
-      Consolas,
-      "Liberation Mono",
-      monospace;
-    font-size: 11px;
+    font-family: var(--font-mono);
     line-height: 1.55;
     tab-size: 2;
     white-space: pre;
     word-break: normal;
+    overflow-x: auto;
   }
 
-  .code-detail::before {
-    content: attr(data-language);
+  /* On the head row opposite the "Result" label, rather than floating over the
+     body — inside the body it is a child of the scroller and scrolls away. */
+  .result-body.code::before {
     position: absolute;
-    top: 8px;
-    right: 9px;
-    padding: 2px 7px;
-    border: 1px solid var(--code-label-border);
-    border-radius: 999px;
-    background: var(--code-label-bg);
-    color: var(--code-label-text);
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-    font-size: 10px;
-    font-weight: 750;
-    line-height: 1.2;
-    letter-spacing: 0;
+    top: 0;
+    right: 0;
   }
 
-  .code-detail code {
+  .result-body code {
     display: block;
     font: inherit;
+  }
+
+  /* The caret is the one thing here that moves, and it repeats forever. */
+  @media (prefers-reduced-motion: reduce) {
+    .caret {
+      animation: none;
+    }
   }
 
   .metrics {
     display: flex;
     gap: 8px;
     margin-top: 10px;
-    color: var(--text-3);
-    font-size: 10px;
-    text-transform: uppercase;
   }
 
   .metrics span {
@@ -349,7 +530,7 @@
 
   .metrics strong {
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     font-variant-numeric: tabular-nums;
   }
 </style>

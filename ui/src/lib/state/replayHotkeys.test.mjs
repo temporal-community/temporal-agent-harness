@@ -1,0 +1,947 @@
+// ABOUTME: Checks the replay hotkeys on both halves of a binding — when it is allowed to fire, and
+// what it then does. The second half is why the first is not enough on its own: asserting that two
+// keys resolve to two different action *names* is what `End` and a `jumpToLive` on `L` both satisfy
+// while running `goTo(total)` and landing on identical state. A name is not a behaviour, so a
+// name-only check passes while the help overlay advertises two shortcuts that are one.
+//
+// The last section covers what the transport row does not offer: relative movement is left to the
+// keyboard, on the argument that the keyboard does it better, so the keys are the only route to it
+// and this is the only thing that would notice one going missing.
+//
+// The guards are pure decisions and are checked as such. The behaviour half drives the shipped
+// `applyReplayAction` — the same function App.svelte's window handler calls — against a real
+// `AgentRunController` filled from `realisticQaScenario`, and compares state read back from the
+// controller rather than hardcoded indices. Every pair of rows in the overlay must be told apart
+// by some starting position. Re-add `{ action: "jumpToLive", key: "l", ... }` and this file fails
+// on that pair, naming both rows.
+//
+// A third thing is checked between those two: which keys may move the playhead. `?`, `Esc` and the
+// rail keys must leave the cursor alone, and both ends of the run must clamp. Driven through the
+// shipped dispatch and measured on `viewIndex` itself, with positive controls first so a broken
+// measurement cannot pass every claim by seeing nothing move.
+import assert from "node:assert/strict";
+import { readdir, readFile } from "node:fs/promises";
+import { describe, it } from "vitest";
+
+import { installBrowserSurface } from "../../../tests/support/controllerHarness.mjs";
+import { realisticQaScenario } from "../mock/scenarios.ts";
+import { AgentRunController } from "./agentRun.svelte.ts";
+import {
+  applyReplayAction,
+  describeReplayKeyEvent,
+  REPLAY_BINDINGS,
+  resolveReplayAction
+} from "./replayHotkeys.ts";
+
+/** A key press on nothing in particular: no modifiers, no focused control. */
+function press(overrides = {}) {
+  return {
+    key: "ArrowRight",
+    shiftKey: false,
+    altKey: false,
+    modKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    composing: false,
+    typing: false,
+    spaceActivates: false,
+    claimedKeys: [],
+    modalOpen: false,
+    helpOpen: false,
+    bleeding: false,
+    ...overrides
+  };
+}
+
+describe("when a binding is allowed to fire", () => {
+  it("a plain key does what the table says", () => {
+    assert.equal(resolveReplayAction(press({ key: "ArrowRight" })), "stepForward");
+    assert.equal(resolveReplayAction(press({ key: "ArrowLeft" })), "stepBack");
+    assert.equal(
+      resolveReplayAction(press({ key: "ArrowRight", shiftKey: true })),
+      "nextTurn",
+      "Shift picks the turn-sized jump, not the frame-sized one"
+    );
+    assert.equal(resolveReplayAction(press({ key: "Home" })), "first");
+    assert.equal(resolveReplayAction(press({ key: "End" })), "last");
+    assert.equal(resolveReplayAction(press({ key: " " })), "togglePlay");
+    assert.equal(resolveReplayAction(press({ key: "?" })), "toggleHelp");
+    assert.equal(resolveReplayAction(press({ key: "q" })), null, "unbound keys do nothing");
+    assert.equal(resolveReplayAction(press({ key: "." })), "nextStep");
+    assert.equal(resolveReplayAction(press({ key: "," })), "previousStep");
+  });
+
+  /* The pane keys, which are rows in the same table rather than an if-chain in App.svelte. This
+     block is the point of keeping them there: nothing else in this repo presses these keys. */
+  it("the pane keys", () => {
+    assert.equal(resolveReplayAction(press({ key: "ArrowLeft", altKey: true })), "railFocusPrevious");
+    assert.equal(resolveReplayAction(press({ key: "ArrowRight", altKey: true })), "railFocusNext");
+    assert.equal(resolveReplayAction(press({ key: "ArrowUp", altKey: true })), "railFocusPreviousTab");
+    assert.equal(resolveReplayAction(press({ key: "ArrowDown", altKey: true })), "railFocusNextTab");
+    assert.equal(
+      resolveReplayAction(press({ key: "ArrowLeft", modKey: true, shiftKey: true })),
+      "railMovePrevious"
+    );
+    assert.equal(
+      resolveReplayAction(press({ key: "ArrowDown", modKey: true, shiftKey: true })),
+      "railMoveNextTab"
+    );
+    assert.equal(resolveReplayAction(press({ key: "f" })), "railToggleBleed");
+    assert.equal(resolveReplayAction(press({ key: "F" })), "railToggleBleed", "caps lock is not Shift");
+    assert.equal(resolveReplayAction(press({ key: "f", modKey: true })), null, "Cmd+F is browser find");
+    assert.equal(resolveReplayAction(press({ key: "f", altKey: true })), null, "Alt+F is a menu");
+    assert.equal(resolveReplayAction(press({ key: "d" })), "toggleDrawer");
+    assert.equal(resolveReplayAction(press({ key: "D" })), "toggleDrawer", "caps lock is not Shift");
+    assert.equal(
+      resolveReplayAction(press({ key: "d", modKey: true })),
+      null,
+      "Cmd+D is a bookmark and never reaches the page"
+    );
+  });
+
+  /* The digits, which address a column by its place along the rail. Ctrl and not Cmd, and that
+     is the whole reason the two are separate fields in the context: Cmd+1 is "first tab" on
+     macOS and Ctrl+1 is "first tab" on Windows, so the chord `mod` spells is the browser's on
+     whichever platform it lands. Ctrl on macOS is bound to nothing — it appears nowhere in
+     Chromium's mac shortcut table and nowhere in Safari's menus — so it is the one digit chord
+     that is free rather than merely contested. */
+  it("the digits", () => {
+    const ctrl = (key) => press({ key, modKey: true, ctrlKey: true });
+    /* What a digit reaches once it has resolved — which column of which of the two rails — is
+       App.svelte's question and not this table's, so it is out of scope here, as is the half
+       of the typing guard that only means anything in a real text field: that a bare 1 still
+       types a 1. Both need a browser. */
+    assert.equal(resolveReplayAction(ctrl("1")), "railFocusSlot1");
+    assert.equal(resolveReplayAction(ctrl("2")), "railFocusSlot2");
+    assert.equal(resolveReplayAction(ctrl("9")), "railFocusSlot9");
+    assert.equal(
+      resolveReplayAction(press({ key: "1" })),
+      null,
+      "a bare digit is the page's — it must still type a 1"
+    );
+    assert.equal(
+      resolveReplayAction(press({ key: "1", modKey: true, metaKey: true })),
+      null,
+      "Cmd+1 stays the browser's tab switcher"
+    );
+    assert.equal(
+      resolveReplayAction(press({ key: "1", modKey: true, ctrlKey: true, metaKey: true })),
+      null,
+      "Ctrl+Cmd+1 is Safari's bookmarks sidebar, and a Ctrl row must not take it"
+    );
+    assert.equal(
+      resolveReplayAction(press({ key: "1", modKey: true, ctrlKey: true, shiftKey: true })),
+      null,
+      "Ctrl+Shift+1 is nobody's here"
+    );
+    assert.equal(resolveReplayAction(ctrl("0")), null, "there is no zeroth column");
+  });
+
+  /* Escape resolves against what is actually on screen, which is why it is one row and not two.
+     With neither surface up the key is nobody's and the browser keeps it — a Escape that is always
+     swallowed is one that cannot cancel a drag or dismiss a native prompt. */
+  it("Escape resolves against what is on screen", () => {
+    assert.equal(resolveReplayAction(press({ key: "Escape" })), null, "nothing to escape from");
+    assert.equal(resolveReplayAction(press({ key: "Escape", helpOpen: true })), "escape");
+    assert.equal(resolveReplayAction(press({ key: "Escape", bleeding: true })), "escape");
+  });
+
+  /* Nothing fires while the user is typing, and "nothing" now means the pane keys too.
+     Option+Left inside the chat composer is the OS's "back one word" — the console taking it was
+     the bug that started this, and it reached the user because these keys were in an if-chain no
+     check could see. Swept over the whole table rather than a list of keys, so a binding added
+     later cannot quietly skip the guard. */
+  it("nothing fires while the user is typing", () => {
+    for (const binding of REPLAY_BINDINGS) {
+      const typed = press({
+        key: binding.key,
+        shiftKey: binding.shift === true,
+        altKey: binding.alt === true,
+        modKey: binding.mod === true || binding.ctrl === true,
+        ctrlKey: binding.ctrl === true,
+        helpOpen: true,
+        bleeding: true
+      });
+      assert.equal(
+        resolveReplayAction({ ...typed, typing: true }),
+        null,
+        `${binding.chord} must not act while focus is in a text field, a textarea or a contenteditable`
+      );
+      assert.equal(
+        resolveReplayAction({ ...typed, composing: true }),
+        null,
+        `${binding.chord} must not act while an IME is composing`
+      );
+      /* And the same chord away from a field must reach its action, or the assertion above is
+         passing because the binding is broken rather than because the guard works. */
+      assert.equal(
+        resolveReplayAction(typed),
+        binding.action,
+        `${binding.chord} must still resolve when focus is not in a text field`
+      );
+    }
+  });
+
+  it("browser and OS chords the table does not spell are left alone", () => {
+    assert.equal(resolveReplayAction(press({ key: "ArrowRight", modKey: true })), null);
+    assert.equal(resolveReplayAction(press({ key: " ", modKey: true })), null);
+    assert.equal(resolveReplayAction(press({ key: " ", altKey: true })), null);
+    assert.equal(
+      resolveReplayAction(press({ key: "ArrowRight", altKey: true, modKey: true })),
+      null,
+      "Alt+Cmd+Right is the OS's, not the rail's"
+    );
+  });
+
+  /* The focused scrubber, which is the control a reader is most likely to be standing on when they
+     want to traverse the timeline, and so the one place traversal can least afford to stop working.
+     `input.scrub-input` is a range, and a range is not text entry — if it ever starts reading as
+     typing, the guard above declines the whole table and the timeline goes dead under the user's
+     hands. Built from the shipped `describeReplayKeyEvent` against an element shaped like the real
+     scrubber, so this pins the classification and not just a hand-written flag. */
+  const scrubber = {
+    tagName: "INPUT",
+    type: "range",
+    isContentEditable: false,
+    getAttribute: (name) => (name === "aria-label" ? "Replay position" : null)
+  };
+  const onScrubber = (event) =>
+    describeReplayKeyEvent(
+      { shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, ...event, target: scrubber },
+      { helpOpen: false, bleeding: false }
+    );
+
+  it("the whole table still acts with the scrubber focused", () => {
+    assert.equal(
+      onScrubber({ key: "ArrowRight" }).typing,
+      false,
+      "a range input holds no text, so a keystroke over the scrubber is not typing"
+    );
+    for (const binding of REPLAY_BINDINGS) {
+      const context = {
+        ...onScrubber({
+          key: binding.key,
+          shiftKey: binding.shift === true,
+          altKey: binding.alt === true,
+          ctrlKey: binding.mod === true || binding.ctrl === true
+        }),
+        helpOpen: true,
+        bleeding: true
+      };
+      assert.equal(
+        resolveReplayAction(context),
+        binding.action,
+        `${binding.chord} must still act with the scrub slider focused — that is where the user is`
+      );
+    }
+  });
+
+  /* Where the table has no row, the slider keeps the key. This is the whole of the range deference
+     now: not a list of keys to defer on, just the absence of a binding. `↑`/`↓` were in this list
+     until the speed ladder took them, and the trade is sound because a range steps by one on those
+     keys — the same one event `←`/`→` already move on this same focused control, and those are
+     bound. The list was holding a duplicate. PageUp/PageDown jump the slider by a tenth, which is
+     how a screen-reader user drives one and is a motion this console spells nowhere else, so they
+     are still worth more unbound than anything they could be spent on. */
+  it("where the table has no row, the slider keeps the key", () => {
+    for (const key of ["PageUp", "PageDown"]) {
+      assert.equal(
+        resolveReplayAction(onScrubber({ key })),
+        null,
+        `${key} is the range input's own stepping and the table must not take it`
+      );
+    }
+    /* The keys the table *does* spell are taken from the slider on purpose, and land in the same place
+       its native stepping would: `←` is one event either way. The caller cancels the native step when a
+       row resolves, so they never both apply — though only a browser can watch that end to end. */
+    assert.equal(
+      resolveReplayAction(onScrubber({ key: "ArrowLeft" })),
+      "stepBack",
+      "one event back, whichever path moves it"
+    );
+    assert.equal(
+      resolveReplayAction(onScrubber({ key: "ArrowLeft", shiftKey: true })),
+      "previousTurn",
+      "Shift+Left is a turn, and a range input cannot tell it from a plain Left — this was the bug"
+    );
+  });
+
+  it("a control that declares its keys keeps them", () => {
+    assert.equal(
+      resolveReplayAction(
+        press({ key: "ArrowLeft", altKey: true, claimedKeys: ["ArrowLeft", "ArrowRight", "Home", "End"] })
+      ),
+      "railFocusPrevious",
+      "a control's aria-keyshortcuts claim covers the bare key, not the rail's chord over it"
+    );
+    assert.equal(
+      resolveReplayAction(
+        press({ key: "ArrowLeft", shiftKey: true, claimedKeys: ["ArrowLeft", "ArrowRight", "Home"] })
+      ),
+      "previousTurn",
+      "the resizer hands back everything modified, Shift included, so a claim must not eat Shift+Left"
+    );
+
+    // A control that declares its keys keeps them.
+    assert.equal(
+      resolveReplayAction(press({ key: "Home", claimedKeys: ["ArrowLeft", "ArrowRight", "Home", "End"] })),
+      null,
+      "aria-keyshortcuts on the focused element shadows the global binding"
+    );
+    assert.equal(
+      resolveReplayAction(press({ key: "ArrowLeft", claimedKeys: ["Shift+ArrowLeft"] })),
+      "stepBack",
+      "a claim naming a modifier is not a claim on the bare key"
+    );
+    assert.equal(
+      resolveReplayAction(
+        press({
+          key: "ArrowUp",
+          claimedKeys: ["Meta+Shift+ArrowUp", "Meta+Shift+ArrowDown", "Meta+Shift+ArrowLeft"]
+        })
+      ),
+      "speedUp",
+      "PaneShell's four Meta+Shift claims must not disable the bare speed ladder"
+    );
+    assert.equal(
+      resolveReplayAction(press({ key: "ArrowRight", claimedKeys: ["Home", "End"] })),
+      "stepForward",
+      "unclaimed keys still reach the global binding"
+    );
+  });
+
+  /* A modal owns the keyboard while it is up. showModal() takes the pointer and the focus ring
+     off the desk behind it, but a window-level keydown listener hears through it, so this module
+     has to decline the same reach the platform already denies. `?` and Escape are the exceptions
+     because they dismiss the layer rather than acting behind it. */
+  it("a modal owns the keyboard while it is up", () => {
+    for (const key of ["d", "ArrowUp", "f", " ", "ArrowRight"]) {
+      assert.equal(
+        resolveReplayAction(press({ key, modalOpen: true })),
+        null,
+        `${key} must not reach the desk through an open modal`
+      );
+    }
+    assert.equal(
+      resolveReplayAction(press({ key: "?", shiftKey: true, modalOpen: true })),
+      "toggleHelp",
+      "the help sheet documents ? as its own toggle, so ? has to survive its own modal"
+    );
+    assert.equal(
+      resolveReplayAction(press({ key: "Escape", modalOpen: true, helpOpen: true })),
+      "escape",
+      "Escape still closes the layer that is up"
+    );
+    assert.equal(
+      describeReplayKeyEvent(
+        {
+          key: "d",
+          shiftKey: false,
+          altKey: false,
+          ctrlKey: false,
+          metaKey: false,
+          target: { ...scrubber, ownerDocument: { querySelector: (sel) => (sel === "dialog[open]" ? {} : null) } }
+        },
+        { helpOpen: false, bleeding: false }
+      ).modalOpen,
+      true,
+      "modalOpen must actually be read from the document, or the guard above is decoration"
+    );
+  });
+
+  // Space activates a focused button; it must not also toggle playback.
+  it("Space activates a focused button", () => {
+    assert.equal(resolveReplayAction(press({ key: " ", spaceActivates: true })), null);
+    assert.equal(
+      resolveReplayAction(press({ key: "ArrowRight", spaceActivates: true })),
+      "stepForward",
+      "a focused button only shadows the key that activates it"
+    );
+  });
+
+  // The overlay renders straight from the table, so every row needs a legible
+  // chord and label, and no two bindings may claim the same chord.
+  it("every row in the overlay has a legible chord and label of its own", () => {
+    const chords = new Set();
+    for (const binding of REPLAY_BINDINGS) {
+      assert.ok(binding.chord.length > 0, `${binding.action} needs a chord to display`);
+      assert.ok(binding.label.length > 0, `${binding.action} needs a label to display`);
+      assert.ok(!chords.has(binding.chord), `duplicate chord in the help overlay: ${binding.chord}`);
+      chords.add(binding.chord);
+    }
+  });
+});
+
+// --- what the keys actually do -----------------------------------------------------------------
+
+installBrowserSurface();
+
+const api = new Proxy({}, { get: () => async () => [] });
+const run = new AgentRunController(api);
+run.sessions = realisticQaScenario.sessions;
+run.session = realisticQaScenario.sessions[0];
+run.frames = realisticQaScenario.frames;
+
+const total = run.total;
+const markers = run.turnMarkers.map((marker) => marker.index);
+assert.ok(total > 4, `the scenario must carry a run to move around in (saw ${total} events)`);
+assert.ok(markers.length >= 3, `the scenario must carry turns to navigate (saw ${markers.length})`);
+
+/**
+ * A pane rail reduced to what the four `RailSurface` verbs do to one: columns of panes, a cursor
+ * over them, and one pane that can be full-screen.
+ *
+ * A stub rather than a real `PaneStack` for the same reason `RailSurface` is not `PaneStack`:
+ * there are two stacks on screen and which one a key acts on is App.svelte's question. What has to
+ * be checked here is that eight rail bindings do eight different things, and that is measurable
+ * against any rail at all.
+ */
+function stubRail() {
+  const clamp = (value, limit) => Math.max(0, Math.min(value, limit));
+  const rail = {
+    columns: [],
+    column: 0,
+    tab: 0,
+    bleeding: null,
+    reset({ column, tab }) {
+      /* Ten columns, because nine digits have to be able to differ from each other and from
+         "the last one". On a three-column rail Ctrl+3 and Ctrl+9 land in the same place and
+         Ctrl+4 through Ctrl+8 land nowhere, which is honest behaviour on a short desk and
+         useless as a way to tell nine rows apart. */
+      rail.columns = [
+        ["a1", "a2"],
+        ["b1"],
+        ["c1", "c2", "c3"],
+        ["d1"],
+        ["e1"],
+        ["f1"],
+        ["g1"],
+        ["h1"],
+        ["i1"],
+        ["j1"]
+      ];
+      rail.column = column;
+      rail.tab = tab;
+      rail.bleeding = null;
+    },
+    focusedId: () => rail.columns[rail.column]?.[rail.tab] ?? null,
+    focus(axis, delta) {
+      if (axis === "along") {
+        rail.column = clamp(rail.column + delta, rail.columns.length - 1);
+        rail.tab = 0;
+        return;
+      }
+      rail.tab = clamp(rail.tab + delta, rail.columns[rail.column].length - 1);
+    },
+    /* `9` is the last column and everything else is counted from the left, which is the
+       app's own reading of the digit — App.svelte resolves it against the rail's length
+       for the same reason this stub does: the table hands over a number, not a place. */
+    focusSlot(slot) {
+      const index = slot === 9 ? rail.columns.length - 1 : slot - 1;
+      if (index < 0 || index >= rail.columns.length) return;
+      rail.column = index;
+      rail.tab = 0;
+    },
+    move(axis, delta) {
+      const id = rail.focusedId();
+      if (!id) return;
+      if (axis === "along") {
+        /* Carry the pane into the neighbouring column, which is what movePane does. */
+        const to = clamp(rail.column + delta, rail.columns.length - 1);
+        if (to === rail.column) return;
+        rail.columns[rail.column].splice(rail.tab, 1);
+        rail.columns[to].push(id);
+        if (rail.columns[rail.column].length === 0) rail.columns.splice(rail.column, 1);
+        rail.column = rail.columns.findIndex((column) => column.includes(id));
+        rail.tab = rail.columns[rail.column].indexOf(id);
+        return;
+      }
+      const column = rail.columns[rail.column];
+      const to = clamp(rail.tab + delta, column.length - 1);
+      if (to === rail.tab) return;
+      column.splice(rail.tab, 1);
+      column.splice(to, 0, id);
+      rail.tab = to;
+    },
+    toggleBleed() {
+      rail.bleeding = rail.bleeding === rail.focusedId() ? null : rail.focusedId();
+    },
+    exitBleed() {
+      rail.bleeding = null;
+    }
+  };
+  rail.reset({ column: 0, tab: 0 });
+  return rail;
+}
+
+const rail = stubRail();
+
+/* The bottom drawer, reduced to the one thing a key does to it. App.svelte's own toggle empties
+   panes and re-fits a height; none of that is what the binding has to be told apart by, and a
+   stub keeps this file free of the desk it would otherwise have to build. */
+const drawer = {
+  open: false,
+  reset() {
+    drawer.open = false;
+  },
+  toggle() {
+    drawer.open = !drawer.open;
+  }
+};
+
+/* The overlay flag lives in App.svelte and is passed to the action the same way here: a surface
+   the action writes through. That is what keeps `?`, `Esc` and the pane keys inside this
+   comparison. */
+const surface = { run, helpOpen: false, rail, toggleDrawer: () => drawer.toggle() };
+
+/* Positions a person can be standing at when they reach for a key, stated against the markers the
+   scenario actually produces. Two bindings only have to differ somewhere, not everywhere — `Home`
+   and `←` agree from index 1, which is fine — so a pair is condemned only when no position here
+   tells them apart. */
+const positions = [
+  ["at the first event", () => run.goTo(0)],
+  ["one event in", () => run.goTo(1)],
+  ["at the start of a turn", () => run.goTo(markers[1])],
+  ["mid-turn", () => run.goTo(markers[1] + 1)],
+  ["at the start of a later turn", () => run.goTo(markers[2])],
+  ["at the last turn", () => run.goTo(markers.at(-1))],
+  ["one before the live edge", () => run.goTo(total - 1)],
+  ["at the live edge", () => run.goTo(total)],
+  [
+    "playing, mid-run",
+    () => {
+      run.goTo(markers[1]);
+      run.play();
+    }
+  ]
+];
+/* Rail positions, cycled through the probe list rather than multiplied into it. Eight rail
+   bindings need somewhere to differ — `Alt ↑` and `Cmd Shift ↑` both do nothing on the first tab
+   of a column, so a rail parked at one corner would report them identical — and the run positions
+   above already number eighteen. */
+const RAIL_STARTS = [
+  { column: 0, tab: 0 },
+  { column: 1, tab: 0 },
+  { column: 2, tab: 1 },
+  { column: 2, tab: 2 }
+];
+
+const probes = positions
+  .flatMap(([where, seek]) =>
+    [false, true].map((helpOpen) => [`${where}${helpOpen ? ", overlay open" : ""}`, seek, helpOpen])
+  )
+  .map(([where, seek, helpOpen], index) => {
+    const railStart = RAIL_STARTS[index % RAIL_STARTS.length];
+    return [
+      `${where}, rail at ${railStart.column}.${railStart.tab}`,
+      () => {
+        run.pause();
+        /* Speed is read by `state()` below, so it has to be reset here like everything else is:
+           `↑`/`↓` change it, and without this it rides from one probe into the next and the
+           pairwise sweep below decides what the "never changes anything" loop is measured from.
+           That loop passed on residual state before this line existed — a pass that depended on
+           which rung 465 pairwise comparisons happened to leave behind, which is worse than a
+           clean failure because reordering a row silently changes the answer.
+
+           The second rung, not the first: `↓` from ×1 clamps, so a floor reset would make the
+           `↓` row look like a key that changes nothing anywhere and fail that same loop for a
+           binding that works. Both directions need somewhere to go. */
+        run.setPlaybackSpeed(2);
+        seek();
+        surface.helpOpen = helpOpen;
+        rail.reset(railStart);
+        /* Reset for the reason the speed rung above is: `D` flips, so without this the drawer
+           rides from one probe into the next and the pairwise sweep is measured from whatever
+           the previous 400-odd presses happened to leave behind. */
+        drawer.reset();
+      }
+    ];
+  });
+
+const state = () => ({
+  viewIndex: run.viewIndex,
+  following: run.following,
+  playing: run.playing,
+  playbackSpeed: run.playbackSpeed,
+  helpOpen: surface.helpOpen,
+  /* The rail is part of the state a key can change, so it is part of what tells two keys apart. */
+  rail: { columns: rail.columns, column: rail.column, tab: rail.tab, bleeding: rail.bleeding },
+  drawerOpen: drawer.open
+});
+
+/* One press of `action` from `probe`, measured. Playback is stopped straight after so the 700ms
+   auto-advance timer can never fire between two probes and make this file flaky. */
+function outcome([, setUp], action) {
+  setUp();
+  const before = JSON.stringify(state());
+  applyReplayAction(action, surface);
+  const after = JSON.stringify(state());
+  run.pause();
+  return { before, after };
+}
+
+describe("what the keys actually do", () => {
+  /* Stated directly: the one live-edge binding lands on the end, follows it, and stops playback.
+     That is the whole of what a second `jumpToLive` on `L` would have to promise. */
+  it("the one live-edge binding lands on the end and follows it", () => {
+    const [, setUp] = probes[0];
+    setUp();
+    applyReplayAction("last", surface);
+    const { rail: railAfter, drawerOpen, ...transport } = state();
+    assert.deepEqual(transport, {
+      viewIndex: total,
+      following: true,
+      playing: false,
+      playbackSpeed: run.playbackSpeed,
+      helpOpen: false
+    });
+    assert.equal(railAfter.bleeding, null, "a transport key must not touch the desk");
+    assert.equal(drawerOpen, false, "nor the drawer");
+  });
+});
+
+// --- the step-sized jump ------------------------------------------------------------------------
+// `,` and `.` exist because the transport had a hole in the middle of it: `←`/`→` move one frame,
+// which nobody is looking for, and `Shift`+those move a whole turn, which in a real run is most of
+// it. The middle rung is a span edge — a model call, a tool call or an approval starting or ending
+// — which is not a new notion invented for the key: a span is what the state-flow graph draws as a
+// card and what the latency waterfall draws as a bar, so this walks between the things already on
+// screen.
+//
+// Asserted against the spans themselves rather than against remembered indices, so the day the
+// projection changes what counts as a span, this either still holds or says which part stopped.
+describe("the step-sized jump", () => {
+  it("lands on span boundaries, and is coarser than an event and finer than a turn", () => {
+    const spans = run.stepTimeline.turns.flatMap((turn) => [
+      ...turn.spans,
+      ...turn.subagentTurns.flatMap((sub) => sub.spans)
+    ]);
+    const edges = new Set(spans.flatMap((span) => [span.startIndex, span.endIndex]));
+    const boundaries = run.stepBoundaries;
+
+    assert.ok(spans.length > 3, `the scenario must carry spans to jump between (saw ${spans.length})`);
+    assert.deepEqual(
+      boundaries,
+      [...edges].sort((a, b) => a - b),
+      "the boundary list must be every span edge, ascending and deduplicated, and nothing else"
+    );
+    assert.deepEqual(boundaries, [...new Set(boundaries)], "a boundary may not appear twice");
+
+    /* Every landing is on a real boundary, from every event in the run — not from a handful of
+       positions that happen to work. This is the assertion that would fail on an off-by-one in
+       either direction, or on a `>=` that re-seeks where the cursor already is. */
+    for (let from = 0; from <= total; from += 1) {
+      run.goTo(from);
+      run.nextStep();
+      const forward = run.viewIndex;
+      assert.ok(
+        forward > from || forward === total,
+        `. at ${from} went to ${forward}: forward must move forward, or stop at the live edge`
+      );
+      assert.ok(
+        boundaries.includes(forward) || forward === total,
+        `. at ${from} landed on ${forward}, which is not a span boundary`
+      );
+
+      run.goTo(from);
+      run.previousStep();
+      const back = run.viewIndex;
+      assert.ok(back < from || from === 0, `, at ${from} went to ${back}: back must move back`);
+      assert.ok(
+        boundaries.includes(back) || back === 0,
+        `, at ${from} landed on ${back}, which is not a span boundary`
+      );
+    }
+
+    /* And it is genuinely the middle rung. Compared as totals over the whole run, because any one
+       position can tie — a boundary that happens to sit one event along, a turn whose first span
+       opens on its first frame. What must hold is that a reader crossing the run by span presses
+       the key more often than by turn and less often than by frame. */
+    const presses = (step) => {
+      let count = 0;
+      run.goTo(0);
+      while (run.viewIndex < total && count <= total + 1) {
+        const before = run.viewIndex;
+        step();
+        if (run.viewIndex === before) break;
+        count += 1;
+      }
+      return count;
+    };
+    const byTurn = presses(() => run.nextTurn());
+    const byStep = presses(() => run.nextStep());
+    const byEvent = total;
+
+    assert.ok(
+      byTurn < byStep && byStep < byEvent,
+      `. must be coarser than an event and finer than a turn, and over ${total} events it took ` +
+        `${byEvent} presses by event, ${byStep} by step and ${byTurn} by turn`
+    );
+    run.goTo(0);
+    run.pause();
+  });
+});
+
+// --- which keys are allowed to move the playhead at all ---------------------------------------
+
+/* Said directly about the cursor: which keys may move the playhead and which may not. The
+   state-comparison checks below cannot cover this — they assert that two bindings differ, and a
+   rail key that also dragged the playhead would differ from its neighbours just fine. */
+describe("which keys are allowed to move the playhead at all", () => {
+  function seek(move) {
+    const before = run.viewIndex;
+    move();
+    /* Playback stopped straight after, so the 700ms auto-advance timer can never fire between two
+       assertions and make this file flaky. */
+    run.pause();
+    return run.viewIndex - before;
+  }
+
+  const markerMid = markers[1];
+
+  it("only position keys move the playhead, and both ends clamp", () => {
+    /* Positive controls first. Without them every "moves nothing" below would also pass if `seek` were
+       broken, or if these actions had stopped working entirely. */
+    run.goTo(markerMid);
+    assert.equal(seek(() => applyReplayAction("stepForward", surface)), 1, "→ moves one event");
+    assert.equal(seek(() => applyReplayAction("stepBack", surface)), -1, "← moves one event back");
+    run.goTo(markerMid);
+    assert.ok(seek(() => applyReplayAction("nextTurn", surface)) > 0, "next turn moves forward");
+    assert.ok(seek(() => applyReplayAction("previousTurn", surface)) < 0, "previous turn moves back");
+    assert.ok(seek(() => applyReplayAction("first", surface)) < 0, "Home moves back to the start");
+    assert.ok(seek(() => applyReplayAction("last", surface)) > 0, "End moves on to the live edge");
+
+    /* Keys that are not about position, which must leave the cursor exactly where the reader put it.
+       The rail keys are the ones worth the assertion: walking or rearranging panes is a gesture about
+       the desk, and a reader doing it in the middle of reading a turn must not find the run has moved
+       underneath them. */
+    run.goTo(markerMid);
+    assert.equal(seek(() => applyReplayAction("toggleHelp", surface)), 0, "? moves no playhead");
+    assert.equal(seek(() => applyReplayAction("escape", surface)), 0, "Esc moves no playhead");
+    for (const action of ["railFocusNext", "railMoveNext", "railToggleBleed", "toggleDrawer"]) {
+      assert.equal(seek(() => applyReplayAction(action, surface)), 0, `${action} moves no playhead`);
+    }
+    assert.equal(
+      seek(() => applyReplayAction("togglePlay", surface)),
+      0,
+      "Space mid-run starts playback where the cursor already is"
+    );
+
+    /* Both ends clamp. This is where a reader holding a key down ends up, so it is the ordinary case
+       rather than an exotic one, and an off-by-one here would run the cursor off the end of the run. */
+    run.goTo(0);
+    assert.equal(seek(() => applyReplayAction("stepBack", surface)), 0, "← at the first event holds");
+    assert.equal(seek(() => applyReplayAction("first", surface)), 0, "Home when already first holds");
+    run.goTo(total);
+    assert.equal(seek(() => applyReplayAction("stepForward", surface)), 0, "→ at the live edge holds");
+    assert.equal(seek(() => applyReplayAction("last", surface)), 0, "End when already at the end holds");
+  });
+
+  /* Both ends of the speed ladder clamp, in the same shape and for the same reason: a held key is
+     the ordinary way to reach the far rung, so running off the end is the ordinary failure. This is
+     also the only sweep in this file that proves a binding *stops* — every other one proves that two
+     bindings differ, which an index walking off the ladder into `undefined` would satisfy just as
+     well right up until the timer divided by it. */
+  it("the speed ladder clamps at both ends", () => {
+    run.setPlaybackSpeed(1);
+    applyReplayAction("speedDown", surface);
+    assert.equal(run.playbackSpeed, 1, "↓ at the slowest rung holds");
+    for (let i = 0; i < 8; i += 1) applyReplayAction("speedUp", surface);
+    assert.equal(run.playbackSpeed, 10, "eight ↑ pins at the fastest rung and holds there");
+    applyReplayAction("speedDown", surface);
+    assert.equal(run.playbackSpeed, 5, "and the rung below is still one press back down");
+    run.setPlaybackSpeed(1);
+  });
+
+  /* Which word a scroll call is allowed to animate with. `"auto"` is not a way to spell instant — it
+     defers to the container's `scroll-behavior`, which is unset everywhere in this tree today, so it
+     reads as instant by luck and would turn smooth again the day any stylesheet sets it. `"instant"`
+     is the only value that ignores CSS. Measured, not assumed: forcing `scroll-behavior: smooth` on
+     the real scroller and counting frames showed `"auto"` animate over ~113 of them while `"instant"`
+     landed in one. The probe that measured it was a throwaway and is gone; the number is kept and the
+     path is not, because a citation pointing at a file no clone has is the worse of the two.
+
+     One caller passes the word at all, PaneRail's, which animates unless the reader asked it not to.
+     The two panes that follow the playhead go through followScroll.ts, which writes `scrollTop` and
+     so has no word to get wrong. That is why the floor below is one caller's worth; it reads as two
+     because that caller spells it as a ternary and both words count.
+
+     Swept over the whole tree rather than pinned to the known caller, because the failure mode is a
+     second caller written later that copies the wrong word from a sibling. */
+  it('no scroll call passes behavior: "auto"', async () => {
+    const scrollBehaviours = [];
+    for (const file of await readdir(new URL("../../", import.meta.url), {
+      recursive: true,
+      withFileTypes: true
+    })) {
+      if (!file.isFile() || !/\.(svelte|ts)$/.test(file.name)) continue;
+      const path = `${file.parentPath}/${file.name}`;
+      const source = await readFile(path, "utf8");
+      if (!/\.(scrollIntoView|scrollTo|scrollBy)\(/.test(source)) continue;
+      /* The value is taken as the whole rest of the line and then scanned for every keyword in it,
+         rather than the first one: both callers spell it as a ternary, so a `"smooth" : "auto"` would
+         hide from a pattern that stopped at the first quoted word. */
+      for (const [, expression] of source.matchAll(/behavior:\s*([^\n]*)/g)) {
+        for (const [, quoted] of expression.matchAll(/["'](auto|instant|smooth)["']/g)) {
+          scrollBehaviours.push({ file: path.replace(/.*\/src\//, "src/"), value: quoted });
+        }
+      }
+    }
+    assert.ok(
+      scrollBehaviours.length >= 1,
+      `expected to find a scroll caller's behaviour and found ${scrollBehaviours.length} — the ` +
+        "sweep above has gone stale, so it is guarding nothing"
+    );
+    for (const { file, value } of scrollBehaviours) {
+      assert.notEqual(
+        value,
+        "auto",
+        `${file} passes behavior: "auto" to a scroll call. "auto" asks the container's CSS, which is ` +
+          'the one thing a "do not animate this" branch cannot depend on: nothing sets ' +
+          "`scroll-behavior` in ui/ today, so it happens to be instant, and the first stylesheet to " +
+          'set `scroll-behavior: smooth` turns it into an animation. Say "instant", which never ' +
+          "consults CSS."
+      );
+    }
+  });
+});
+
+describe("every row in the overlay promises a behaviour of its own", () => {
+  /* `following` means "the cursor is at the end" and nothing else: goTo() assigns it that way and
+     every transport action routes through goTo, so it is asserted after every press below rather
+     than trusted once. */
+  it("following means viewIndex === total after every press", () => {
+    for (const probe of probes) {
+      for (const binding of REPLAY_BINDINGS) {
+        outcome(probe, binding.action);
+        assert.equal(
+          run.following,
+          run.viewIndex === total,
+          `following must mean viewIndex === total (${binding.chord} ${probe[0]}: ` +
+            `following=${run.following}, viewIndex=${run.viewIndex}, total=${total})`
+        );
+      }
+    }
+  });
+
+  /* The same question asked of behaviour rather than of names. Every row in the overlay promises a
+     behaviour of its own; a row that cannot be told from another row promises something the app
+     does not have.
+     Compared by effect, so what the two actions are named does not enter into it. */
+  it("no two rows leave the replay in the same state everywhere", () => {
+    for (let i = 0; i < REPLAY_BINDINGS.length; i += 1) {
+      for (let j = i + 1; j < REPLAY_BINDINGS.length; j += 1) {
+        const [a, b] = [REPLAY_BINDINGS[i], REPLAY_BINDINGS[j]];
+        assert.ok(
+          probes.some((probe) => outcome(probe, a.action).after !== outcome(probe, b.action).after),
+          `"${a.chord} — ${a.label}" and "${b.chord} — ${b.label}" leave the replay in the same ` +
+            `state from all ${probes.length} starting positions: one behaviour, two rows in the help ` +
+            `overlay. Drop a binding, or merge them into a single row that lists both keys.`
+        );
+      }
+    }
+  });
+
+  /* A key that changes nothing anywhere is the same broken promise with one row instead of two. */
+  it("no key changes nothing anywhere", () => {
+    for (const binding of REPLAY_BINDINGS) {
+      assert.ok(
+        probes.some((probe) => {
+          const { before, after } = outcome(probe, binding.action);
+          return before !== after;
+        }),
+        `"${binding.chord} — ${binding.label}" never changes anything the user can see`
+      );
+    }
+  });
+});
+
+// --- motions the transport row no longer offers a button for -------------------------------------
+// The row carries three buttons and none of them does relative movement — one event or one turn,
+// either direction — on the argument that the keyboard does that better. That argument is only true
+// while the keys work, and nothing else in this repo would notice if one stopped: there is no
+// button left to fall back to.
+//
+// So the assertion is the consequence, not the shape. For each motion the row does not carry, this
+// demands a binding that (a) a real key press resolves to, through the same guards the window
+// handler runs, and (b) leaves the run in the state a button for that motion would have, from
+// every starting position above. Compared by effect, so renaming an action changes nothing here.
+//
+// Drop the `previousTurn` row from REPLAY_BINDINGS, or give it a key the guards swallow, and this
+// fails naming "one turn back" — which is exactly the silence a button would have covered.
+describe("motions the transport row no longer offers a button for", () => {
+  /** The same measurement as `outcome`, for a motion invoked directly rather than through a key. */
+  function effectOf([, setUp], act) {
+    setUp();
+    act();
+    const after = JSON.stringify(state());
+    run.pause();
+    return after;
+  }
+
+  /* Each entry is a button the row does not carry and the controller call one would make.
+     `previousTurn`/`nextTurn` pause on their own, which is why no extra `run.pause()` is wrapped
+     around them here. */
+  const CUT_MOTIONS = [
+    { motion: "one event back", button: "Previous event", act: () => run.stepBack() },
+    { motion: "one event forward", button: "Next event", act: () => run.stepForward() },
+    { motion: "one turn back", button: "Previous turn", act: () => run.previousTurn() },
+    { motion: "one turn forward", button: "Next turn", act: () => run.nextTurn() }
+  ];
+
+  it("every motion the row dropped is still reachable by key", async () => {
+    /* `label="..."` is the IconButton prop; the negative lookbehind keeps `aria-label=` out. */
+    const controller = await readFile(
+      new URL("../components/flow/StepController.svelte", import.meta.url),
+      "utf8"
+    );
+    const buttonLabels = new Set([...controller.matchAll(/(?<!aria-)label="([^"]+)"/g)].map((m) => m[1]));
+    assert.ok(
+      buttonLabels.size > 0,
+      "found no IconButton labels in StepController.svelte — the parse above has gone stale"
+    );
+
+    for (const { motion, button, act } of CUT_MOTIONS) {
+      assert.ok(
+        !buttonLabels.has(button),
+        `StepController.svelte still renders a "${button}" button. Either the row grew back — in ` +
+          `which case drop this entry — or the label drifted and this check is now guarding nothing.`
+      );
+
+      const reachable = REPLAY_BINDINGS.filter((binding) => {
+        /* The key must survive the guards on the way in. `shift: null` means the binding does not
+           care, and the plain press is the one a person makes. */
+        const resolved = resolveReplayAction(
+          press({ key: binding.key, shiftKey: binding.shift === true })
+        );
+        if (resolved !== binding.action) return false;
+        return probes.every(
+          (probe) => outcome(probe, binding.action).after === effectOf(probe, act)
+        );
+      });
+
+      assert.ok(
+        reachable.length > 0,
+        `"${button}" is gone from the transport row and no key reproduces it: ${motion} is now ` +
+          `unreachable. Over all ${probes.length} starting positions, no binding in REPLAY_BINDINGS ` +
+          `both resolves from its own key press and lands where that button did.`
+      );
+    }
+    run.pause();
+  });
+
+  /* The figures the summary line used to print, kept as assertions because they are the coverage
+     claim: every loop above passes trivially if the table or the probe list has quietly narrowed,
+     and nothing else in this file would notice. */
+  it("the sweeps above are as wide as they claim", () => {
+    assert.ok(
+      REPLAY_BINDINGS.length >= 32,
+      `the overlay must still carry the whole board (saw ${REPLAY_BINDINGS.length} bindings)`
+    );
+    assert.ok(
+      probes.length >= 18,
+      `every pair must be distinguished over the whole probe list (saw ${probes.length} starting positions)`
+    );
+    assert.equal(CUT_MOTIONS.length, 4, "four buttons were cut, and all four are asserted above");
+  });
+});

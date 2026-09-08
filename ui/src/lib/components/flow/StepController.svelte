@@ -1,27 +1,19 @@
 <script lang="ts">
-  import {
-    ChevronDown,
-    ChevronLeft,
-    ChevronRight,
-    CircleDollarSign,
-    Pause,
-    Play,
-    RotateCcw,
-    SkipForward
-  } from "@lucide/svelte";
+  import { PanelBottom, Pause, Play, SkipBack, SkipForward } from "@lucide/svelte";
+  import Chip from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
-  import MetricStrip from "$lib/components/primitives/MetricStrip.svelte";
-  import UsageLineChart from "$lib/components/flow/UsageLineChart.svelte";
-  import ModelBreakdown from "$lib/components/flow/ModelBreakdown.svelte";
-  import type { Metric } from "$lib/components/primitives/metrics";
-  import {
-    formatCost,
-    formatTokens,
-    type CostSummary,
-    type UsageTimelinePoint
-  } from "$lib/cost/pricing";
-  import type { PlaybackSpeed } from "$lib/state/agentRun.svelte";
+  import { PLAYBACK_SPEEDS, type PlaybackSpeed } from "$lib/state/agentRun.svelte";
+  import { dismissable } from "$lib/state/dismissable.svelte";
+  import { eventVelocity, velocityPath } from "$lib/state/eventVelocity";
   import type { ReplayLogRow, ReplayMarker } from "$lib/state/replayLog";
+  import {
+    laneCues,
+    lanePct,
+    laneReading,
+    laneScale,
+    laneSegments,
+    type TurnMark
+  } from "$lib/state/scrubLane";
 
   interface Props {
     viewIndex: number;
@@ -30,14 +22,24 @@
     following: boolean;
     playbackSpeed: PlaybackSpeed;
     currentEvent: ReplayLogRow | null;
-    usage: CostSummary;
-    usageTimeline: UsageTimelinePoint[];
-    turnMarkers: Array<{ index: number; turnNumber: number }>;
+    turnMarkers: TurnMark[];
     anomalyMarkers: ReplayMarker[];
+    /**
+     * Every event of the run, for the density ribbon behind the bar. Only its
+     * indices and timestamps are read; the rows are taken as they are so the
+     * lane costs no second pass over the log.
+     */
+    eventRows: ReplayLogRow[];
+    /**
+     * Whether the bottom drawer is showing anything. Its control lives here
+     * because the transport is the drawer's top edge — the drawer collapses
+     * down onto this bar, so this bar is the lid, and the handle belongs on the
+     * lid rather than inside the box.
+     */
+    drawerOpen: boolean;
+    onToggleDrawer: () => void;
     onPlay: () => void;
     onPause: () => void;
-    onStepBack: () => void;
-    onStepForward: () => void;
     onSpeedChange: (speed: PlaybackSpeed) => void;
     onJumpToLive: () => void;
     onReset: () => void;
@@ -51,475 +53,758 @@
     following,
     playbackSpeed,
     currentEvent,
-    usage,
-    usageTimeline,
     turnMarkers,
     anomalyMarkers,
+    eventRows,
+    drawerOpen,
+    onToggleDrawer,
     onPlay,
     onPause,
-    onStepBack,
-    onStepForward,
     onSpeedChange,
     onJumpToLive,
     onReset,
     onScrub
   }: Props = $props();
 
-  const playbackSpeeds: PlaybackSpeed[] = [1, 2, 5, 10];
-  let usageExpanded = $state(false);
+  let detailOpen = $state(false);
+  /* The lane already carries one floating label. A cue gets its name by taking
+     that label over while the pointer is on it, rather than opening a second
+     bubble in the same 18px of vertical space.
+     Held as an event index, not as the marker object: the markers are re-derived
+     from the log on every arriving event, so object identity does not survive
+     even one frame of streaming. */
+  let aimedIndex = $state<number | null>(null);
 
-  const metrics: Metric[] = $derived([
-    { label: "cost", value: formatCost(usage.estimatedCostUsd), tone: "cost" },
-    { label: "total", value: formatTokens(usage.tokens.total), tone: "strong" },
-    { label: "input", value: formatTokens(usage.tokens.input) },
-    { label: "output", value: formatTokens(usage.tokens.output) },
-    { label: "thought", value: formatTokens(usage.tokens.thought) },
-    { label: "cached", value: formatTokens(usage.tokens.cached) }
-  ]);
+  const tone = $derived(currentEvent?.tone ?? "neutral");
+  const eventTitle = $derived(currentEvent?.label ?? "Replay start");
+  const eventType = $derived(currentEvent?.event ?? null);
+  const eventBody = $derived(currentEvent?.body ?? currentEvent?.status ?? "");
+  const hasDetail = $derived(Boolean(eventBody || eventType));
 
-  const currentLabel = $derived(
-    currentEvent
-      ? `${currentEvent.label} · turn ${currentEvent.turnNumber} · ${viewIndex}/${total}`
-      : `Replay start · ${viewIndex}/${total}`
+  /* Wraps, where the `↑`/`↓` keys clamp. One button has no second direction, so a cycle is
+     the only route back to ×1. */
+  const nextSpeed = $derived(
+    PLAYBACK_SPEEDS[(PLAYBACK_SPEEDS.indexOf(playbackSpeed) + 1) % PLAYBACK_SPEEDS.length]
   );
 
-  const currentBody = $derived(currentEvent?.body ?? currentEvent?.status ?? "");
+  /**
+   * The scale the lane is drawn against, held still while the pointer is on it.
+   *
+   * Every mark on the bar sits at ``index / total``, so each event that arrives
+   * moves all of them: measured at streaming speed a cue slides left about 50px
+   * a second. The mark you are reaching for leaves before you get there, which
+   * is why a cue could be neither hovered nor clicked during a live run — the
+   * pointer was always over whatever had moved into its place. Pinning the
+   * denominator while the pointer is on the lane makes the bar a still target;
+   * it catches up when the pointer leaves. The cost is that the bar is a
+   * snapshot while you point at it, which is also what makes it aimable.
+   */
+  let heldScale = $state<number | null>(null);
+  const scale = $derived(laneScale(total, heldScale));
+  const cursorPct = $derived(lanePct(viewIndex, scale));
+  const shownIndex = $derived(laneReading(viewIndex, scale));
+  const currentTurn = $derived(currentEvent?.turnNumber ?? null);
+
+  const cues = $derived(laneCues(anomalyMarkers, scale));
+
+  /* Where the run sped up and where it stalled, against the same scale the cues
+     are placed on. Independent of the cursor, so scrubbing and playback never
+     recompute it — only an arriving event or a released scale can. */
+  const ridge = $derived(velocityPath(eventVelocity(eventRows, scale)));
+
+  const aimedCue = $derived(
+    aimedIndex == null ? null : (cues.find((cue) => cue.index === aimedIndex) ?? null)
+  );
+  const labelTone = $derived(aimedCue?.tone ?? tone);
+  const labelTitle = $derived(aimedCue?.label ?? eventTitle);
+  const labelTurn = $derived(aimedCue ? aimedCue.turnNumber : currentTurn);
+  const labelPct = $derived(aimedCue ? lanePct(aimedCue.index, scale) : cursorPct);
+
+  function holdScale(event: PointerEvent): void {
+    /* Touch has no hover to end, so a tap would pin the scale until the next. */
+    if (event.pointerType === "touch") return;
+    heldScale = Math.max(total, 0);
+  }
+
+  function releaseScale(): void {
+    heldScale = null;
+  }
+
+  /* A range input announces "96" on its own, which tells a screen-reader user
+     nothing about where they are in the run. Say the event instead.
+     "Event" throughout this row, and it means one published event of the run —
+     the same thing the total counts. */
+  const positionText = $derived(
+    [
+      currentTurn != null ? `Turn ${currentTurn}` : null,
+      eventTitle,
+      `event ${viewIndex} of ${total}`,
+      following ? "live" : null
+    ]
+      .filter(Boolean)
+      .join(", ")
+  );
+
+  const turnSegments = $derived(laneSegments(turnMarkers, viewIndex, scale));
 
   function handleInput(event: Event): void {
-    onScrub(Number((event.currentTarget as HTMLInputElement).value));
+    const index = Number((event.currentTarget as HTMLInputElement).value);
+    /* A focused scrubber still moves itself for the keys the binding table does
+       not spell — up, down, PageUp, PageDown — which are left native for screen
+       reader users by omission rather than by a list. `onScrub` does the moving,
+       so the run-state API learns nothing about keyboards.
+
+       The keys the table does spell never arrive here at all: they win and cancel
+       the native step. Deciding that deference by key name instead is what hands
+       `Shift+←` to the slider as if it were a bare arrow, stepping one event where
+       the reader asked for one turn. */
+    onScrub(index);
   }
+
+  /* Escape and press-outside come from the shared attachment, which is attached to the
+     card itself: the card is rendered only while it is open, so mounting is opening and
+     there is no second copy of `detailOpen` to keep in sync. `keep` is the whole footer
+     because the reader goes on scrubbing while the card reports the scrub — a press on
+     the transport is not a press somewhere else. */
 </script>
 
 <footer class="step-controller">
-  <div class="replay-row">
-    <div class="transport">
-      <IconButton label="Reset replay" onclick={onReset}>
-        <RotateCcw size={16} />
+  <!-- Three controls, and what is missing is the point. Relative movement — one
+       event or one turn, either direction — is keyboard only: the arrows and
+       Shift+arrows do it, the `?` overlay is where they are written down, and
+       four buttons that only repeated them cost 136px of a row the lane has to
+       share. What survives is the pair of absolute destinations, which
+       have no key-repeat to be worn out by, and the one toggle.
+
+       Said the other way: the two that stayed carry state a button is the only
+       thing that can show — play/pause is which of the two it is, follow dims
+       once the view is already at the live edge. A stepper carries none, which
+       is exactly why it survives being a key and nothing else.
+
+       The rule below keeps the speed cycler out of that run: it is the only
+       control here that changes how playback behaves rather than where the
+       cursor is. -->
+  <div class="transport">
+    <IconButton label="Jump to first step" onclick={onReset} disabled={viewIndex === 0}>
+      <SkipBack size={14} />
+    </IconButton>
+    {#if playing}
+      <IconButton label="Pause replay" tone="primary" onclick={onPause}>
+        <Pause size={16} />
       </IconButton>
-      <IconButton label="Previous event" onclick={onStepBack} disabled={viewIndex === 0}>
-        <ChevronLeft size={18} />
+    {:else}
+      <IconButton label="Play replay" tone="primary" onclick={onPlay}>
+        <Play size={16} />
       </IconButton>
-      <IconButton label="Next event" onclick={onStepForward} disabled={viewIndex >= total}>
-        <ChevronRight size={18} />
-      </IconButton>
-      {#if playing}
-        <IconButton label="Pause replay" tone="primary" onclick={onPause}>
-          <Pause size={18} />
-        </IconButton>
-      {:else}
-        <IconButton label="Play replay" tone="primary" onclick={onPlay}>
-          <Play size={18} />
-        </IconButton>
+    {/if}
+    <!-- Not a toggle, so no `pressed`: this only ever seeks to the end, and
+         pressing it while it was showing pressed left following true — there
+         was no second state to reach. What it announced as a toggle state was
+         really "the cursor is at the end", which is what the inert state says.
+         The tailing that follows from being there is the part nobody could see,
+         so the tip is where it gets said.
+
+         `aria-disabled` rather than `disabled`, and the tip is the whole
+         reason: the dimming exists to explain that the view is already at the
+         live edge and will stay there, and `disabled` would drop the button out
+         of the tab order — deleting that explanation for a keyboard user at
+         precisely the moment it becomes true. So the button stays reachable and
+         announces itself as unavailable, which is what it is. Nothing guards
+         the handler because there is nothing to guard: jumpToLive() from the
+         live edge is goTo(total) from total, which moves no cursor and changes
+         no flag (pinned in turnNavigation.test.mjs). -->
+    <IconButton
+      label="Jump to latest step"
+      tip="Jump to latest step — new events keep the view here"
+      tone="follow"
+      aria-disabled={following}
+      onclick={onJumpToLive}
+    >
+      <SkipForward size={14} />
+    </IconButton>
+    <span class="rule" aria-hidden="true"></span>
+    <!-- Four speeds cycle from one chip, the way podcast players do it. -->
+    <Chip
+      class="speed"
+      tone={playbackSpeed === 1 ? "neutral" : "accent"}
+      active={playbackSpeed !== 1}
+      aria-label={`Playback speed ${playbackSpeed}x, switch to ${nextSpeed}x`}
+      data-tip={`Playback speed ${playbackSpeed}× — click for ${nextSpeed}×`}
+      onclick={() => onSpeedChange(nextSpeed)}
+    >
+      {playbackSpeed}×
+    </Chip>
+  </div>
+
+  <!-- The lane is not a control — the range input inside it is. These handlers
+       only decide what the lane is drawn against while a hand is over it, so
+       there is no role here for anything to operate. -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="scrub" onpointerenter={holdScale} onpointerleave={releaseScale}>
+    <!-- The label rides the playhead on hover — or the cue being pointed at, so
+         a mark can say what it is without a second bubble over the same lane. -->
+    <div
+      class="tip"
+      style={`left: ${labelPct}%; transform: translateX(-${labelPct}%)`}
+      aria-hidden="true"
+    >
+      <span class={`dot ${labelTone}`}></span>
+      <span class="tip-title">{labelTitle}</span>
+      {#if labelTurn != null}
+        <span class="kicker tip-turn">turn {labelTurn}</span>
       {/if}
-      <div class="speed-control" aria-label="Playback speed">
-        {#each playbackSpeeds as speed}
-          <button
-            class:active={playbackSpeed === speed}
-            type="button"
-            aria-pressed={playbackSpeed === speed}
-            onclick={() => onSpeedChange(speed)}
-          >
-            {speed}x
-          </button>
+      {#if aimedCue}
+        <span class="kicker tip-hint">jump</span>
+      {/if}
+    </div>
+
+    <div class="bar">
+      <div class="segments" aria-hidden="true">
+        {#each turnSegments as segment (segment.turnNumber)}
+          <span
+            class="segment"
+            class:current={segment.turnNumber === currentTurn}
+            style={`left: ${segment.leftPct}%; width: ${segment.widthPct}%; --fill: ${segment.fillPct}%`}
+          ></span>
         {/each}
       </div>
-      <IconButton label="Jump to latest step" tone="live" pressed={following} onclick={onJumpToLive}>
-        <SkipForward size={16} />
-      </IconButton>
+
+      <!-- Two paths for the whole run's pace rather than a node per bucket, and
+           inside the bar rather than beside it: the lane's 18px are already
+           spoken for, and the bar's existing hover growth is what turns the
+           ribbon from a texture into something with amplitude to read. -->
+      {#if ridge}
+        <svg class="ridge" viewBox="0 0 100 1" preserveAspectRatio="none" aria-hidden="true">
+          <path class="ridge-area" d={`${ridge}V1H0Z`} />
+          <path class="ridge-line" d={ridge} />
+        </svg>
+      {/if}
     </div>
 
-    <div class="scrub-area">
-      <div class="scrub-meta">
-        <span>{currentLabel}</span>
-        <span>{turnMarkers.length} turns</span>
-      </div>
-      <div class="range-wrap">
-        <input
-          aria-label="Replay position"
-          type="range"
-          min="0"
-          max={total}
-          value={viewIndex}
-          oninput={handleInput}
-        />
-        <div class="turn-ticks" aria-hidden="true">
-          {#each turnMarkers as marker}
-            <span style={`left: ${(marker.index / Math.max(total, 1)) * 100}%`} title={`turn ${marker.turnNumber}`}></span>
-          {/each}
-        </div>
-        <div class="event-markers">
-          {#each anomalyMarkers as marker}
-            <button
-              type="button"
-              class={`event-marker ${marker.tone}`}
-              style={`left: ${(marker.index / Math.max(total, 1)) * 100}%`}
-              title={`${marker.label} · turn ${marker.turnNumber} — click to jump`}
-              aria-label={`Jump to ${marker.label}, turn ${marker.turnNumber}`}
-              onclick={() => onScrub(marker.index)}
-            ></button>
-          {/each}
-        </div>
-      </div>
+    <!-- The drag range is the lane as drawn, not the live total: against a total
+         that grew while the scale was held, a drop would land some events away
+         from where it was released. -->
+    <input
+      class="scrub-input"
+      aria-label="Replay position"
+      aria-valuetext={positionText}
+      type="range"
+      min="0"
+      max={scale}
+      value={viewIndex}
+      oninput={handleInput}
+    />
+
+    <!-- Anomalies keep their own marks: they are the reason to scrub at all.
+         No `title`: a native tooltip needs the pointer to rest on one element
+         for about a second, which never happened while the marks were moving,
+         and the lane's own label says it sooner and in our own type. -->
+    {#each cues as marker (marker.index)}
+      <button
+        type="button"
+        class={`cue ${marker.tone}`}
+        class:aimed={aimedIndex === marker.index}
+        style={`left: ${lanePct(marker.index, scale)}%`}
+        aria-label={`Jump to ${marker.label}, turn ${marker.turnNumber}`}
+        onpointerenter={() => (aimedIndex = marker.index)}
+        onpointerleave={() => (aimedIndex = null)}
+        onfocus={() => (aimedIndex = marker.index)}
+        onblur={() => (aimedIndex = null)}
+        onclick={() => onScrub(marker.index)}
+      ></button>
+    {/each}
+
+    <div class="playhead" style={`left: ${cursorPct}%`} aria-hidden="true">
+      <span class="knob"></span>
     </div>
   </div>
 
-  <div class={`current-event ${currentEvent?.tone ?? "neutral"}`}>
-    <span class="event-kicker">Now</span>
-    <strong>{currentEvent?.label ?? "Replay start"}</strong>
-    {#if currentEvent}
-      <span class="event-type">{currentEvent.event}</span>
-    {/if}
-    {#if currentBody}
-      <span class="event-body">{currentBody}</span>
-    {/if}
-  </div>
-
-  <section class="usage-section" class:expanded={usageExpanded}>
-    <button
-      class="usage-toggle"
-      type="button"
-      aria-expanded={usageExpanded}
-      aria-controls="usage-details"
-      onclick={() => (usageExpanded = !usageExpanded)}
+  <div class="now">
+    <Chip
+      class="readout"
+      active={detailOpen}
+      disabled={!hasDetail}
+      aria-expanded={detailOpen}
+      aria-controls="now-card"
+      data-tip={hasDetail
+        ? `${eventTitle} — click for details (stays open while scrubbing)`
+        : eventTitle}
+      data-tip-align="end"
+      onclick={() => (detailOpen = !detailOpen)}
     >
-      <span class="usage-toggle-title">
-        <CircleDollarSign size={15} />
-        <span>Token / Cost</span>
-      </span>
-      <span class="usage-toggle-summary">
-        <strong>{formatTokens(usage.tokens.total)} tok</strong>
-        <span>{formatCost(usage.estimatedCostUsd)}</span>
-      </span>
-      <span class="usage-toggle-icon" aria-hidden="true">
-        <ChevronDown size={15} />
-      </span>
-    </button>
+      {#snippet lead()}
+        <span class={`dot ${tone}`}></span>
+      {/snippet}
+      <!-- Against the held scale, and holding room for the widest reading it can
+           reach. The digits are tabular but their count is not: one more of them
+           widens this chip, the lane is the flex item that pays for it, and
+           every mark a hand is reaching for slides. Reserving the room here is
+           what makes the lane's width, and so its aim, hold still. -->
+      <span class="pos" style={`--pos-chars: ${String(scale).length * 2 + 1}`}
+        >{shownIndex}/{scale}</span>
+    </Chip>
 
-    {#if usageExpanded}
-      <div id="usage-details" class="usage-row">
-        <div class="usage">
-          <div class="usage-title">
-            <CircleDollarSign size={15} />
-            <span>Replay totals</span>
-          </div>
-          <MetricStrip {metrics} dense />
+    {#if detailOpen && hasDetail}
+      <div
+        class="now-card"
+        id="now-card"
+        {@attach dismissable({ ondismiss: () => (detailOpen = false), keep: ".step-controller" })}
+      >
+        <div class="now-head">
+          <span class={`dot ${tone}`}></span>
+          <strong>{eventTitle}</strong>
+          {#if eventType}
+            <span class="kicker now-type">{eventType}</span>
+          {/if}
         </div>
-        <ModelBreakdown {usage} />
-        <UsageLineChart points={usageTimeline} {viewIndex} />
+        <p class="kicker now-where">
+          {#if currentTurn != null}turn {currentTurn} ·{/if}
+          event {viewIndex} of {total}
+        </p>
+        {#if eventBody}
+          <p class="now-body">{eventBody}</p>
+        {/if}
       </div>
     {/if}
-  </section>
+  </div>
+
+  <!-- The drawer's whole chrome. It replaces the pane header down there, which is
+       why it is a real toggle with a pressed state rather than an opener: it is
+       the only thing that says whether the drawer is holding anything, and the
+       only way to shut it that does not involve dragging.
+
+       Last, behind the readout, because that is how every other strip in this
+       console orders itself — a pane header puts its name first and its icons
+       against the trailing edge, the minimap puts the run first and its launcher
+       last. It also puts the drawer's control in the window's corner, which is
+       the one target a pointer cannot overshoot. -->
+  <div class="aside">
+    <IconButton
+      label={drawerOpen ? "Close the bottom drawer" : "Open the bottom drawer"}
+      tip={drawerOpen
+        ? "Close the bottom drawer\nD"
+        : "Open the bottom drawer — latency trace\nD"}
+      pressed={drawerOpen}
+      onclick={onToggleDrawer}
+    >
+      <PanelBottom size={14} />
+    </IconButton>
+  </div>
 </footer>
 
 <style>
   .step-controller {
-    display: grid;
-    grid-template-rows: auto auto;
-    gap: 12px;
-    padding: 12px 14px;
+    position: relative;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--gap-md);
+    padding: var(--gap-md) var(--gutter);
     border-top: 1px solid var(--border);
     background: color-mix(in srgb, var(--surface-1) 92%, black);
   }
 
-  .replay-row {
-    display: grid;
-    grid-template-columns: auto minmax(240px, 1fr);
-    gap: 14px;
-    align-items: center;
-    width: 100%;
-  }
-
   .transport {
+    flex: none;
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 7px;
+    gap: var(--gap-sm);
   }
 
-  .speed-control {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    height: 32px;
-    padding: 2px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--surface-0);
+  /* Divides the movements from the one control that is not one. */
+  .rule {
+    align-self: stretch;
+    width: 1px;
+    background: var(--border);
   }
 
-  .speed-control button {
-    min-width: 31px;
-    height: 26px;
-    padding: 0 6px;
-    border: 0;
-    border-radius: 5px;
-    color: var(--text-3);
-    background: transparent;
-    cursor: pointer;
-    font: inherit;
-    font-size: 11px;
+  /* Chip carries the box, the height, the press and the hover. Only the
+     numerals need saying. */
+  :global(.speed) {
+    min-width: 42px;
+    justify-content: center;
     font-variant-numeric: tabular-nums;
+    letter-spacing: var(--letter-tight);
   }
 
-  .speed-control button.active {
-    color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
-  }
-
-  .scrub-area {
-    min-width: 0;
-  }
-
-  .scrub-meta {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 5px;
-    color: var(--text-3);
-    font-size: 11px;
-    white-space: nowrap;
-  }
-
-  .range-wrap {
+  /* A fixed-height lane holds the bar, so growing it on hover shifts nothing. */
+  .scrub {
     position: relative;
-    height: 28px;
+    flex: 1 1 240px;
+    min-width: 160px;
+    height: 18px;
+    display: flex;
+    align-items: center;
   }
 
-  input[type="range"] {
+  .bar {
+    position: relative;
     width: 100%;
-    margin: 0;
-    accent-color: var(--accent);
-    cursor: grab;
-  }
-
-  input[type="range"]:active {
-    cursor: grabbing;
-  }
-
-  input[type="range"]::-webkit-slider-thumb {
-    cursor: grab;
-  }
-
-  input[type="range"]:active::-webkit-slider-thumb {
-    cursor: grabbing;
-  }
-
-  input[type="range"]::-moz-range-thumb {
-    cursor: grab;
-  }
-
-  input[type="range"]:active::-moz-range-thumb {
-    cursor: grabbing;
-  }
-
-  .turn-ticks {
-    position: absolute;
-    left: 6px;
-    right: 6px;
-    top: 20px;
     height: 6px;
+    background: var(--surface-0);
+    box-shadow: inset 0 0 0 1px var(--border);
+    transition: height var(--duration-fast) var(--ease-out);
+  }
+
+  .scrub:focus-within .bar {
+    height: 12px;
+  }
+
+  .segments {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+  }
+
+  .segment {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: linear-gradient(
+      to right,
+      color-mix(in srgb, var(--text-2) 40%, transparent) 0 var(--fill),
+      color-mix(in srgb, var(--text-1) 7%, transparent) var(--fill) 100%
+    );
+    /* Translucent, so the seam composites lighter than whatever it sits on and a
+       turn boundary reads the same in the played part of the track as in the part
+       still ahead. An opaque divider in --surface-0 was the bar's own background
+       colour, so it only showed where the fill behind it happened to be light. */
+    border-right: 1px solid var(--border-strong);
+  }
+
+  .segment.current {
+    background: linear-gradient(
+      to right,
+      color-mix(in srgb, var(--text-1) 62%, transparent) 0 var(--fill),
+      color-mix(in srgb, var(--text-1) 12%, transparent) var(--fill) 100%
+    );
+  }
+
+  /* One muted tone, and no `z-index`: colour on this lane means an anomaly, and
+     painting before the input above it is what keeps the ribbon from taking a
+     click meant for a cue. The SVG clips to its own box, so a peak stays inside
+     the bar instead of riding out over the transport. */
+  .ridge {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
     pointer-events: none;
   }
 
-  .turn-ticks span {
-    position: absolute;
-    width: 2px;
-    height: 6px;
-    border-radius: 2px;
-    background: var(--queue);
+  .ridge-area {
+    fill: color-mix(in srgb, var(--text-1) 13%, transparent);
   }
 
-  .event-markers {
-    position: absolute;
-    left: 6px;
-    right: 6px;
-    top: 0;
-    height: 9px;
-    z-index: 2;
+  /* Non-scaling, because the box is one user unit tall and a plain stroke-width
+     would be scaled to the height of the bar. */
+  .ridge-line {
+    fill: none;
+    stroke: color-mix(in srgb, var(--text-1) 38%, transparent);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
   }
 
-  .event-marker {
+  /* The input owns the whole lane so the drag target is bigger than the bar. */
+  .scrub-input {
     position: absolute;
-    top: 0;
+    inset: 0;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    margin: 0;
     padding: 0;
-    width: 9px;
-    height: 9px;
-    border-radius: 999px;
-    border: 1px solid var(--surface-0);
+    background: transparent;
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: grab;
+  }
+
+  .scrub-input:active {
+    cursor: grabbing;
+  }
+
+  .scrub-input:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 1px;
+  }
+
+  /* A hairline thumb keeps the pointer aligned with the painted playhead. */
+  .scrub-input::-webkit-slider-thumb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 2px;
+    height: 18px;
+    background: transparent;
+    border: 0;
+  }
+
+  .scrub-input::-moz-range-thumb {
+    width: 2px;
+    height: 18px;
+    background: transparent;
+    border: 0;
+  }
+
+  /* Small mark, generous hit box: the tick is 3px, the button is 11px. */
+  .cue {
+    position: absolute;
+    top: 0;
+    z-index: 2;
+    width: 11px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
     transform: translateX(-50%);
-    background: var(--text-3);
     cursor: pointer;
-    transition: transform 100ms ease;
   }
 
-  .event-marker:hover {
-    transform: translateX(-50%) scale(1.35);
+  .cue::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 3px;
+    height: 10px;
+    background: var(--text-3);
+    transform: translate(-50%, -50%);
+    transition: height var(--duration-fast) var(--ease-out);
   }
 
-  .event-marker.approval {
+  .cue.approval::before,
+  .cue.queue::before {
     background: var(--queue);
   }
 
-  .event-marker.error {
+  .cue.error::before {
     background: var(--error);
   }
 
-  .event-marker.queue {
-    background: var(--warning);
+  .cue:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: -1px;
   }
 
-  .current-event {
-    min-width: 0;
+  /* Whichever mark the label is currently describing stands slightly taller, so
+     the tie between the two is visible with a pointer or a keyboard. */
+  .cue.aimed::before {
+    height: 14px;
+  }
+
+  .playhead {
+    position: absolute;
+    top: 0;
+    z-index: 3;
+    height: 100%;
+    width: 2px;
+    margin-left: -1px;
+    background: var(--text-1);
+    pointer-events: none;
+  }
+
+  .knob {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 9px;
+    height: 9px;
+    background: var(--text-1);
+    transform: translate(-50%, -50%) scale(0);
+    transition: transform var(--duration-fast) var(--ease-out);
+  }
+
+  .scrub:focus-within .knob {
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  .tip {
+    position: absolute;
+    bottom: calc(100% + var(--gap-sm));
+    z-index: 20;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--surface-2);
-    color: var(--text-2);
-    font-size: 12px;
-  }
-
-  .current-event strong {
+    gap: 6px;
+    max-width: min(340px, 100%);
+    padding: 3px 8px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-3);
+    box-shadow: var(--shadow-floating);
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-sm);
     white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--duration-fast) var(--ease-out);
   }
 
-  .event-kicker {
-    color: var(--accent);
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
+  .scrub:focus-within .tip {
+    opacity: 1;
   }
 
-  .event-type {
-    color: var(--text-3);
-    font-size: 11px;
-    white-space: nowrap;
-  }
-
-  .event-body {
+  .tip-title {
     min-width: 0;
     overflow: hidden;
-    color: var(--text-2);
+    text-overflow: ellipsis;
+  }
+
+  .tip-turn {
+    flex: none;
+    color: var(--text-3);
+  }
+
+  .tip-hint {
+    flex: none;
+    color: var(--accent);
+  }
+
+  .dot {
+    flex: none;
+    width: var(--pip);
+    height: var(--pip);
+    background: var(--text-4);
+  }
+
+  .dot.error {
+    background: var(--error);
+  }
+
+  .dot.approval,
+  .dot.queue {
+    background: var(--queue);
+  }
+
+  .dot.done {
+    background: var(--success);
+  }
+
+  /* Holds the drawer's handle, and only that: tokens are a pane of their own, so
+     nothing stands beside it and there is no gap or rule to separate. */
+  .aside {
+    flex: none;
+    display: flex;
+    align-items: center;
+  }
+
+  .now {
+    position: relative;
+    flex: none;
+  }
+
+  .pos {
+    min-width: calc(var(--pos-chars, 7) * 1ch);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: var(--letter-tight);
+  }
+
+  /* Grows out of the readout rather than fading in from nowhere. */
+  .now-card {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + var(--gap-sm));
+    z-index: 20;
+    width: min(340px, 70vw);
+    display: grid;
+    gap: 6px;
+    padding: 9px 10px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-3);
+    box-shadow: var(--shadow-floating);
+    transform-origin: bottom right;
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity var(--duration-fast) var(--ease-out),
+      transform var(--duration-fast) var(--ease-out);
+  }
+
+  @starting-style {
+    .now-card {
+      opacity: 0;
+      transform: scale(0.96) translateY(3px);
+    }
+  }
+
+  .now-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+  }
+
+  .now-head strong {
+    min-width: 0;
+    color: var(--text-1);
+    font-size: var(--font-md);
+    overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .current-event.error {
-    border-color: color-mix(in srgb, var(--error) 45%, var(--border));
+  .now-type {
+    flex: none;
+    margin-left: auto;
+    color: var(--text-4);
   }
 
-  .current-event.approval,
-  .current-event.queue {
-    border-color: color-mix(in srgb, var(--queue) 40%, var(--border));
+  .now-where {
+    margin: 0;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
   }
 
-  .usage-section {
-    min-width: 0;
-    display: grid;
-    gap: 10px;
-  }
-
-  .usage-toggle {
-    min-width: 0;
-    min-height: 36px;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 12px;
-    padding: 7px 10px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--surface-2);
+  .now-body {
+    margin: 0;
     color: var(--text-2);
-    cursor: pointer;
-    font: inherit;
-    text-align: left;
-  }
-
-  .usage-toggle:hover,
-  .usage-toggle:focus-visible {
-    border-color: var(--border-strong);
-    color: var(--text-1);
-    outline: 0;
-  }
-
-  .usage-toggle-title,
-  .usage-toggle-summary {
-    min-width: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    white-space: nowrap;
-  }
-
-  .usage-toggle-title {
-    color: var(--text-1);
-    font-size: 12px;
-    font-weight: 700;
-  }
-
-  .usage-toggle-summary {
-    justify-self: end;
+    font-size: var(--font-sm);
+    line-height: 1.4;
     overflow: hidden;
-    color: var(--text-3);
-    font-size: 12px;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
   }
 
-  .usage-toggle-summary strong {
-    color: var(--text-1);
-    font-weight: 700;
-  }
-
-  .usage-toggle-icon {
-    display: inline-flex;
-    color: var(--text-3);
-    transition: transform 140ms ease;
-  }
-
-  .usage-section.expanded .usage-toggle-icon {
-    transform: rotate(180deg);
-  }
-
-  .usage-row {
-    min-width: 0;
-    display: grid;
-    grid-template-columns: minmax(300px, 0.85fr) minmax(220px, 0.7fr) minmax(320px, 1fr);
-    gap: 12px;
-    align-items: start;
-  }
-
-  .usage {
-    min-width: 0;
-    display: grid;
-    align-content: start;
-    gap: 8px;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: var(--surface-2);
-  }
-
-  .usage-title {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--text-2);
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
-  @media (max-width: 1120px) {
-    .replay-row,
-    .usage-row {
-      grid-template-columns: 1fr;
+  @media (hover: hover) and (pointer: fine) {
+    .scrub:hover .bar {
+      height: 12px;
     }
 
-    .transport {
-      justify-content: flex-start;
+    .scrub:hover .knob {
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    .scrub:hover .tip {
+      opacity: 1;
+    }
+
+    .cue:hover::before {
+      height: 14px;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .scrub {
+      order: 3;
+      flex: 1 1 100%;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bar,
+    .knob,
+    .tip,
+    .cue::before,
+    .now-card {
+      transition: none;
+    }
+
+    @starting-style {
+      .now-card {
+        opacity: 0;
+        transform: none;
+      }
     }
   }
 </style>

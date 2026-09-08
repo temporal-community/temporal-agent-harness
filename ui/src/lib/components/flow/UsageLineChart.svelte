@@ -1,5 +1,16 @@
 <script lang="ts">
+  /* Narrowest subpath per symbol, not the barrel: every mark has its own entry and
+     that is the only lever on what the d3 dependency tree drags in. */
+  import { areaY } from "@tanstack/charts/area";
+  import { lineY } from "@tanstack/charts/line";
+  import { ruleX } from "@tanstack/charts/rule";
+  import { scaleLinear } from "@tanstack/charts/scales/linear";
+  import { defineChart } from "@tanstack/charts/scene";
+  import { Chart } from "@tanstack/charts/svelte";
+  import { tooltip } from "@tanstack/charts/tooltip";
   import { formatTokens, type UsageTimelinePoint } from "$lib/cost/pricing";
+  import { formatDuration } from "$lib/state/replayLog";
+  import { niceTimeTicks } from "$lib/state/timeTicks";
 
   interface Props {
     points: UsageTimelinePoint[];
@@ -8,221 +19,296 @@
 
   let { points, viewIndex }: Props = $props();
 
-  let hover = $state<{ fraction: number; point: UsageTimelinePoint } | null>(null);
+  /* One sample per timeline point, carrying elapsed seconds rather than absolute
+     timestamps so the x axis reads as run duration. */
+  interface Sample {
+    index: number;
+    elapsed: number;
+    tokens: number;
+    event: string;
+  }
 
-  const width = 640;
-  const height = 52;
-  const inset = {
-    top: 8,
-    right: 12,
-    bottom: 8,
-    left: 12
-  };
+  const PLOT_HEIGHT = 132;
+
+  /* The renderer sizes its own SVG from this number and writes the result inline,
+     which outranks any height the stylesheet asks for. Inside the popover this
+     never showed, because that card was only ever about as tall as the fixed
+     figure. A pane is resizable, so the card stretches and a fixed plot would sit
+     in the top 132px of a 500px box under a lake of empty. Measure the box and
+     hand the renderer the height it actually has; the fixed figure stays as the
+     floor for the stacked form, where the card is auto-height and takes its size
+     from the plot rather than the other way round. */
+  let plotBox = $state(0);
+  const plotHeight = $derived(Math.max(PLOT_HEIGHT, Math.round(plotBox)));
 
   const chartPoints = $derived(tokenWindow(points));
-  const pointTimestamps = $derived(chartPoints.map((point) => point.timestamp));
-  const minTimestamp = $derived(
-    pointTimestamps.length ? Math.min(...pointTimestamps) : 0
+  const originTimestamp = $derived(
+    chartPoints.length ? Math.min(...chartPoints.map((point) => point.timestamp)) : 0
   );
-  const maxTimestamp = $derived(
-    pointTimestamps.length ? Math.max(...pointTimestamps) : minTimestamp + 1
-  );
-  const durationSeconds = $derived(Math.max(maxTimestamp - minTimestamp, 1));
-  const currentPoint = $derived(
-    latestPointAtOrBefore(chartPoints, viewIndex) ?? chartPoints[0]
-  );
-  const markerX = $derived(xForTimestamp(currentPoint?.timestamp ?? minTimestamp));
-  const shapePoints = $derived(pointsForShape(chartPoints));
-  const tokenPath = $derived(stepPath(shapePoints));
-  const areaPath = $derived(areaFor(tokenPath));
-  const currentShapePoint = $derived(shapePointFor(currentPoint));
-  const currentTokens = $derived(
-    `${formatTokens(currentPoint?.tokens.total ?? 0)} · +${formatDuration(
-      (currentPoint?.timestamp ?? minTimestamp) - minTimestamp
-    )}`
+  const samples = $derived(
+    collapseSameInstant(
+      chartPoints
+        .map((point) => ({
+          index: point.index,
+          elapsed: Math.max(0, point.timestamp - originTimestamp),
+          tokens: point.tokens.total,
+          event: point.event
+        }))
+        /* Timestamps can arrive out of order across agents; an unsorted series draws a
+           path that doubles back on itself. */
+        .sort((a, b) => a.elapsed - b.elapsed || a.index - b.index)
+    )
   );
 
-  function xForTimestamp(timestamp: number): number {
-    const usableWidth = width - inset.left - inset.right;
-    return inset.left + ((timestamp - minTimestamp) / durationSeconds) * usableWidth;
+  const currentSample = $derived(latestSampleAtOrBefore(samples, viewIndex));
+  const peakTokens = $derived(samples.reduce((max, s) => Math.max(max, s.tokens), 0));
+  const lastElapsed = $derived(samples.length ? samples[samples.length - 1].elapsed : 0);
+
+  /* Both domains are floored away from zero width. A flat or all-zero series would
+     otherwise collapse the range and divide by zero when the scale interpolates.
+     Token counts are zero-based on purpose: the series is cumulative, so a clipped
+     baseline would overstate growth. The headroom keeps a flat series off the frame
+     edge, and the all-zero floor of 4 keeps its two ticks on whole tokens. */
+  const yDomain = $derived<[number, number]>([
+    0,
+    peakTokens > 0 ? peakTokens * 1.08 : 4
+  ]);
+  const xDomain = $derived<[number, number]>([0, lastElapsed > 0 ? lastElapsed : 1]);
+
+  const reducedMotion = prefersReducedMotion();
+
+  const definition = $derived(
+    defineChart({
+      /* Responsive form: the tick budget is recomputed from the measured width, which
+         is what keeps labels from colliding when the pane rail narrows. */
+      chart: ({ width }) => ({
+        marks: [
+          areaY(samples, {
+            x: "elapsed",
+            y: "tokens",
+            fill: "var(--usage-fill)",
+            fillOpacity: 1
+          }),
+          lineY(samples, {
+            x: "elapsed",
+            y: "tokens",
+            stroke: "var(--usage-line)",
+            strokeWidth: 2,
+            /* Point dots stay legible up to a few dozen samples; past that they merge
+               into a band and the line alone reads better. A lone sample has no line,
+               so its dot is the only thing that would render. */
+            points: samples.length <= 40
+          }),
+          ...(currentSample
+            ? [
+                ruleX([currentSample.elapsed], {
+                  stroke: "var(--usage-marker)",
+                  strokeWidth: 1,
+                  strokeDasharray: "3 4"
+                })
+              ]
+            : [])
+        ],
+        scales: {
+          /* Configured instances, not factories: a factory would let the engine infer
+             the domain from the channels, which is exactly what collapses on a flat or
+             all-zero series. These domains are already floored. */
+          x: {
+            scale: scaleLinear().domain(xDomain),
+            /* Not niced: nicing rounds a SECONDS domain to a power of ten, so a 12,005s
+               run grew a 20,000s axis and left the series stopping at 60% of the width
+               under a tick reading "5h 33m 20s". The domain is already floored, and the
+               ticks below are chosen on time steps instead. */
+            nice: false,
+            axis: {
+              ticks: {
+                /* A run with no measurable duration gets a single origin tick; any
+                   more would all format to the same second and read as duplicates. */
+                ...(lastElapsed > 0
+                  ? { values: niceTimeTicks(lastElapsed, Math.max(4, Math.min(8, Math.round(width / 60)))) }
+                  : { values: [0] }),
+                /* Axis ticks land on whole steps, so the shared formatter's trailing
+                   zero fields are dead weight there: "1h 00m 00s" is eleven characters
+                   on a 240px axis, wide enough that the thinner drops a neighbour to
+                   fit it. The header keeps the full form, where the seconds matter. */
+                format: (seconds: number) =>
+                  formatDuration(seconds).replace(/( 00m)? 00s$/, "")
+              },
+              tickLabels: { thin: { minGap: 12, priority: "ends" } }
+            }
+          },
+          y: {
+            scale: scaleLinear().domain(yDomain),
+            /* Not niced, for the reason the x axis is not: nicing rounds the TOP of
+               the domain out to a whole tick, so a run peaking at 430k grew a
+               600,000 axis and drew the series in the bottom 70% of the box. The
+               domain is already floored and has its own headroom; the ticks below
+               land on round tokens inside it instead. */
+            nice: false,
+            grid: true,
+            axis: {
+              ticks: {
+                values: niceTokenTicks(peakTokens),
+                format: (value: number) => formatTokens(value)
+              },
+              tickLabels: { thin: { minGap: 8 } }
+            }
+          }
+        }
+      }),
+      /* 'auto' happily parks the tooltip over the x axis, hiding the very tick labels
+         the hover is being read against. Preferring the sides and top keeps it clear of
+         them, with 'bottom' still available when there is nowhere else to go. */
+      tooltip: {
+        ...tooltip,
+        placement: ["top", "top-right", "top-left", "right", "left", "bottom"],
+        offset: 12
+      },
+      /* The library gates its own transitions on the media query; the flag keeps the
+         initial draw static too when motion is not wanted. */
+      svgAnimation: reducedMotion ? false : { respectReducedMotion: true },
+      keyboard: true
+    })
+  );
+
+  /* Read once: a replay footer is not a place to re-run layout on a media change. */
+  function prefersReducedMotion(): boolean {
+    if (typeof window === "undefined" || !window.matchMedia) return false;
+    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   }
 
   function hasTokens(point: UsageTimelinePoint): boolean {
     return point.tokens.total > 0;
   }
 
+  /* Trim the dead head of the run: everything before the first billed event, less one
+     point so the first spike still rises from a baseline. */
   function tokenWindow(source: UsageTimelinePoint[]): UsageTimelinePoint[] {
     const firstTokenIndex = source.findIndex(hasTokens);
     if (firstTokenIndex === -1) return source;
     return source.slice(Math.max(0, firstTokenIndex - 1));
   }
 
-  function latestPointAtOrBefore(
-    source: UsageTimelinePoint[],
-    index: number
-  ): UsageTimelinePoint | undefined {
-    for (let i = source.length - 1; i >= 0; i -= 1) {
-      const point = source[i];
-      if (point.index <= index) return point;
+  /* Several frames commonly land inside the same sampled instant, and a run of points
+     sharing one x is ambiguous for a line: the series is cumulative, so the last of the
+     run is the only total that was true at that instant. Collapsing here also keeps the
+     area mark well formed, since a stacked area rejects a repeated position outright.
+     Expects `source` sorted by (elapsed, index). */
+  function collapseSameInstant(source: Sample[]): Sample[] {
+    const collapsed: Sample[] = [];
+    for (const sample of source) {
+      const previous = collapsed[collapsed.length - 1];
+      if (previous && previous.elapsed === sample.elapsed) collapsed[collapsed.length - 1] = sample;
+      else collapsed.push(sample);
     }
-    return undefined;
+    return collapsed;
   }
 
-  interface ShapePoint {
-    index: number;
-    x: number;
-    y: number;
-  }
+  /* Round token counts from 0 up to the peak, on the 1/2/5 steps a reader
+     recognises — the linear twin of niceTimeTicks, and the reason the y domain
+     can stop asking the library to nice it. Every tick sits AT OR BELOW the
+     peak, so the axis never grows to reach its own last label. */
+  function niceTokenTicks(peak: number, targetCount = 3): number[] {
+    /* A run that billed nothing has no peak to step towards; the ends of the
+       all-zero domain floor above are the only two labels available. */
+    if (!Number.isFinite(peak) || peak <= 0) return [0, 4];
+    const rough = peak / Math.max(2, targetCount);
+    const magnitude = 10 ** Math.floor(Math.log10(rough));
+    const step =
+      [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= rough) ??
+      magnitude * 10;
 
-  function baselineY(): number {
-    return height - inset.bottom;
-  }
-
-  function pointsForShape(source: UsageTimelinePoint[]): ShapePoint[] {
-    if (source.length === 0) return [];
-
-    const maxValue = Math.max(...source.map((point) => point.tokens.total), 1);
-    const usableHeight = height - inset.top - inset.bottom;
-
-    return source.map((point) => {
-      const normalized = point.tokens.total / maxValue;
-      return {
-        index: point.index,
-        x: xForTimestamp(point.timestamp),
-        y: baselineY() - normalized * usableHeight
-      };
-    });
-  }
-
-  function stepPath(points: ShapePoint[]): string {
-    if (points.length === 0) return "";
-    if (points.length === 1) {
-      return `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+    const ticks: number[] = [];
+    /* Re-derived from the index rather than accumulated, so float drift cannot
+       shift a late tick off a round number. */
+    while (ticks.length * step <= peak + 1e-9 && ticks.length <= 64) {
+      ticks.push(Number((ticks.length * step).toPrecision(12)));
     }
+    return ticks.length >= 2 ? ticks : [0, peak];
+  }
 
-    let path = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
-    for (let index = 0; index < points.length - 1; index += 1) {
-      const point = points[index];
-      const next = points[index + 1];
-      path += ` L ${next.x.toFixed(2)} ${point.y.toFixed(2)} L ${next.x.toFixed(2)} ${next.y.toFixed(2)}`;
+  function latestSampleAtOrBefore(source: Sample[], index: number): Sample | undefined {
+    let found: Sample | undefined;
+    for (const sample of source) {
+      if (sample.index <= index) found = sample;
     }
-    return path;
+    return found ?? source[0];
   }
 
-  function areaFor(topPath: string): string {
-    if (!topPath || shapePoints.length === 0) return "";
-    const first = shapePoints[0];
-    const last = shapePoints.at(-1)!;
-    return `${topPath} L ${last.x.toFixed(2)} ${baselineY().toFixed(2)} L ${first.x.toFixed(2)} ${baselineY().toFixed(2)} Z`;
-  }
+  const currentLabel = $derived(
+    currentSample
+      ? `${formatTokens(currentSample.tokens)} · +${formatDuration(currentSample.elapsed)}`
+      : "0"
+  );
 
-  function shapePointFor(point: UsageTimelinePoint | undefined): ShapePoint | undefined {
-    if (!point) return undefined;
-    for (let index = shapePoints.length - 1; index >= 0; index -= 1) {
-      const candidate = shapePoints[index];
-      if (candidate.index <= point.index) return candidate;
-    }
-    return shapePoints[0];
-  }
-
-  function formatDuration(seconds: number): string {
-    const bounded = Math.max(0, Math.round(seconds));
-    if (bounded < 60) return `${bounded}s`;
-    return `${Math.floor(bounded / 60)}m ${String(bounded % 60).padStart(2, "0")}s`;
-  }
-
-  function handleHover(event: MouseEvent): void {
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    if (rect.width === 0 || chartPoints.length === 0) return;
-    const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    const targetTs = minTimestamp + fraction * durationSeconds;
-    const point = pointAtTimestamp(targetTs);
-    hover = { fraction, point };
-  }
-
-  const hoverX = $derived(hover ? xForTimestamp(hover.point.timestamp) : 0);
-
-  function pointAtTimestamp(timestamp: number): UsageTimelinePoint {
-    let current = chartPoints[0];
-    for (const candidate of chartPoints) {
-      if (
-        candidate.timestamp <= timestamp &&
-        (candidate.timestamp > current.timestamp || candidate.index > current.index)
-      ) {
-        current = candidate;
-      }
-    }
-    return current;
-  }
+  /* The chart is an image to assistive tech, so the numbers it encodes have to be
+     stated somewhere. This is that statement, and it also feeds the aria label. */
+  const summary = $derived(
+    samples.length === 0
+      ? "No token usage recorded yet."
+      : `Cumulative token usage across ${samples.length} sampled ${
+          samples.length === 1 ? "event" : "events"
+        }, peaking at ${formatTokens(peakTokens)} tokens over ${formatDuration(
+          lastElapsed
+        )}. Replay is at ${currentLabel}.`
+  );
 </script>
 
 <section class="usage-chart" aria-label="Replay token usage timeline">
   <div class="chart-head">
     <span>Token total</span>
-    <span class="current-value">{currentTokens}</span>
+    <span class="current-value">{currentLabel}</span>
   </div>
 
-  <div
-    class="plot"
-    role="presentation"
-    onmousemove={handleHover}
-    onmouseleave={() => (hover = null)}
-  >
-    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img">
-      <line class="grid" x1={inset.left} x2={width - inset.right} y1={inset.top} y2={inset.top} />
-      <line
-        class="grid baseline"
-        x1={inset.left}
-        x2={width - inset.right}
-        y1={height - inset.bottom}
-        y2={height - inset.bottom}
-      />
-      <path class="area tokens" d={areaPath} />
-      <path class="series tokens" d={tokenPath} />
-      <line
-        class="marker"
-        x1={markerX}
-        x2={markerX}
-        y1={inset.top}
-        y2={height - inset.bottom}
-      />
-      {#if hover}
-        <line class="hover-line" x1={hoverX} x2={hoverX} y1={inset.top} y2={height - inset.bottom} />
-      {/if}
-      {#if currentShapePoint}
-        <circle
-          class="current-dot"
-          cx={markerX}
-          cy={currentShapePoint.y}
-          r="5.5"
-        />
-      {/if}
-    </svg>
-
-    {#if hover}
-      <div
-        class="tooltip"
-        style={`left: ${hover.fraction * 100}%`}
-        class:flip={hover.fraction > 0.6}
+  {#if samples.length === 0}
+    <p class="chart-empty">Step through the stream to chart token usage.</p>
+  {:else}
+    <div
+      class="plot"
+      style={`--plot-height: ${PLOT_HEIGHT}px`}
+      bind:clientHeight={null, (value) => (plotBox = value ?? 0)}
+    >
+      <Chart
+        {definition}
+        height={plotHeight}
+        class="usage-plot"
+        ariaLabel="Cumulative token usage over run time"
+        ariaDescription={summary}
       >
-        <strong>{formatTokens(hover.point.tokens.total)} tok</strong>
-        <span>{hover.point.event} · +{formatDuration(hover.point.timestamp - minTimestamp)}</span>
-      </div>
-    {/if}
-  </div>
+        {#snippet tooltipBody({ points: hovered })}
+          <div class="usage-tip">
+            {#each hovered as hoveredPoint (hoveredPoint.key)}
+              {@const sample = hoveredPoint.datum as Sample}
+              <strong>{formatTokens(sample.tokens)} tok</strong>
+              <span>{sample.event} · +{formatDuration(sample.elapsed)}</span>
+            {/each}
+          </div>
+        {/snippet}
+      </Chart>
+    </div>
+  {/if}
+
+  <p class="visually-hidden" aria-live="off">{summary}</p>
 </section>
 
 <style>
   .usage-chart {
-    --token-spike: #f59e0b;
+    /* The amber identity comes off the token layer rather than a local hex. */
+    --usage-line: var(--warning);
+    --usage-fill: color-mix(in srgb, var(--warning) 14%, transparent);
+    --usage-marker: color-mix(in srgb, var(--text-1) 55%, transparent);
+    --usage-grid: var(--border);
+    --usage-axis-text: var(--text-3);
+
     min-width: 0;
     display: grid;
-    grid-template-rows: auto 38px;
-    gap: 4px;
-    align-self: start;
-    padding: 8px 10px;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 6px;
+    /* Same inset as the cards beside and below it, so the three headings share
+       one baseline. */
+    padding: var(--gutter);
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-2);
   }
 
@@ -233,105 +319,96 @@
     gap: 10px;
     align-items: center;
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .current-value {
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 
-  .tokens { color: var(--token-spike); }
-
+  /* Grows into whatever height the card is stretched to, with the fixed height as
+     a floor. The renderer does not measure this box, so the script reads it and
+     passes the height down; these two rules only make the box itself stretch. */
   .plot {
     position: relative;
-    height: 38px;
-    min-height: 0;
+    min-width: 0;
+    height: 100%;
+    min-height: var(--plot-height);
   }
 
-  svg {
-    width: 100%;
-    height: 38px;
-    min-height: 0;
+  /* The adapter renders its own SVG, so the token layer reaches it through
+     descendant selectors rather than through props. */
+  .plot :global(.usage-plot) {
     display: block;
+    width: 100%;
+    height: 100%;
     overflow: visible;
   }
 
-  .hover-line {
-    stroke: var(--token-spike);
+  .plot :global(.usage-plot text) {
+    fill: var(--usage-axis-text);
+    font-size: var(--font-xs);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Renderer-owned groups, named as the adapter emits them: ts-chart__grid and
+     ts-chart__axes. Without these the lines keep the library's own defaults, which are
+     not on the token layer. */
+  .plot :global(.usage-plot .ts-chart__grid line),
+  .plot :global(.usage-plot .ts-chart__axes line),
+  .plot :global(.usage-plot .ts-chart__axes path) {
+    stroke: var(--usage-grid);
     stroke-width: 1;
     vector-effect: non-scaling-stroke;
   }
 
-  .area {
-    fill: color-mix(in srgb, var(--token-spike) 22%, transparent);
-    stroke: none;
+  .chart-empty {
+    margin: 0;
+    align-self: center;
+    color: var(--text-3);
+    font-size: var(--font-sm);
   }
 
-  .tooltip {
-    position: absolute;
-    bottom: calc(100% + 4px);
-    transform: translateX(-50%);
+  .usage-tip {
     display: grid;
     gap: 1px;
     padding: 5px 8px;
     border: 1px solid var(--border-strong);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--surface-3);
     color: var(--text-1);
-    font-size: 11px;
+    font-size: var(--font-sm);
     white-space: nowrap;
-    pointer-events: none;
-    z-index: 4;
   }
 
-  .tooltip.flip {
-    transform: translateX(-100%);
-  }
-
-  .tooltip strong {
+  .usage-tip strong {
     font-variant-numeric: tabular-nums;
   }
 
-  .tooltip span {
+  .usage-tip span {
     color: var(--text-3);
-    font-size: 10px;
+    font-size: var(--font-xs);
   }
 
-  .grid {
-    stroke: var(--border);
-    stroke-width: 1;
-    vector-effect: non-scaling-stroke;
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
   }
 
-  .baseline {
-    stroke: var(--border-strong);
-  }
-
-  .series {
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 2.4;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    vector-effect: non-scaling-stroke;
-  }
-
-  .series.tokens { color: var(--token-spike); }
-
-  .marker {
-    stroke: color-mix(in srgb, var(--text-1) 55%, transparent);
-    stroke-dasharray: 3 4;
-    stroke-width: 1;
-    vector-effect: non-scaling-stroke;
-  }
-
-  .current-dot {
-    fill: var(--surface-2);
-    stroke: var(--token-spike);
-    stroke-width: 2.4;
-    vector-effect: non-scaling-stroke;
+  @media (prefers-reduced-motion: reduce) {
+    .plot :global(.usage-plot *) {
+      transition: none !important;
+      animation: none !important;
+    }
   }
 </style>

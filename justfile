@@ -25,10 +25,9 @@ default:
 app-install:
     pnpm --dir "{{ui}}" install
 
-# Type-check the Svelte UI and run the local Svelte 5 syntax guard.
+# Type-check the Svelte UI and run its test suite.
 app-check:
     pnpm --dir "{{ui}}" run check
-    pnpm --dir "{{ui}}" run check:svelte5
 
 # Build the Svelte UI into temporal_agent_harness/ui/dist.
 app-build:

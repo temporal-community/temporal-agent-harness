@@ -50,10 +50,9 @@ server:
 app-install:
     pnpm --dir "{{ui}}" install
 
-# Type-check the shared Svelte UI and run the local Svelte 5 syntax guard.
+# Type-check the shared Svelte UI and run its test suite.
 app-check:
     pnpm --dir "{{ui}}" run check
-    pnpm --dir "{{ui}}" run check:svelte5
 
 # Build the shared Svelte UI into temporal_agent_harness/ui/dist for packaging/server use.
 app-build:

@@ -1,0 +1,723 @@
+/**
+ * Does a streamed frame actually reach the view?
+ *
+ * Division of labour with its sibling: hydration.test.mjs owns the commit
+ * SCHEDULE — when a batch should land, modelled on a virtual clock against a
+ * re-implementation of the policy. It is precise about timing and says nothing
+ * about whether anything calls the policy. This file owns the blunter question:
+ * boot the real AgentRunController, hand it a real stream, and see whether the
+ * frames arrive. Every frame-loss bug this repo has had was of that second kind
+ * — the policy was right and nothing invoked it — and a schedule check cannot
+ * see them, because a test that re-implements the pipeline always has one.
+ *
+ * So this loads the shipped module. Vite compiles it for SSR (the runes and the
+ * $lib alias come along), the api is injected through the constructor the app
+ * already exposes, and the assertions read the same `frames`, `total` and
+ * `viewIndex` the components render.
+ *
+ * What breaks this test. Each of these was applied to the source and the
+ * failure it produces observed, so the list is measured rather than hoped for:
+ *  - Removing #flushStreamTail: "ends short" never publishes and the case times
+ *    out. That is a run whose last events are staged behind the chunk gate when
+ *    the stream ends, so nothing is left to publish them and the transcript
+ *    loses its tail. It reads as a timeout rather than "0 frames instead of 9"
+ *    because selectSession's promise resolves once the session is selected
+ *    rather than once the stream drains, so the wait here is on the frames
+ *    themselves, like every other case in this file.
+ *  - Removing the #armCatchUpFlush call: "stays open" never publishes and the
+ *    case times out — the live-session gap, back again.
+ *  - Emptying reattachBackoffMs, or otherwise not re-attaching a RUNNING
+ *    workflow: "dropped stream" times out waiting for the second attach.
+ *  - Resuming a reconnect from 0 rather than the last offset the server sent:
+ *    the from_offset assertion fails. Replaying from zero is not harmless — it
+ *    re-sends the whole history on every blip.
+ *  - Never registering the `online` listener: "connectivity returns" times out,
+ *    which is a reader stranded by an outage that outlasted the retry budget.
+ *  - Dropping either guard on that listener: it re-attaches a stream that was
+ *    perfectly healthy, or resurrects a workflow that has closed.
+ *  - Removing the per-frame "is this still the current stream" check in
+ *    attach(): "session switch" sees 11 frames instead of 7, the extra four
+ *    being the abandoned session's, landed in the session now on screen.
+ *  - #schedulePublish no longer being called from #appendFrame, or
+ *    #publishFrames no longer copying #frameBuffer into `frames`: every case
+ *    reports 0, which is the whole reason this file exists.
+ *  - cursorAfterPublish no longer following the live edge: the viewIndex
+ *    assertions fail while the counts still pass — a console that receives its
+ *    frames and shows you the first one.
+ *  - Not resolving a child's status on subagent_stream_unavailable: "operator
+ *    stopped" times out, which is a stopped subagent rendering as running.
+ *  - Assuming an unreadable child stream means a closed workflow, rather than
+ *    letting the status answer decide: "not a closed workflow" closes a child
+ *    that is still running, or one nothing could answer for.
+ *  - Discarding the `code` on an error frame, or letting it outlive the message
+ *    it came with: the unreplayable-run case reports a bare sentence, or a stale
+ *    code describing a failure that is over.
+ *  - Retrying a workflow_not_found, or refusing to retry a stream_unavailable:
+ *    the retry cases fail in one direction or the other. The budget is for
+ *    outages that end, and a deleted history is not one.
+ */
+import assert from "node:assert/strict";
+import { describe, it } from "vitest";
+
+import { installBrowserSurface, sleep } from "../../../tests/support/controllerHarness.mjs";
+import { AgentRunController } from "./agentRun.svelte.ts";
+import { framePublishChunkSize } from "./hydration.ts";
+
+/**
+ * Wait for a condition, then return. Polling rather than a fixed sleep so a
+ * slow machine does not fail the check, but bounded so a broken pipeline does
+ * not hang it.
+ */
+async function waitFor(label, predicate, timeoutMs = 4_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await sleep(25);
+  }
+  assert.fail(`timed out after ${timeoutMs}ms waiting for ${label}`);
+}
+
+// --- browser surface the controller reaches for ------------------------------
+
+/* Held in a mutable box so each case can be given its own pair.
+   The cases below use distinct workflow ids, and the frame cache is keyed by
+   session, so sharing one pair would not actually contaminate them today —
+   this is insurance, not a live fix. It is worth the three lines because the
+   contamination is real when ids do repeat: a scratch harness written while
+   building this check shared one store between cases, and a later case
+   reported the earlier case's cached frame count while ingesting nothing of
+   its own. Per-case storage makes that impossible to reintroduce by reusing an
+   id. */
+/* Enough of an event target to carry the `online` event the controller listens
+   for. Kept per-type and additive because every controller booted here
+   registers its own listener. */
+/* A macrotask stands in for a paint: the controller only needs the main thread
+   handed back, and nothing here measures frame budget. */
+const { freshStorage, listeners } = installBrowserSurface();
+const goOnline = () => {
+  for (const fn of listeners.get("online") ?? []) fn(new Event("online"));
+};
+
+// --- fixtures ----------------------------------------------------------------
+
+const session = (id, over = {}) => ({
+  workflow_id: id,
+  agent_workflow_type: "IncidentTriageWorkflow",
+  run_id: `${id}-run`,
+  execution_status: "RUNNING",
+  closed: false,
+  ...over
+});
+
+/**
+ * A frame shaped like the wire's. `replay` is what puts the pipeline in
+ * catch-up, and `resume_offset` is what a reconnect resumes from, so both have
+ * to be real for this to test anything.
+ */
+const frame = (agentId, offset, { replay = true } = {}) => ({
+  event: "reply_delta",
+  data: {
+    type: "reply_delta",
+    agent_id: agentId,
+    turn_id: "t1",
+    turn_number: 1,
+    timestamp: offset,
+    resume_offset: offset + 1,
+    event_offset: offset,
+    delta: `${agentId}#${offset} `,
+    replay
+  }
+});
+
+/**
+ * The two parent-stream frames a client sees for a child the merge could not
+ * mount. `subagent_started` is the parent's, so it carries the parent's
+ * `agent_id`; the marker is synthesized (hence `event_offset: -1`) and stamped
+ * with the child's `agent_id`, matching `_unavailable_event` in
+ * `stream_merge/merge.py`.
+ */
+const subagentStarted = (subagentId, workflowId, offset) => ({
+  event: "subagent_started",
+  data: {
+    type: "subagent_started",
+    agent_id: "root",
+    turn_id: "t1",
+    turn_number: 1,
+    timestamp: offset,
+    resume_offset: offset + 1,
+    event_offset: offset,
+    subagent_id: subagentId,
+    agent_key: "qa",
+    workflow_id: workflowId,
+    replay: true
+  }
+});
+
+const subagentStreamUnavailable = (subagentId, workflowId) => ({
+  event: "subagent_stream_unavailable",
+  data: {
+    type: "subagent_stream_unavailable",
+    agent_id: subagentId,
+    turn_id: "",
+    turn_number: 0,
+    timestamp: 0,
+    event_offset: -1,
+    subagent_id: subagentId,
+    workflow_id: workflowId,
+    reason: "subagent stream unavailable — refresh to retry",
+    replay: true
+  }
+});
+
+/**
+ * An in-band failure frame from /api/attach: `kind`, `code` and `message`, no
+ * `type` and no offset. Matches `_attach_error` and `_unreplayable_run_frame`
+ * in `web/app.py`; the `code` is the part a caller can branch on.
+ */
+const attachErrorFrame = (code, message) => ({
+  event: "error",
+  data: { kind: "unavailable", code, message }
+});
+
+const abortError = () => Object.assign(new Error("aborted"), { name: "AbortError" });
+
+/**
+ * A stream this file drives frame by frame, and can end or drop on cue.
+ *
+ * `ignoreAbort` models the uncooperative reader: a generator that hands over a
+ * frame it had already buffered before noticing it was cancelled. Aborting is
+ * therefore not enough on its own, and the controller's own "is this still the
+ * current stream" check is the only thing standing between those frames and
+ * whichever session is on screen now.
+ */
+function controllableStream({ ignoreAbort = false } = {}) {
+  const queue = [];
+  let wake = null;
+  let ended = false;
+  let failure = null;
+  const ping = () => {
+    wake?.();
+    wake = null;
+  };
+  return {
+    push(...frames) {
+      queue.push(...frames);
+      ping();
+    },
+    end() {
+      ended = true;
+      ping();
+    },
+    drop(error = new Error("Failed to fetch")) {
+      failure = error;
+      ping();
+    },
+    async *iterate(signal) {
+      while (true) {
+        if (signal?.aborted && !ignoreAbort) throw abortError();
+        if (queue.length) {
+          yield queue.shift();
+          continue;
+        }
+        if (failure) {
+          const error = failure;
+          failure = null;
+          throw error;
+        }
+        if (ended) return;
+        await new Promise((resolve) => {
+          wake = resolve;
+          signal?.addEventListener("abort", resolve, { once: true });
+        });
+      }
+    }
+  };
+}
+
+/**
+ * The narrowest api the attach paths touch. Anything the controller calls that
+ * is not here throws, which is the point: the check should notice if the
+ * pipeline starts depending on something new.
+ */
+function fakeApi({ streamFor, statusFor }) {
+  const attachCalls = [];
+  const statusCalls = [];
+  return {
+    attachCalls,
+    statusCalls,
+    api: {
+      async listSessions() {
+        return [];
+      },
+      async agentInterface() {
+        return [];
+      },
+      async operatorInterface() {
+        return [];
+      },
+      async workflowStatus(workflowId) {
+        statusCalls.push(workflowId);
+        const status = statusFor(workflowId);
+        return { workflow_id: workflowId, execution_status: status, closed: status !== "RUNNING" };
+      },
+      attach(sessionId, fromOffset, signal) {
+        attachCalls.push({ sessionId, fromOffset });
+        return streamFor(sessionId).iterate(signal);
+      }
+    }
+  };
+}
+
+// --- harness -----------------------------------------------------------------
+
+/**
+ * A controller with its own storage, its own api, and no other case's state.
+ *
+ * `finish` reports the workflow as closed from then on, which is how a case says
+ * "the run completed" rather than "the connection died". Ending a stream without
+ * it leaves the controller correctly retrying for its whole backoff budget.
+ */
+function boot({ sessions, streamFor, statusFor }) {
+  freshStorage();
+  const closed = new Set();
+  const { api, attachCalls, statusCalls } = fakeApi({
+    streamFor,
+    statusFor: statusFor ?? ((id) => (closed.has(id) ? "COMPLETED" : "RUNNING"))
+  });
+  const controller = new AgentRunController(api);
+  controller.sessions = sessions;
+  return { controller, attachCalls, statusCalls, finish: (id) => closed.add(id) };
+}
+
+/* The real gate, not a copy of its current value. A copy agrees with the shipped
+   number today; the day the chunk shrinks below `underAChunk` the precondition
+   below inverts, and the dozen "still staged, not published" assertions in this
+   file start passing on a backlog that was never short of a chunk at all. */
+const underAChunk = 9;
+assert.ok(
+  underAChunk < framePublishChunkSize,
+  "the whole point is a backlog too short to fill a chunk"
+);
+
+describe("frame arrival", () => {
+  // The chunk gate holds the backlog, the stream ends, and without a terminal
+  // flush nothing is left to publish it — so a run's last events never arrive.
+  it("a stream that ends short of a chunk boundary", async () => {
+    const stream = controllableStream();
+    const { controller, attachCalls, finish } = boot({
+      sessions: [session("wf-ends")],
+      streamFor: () => stream
+    });
+
+    void controller.selectSession("wf-ends");
+    await waitFor("the stream to be attached", () => attachCalls.length === 1);
+    stream.push(...Array.from({ length: underAChunk }, (_, i) => frame("root", i)));
+    await sleep(120);
+    assert.equal(
+      controller.frames.length,
+      0,
+      "a short backlog should still be staged, not published, before the stream ends"
+    );
+
+    finish("wf-ends"); // the run completed; this stream ending is not a drop
+    stream.end();
+    await waitFor("the ended stream to publish its tail", () => controller.frames.length > 0);
+
+    assert.equal(
+      controller.frames.length,
+      underAChunk,
+      "a stream that ends short of a chunk boundary must still publish its backlog"
+    );
+    assert.equal(controller.total, underAChunk, "total must count the published frames");
+    assert.equal(
+      controller.viewIndex,
+      underAChunk,
+      "the scrubber must follow the live edge, not sit at the first frame"
+    );
+    assert.equal(
+      attachCalls.length,
+      1,
+      "a workflow that has closed must not be re-attached after its stream ends"
+    );
+  });
+
+  // The live-session gap. Nothing ends the stream, so no terminal flush can help;
+  // only the deadline publishes. Waiting has to be sufficient.
+  it("a stream that stays open under a chunk", async () => {
+    const stream = controllableStream();
+    const { controller, attachCalls, finish } = boot({
+      sessions: [session("wf-open")],
+      streamFor: () => stream
+    });
+
+    void controller.selectSession("wf-open");
+    await waitFor("the stream to be attached", () => attachCalls.length === 1);
+    stream.push(...Array.from({ length: underAChunk }, (_, i) => frame("root", i)));
+
+    await sleep(150);
+    assert.equal(
+      controller.frames.length,
+      0,
+      "a short backlog must batch first, or the batching is not doing its job"
+    );
+
+    await waitFor(
+      "the deadline to publish a still-open stream",
+      () => controller.frames.length === underAChunk
+    );
+    assert.equal(controller.total, underAChunk, "total must count the deadline-published frames");
+    assert.equal(
+      controller.viewIndex,
+      underAChunk,
+      "the scrubber must follow the live edge after a deadline commit too"
+    );
+    assert.equal(
+      attachCalls.length,
+      1,
+      "a stream that is still open must not be re-attached underneath itself"
+    );
+    finish("wf-open");
+    stream.end();
+  });
+
+  // The buffer staged against the old session must never land in the new one. If
+  // the guards weaken, this is where it shows: as another session's frames.
+  it("a session switch mid-stream", async () => {
+    const streams = {
+      "wf-old": controllableStream({ ignoreAbort: true }),
+      "wf-new": controllableStream()
+    };
+    const { controller, attachCalls, finish } = boot({
+      sessions: [session("wf-old"), session("wf-new")],
+      streamFor: (id) => streams[id]
+    });
+
+    void controller.selectSession("wf-old");
+    await waitFor("the old stream to be attached", () => attachCalls.length === 1);
+    streams["wf-old"].push(...Array.from({ length: 5 }, (_, i) => frame("old", i)));
+    await sleep(120);
+    assert.equal(controller.frames.length, 0, "the old session's backlog should still be staged");
+
+    // Switch while that backlog is staged and its stream is still open.
+    void controller.selectSession("wf-new");
+    streams["wf-old"].push(...Array.from({ length: 4 }, (_, i) => frame("old", 100 + i)));
+    await waitFor(
+      "the new stream to be attached",
+      () => attachCalls.some((call) => call.sessionId === "wf-new")
+    );
+    streams["wf-new"].push(...Array.from({ length: 7 }, (_, i) => frame("new", i)));
+    finish("wf-new");
+    streams["wf-new"].end();
+    await waitFor("the new session's tail to publish", () => controller.frames.length > 0);
+
+    assert.equal(
+      controller.frames.length,
+      7,
+      "the new session must show its own frames and only its own"
+    );
+    assert.deepEqual(
+      [...new Set(controller.frames.map((item) => item.data.agent_id))],
+      ["new"],
+      "a buffer staged against the previous session must never land in the new one"
+    );
+    assert.equal(controller.viewIndex, 7, "the scrubber must follow the new session's live edge");
+    streams["wf-old"].end();
+  });
+
+  // /api/attach ends the same way whether the run finished or the connection
+  // died, so only the workflow's status distinguishes them. A RUNNING one has to
+  // be re-attached, from the offset the server already proved it holds.
+  it("a dropped stream against a RUNNING workflow", async () => {
+    const stream = controllableStream();
+    const { controller, attachCalls, finish } = boot({
+      sessions: [session("wf-drop")],
+      streamFor: () => stream
+    });
+
+    void controller.selectSession("wf-drop");
+    await waitFor("the first attach", () => attachCalls.length === 1);
+    assert.equal(attachCalls[0].fromOffset, 0, "a first attach starts from the beginning");
+
+    stream.push(...Array.from({ length: 3 }, (_, i) => frame("root", i)));
+    await sleep(80);
+    stream.drop(); // a server restart or a network blip, indistinguishable on the wire
+
+    await waitFor("a re-attach after the drop", () => attachCalls.length === 2, 6_000);
+    assert.equal(
+      attachCalls[1].fromOffset,
+      3,
+      "a reconnect must resume from the last offset the server sent, not replay from 0"
+    );
+
+    stream.push(...Array.from({ length: 2 }, (_, i) => frame("root", 3 + i)));
+    await waitFor(
+      "the resumed backlog to reach the view",
+      () => controller.frames.length === 5
+    );
+    assert.equal(
+      controller.viewIndex,
+      5,
+      "the scrubber must follow the live edge across a reconnect"
+    );
+
+    finish("wf-drop");
+    stream.end();
+    await sleep(400);
+    assert.equal(
+      attachCalls.length,
+      2,
+      "once the workflow closes, the stream ending must not start another attach"
+    );
+  });
+
+  // The budget stops asking on purpose, so something has to notice when asking
+  // is worth it again. An outage that outlasts the budget is the case; an
+  // `online` event arriving while a stream is perfectly healthy is the trap.
+  it("connectivity returning after the retry budget is spent", async () => {
+    const streams = { "wf-online": controllableStream(), "wf-later": controllableStream() };
+    const { controller, attachCalls, finish } = boot({
+      sessions: [session("wf-online"), session("wf-later")],
+      streamFor: (id) => streams[id]
+    });
+    const stream = streams["wf-online"];
+
+    void controller.selectSession("wf-online");
+    await waitFor("the stream to be attached", () => attachCalls.length === 1);
+    stream.push(...Array.from({ length: 4 }, (_, i) => frame("root", i)));
+    await sleep(80);
+
+    // The trap: this stream is fine, and re-attaching it would be a regression.
+    goOnline();
+    await sleep(200);
+    assert.equal(
+      attachCalls.length,
+      1,
+      "an online event must not re-attach a stream that is already healthy"
+    );
+
+    /* Let this attach finish so no stream is in flight, which is the state the
+       budget leaves behind when it gives up. Reaching it by actually spending the
+       budget would mean waiting out most of a minute of backoff. */
+    finish("wf-online");
+    stream.end();
+    await waitFor("the first attach to finish", () => attachCalls.length === 1 && !controller.connecting);
+
+    // A run that has since finished stays finished, event or no event.
+    goOnline();
+    await sleep(200);
+    assert.equal(
+      attachCalls.length,
+      1,
+      "an online event must not re-attach a workflow that has closed"
+    );
+
+    // A running one, with nothing in flight, is the case this exists for.
+    controller.session = controller.sessions[1];
+    goOnline();
+    await waitFor("a re-attach once connectivity returns", () => attachCalls.length === 2);
+    assert.equal(
+      attachCalls[1].sessionId,
+      "wf-later",
+      "the reconnect must target the session on screen"
+    );
+    assert.equal(
+      attachCalls[1].fromOffset,
+      controller.lastResumeOffset,
+      "reconnecting on an online event must resume from the last offset too"
+    );
+    finish("wf-later");
+    streams["wf-later"].end();
+  });
+
+  // `/stop` completes the child workflow, and a completed workflow's stream
+  // cannot be mounted, so the merge gives up and the parent's stream carries only
+  // the unavailable marker. Neither event that says "closed" arrives: the parent
+  // never stopped this child, and the operator_command_completed that did is on
+  // the stream that no longer exists. The marker is the only thing left to ask on.
+  //
+  // Deliberately a cold load rather than a reload: replaying the frame cache
+  // re-runs this same ingest, so a tab that watched the stop live recovers either
+  // way and would prove nothing.
+  it("a subagent an operator stopped, seen by a client that missed it", async () => {
+    const stream = controllableStream();
+    const { controller, statusCalls, finish } = boot({
+      sessions: [session("wf-parent")],
+      streamFor: () => stream
+    });
+    finish("wf-stopped-child"); // Temporal's answer: the operator's stop landed
+
+    void controller.selectSession("wf-parent");
+    await waitFor("the parent stream to be attached", () => statusCalls.length > 0);
+    stream.push(
+      subagentStarted("child-1", "wf-stopped-child", 0),
+      subagentStreamUnavailable("child-1", "wf-stopped-child")
+    );
+
+    await waitFor("the marker to reach the view", () => controller.frames.length === 2);
+    await waitFor(
+      "the child's status to be resolved",
+      () => controller.operatorTargetForWorkflow("wf-stopped-child").closed
+    );
+    assert.ok(
+      statusCalls.includes("wf-stopped-child"),
+      "an unreadable child stream must be resolved against the child's own status"
+    );
+    assert.equal(
+      controller.graphAgents.find((agent) => agent.workflowId === "wf-stopped-child")?.stopped,
+      true,
+      "a stopped subagent must not render as running"
+    );
+
+    finish("wf-parent");
+    stream.end();
+  });
+
+  // History aged out, or a worker went away, and the child is still running. The
+  // marker looks identical, so only the status answer can tell them apart — and a
+  // status call that fails must leave the child no worse than the marker found it.
+  it("an unreadable child stream that is not a closed workflow", async () => {
+    const stream = controllableStream();
+    const closedIds = new Set();
+    const { controller, statusCalls, finish } = boot({
+      sessions: [session("wf-parent-live")],
+      streamFor: () => stream,
+      statusFor: (id) => {
+        if (id === "wf-unanswerable-child") throw new Error("Temporal is unreachable");
+        return closedIds.has(id) ? "COMPLETED" : "RUNNING";
+      }
+    });
+
+    void controller.selectSession("wf-parent-live");
+    await waitFor("the parent stream to be attached", () => statusCalls.length > 0);
+    stream.push(
+      subagentStarted("child-live", "wf-running-child", 0),
+      subagentStreamUnavailable("child-live", "wf-running-child"),
+      subagentStarted("child-lost", "wf-unanswerable-child", 1),
+      subagentStreamUnavailable("child-lost", "wf-unanswerable-child")
+    );
+
+    await waitFor("the markers to reach the view", () => controller.frames.length === 4);
+    await waitFor(
+      "both children to be asked about",
+      () =>
+        statusCalls.includes("wf-running-child") &&
+        statusCalls.includes("wf-unanswerable-child")
+    );
+    await sleep(100); // let any wrong answer land before asserting it did not
+
+    assert.equal(
+      controller.operatorTargetForWorkflow("wf-running-child").closed,
+      false,
+      "a child Temporal reports as RUNNING must stay open, unreadable stream or not"
+    );
+    assert.equal(
+      controller.operatorTargetForWorkflow("wf-unanswerable-child").closed,
+      false,
+      "a status query that fails must not close the child it could not answer for"
+    );
+    assert.equal(
+      controller.frames.length,
+      4,
+      "a failed status query must not disturb the frames already delivered"
+    );
+
+    closedIds.add("wf-parent-live");
+    finish("wf-parent-live");
+    stream.end();
+  });
+
+  // The run finished and Temporal cannot replay its stream, so the console holds
+  // none of the events it spent money on. Every total over `frames` is an empty
+  // sum, and reporting one as a measured zero is the bug. The server says which
+  // case this is; keeping only its sentence threw that away.
+  it("an unreplayable run's figures are unknown, not zero", async () => {
+    const stream = controllableStream();
+    const { controller, finish } = boot({
+      sessions: [session("wf-unreplayable")],
+      streamFor: () => stream
+    });
+
+    void controller.selectSession("wf-unreplayable");
+    await waitFor("the stream to be attached", () => controller.connecting);
+    stream.push(
+      attachErrorFrame(
+        "unreplayable_run",
+        "Session finished (COMPLETED) and its event stream cannot be replayed."
+      )
+    );
+
+    await waitFor("the error frame to be ingested", () => controller.connectionError != null);
+    assert.equal(
+      controller.connectionErrorCode,
+      "unreplayable_run",
+      "the code the server sent must survive, not just the sentence"
+    );
+    assert.equal(
+      controller.runUnmeasured,
+      true,
+      "an unreplayable run's totals are unknown, and something has to be able to say so"
+    );
+
+    // Any later failure, or a clearing, describes something else entirely.
+    controller.connectionError = null;
+    assert.equal(
+      controller.connectionErrorCode,
+      null,
+      "clearing the message must clear the code, or a stale code outlives what it described"
+    );
+    assert.equal(controller.runUnmeasured, false, "a cleared error leaves nothing unmeasured");
+
+    finish("wf-unreplayable");
+    stream.end();
+  });
+
+  // The budget exists for outages that end. `workflow_not_found` is not one: the
+  // server has said the history is deleted or past retention, so every retry is
+  // guaranteed-futile work that re-appends the same error. `stream_unavailable`
+  // is the opposite — an unreachable Temporal or an absent worker comes back —
+  // and must keep its retries.
+  it("which failures are worth retrying", async () => {
+    {
+      const stream = controllableStream();
+      const { controller, attachCalls, finish } = boot({
+        sessions: [session("wf-gone")],
+        streamFor: () => stream
+      });
+
+      void controller.selectSession("wf-gone");
+      await waitFor("the first attach", () => attachCalls.length === 1);
+      stream.push(
+        attachErrorFrame("workflow_not_found", "No workflow 'wf-gone' in this namespace.")
+      );
+      await waitFor("the error frame to be ingested", () => controller.connectionError != null);
+      stream.end();
+
+      // Comfortably past the first 500ms backoff step.
+      await sleep(900);
+      assert.equal(
+        attachCalls.length,
+        1,
+        "a workflow whose history is gone must not spend the retry budget"
+      );
+      finish("wf-gone");
+    }
+    {
+      const stream = controllableStream();
+      const { controller, attachCalls, finish } = boot({
+        sessions: [session("wf-unreachable")],
+        streamFor: () => stream
+      });
+
+      void controller.selectSession("wf-unreachable");
+      await waitFor("the first attach", () => attachCalls.length === 1);
+      stream.push(
+        attachErrorFrame("stream_unavailable", "The event stream could not be read (UNAVAILABLE).")
+      );
+      await waitFor("the error frame to be ingested", () => controller.connectionError != null);
+      stream.end();
+
+      await waitFor("a retry of a transient failure", () => attachCalls.length === 2, 3_000);
+      finish("wf-unreachable");
+    }
+  });
+});

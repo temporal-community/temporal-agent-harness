@@ -1,4 +1,6 @@
 import type { AgentSseFrame, FileCitationAnnotation } from "$lib/api/types";
+import { renderUserMessage } from "$lib/state/inboundMessageText";
+import { thoughtDeltaText } from "$lib/state/thoughtSummary";
 
 export type TranscriptItem =
   | {
@@ -24,7 +26,9 @@ export type TranscriptItem =
       toolId: string;
       toolName: string;
       status: "requested" | "awaiting" | "approved" | "running" | "done" | "failed" | "denied";
-      input?: Record<string, unknown>;
+      /** Absent means no `tool_input` on the frame; `null` means the frame carried one and it
+       *  was unknown (arguments streamed but unparseable), which is not the same as `{}`. */
+      input?: Record<string, unknown> | null;
       output?: string;
       message?: string;
       timestamp: number;
@@ -45,29 +49,6 @@ export type TranscriptItem =
       status: "running" | "completed" | "failed";
       timestamp: number;
     };
-
-function renderUserMessage(value: string): string {
-  if (!value.startsWith("{")) return value;
-  try {
-    const message = JSON.parse(value) as {
-      type?: string;
-      payload?: { name?: string; arg?: string; text?: string };
-      script?: string;
-    };
-    if (typeof message.payload?.text === "string") return message.payload.text;
-    if (typeof message.script === "string") return message.script;
-    if (
-      (message.type !== "slash" && message.type !== "slash_command") ||
-      !message.payload?.name
-    ) {
-      return value;
-    }
-    const command = message.payload.name === "set-model" ? "model" : message.payload.name;
-    return `/${command}${message.payload.arg ? ` ${message.payload.arg}` : ""}`;
-  } catch {
-    return value;
-  }
-}
 
 function textFromReply(data: { text?: unknown; output?: unknown }): string {
   if (typeof data.text === "string") return data.text;
@@ -160,11 +141,7 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
     }
 
     if (frame.event === "thought_summary") {
-      const content = frame.data.delta.content;
-      const text =
-        typeof content === "object" && content != null && "text" in content
-          ? String((content as { text?: unknown }).text ?? "")
-          : "";
+      const text = thoughtDeltaText(frame.data.delta);
       if (text) {
         items.push({
           kind: "thought",
