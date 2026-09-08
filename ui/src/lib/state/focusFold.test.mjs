@@ -257,7 +257,7 @@ describe("a card toned done is drawn as finished, not as idle", () => {
   /* The neutral chip means nothing has happened yet, which is the wrong thing to
      say about a card toned done. The Output node has always had this gap. */
   it("settles the Output card", () => {
-    assert.equal(kindFromState("reply available", "done"), "complete");
+    assert.equal(kindFromState("available", "done"), "complete");
   });
 
   it("still lets the state string outrank the tone", () => {

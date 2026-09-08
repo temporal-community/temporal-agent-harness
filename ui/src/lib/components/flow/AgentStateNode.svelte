@@ -50,9 +50,9 @@
     if (tone === "approval") return "approval";
     if (tone === "queue") return "queued";
     /* Last, so a state string still outranks it. Without this a node toned done
-       whose state says so in its own words — a tool batch reading "3 calls", an
-       Output card reading "reply available" — fell through to the neutral dot,
-       which is the one chip that means nothing has happened yet. */
+       whose state says so in its own words — an Output card reading "available"
+       — fell through to the neutral dot, which is the one chip that means
+       nothing has happened yet. */
     if (tone === "done") return "complete";
     return "idle";
   }
@@ -307,13 +307,20 @@
     min-width: 0;
   }
 
-  /* Chip is nowrap + uppercase; a long state used to paint past the 230px
-     border. Shrink the chip first so the title stays a word and the label
-     ellipsizes inside the card instead of the canvas. */
+  /* A status is a closed vocabulary, and one clipped character makes it ambiguous:
+     "AWAITIN…" reads as either `awaiting` or `awaiting approval`. So the chip does
+     not shrink, and the title — which a reader can still place from its first few
+     characters — yields instead.
+
+     The cap is what keeps the old bug fixed. The subagent's state is free-form —
+     "fn → turn n" measures 207px, wider than the card itself — and that did paint
+     past the border. Fixed labels are kept short enough to clear the cap instead
+     of relying on it; see replyState in flowProjection. Measured against a live
+     card, the cap sits above the whole closed vocabulary (126px at its widest, a
+     retried "requested ×10") and still leaves the title ~76px of the 204px row. */
   .topline :global(.chip) {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
+    flex: 0 0 auto;
+    max-width: 128px;
   }
 
   .title {

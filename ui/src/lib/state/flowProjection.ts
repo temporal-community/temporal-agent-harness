@@ -1060,7 +1060,9 @@ export function buildAgentGraph(
       markOutput();
       status = "replied";
       replyText = textFromReply(frame.data) || replyText;
-      replyState = "reply available";
+      /* "reply available" was wider than the chip, the same way "awaiting
+         approval" was. The noun is carried by the card, which is titled Output. */
+      replyState = "available";
     } else if (frame.event === "error") {
       markOutput();
       status = "error";
@@ -1229,7 +1231,8 @@ export function buildAgentGraph(
       } else if (frame.event === "subagent_reply_received") {
         subagentState = `reply ${frame.data.outcome}`;
       } else if (frame.event === "subagent_stream_unavailable") {
-        subagentState = "detail unavailable";
+        /* Short enough for the chip to render whole; see replyState above. */
+        subagentState = "unavailable";
       } else {
         subagentState = "stopped";
       }
@@ -1453,7 +1456,7 @@ export function buildAgentGraph(
     if (id === "subagent") {
       return {
         tone:
-          subagentState === "detail unavailable"
+          subagentState === "unavailable"
             ? "error"
             : subagentState === "stopped"
               ? "done"
