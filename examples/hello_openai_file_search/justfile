@@ -1,0 +1,74 @@
+# Scoped justfile for the OpenAI hosted-file_search example (examples/hello_openai_file_search).
+# Run from this directory: `just <recipe>`.
+#
+# Self-contained local stack (each in its own terminal):
+#   just temporal          # 1. local Temporal dev server (or bring your own)
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API + UI on :8000
+#   just worker            # 4. this example's agent worker (creates the vector store on first run)
+#
+# Then open http://localhost:8000, pick "Hello OpenAI file_search", and ask
+#   "What is the Zarnak coefficient for the 2026-Q3 reference build?"
+# That figure exists ONLY in the ingested document, so a correct answer proves provider-side
+# retrieval ran. Ask about the weather instead to see a harness-owned tool's lifecycle events.
+#
+# `just prove` runs the same thing headlessly as a test — no UI, no session manager.
+#
+# First-time setup: `cp .env.example .env.local` from the repo root and set OPENAI_API_KEY.
+
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+ui := root / "ui"
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Show the Temporal connection these recipes will use (read from the repo-root .env.local).
+config:
+    @echo "TEMPORAL_CONFIG_FILE   = ${TEMPORAL_CONFIG_FILE:-<unset — set it in the repo-root .env.local>}"
+    @echo "TEMPORAL_PROFILE       = ${TEMPORAL_PROFILE:-default}"
+    @echo "OPENAI_API_KEY         = ${OPENAI_API_KEY:+<set>}${OPENAI_API_KEY:-<unset>}"
+    @echo "OPENAI_VECTOR_STORE_ID = ${OPENAI_VECTOR_STORE_ID:-<unset — the worker will create one>}"
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Run the shared session-manager worker (examples/session_manager_worker.py).
+session-manager:
+    cd "{{root}}" && uv run --group examples python -m examples.session_manager_worker
+
+# Serve the packaged FastAPI API + UI on http://localhost:8000 for this example's registry.
+server: app-build
+    cd "{{root}}" && uv run --group examples python -m examples.app "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Build the shared Svelte UI into temporal_agent_harness/ui/dist for the server to serve.
+app-build:
+    cd "{{ui}}" && pnpm run build
+
+# Install the shared Svelte UI dependencies.
+app-install:
+    cd "{{ui}}" && pnpm install
+
+# Run the shared Svelte UI on Vite for hot reloading. /api is proxied to :8000.
+ui-dev:
+    cd "{{ui}}" && pnpm run dev
+
+# Run the HelloOpenAIFileSearchAgent worker. Creates + ingests the vector store on first run
+# (idempotent by name), then prints its id.
+worker:
+    cd "{{root}}" && uv run --group examples python -m examples.hello_openai_file_search.worker
+
+# Prove hosted retrieval end to end, headlessly: one real turn asking for a corpus-only figure,
+# plus an assertion of exactly which turn events this path produces.
+prove:
+    cd "{{root}}" && uv run --group examples pytest tests/examples/hello_openai_file_search -v -s
+
+# List the vector stores in the account (handy for cleanup — the example reuses one by name).
+stores:
+    cd "{{root}}" && uv run --group examples python -c "\
+from openai import OpenAI; \
+print('\n'.join(f'{s.id}  {s.name}' for s in OpenAI().vector_stores.list()))"

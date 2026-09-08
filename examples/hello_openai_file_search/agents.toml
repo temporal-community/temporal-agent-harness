@@ -1,0 +1,19 @@
+# Registry of agents the OpenAI hosted-file_search example UI can launch.
+#
+# The shared FastAPI server (examples/app.py) reads this file and passes the parsed
+# registry into the packaged SessionManagerWorkflow as its workflow init arg.
+
+[[agents]]
+key = "hello-openai-file-search"
+workflow_type = "HelloOpenAIFileSearchAgent"
+task_queue = "hello-openai-file-search"
+label = "Hello OpenAI file_search"
+description = """
+A doc-QA agent on OpenAI's HOSTED file_search, over a tiny vector store the worker
+ingests at startup. Ask "What is the Zarnak coefficient for the 2026-Q3 reference
+build?" — that figure exists only in the ingested document, so a correct answer proves
+provider-side retrieval ran. Exists as the counterpart to Hello Gemini Enterprise: GEAP
+refuses the Gemini Interactions API's built-in file_search, and this shows what the same
+capability costs on OpenAI instead (nothing — the harness already forwards the tool).
+Also asks get_weather, a harness-owned tool, so one turn shows which events each kind
+of tool produces."""
