@@ -193,7 +193,11 @@ class ActivityModelInput(TypedDict, total=False):
 
     model_name: str | None
     system_instructions: str | None
-    input: Required[str | list[TResponseInputItem]]
+    # Opaque JSON, not the typed item union. The workflow already sends wire-shaped items, and
+    # validating them back into the union here made pydantic hand the SDK lazy ValidatorIterators
+    # for Iterable-typed fields (content / summary / output); detached from their validation
+    # context those cannot be re-serialized. Forwarding the items untouched keeps them consumable.
+    input: Required[str | list[Any]]
     model_settings: Required[ModelSettings]
     tools: list[ToolInput]
     output_schema: AgentOutputSchemaInput | None
