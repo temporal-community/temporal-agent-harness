@@ -1176,7 +1176,7 @@
     border-radius: var(--radius-sm);
     padding: 1px 4px;
     background: var(--code-inline-bg);
-    color: #f5f0ff;
+    color: var(--code-inline-text);
     font-family: var(--font-mono);
     font-size: var(--font-md);
   }
@@ -1194,38 +1194,38 @@
   }
 
   .markdown-message :global(.md-syntax-comment) {
-    color: #9d96b8;
+    color: var(--syntax-comment);
     font-style: italic;
   }
 
   .markdown-message :global(.md-syntax-string) {
-    color: #a7f3d0;
+    color: var(--syntax-string);
   }
 
   .markdown-message :global(.md-syntax-keyword) {
-    color: #d8b4fe;
+    color: var(--syntax-keyword);
     font-weight: 750;
   }
 
   .markdown-message :global(.md-syntax-type) {
-    color: #93c5fd;
+    color: var(--syntax-type);
   }
 
   .markdown-message :global(.md-syntax-function) {
-    color: #fde68a;
+    color: var(--syntax-function);
   }
 
   .markdown-message :global(.md-syntax-number) {
-    color: #fdba74;
+    color: var(--syntax-number);
   }
 
   .markdown-message :global(.md-syntax-literal) {
-    color: #f0abfc;
+    color: var(--syntax-literal);
   }
 
   .markdown-message :global(.md-syntax-operator),
   .markdown-message :global(.md-syntax-punctuation) {
-    color: #c4b5fd;
+    color: var(--syntax-operator);
   }
 
 	  .markdown-message :global(.md-table-wrap) {

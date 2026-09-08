@@ -584,7 +584,7 @@
   }
 
   .roll.model .roll-icon { color: var(--model); }
-  .roll.tool .roll-icon { color: var(--warning); }
+  .roll.tool .roll-icon { color: var(--tool); }
   .roll.approval .roll-icon { color: var(--queue); }
 
   .roll-text {
@@ -930,9 +930,8 @@
     color: var(--model);
   }
 
-  .bar.tool { background: var(--warning); }
+  .bar.tool { background: var(--tool); }
   .bar.approval { background: var(--queue); }
-  .bar.done { background: var(--success); }
   .bar.error { background: var(--error); }
 
   .bar.ongoing {

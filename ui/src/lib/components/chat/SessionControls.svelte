@@ -734,8 +734,7 @@
 
   .session-row.active {
     border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
-    background: color-mix(in srgb, var(--accent) 10%, var(--surface-1));
-    box-shadow: inset 3px 0 0 var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface-1));
   }
 
   .session-copy {

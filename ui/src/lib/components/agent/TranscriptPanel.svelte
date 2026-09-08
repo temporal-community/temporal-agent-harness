@@ -590,7 +590,7 @@
   .turn-group.active-turn {
     border-color: var(--border-strong);
     transform: translateY(-1px);
-    background: color-mix(in srgb, var(--surface-2) 38%, var(--surface-0));
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface-0));
   }
 
   @media (hover: hover) and (pointer: fine) {
@@ -599,10 +599,6 @@
       transform: translateY(-1px);
       background: color-mix(in srgb, var(--surface-2) 38%, var(--surface-0));
     }
-  }
-
-  .turn-group.active-turn {
-    box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 70%, transparent);
   }
 
   .turn-head {
@@ -728,7 +724,7 @@
   }
 
   .log-line.active-row {
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
   }
 
   .actor-icon {
@@ -747,7 +743,7 @@
      chip's wash to say the same thing. */
   .log-line.agent .actor-icon { color: var(--accent); }
   .log-line.model .actor-icon { color: var(--model); }
-  .log-line.tool .actor-icon { color: var(--warning); }
+  .log-line.tool .actor-icon { color: var(--tool); }
   .log-line.approval .actor-icon,
   .log-line.queue .actor-icon { color: var(--queue); }
   .log-line.done .actor-icon { color: var(--success); }
@@ -773,7 +769,7 @@
   }
 
   .line-toggle:focus-visible {
-    outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    outline: 2px solid var(--focus-ring);
     outline-offset: 3px;
     border-radius: var(--radius-xs);
   }

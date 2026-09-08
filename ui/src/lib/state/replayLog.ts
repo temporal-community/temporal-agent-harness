@@ -648,3 +648,25 @@ export function formatDuration(seconds: number): string {
   if (minutes < 60) return `${minutes}m ${pad(rounded % 60)}s`;
   return `${Math.floor(minutes / 60)}h ${pad(minutes % 60)}m ${pad(rounded % 60)}s`;
 }
+
+/**
+ * The same reading at the resolution one step is watched at, rather than a run.
+ *
+ * Two things are this function's own, and only two. Below a second it answers in
+ * milliseconds, and between one and ten it keeps a tenth — a tool call that took
+ * 2.4s is not a 2s one, and the activity feed is read at that resolution. From ten
+ * seconds up there is nothing here formatDuration does not already own.
+ *
+ * It used to restate the minutes branch instead of delegating, and stopped there,
+ * so a three-hour turn read "200m 05s" in the feed for as long as it took anyone
+ * to notice — the exact bug formatDuration above was written to fix, reintroduced
+ * one component over by copying half of it.
+ */
+export function formatElapsedDuration(deltaMs: number): string {
+  if (deltaMs < 1000) return `${Math.max(1, Math.round(deltaMs))}ms`;
+
+  const seconds = deltaMs / 1000;
+  const tenths = Math.round(seconds * 10) / 10;
+  if (seconds < 10 && !Number.isInteger(tenths)) return `${tenths.toFixed(1)}s`;
+  return formatDuration(seconds);
+}

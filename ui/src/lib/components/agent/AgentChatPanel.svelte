@@ -30,7 +30,7 @@
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
   import { formatLogValue } from "$lib/state/logValue";
-  import type { ReplayLogRow } from "$lib/state/replayLog";
+  import { formatElapsedDuration, type ReplayLogRow } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
 
@@ -617,18 +617,6 @@
 
   function sameLogScope(a: ReplayLogRow, b: ReplayLogRow): boolean {
     return a.workflowId === b.workflowId && a.sourceTurnNumber === b.sourceTurnNumber;
-  }
-
-  function formatElapsedDuration(deltaMs: number): string {
-    if (deltaMs < 1000) return `${Math.max(1, Math.round(deltaMs))}ms`;
-
-    const seconds = deltaMs / 1000;
-    const tenths = Math.round(seconds * 10) / 10;
-    if (seconds < 10 && !Number.isInteger(tenths)) return `${tenths.toFixed(1)}s`;
-    if (seconds < 60) return `${Math.round(seconds)}s`;
-
-    const roundedSeconds = Math.round(seconds);
-    return `${Math.floor(roundedSeconds / 60)}m ${String(roundedSeconds % 60).padStart(2, "0")}s`;
   }
 
   function logDetail(row: ReplayLogRow): string {
@@ -1817,7 +1805,7 @@
   .operator-assistant .assistant-avatar {
     border-color: color-mix(in srgb, var(--model) 34%, transparent);
     background: color-mix(in srgb, var(--model) 16%, var(--surface-2));
-    color: color-mix(in srgb, var(--model) 85%, white);
+    color: color-mix(in srgb, var(--model) 85%, var(--text-1));
     font-family: var(--font-mono);
     font-size: var(--font-display);
     font-weight: 750;
@@ -2018,7 +2006,7 @@
 
   .activity-line.model .activity-icon { color: var(--model); }
   .activity-line.reasoning .activity-icon { color: var(--reasoning); }
-  .activity-line.tool .activity-icon { color: var(--warning); }
+  .activity-line.tool .activity-icon { color: var(--tool); }
   .activity-line.approval .activity-icon { color: var(--queue); }
   .activity-line.done .activity-icon { color: var(--success); }
   .activity-line.error .activity-icon { color: var(--error); }
@@ -2327,7 +2315,7 @@
     padding: 8px;
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--surface-1) 96%, black);
+    background: color-mix(in srgb, var(--surface-1) 96%, var(--surface-0));
     box-shadow: var(--shadow-dropdown);
   }
 
@@ -2355,7 +2343,7 @@
     flex: 0 0 auto;
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--model) 28%, var(--surface-1));
-    color: color-mix(in srgb, var(--model) 88%, white);
+    color: color-mix(in srgb, var(--model) 88%, var(--text-1));
     font-family: var(--font-mono);
     font-size: var(--font-lg);
     font-weight: 750;

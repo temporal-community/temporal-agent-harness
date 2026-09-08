@@ -228,7 +228,7 @@
       linear-gradient(
         180deg,
         color-mix(in srgb, var(--tone-color, var(--text-2)) 9%, var(--surface-2)),
-        color-mix(in srgb, var(--surface-1) 88%, black)
+        color-mix(in srgb, var(--surface-1) 88%, var(--surface-0))
       );
     color: var(--text-1);
     box-shadow: var(--shadow-node);
@@ -238,39 +238,16 @@
     outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
   }
 
-  /* Same three cues the transcript spends on the row at the playhead
-     (.turn-group.active-turn): the hairline brightens neutrally, the surface
-     lifts, and the left edge marker appears.
-
-     Appears, not brightens — and that is the whole difference from the version
-     this replaces. The bar used to sit on every card and step 3px/0.78 to
-     4px/1 on the current one, which is a comparative signal: it cannot be read
-     without finding a neighbour to compare against, and the only way it could
-     win that comparison over eight equally colourful siblings was to get thick.
-     No idle card carries one now, so presence IS the signal and a single card
-     in isolation answers the question. That is also why a tone-coloured edge is
-     the right channel here when it was the wrong one before — the hue is no
-     longer busy naming the node's kind on every sibling at once.
-
-     It is the loudest channel the active state has, measured against the same
-     card one frame earlier: 55 units of RGB, against ~10 for the lifted surface
-     and ~11 for the neutralised hairline. */
+  /* Same cues the transcript spends on the playhead row: the hairline
+     brightens neutrally and the surface lifts with a full tone wash. No left
+     edge bar — presence of the fill is the signal (same call as the turn card). */
   .state-node.active {
     border-color: var(--border-strong);
     background: linear-gradient(
       180deg,
-      color-mix(in srgb, var(--tone-color, var(--text-2)) 14%, var(--surface-2)),
-      var(--surface-1)
+      color-mix(in srgb, var(--tone-color, var(--text-2)) 22%, var(--surface-2)),
+      color-mix(in srgb, var(--tone-color, var(--text-2)) 10%, var(--surface-1))
     );
-  }
-
-  .state-node.active::before {
-    content: "";
-    position: absolute;
-    inset: 0 auto 0 0;
-    width: 4px;
-    background: color-mix(in srgb, var(--tone-color, var(--text-2)) 86%, white 4%);
-    opacity: 1;
   }
 
   .state-node.large {
@@ -279,7 +256,7 @@
   }
 
   .state-node.container {
-    background: color-mix(in srgb, var(--tone-color, var(--warning)) 12%, transparent);
+    background: color-mix(in srgb, var(--tone-color, var(--text-2)) 12%, transparent);
     box-shadow: var(--shadow-node-soft);
   }
 
@@ -293,7 +270,7 @@
   .agent { --tone-color: var(--accent); }
   .model { --tone-color: var(--model); }
   .reasoning { --tone-color: var(--reasoning); }
-  .tool { --tone-color: var(--warning); }
+  .tool { --tone-color: var(--tool); }
   .approval,
   .queue { --tone-color: var(--queue); }
   .done { --tone-color: var(--success); }
@@ -342,7 +319,7 @@
 
   .title-dot.model { background: var(--model); }
   .title-dot.reasoning { background: var(--reasoning); }
-  .title-dot.tool { background: var(--warning); }
+  .title-dot.tool { background: var(--tool); }
   .title-dot.approval { background: var(--queue); }
 
   :global(.node-handle) {
@@ -356,7 +333,7 @@
   :global(.node-handle.approval-port) {
     width: 9px;
     height: 9px;
-    border: 1px solid color-mix(in srgb, var(--queue) 76%, white 10%);
+    border: 1px solid color-mix(in srgb, var(--queue) 76%, var(--text-1) 10%);
     background: var(--queue);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--queue) 24%, transparent);
     opacity: 1;

@@ -213,7 +213,7 @@
     border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
     border-radius: var(--radius-chip);
     background: color-mix(in srgb, var(--accent) 10%, transparent);
-    color: color-mix(in srgb, var(--accent) 74%, white);
+    color: color-mix(in srgb, var(--accent) 74%, var(--text-1));
     font-size: var(--font-xs);
     font-weight: 650;
   }

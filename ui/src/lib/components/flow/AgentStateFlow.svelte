@@ -174,7 +174,13 @@
       nodeBorderRadius={5}
       ariaLabel="Flow overview"
     />
-    <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
+    <Background
+      variant={BackgroundVariant.Dots}
+      gap={18}
+      size={1}
+      bgColor="var(--flow-canvas)"
+      patternColor="var(--flow-dots)"
+    />
   </SvelteFlow>
 
   {#if inspectedNode}
@@ -238,7 +244,7 @@
     width: 100%;
     height: 100%;
     min-height: 0;
-    background: var(--surface-0);
+    background: var(--flow-canvas);
   }
 
   /* Centred by the UA's own :modal rule rather than by a translate, which is
@@ -276,7 +282,7 @@
   .node-inspector.agent { --tone-color: var(--accent); }
   .node-inspector.model { --tone-color: var(--model); }
   .node-inspector.reasoning { --tone-color: var(--reasoning); }
-  .node-inspector.tool { --tone-color: var(--warning); }
+  .node-inspector.tool { --tone-color: var(--tool); }
   .node-inspector.approval,
   .node-inspector.queue { --tone-color: var(--queue); }
   .node-inspector.done { --tone-color: var(--success); }
@@ -328,7 +334,7 @@
   .inspector-dot.agent { background: var(--accent); }
   .inspector-dot.model { background: var(--model); }
   .inspector-dot.reasoning { background: var(--reasoning); }
-  .inspector-dot.tool { background: var(--warning); }
+  .inspector-dot.tool { background: var(--tool); }
   .inspector-dot.approval,
   .inspector-dot.queue { background: var(--queue); }
   .inspector-dot.done { background: var(--success); }
@@ -371,7 +377,7 @@
     padding: var(--gutter);
     overflow-x: auto;
     border: 1px solid color-mix(in srgb, var(--tone-color) 22%, var(--border));
-    background: color-mix(in srgb, var(--surface-0) 86%, black 10%);
+    background: var(--surface-0);
     color: var(--text-2);
     font-family: var(--font-mono);
     font-size: var(--font-code);
@@ -449,13 +455,13 @@
   }
 
   :global(.edge-approval .svelte-flow__edge-path) {
-    stroke: color-mix(in srgb, var(--queue) 78%, white 6%);
+    stroke: color-mix(in srgb, var(--queue) 78%, var(--text-1) 6%);
     stroke-width: 2;
     stroke-dasharray: 6 5;
   }
 
   :global(.edge-approval .svelte-flow__edge-text) {
-    fill: color-mix(in srgb, var(--queue) 82%, white 8%);
+    fill: color-mix(in srgb, var(--queue) 82%, var(--text-1) 8%);
   }
 
   :global(.edge-output .svelte-flow__edge-path) {

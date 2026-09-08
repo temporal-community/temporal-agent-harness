@@ -402,7 +402,7 @@
     gap: var(--gap-md);
     padding: var(--gap-md) var(--gutter);
     border-top: 1px solid var(--border);
-    background: color-mix(in srgb, var(--surface-1) 92%, black);
+    background: color-mix(in srgb, var(--surface-1) 92%, var(--surface-0));
   }
 
   .transport {

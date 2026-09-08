@@ -66,6 +66,7 @@
   /* Space Black console chassis + Temporal indigo structure. Status / attention
      hues borrow Holocene readability and SoP gold punch — not alternate themes. */
   --accent: #6173f3;
+  --accent-soft: #a9aef5;
   /* Reserved for "this needs you" — never chrome, never decoration. */
   --live: #fad000;
   --model: #a9aef5;
@@ -76,7 +77,7 @@
      both — so they cannot be one token. */
   --tool: #ff9d00;
   --success: #6ee7b7;
-  --warning: #ffc857;
+  --warning: #fcd34d;
   /* Retrying. Deliberately between --warning and --error, because that is what
      a retry is: on its way to failing, not there yet. Red stays reserved for
      "gave up", and a retry that has gone on long enough to need a person
@@ -90,12 +91,23 @@
   --code-block-border: color-mix(in srgb, var(--code-violet) 42%, var(--border));
   --code-block-bg: color-mix(in srgb, var(--code-violet) 12%, var(--surface-0));
   --code-block-shadow: none;
-  --code-block-text: #f7f2ff;
-  --code-label-border: rgb(196 181 253 / 24%);
-  --code-label-bg: rgb(91 68 142 / 34%);
-  --code-label-text: #d8ccff;
+  --code-block-text: color-mix(in srgb, var(--code-violet) 18%, var(--text-1));
+  --code-label-border: color-mix(in srgb, var(--code-violet) 24%, transparent);
+  --code-label-bg: color-mix(in srgb, var(--code-violet) 34%, transparent);
+  --code-label-text: color-mix(in srgb, var(--code-violet) 55%, var(--text-1));
   --code-inline-border: color-mix(in srgb, var(--code-violet) 28%, var(--border));
-  --code-inline-bg: rgb(63 45 105 / 42%);
+  --code-inline-bg: color-mix(in srgb, var(--code-violet) 42%, transparent);
+  --code-inline-text: color-mix(in srgb, var(--code-violet) 22%, var(--text-1));
+
+  /* --- Markdown syntax highlighting ---------------------------------------- */
+  --syntax-comment: #9d96b8;
+  --syntax-string: var(--success);
+  --syntax-keyword: #ff9d00;
+  --syntax-type: #9effff;
+  --syntax-function: #fad000;
+  --syntax-number: #ff628c;
+  --syntax-literal: #fb94ff;
+  --syntax-operator: var(--accent-soft);
 
   /* --- Density: sharp corners / compact type / motion ---------------------- */
   /* Everything is square, down to the status pips — nothing rounds. */
@@ -166,6 +178,12 @@
      Chip's 0.4 was the outlier, and it is also the least readable of the values
      in use on these surfaces. */
   --disabled-opacity: 0.45;
+
+  /* State-flow canvas. Matches the pre-theme xyflow dark defaults (#141414 /
+     #777) via console tokens — surface-1 is Space Black; dots sit between
+     text-3 and text-4. */
+  --flow-canvas: var(--surface-1);
+  --flow-dots: color-mix(in srgb, var(--text-3) 55%, var(--text-4));
 
 }
 
