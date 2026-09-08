@@ -61,7 +61,13 @@
   const tweenMs = 260;
   const minZoom = 0.04;
   const maxZoom = 2.5;
-  const fitViewOptions = { padding: 0.16, minZoom, maxZoom };
+  /* Auto-fit frames the graph but never magnifies it. A fit that runs while the
+     graph is still arriving sees one node, or nodes not yet measured, and filling
+     the pane with it lands at maxZoom — so every page load opened at 2.5x and then
+     swept back out to the real framing. Capping the fit at 1:1 means that early
+     framing is somewhere the graph can sit, not a place to escape from. Manual
+     zoom is unaffected and still reaches maxZoom. */
+  const fitViewOptions = { padding: 0.16, minZoom, maxZoom: 1 };
   const nodeTypes: NodeTypes = {
     agentState: AgentStateNode,
     agentWorkflow: AgentWorkflowNode
