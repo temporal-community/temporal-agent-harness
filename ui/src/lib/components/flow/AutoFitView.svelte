@@ -6,9 +6,15 @@
   interface Props {
     signature: string;
     fitViewOptions: FitViewOptions<Node>;
+    /**
+     * Deferred while true, and never dropped: a fit that ran against a graph
+     * still travelling would chase it frame by frame. The signature is left
+     * unconsumed, so the fit it asked for happens the moment this clears.
+     */
+    hold?: boolean;
   }
 
-  let { signature, fitViewOptions }: Props = $props();
+  let { signature, fitViewOptions, hold = false }: Props = $props();
   const { fitView } = useSvelteFlow();
   let previousSignature = "";
   let fitRequest = 0;
@@ -37,6 +43,9 @@
 
   $effect(() => {
     const nextSignature = signature;
+    /* Read above, so this effect stays subscribed to it, and returned before
+       previousSignature is written, so the held fit is owed rather than lost. */
+    if (hold) return;
     if (!nextSignature || nextSignature === previousSignature) return;
 
     previousSignature = nextSignature;

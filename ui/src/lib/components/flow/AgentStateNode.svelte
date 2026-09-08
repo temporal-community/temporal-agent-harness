@@ -1,9 +1,66 @@
+<script lang="ts" module>
+  import type { AgentNodeData } from "$lib/state/flowProjection";
+  import { type StatusKind } from "$lib/components/primitives/StatusChip.svelte";
+
+  /**
+   * Which chip a card wears, read off the words already on it.
+   *
+   * Exported for its test, the way TranscriptPanel exports statusKind: this is a
+   * pure decision with a lot of branches and no way to reach it from a rendered
+   * node, because a node needs SvelteFlow's context to render at all.
+   *
+   * State first, tone second. The state string is what the card is saying right
+   * now and the tone is only what kind of thing it is, so a running tool has to
+   * beat a tool that is merely toned.
+   */
+  export function kindFromState(
+    state: string,
+    tone: AgentNodeData["tone"] | undefined
+  ): StatusKind {
+    const normalized = state.toLowerCase();
+    if (normalized.includes("fail") || normalized.includes("error") || normalized.includes("denied")) {
+      return "error";
+    }
+    if (normalized.includes("approval") || normalized.includes("pending") || normalized.includes("await")) {
+      return "approval";
+    }
+    if (normalized.includes("queue") || normalized.includes("requested") || normalized.includes("dispatch")) {
+      return "queued";
+    }
+    if (
+      normalized.includes("done") ||
+      normalized.includes("complete") ||
+      normalized.includes("replied") ||
+      normalized.includes("captured") ||
+      normalized.includes("approved") ||
+      normalized.includes("stopped")
+    ) {
+      return "complete";
+    }
+    if (normalized.includes("running") || normalized.includes("streaming")) {
+      if (tone === "tool") return "tool";
+      if (tone === "model") return "model";
+      if (tone === "reasoning") return "reasoning";
+      if (tone === "queue") return "queued";
+      return "thinking";
+    }
+    if (tone === "tool") return "tool";
+    if (tone === "model") return "model";
+    if (tone === "reasoning") return "reasoning";
+    if (tone === "approval") return "approval";
+    if (tone === "queue") return "queued";
+    /* Last, so a state string still outranks it. Without this a node toned done
+       whose state says so in its own words — a tool batch reading "3 calls", an
+       Output card reading "reply available" — fell through to the neutral dot,
+       which is the one chip that means nothing has happened yet. */
+    if (tone === "done") return "complete";
+    return "idle";
+  }
+</script>
+
 <script lang="ts">
   import { Handle, Position } from "@xyflow/svelte";
-  import type { AgentNodeData } from "$lib/state/flowProjection";
-  import StatusChip, {
-    type StatusKind
-  } from "$lib/components/primitives/StatusChip.svelte";
+  import StatusChip from "$lib/components/primitives/StatusChip.svelte";
 
   interface Props {
     data: AgentNodeData;
@@ -91,44 +148,6 @@
     data.active === true && /streaming|running/.test(data.state.toLowerCase())
   );
 
-  function kindFromState(
-    state: string,
-    tone: AgentNodeData["tone"] | undefined
-  ): StatusKind {
-    const normalized = state.toLowerCase();
-    if (normalized.includes("fail") || normalized.includes("error") || normalized.includes("denied")) {
-      return "error";
-    }
-    if (normalized.includes("approval") || normalized.includes("pending") || normalized.includes("await")) {
-      return "approval";
-    }
-    if (normalized.includes("queue") || normalized.includes("requested") || normalized.includes("dispatch")) {
-      return "queued";
-    }
-    if (
-      normalized.includes("done") ||
-      normalized.includes("complete") ||
-      normalized.includes("replied") ||
-      normalized.includes("captured") ||
-      normalized.includes("approved") ||
-      normalized.includes("stopped")
-    ) {
-      return "complete";
-    }
-    if (normalized.includes("running") || normalized.includes("streaming")) {
-      if (tone === "tool") return "tool";
-      if (tone === "model") return "model";
-      if (tone === "reasoning") return "reasoning";
-      if (tone === "queue") return "queued";
-      return "thinking";
-    }
-    if (tone === "tool") return "tool";
-    if (tone === "model") return "model";
-    if (tone === "reasoning") return "reasoning";
-    if (tone === "approval") return "approval";
-    if (tone === "queue") return "queued";
-    return "idle";
-  }
 </script>
 
 <div

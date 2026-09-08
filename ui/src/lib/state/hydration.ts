@@ -59,6 +59,45 @@ export function catchingUpAfterFrame(isReplay: boolean, liveFrameSeen: boolean):
 }
 
 /**
+ * The backlog a stream opens on arrives in a burst — a seven-second session replays
+ * inside 250ms — so nothing counts as news until the view has listened past it.
+ */
+export const backlogGraceMs = 1_500;
+
+/** How recently a thing must have happened, by its own timestamp, to count as news. */
+export const liveSettleWindowSec = 10;
+
+/**
+ * Whether a tool that just settled is one the reader could have watched settle.
+ *
+ * Asked so that the focus canvas can hold a finished card for a beat instead of
+ * blinking it out. The hold is only ever right for a settle that happened just
+ * now: a page load pours the whole session back through the same pipeline, and
+ * holding those would put one card per tool the session ever ran back on the
+ * canvas at once — the exact clutter focus view exists to remove.
+ *
+ * `catchingUp` alone cannot answer it. That flag keys off the server's `replay`
+ * mark, and the payloads /api/attach sends carry no such field, so on the path
+ * that matters most every replayed frame reads as live. The frame's own age is
+ * what settles it — a replayed one is minutes or days old where a live one is
+ * milliseconds — and the grace window covers the case where the clock cannot be
+ * trusted to say so. Both are kept because they fail in different directions.
+ *
+ * `frameAgeSec` is signed, and compared absolutely: a server clock a little ahead
+ * of the browser's hands back a negative age for a frame that genuinely just
+ * arrived. Past the window in either direction, nothing is held, which is this
+ * feature switched off rather than misfiring.
+ */
+export function settleIsLive(
+  catchingUp: boolean,
+  msListening: number,
+  frameAgeSec: number | null
+): boolean {
+  if (catchingUp || msListening < backlogGraceMs) return false;
+  return frameAgeSec != null && Math.abs(frameAgeSec) < liveSettleWindowSec;
+}
+
+/**
  * Where the cursor lands after a commit.
  *
  * Following means tail the live edge. Not following means someone scrubbed back

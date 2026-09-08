@@ -590,7 +590,12 @@
          each fill with their own height: 100%. -->
     <div class="pane-content">
       {#if pane.kind === "graph"}
-        <AgentStateFlow graph={run.graph} onNodeSelect={selectNode} />
+        <AgentStateFlow
+          graph={run.graph}
+          focus={run.graphFocus}
+          onFocusChange={(next) => run.setGraphFocus(next)}
+          onNodeSelect={selectNode}
+        />
       {:else if pane.kind === "chat"}
         <!-- No session props: the picker above owns starting, choosing and
              listing sessions, so the panel is handed the one it is showing and

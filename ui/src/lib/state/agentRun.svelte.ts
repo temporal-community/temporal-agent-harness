@@ -4,6 +4,7 @@ import type {
   AgentSseFrame,
   OperatorCommand,
   OperatorCommandResponse,
+  ToolId,
   WorkflowExecutionState
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
@@ -15,14 +16,18 @@ import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
 import { chooseBootSession } from "./bootSession";
 import {
   readCachedFrames,
+  readOperatorPrefs,
   readStoredActiveSessionId,
   readUrlSessionId,
   writeCachedFrames,
+  writeOperatorPrefs,
   writeStoredActiveSessionId,
   writeUrlSessionId
 } from "./agentRunStorage";
 import {
   buildAgentTreeGraph,
+  settledNearCursor,
+  settledToolIdFromFrame,
   type AgentGraphSource
 } from "./flowProjection";
 import {
@@ -30,7 +35,8 @@ import {
   catchingUpAfterFrame,
   cursorAfterPublish,
   framePublishChunkSize,
-  publishAtChunkBoundary
+  publishAtChunkBoundary,
+  settleIsLive
 } from "./hydration";
 import {
   displayTextForMessage,
@@ -75,6 +81,14 @@ export interface OperatorTarget {
 }
 
 const basePlaybackDelayMs = 700;
+/**
+ * How long a finished tool stays on the focus canvas before it goes.
+ *
+ * Long enough to register as a state a card passed through, short enough that a
+ * fan-out of eight settling together does not put the clutter back. Under about
+ * 600ms a card that arrives and settles in the same breath reads as a flicker.
+ */
+const settledLingerMs = 1200;
 
 function now(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -254,6 +268,16 @@ export class AgentRunController {
   #catchUpFlushTimer: number | null = null;
   #submitQueue: Promise<void> = Promise.resolve();
   #timer: number | null = null;
+  /**
+   * Tools that finished a moment ago and are being held on the focus canvas.
+   *
+   * Replaced rather than mutated on every change, because a plain Set is not
+   * reactive and the graph derives off this one.
+   */
+  #lingering = $state<ReadonlySet<ToolId>>(new Set());
+  #lingerTimers = new Map<ToolId, number>();
+  /** When this view started watching, so the backlog it opens on is not mistaken for news. */
+  #listeningSince = now();
 
   /**
    * The last connection-level failure, and the machine-readable reason for it.
@@ -351,7 +375,33 @@ export class AgentRunController {
       .map((entry) => entry.frame)
   );
   graphAgents = $derived(this.#graphAgents());
-  graph = $derived(buildAgentTreeGraph(this.graphAgents));
+  /**
+   * Focus by default, and the `?? true` is what says so: every prefs blob
+   * written before this field existed reads back undefined, and a plain read
+   * would hand every existing operator the accumulated graph.
+   */
+  graphFocus = $state(readOperatorPrefs().graphFocus ?? true);
+  /**
+   * Which finished tools focus view is still drawing, and why the answer has two
+   * halves.
+   *
+   * At the live edge the run sets the pace, so the beat is timed off the clock by
+   * the controller. Parked anywhere behind it, the reader sets the pace and the
+   * clock is meaningless — a card cannot be held "for 1.2 seconds" on a frame
+   * someone is sitting on — so the beat is measured in steps of the cursor
+   * instead, and falls out of the cursor alone with no timer.
+   */
+  graphLinger = $derived(
+    this.viewIndex >= this.total
+      ? this.#lingering
+      : settledNearCursor(this.visibleReplayTimeline)
+  );
+  graph = $derived(
+    buildAgentTreeGraph(this.graphAgents, {
+      focus: this.graphFocus,
+      linger: this.graphLinger
+    })
+  );
   operatorTargets = $derived(this.#operatorTargets());
   sessionClosed = $derived(
     this.session != null && this.#isWorkflowClosed(this.session.workflow_id)
@@ -1528,6 +1578,8 @@ export class AgentRunController {
     this.#publishGeneration += 1;
     this.#flushQueued = false;
     this.#clearCatchUpFlush();
+    this.#clearHeldTools();
+    this.#listeningSince = now();
     this.#catchingUp = false;
     this.#liveFrameSeen = false;
     this.#sinceCatchUpPublish = 0;
@@ -1748,8 +1800,53 @@ export class AgentRunController {
          after catching up would otherwise leave its last events unpublished. */
       if (!catchingUp) this.#publishFrames();
     }
+    if (this.#isLiveSettle(frame)) this.#holdSettledTool(frame);
     this.#ingestFrame(frame, options);
     this.#schedulePublish();
+  }
+
+  /** Frame timestamps are the server's, in epoch seconds; see settleIsLive. */
+  #isLiveSettle(frame: AgentSseFrame): boolean {
+    const at =
+      "timestamp" in frame.data && typeof frame.data.timestamp === "number"
+        ? Date.now() / 1000 - frame.data.timestamp
+        : null;
+    return settleIsLive(this.#catchingUp, now() - this.#listeningSince, at);
+  }
+
+  /**
+   * Keep a tool on the focus canvas for a beat after it finishes.
+   *
+   * Focus view drops a settled tool, which is the point of it, but a call that
+   * starts and finishes between two glances is a card that was never seen at all:
+   * the reader watches something vanish and cannot tell whether it succeeded,
+   * failed, or was denied. The card holds its own answer — DONE, FAILED, DENIED —
+   * so the fix is to leave it up long enough to be read, not to caption it.
+   *
+   * A tool that somehow settles twice restarts its hold rather than being held
+   * twice, so the card cannot outstay one beat.
+   */
+  #holdSettledTool(frame: AgentSseFrame): void {
+    const toolId = settledToolIdFromFrame(frame);
+    if (toolId == null) return;
+    const running = this.#lingerTimers.get(toolId);
+    if (running != null) window.clearTimeout(running);
+    this.#lingering = new Set(this.#lingering).add(toolId);
+    this.#lingerTimers.set(
+      toolId,
+      window.setTimeout(() => {
+        this.#lingerTimers.delete(toolId);
+        const remaining = new Set(this.#lingering);
+        remaining.delete(toolId);
+        this.#lingering = remaining;
+      }, settledLingerMs)
+    );
+  }
+
+  #clearHeldTools(): void {
+    for (const timer of this.#lingerTimers.values()) window.clearTimeout(timer);
+    this.#lingerTimers.clear();
+    if (this.#lingering.size > 0) this.#lingering = new Set();
   }
 
   #publisherWorkflowId(frame: AgentSseFrame): string | undefined {
@@ -1883,6 +1980,11 @@ export class AgentRunController {
   jumpToLive(): void {
     this.goTo(this.total);
     this.following = true;
+  }
+
+  setGraphFocus(focus: boolean): void {
+    this.graphFocus = focus;
+    writeOperatorPrefs({ graphFocus: focus });
   }
 
   setPlaybackSpeed(speed: PlaybackSpeed): void {

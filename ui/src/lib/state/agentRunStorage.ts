@@ -36,6 +36,8 @@ export type OperatorPrefs = {
   transcriptFilter?: string;
   drawerHeight?: number;
   followDefault?: boolean;
+  /** Fold settled tool cards on the graph. Absent means yes; see agentRun. */
+  graphFocus?: boolean;
 };
 
 function frameCacheStorageKey(sessionId: string): string {

@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { X } from "@lucide/svelte";
+  import { untrack } from "svelte";
+  import { Wrench, X } from "@lucide/svelte";
   import {
     Background,
     BackgroundVariant,
+    ControlButton,
     Controls,
     MiniMap,
     SvelteFlow,
@@ -19,16 +21,31 @@
     AgentNodeContext,
     AgentNodeData
   } from "$lib/state/flowProjection";
+  import { lerpNodes, nodesMovedInPlace } from "$lib/state/nodeTween";
   import AgentStateNode from "./AgentStateNode.svelte";
   import AgentWorkflowNode from "./AgentWorkflowNode.svelte";
   import AutoFitView from "./AutoFitView.svelte";
 
+  /* Asked per rearrangement rather than cached, so the setting takes effect
+     without a reload. Absent matchMedia (the self-check paths) means no motion
+     preference to honour, not a preference against motion. */
+  function reduceMotion(): boolean {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  }
+
   interface Props {
     graph: AgentGraph;
+    /** Settled tools leave the canvas, rather than every card being kept. */
+    focus: boolean;
+    onFocusChange: (focus: boolean) => void;
     onNodeSelect?: (nodeId: string) => void;
   }
 
-  let { graph, onNodeSelect }: Props = $props();
+  let { graph, focus, onFocusChange, onNodeSelect }: Props = $props();
   let nodes = $state.raw<Node<AgentNodeData>[]>([]);
   let edges = $state.raw<Edge[]>([]);
   let inspectedNode = $state<Node<AgentNodeData> | null>(null);
@@ -37,6 +54,11 @@
   let flowViewportWidth = $state(0);
   let flowViewportHeight = $state(0);
   let resizeFrame = 0;
+  let tweening = $state(false);
+  let tweenFrame = 0;
+  /* Long enough to be followed across the pane, short enough that a reader
+     toggling the view twice is not waiting on the first one. */
+  const tweenMs = 260;
   const minZoom = 0.04;
   const maxZoom = 2.5;
   const fitViewOptions = { padding: 0.16, minZoom, maxZoom };
@@ -64,9 +86,51 @@
   const viewportSignature = $derived(`${flowViewportWidth}x${flowViewportHeight}`);
   const fitSignature = $derived(`${autoFitSignature}|${viewportSignature}`);
 
+  /**
+   * A rearrangement travels rather than cutting.
+   *
+   * Every frame rebuilds the whole projection, so folding a batch, opening one,
+   * or throwing the focus switch arrives as an entirely new set of positions.
+   * nodeTween decides which nodes are entitled to move; this decides when it is
+   * worth doing, which is only when something that stayed also moved. Ordinary
+   * streaming — text into a card that has not shifted — takes the direct
+   * assignment and pays nothing.
+   */
   $effect(() => {
-    nodes = graph.nodes;
+    const next = graph.nodes;
     edges = graph.edges;
+    /* untracked: this effect writes `nodes`, and reading it as a dependency
+       would make every interpolated frame re-enter the effect that produced it. */
+    const previous = untrack(() => nodes);
+
+    if (tweenFrame) cancelAnimationFrame(tweenFrame);
+    if (reduceMotion() || !nodesMovedInPlace(previous, next)) {
+      nodes = next;
+      tweening = false;
+      return;
+    }
+
+    tweening = true;
+    const start = performance.now();
+    const step = () => {
+      const t = Math.min(1, (performance.now() - start) / tweenMs);
+      /* Ease out: the graph leaves briskly and arrives gently, which is what
+         makes a rearrangement read as one move rather than a slide. */
+      nodes = lerpNodes(previous, next, 1 - (1 - t) ** 3);
+      if (t < 1) {
+        tweenFrame = requestAnimationFrame(step);
+        return;
+      }
+      tweenFrame = 0;
+      tweening = false;
+    };
+    tweenFrame = requestAnimationFrame(step);
+
+    return () => {
+      if (tweenFrame) cancelAnimationFrame(tweenFrame);
+      tweenFrame = 0;
+      tweening = false;
+    };
   });
 
   $effect(() => {
@@ -110,7 +174,7 @@
       : [{ label: "Node", text: JSON.stringify(data, null, 2), kind: "json" }];
   }
 
-  function inspectNode(node: Node<AgentNodeData>): void {
+  function handleNodeClick(node: Node<AgentNodeData>): void {
     inspectedNode = node;
     onNodeSelect?.(node.id);
   }
@@ -161,11 +225,24 @@
     nodesDraggable={false}
     nodesConnectable={false}
     elementsSelectable
-    onnodeclick={({ node }) => inspectNode(node)}
+    onnodeclick={({ node }) => handleNodeClick(node)}
     proOptions={{ hideAttribution: true }}
   >
-    <AutoFitView signature={fitSignature} {fitViewOptions} />
-    <Controls {fitViewOptions} />
+    <AutoFitView signature={fitSignature} {fitViewOptions} hold={tweening} />
+    <!-- No lock button: nothing on this canvas is draggable, so it only ever
+         toggled selection on a pane whose single click opens an inspector.
+         The tool switch takes its place rather than sitting in a bar of its own,
+         because "show me less of this graph" and "show me this graph smaller"
+         are the same question and belong in the same corner. -->
+    <Controls {fitViewOptions} showLock={false}>
+      <ControlButton
+        aria-label="Show every tool"
+        aria-pressed={!focus}
+        onclick={() => onFocusChange(!focus)}
+      >
+        <Wrench size={14} />
+      </ControlButton>
+    </Controls>
     <MiniMap
       pannable
       zoomable

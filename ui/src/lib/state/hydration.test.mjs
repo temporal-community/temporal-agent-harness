@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "vitest";
 
 import {
+  backlogGraceMs,
   catchUpCeilingMs,
   catchingUpAfterFrame,
   cursorAfterPublish,
   framePublishChunkSize,
-  publishAtChunkBoundary
+  liveSettleWindowSec,
+  publishAtChunkBoundary,
+  settleIsLive
 } from "./hydration.ts";
 
 /* What the schedule costs, which is the regression being prevented. Committing
@@ -385,6 +388,59 @@ describe("interleaved replay marks", () => {
       0,
       "nor may it arm a deadline: past the live edge the per-paint schedule owns it"
     );
+  });
+});
+
+/* The focus canvas holds a finished tool card for a beat so the reader sees it
+   finish. Whether a settle qualifies is this rule, and it is the whole safety of
+   the feature: get it wrong the permissive way and every page load flashes one
+   card per tool the session ever ran, which is what focus view exists to prevent.
+   That regression shipped once already — the `replay` mark the first version
+   trusted is not on the payloads /api/attach sends — so it is pinned here. */
+describe("only a settle the reader could have watched is held", () => {
+  const settled = 60_000; // listening well past the backlog burst
+  const justNow = 0.05;
+
+  it("holds a settle that just happened on a stream being watched", () => {
+    assert.equal(settleIsLive(false, settled, justNow), true);
+  });
+
+  /* The bug. A reload replays the session through the same pipeline, and these
+     frames are as old as the run — minutes, days — however live they look. */
+  it("refuses a settle replayed out of history", () => {
+    assert.equal(settleIsLive(false, settled, 78), false, "78s old, from a reload");
+    assert.equal(settleIsLive(false, settled, 86_400), false, "a day old");
+  });
+
+  /* The backlog arrives as a burst the instant the stream opens, and those frames
+     can be seconds old at most on a session that just ran — too fresh for the age
+     check to catch. This is what stops them. */
+  it("refuses anything at all until the opening burst is past", () => {
+    assert.equal(settleIsLive(false, 0, justNow), false, "the first frame off the wire");
+    assert.equal(settleIsLive(false, backlogGraceMs - 1, justNow), false);
+    assert.equal(settleIsLive(false, backlogGraceMs, justNow), true, "and then it opens");
+  });
+
+  it("refuses while the stream says it is still catching up", () => {
+    assert.equal(settleIsLive(true, settled, justNow), false);
+  });
+
+  /* A server clock a shade ahead of the browser's dates a frame into the future.
+     That frame did just arrive, and reading it as "not yet happened" would switch
+     the feature off for the whole session. */
+  it("holds a frame the clock has dated slightly ahead", () => {
+    assert.equal(settleIsLive(false, settled, -1), true);
+  });
+
+  /* Past the window either way nothing is held, which is the feature off rather
+     than the feature wrong — the failure a skewed clock is allowed to have. */
+  it("gives up rather than guessing when the clock is far out", () => {
+    assert.equal(settleIsLive(false, settled, liveSettleWindowSec + 1), false);
+    assert.equal(settleIsLive(false, settled, -(liveSettleWindowSec + 1)), false);
+  });
+
+  it("refuses a frame that carries no time at all", () => {
+    assert.equal(settleIsLive(false, settled, null), false);
   });
 });
 

@@ -114,6 +114,22 @@ interface AgentGraphOptions {
   outputPlacement?: "external" | "runtime";
   agentInterface?: AgentInterfaceFunction[];
   embeddedToolGraphs?: AgentGraph[];
+  /**
+   * Draw the turn as it stands rather than as it happened: a settled tool leaves
+   * the canvas. Off by default, so a caller that asks for nothing gets the
+   * accumulated graph this file has always built.
+   */
+  focus?: boolean;
+  /**
+   * Tools that have settled but should still be drawn, so a call that finishes
+   * says so before it goes rather than blinking out unacknowledged.
+   *
+   * Held here rather than computed from a clock, because this projection is also
+   * what a scrub and a page-load replay run through: a tool that finished an hour
+   * ago must not linger just because its frame is being read now. The caller owns
+   * the timing and only ever puts a live settle in this set.
+   */
+  linger?: ReadonlySet<ToolId>;
 }
 
 type RuntimeNodeId =
@@ -360,6 +376,34 @@ function collapseConsecutiveFailedRetries(
 
 function toolIdFromRuntimeNodeId(id: ToolRuntimeNodeId): ToolId {
   return id.slice("tool:".length);
+}
+
+/**
+ * Focus view: a settled tool leaves the canvas, and nothing stands in for it —
+ * the transcript holds what it did. Accumulated view is this not running.
+ *
+ * `linger` holds back the ones that just finished, so a call leaves having been
+ * seen to finish rather than blinking out mid-turn. See AgentGraphOptions.linger.
+ *
+ * Same contract as the retry fold above: `order` is spliced in place.
+ *
+ * In-flight is read off the set the flow-group bookkeeping already maintains
+ * rather than tested for on `status`. A status predicate has to enumerate
+ * `requested`, `running`, `awaiting` and `approved` correctly to avoid hiding a
+ * card, and hiding the one sitting at a human approval gate is the worst thing
+ * this fold could do.
+ */
+function dropSettledTools(
+  order: RuntimeNodeId[],
+  inFlight: Set<ToolId>,
+  linger: ReadonlySet<ToolId>
+): void {
+  const kept = order.filter((id) => {
+    if (!isToolRuntimeNodeId(id)) return true;
+    const toolId = toolIdFromRuntimeNodeId(id);
+    return inFlight.has(toolId) || linger.has(toolId);
+  });
+  order.splice(0, order.length, ...kept);
 }
 
 function codeModeScriptFromToolInput(input: unknown): string | null {
@@ -699,6 +743,72 @@ function maybeJsonSection(label: string, text: string | undefined): AgentNodeCon
   }
 }
 
+const noLingeringTools: ReadonlySet<ToolId> = new Set();
+
+/**
+ * The tool this frame just settled, if it settled one.
+ *
+ * The same three cases that call markToolSettled inside the builder — a tool that
+ * ended, one that failed, and an approval that was refused — and pointedly not a
+ * granted approval, which tones the card "done" while the call has yet to run.
+ *
+ * Exported because the caller timing the linger has to answer exactly this
+ * question, and two spellings of "has this finished" would drift apart. Hiding a
+ * card that is still going, or holding one that is not, both start here.
+ */
+export function settledToolIdFromFrame(frame: AgentSseFrame): ToolId | null {
+  if (!("type" in frame.data) || !("tool_id" in frame.data)) return null;
+  if (frame.event === "tool_end" || frame.event === "tool_error") return frame.data.tool_id;
+  if (frame.event === "tool_approval_resolved" && !frame.data.approved) {
+    return frame.data.tool_id;
+  }
+  return null;
+}
+
+/**
+ * How many steps of the cursor a finished tool stays drawn while a run is being
+ * read back. One: the frame that finished it draws it done, and the next frame
+ * dismisses it.
+ *
+ * One rather than a few, so the card answers for the event the reader is standing
+ * on and nothing else. A tool held two steps is still on the canvas after the run
+ * has moved on to the next thing, which puts a finished call next to a live one
+ * and makes the reader work out which event they are looking at — the confusion
+ * this whole fold exists to remove, reintroduced a step later.
+ *
+ * Since each settle is its own frame, this also means at most one card is held at
+ * a time: what just finished, singular.
+ *
+ * At the live edge the beat is measured on the clock instead, because there the
+ * run sets the pace and frames can arrive faster than they can be read.
+ */
+export const cursorHoldSteps = 1;
+
+/**
+ * The tool that settled on the frame the cursor is parked on, if one did.
+ *
+ * The read-back half of the hold. Scrubbing rebuilds the graph from the frames up
+ * to the cursor, so a tool that finished one step ago is simply absent from focus
+ * view — which is the same card blinking out unacknowledged that the hold exists
+ * to stop, and it is what a reader stepping through a finished run sees for every
+ * call in it.
+ *
+ * Pure and derived from the cursor alone, so it needs no timer and a given cursor
+ * always draws the same graph: stepping back and forward again lands on what it
+ * landed on before.
+ */
+export function settledNearCursor(
+  timeline: readonly { frame: AgentSseFrame }[],
+  steps: number = cursorHoldSteps
+): ReadonlySet<ToolId> {
+  const held = new Set<ToolId>();
+  for (let at = Math.max(0, timeline.length - steps); at < timeline.length; at += 1) {
+    const toolId = settledToolIdFromFrame(timeline[at].frame);
+    if (toolId != null) held.add(toolId);
+  }
+  return held;
+}
+
 function valueSection(label: string, value: unknown): AgentNodeContext | null {
   if (value == null) return null;
   return { label, text: JSON.stringify(value, null, 2), kind: "json" };
@@ -712,6 +822,7 @@ export function buildAgentGraph(
   const showSubagentDispatch = options.showSubagentDispatch ?? true;
   const outputPlacement = options.outputPlacement ?? "external";
   const agentInterface = summarizeAgentInterface(options.agentInterface);
+  const lingeringTools = options.linger ?? noLingeringTools;
   let activeTurn: number | null = null;
   let status: AgentGraph["status"] = "idle";
   let currentUserMessage = "No message received";
@@ -735,6 +846,10 @@ export function buildAgentGraph(
   let subagentDetail = "";
   const tools = new Map<ToolId, ToolRuntime>();
   const codeModeChildren = new Map<ToolId, ToolId[]>();
+  /* Children are not in `runtimeNodeOrder` and so are not reached by the fold that
+     drops settled tools. They get their own set, filled from the same call sites, so
+     both halves of the graph answer "has this finished" the same way. */
+  const settledChildToolIds = new Set<ToolId>();
   const activeCodeModeToolIds: ToolId[] = [];
   const activeRuntimeToolIds = new Set<ToolId>();
   let runtimeToolFlowGroup = 0;
@@ -805,8 +920,11 @@ export function buildAgentGraph(
     return runtimeToolFlowGroup;
   }
 
+  /* Called from tool_end, tool_error and a denied approval — and pointedly not from a
+     granted one, which tones the card "done" while the call has yet to run. */
   function markToolSettled(toolId: ToolId, parentToolId?: ToolId): void {
-    if (!parentToolId) activeRuntimeToolIds.delete(toolId);
+    if (parentToolId) settledChildToolIds.add(toolId);
+    else activeRuntimeToolIds.delete(toolId);
   }
 
   function toolRuntime(toolId: ToolId, name: string, parentToolId?: ToolId): ToolRuntime {
@@ -830,8 +948,15 @@ export function buildAgentGraph(
     };
   }
 
+  /* The one list of a host's visible children: both the container's size and the
+     child nodes themselves read it, so a settled child cannot leave a hole the box
+     is still sized around. */
   function codeModeHostChildIds(toolId: ToolId): ToolId[] {
-    return (codeModeChildren.get(toolId) ?? []).filter((childId) => tools.has(childId));
+    return (codeModeChildren.get(toolId) ?? []).filter(
+      (childId) =>
+        tools.has(childId) &&
+        !(options.focus && settledChildToolIds.has(childId) && !lingeringTools.has(childId))
+    );
   }
 
   function childToolParent(toolId: ToolId, isCodeModeTool: boolean): ToolId | undefined {
@@ -851,6 +976,7 @@ export function buildAgentGraph(
   function resetTurnTools(): void {
     tools.clear();
     codeModeChildren.clear();
+    settledChildToolIds.clear();
     activeCodeModeToolIds.splice(0, activeCodeModeToolIds.length);
     activeRuntimeToolIds.clear();
     runtimeToolFlowGroup = 0;
@@ -1102,6 +1228,26 @@ export function buildAgentGraph(
     latestNodeId = retryRedirect.get(latestNodeId)!;
   }
 
+  /* Read before the focus fold, which can drop the reasoning node: the summary
+     below keys "drew a card and said nothing" off the card having existed, and
+     asking runtimeNodeOrder after the splice answers about the wrong thing. */
+  const reasoningSeen = runtimeNodeOrder.includes("reasoning");
+  if (options.focus) {
+    dropSettledTools(runtimeNodeOrder, activeRuntimeToolIds, lingeringTools);
+    /* A finished thought trace is a completed event too, and the transcript
+       holds it either way. While fragments are still arriving it stays. */
+    if (reasoningState !== "running") {
+      const at = runtimeNodeOrder.indexOf("reasoning");
+      if (at >= 0) runtimeNodeOrder.splice(at, 1);
+    }
+    /* Not optional bookkeeping: `active: latestNodeId === id` is what marks the
+       live card, so a turn whose last tool just settled off the canvas would
+       have no active node at all. The newest survivor is where the run is. */
+    if (latestNodeId && !runtimeNodeOrder.includes(latestNodeId)) {
+      latestNodeId = runtimeNodeOrder.at(-1) ?? null;
+    }
+  }
+
   const embeddedToolLayout = layoutEmbeddedToolGraphs(options.embeddedToolGraphs ?? []);
   if (embeddedToolLayout && !runtimeNodeOrder.includes("tool-container")) {
     runtimeNodeOrder.push("tool-container");
@@ -1118,8 +1264,7 @@ export function buildAgentGraph(
    * examples/sandbox_tools/coding_agent runs on) streams no such frame and draws no card,
    * so it is already distinguishable; what was not distinguishable is this.
    */
-  const reasoningSummary =
-    reasoningDetail || (runtimeNodeOrder.includes("reasoning") ? NO_THOUGHT_SUMMARY : "");
+  const reasoningSummary = reasoningDetail || (reasoningSeen ? NO_THOUGHT_SUMMARY : "");
   /* Only once the thinking is over: while fragments are still arriving the end moves, and a
      number that climbs while you read it is not a duration. */
   const reasoningSeconds =
@@ -1386,11 +1531,13 @@ export function buildAgentGraph(
       )
     )
   );
-  for (const [parentToolId, childToolIds] of codeModeChildren) {
+  for (const parentToolId of codeModeChildren.keys()) {
     const parentNodeId = toolRuntimeNodeId(parentToolId);
     const parentPosition = runtimeLayout.positions.get(parentNodeId);
     if (!parentPosition) continue;
-    for (const [index, childToolId] of childToolIds.entries()) {
+    /* Survivors repack from the first slot, so the grid has no gaps where the
+       finished calls were. */
+    for (const [index, childToolId] of codeModeHostChildIds(parentToolId).entries()) {
       const childNodeId = toolRuntimeNodeId(childToolId);
       const childOffset = codeModeChildPosition(index);
       nodes.push({
@@ -1561,8 +1708,13 @@ function composeStatus(statuses: AgentGraph["status"][]): AgentGraph["status"] {
   return "idle";
 }
 
-export function buildAgentTreeGraph(agents: AgentGraphSource[]): AgentGraph {
-  if (agents.length === 0) return buildAgentGraph([]);
+export function buildAgentTreeGraph(
+  agents: AgentGraphSource[],
+  /* Forwarded to every agent in the tree, not just the root: a focus mode that
+     only applied to the parent would leave a busy subagent drawing every card. */
+  options: Pick<AgentGraphOptions, "focus" | "linger"> = {}
+): AgentGraph {
+  if (agents.length === 0) return buildAgentGraph([], options);
 
   const agentByWorkflow = new Map(agents.map((agent) => [agent.workflowId, agent]));
   const childrenByParent = new Map<string, AgentGraphSource[]>();
@@ -1588,7 +1740,9 @@ export function buildAgentTreeGraph(agents: AgentGraphSource[]): AgentGraph {
       showSubagentDispatch: false,
       outputPlacement: agent.role === "subagent" ? "runtime" : "external",
       agentInterface: agent.agentInterface,
-      embeddedToolGraphs: childGraphs
+      embeddedToolGraphs: childGraphs,
+      focus: options.focus,
+      linger: options.linger
     });
     const scoped = scopedGraph(agent, graph, 0, 0);
     builtGraphs.push(scoped);
