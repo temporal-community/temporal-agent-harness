@@ -38,6 +38,8 @@ export interface AgentNodeData {
   approvalDecisionPort?: boolean;
   nodeWidth?: number;
   nodeHeight?: number;
+  /** Overrides the result body's height, in px. See codeModeScriptHeight. */
+  resultHeight?: number;
   flowGroup?: number;
   metrics?: Array<{ label: string; value: string }>;
   interfaces?: AgentInterfaceSummary[];
@@ -202,7 +204,18 @@ const embeddedToolPadding = 18;
 const embeddedToolHeaderHeight = 116;
 const embeddedToolGap = 32;
 const codeModePadding = 18;
-const codeModeHeaderHeight = 126;
+/**
+ * A Code Mode host draws its own head and its script above the host calls laid
+ * out inside it, so the header has to reserve room for both.
+ *
+ * The script used to get whatever was left of a flat 126px, which was 26px — one
+ * clipped line of Python behind a scrollbar, on the card whose whole point is the
+ * script it ran. It gets a normal card's result body instead, and the node data
+ * carries that number to the CSS so the two cannot drift apart.
+ */
+const codeModeHeadHeight = 100;
+const codeModeScriptHeight = 132;
+const codeModeHeaderHeight = codeModeHeadHeight + codeModeScriptHeight;
 const codeModeColumns = 2;
 const codeModeColumnGap = 32;
 const codeModeRowGap = 26;
@@ -1414,6 +1427,10 @@ export function buildAgentGraph(
         size: codeModeDimensions ? "container" : undefined,
         nodeWidth: codeModeDimensions?.width,
         nodeHeight: codeModeDimensions?.height ?? resultNodeHeight,
+        /* Only for a Code Mode host: the container class otherwise squeezes the
+           result body to leave room for children, which is right for the subagent
+           container and wrong for a card showing a script. */
+        resultHeight: codeModeDimensions ? codeModeScriptHeight : undefined,
         active: latestNodeId === id,
         toolId: runtime?.id,
         codeMode: runtime?.isCodeMode,

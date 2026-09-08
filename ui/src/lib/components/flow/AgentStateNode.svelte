@@ -132,7 +132,10 @@
   const nodeStyle = $derived(
     [
       typeof data.nodeWidth === "number" ? `width: ${data.nodeWidth}px;` : null,
-      typeof data.nodeHeight === "number" ? `min-height: ${data.nodeHeight}px;` : null
+      typeof data.nodeHeight === "number" ? `min-height: ${data.nodeHeight}px;` : null,
+      /* Inline, so it beats the .container rule below: a Code Mode host reserves
+         room for its script in the same number flowProjection lays out against. */
+      typeof data.resultHeight === "number" ? `--result-height: ${data.resultHeight}px;` : null
     ]
       .filter(Boolean)
       .join(" ")
@@ -279,8 +282,9 @@
     box-shadow: var(--shadow-node-soft);
   }
 
-  /* A container's own body has to fit above the children laid out inside it,
-     which start at codeModeHeaderHeight (126px) in flowProjection. */
+  /* A container's own body has to fit above the children laid out inside it.
+     A Code Mode host overrides this inline with the height flowProjection
+     reserved for its script; the subagent container has no body worth showing. */
   .state-node.container {
     --result-height: 26px;
   }

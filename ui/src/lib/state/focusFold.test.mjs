@@ -222,6 +222,31 @@ describe("focus view removes settled Code Mode children too", () => {
       `focus box must not grow (${focused.data.nodeHeight} vs ${accumulated.data.nodeHeight})`
     );
   });
+
+  /* The script had been getting 26px — one clipped line behind a scrollbar — because
+     the header was a flat number the result body had to fit inside. The card carries
+     that height to the CSS now, so this pins the two together: whatever room the host
+     reserves for its script, the first host call has to start below it. */
+  it("reserves readable room for the script above its host calls", () => {
+    const graph = graphOf(codeModeTurn);
+    const host = graph.nodes.find((n) => n.id === "tool:host");
+    /* Host calls are placed absolutely, at the host's origin plus an offset, so
+       the gap that matters is measured against the host rather than the canvas. */
+    const children = graph.nodes.filter((n) => n.id === "tool:kid1" || n.id === "tool:kid2");
+
+    assert.ok(
+      host.data.resultHeight >= 100,
+      `script body must be readable, got ${host.data.resultHeight}px`
+    );
+    assert.equal(children.length, 2, "expected the host to draw its calls inside it");
+    for (const child of children) {
+      const gap = child.position.y - host.position.y;
+      assert.ok(
+        gap >= host.data.resultHeight,
+        `host call ${child.id} sits ${gap}px down, overlapping a ${host.data.resultHeight}px script`
+      );
+    }
+  });
 });
 
 /* The card picks its chip by sniffing the words already on it, and falls back to
