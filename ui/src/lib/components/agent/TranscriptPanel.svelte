@@ -1,5 +1,48 @@
+<script lang="ts" module>
+  import type { StatusKind } from "$lib/components/primitives/StatusChip.svelte";
+  import type { ReplayLogRow } from "$lib/state/replayLog";
+
+  /**
+   * The colour a surviving status chip is drawn in. Module scope, and exported,
+   * so statusNote.test.mjs can call this one rather than keep a copy: the
+   * ordering below is the whole content of the function and a copy of it drifts
+   * without a word. Pure, so nothing is lost by lifting it out of the instance.
+   */
+  export function statusKind(row: ReplayLogRow): StatusKind {
+    const status = row.status?.toLowerCase() ?? "";
+    if (row.tone === "error" || row.actor === "error" || status.includes("fail")) {
+      return "error";
+    }
+    if (row.actor === "approval" || status.includes("approval") || status.includes("await")) {
+      return "approval";
+    }
+    if (row.actor === "operator") return "queued";
+    if (row.actor === "tool" || status.includes("tool")) return "tool";
+    if (row.actor === "model") return "model";
+    if (row.actor === "reasoning") return "reasoning";
+    if (row.actor === "queue" || status.includes("queue")) return "queued";
+    /* The row's own tone settles the outcome, so the chip cannot disagree with
+       the line it sits on: a subagent reply says ok or error in its tone and
+       nowhere in its status text, and matching on the text alone left every
+       successful reply looking like one still in flight. */
+    if (
+      row.tone === "done" ||
+      status.includes("done") ||
+      status.includes("complete") ||
+      status.includes("approved")
+    ) {
+      return "complete";
+    }
+    if (status.includes("running") || status.includes("streaming")) return "thinking";
+    /* Last, not first. Delegation is what a subagent row is doing when nothing
+       sharper is known about it; asked before the outcome tests it swallowed
+       them, and ok, error, and still-running all came out the same colour. */
+    if (row.actor === "subagent") return "delegating";
+    return "idle";
+  }
+</script>
+
 <script lang="ts">
-  import { tick } from "svelte";
   import {
     AlertTriangle,
     Bot,
@@ -17,15 +60,12 @@
   } from "@lucide/svelte";
   import { Search, X } from "@lucide/svelte";
   import Badge from "$lib/components/primitives/Badge.svelte";
-  import StatusChip, {
-    type StatusKind
-  } from "$lib/components/primitives/StatusChip.svelte";
-  import {
-    formatDuration,
-    type ReplayLogRow,
-    type TurnLogGroup
-  } from "$lib/state/replayLog";
-  import { formatCost, formatTokens } from "$lib/cost/pricing";
+  import Chip from "$lib/components/primitives/Chip.svelte";
+  import StatusChip from "$lib/components/primitives/StatusChip.svelte";
+  import { scrollFollower } from "$lib/state/followScroll";
+  import { formatLogValue } from "$lib/state/logValue";
+  import { formatDuration, statusNote, type TurnLogGroup } from "$lib/state/replayLog";
+  import { formatTokens } from "$lib/cost/pricing";
 
   export type TranscriptFilter = "all" | "model" | "tool" | "approval" | "error";
 
@@ -70,12 +110,6 @@
     label: string;
     text: string;
     kind: "block" | "text";
-  }
-
-  function formatLogValue(value: unknown): string {
-    if (value == null) return "";
-    if (typeof value === "string") return value.trim();
-    return JSON.stringify(value, null, 2);
   }
 
   function inputText(row: ReplayLogRow): string {
@@ -168,6 +202,11 @@
     visibleGroups.reduce((sum, group) => sum + group.rows.length, 0)
   );
 
+  /* The pane's own scroller, and the only box this component is allowed to move.
+     See followScroll.ts: `scrollIntoView` was moving the whole pane rail sideways. */
+  let itemsElement = $state<HTMLElement | null>(null);
+  const follower = scrollFollower(() => itemsElement);
+
   $effect(() => {
     const rowId = activeRowId;
     if (rowId == null) {
@@ -175,11 +214,7 @@
       return;
     }
     expandedRows = { [rowId]: true };
-    tick().then(() => {
-      document
-        .getElementById(`log-row-${rowId}`)
-        ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    });
+    follower.to(`log-row-${rowId}`);
   });
 
   function time(value: number): string {
@@ -218,26 +253,12 @@
     return `${prefix}System`;
   }
 
-  function statusKind(row: ReplayLogRow): StatusKind {
-    const status = row.status?.toLowerCase() ?? "";
-    if (row.tone === "error" || row.actor === "error" || status.includes("fail")) {
-      return "error";
-    }
-    if (row.actor === "approval" || status.includes("approval") || status.includes("await")) {
-      return "approval";
-    }
-    if (row.actor === "operator") return "queued";
-    if (row.actor === "tool" || status.includes("tool")) return "tool";
-    if (row.actor === "model") return "model";
-    if (row.actor === "reasoning") return "reasoning";
-    if (row.actor === "subagent") return "delegating";
-    if (row.actor === "queue" || status.includes("queue")) return "queued";
-    if (status.includes("done") || status.includes("complete") || status.includes("approved")) {
-      return "complete";
-    }
-    if (status.includes("running") || status.includes("streaming")) return "thinking";
-    return "idle";
+  /** The tool an event belongs to, unless the label already names it. */
+  function toolNote(row: ReplayLogRow): string | null {
+    if (!row.toolName) return null;
+    return row.label.toLowerCase().includes(row.toolName.toLowerCase()) ? null : row.toolName;
   }
+
 </script>
 
 <section class="transcript" aria-label="Replay logs">
@@ -252,14 +273,15 @@
   <div class="transcript-controls">
     <div class="filter-chips" role="group" aria-label="Filter logs">
       {#each filters as item}
-        <button
-          class:active={filter === item.key}
-          type="button"
+        <Chip
+          label={item.label}
+          tone="accent"
+          size="xs"
+          fill="quiet"
+          active={filter === item.key}
           aria-pressed={filter === item.key}
           onclick={() => onFilterChange?.(item.key)}
-        >
-          {item.label}
-        </button>
+        />
       {/each}
     </div>
     <div class="search">
@@ -278,7 +300,7 @@
     </div>
   </div>
 
-  <div class="items">
+  <div class="items" bind:this={itemsElement} onscroll={follower.handleScroll}>
     {#if groups.length === 0}
       <p class="empty">Step through the stream to build the logs.</p>
     {:else if visibleGroups.length === 0}
@@ -318,21 +340,31 @@
               {#if group.summary.tokens}
                 <span>{formatTokens(group.summary.tokens)} tok</span>
               {/if}
-              {#if group.summary.tokens && group.summary.estimatedCostUsd != null}
-                <span>{formatCost(group.summary.estimatedCostUsd)}</span>
-              {/if}
             </div>
           </header>
 
           <div class="log-lines" id={`turn-${group.turnNumber}-logs`}>
             {#each group.rows as row}
+              <!-- A seam, drawn where it is rather than as a badge on the rows around
+                   it: the log's whole claim is that consecutive lines are consecutive
+                   events, and this is the one place that is untrue. -->
+              {#if row.gapBefore}
+                <p class="history-gap">{row.gapBefore}</p>
+              {/if}
               {@const expanded = isRowExpanded(row.id)}
+              {@const status = statusNote(row)}
+              {@const tool = toolNote(row)}
               {@const active = activeRowId === row.id || (activeRowId == null && activeOrdinal === row.ordinal)}
               <article
                 id={`log-row-${row.id}`}
                 class={`log-line ${row.tone} ${row.parentTurnNumber != null ? "nested-subagent" : ""} ${expanded ? "expanded" : ""} ${active ? "active-row" : ""}`}
               >
-                <div class="actor-icon" aria-hidden="true">
+                <div
+                  class="actor-icon"
+                  role="img"
+                  aria-label={actorLabel(row)}
+                  title={actorLabel(row)}
+                >
                   {#if row.actor === "user"}
                     <UserRound size={15} />
                   {:else if row.actor === "agent" || row.actor === "subagent"}
@@ -376,12 +408,13 @@
                   >
                     <span class="line-toggle-main">
                       <span class="line-meta">
-                        <span class="actor-name">{actorLabel(row)}</span>
-                        <time>{time(row.timestamp)}</time>
                         <Badge label={row.label} tone={row.tone} />
-                        {#if row.status}
+                        {#if tool}
+                          <span class="line-tool">{tool}</span>
+                        {/if}
+                        {#if status}
                           <StatusChip
-                            label={row.status}
+                            label={status}
                             kind={statusKind(row)}
                             compact
                             active={row.ordinal === activeOrdinal}
@@ -392,6 +425,7 @@
                             subagent turn {row.sourceTurnNumber}
                           </span>
                         {/if}
+                        <time>{time(row.timestamp)}</time>
                       </span>
                     </span>
                     <span class="row-toggle-icon" aria-hidden="true">
@@ -468,7 +502,7 @@
 
   h2 {
     margin: 0;
-    font-size: 13px;
+    font-size: var(--font-lg);
   }
 
   .transcript-controls {
@@ -484,35 +518,17 @@
     gap: 4px;
   }
 
-  .filter-chips button {
-    padding: 4px 9px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    color: var(--text-3);
-    background: var(--surface-0);
-    cursor: pointer;
-    font: inherit;
-    font-size: 11px;
-  }
-
-  .filter-chips button:hover {
-    color: var(--text-1);
-    border-color: var(--border-strong);
-  }
-
-  .filter-chips button.active {
-    color: var(--accent);
-    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-    background: color-mix(in srgb, var(--accent) 13%, var(--surface-2));
-  }
-
+  /* A row you type into, so the lg box: the same token and the same 34px as the
+     session search in SessionControls. The height lives on the box rather than
+     on the input, which had been sitting on a literal 30px. */
   .search {
+    height: var(--control-height-lg);
     display: flex;
     align-items: center;
     gap: 7px;
     padding: 0 8px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-0);
     color: var(--text-3);
   }
@@ -520,11 +536,10 @@
   .search input {
     flex: 1;
     min-width: 0;
-    height: 30px;
     border: 0;
     background: transparent;
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     outline: none;
   }
 
@@ -536,14 +551,16 @@
     display: inline-flex;
     padding: 2px;
     border: 0;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     color: var(--text-3);
     background: transparent;
     cursor: pointer;
   }
 
-  .search .clear:hover {
-    color: var(--text-1);
+  @media (hover: hover) and (pointer: fine) {
+    .search .clear:hover {
+      color: var(--text-1);
+    }
   }
 
   .items {
@@ -561,24 +578,27 @@
     flex-direction: column;
     min-height: 58px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     overflow: hidden;
     background: color-mix(in srgb, var(--surface-1) 75%, var(--surface-0));
     transition:
-      border-color 140ms ease,
-      transform 140ms ease,
-      background 140ms ease;
+      border-color var(--duration-fast) var(--ease-ui),
+      transform var(--duration-fast) var(--ease-ui),
+      background var(--duration-fast) var(--ease-ui);
   }
 
-  .turn-group:hover,
   .turn-group.active-turn {
     border-color: var(--border-strong);
     transform: translateY(-1px);
-    background: color-mix(in srgb, var(--surface-2) 38%, var(--surface-0));
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface-0));
   }
 
-  .turn-group.active-turn {
-    box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 70%, transparent);
+  @media (hover: hover) and (pointer: fine) {
+    .turn-group:hover {
+      border-color: var(--border-strong);
+      transform: translateY(-1px);
+      background: color-mix(in srgb, var(--surface-2) 38%, var(--surface-0));
+    }
   }
 
   .turn-head {
@@ -586,7 +606,7 @@
     border-bottom: 1px solid var(--border);
     background: var(--surface-2);
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-weight: 650;
   }
 
@@ -609,7 +629,7 @@
 
   .turn-title {
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
   }
 
   .turn-preview {
@@ -640,14 +660,14 @@
     gap: 5px;
     padding: 0 9px 8px;
     color: var(--text-3);
-    font-size: 10px;
+    font-size: var(--font-xs);
     font-variant-numeric: tabular-nums;
   }
 
   .turn-stats span {
     padding: 2px 6px;
     border: 1px solid var(--border);
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     background: var(--surface-0);
   }
 
@@ -667,6 +687,19 @@
     padding: 8px 9px;
     border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
     background: transparent;
+  }
+
+  /* Same tone and the same words as the waterfall's seam, so the two surfaces are
+     read as one fact about the run rather than two coincidences. */
+  .history-gap {
+    margin: 0;
+    padding: 7px 9px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    border-left: 2px solid var(--error);
+    background: color-mix(in srgb, var(--error) 8%, transparent);
+    color: var(--text-2);
+    font-size: var(--font-xs);
+    line-height: 1.45;
   }
 
   .log-line.nested-subagent {
@@ -691,7 +724,7 @@
   }
 
   .log-line.active-row {
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
   }
 
   .actor-icon {
@@ -701,16 +734,18 @@
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--text-2);
     background: var(--surface-0);
   }
 
+  /* Full-strength hue on the glyph, now that most rows no longer carry a second
+     chip's wash to say the same thing. */
+  .log-line.agent .actor-icon { color: var(--accent); }
   .log-line.model .actor-icon { color: var(--model); }
-  .log-line.tool .actor-icon { color: var(--warning); }
+  .log-line.tool .actor-icon { color: var(--tool); }
   .log-line.approval .actor-icon,
   .log-line.queue .actor-icon { color: var(--queue); }
-  .log-line.operator .actor-icon { color: var(--accent); }
   .log-line.done .actor-icon { color: var(--success); }
   .log-line.error .actor-icon { color: var(--error); }
 
@@ -734,9 +769,9 @@
   }
 
   .line-toggle:focus-visible {
-    outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    outline: 2px solid var(--focus-ring);
     outline-offset: 3px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
   }
 
   .line-toggle-main {
@@ -752,16 +787,22 @@
     justify-content: center;
     margin-top: 1px;
     border: 1px solid var(--border);
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     color: var(--text-3);
     background: var(--surface-0);
   }
 
-  .log-line:hover .row-toggle-icon,
   .log-line.expanded .row-toggle-icon,
   .line-toggle:focus-visible .row-toggle-icon {
     color: var(--text-1);
     border-color: var(--border-strong);
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .log-line:hover .row-toggle-icon {
+      color: var(--text-1);
+      border-color: var(--border-strong);
+    }
   }
 
   .line-meta {
@@ -772,7 +813,7 @@
     gap: 6px;
     overflow: hidden;
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-variant-numeric: tabular-nums;
   }
 
@@ -780,30 +821,40 @@
     flex-wrap: wrap;
   }
 
-  .actor-name {
-    flex: 0 0 auto;
-    color: var(--text-2);
-    font-weight: 650;
+  /* An identifier, so it stays mono and unshouted, as tool names are elsewhere.
+     It shrinks before the label does: `reprice_ro…` still reads as the tool it
+     names, which a truncated label does not. */
+  .line-tool {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: var(--figure-size);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .source-turn {
     flex: 0 0 auto;
     padding: 1px 5px;
     border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     color: var(--accent);
     background: color-mix(in srgb, var(--accent) 9%, transparent);
-    font-size: 10px;
+    font-size: var(--font-xs);
   }
 
+  /* Pushed to the right edge, where a run of events that really did happen in
+     the same second reads as a column rather than as the same word repeated
+     down the middle of every row. */
   .line-meta time {
     flex: 0 0 auto;
-  }
-
-  .line-meta :global(.badge) {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    margin-left: auto;
+    color: var(--text-4);
+    font-family: var(--font-mono);
+    font-size: var(--figure-size);
+    font-variant-numeric: tabular-nums;
   }
 
   .line-details {
@@ -815,7 +866,7 @@
   p {
     margin: 0;
     color: var(--text-1);
-    font-size: 12px;
+    font-size: var(--font-md);
     line-height: 1.42;
     word-break: break-word;
   }
@@ -828,18 +879,18 @@
 
   .payload-label {
     color: var(--text-3);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-weight: 650;
   }
 
   pre {
     margin: 0;
     padding: 8px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     overflow-x: auto;
     background: var(--surface-0);
     color: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-sm);
   }
 
   .primary-pre {
@@ -849,6 +900,11 @@
   .full-details pre {
     margin-top: 6px;
     color: var(--text-2);
+    /* A bare `pre` clips rather than scrolls in a pane this narrow, so anything past the
+       fold was silently gone. AgentChatPanel's equivalent block already wraps; this one
+       only got away with it while every value here was short. */
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
   }
 
   .citations {
@@ -859,12 +915,22 @@
 
   .citations a {
     color: var(--accent);
-    font-size: 11px;
+    font-size: var(--font-sm);
     text-decoration: none;
     border-bottom: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
   }
 
   .empty {
     color: var(--text-3);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .turn-group {
+      transition: none;
+    }
+
+    .turn-group.active-turn {
+      transform: none;
+    }
   }
 </style>

@@ -1,0 +1,561 @@
+/**
+ * Every keyboard binding in the console, transport and panes alike.
+ *
+ * The table below is the only place a binding is written down: the window
+ * handler matches against it and the help overlay renders from it, so a key
+ * that works is a key that is documented.
+ *
+ * `resolveReplayAction` is deliberately DOM-free. Everything that decides
+ * whether a key should act at all — is the user typing, is an IME mid-word, is
+ * the scrubber focused — is expressed in a plain object, which is what makes
+ * the guard testable in a script with no browser.
+ *
+ * The pane bindings — Alt+Arrows, Cmd/Ctrl+Shift+Arrows, F, Escape — are rows
+ * here rather than an if-chain in App.svelte beside the call into this module,
+ * and that is not a style preference. A key held outside this table appears in
+ * neither the help overlay nor replayHotkeys.test.mjs, so Alt+Left quietly
+ * eating the OS-standard word-jump inside the chat composer would be a bug
+ * nothing in the repo could catch. As rows they are guarded by the same
+ * `typing` test as everything else, and the check drives them through the same
+ * resolver.
+ */
+
+import type { AgentRunController } from "./agentRun.svelte";
+
+export type ReplayAction =
+  | "stepBack"
+  | "stepForward"
+  | "previousStep"
+  | "nextStep"
+  | "previousTurn"
+  | "nextTurn"
+  | "first"
+  | "last"
+  | "togglePlay"
+  | "speedUp"
+  | "speedDown"
+  | "toggleHelp"
+  | "escape"
+  | "railFocusPrevious"
+  | "railFocusNext"
+  | "railFocusPreviousTab"
+  | "railFocusNextTab"
+  | "railMovePrevious"
+  | "railMoveNext"
+  | "railMovePreviousTab"
+  | "railMoveNextTab"
+  | "railToggleBleed"
+  | "toggleDrawer"
+  | `railFocusSlot${RailSlot}`;
+
+/**
+ * The digits a column can be reached by, and the whole of what a digit means here.
+ *
+ * `9` is the last column rather than the ninth, which is what every browser and every
+ * editor that binds these keys does, and the only reading that is useful on a rail whose
+ * length changes all day. Everything between is the column's place along the rail,
+ * counted from the left.
+ */
+export type RailSlot = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+
+const RAIL_SLOTS: readonly RailSlot[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+/** Which surface a binding drives, and the heading it is filed under in help. */
+export type ReplayScope = "replay" | "rail";
+
+export interface ReplayBinding {
+  action: ReplayAction;
+  scope: ReplayScope;
+  /** `KeyboardEvent.key` to match. Single characters are compared lowercased. */
+  key: string;
+  /** Required Shift state, or `null` when Shift takes no part in the match. */
+  shift: boolean | null;
+  /** Required Alt state. Absent means the chord is only Alt's if nothing else claims it. */
+  alt?: boolean;
+  /** Required Ctrl-or-Meta state — one field, because they are one chord on two platforms. */
+  mod?: boolean;
+  /**
+   * Ctrl specifically, and not Meta. The one place the two have to be told apart.
+   *
+   * `mod` is right for every chord a platform spells with its own command key, and wrong
+   * for the digits: Cmd+1 is "first tab" on macOS and Ctrl+1 is "first tab" on Windows, so
+   * `mod` would collide with the browser on both. Ctrl is bound to nothing at all on macOS
+   * — it is not in Chromium's mac shortcut table and not in Safari's menus — which is why
+   * it is the one digit chord that is free rather than merely contested.
+   */
+  ctrl?: boolean;
+  /** How the chord reads in the help overlay. */
+  chord: string;
+  label: string;
+}
+
+/**
+ * No transport binding carries Ctrl, Meta or Alt. That is not an oversight:
+ * those belong to the browser (find, reload, tab switching), and the cheapest
+ * way not to fight it is to leave the whole modifier space alone.
+ *
+ * The pane bindings do carry them, and that is what keeps the two halves off
+ * each other: the arrows are the only key both spell, and every pane row below
+ * requires Alt or Ctrl/Meta+Shift, which no transport row will match.
+ */
+export const REPLAY_BINDINGS: readonly ReplayBinding[] = [
+  { action: "stepBack", scope: "replay", key: "ArrowLeft", shift: false, chord: "←", label: "Previous event" },
+  { action: "stepForward", scope: "replay", key: "ArrowRight", shift: false, chord: "→", label: "Next event" },
+  /* The step-sized jump between the event and the turn. `,` and `.` because the
+     arrows are spoken for three times over and these two are on every layout. */
+  {
+    action: "previousStep",
+    scope: "replay",
+    key: ",",
+    shift: false,
+    chord: ",",
+    label: "Previous step — a model call, tool call or approval starting or ending"
+  },
+  {
+    action: "nextStep",
+    scope: "replay",
+    key: ".",
+    shift: false,
+    chord: ".",
+    label: "Next step — a model call, tool call or approval starting or ending"
+  },
+  {
+    action: "previousTurn",
+    scope: "replay",
+    key: "ArrowLeft",
+    shift: true,
+    chord: "Shift ←",
+    label: "Previous turn"
+  },
+  { action: "nextTurn", scope: "replay", key: "ArrowRight", shift: true, chord: "Shift →", label: "Next turn" },
+  { action: "first", scope: "replay", key: "Home", shift: null, chord: "Home", label: "First event" },
+  /* Landing on the last event *is* following the live edge: goTo() sets `following` from
+     `viewIndex === total`, so there is one behaviour here and one row for it. */
+  { action: "last", scope: "replay", key: "End", shift: null, chord: "End", label: "Latest event, and follow live" },
+  { action: "togglePlay", scope: "replay", key: " ", shift: false, chord: "Space", label: "Play / pause" },
+  /* Bare, and taken off the focused scrubber on the argument in the range note below. Up is
+     faster because up is faster everywhere — volume, zoom, every stepper on the platform. */
+  {
+    action: "speedUp",
+    scope: "replay",
+    key: "ArrowUp",
+    shift: false,
+    chord: "↑",
+    label: "Faster playback — one rung up the ×1, ×2, ×5, ×10 ladder"
+  },
+  {
+    action: "speedDown",
+    scope: "replay",
+    key: "ArrowDown",
+    shift: false,
+    chord: "↓",
+    label: "Slower playback — one rung down the ×1, ×2, ×5, ×10 ladder"
+  },
+  { action: "toggleHelp", scope: "replay", key: "?", shift: null, chord: "?", label: "Show this list" },
+  /* One row, two layers. The help sheet is the topmost surface and takes Escape
+     while it is up; the bleeding pane takes it underneath. With neither on
+     screen the resolver declines, so Escape stays the browser's. */
+  {
+    action: "escape",
+    scope: "replay",
+    key: "Escape",
+    shift: null,
+    chord: "Esc",
+    label: "Close this list, or leave full screen"
+  },
+
+  { action: "railFocusPrevious", scope: "rail", key: "ArrowLeft", shift: false, alt: true, chord: "Alt ←", label: "Focus the pane to the left" },
+  { action: "railFocusNext", scope: "rail", key: "ArrowRight", shift: false, alt: true, chord: "Alt →", label: "Focus the pane to the right" },
+  { action: "railFocusPreviousTab", scope: "rail", key: "ArrowUp", shift: false, alt: true, chord: "Alt ↑", label: "Focus the pane above, or the previous tab" },
+  { action: "railFocusNextTab", scope: "rail", key: "ArrowDown", shift: false, alt: true, chord: "Alt ↓", label: "Focus the pane below, or the next tab" },
+  { action: "railMovePrevious", scope: "rail", key: "ArrowLeft", shift: true, mod: true, chord: "Cmd Shift ←", label: "Move the focused pane left" },
+  { action: "railMoveNext", scope: "rail", key: "ArrowRight", shift: true, mod: true, chord: "Cmd Shift →", label: "Move the focused pane right" },
+  { action: "railMovePreviousTab", scope: "rail", key: "ArrowUp", shift: true, mod: true, chord: "Cmd Shift ↑", label: "Move the focused pane up, or into the column before" },
+  { action: "railMoveNextTab", scope: "rail", key: "ArrowDown", shift: true, mod: true, chord: "Cmd Shift ↓", label: "Move the focused pane down, or into the column after" },
+  /* Unmodified, because Cmd+F is the browser's and Alt+F is a menu. */
+  { action: "railToggleBleed", scope: "rail", key: "f", shift: false, chord: "F", label: "Full-screen the focused pane, and back" },
+  /* The drawer's own letter, and bare for the same reason F is: Cmd+D is a bookmark and Alt+D
+     is the address bar, so the plain key is the only one that reaches the page. Until this row
+     the transport's toggle was the only way in, which is a control a reader has to find before
+     they can learn it exists. */
+  { action: "toggleDrawer", scope: "rail", key: "d", shift: false, chord: "D", label: "Open the bottom drawer, and back" },
+
+  /* The digits, one row each because the table matches on the key and the dispatcher is
+     handed the action alone. Written out rather than hand-listed nine times over: the
+     only thing that differs between them is the number, and a hand-written list is nine
+     chances to typo one. */
+  ...RAIL_SLOTS.map(
+    (slot): ReplayBinding => ({
+      action: `railFocusSlot${slot}`,
+      scope: "rail",
+      key: String(slot),
+      shift: false,
+      ctrl: true,
+      chord: `Ctrl ${slot}`,
+      label: slot === 9 ? "Focus the last column" : `Focus column ${slot}`
+    })
+  )
+];
+
+/**
+ * A keyboard event reduced to the things a binding decision depends on.
+ */
+export interface ReplayKeyContext {
+  key: string;
+  shiftKey: boolean;
+  altKey: boolean;
+  /** Ctrl or Meta is down. One flag, because they are one chord on two platforms. */
+  modKey: boolean;
+  /** Ctrl and Meta apart, which only the digit rows have any use for. */
+  ctrlKey: boolean;
+  metaKey: boolean;
+  /** An IME is composing a character and these keystrokes are spelling it. */
+  composing: boolean;
+  /** Focus is in a text field, a select, or a contenteditable region. */
+  typing: boolean;
+  /** Focus is on something the browser activates with Space, such as a button. */
+  spaceActivates: boolean;
+  /**
+   * Keys the focused element has declared it handles, read from
+   * `aria-keyshortcuts`. A control that says which keys are its own gets them.
+   */
+  claimedKeys: readonly string[];
+  /** A modal dialog is up, so the desk behind it is not the reader's to drive. */
+  modalOpen: boolean;
+  /** The help sheet is up, so Escape has it to close. */
+  helpOpen: boolean;
+  /** A pane is full-screen, so Escape has it to leave. */
+  bleeding: boolean;
+}
+
+/**
+ * Input types that hold no text, so a keystroke over one is not typing.
+ */
+const NON_TEXT_INPUT_TYPES = new Set([
+  "button",
+  "checkbox",
+  "color",
+  "file",
+  "hidden",
+  "image",
+  "radio",
+  "range",
+  "reset",
+  "submit"
+]);
+
+/*
+ * A focused range input gets no deference of its own, and wants none.
+ *
+ * The scrubber is a range, and the table already spells what its navigation
+ * keys should do — `←` is one event either way, `Home` is the first event
+ * either way. Where the table has a row, the row wins and the caller's
+ * `preventDefault` cancels the native step, so the two never both land. Where
+ * it has none — PageUp, PageDown — the resolver returns null and the slider
+ * keeps the key. Free platform behaviour survives by not being bound, which
+ * needs no list to maintain and cannot drift out of date against one.
+ *
+ * `↑` and `↓` were on that unbound list until the speed ladder took them, and
+ * the reason they were on it did not survive being read twice. On a range input
+ * they step the value by one — which is exactly what `←` and `→` already do on
+ * that same focused control, and those two are bound. So the deference was
+ * holding a second way to nudge the playhead one event, not a capability the
+ * reader would otherwise lose, and a duplicate is a cheap thing to trade for
+ * the only two keys on the board that spell "more" and "less".
+ *
+ * PageUp and PageDown are the case the principle was actually about, and they
+ * are why it is still written down rather than deleted: a tenth of the run per
+ * press is how a screen-reader user drives a slider, this console offers no
+ * other key that does it, and nothing here is worth spending them on. The rule
+ * did not change — only which keys it turns out to cover.
+ */
+
+/**
+ * Elements the browser activates on Space. Pressing Space just after clicking
+ * one of the transport buttons would otherwise press the button again *and*
+ * toggle playback.
+ */
+const SPACE_ACTIVATED_INPUT_TYPES = new Set(["button", "checkbox", "radio", "reset", "submit"]);
+
+/** What is on screen that a key could act on, which the DOM cannot be asked. */
+export interface ReplaySurfaceState {
+  helpOpen: boolean;
+  bleeding: boolean;
+}
+
+export function describeReplayKeyEvent(
+  event: KeyboardEvent,
+  surfaces: ReplaySurfaceState
+): ReplayKeyContext {
+  const target = event.target as HTMLElement | null;
+  const tag = target?.tagName?.toLowerCase() ?? null;
+  const type =
+    tag === "input" ? ((target as HTMLInputElement).type || "text").toLowerCase() : null;
+
+  return {
+    key: event.key,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    modKey: event.ctrlKey || event.metaKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+    helpOpen: surfaces.helpOpen,
+    bleeding: surfaces.bleeding,
+    /* `isComposing` is the right question, but Chromium answers it late for the
+       first keystroke of a composition and reports the legacy 229 sentinel
+       instead. Both readings mean the user is mid-word. */
+    composing: event.isComposing || event.keyCode === 229,
+    typing:
+      tag === "textarea" ||
+      tag === "select" ||
+      target?.isContentEditable === true ||
+      (tag === "input" && !NON_TEXT_INPUT_TYPES.has(type ?? "text")),
+    spaceActivates:
+      tag === "button" ||
+      tag === "summary" ||
+      (tag === "a" && target?.hasAttribute("href") === true) ||
+      (tag === "input" && SPACE_ACTIVATED_INPUT_TYPES.has(type ?? "text")),
+    claimedKeys: (target?.getAttribute("aria-keyshortcuts") ?? "").split(/\s+/).filter(Boolean),
+    /* `dialog[open]` rather than `dialog:modal` because modal-surfaces.test.mjs
+       already makes the two the same set here — every dialog in this console is
+       opened with `showModal()` and none is written `<dialog open>` — and the
+       attribute selector needs no support floor. */
+    modalOpen: target?.ownerDocument?.querySelector("dialog[open]") != null
+  };
+}
+
+/** A single character compares case-blind; a named key like `ArrowLeft` does not. */
+const foldKey = (key: string): string => (key.length === 1 ? key.toLowerCase() : key);
+
+/**
+ * Whether the surface a binding acts on is actually there.
+ *
+ * Only Escape has anything to say here, and it is the reason Escape is one row
+ * rather than two: with no help sheet and no bleeding pane the key is nobody's,
+ * so the resolver declines and the browser keeps it. Every other binding is
+ * free to be a no-op at the far end — `→` at the live edge moves nothing and
+ * that is still `→` doing its job.
+ */
+function isLive(binding: ReplayBinding, context: ReplayKeyContext): boolean {
+  return binding.action !== "escape" || context.helpOpen || context.bleeding;
+}
+
+export function resolveReplayAction(context: ReplayKeyContext): ReplayAction | null {
+  if (context.composing) return null;
+  /* The one guard that covers every binding in the table, transport and pane
+     alike. Inside a field, arrows and word-jump are the field's: Option+Left is
+     the OS's "back one word" long before it is this console's "pane to the
+     left". */
+  if (context.typing) return null;
+
+  /* The focused control said these keys are its own — the panel resizer
+     declares `aria-keyshortcuts="ArrowLeft ArrowRight Home End"` for exactly
+     this reason. Honouring the attribute is what lets a focused pane shadow a
+     global binding without this module knowing the pane exists.
+
+     A claim covers the bare chord only, because that is the only chord these
+     controls actually handle: the resizer's own handler hands anything modified
+     straight back, Shift included. Shadowing on the key alone and ignoring the
+     modifiers was the scrubber bug — a focused slider ate Shift+Left, a chord
+     it does not distinguish and the table reads as "previous turn", and quietly
+     nudged one event instead. It would equally have stranded a reader on a
+     focused gutter with no chord left to walk off it.
+
+     So the whole claim string has to match, not its last segment. PaneShell
+     declares `Meta+Shift+ArrowUp` and three like it; reading only the tail made
+     those a claim on bare `↑`, which cost nothing while `↑` was unbound and
+     silently disables the speed ladder now that it is. */
+  const key = foldKey(context.key);
+  const bare = !context.altKey && !context.modKey && !context.shiftKey;
+  if (bare) {
+    if (context.claimedKeys.some((claim) => foldKey(claim) === key)) return null;
+    if (context.spaceActivates && context.key === " ") return null;
+  }
+
+  const binding = REPLAY_BINDINGS.find(
+    (candidate) =>
+      candidate.key === key &&
+      (candidate.shift === null || candidate.shift === context.shiftKey) &&
+      (candidate.alt ?? false) === context.altKey &&
+      /* A row that names Ctrl wants Ctrl on its own: Ctrl+Cmd+1 is Safari's bookmarks
+         sidebar, and a match on Ctrl alone would take it. Everything else asks the
+         union, which is the whole point of `mod`. */
+      (candidate.ctrl
+        ? context.ctrlKey && !context.metaKey
+        : (candidate.mod ?? false) === context.modKey) &&
+      isLive(candidate, context)
+  );
+  if (!binding) return null;
+
+  /* A modal is up. The platform already keeps the pointer and the focus ring off
+     the desk behind it; a window-level keydown listener is the one route that
+     still reaches through, and `D` toggling a drawer nobody can see — pressed
+     from inside the very sheet that documents `D` — is the worst version of it.
+
+     The two keys that dismiss a layer carry on, because they act on the layer
+     rather than behind it: `?` is how the help sheet says to close the help
+     sheet, and Escape is nobody's unless something is open. Everything else
+     waits its turn. */
+  if (context.modalOpen && binding.action !== "toggleHelp" && binding.action !== "escape") {
+    return null;
+  }
+
+  return binding.action;
+}
+
+/** Along the rail's columns, or across the panes stacked inside one column. */
+export type RailAxis = "along" | "across";
+
+/**
+ * The pane rail, reduced to the four things a key does to it.
+ *
+ * Deliberately not `PaneStack`. There are two stacks on screen — the rail and
+ * the bottom drawer — and which one a key acts on is the app shell's question,
+ * answered by where the reader last put their hands; this module only needs
+ * somewhere to send the verb. It is also what lets the check drive these keys
+ * against a stub rail instead of a live desk.
+ */
+export interface RailSurface {
+  /** Walk focus one pane, and put DOM focus on where it landed. */
+  focus(axis: RailAxis, delta: -1 | 1): void;
+  /** Carry the focused pane one place the same two ways. */
+  move(axis: RailAxis, delta: -1 | 1): void;
+  /**
+   * Land on a column by its place along the rail, and put DOM focus there.
+   *
+   * A place, not a pane and not a kind. A stable per-pane number would have to be kept
+   * somewhere and would turn over every time a pane closed, and a number per kind cannot
+   * address the second log. What a reader points at is the column they can see, counted
+   * from the left, which is the same thing `focus("along", …)` walks one step at a time.
+   *
+   * A slot with no column behind it does nothing at all — no wrap, no nearest match. The
+   * rail is short and the reader can see how short it is.
+   */
+  focusSlot(slot: RailSlot): void;
+  toggleBleed(): void;
+  exitBleed(): void;
+}
+
+/**
+ * Everything a key can touch. The run holds the transport state; the overlay flag
+ * and the rail belong to the app shell, which passes them in as accessors.
+ */
+export interface ReplaySurface {
+  run: AgentRunController;
+  helpOpen: boolean;
+  rail: RailSurface;
+  /**
+   * Show the bottom drawer, or put it away.
+   *
+   * Not on `RailSurface`, though the drawer is a rail: `rail` here is whichever of the two the
+   * reader last touched, so a drawer verb hung off it would act on the drawer from inside the
+   * drawer. Which box this opens is fixed, so it belongs to the shell alongside `helpOpen`.
+   */
+  toggleDrawer(): void;
+}
+
+/** Nine rows that differ only by a number, told apart from the rest before the switch. */
+function isRailSlotAction(action: ReplayAction): action is `railFocusSlot${RailSlot}` {
+  return action.startsWith("railFocusSlot");
+}
+
+/**
+ * What a key does, in one place. The window handler calls this and so does
+ * `replayHotkeys.test.mjs`, which is the only way that check can compare what two bindings
+ * *do* rather than what they are named.
+ */
+export function applyReplayAction(action: ReplayAction, surface: ReplaySurface): void {
+  const { run, rail } = surface;
+
+  /* Ahead of the switch rather than as nine cases of it. A type predicate rather than a
+     plain string test, so the union the switch sees below is narrowed by exactly these
+     nine and `default` still narrows to `never`. */
+  if (isRailSlotAction(action)) {
+    rail.focusSlot(Number(action.slice(-1)) as RailSlot);
+    return;
+  }
+
+  /* Every case breaks rather than returning, which is left as it is now that nothing runs after
+     the switch: `default` narrowing `action` to `never` is what makes an unhandled action a
+     compile error, and that only holds while every case falls out of the bottom. */
+  switch (action) {
+    case "stepBack":
+      run.stepBack();
+      break;
+    case "stepForward":
+      run.stepForward();
+      break;
+    case "previousStep":
+      run.previousStep();
+      break;
+    case "nextStep":
+      run.nextStep();
+      break;
+    case "previousTurn":
+      run.previousTurn();
+      break;
+    case "nextTurn":
+      run.nextTurn();
+      break;
+    case "first":
+      run.goTo(0);
+      break;
+    case "last":
+      run.goTo(run.total);
+      break;
+    case "togglePlay":
+      if (run.playing) run.pause();
+      else run.play();
+      break;
+    case "speedUp":
+      run.stepPlaybackSpeed(1);
+      break;
+    case "speedDown":
+      run.stepPlaybackSpeed(-1);
+      break;
+    case "toggleHelp":
+      surface.helpOpen = !surface.helpOpen;
+      break;
+    /* Topmost surface first: the sheet covers the bleeding pane, so it is what
+       the reader is escaping from while it is up. The resolver has already
+       established that one of the two is there. */
+    case "escape":
+      if (surface.helpOpen) surface.helpOpen = false;
+      else rail.exitBleed();
+      break;
+    case "railFocusPrevious":
+      rail.focus("along", -1);
+      break;
+    case "railFocusNext":
+      rail.focus("along", 1);
+      break;
+    case "railFocusPreviousTab":
+      rail.focus("across", -1);
+      break;
+    case "railFocusNextTab":
+      rail.focus("across", 1);
+      break;
+    case "railMovePrevious":
+      rail.move("along", -1);
+      break;
+    case "railMoveNext":
+      rail.move("along", 1);
+      break;
+    case "railMovePreviousTab":
+      rail.move("across", -1);
+      break;
+    case "railMoveNextTab":
+      rail.move("across", 1);
+      break;
+    case "railToggleBleed":
+      rail.toggleBleed();
+      break;
+    case "toggleDrawer":
+      surface.toggleDrawer();
+      break;
+    default: {
+      const unhandled: never = action;
+      void unhandled;
+    }
+  }
+}

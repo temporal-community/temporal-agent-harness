@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { X } from "@lucide/svelte";
+  import { untrack } from "svelte";
+  import { Wrench, X } from "@lucide/svelte";
   import {
     Background,
     BackgroundVariant,
+    ControlButton,
     Controls,
     MiniMap,
     SvelteFlow,
@@ -11,27 +13,61 @@
     type NodeTypes
   } from "@xyflow/svelte";
   import "@xyflow/svelte/dist/style.css";
-  import type { AgentGraph, AgentNodeData } from "$lib/state/flowProjection";
+  import Badge from "$lib/components/primitives/Badge.svelte";
+  import IconButton from "$lib/components/primitives/IconButton.svelte";
+  import MetricStrip from "$lib/components/primitives/MetricStrip.svelte";
+  import type {
+    AgentGraph,
+    AgentNodeContext,
+    AgentNodeData
+  } from "$lib/state/flowProjection";
+  import { lerpNodes, nodesMovedInPlace } from "$lib/state/nodeTween";
   import AgentStateNode from "./AgentStateNode.svelte";
   import AgentWorkflowNode from "./AgentWorkflowNode.svelte";
   import AutoFitView from "./AutoFitView.svelte";
 
+  /* Asked per rearrangement rather than cached, so the setting takes effect
+     without a reload. Absent matchMedia (the self-check paths) means no motion
+     preference to honour, not a preference against motion. */
+  function reduceMotion(): boolean {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  }
+
   interface Props {
     graph: AgentGraph;
+    /** Settled tools leave the canvas, rather than every card being kept. */
+    focus: boolean;
+    onFocusChange: (focus: boolean) => void;
     onNodeSelect?: (nodeId: string) => void;
   }
 
-  let { graph, onNodeSelect }: Props = $props();
+  let { graph, focus, onFocusChange, onNodeSelect }: Props = $props();
   let nodes = $state.raw<Node<AgentNodeData>[]>([]);
   let edges = $state.raw<Edge[]>([]);
   let inspectedNode = $state<Node<AgentNodeData> | null>(null);
+  let inspectorElement = $state<HTMLDialogElement | null>(null);
   let flowWrapElement = $state<HTMLDivElement | null>(null);
   let flowViewportWidth = $state(0);
   let flowViewportHeight = $state(0);
   let resizeFrame = 0;
+  let tweening = $state(false);
+  let tweenFrame = 0;
+  /* Long enough to be followed across the pane, short enough that a reader
+     toggling the view twice is not waiting on the first one. */
+  const tweenMs = 260;
   const minZoom = 0.04;
   const maxZoom = 2.5;
-  const fitViewOptions = { padding: 0.16, minZoom, maxZoom };
+  /* Auto-fit frames the graph but never magnifies it. A fit that runs while the
+     graph is still arriving sees one node, or nodes not yet measured, and filling
+     the pane with it lands at maxZoom — so every page load opened at 2.5x and then
+     swept back out to the real framing. Capping the fit at 1:1 means that early
+     framing is somewhere the graph can sit, not a place to escape from. Manual
+     zoom is unaffected and still reaches maxZoom. */
+  const fitViewOptions = { padding: 0.16, minZoom, maxZoom: 1 };
   const nodeTypes: NodeTypes = {
     agentState: AgentStateNode,
     agentWorkflow: AgentWorkflowNode
@@ -56,9 +92,51 @@
   const viewportSignature = $derived(`${flowViewportWidth}x${flowViewportHeight}`);
   const fitSignature = $derived(`${autoFitSignature}|${viewportSignature}`);
 
+  /**
+   * A rearrangement travels rather than cutting.
+   *
+   * Every frame rebuilds the whole projection, so folding a batch, opening one,
+   * or throwing the focus switch arrives as an entirely new set of positions.
+   * nodeTween decides which nodes are entitled to move; this decides when it is
+   * worth doing, which is only when something that stayed also moved. Ordinary
+   * streaming — text into a card that has not shifted — takes the direct
+   * assignment and pays nothing.
+   */
   $effect(() => {
-    nodes = graph.nodes;
+    const next = graph.nodes;
     edges = graph.edges;
+    /* untracked: this effect writes `nodes`, and reading it as a dependency
+       would make every interpolated frame re-enter the effect that produced it. */
+    const previous = untrack(() => nodes);
+
+    if (tweenFrame) cancelAnimationFrame(tweenFrame);
+    if (reduceMotion() || !nodesMovedInPlace(previous, next)) {
+      nodes = next;
+      tweening = false;
+      return;
+    }
+
+    tweening = true;
+    const start = performance.now();
+    const step = () => {
+      const t = Math.min(1, (performance.now() - start) / tweenMs);
+      /* Ease out: the graph leaves briskly and arrives gently, which is what
+         makes a rearrangement read as one move rather than a slide. */
+      nodes = lerpNodes(previous, next, 1 - (1 - t) ** 3);
+      if (t < 1) {
+        tweenFrame = requestAnimationFrame(step);
+        return;
+      }
+      tweenFrame = 0;
+      tweening = false;
+    };
+    tweenFrame = requestAnimationFrame(step);
+
+    return () => {
+      if (tweenFrame) cancelAnimationFrame(tweenFrame);
+      tweenFrame = 0;
+      tweening = false;
+    };
   });
 
   $effect(() => {
@@ -88,32 +166,21 @@
     };
   });
 
-  function detailText(data: AgentNodeData): { label: string; text: string; kind: "code" | "json" | "text" } {
-    const detail = data.detail;
-    if (typeof detail !== "string" || !detail.trim()) {
-      return { label: "Context", text: "No additional context captured for this node.", kind: "text" };
-    }
-
-    try {
-      const parsed = JSON.parse(detail);
-      const script =
-        typeof parsed?.script === "string"
-          ? parsed.script
-          : typeof parsed?.payload?.script === "string"
-            ? parsed.payload.script
-            : null;
-      if (script) return { label: "Script", text: script, kind: "code" };
-      return { label: "Context", text: JSON.stringify(parsed, null, 2), kind: "json" };
-    } catch {
-      return { label: "Context", text: detail, kind: looksLikeCode(detail) ? "code" : "text" };
-    }
+  /**
+   * The sections come from flowProjection, which is the only layer that can see
+   * the frames. This used to read `data.detail` and nothing else, and print "No
+   * additional context captured for this node." whenever it was unset — which is
+   * every model interaction ever rendered, because nodeDataFor has never given
+   * that kind a `detail`. contextFor() now guarantees a non-empty list for every
+   * node kind, so there is no empty case left to write a message for.
+   */
+  function sectionsFor(data: AgentNodeData): AgentNodeContext[] {
+    return Array.isArray(data.context) && data.context.length > 0
+      ? data.context
+      : [{ label: "Node", text: JSON.stringify(data, null, 2), kind: "json" }];
   }
 
-  function looksLikeCode(value: string): boolean {
-    return /^\s*(def |class |import |from |async def |value\s*=|answer\s*=|\{)/m.test(value);
-  }
-
-  function inspectNode(node: Node<AgentNodeData>): void {
+  function handleNodeClick(node: Node<AgentNodeData>): void {
     inspectedNode = node;
     onNodeSelect?.(node.id);
   }
@@ -122,12 +189,34 @@
     inspectedNode = null;
   }
 
-  function handleInspectorKeydown(event: KeyboardEvent): void {
-    if (event.key === "Escape") closeInspector();
+  function mapMarkClass(node: Node): string {
+    const tone = (node.data as AgentNodeData | undefined)?.tone;
+    if (tone === "error") return "mm-fail";
+    if (tone === "queue" || tone === "approval") return "mm-wait";
+    if (tone === "done") return "mm-done";
+    return "mm-run";
   }
-</script>
 
-<svelte:window onkeydown={handleInspectorKeydown} />
+  function mapMarkColor(node: Node): string {
+    const tone = (node.data as AgentNodeData | undefined)?.tone;
+    if (tone === "done") return "var(--success)";
+    if (tone === "error") return "var(--error)";
+    if (tone === "model" || tone === "reasoning") return "var(--model)";
+    if (tone === "tool") return "var(--tool)";
+    if (tone === "queue" || tone === "approval") return "var(--queue)";
+    return "var(--accent)";
+  }
+
+  /* showModal() rather than the `open` attribute, which is what this used to
+     set. The top layer is what grants a dialog its focus trap, its Escape, its
+     focus restore, and a real ::backdrop; with `open` alone the browser gives
+     none of them, so Escape and the scrim were hand-rolled and the focus
+     behaviour was simply missing. */
+  $effect(() => {
+    const element = inspectorElement;
+    if (element && !element.open) element.showModal();
+  });
+</script>
 
 <div class="flow-wrap" bind:this={flowWrapElement}>
   <SvelteFlow
@@ -142,58 +231,91 @@
     nodesDraggable={false}
     nodesConnectable={false}
     elementsSelectable
-    onnodeclick={({ node }) => inspectNode(node)}
+    onnodeclick={({ node }) => handleNodeClick(node)}
     proOptions={{ hideAttribution: true }}
   >
-    <AutoFitView signature={fitSignature} {fitViewOptions} />
-    <Controls {fitViewOptions} />
-    <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
+    <AutoFitView signature={fitSignature} {fitViewOptions} hold={tweening} />
+    <!-- No lock button: nothing on this canvas is draggable, so it only ever
+         toggled selection on a pane whose single click opens an inspector.
+         The tool switch takes its place rather than sitting in a bar of its own,
+         because "show me less of this graph" and "show me this graph smaller"
+         are the same question and belong in the same corner. -->
+    <Controls {fitViewOptions} showLock={false}>
+      <ControlButton
+        aria-label="Show every tool"
+        aria-pressed={!focus}
+        onclick={() => onFocusChange(!focus)}
+      >
+        <Wrench size={14} />
+      </ControlButton>
+    </Controls>
+    <MiniMap
+      pannable
+      zoomable
+      nodeColor={mapMarkColor}
+      nodeClass={mapMarkClass}
+      nodeBorderRadius={5}
+      ariaLabel="Flow overview"
+    />
+    <Background
+      variant={BackgroundVariant.Dots}
+      gap={18}
+      size={1}
+      bgColor="var(--flow-canvas)"
+      patternColor="var(--flow-dots)"
+    />
   </SvelteFlow>
 
   {#if inspectedNode}
     {@const data = inspectedNode.data}
-    {@const detail = detailText(data)}
-    <button
-      type="button"
-      class="inspector-backdrop"
-      aria-label="Close node context"
-      onclick={closeInspector}
-    ></button>
+    {@const sections = sectionsFor(data)}
+    <!-- The scrim is the dialog's own ::backdrop now, so there is no element
+         between the canvas and the dialog to catch the click. A click that lands
+         on the dialog itself can only have come from the backdrop, because the
+         body fills it edge to edge. -->
     <dialog
+      bind:this={inspectorElement}
       class={`node-inspector ${data.tone}`}
       aria-label={`${data.title} context`}
-      open
+      onclose={closeInspector}
+      onclick={(event) => {
+        if (event.target === inspectorElement) inspectorElement?.close();
+      }}
     >
-      <header class="inspector-header">
-        <div class="inspector-heading">
-          <span class={`inspector-dot ${data.dotTone ?? data.tone}`} aria-hidden="true"></span>
-          <div>
-            <h2>{data.title}</h2>
-            <p>{data.subtitle ?? "state diagram node"}</p>
+      <div class="inspector-body">
+        <header class="inspector-header">
+          <div class="inspector-heading">
+            <span class={`inspector-dot ${data.dotTone ?? data.tone}`} aria-hidden="true"></span>
+            <div>
+              <h2>{data.title}</h2>
+              <p>{data.subtitle ?? "state diagram node"}</p>
+            </div>
           </div>
-        </div>
-        <div class="inspector-actions">
-          <span class="inspector-state">{data.state}</span>
-          <button type="button" class="close-button" aria-label="Close node context" onclick={closeInspector}>
-            <X size={18} />
-          </button>
-        </div>
-      </header>
+          <div class="inspector-actions">
+            <Badge label={data.state} tone={data.statusTone ?? data.tone} size="sm" />
+            <IconButton label="Close node context" onclick={() => inspectorElement?.close()}>
+              <X size={16} />
+            </IconButton>
+          </div>
+        </header>
 
-      {#if data.metrics?.length}
-        <div class="inspector-metrics">
-          {#each data.metrics as metric}
-            <span><strong>{metric.value}</strong>{metric.label}</span>
+        {#if data.metrics?.length}
+          <MetricStrip metrics={data.metrics} />
+        {/if}
+
+        <!-- Scrolls as one column: the reply the node card had to clip belongs
+             here in full, and it is routinely longer than the dialog is tall. -->
+        <div class="inspector-content">
+          {#each sections as section (section.label)}
+            <div class="inspector-section">
+              <div class="kicker">{section.label}</div>
+              <div class="expanded-detail-wrap"><pre
+                  class={`expanded-detail ${section.kind}`}
+                  data-language={section.kind === "text" ? undefined : section.kind}
+                ><code>{section.text}</code></pre></div>
+            </div>
           {/each}
         </div>
-      {/if}
-
-      <div class="inspector-content">
-        <div class="content-label">{detail.label}</div>
-        <pre
-          class={`expanded-detail ${detail.kind}`}
-          data-language={detail.kind === "json" ? "json" : detail.kind === "code" ? "code" : undefined}
-        ><code>{detail.text}</code></pre>
       </div>
     </dialog>
   {/if}
@@ -205,45 +327,45 @@
     width: 100%;
     height: 100%;
     min-height: 0;
-    background: var(--surface-0);
+    background: var(--flow-canvas);
   }
 
-  .inspector-backdrop {
-    position: absolute;
-    inset: 0;
-    z-index: 20;
-    border: 0;
-    background: rgba(0, 0, 0, 0.42);
-    cursor: default;
-  }
-
+  /* Centred by the UA's own :modal rule rather than by a translate, which is
+     the other thing the top layer hands over for free. */
   .node-inspector {
     --tone-color: var(--text-3);
-    position: absolute;
-    z-index: 21;
-    left: 50%;
-    top: 50%;
-    width: min(760px, calc(100% - 48px));
-    max-height: min(720px, calc(100% - 48px));
-    transform: translate(-50%, -50%);
     display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding: 20px;
-    border: 2px solid color-mix(in srgb, var(--tone-color) 72%, white 6%);
-    border-radius: 12px;
+    width: min(760px, calc(100% - var(--gutter) * 4));
+    max-height: min(720px, calc(100% - var(--gutter) * 4));
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--tone-color) 72%, var(--text-1) 6%);
     background: color-mix(in srgb, var(--tone-color) 9%, var(--surface-2));
     color: var(--text-1);
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--tone-color) 26%, transparent),
-      0 26px 80px rgba(0, 0, 0, 0.62);
+    box-shadow: var(--shadow-modal);
+  }
+
+  .node-inspector::backdrop {
+    background: var(--overlay-scrim);
+  }
+
+  /* The inset lives here, not on the dialog, so the dialog's own box is only
+     ever the backdrop's click target. */
+  .inspector-body {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--gutter);
+    padding: var(--gutter);
   }
 
   .node-inspector.neutral { --tone-color: var(--text-3); }
   .node-inspector.agent { --tone-color: var(--accent); }
   .node-inspector.model { --tone-color: var(--model); }
   .node-inspector.reasoning { --tone-color: var(--reasoning); }
-  .node-inspector.tool { --tone-color: var(--warning); }
+  .node-inspector.tool { --tone-color: var(--tool); }
   .node-inspector.approval,
   .node-inspector.queue { --tone-color: var(--queue); }
   .node-inspector.done { --tone-color: var(--success); }
@@ -253,47 +375,49 @@
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 16px;
+    gap: var(--gutter);
     min-width: 0;
   }
 
   .inspector-heading {
     display: flex;
     align-items: flex-start;
-    gap: 12px;
+    gap: var(--gutter-tight);
     min-width: 0;
   }
 
   .inspector-heading h2 {
     margin: 0;
-    font-size: 22px;
+    font-size: var(--font-title);
     line-height: 1.2;
     letter-spacing: 0;
   }
 
   .inspector-heading p {
-    margin: 5px 0 0;
+    margin: var(--gap-xs) 0 0;
     color: var(--text-2);
-    font-size: 13px;
+    font-size: var(--font-lg);
     line-height: 1.35;
     word-break: break-word;
   }
 
+  /* The one part of the header with no primitive behind it: a tone square, the
+     same mark Chip draws as its pip and the node card draws beside its title.
+     Sized by the pip token so all three stay one size, and unringed because the
+     elevation layer has no blooms in it. */
   .inspector-dot {
     flex: 0 0 auto;
-    width: 11px;
-    height: 11px;
-    margin-top: 8px;
-    border-radius: 999px;
+    width: var(--pip-lg);
+    height: var(--pip-lg);
+    margin-top: var(--gap-md);
     background: var(--tone-color);
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--tone-color) 18%, transparent);
   }
 
   .inspector-dot.neutral { background: var(--text-3); }
   .inspector-dot.agent { background: var(--accent); }
   .inspector-dot.model { background: var(--model); }
   .inspector-dot.reasoning { background: var(--reasoning); }
-  .inspector-dot.tool { background: var(--warning); }
+  .inspector-dot.tool { background: var(--tool); }
   .inspector-dot.approval,
   .inspector-dot.queue { background: var(--queue); }
   .inspector-dot.done { background: var(--success); }
@@ -302,102 +426,44 @@
   .inspector-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--gap-md);
     flex: 0 0 auto;
   }
 
-  .inspector-state {
-    max-width: 190px;
-    padding: 5px 10px;
-    border: 1px solid color-mix(in srgb, var(--tone-color) 34%, var(--border));
-    border-radius: 999px;
-    color: var(--text-2);
-    background: color-mix(in srgb, var(--tone-color) 10%, var(--surface-1));
-    font-size: 12px;
-    font-weight: 700;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .close-button {
-    display: inline-grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--surface-3) 72%, transparent);
-    color: var(--text-2);
-    cursor: pointer;
-  }
-
-  .close-button:hover {
-    color: var(--text-1);
-    border-color: var(--border-strong);
-  }
-
-  .inspector-metrics {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-
-  .inspector-metrics span {
-    min-width: 84px;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text-3);
-    background: color-mix(in srgb, var(--surface-1) 84%, transparent);
-    font-size: 10px;
-    text-transform: uppercase;
-  }
-
-  .inspector-metrics strong {
-    display: block;
-    margin-bottom: 2px;
-    color: var(--text-1);
-    font-size: 13px;
-    font-variant-numeric: tabular-nums;
-    text-transform: none;
-  }
-
+  /* The column scrolls, not each section: several bodies of very different
+     lengths, and a reply that is routinely taller than the dialog. */
   .inspector-content {
+    flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 7px;
+    gap: var(--gutter);
+    overflow-y: auto;
   }
 
-  .content-label {
-    color: var(--text-3);
-    font-size: 11px;
-    font-weight: 750;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+  .inspector-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-sm);
+  }
+
+  /* Positions the language tag from outside the scroller: an absolutely
+     positioned box whose containing block is the scroll container is laid out in
+     scrolled coordinates and slides away with the code. */
+  .expanded-detail-wrap {
+    position: relative;
+    min-width: 0;
   }
 
   .expanded-detail {
-    position: relative;
-    min-height: 180px;
-    max-height: min(520px, calc(100vh - 260px));
     margin: 0;
-    padding: 16px;
-    overflow: auto;
+    padding: var(--gutter);
+    overflow-x: auto;
     border: 1px solid color-mix(in srgb, var(--tone-color) 22%, var(--border));
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--surface-0) 86%, black 10%);
+    background: var(--surface-0);
     color: var(--text-2);
-    font-family:
-      ui-monospace,
-      SFMono-Regular,
-      Menlo,
-      Monaco,
-      Consolas,
-      "Liberation Mono",
-      monospace;
-    font-size: 13px;
+    font-family: var(--font-mono);
+    font-size: var(--font-code);
     line-height: 1.55;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -405,7 +471,8 @@
 
   .expanded-detail.code,
   .expanded-detail.json {
-    padding-top: 34px;
+    /* The gutter, plus a chip row for the language tag to sit in. */
+    padding-top: calc(var(--gutter) + var(--control-height-xs));
     border-color: var(--code-block-border);
     background: var(--code-block-bg);
     color: var(--code-block-text);
@@ -414,35 +481,45 @@
     overflow-wrap: normal;
   }
 
+  /* app.css draws the language tag; this only says where to put it. */
   .expanded-detail.code::before,
   .expanded-detail.json::before {
-    content: attr(data-language);
     position: absolute;
-    top: 9px;
-    right: 10px;
-    padding: 2px 7px;
-    border: 1px solid var(--code-label-border);
-    border-radius: 999px;
-    background: var(--code-label-bg);
-    color: var(--code-label-text);
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-    font-size: 10px;
-    font-weight: 750;
-    line-height: 1.2;
-    letter-spacing: 0;
+    top: var(--gap-md);
+    right: var(--gap-md);
   }
 
-  :global(.svelte-flow__edges) {
-    z-index: 1;
-  }
+  /* Deliberately no z-index on either layer, which is what these two rules used
+     to set. The library positions .svelte-flow__edges absolutely and leaves
+     .svelte-flow__nodes static, so those rules were not the symmetric pair they
+     read as: the nodes one was inert (a static box ignores z-index), while the
+     edges one opened a stacking context that flattened every edge in the canvas
+     onto a single rung at 1. Each node's own z-index then competed against that
+     one number, and any node above it — an embedded subagent's boundary at 4,
+     the Subagent activity container at 10 — painted over edges that were drawn,
+     at the right coordinates, underneath it. Left to `auto`, both layers stay
+     transparent to stacking and flowProjection's per-element z-index decides,
+     which is the ordering it has always described. */
 
-  :global(.svelte-flow__nodes) {
-    z-index: 2;
+  /* Puts back the baseline ring app.css gives every other focusable thing. A
+     node was the one focusable element on the page with none: the library's own
+     stylesheet sets `outline: none` on .svelte-flow__node.selectable:focus-visible,
+     so tabbing the canvas moved an invisible cursor. Nested under .flow-wrap
+     rather than written flat, because that rule is three classes deep and a
+     flat :global() would lose to it — the scoped ancestor is how this file
+     outranks a vendor stylesheet without a specificity hack.
+
+     Offset outward, because a flush outline is what selection draws: a keyboard
+     user who has focused a node without selecting it must not be shown the
+     selected mark, and a node that is both wears the two rings concentrically. */
+  .flow-wrap :global(.svelte-flow__node:focus-visible) {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
   }
 
   :global(.svelte-flow__edge-text) {
     fill: var(--text-2);
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-weight: 650;
   }
 
@@ -461,13 +538,13 @@
   }
 
   :global(.edge-approval .svelte-flow__edge-path) {
-    stroke: color-mix(in srgb, var(--queue) 78%, white 6%);
+    stroke: color-mix(in srgb, var(--queue) 78%, var(--text-1) 6%);
     stroke-width: 2;
     stroke-dasharray: 6 5;
   }
 
   :global(.edge-approval .svelte-flow__edge-text) {
-    fill: color-mix(in srgb, var(--queue) 82%, white 8%);
+    fill: color-mix(in srgb, var(--queue) 82%, var(--text-1) 8%);
   }
 
   :global(.edge-output .svelte-flow__edge-path) {
@@ -488,5 +565,20 @@
   :global(.svelte-flow__minimap) {
     background: var(--surface-1);
     border: 1px solid var(--border);
+  }
+
+  /* Shape is the second channel: colour alone smears at MiniMap size.
+     Diamond = failed, pill = waiting, square = done, rounded = running.
+     clip-path on the SVG rect, so the MiniMap's own packing is left alone. */
+  :global(.svelte-flow__minimap-node.mm-fail) {
+    clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  }
+
+  :global(.svelte-flow__minimap-node.mm-wait) {
+    clip-path: circle(50%);
+  }
+
+  :global(.svelte-flow__minimap-node.mm-done) {
+    clip-path: inset(12% round 1px);
   }
 </style>

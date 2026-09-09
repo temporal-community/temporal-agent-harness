@@ -67,7 +67,17 @@ function addUsage(totals: UsageTotals, usage: TokenUsage): void {
   totals.thought += usage.thought_tokens ?? 0;
   totals.cached += usage.cached_tokens ?? 0;
   totals.toolUse += usage.tool_use_tokens ?? 0;
-  totals.total += (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+  /* The five fields above OVERLAP, so their sum is not a token count. `cached` is
+     the slice of `input` the prompt cache served; for the OpenAI and pydantic-ai
+     producers `thought` is likewise the slice of `output` spent reasoning. Gemini
+     instead reports thought and tool-use outside input/output and folds them into
+     its own `total_tokens` ("prompt + responses + other internal tokens"). Only
+     the provider knows which convention it used, which is why the protocol ships
+     a grand total and documents it as "not necessarily the sum of the parts".
+     Falling back to input + output keeps the previous answer for a producer that
+     reports no total of its own. */
+  totals.total +=
+    usage.total_tokens ?? (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
 }
 
 function estimate(model: string, tokens: UsageTotals): number | null {
@@ -154,7 +164,20 @@ export function buildUsageTimeline(frames: AgentSseFrame[]): UsageTimelinePoint[
       addUsage(cumulative, frame.data.usage);
       const estimatedCostUsd = estimate(frame.data.model ?? "unknown", tokens);
       if (estimatedCostUsd == null) {
-        hasUnknownCost = true;
+        /* The latch is deliberate and stays: this series is CUMULATIVE, so once a
+           term is missing every later sum is a lower bound rather than a value,
+           and reporting the known part as if it were the whole is a quieter lie
+           than reporting nothing. What is not deliberate is tripping on an
+           interaction that spent nothing — zero tokens cost zero at any price, so
+           it cannot make the running total unknown. Summed field-wise rather than
+           via tokens.total because a provider that reports no grand total of its
+           own still leaves thought and tool-use counts outside that fallback. */
+        if (
+          tokens.input + tokens.output + tokens.thought + tokens.cached + tokens.toolUse >
+          0
+        ) {
+          hasUnknownCost = true;
+        }
       } else {
         cumulativeCost += estimatedCostUsd;
       }
@@ -176,6 +199,19 @@ export function formatCost(cost: number | null): string {
   if (cost == null) return "—";
   if (cost < 0.01) return `$${cost.toFixed(4)}`;
   return `$${cost.toFixed(2)}`;
+}
+
+/** Models in this run that we hold no price for, so their cost is unknown. */
+export function unpricedModels(usage: CostSummary): string[] {
+  return usage.modelBreakdown
+    .filter((item) => item.estimatedCostUsd == null)
+    .map((item) => item.model);
+}
+
+/** Hover text for a cost we could not compute. Null when the cost is real. */
+export function unpricedNote(models: string[]): string | null {
+  if (models.length === 0) return null;
+  return `No price configured for ${models.join(", ")} — token counts are exact, cost is not estimated.`;
 }
 
 export function formatTokens(value: number): string {

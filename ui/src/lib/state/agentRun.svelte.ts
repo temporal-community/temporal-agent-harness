@@ -1,31 +1,61 @@
 import type {
   AgentInboundMessage,
   AgentInterfaceFunction,
-  AgentMessageObject,
   AgentSseFrame,
   OperatorCommand,
   OperatorCommandResponse,
+  ToolId,
   WorkflowExecutionState
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
 import type { AgentDescriptor, Session } from "$lib/api/types";
+import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
 import { HttpAgentApi } from "$lib/api/httpClient";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
+import { chooseBootSession } from "./bootSession";
+import {
+  readCachedFrames,
+  readOperatorPrefs,
+  readStoredActiveSessionId,
+  readUrlSessionId,
+  writeCachedFrames,
+  writeOperatorPrefs,
+  writeStoredActiveSessionId,
+  writeUrlSessionId
+} from "./agentRunStorage";
 import {
   buildAgentTreeGraph,
+  settledNearCursor,
+  settledToolIdFromFrame,
   type AgentGraphSource
 } from "./flowProjection";
+import {
+  catchUpCeilingMs,
+  catchingUpAfterFrame,
+  cursorAfterPublish,
+  framePublishChunkSize,
+  publishAtChunkBoundary,
+  settleIsLive
+} from "./hydration";
+import {
+  displayTextForMessage,
+  isAgentMessageObject,
+  renderUserMessage
+} from "./inboundMessageText";
 import { buildReplayLog, buildReplayMarkers } from "./replayLog";
-import { buildStepTimeline, type StepTimelineFrame } from "./stepTimeline";
+import { buildReplayTimeline } from "./replayTimeline";
+import { buildStepBoundaries, buildStepTimeline } from "./stepTimeline";
 import { buildTranscript } from "./transcript";
 
-export type PlaybackSpeed = 1 | 2 | 5 | 10;
+/* The ladder, in rung order, and the only place it is written down: the chip cycles it,
+   the arrow keys step it, and the type is read off it so a fifth rung is one edit. */
+export const PLAYBACK_SPEEDS = [1, 2, 5, 10] as const;
+export type PlaybackSpeed = (typeof PLAYBACK_SPEEDS)[number];
 
 export interface RunInfo {
   sessionId: string;
   agentLabel: string;
-  models: string[];
   startedAt: number;
 }
 
@@ -50,139 +80,108 @@ export interface OperatorTarget {
   closed: boolean;
 }
 
-type ReplayTimelineRole = "parent" | "subagent";
-
-interface ReplayTimelineEntry extends StepTimelineFrame {
-  workflowId: string;
-  role: ReplayTimelineRole;
-  frame: AgentSseFrame;
-}
-
 const basePlaybackDelayMs = 700;
-const activeSessionStorageKey = "temporal-agent-ui.active-session.v1";
-const frameCacheStorageKeyPrefix = "temporal-agent-ui.frames.v1:";
+/**
+ * How long a finished tool stays on the focus canvas before it goes.
+ *
+ * Long enough to register as a state a card passed through, short enough that a
+ * fan-out of eight settling together does not put the clutter back. Under about
+ * 600ms a card that arrives and settles in the same breath reads as a flicker.
+ */
+const settledLingerMs = 1200;
 
-function frameCacheStorageKey(sessionId: string): string {
-  return `${frameCacheStorageKeyPrefix}${sessionId}`;
+function now(): number {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
-function readStoredActiveSessionId(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const value = window.localStorage.getItem(activeSessionStorageKey);
-    return value && value.trim() ? value : null;
-  } catch {
-    return null;
-  }
-}
+/**
+ * Backoff before re-opening a stream that dropped mid-run, and the cap on how
+ * many times to try.
+ *
+ * Capped because an unbounded loop against a server that is genuinely down is
+ * worse than going quiet: it never stops, never surfaces the error, and buries
+ * the real one under retries.
+ *
+ * The tail repeats at the cap rather than doubling further, and the total —
+ * about half a minute — is sized for the one outage nothing else here can
+ * recover from: a server restart. Losing the network fires an `online` event
+ * on the way back (see #reattachWhenOnline), and a sleeping machine suspends
+ * these timers so the budget survives the nap. A server that is down while the
+ * network stays up produces neither signal, so the wait for it has to be spent
+ * here.
+ */
+const reattachBackoffMs = [500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000];
 
-function writeStoredActiveSessionId(sessionId: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(activeSessionStorageKey, sessionId);
-  } catch {
-    // Ignore storage failures; active session persistence is a UI convenience.
-  }
-}
-
-function removeStoredActiveSessionId(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(activeSessionStorageKey);
-  } catch {
-    // Ignore storage failures.
-  }
-}
-
-function readCachedFrames(sessionId: string): AgentSseFrame[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.sessionStorage.getItem(frameCacheStorageKey(sessionId));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as { frames?: unknown };
-    return Array.isArray(parsed.frames) ? (parsed.frames as AgentSseFrame[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeCachedFrames(sessionId: string, frames: AgentSseFrame[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.setItem(
-      frameCacheStorageKey(sessionId),
-      JSON.stringify({ frames, savedAt: Date.now() })
-    );
-  } catch {
-    try {
-      window.sessionStorage.removeItem(frameCacheStorageKey(sessionId));
-    } catch {
-      // Ignore storage failures.
+/** Sleep, unless the stream is abandoned first. */
+function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
     }
-  }
-}
-
-function renderUserMessage(value: string): string {
-  if (!value.startsWith("{")) return value;
-  try {
-    const message = JSON.parse(value) as {
-      type?: string;
-      payload?: { name?: string; arg?: string; text?: string; script?: string };
-      script?: string;
+    let timer: ReturnType<typeof setTimeout>;
+    const settle = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", settle);
+      resolve();
     };
-    if (typeof message.payload?.text === "string") return message.payload.text;
-    if (typeof message.payload?.script === "string") return message.payload.script;
-    if (typeof message.script === "string") return message.script;
-    if (
-      (message.type !== "slash" && message.type !== "slash_command") ||
-      !message.payload?.name
-    ) {
-      return value;
+    timer = setTimeout(settle, ms);
+    signal.addEventListener("abort", settle, { once: true });
+  });
+}
+
+/**
+ * Hand the main thread back so the browser can paint and answer input.
+ *
+ * A rAF rather than a bare timeout, because the point is to let a paint happen:
+ * resuming before one has means the work was interleaved without the page ever
+ * catching up.
+ */
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => resolve());
+      return;
     }
-    return slashCommandDisplayText(message.payload.name, message.payload.arg);
-  } catch {
-    return value;
-  }
+    setTimeout(resolve, 0);
+  });
 }
 
-function isAgentMessageObject(message: AgentInboundMessage): message is AgentMessageObject {
-  return typeof message === "object" && message !== null;
-}
-
-function slashCommandDisplayText(name: string, arg?: string): string {
-  const command = name === "set-model" ? "model" : name;
-  return `/${command}${arg ? ` ${arg}` : ""}`;
-}
-
-function displayTextForMessage(message: AgentInboundMessage): string {
-  if (typeof message === "string") return message.trim();
+/**
+ * The identity #ingestFrame dedupes on. A frame arriving twice is normal — a reconnect replays from
+ * a root offset, and the cached frames overlap the live stream — so this has to say "same event"
+ * exactly when it is the same event.
+ *
+ * An event read off a log reports its own offset there, which with the tree-unique `agent_id` is
+ * precisely that: stable across redeliveries, distinct between two events of one agent. Prefer it.
+ *
+ * Fall back to hashing the payload only for the frames that have no offset to report — the ones the
+ * server synthesized, plus client-side stream errors that carry no envelope. This fallback is what
+ * every frame used to use, and the reason not to: two DIFFERENT events with byte-identical payloads
+ * collide under it, and the second is silently dropped. Measured over 214 frames of live traffic
+ * that never fired, but the synthesized `subagent_stream_unavailable` marker is constructibly
+ * vulnerable — every field of it is a constant for a given child, so a child given up twice (the
+ * merge re-arms a re-dispatched child's gate) yields two identical frames. Keeping the fallback
+ * scoped to those frames holds their behavior exactly as it is today while real events, which are
+ * the ones whose loss would corrupt the transcript, get an identity that cannot collide.
+ *
+ * Exported for frameKey.test.mjs, which asserts these properties. It held a
+ * hand-copied twin of this function for as long as there was no way to import
+ * one — so the check could agree with itself while disagreeing with the shipped
+ * dedupe, which is the one thing it exists to rule out.
+ */
+export function frameKey(frame: AgentSseFrame): string {
   if (
-    message.type === "slash" &&
-    typeof message.payload === "object" &&
-    message.payload != null &&
-    "name" in message.payload &&
-    typeof message.payload.name === "string"
+    "event_offset" in frame.data &&
+    "agent_id" in frame.data &&
+    typeof frame.data.event_offset === "number" &&
+    frame.data.event_offset !== SYNTHESIZED
   ) {
-    const arg =
-      "arg" in message.payload && typeof message.payload.arg === "string"
-        ? message.payload.arg
-        : undefined;
-    return slashCommandDisplayText(message.payload.name, arg);
+    return `${frame.data.agent_id}|${frame.data.event_offset}`;
   }
-  if (
-    message.type === "run_script" &&
-    typeof message.payload === "object" &&
-    message.payload != null &&
-    "script" in message.payload &&
-    typeof message.payload.script === "string"
-  ) {
-    return message.payload.script.trim();
-  }
-  return JSON.stringify(message);
-}
-
-function frameKey(frame: AgentSseFrame): string {
-  const { resume_offset: _resumeOffset, ...identityData } = frame.data;
+  const identityData: Record<string, unknown> = { ...frame.data };
+  delete identityData.resume_offset;
+  delete identityData.event_offset;
   return `${frame.event}|${JSON.stringify(identityData)}`;
 }
 
@@ -218,12 +217,20 @@ export class AgentRunController {
   closedWorkflowIds = $state<string[]>([]);
   viewIndex = $state(0);
   playing = $state(false);
-  following = $state(false);
+  /**
+   * Tail the live edge. Load-bearing now that the cursor only advances while it
+   * is set: starting false would leave a fresh session parked at event zero
+   * while frames streamed in behind it.
+   */
+  following = $state(true);
   connecting = $state(false);
   sending = $state(false);
   creatingSession = $state(false);
   refreshingSessions = $state(false);
-  connectionError = $state<string | null>(null);
+  /** List-load failure for the picker; never the stream connection banner. */
+  sessionsError = $state<string | null>(null);
+  #connectionError = $state<string | null>(null);
+  #connectionErrorCode = $state<string | null>(null);
   playbackSpeed = $state<PlaybackSpeed>(1);
   agents = $state<AgentDescriptor[]>([]);
   sessions = $state<Session[]>([]);
@@ -233,6 +240,11 @@ export class AgentRunController {
   #streamVersion = 0;
   #connectionVersion = 0;
   #sendVersion = 0;
+  #syncingSessions = false;
+  /** Single-flight promise for listSessions loads. */
+  #sessionsLoad: Promise<void> | null = null;
+  /** When the last listSessions finished (ms). */
+  #sessionsLoadedAt = 0;
   #streamAbort: AbortController | null = null;
   #interfaceRequests = new Set<string>();
   #operatorInterfaceRequests = new Set<string>();
@@ -240,14 +252,118 @@ export class AgentRunController {
   #workflowAttachAbort = new Map<string, AbortController>();
   #frameKeys = new Set<string>();
   #frameCacheTimer: number | null = null;
+  /** Frames staged but not yet committed. Plain array: writing it must not react. */
+  #frameBuffer: AgentSseFrame[] = [];
+  #flushQueued = false;
+  /** Bumped on session change, to strand a flush queued against the old session. */
+  #publishGeneration = 0;
+  /** A bounded backlog is being replayed in, so hold off on per-paint commits. */
+  #catchingUp = false;
+  /** A live frame has arrived on this stream, so the catch-up is over for good. */
+  #liveFrameSeen = false;
+  #catchUpStartedAt = 0;
+  /** Frames staged since the last catch-up commit, counting toward the next chunk. */
+  #sinceCatchUpPublish = 0;
+  /** Deadline commit for a catch-up whose chunk may never fill. */
+  #catchUpFlushTimer: number | null = null;
   #submitQueue: Promise<void> = Promise.resolve();
   #timer: number | null = null;
+  /**
+   * Tools that finished a moment ago and are being held on the focus canvas.
+   *
+   * Replaced rather than mutated on every change, because a plain Set is not
+   * reactive and the graph derives off this one.
+   */
+  #lingering = $state<ReadonlySet<ToolId>>(new Set());
+  #lingerTimers = new Map<ToolId, number>();
+  /** When this view started watching, so the backlog it opens on is not mistaken for news. */
+  #listeningSince = now();
+
+  /**
+   * The last connection-level failure, and the machine-readable reason for it.
+   *
+   * `/api/attach` reports every way it can fail in band, as an error frame
+   * carrying `kind`, `code` and `message` (see `_attach_error` and
+   * `_unreplayable_run_frame` in `web/app.py`). Keeping only the sentence threw
+   * away the one part a caller can branch on.
+   *
+   * Written through a setter rather than as a second public field because the
+   * two must never disagree. Every existing assignment site is either a fresh
+   * failure with no code of its own or a clearing, and a code left over from the
+   * previous failure would be read as describing this one; clearing it here
+   * means those sites stay correct without knowing this field exists. Only
+   * #ingestFrame, which has the frame in hand, sets both.
+   */
+  get connectionError(): string | null {
+    return this.#connectionError;
+  }
+
+  set connectionError(message: string | null) {
+    this.#connectionError = message;
+    this.#connectionErrorCode = null;
+  }
+
+  get connectionErrorCode(): string | null {
+    return this.#connectionErrorCode;
+  }
+
+  /**
+   * Whether this run's figures are unknown rather than zero.
+   *
+   * `unreplayable_run` means the run finished and Temporal cannot replay its
+   * event stream, so this console holds none of the events it spent money on.
+   * Every total derived from `frames` is therefore an empty sum, and rendering
+   * one as `0 tok $0.0000` reports a measurement that was never taken — beside
+   * runs whose zeros are real.
+   */
+  get runUnmeasured(): boolean {
+    return this.#connectionErrorCode === "unreplayable_run";
+  }
 
   constructor(api: AgentApi = new HttpAgentApi()) {
     this.#api = api;
+    /* No teardown: one controller lives as long as the page (see
+       createAgentRunController), and the handler is inert without a session. */
+    if (typeof window !== "undefined") {
+      window.addEventListener("online", this.#reattachWhenOnline);
+    }
   }
 
-  replayTimeline = $derived(this.#replayTimeline());
+  /**
+   * Re-attach when connectivity comes back.
+   *
+   * The retry budget above deliberately stops asking, which strands a reader
+   * whose outage outlasted it — and lengthening the array to cover a two minute
+   * one is guessing at a number the browser already knows. This is the answer
+   * to "is it worth asking again", so it does not need to be estimated.
+   *
+   * Doing nothing while a stream is in flight is what keeps an `online` event
+   * from re-attaching a healthy stream underneath itself: #streamAbort is set
+   * for exactly as long as an attach is running, and only #finishStream clears
+   * it. So this fires for a stream that gave up, and not for one that rode the
+   * blip out.
+   */
+  #reattachWhenOnline = (): void => {
+    const session = this.session;
+    if (this.#streamAbort || !session) return;
+    if (this.#isWorkflowClosed(session.workflow_id)) return;
+    this.connectionError = null;
+    void this.attach(this.lastResumeOffset).catch((error: unknown) => {
+      if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
+        this.connectionError =
+          error instanceof Error ? error.message : "Failed to reconnect.";
+      }
+    });
+  };
+
+  replayTimeline = $derived(
+    buildReplayTimeline(
+      this.session,
+      this.frames,
+      this.observedSubagents,
+      this.runInfo.agentLabel
+    )
+  );
   visibleReplayTimeline = $derived(this.replayTimeline.slice(0, this.viewIndex));
   allReplayFrames = $derived(this.replayTimeline.map((entry) => entry.frame));
   visibleReplayFrames = $derived(
@@ -258,17 +374,44 @@ export class AgentRunController {
       .filter((entry) => entry.role === "parent")
       .map((entry) => entry.frame)
   );
-  currentFrame = $derived(
-    this.viewIndex > 0 ? this.visibleReplayFrames.at(-1) ?? null : null
-  );
   graphAgents = $derived(this.#graphAgents());
-  graph = $derived(buildAgentTreeGraph(this.graphAgents));
+  /**
+   * Focus by default, and the `?? true` is what says so: every prefs blob
+   * written before this field existed reads back undefined, and a plain read
+   * would hand every existing operator the accumulated graph.
+   */
+  graphFocus = $state(readOperatorPrefs().graphFocus ?? true);
+  /**
+   * Which finished tools focus view is still drawing, and why the answer has two
+   * halves.
+   *
+   * At the live edge the run sets the pace, so the beat is timed off the clock by
+   * the controller. Parked anywhere behind it, the reader sets the pace and the
+   * clock is meaningless — a card cannot be held "for 1.2 seconds" on a frame
+   * someone is sitting on — so the beat is measured in steps of the cursor
+   * instead, and falls out of the cursor alone with no timer.
+   */
+  graphLinger = $derived(
+    this.viewIndex >= this.total
+      ? this.#lingering
+      : settledNearCursor(this.visibleReplayTimeline)
+  );
+  graph = $derived(
+    buildAgentTreeGraph(this.graphAgents, {
+      focus: this.graphFocus,
+      linger: this.graphLinger
+    })
+  );
   operatorTargets = $derived(this.#operatorTargets());
   sessionClosed = $derived(
     this.session != null && this.#isWorkflowClosed(this.session.workflow_id)
   );
-  replayLog = $derived(buildReplayLog(this.visibleReplayTimeline));
   fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
+  replayLog = $derived(
+    this.viewIndex === this.replayTimeline.length
+      ? this.fullReplayLog
+      : buildReplayLog(this.visibleReplayTimeline)
+  );
   chatTranscript = $derived(
     buildTranscript(
       this.replayTimeline
@@ -282,7 +425,8 @@ export class AgentRunController {
   usage = $derived(summarizeCost(this.visibleReplayFrames));
   usageTimeline = $derived(buildUsageTimeline(this.allReplayFrames));
   stepTimeline = $derived(buildStepTimeline(this.replayTimeline));
-  anomalyMarkers = $derived(buildReplayMarkers(this.replayTimeline));
+  stepBoundaries = $derived(buildStepBoundaries(this.stepTimeline));
+  anomalyMarkers = $derived(buildReplayMarkers(this.fullReplayLog));
   turnMarkers = $derived(
     this.replayTimeline
       .map((entry, index) =>
@@ -296,9 +440,30 @@ export class AgentRunController {
   );
 
   get total(): number {
-    return this.replayTimeline.length;
+    // buildReplayTimeline() emits exactly one entry per frame, so this matches
+    // replayTimeline.length without forcing that projection to rebuild. Reading
+    // the projection here made appending one frame O(n), and hydrating a cached
+    // session O(n^2) — 1,583 frames cost 10.2s of rebuilds before this.
+    return this.session ? this.frames.length : 0;
   }
 
+  /**
+   * Names for the run in hand: cheap to read, and it has to stay that way.
+   *
+   * It used to carry `models: summarizeCost(this.frames).modelBreakdown...`,
+   * which nothing read — so every access paid a full pass over every frame to
+   * fill a field with no reader. That is how the replay timeline went quadratic
+   * merely by labelling its rows, and why five reads in App.svelte's markup
+   * cost five passes over the session. Deleted rather than memoized: caching it
+   * would have kept the work and added staleness to reason about, for an answer
+   * nobody wanted.
+   *
+   * Keep it that way. Sitting beside `total`, `connectionError` and
+   * `runUnmeasured` — all field reads — a getter that summarizes frames is
+   * indistinguishable from one that does not, and the call sites are loops and
+   * markup. Anything derived belongs in a `$derived`, which is cached; that is
+   * why every other heavy projection on this class is one.
+   */
   get runInfo(): RunInfo {
     const session = this.session ?? realisticQaScenario.sessions[0];
     const agent = this.agents.find(
@@ -309,7 +474,6 @@ export class AgentRunController {
     return {
       sessionId: session?.workflow_id ?? "unknown-session",
       agentLabel: agent?.label ?? "Agent",
-      models: summarizeCost(this.frames).modelBreakdown.map((item) => item.model),
       startedAt: session?.created_at ?? 0
     };
   }
@@ -320,57 +484,6 @@ export class AgentRunController {
 
   #isCurrentConnection(connectionVersion: number): boolean {
     return connectionVersion === this.#connectionVersion;
-  }
-
-  #replayTimeline(): ReplayTimelineEntry[] {
-    const session = this.session;
-    if (!session) return [];
-    const observedBySubagentId = new Map(
-      this.observedSubagents.map((agent) => [agent.subagentId, agent])
-    );
-    const parentTurnBySubagentTurn = new Map<string, number>();
-    const timeline: ReplayTimelineEntry[] = [];
-
-    for (const frame of this.frames) {
-      if (!("type" in frame.data)) {
-        timeline.push({
-          workflowId: session.workflow_id,
-          role: "parent",
-          label: this.runInfo.agentLabel,
-          frame
-        });
-        continue;
-      }
-
-      const observedSubagent = observedBySubagentId.get(frame.data.agent_id);
-      const parentTurnNumber =
-        observedSubagent == null
-          ? undefined
-          : parentTurnBySubagentTurn.get(
-              `${frame.data.agent_id}:${frame.data.turn_number}`
-            );
-      const role: ReplayTimelineRole = observedSubagent == null ? "parent" : "subagent";
-      timeline.push({
-        workflowId: observedSubagent?.workflowId ?? session.workflow_id,
-        role,
-        label: observedSubagent?.label ?? this.runInfo.agentLabel,
-        parentTurnNumber,
-        frame
-      });
-
-      if (frame.event === "subagent_message_sent") {
-        const enclosingParentTurn =
-          role === "subagent" && parentTurnNumber != null
-            ? parentTurnNumber
-            : frame.data.turn_number;
-        parentTurnBySubagentTurn.set(
-          `${frame.data.subagent_id}:${frame.data.subagent_turn}`,
-          enclosingParentTurn
-        );
-      }
-    }
-
-    return timeline;
   }
 
   #graphAgents(): AgentGraphSource[] {
@@ -394,7 +507,10 @@ export class AgentRunController {
       visibleSubagentWorkflowIds.add(workflowId);
     }
     for (const entry of this.visibleReplayTimeline) {
-      if (entry.role !== "subagent") continue;
+      // The one consumer that wants "announced yet?" rather than "is this the
+      // root?", and it reads that off the field it then groups by: a pane can
+      // only exist for a subagent whose workflow id we have been told.
+      if (entry.workflowId === session.workflow_id) continue;
       visibleSubagentWorkflowIds.add(entry.workflowId);
       const frames = visibleSubagentFrames.get(entry.workflowId) ?? [];
       frames.push(entry.frame);
@@ -446,6 +562,9 @@ export class AgentRunController {
     this.#streamAbort?.abort();
     const controller = new AbortController();
     this.#streamAbort = controller;
+    /* A fresh attach re-opens on a backlog, so it gets a catch-up of its own —
+       the latch is per stream, not per session. */
+    this.#liveFrameSeen = false;
     return {
       controller,
       signal: controller.signal,
@@ -719,21 +838,20 @@ export class AgentRunController {
       const defaultAgent = agents.find((agent) => agent.key === "qa") ?? agents[0];
       if (!defaultAgent) throw new Error("No agent is registered.");
 
-      const sessions = await this.#api.listSessions();
-      this.sessions = sessions;
-      this.#applySessionExecutionStates(sessions);
-      const storedSessionId = readStoredActiveSessionId();
-      const storedSession = storedSessionId
-        ? sessions.find((item) => item.workflow_id === storedSessionId)
-        : null;
-      const existing = [...sessions]
-        .reverse()
-        .find((item) => item.agent_workflow_type === defaultAgent.workflow_type);
+      await this.#loadSessions();
+      const wantedSessionId = readUrlSessionId() ?? readStoredActiveSessionId();
+      let openable = chooseBootSession(
+        this.sessions,
+        wantedSessionId,
+        defaultAgent.workflow_type
+      );
 
-      if (storedSession) {
-        this.session = storedSession;
-      } else if (existing) {
-        this.session = existing;
+      if (!openable && wantedSessionId) {
+        openable = await this.#resolveSessionById(wantedSessionId);
+      }
+
+      if (openable) {
+        this.session = openable;
       } else {
         this.session = await this.#api.createSession({
           agent_workflow_type: defaultAgent.workflow_type,
@@ -741,10 +859,12 @@ export class AgentRunController {
         });
         this.sessions = [...this.sessions, this.session];
       }
-      writeStoredActiveSessionId(this.session.workflow_id);
+      this.#rememberActiveSession(this.session.workflow_id);
       void this.#fetchAgentInterface(this.session.workflow_id);
       void this.#fetchOperatorInterface(this.session.workflow_id);
-      this.#hydrateCachedFrames(this.session.workflow_id);
+      /* Awaited so the cache lands before the live stream opens: interleaving
+         the two would order the buffer by arrival rather than by event. */
+      await this.#hydrateCachedFrames(this.session.workflow_id);
       await this.#refreshWorkflowExecutionState(this.session.workflow_id);
 
       if (!this.#isCurrentConnection(connectionVersion)) return;
@@ -760,19 +880,129 @@ export class AgentRunController {
     }
   }
 
-  async refreshSessions(): Promise<void> {
-    if (this.refreshingSessions) return;
-    this.refreshingSessions = true;
+  #rememberActiveSession(sessionId: string): void {
+    writeStoredActiveSessionId(sessionId);
+    writeUrlSessionId(sessionId);
+  }
+
+  /**
+   * Deep-link / URL session: find it in the list, re-listing once if it is not there.
+   * Main has no per-session GET, so an id that never appears in ``listSessions`` cannot
+   * be opened.
+   *
+   * NOT_FOUND is excluded on the same terms chooseBootSession excludes it, and for the
+   * same reason: Temporal has purged the workflow and /api/attach answers 500, so the
+   * row can only open an empty console. Without this the exclusion does not survive
+   * boot — initialize() asks chooseBootSession, which declines the purged id, and then
+   * asks here for the very id it just declined.
+   */
+  async #resolveSessionById(sessionId: string): Promise<Session | null> {
+    const openable = (): Session | null =>
+      this.sessions.find(
+        (item) => item.workflow_id === sessionId && item.execution_status !== "NOT_FOUND"
+      ) ?? null;
+
+    const known = openable();
+    if (known) return known;
     try {
+      await this.#loadSessions();
+    } catch {
+      return null;
+    }
+    return openable();
+  }
+
+  async #loadSessions(): Promise<void> {
+    if (this.#sessionsLoad) return this.#sessionsLoad;
+    this.#sessionsLoad = (async () => {
       const sessions = await this.#api.listSessions();
       this.sessions = sessions;
       this.#applySessionExecutionStates(sessions);
+      this.#sessionsLoadedAt = Date.now();
+    })().finally(() => {
+      this.#sessionsLoad = null;
+    });
+    return this.#sessionsLoad;
+  }
+
+  async refreshSessions(): Promise<void> {
+    if (this.refreshingSessions) return;
+    this.refreshingSessions = true;
+    this.sessionsError = null;
+    try {
+      await this.#loadSessions();
     } catch (error) {
-      this.connectionError =
+      this.sessionsError =
         error instanceof Error ? error.message : "Failed to refresh sessions.";
     } finally {
       this.refreshingSessions = false;
     }
+  }
+
+  /**
+   * Refresh for the picker without a global connection error. Skips if a fresh
+   * list already landed within ``maxAgeMs`` so open/close spam is cheap.
+   */
+  async ensureSessionsEnriched(maxAgeMs = 5_000): Promise<void> {
+    if (this.refreshingSessions || this.#sessionsLoad) return;
+    if (this.#sessionsLoadedAt > 0 && Date.now() - this.#sessionsLoadedAt < maxAgeMs) {
+      return;
+    }
+    try {
+      await this.#loadSessions();
+    } catch {
+      // Quiet: the next open or the refresh button can surface a failure.
+    }
+  }
+
+  /**
+   * Re-list so sessions created elsewhere show up without a reload. Called when a
+   * hidden tab comes back, which is the one moment the list is reliably stale; the
+   * picker refreshes itself on open and nothing runs this on a timer.
+   *
+   * Quiet on purpose: a refresh nobody asked for must not spin the refresh control
+   * or raise the connection banner.
+   */
+  async syncSessions(): Promise<void> {
+    if (this.refreshingSessions || this.#syncingSessions) return;
+    this.#syncingSessions = true;
+    try {
+      await this.#loadSessions();
+    } catch {
+      // The list stays as it was until a later tick answers.
+    } finally {
+      this.#syncingSessions = false;
+    }
+  }
+
+  /**
+   * Hand an attach off to the background and keep its rejection reportable.
+   *
+   * `attach()` deliberately outlives the reader: it spends a 31.5s retry budget
+   * on background liveness, and a brand-new session is the case that always
+   * spends it in full. Awaiting it made "this session exists and is selected"
+   * indistinguishable from "the stream finally drained", so anything a caller
+   * sequenced after the await was dead for half a minute — which is what the
+   * session menus were doing when they tried to close themselves.
+   *
+   * The flags are not this function's business: `connecting` and
+   * `creatingSession` are cleared at attach's own "went idle" point, which is
+   * the whole reason that point exists. What is left is the failure path. Once
+   * nobody awaits the promise, a rejection would surface as an unhandled one
+   * and no flag would ever be cleared, so it is caught here, reported, and the
+   * flags the idle point will now never reach are released.
+   */
+  #streamInBackground(
+    attaching: Promise<void>,
+    connectionVersion: number,
+    message: string
+  ): void {
+    void attaching.catch((error: unknown) => {
+      if (isAbortError(error) || !this.#isCurrentConnection(connectionVersion)) return;
+      this.connectionError = error instanceof Error ? error.message : message;
+      this.creatingSession = false;
+      this.connecting = false;
+    });
   }
 
   async startNewSession(workflowType?: string): Promise<void> {
@@ -784,6 +1014,10 @@ export class AgentRunController {
     this.connecting = true;
     this.connectionError = null;
 
+    /* Tells the `finally` which of two things happened: the stream was handed
+       off and owns these flags now, or this method gave up before there was one
+       and still owes the caller a release. */
+    let streaming = false;
     try {
       const agents = await this.#loadAgents();
       const currentWorkflowType = this.session?.agent_workflow_type;
@@ -806,20 +1040,25 @@ export class AgentRunController {
       this.#initialized = true;
       this.#resetSessionView();
       this.session = session;
-      writeStoredActiveSessionId(session.workflow_id);
+      this.#rememberActiveSession(session.workflow_id);
       void this.#fetchAgentInterface(session.workflow_id);
       void this.#fetchOperatorInterface(session.workflow_id);
       await this.#refreshWorkflowExecutionState(session.workflow_id);
       if (!this.#isCurrentConnection(connectionVersion)) return;
       if (this.#isWorkflowClosed(session.workflow_id)) return;
-      await this.attach(0);
+      streaming = true;
+      this.#streamInBackground(
+        this.attach(0),
+        connectionVersion,
+        "Failed to create agent session."
+      );
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
           error instanceof Error ? error.message : "Failed to create agent session.";
       }
     } finally {
-      if (this.#isCurrentConnection(connectionVersion)) {
+      if (!streaming && this.#isCurrentConnection(connectionVersion)) {
         this.creatingSession = false;
         this.connecting = false;
       }
@@ -828,11 +1067,17 @@ export class AgentRunController {
 
   async selectSession(sessionId: string): Promise<void> {
     if (this.session?.workflow_id === sessionId) {
-      writeStoredActiveSessionId(sessionId);
+      this.#rememberActiveSession(sessionId);
       return;
     }
-    const session = this.sessions.find((item) => item.workflow_id === sessionId);
-    if (!session) return;
+    let session = this.sessions.find((item) => item.workflow_id === sessionId) ?? null;
+    if (!session) {
+      session = await this.#resolveSessionById(sessionId);
+    }
+    if (!session) {
+      this.sessionsError = `No session ${sessionId} in the session manager.`;
+      return;
+    }
 
     const connectionVersion = this.#beginConnection();
     this.#sendVersion += 1;
@@ -840,26 +1085,63 @@ export class AgentRunController {
     this.connecting = true;
     this.sending = false;
     this.connectionError = null;
+    this.sessionsError = null;
     this.#resetSessionView();
     this.session = session;
-    writeStoredActiveSessionId(session.workflow_id);
+    this.#rememberActiveSession(session.workflow_id);
     void this.#fetchAgentInterface(session.workflow_id);
     void this.#fetchOperatorInterface(session.workflow_id);
-    this.#hydrateCachedFrames(session.workflow_id);
+    await this.#hydrateCachedFrames(session.workflow_id);
 
+    let streaming = false;
     try {
       await this.#refreshWorkflowExecutionState(session.workflow_id);
       if (!this.#isCurrentConnection(connectionVersion)) return;
       if (this.#isWorkflowClosed(session.workflow_id)) return;
-      await this.attach(this.lastResumeOffset);
+      streaming = true;
+      this.#streamInBackground(
+        this.attach(this.lastResumeOffset),
+        connectionVersion,
+        "Failed to load selected session."
+      );
     } catch (error) {
       if (this.#isCurrentConnection(connectionVersion) && !isAbortError(error)) {
         this.connectionError =
           error instanceof Error ? error.message : "Failed to load selected session.";
       }
     } finally {
-      if (this.#isCurrentConnection(connectionVersion)) this.connecting = false;
+      if (!streaming && this.#isCurrentConnection(connectionVersion)) this.connecting = false;
     }
+  }
+
+  /**
+   * Whether a stream that just stopped carrying frames was dropped rather than
+   * finished.
+   *
+   * The generator ends cleanly either way, so the stream ending is evidence of
+   * neither — /api/attach has no marker for the root workflow dying. Temporal is
+   * the thing that knows: a workflow still running has more to say, so a stream
+   * that stopped carrying it was dropped. When an in-band error frame does start
+   * arriving it needs no special case here, because a root that died reports as
+   * closed and stops the retry on its own; the frame supplies the message.
+   *
+   * A status call that fails is the transient case this exists for, so it counts
+   * as worth retrying. The retry budget is what keeps an outage bounded.
+   *
+   * `workflow_not_found` is the exception: the server has said the history is
+   * deleted or past retention, so there is nothing left to stream and no wait
+   * will produce any. Spending the budget on it is guaranteed-futile work, and
+   * each attempt re-appends the same error frame.
+   */
+  async #streamDroppedMidRun(workflowId: string): Promise<boolean> {
+    if (this.#isWorkflowClosed(workflowId)) return false;
+    if (this.#connectionErrorCode === "workflow_not_found") return false;
+    try {
+      await this.#refreshWorkflowExecutionState(workflowId);
+    } catch {
+      return true;
+    }
+    return !this.#isWorkflowClosed(workflowId);
   }
 
   async attach(
@@ -869,26 +1151,147 @@ export class AgentRunController {
     const session = this.session;
     if (!session) return;
 
+    /* One #beginStream for the whole attachment, retries included, so every
+       attempt shares its abort controller and stream version. A session switch
+       then aborts the in-flight read and the backoff sleep together, and no
+       retry can outlive the stream it belongs to. */
     const { controller, signal, streamVersion } = this.#beginStream();
+    const isCurrentStream = (): boolean =>
+      streamVersion === this.#streamVersion &&
+      this.session?.workflow_id === session.workflow_id;
+    let offset = Math.max(0, fromOffset);
+    let attempt = 0;
     try {
-      for await (const frame of this.#api.attach(session.workflow_id, fromOffset, signal)) {
-        if (streamVersion !== this.#streamVersion || this.session?.workflow_id !== session.workflow_id) {
-          break;
+      while (isCurrentStream()) {
+        let delivered = false;
+        try {
+          for await (const frame of this.#api.attach(session.workflow_id, offset, signal)) {
+            if (!isCurrentStream()) break;
+            /* An in-band error frame is a fact about the CONNECTION, not about
+               the run, so it must not count as the stream having carried
+               something. Counting it renews the budget below on every pass, and
+               /api/attach answers an unreadable stream with exactly one such
+               frame and nothing else — a re-attach every 500ms for as long as
+               the tab is open, each one re-appending the same error.
+
+               #streamDroppedMidRun already stops on `workflow_not_found`, which
+               is the one code that says retrying is pointless. This covers the
+               other direction: `stream_unavailable` genuinely is worth
+               retrying, so the budget has to be allowed to run out. */
+            if (!isClientSideStreamError(frame.data)) delivered = true;
+            this.#appendFrame(frame);
+          }
+        } catch (error) {
+          if (isAbortError(error) || !isCurrentStream()) break;
+          /* Out of retries: surface the transport error the way an un-retried
+             attach always did, rather than ending quietly. */
+          if (attempt >= reattachBackoffMs.length) throw error;
         }
-        this.#appendFrame(frame);
+        /* Publish before asking why the stream stopped. Finding out costs a
+           status call, and learning the workflow closed stops the stream
+           (#markWorkflowClosed -> #stopStream), which bumps the stream version
+           and makes the flush below skip its own guard — stranding exactly the
+           tail it exists to commit.
+
+           Keyed on the session rather than the stream version, because a bumped
+           version is the condition being worked around. A switched session is
+           not: its buffer belongs to someone else now. */
+        if (this.session?.workflow_id === session.workflow_id) this.#flushStreamTail();
+        /* The transcript is on screen, so the reader is no longer waiting on us
+           — whatever the retries do from here is background liveness. Held
+           across the whole loop, these reported "connecting" for the full 31.5s
+           of backoff on a session that had finished loading in ten
+           milliseconds, which is what "sessions load slowly" was.
+
+           `sending` is the same flag one step later, and it is the one that
+           bites: it gates the composer (`sendingBlocksInput`), so a reply that
+           had fully arrived left the input locked for 31.5s while the budget
+           drained behind it. "Idle" means this attach went idle, which is the
+           moment below, not the moment the retries give up. Measured at
+           31,536ms before this.
+
+           `creatingSession` is the third of the same family and the worst of
+           them, because a BRAND-NEW session is the case that always spends the
+           whole budget: it has published nothing yet, so every attach in the
+           loop answers empty while the workflow stays RUNNING. It gates the
+           composer outright (`composerDisabled`), so the one thing a new
+           session is for — sending it a first message — was locked out for
+           34.1s, measured. Nothing could be sent, so nothing streamed, and
+           reloading looked like the cure: initialize() reaches the same
+           attach without ever setting this flag.
+
+           Cleared here rather than by the callers because this is where the
+           fact is known: the callers hand this attach off to the background
+           (#streamInBackground) and return as soon as the session exists, so
+           they are long gone by the time the stream goes idle and could not
+           report it even if they wanted to. Their own `finally` releases these
+           flags only on the paths that never reached a stream at all, and
+           #streamInBackground's `catch` covers the paths where this attach
+           throws and so never reaches the line below.
+           The `finally` still clears `sending` as well, for the paths that
+           break or throw before completing an iteration. Guarded on the stream,
+           so a session switched away from mid-retry does not clear a flag the
+           new session just set. */
+        if (isCurrentStream()) {
+          this.connecting = false;
+          this.creatingSession = false;
+          if (options.clearSendingOnIdle) this.sending = false;
+        }
+        /* A stream that carried something earned a fresh budget, so hours of
+           occasional blips do not add up to an exhausted one. */
+        if (delivered) attempt = 0;
+        if (attempt >= reattachBackoffMs.length) break;
+        if (!(await this.#streamDroppedMidRun(session.workflow_id))) break;
+        await sleepUnlessAborted(reattachBackoffMs[attempt], signal);
+        attempt += 1;
+        /* Resume only from an offset the server already proved it holds, by
+           having sent it. An offset past the end answers 200 and then hangs
+           open forever, so inventing one trades a quiet console for a wedged
+           one. */
+        offset = Math.max(offset, this.lastResumeOffset);
       }
     } catch (error) {
       if (!isAbortError(error)) throw error;
     } finally {
-      if (
-        options.clearSendingOnIdle &&
-        streamVersion === this.#streamVersion &&
-        this.session?.workflow_id === session.workflow_id
-      ) {
-        this.sending = false;
+      const sameSession = this.session?.workflow_id === session.workflow_id;
+      /* `sending` belongs to the newest stream: a superseded one clearing it would
+         drop the spinner on a send it knows nothing about. The version guard is
+         right here and stays. */
+      if (streamVersion === this.#streamVersion && sameSession) {
+        if (options.clearSendingOnIdle) this.sending = false;
       }
+      /* The tail is the opposite case, for the reason the in-loop flush above
+         spells out — and this is the path that one cannot reach. Learning the
+         workflow closed calls #stopStream, which aborts the read; the abort
+         `break`s out of the loop before that flush, and lands here with the
+         version already bumped by the very event being handled. Guarding the
+         tail on the version therefore drops it exactly when a run ends
+         mid-catch-up. The session is the honest question: it says whose buffer
+         this is, and a switched session is the only answer that means "not
+         ours". */
+      if (sameSession) this.#flushStreamTail();
       this.#finishStream(controller);
     }
+  }
+
+  /**
+   * Commit whatever the stream staged but never published.
+   *
+   * A stream can stop mid-catch-up. #schedulePublish only commits at a chunk
+   * boundary past the ceiling, so a replay that stops short of one strands its
+   * tail with nothing left to flush it, and an idle session — whose whole
+   * history is replay and which never crosses to live — shows an empty console.
+   * Worth doing on the error path too: partial history beats nothing.
+   */
+  #flushStreamTail(): void {
+    this.#catchingUp = false;
+    this.#sinceCatchUpPublish = 0;
+    /* Same invariant #armCatchUpFlush relies on: `frames` is a whole copy of the
+       buffer and the buffer only grows, so equal lengths mean nothing new is
+       staged, and committing would rebuild every projection to reproduce the
+       array already on screen. */
+    if (this.#frameBuffer.length === this.frames.length) return;
+    this.#publishFrames();
   }
 
   async #attachWorkflow(
@@ -921,6 +1324,13 @@ export class AgentRunController {
     } finally {
       if (this.#workflowAttachAbort.get(workflowId) === controller) {
         this.#workflowAttachAbort.delete(workflowId);
+        /* Same stranded tail as the root stream: a subagent's history is replay
+           too, and its stream ends without ever crossing to live. Only flush
+           while this is still the stream that owns the buffer, and still the
+           session it was opened for. */
+        if (this.session?.workflow_id === session.workflow_id) {
+          this.#flushStreamTail();
+        }
       }
     }
   }
@@ -1111,11 +1521,36 @@ export class AgentRunController {
     }
   }
 
-  #hydrateCachedFrames(sessionId: string): void {
+  /**
+   * Replay the cached frames for a session back into the buffer.
+   *
+   * The one place the pipeline does its own chunking. Everywhere else frames
+   * arrive from an await, so the event loop breathes between them by itself;
+   * here the whole cache is already in hand and a tight loop over it would hold
+   * the main thread for the length of the session.
+   */
+  async #hydrateCachedFrames(sessionId: string): Promise<void> {
     const cachedFrames = readCachedFrames(sessionId);
     if (cachedFrames.length === 0) return;
-    for (const frame of cachedFrames) {
-      this.#appendFrame(frame, { persist: false });
+    this.#catchingUp = true;
+    this.#catchUpStartedAt = now();
+    try {
+      for (let index = 0; index < cachedFrames.length; index += 1) {
+        if (this.session?.workflow_id !== sessionId) return;
+        this.#ingestFrame(cachedFrames[index], { persist: false });
+        if ((index + 1) % framePublishChunkSize !== 0) continue;
+        if (publishAtChunkBoundary(this.#catchingUp, now() - this.#catchUpStartedAt)) {
+          this.#publishFrames();
+          /* Restarting the clock is what makes the ceiling a rate limit rather
+             than just a delay: without it, every chunk past the first second
+             commits, and chunks can pass far faster than the page can paint. */
+          this.#catchUpStartedAt = now();
+        }
+        await yieldToMain();
+      }
+    } finally {
+      this.#catchingUp = false;
+      this.#publishFrames();
     }
   }
 
@@ -1127,7 +1562,7 @@ export class AgentRunController {
       this.#frameCacheTimer = null;
       if (this.session?.workflow_id !== sessionId) return;
       writeCachedFrames(sessionId, this.frames);
-    }, 250);
+    }, 750);
   }
 
   #resetSessionView(): void {
@@ -1137,14 +1572,31 @@ export class AgentRunController {
     this.frames = [];
     this.observedSubagents = [];
     this.#frameKeys = new Set<string>();
+    this.#frameBuffer = [];
+    /* Strand any flush already queued: it would republish the old session's
+       buffer over the new session's empty one. */
+    this.#publishGeneration += 1;
+    this.#flushQueued = false;
+    this.#clearCatchUpFlush();
+    this.#clearHeldTools();
+    this.#listeningSince = now();
+    this.#catchingUp = false;
+    this.#liveFrameSeen = false;
+    this.#sinceCatchUpPublish = 0;
     this.#workflowResumeOffsets = new Map<string, number>();
     this.viewIndex = 0;
-    this.following = false;
+    this.following = true;
     this.expectedTurn = 1;
     this.lastResumeOffset = 0;
   }
 
-  #appendFrame(
+  /**
+   * Stage one frame: dedup it, record its bookkeeping, and buffer it.
+   *
+   * Deliberately does not touch `frames`. Committing is what costs — it re-runs
+   * every derived projection — so it happens per batch in #publishFrames().
+   */
+  #ingestFrame(
     frame: AgentSseFrame,
     options: { persist?: boolean; sourceWorkflowId?: string } = {}
   ): void {
@@ -1153,15 +1605,17 @@ export class AgentRunController {
     this.#frameKeys.add(key);
 
     if (!("type" in frame.data)) {
-      this.connectionError = frame.data.message;
+      this.#connectionError = frame.data.message;
+      this.#connectionErrorCode =
+        "code" in frame.data && typeof frame.data.code === "string"
+          ? frame.data.code
+          : null;
     }
     const publisherWorkflowId =
       this.#publisherWorkflowId(frame) ?? options.sourceWorkflowId;
     const isRootFrame = publisherWorkflowId === this.session?.workflow_id;
 
-    this.frames = [...this.frames, frame];
-    this.following = true;
-    this.viewIndex = this.total;
+    this.#frameBuffer.push(frame);
 
     if (
       "resume_offset" in frame.data &&
@@ -1207,6 +1661,192 @@ export class AgentRunController {
     }
     this.#handleSubagentEvent(frame, publisherWorkflowId);
     if (options.persist !== false) this.#scheduleFrameCacheWrite();
+  }
+
+  /**
+   * Commit everything staged so far, in one reactive write.
+   *
+   * A commit is O(frames) and stays that way — batching bounded how MANY commits
+   * happen, not what one costs. The copy below is not the cost (0.01% of a
+   * commit, measured); the derived projections rebuilding from scratch are, at
+   * ~5us per frame across all of them, so one commit is ~27ms at 5,000 events
+   * and ~107ms at 20,000. Total work is therefore still (commits x frames), so a
+   * long LIVE session — one commit per paint — is quadratic, and past a few
+   * thousand events every arriving event costs a visible hitch. Upgrading that
+   * means making the projections incremental (append one entry, don't rebuild
+   * the timeline), which is a state-layer change, not a cheaper copy here.
+   */
+  #publishFrames(): void {
+    this.#clearCatchUpFlush();
+    this.frames = this.#frameBuffer.slice();
+    this.viewIndex = cursorAfterPublish(this.following, this.viewIndex, this.total);
+  }
+
+  #clearCatchUpFlush(): void {
+    if (this.#catchUpFlushTimer == null) return;
+    clearTimeout(this.#catchUpFlushTimer);
+    this.#catchUpFlushTimer = null;
+  }
+
+  /**
+   * Commit the staged backlog once the ceiling passes, even if its chunk never
+   * fills.
+   *
+   * The chunk schedule is driven entirely by frames arriving — #schedulePublish
+   * runs from #appendFrame and nowhere else — so a stream that stays open while
+   * trickling fewer than a chunk's worth of replay frames publishes nothing, and
+   * waiting does not help. That is a live session someone is watching, showing a
+   * blank console. A deadline is what makes waiting sufficient.
+   *
+   * Rate-limited by the same clock as the chunk path, since committing restarts
+   * it, so a high-volume catch-up gains no commits: they stay bounded by elapsed
+   * time over the ceiling, not by frame count.
+   */
+  #armCatchUpFlush(): void {
+    if (this.#catchUpFlushTimer != null || typeof window === "undefined") return;
+    /* Nothing staged means nothing to show; committing anyway would re-run every
+       projection to produce the array that is already there. */
+    if (this.#frameBuffer.length === this.frames.length) return;
+    const generation = this.#publishGeneration;
+    const delay = Math.max(0, catchUpCeilingMs - (now() - this.#catchUpStartedAt));
+    this.#catchUpFlushTimer = window.setTimeout(() => {
+      this.#catchUpFlushTimer = null;
+      /* Same guard as the queued per-paint flush: a session switch bumps the
+         generation, and this buffer must not land in the new session's view. */
+      if (generation !== this.#publishGeneration) return;
+      this.#sinceCatchUpPublish = 0;
+      this.#catchUpStartedAt = now();
+      this.#publishFrames();
+    }, delay);
+  }
+
+  /**
+   * Commit on the next frame the browser paints, coalescing whatever arrives in
+   * between. A burst of thirty events becomes one commit rather than thirty.
+   *
+   * While catching up, commit on the chunk schedule instead. One commit per paint
+   * is the right rate for tailing a live run and far too many for a backlog of a
+   * thousand events, each commit re-running every projection over a longer
+   * timeline than the last.
+   *
+   * #hydrateCachedFrames drives its own loop and never reaches here, so this is
+   * the catch-up path for history arriving over the stream — where there is no
+   * loop to hang the schedule on, only frames landing one at a time.
+   */
+  #schedulePublish(): void {
+    if (this.#catchingUp) {
+      this.#sinceCatchUpPublish += 1;
+      if (
+        this.#sinceCatchUpPublish < framePublishChunkSize ||
+        !publishAtChunkBoundary(true, now() - this.#catchUpStartedAt)
+      ) {
+        this.#armCatchUpFlush();
+        return;
+      }
+      this.#sinceCatchUpPublish = 0;
+      /* Restart the clock so the ceiling rate-limits rather than merely delays:
+         without it every chunk past the first second commits, and chunks can
+         pass far faster than the page can paint. */
+      this.#catchUpStartedAt = now();
+      this.#publishFrames();
+      return;
+    }
+    if (this.#flushQueued) return;
+    this.#flushQueued = true;
+    const generation = this.#publishGeneration;
+    const flush = () => {
+      this.#flushQueued = false;
+      /* Switching sessions bumps the generation, so a flush queued against the
+         old one must not resurrect its frames into the new session's view. */
+      if (generation !== this.#publishGeneration) return;
+      this.#publishFrames();
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(flush);
+      return;
+    }
+    setTimeout(flush, 0);
+  }
+
+  /**
+   * Take one frame off the stream: stage it, then commit on whichever schedule
+   * suits what the server says this frame is.
+   *
+   * The server marks an event replay when it was already durable as the stream
+   * opened. That is the only way to know a cold load is being caught up on
+   * history: a client with no cache cannot tell a thousand backlogged events from
+   * a thousand arriving live, and hydrating one commit at a time is what made a
+   * fresh tab crawl. The absence of the mark means live, so an older server just
+   * gets today's per-paint behavior.
+   *
+   * A subagent's own attach (#attachWorkflow) feeds this same pipeline with its
+   * own seam, so the mark is only ordered per attach and not across them. The
+   * mode therefore latches rather than tracking it per frame — see
+   * catchingUpAfterFrame().
+   */
+  #appendFrame(
+    frame: AgentSseFrame,
+    options: { persist?: boolean; sourceWorkflowId?: string } = {}
+  ): void {
+    const isReplay = "replay" in frame.data && frame.data.replay === true;
+    if (!isReplay) this.#liveFrameSeen = true;
+    const catchingUp = catchingUpAfterFrame(isReplay, this.#liveFrameSeen);
+    if (catchingUp !== this.#catchingUp) {
+      this.#catchingUp = catchingUp;
+      this.#catchUpStartedAt = now();
+      this.#sinceCatchUpPublish = 0;
+      /* Crossing to live commits the tail of the backlog immediately rather than
+         holding it for a chunk that may never fill — a run that goes quiet right
+         after catching up would otherwise leave its last events unpublished. */
+      if (!catchingUp) this.#publishFrames();
+    }
+    if (this.#isLiveSettle(frame)) this.#holdSettledTool(frame);
+    this.#ingestFrame(frame, options);
+    this.#schedulePublish();
+  }
+
+  /** Frame timestamps are the server's, in epoch seconds; see settleIsLive. */
+  #isLiveSettle(frame: AgentSseFrame): boolean {
+    const at =
+      "timestamp" in frame.data && typeof frame.data.timestamp === "number"
+        ? Date.now() / 1000 - frame.data.timestamp
+        : null;
+    return settleIsLive(this.#catchingUp, now() - this.#listeningSince, at);
+  }
+
+  /**
+   * Keep a tool on the focus canvas for a beat after it finishes.
+   *
+   * Focus view drops a settled tool, which is the point of it, but a call that
+   * starts and finishes between two glances is a card that was never seen at all:
+   * the reader watches something vanish and cannot tell whether it succeeded,
+   * failed, or was denied. The card holds its own answer — DONE, FAILED, DENIED —
+   * so the fix is to leave it up long enough to be read, not to caption it.
+   *
+   * A tool that somehow settles twice restarts its hold rather than being held
+   * twice, so the card cannot outstay one beat.
+   */
+  #holdSettledTool(frame: AgentSseFrame): void {
+    const toolId = settledToolIdFromFrame(frame);
+    if (toolId == null) return;
+    const running = this.#lingerTimers.get(toolId);
+    if (running != null) window.clearTimeout(running);
+    this.#lingering = new Set(this.#lingering).add(toolId);
+    this.#lingerTimers.set(
+      toolId,
+      window.setTimeout(() => {
+        this.#lingerTimers.delete(toolId);
+        const remaining = new Set(this.#lingering);
+        remaining.delete(toolId);
+        this.#lingering = remaining;
+      }, settledLingerMs)
+    );
+  }
+
+  #clearHeldTools(): void {
+    for (const timer of this.#lingerTimers.values()) window.clearTimeout(timer);
+    this.#lingerTimers.clear();
+    if (this.#lingering.size > 0) this.#lingering = new Set();
   }
 
   #publisherWorkflowId(frame: AgentSseFrame): string | undefined {
@@ -1257,6 +1897,35 @@ export class AgentRunController {
 
     if (frame.event === "subagent_stream_unavailable") {
       this.#upsertSubagent(frame.data, parentWorkflowId);
+      void this.#resolveUnreadableSubagent(frame.data.workflow_id);
+    }
+  }
+
+  /**
+   * Ask Temporal what became of a child whose stream could not be read.
+   *
+   * Without this an operator's `/stop` on a subagent renders as still running
+   * for anyone who did not watch it happen. The stop completes the child
+   * workflow, and a completed workflow's stream cannot be mounted at all, so
+   * the merge gives up and sends this marker — while the two events that DO say
+   * "closed" both miss: `subagent_stopped` only fires when the parent stopped
+   * the child, and the `operator_command_completed` carrying the stop is on the
+   * child's own stream, which by then does not exist. A tab that saw the stop
+   * live recovers from its frame cache; a second tab, or a cold load off the
+   * session list, has nothing to recover from.
+   *
+   * Asking rather than assuming, because an unreadable stream is not proof of a
+   * closed workflow — history aged out or a worker down produces this same
+   * marker over a child that is still running. #applyWorkflowExecutionState
+   * closes it only if the answer says closed, and a query that fails leaves the
+   * child exactly as the marker found it.
+   */
+  async #resolveUnreadableSubagent(workflowId: string): Promise<void> {
+    if (this.#isWorkflowClosed(workflowId)) return;
+    try {
+      await this.#refreshWorkflowExecutionState(workflowId);
+    } catch {
+      // Status is auxiliary here: the child stays as it was until something answers.
     }
   }
 
@@ -1285,8 +1954,27 @@ export class AgentRunController {
 
   nextTurn(): void {
     this.pause();
-    const target = this.turnMarkers.find((marker) => marker.index >= this.viewIndex);
+    /* Strictly past the cursor. `>=` matched the marker the cursor was standing
+       on, so at the start of any turn — which is exactly where this button and
+       previousTurn leave you — it re-seeked to the same index and the control
+       did nothing at all. */
+    const target = this.turnMarkers.find((marker) => marker.index > this.viewIndex);
     this.goTo(target?.index ?? this.total);
+  }
+
+  /* Both strictly past the cursor, so standing on a boundary the key moves off
+     it rather than re-seeking where you already are — the defect nextTurn's
+     comment above records, avoided here by construction. */
+  previousStep(): void {
+    this.pause();
+    const target = [...this.stepBoundaries].reverse().find((index) => index < this.viewIndex);
+    this.goTo(target ?? 0);
+  }
+
+  nextStep(): void {
+    this.pause();
+    const target = this.stepBoundaries.find((index) => index > this.viewIndex);
+    this.goTo(target ?? this.total);
   }
 
   jumpToLive(): void {
@@ -1294,9 +1982,24 @@ export class AgentRunController {
     this.following = true;
   }
 
+  setGraphFocus(focus: boolean): void {
+    this.graphFocus = focus;
+    writeOperatorPrefs({ graphFocus: focus });
+  }
+
   setPlaybackSpeed(speed: PlaybackSpeed): void {
     this.playbackSpeed = speed;
     if (this.playing) this.#restartTimer();
+  }
+
+  /* Clamped rather than wrapped, like every other two-directional stepper here — stepBack
+     and stepForward, previousStep and nextStep, the rail's focus and focusSlot all stop at
+     the end rather than reappearing at the other one. The speed chip is the lone wrap, and
+     it earns it by being one button: a cycle is its only route back to ×1. Two keys have a
+     second direction, so the far rung is reachable the way you came. */
+  stepPlaybackSpeed(delta: -1 | 1): void {
+    const index = PLAYBACK_SPEEDS.indexOf(this.playbackSpeed) + delta;
+    this.setPlaybackSpeed(PLAYBACK_SPEEDS[Math.min(Math.max(index, 0), PLAYBACK_SPEEDS.length - 1)]);
   }
 
   play(): void {

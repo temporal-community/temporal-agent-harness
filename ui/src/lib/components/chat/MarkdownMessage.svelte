@@ -1013,7 +1013,7 @@
         const languageClass = language ? ` class="language-${escapeAttribute(language)}"` : "";
         const languageAttribute = label ? ` data-language="${escapeAttribute(label)}"` : "";
         blocks.push(
-          `<pre class="md-code-block"${languageAttribute}><code${languageClass}>${highlightCode(codeLines.join("\n"), language)}</code></pre>`
+          `<div class="md-code-wrap"><pre class="md-code-block"${languageAttribute}><code${languageClass}>${highlightCode(codeLines.join("\n"), language)}</code></pre></div>`
         );
         continue;
       }
@@ -1150,41 +1150,35 @@
     overflow-x: auto;
     padding: 12px;
     border: 1px solid var(--code-block-border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: var(--code-block-bg);
     box-shadow: var(--code-block-shadow);
   }
 
-  .markdown-message :global(pre.md-code-block[data-language]) {
+  .markdown-message :global(.md-code-wrap) {
     position: relative;
+    min-width: 0;
+  }
+
+  .markdown-message :global(pre.md-code-block[data-language]) {
     padding-top: 34px;
   }
 
+  /* app.css draws the language tag; this only says where to put it. */
   .markdown-message :global(pre.md-code-block[data-language]::before) {
-    content: attr(data-language);
     position: absolute;
     top: 9px;
     right: 10px;
-    padding: 2px 7px;
-    border: 1px solid var(--code-label-border);
-    border-radius: 999px;
-    background: var(--code-label-bg);
-    color: var(--code-label-text);
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-    font-size: 10px;
-    font-weight: 750;
-    line-height: 1.2;
-    letter-spacing: 0;
   }
 
   .markdown-message :global(code) {
     border: 1px solid var(--code-inline-border);
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     padding: 1px 4px;
     background: var(--code-inline-bg);
-    color: #f5f0ff;
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-    font-size: 12px;
+    color: var(--code-inline-text);
+    font-family: var(--font-mono);
+    font-size: var(--font-md);
   }
 
   .markdown-message :global(pre code) {
@@ -1195,56 +1189,57 @@
     color: var(--code-block-text);
     line-height: 1.55;
     tab-size: 2;
-    white-space: pre;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
   }
 
   .markdown-message :global(.md-syntax-comment) {
-    color: #9d96b8;
+    color: var(--syntax-comment);
     font-style: italic;
   }
 
   .markdown-message :global(.md-syntax-string) {
-    color: #a7f3d0;
+    color: var(--syntax-string);
   }
 
   .markdown-message :global(.md-syntax-keyword) {
-    color: #d8b4fe;
+    color: var(--syntax-keyword);
     font-weight: 750;
   }
 
   .markdown-message :global(.md-syntax-type) {
-    color: #93c5fd;
+    color: var(--syntax-type);
   }
 
   .markdown-message :global(.md-syntax-function) {
-    color: #fde68a;
+    color: var(--syntax-function);
   }
 
   .markdown-message :global(.md-syntax-number) {
-    color: #fdba74;
+    color: var(--syntax-number);
   }
 
   .markdown-message :global(.md-syntax-literal) {
-    color: #f0abfc;
+    color: var(--syntax-literal);
   }
 
   .markdown-message :global(.md-syntax-operator),
   .markdown-message :global(.md-syntax-punctuation) {
-    color: #c4b5fd;
+    color: var(--syntax-operator);
   }
 
 	  .markdown-message :global(.md-table-wrap) {
 	    max-width: 100%;
 	    overflow-x: auto;
 	    border: 1px solid var(--border);
-	    border-radius: 7px;
+	    border-radius: var(--radius-md);
 	  }
 
 	  .markdown-message :global(table) {
 	    width: 100%;
 	    min-width: 520px;
 	    border-collapse: collapse;
-	    font-size: 12px;
+	    font-size: var(--font-md);
 	    line-height: 1.4;
 	  }
 
@@ -1289,7 +1284,7 @@
     position: relative;
     display: inline-flex;
     margin-left: 3px;
-    font-size: 11px;
+    font-size: var(--font-sm);
     font-weight: 750;
     vertical-align: baseline;
     white-space: nowrap;
@@ -1301,7 +1296,7 @@
     left: 50%;
     pointer-events: none;
     opacity: 0;
-    transition: opacity 140ms ease, transform 140ms ease;
+    transition: opacity var(--duration-fast) var(--ease-ui), transform var(--duration-fast) var(--ease-ui);
   }
 
   .markdown-message :global(.md-citation::before) {
@@ -1321,11 +1316,11 @@
     max-width: min(340px, 72vw);
     padding: 8px 10px;
     border: 1px solid var(--border-strong);
-    border-radius: 7px;
+    border-radius: var(--radius-md);
     background: var(--surface-3);
     color: var(--text-1);
-    box-shadow: 0 12px 32px rgb(0 0 0 / 34%);
-    font-size: 11px;
+    box-shadow: var(--shadow-floating);
+    font-size: var(--font-sm);
     font-weight: 600;
     line-height: 1.35;
     text-align: left;
@@ -1335,11 +1330,30 @@
     overflow-wrap: anywhere;
   }
 
-  .markdown-message :global(.md-citation:hover::before),
-  .markdown-message :global(.md-citation:hover::after),
   .markdown-message :global(.md-citation:focus-visible::before),
   .markdown-message :global(.md-citation:focus-visible::after) {
     opacity: 1;
     transform: translate(-50%, 0);
+  }
+
+  /* A tooltip is the worst thing to leave on a sticky hover: tapping a citation
+     follows the link, and the card would still be open underneath on the way
+     back. Keyboard focus above reaches it without a pointer. */
+  @media (hover: hover) and (pointer: fine) {
+    .markdown-message :global(.md-citation:hover::before),
+    .markdown-message :global(.md-citation:hover::after) {
+      opacity: 1;
+      transform: translate(-50%, 0);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* Same bargain the global tooltip strikes: it still fades in, it just
+       stops sliding into place. */
+    .markdown-message :global(.md-citation::before),
+    .markdown-message :global(.md-citation::after) {
+      transition: opacity var(--duration-fast) var(--ease-ui);
+      transform: translate(-50%, 0);
+    }
   }
 </style>

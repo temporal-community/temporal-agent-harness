@@ -6,6 +6,10 @@ import type {
   ToolId
 } from "$lib/api/types";
 import { formatTokens, summarizeCost, type CostSummary } from "$lib/cost/pricing";
+import { renderUserMessage } from "$lib/state/inboundMessageText";
+import { UNKNOWN_TOOL_INPUT } from "$lib/state/logValue";
+import { formatDuration } from "$lib/state/replayLog";
+import { NO_THOUGHT_SUMMARY, thoughtDeltaText } from "$lib/state/thoughtSummary";
 
 export type AgentNodeTone =
   | "neutral"
@@ -34,14 +38,34 @@ export interface AgentNodeData {
   approvalDecisionPort?: boolean;
   nodeWidth?: number;
   nodeHeight?: number;
+  /** Overrides the result body's height, in px. See codeModeScriptHeight. */
+  resultHeight?: number;
   flowGroup?: number;
   metrics?: Array<{ label: string; value: string }>;
   interfaces?: AgentInterfaceSummary[];
+  /** Never empty — see contextFor(). The inspector renders these in order. */
+  context?: AgentNodeContext[];
 }
 
 export interface AgentInterfaceSummary {
   name: string;
   description?: string;
+}
+
+/**
+ * One readable body for the node inspector.
+ *
+ * A node card shows a bounded preview and says so; this is where the rest of it
+ * lives. Built here rather than in the inspector because the inspector only ever
+ * receives node DATA — it has no frames to reach back into, which is exactly why
+ * it used to apologise for having nothing to show over a model interaction that
+ * had streamed 3,515 characters: `detail` was the only field it read, and
+ * nodeDataFor has never set one for that kind.
+ */
+export interface AgentNodeContext {
+  label: string;
+  text: string;
+  kind: "text" | "code" | "json";
 }
 
 export interface AgentGraph {
@@ -72,11 +96,18 @@ interface ToolRuntime {
   tone: AgentNodeTone;
   statusTone?: AgentNodeTone;
   detail?: string;
+  /* Kept apart from `detail`, which the card overwrites with whatever happened
+     last. The inspector wants both halves of the call, and the arguments the
+     model chose were being thrown away the moment the tool answered. */
+  input?: string;
+  output?: string;
   subtitle?: string;
   isCodeMode?: boolean;
   script?: string;
   parentToolId?: ToolId;
   flowGroup?: number;
+  /** Consecutive identical failures stacked onto this node. Absent / 1 = not stacked. */
+  retryCount?: number;
 }
 
 interface AgentGraphOptions {
@@ -85,6 +116,22 @@ interface AgentGraphOptions {
   outputPlacement?: "external" | "runtime";
   agentInterface?: AgentInterfaceFunction[];
   embeddedToolGraphs?: AgentGraph[];
+  /**
+   * Draw the turn as it stands rather than as it happened: a settled tool leaves
+   * the canvas. Off by default, so a caller that asks for nothing gets the
+   * accumulated graph this file has always built.
+   */
+  focus?: boolean;
+  /**
+   * Tools that have settled but should still be drawn, so a call that finishes
+   * says so before it goes rather than blinking out unacknowledged.
+   *
+   * Held here rather than computed from a clock, because this projection is also
+   * what a scrub and a page-load replay run through: a tool that finished an hour
+   * ago must not linger just because its frame is being read now. The caller owns
+   * the timing and only ever puts a live settle in this set.
+   */
+  linger?: ReadonlySet<ToolId>;
 }
 
 type RuntimeNodeId =
@@ -139,6 +186,17 @@ const stateNodeWidth = 230;
 const largeStateNodeWidth = 255;
 const stateNodeHeight = 130;
 const largeStateNodeHeight = 150;
+/**
+ * What a card measures once it carries a Result region, which AgentStateNode
+ * holds at a fixed height on purpose. Reserved here rather than measured,
+ * because these positions are computed from data and never from the DOM — a
+ * card taller than its reservation overlaps the runtime boundary it sits in.
+ *
+ * One number for every kind of result, including scripts: the region is one
+ * fixed height whatever it holds, which is what replaced the old special case
+ * that reserved 210px for nodes whose detail happened to parse as a script.
+ */
+const resultNodeHeight = 231;
 const runtimeColumnGap = 45;
 const runtimeRowGap = 45;
 const modelReasoningGap = 24;
@@ -146,7 +204,18 @@ const embeddedToolPadding = 18;
 const embeddedToolHeaderHeight = 116;
 const embeddedToolGap = 32;
 const codeModePadding = 18;
-const codeModeHeaderHeight = 126;
+/**
+ * A Code Mode host draws its own head and its script above the host calls laid
+ * out inside it, so the header has to reserve room for both.
+ *
+ * The script used to get whatever was left of a flat 126px, which was 26px — one
+ * clipped line of Python behind a scrollbar, on the card whose whole point is the
+ * script it ran. It gets a normal card's result body instead, and the node data
+ * carries that number to the CSS so the two cannot drift apart.
+ */
+const codeModeHeadHeight = 100;
+const codeModeScriptHeight = 132;
+const codeModeHeaderHeight = codeModeHeadHeight + codeModeScriptHeight;
 const codeModeColumns = 2;
 const codeModeColumnGap = 32;
 const codeModeRowGap = 26;
@@ -187,6 +256,18 @@ function runtimeBoundaryHeight(count: number): number {
     40
   );
 }
+
+/**
+ * What `.workflow-head` occupies in AgentWorkflowNode, mirrored here for the same
+ * reason embeddedToolHeaderHeight is: this file computes geometry from data and
+ * never measures the DOM. Measured at 88px in a browser — its `min-height`, which
+ * binds even in the variant that fills it most (title, subtitle and an ACCEPTS
+ * row), and the 120px above the first card is this plus 32px of breathing room.
+ *
+ * It is also the whole height of a boundary with nothing inside it, because the
+ * insets on either side of the card grid have no grid to sit around.
+ */
+const runtimeHeaderHeight = 88;
 
 function outputPosition(boundaryWidth: number): { x: number; y: number } {
   return {
@@ -251,14 +332,6 @@ function edge(
   };
 }
 
-function thoughtText(delta: { [key: string]: unknown }): string {
-  const content = delta.content;
-  if (typeof content === "object" && content != null && "text" in content) {
-    return String((content as { text?: unknown }).text ?? "");
-  }
-  return "";
-}
-
 function scopedId(workflowId: string, localId: string): string {
   return `${workflowId}::${localId}`;
 }
@@ -271,8 +344,79 @@ function isToolRuntimeNodeId(id: string): id is ToolRuntimeNodeId {
   return id.startsWith("tool:");
 }
 
+function sameFailedRetry(a: ToolRuntime | undefined, b: ToolRuntime | undefined): boolean {
+  return Boolean(
+    a &&
+      b &&
+      a.name === b.name &&
+      a.status === "failed" &&
+      b.status === "failed" &&
+      a.detail === b.detail
+  );
+}
+
+/**
+ * Consecutive identical failures (same tool name + same error) become one card
+ * with a count. Successful / distinct tools stay in order — not a focus-view fold.
+ */
+function collapseConsecutiveFailedRetries(
+  order: RuntimeNodeId[],
+  tools: Map<ToolId, ToolRuntime>
+): Map<RuntimeNodeId, RuntimeNodeId> {
+  const redirect = new Map<RuntimeNodeId, RuntimeNodeId>();
+  const kept: RuntimeNodeId[] = [];
+  for (const id of order) {
+    const prev = kept.at(-1);
+    if (
+      prev &&
+      isToolRuntimeNodeId(id) &&
+      isToolRuntimeNodeId(prev) &&
+      sameFailedRetry(tools.get(toolIdFromRuntimeNodeId(prev)), tools.get(toolIdFromRuntimeNodeId(id)))
+    ) {
+      const head = tools.get(toolIdFromRuntimeNodeId(prev))!;
+      const next = tools.get(toolIdFromRuntimeNodeId(id))!;
+      head.retryCount = (head.retryCount ?? 1) + 1;
+      head.detail = next.detail;
+      head.output = next.output;
+      redirect.set(id, prev);
+      continue;
+    }
+    kept.push(id);
+  }
+  order.splice(0, order.length, ...kept);
+  return redirect;
+}
+
 function toolIdFromRuntimeNodeId(id: ToolRuntimeNodeId): ToolId {
   return id.slice("tool:".length);
+}
+
+/**
+ * Focus view: a settled tool leaves the canvas, and nothing stands in for it —
+ * the transcript holds what it did. Accumulated view is this not running.
+ *
+ * `linger` holds back the ones that just finished, so a call leaves having been
+ * seen to finish rather than blinking out mid-turn. See AgentGraphOptions.linger.
+ *
+ * Same contract as the retry fold above: `order` is spliced in place.
+ *
+ * In-flight is read off the set the flow-group bookkeeping already maintains
+ * rather than tested for on `status`. A status predicate has to enumerate
+ * `requested`, `running`, `awaiting` and `approved` correctly to avoid hiding a
+ * card, and hiding the one sitting at a human approval gate is the worst thing
+ * this fold could do.
+ */
+function dropSettledTools(
+  order: RuntimeNodeId[],
+  inFlight: Set<ToolId>,
+  linger: ReadonlySet<ToolId>
+): void {
+  const kept = order.filter((id) => {
+    if (!isToolRuntimeNodeId(id)) return true;
+    const toolId = toolIdFromRuntimeNodeId(id);
+    return inFlight.has(toolId) || linger.has(toolId);
+  });
+  order.splice(0, order.length, ...kept);
 }
 
 function codeModeScriptFromToolInput(input: unknown): string | null {
@@ -299,6 +443,20 @@ function dimensionsForData(data: AgentNodeData): NodeDimensions {
   };
 }
 
+/**
+ * Where each row of a grid starts: under the tallest box in the row above it,
+ * not under a nominal one.
+ */
+function rowTops(heights: readonly number[], columns: number, gap: number): number[] {
+  const tops: number[] = [];
+  let y = 0;
+  for (let start = 0; start < heights.length; start += columns) {
+    tops.push(y);
+    y += Math.max(...heights.slice(start, start + columns)) + gap;
+  }
+  return tops;
+}
+
 function runtimeLayoutFor(
   order: RuntimeNodeId[],
   dataById: Map<RuntimeNodeId, AgentNodeData>
@@ -308,31 +466,38 @@ function runtimeLayoutFor(
     ? order.filter((id) => id !== "reasoning")
     : order;
   const positions = new Map<RuntimeNodeId, { x: number; y: number }>();
-  let nextX = layout.gridStartX;
-  let contentWidth = stateNodeWidth;
-  let contentHeight = stateNodeHeight;
-
-  for (const id of flowOrder) {
+  const sizes = flowOrder.map((id) => {
     const data = dataById.get(id);
-    const dimensions = data ? dimensionsForData(data) : {
-      width: stateNodeWidth,
-      height: stateNodeHeight
-    };
+    const dimensions = data
+      ? dimensionsForData(data)
+      : { width: stateNodeWidth, height: stateNodeHeight };
+    if (!(attachReasoning && id === "model")) return dimensions;
     const reasoningData = dataById.get("reasoning");
     const reasoningDimensions = reasoningData
       ? dimensionsForData(reasoningData)
       : dimensions;
-    const effectiveDimensions =
-      attachReasoning && id === "model"
-        ? {
-            width: Math.max(dimensions.width, reasoningDimensions.width),
-            height: dimensions.height + modelReasoningGap + reasoningDimensions.height
-          }
-        : dimensions;
-    positions.set(id, { x: nextX, y: layout.gridStartY });
-    contentHeight = Math.max(contentHeight, effectiveDimensions.height);
-    contentWidth = nextX - layout.gridStartX + effectiveDimensions.width;
-    nextX += effectiveDimensions.width + runtimeColumnGap;
+    return {
+      width: Math.max(dimensions.width, reasoningDimensions.width),
+      height: dimensions.height + modelReasoningGap + reasoningDimensions.height
+    };
+  });
+  const tops = rowTops(
+    sizes.map((size) => size.height),
+    layout.columns,
+    runtimeRowGap
+  );
+  let contentWidth = stateNodeWidth;
+  let contentHeight = stateNodeHeight;
+
+  for (let slot = 0; slot < flowOrder.length; slot += 1) {
+    const dimensions = sizes[slot];
+    const col = slot % layout.columns;
+    const row = Math.floor(slot / layout.columns);
+    const x = layout.gridStartX + col * (stateNodeWidth + runtimeColumnGap);
+    const y = layout.gridStartY + tops[row];
+    positions.set(flowOrder[slot], { x, y });
+    contentWidth = Math.max(contentWidth, x - layout.gridStartX + dimensions.width);
+    contentHeight = Math.max(contentHeight, y - layout.gridStartY + dimensions.height);
   }
   if (attachReasoning) {
     const modelPosition = positions.get("model");
@@ -417,7 +582,7 @@ function codeModeContainerDimensions(childCount: number): NodeDimensions {
       Math.max(0, columns - 1) * codeModeColumnGap,
     height:
       codeModeHeaderHeight +
-      rows * stateNodeHeight +
+      rows * resultNodeHeight +
       Math.max(0, rows - 1) * codeModeRowGap +
       codeModePadding
   };
@@ -428,15 +593,33 @@ function codeModeChildPosition(index: number): { x: number; y: number } {
   const row = Math.floor(index / codeModeColumns);
   return {
     x: codeModePadding + column * (stateNodeWidth + codeModeColumnGap),
-    y: codeModeHeaderHeight + row * (stateNodeHeight + codeModeRowGap)
+    y: codeModeHeaderHeight + row * (resultNodeHeight + codeModeRowGap)
   };
 }
+
+/**
+ * One graph paints as a ladder: boundary 0, its own flow edges 1, its cards 10,
+ * a Code Mode host's children 14. A graph embedded in a card climbs that ladder
+ * whole — and its edges have further to climb than its nodes.
+ *
+ * Nodes lift by 4, which is enough to clear the enclosing graph's boundary and
+ * no more, so the translucent Subagent activity container at 10 still tints the
+ * subagent boundary drawn inside it. An edge lifted by the same 4 lands at 5,
+ * under that container, so the arrows between a subagent's Input, Model
+ * interaction and Output were drawn at the right coordinates and painted over —
+ * the parent's identical arrows survive only because the parent's boundary is 0.
+ * Edges clear the container outright and still pass under the nested cards, at
+ * 10 + 4, that they run between.
+ */
+const nestedNodeZIndexBoost = 4;
+const nestedEdgeZIndexBoost = 11;
 
 function offsetGraph(
   graph: AgentGraph,
   xOffset: number,
   yOffset: number,
-  zIndexBoost = 0
+  zIndexBoost = 0,
+  edgeZIndexBoost = zIndexBoost
 ): AgentGraph {
   return {
     ...graph,
@@ -448,7 +631,10 @@ function offsetGraph(
       },
       zIndex: (item.zIndex ?? 0) + zIndexBoost
     })),
-    edges: graph.edges.map((item) => ({ ...item }))
+    edges: graph.edges.map((item) => ({
+      ...item,
+      zIndex: (item.zIndex ?? 0) + edgeZIndexBoost
+    }))
   };
 }
 
@@ -552,16 +738,93 @@ function textFromReply(data: { text?: unknown; output?: unknown }): string {
   return "";
 }
 
-function hasScriptDetail(detail: string): boolean {
+function textSection(
+  label: string,
+  text: string | undefined,
+  kind: AgentNodeContext["kind"] = "text"
+): AgentNodeContext | null {
+  return typeof text === "string" && text.trim() ? { label, text, kind } : null;
+}
+
+/** Pretty-printed if it parses as JSON, kept verbatim if it does not. */
+function maybeJsonSection(label: string, text: string | undefined): AgentNodeContext | null {
+  if (typeof text !== "string" || !text.trim()) return null;
   try {
-    const parsed = JSON.parse(detail);
-    return (
-      typeof parsed?.script === "string" ||
-      typeof parsed?.payload?.script === "string"
-    );
+    return { label, text: JSON.stringify(JSON.parse(text), null, 2), kind: "json" };
   } catch {
-    return false;
+    return { label, text, kind: "text" };
   }
+}
+
+const noLingeringTools: ReadonlySet<ToolId> = new Set();
+
+/**
+ * The tool this frame just settled, if it settled one.
+ *
+ * The same three cases that call markToolSettled inside the builder — a tool that
+ * ended, one that failed, and an approval that was refused — and pointedly not a
+ * granted approval, which tones the card "done" while the call has yet to run.
+ *
+ * Exported because the caller timing the linger has to answer exactly this
+ * question, and two spellings of "has this finished" would drift apart. Hiding a
+ * card that is still going, or holding one that is not, both start here.
+ */
+export function settledToolIdFromFrame(frame: AgentSseFrame): ToolId | null {
+  if (!("type" in frame.data) || !("tool_id" in frame.data)) return null;
+  if (frame.event === "tool_end" || frame.event === "tool_error") return frame.data.tool_id;
+  if (frame.event === "tool_approval_resolved" && !frame.data.approved) {
+    return frame.data.tool_id;
+  }
+  return null;
+}
+
+/**
+ * How many steps of the cursor a finished tool stays drawn while a run is being
+ * read back. One: the frame that finished it draws it done, and the next frame
+ * dismisses it.
+ *
+ * One rather than a few, so the card answers for the event the reader is standing
+ * on and nothing else. A tool held two steps is still on the canvas after the run
+ * has moved on to the next thing, which puts a finished call next to a live one
+ * and makes the reader work out which event they are looking at — the confusion
+ * this whole fold exists to remove, reintroduced a step later.
+ *
+ * Since each settle is its own frame, this also means at most one card is held at
+ * a time: what just finished, singular.
+ *
+ * At the live edge the beat is measured on the clock instead, because there the
+ * run sets the pace and frames can arrive faster than they can be read.
+ */
+export const cursorHoldSteps = 1;
+
+/**
+ * The tool that settled on the frame the cursor is parked on, if one did.
+ *
+ * The read-back half of the hold. Scrubbing rebuilds the graph from the frames up
+ * to the cursor, so a tool that finished one step ago is simply absent from focus
+ * view — which is the same card blinking out unacknowledged that the hold exists
+ * to stop, and it is what a reader stepping through a finished run sees for every
+ * call in it.
+ *
+ * Pure and derived from the cursor alone, so it needs no timer and a given cursor
+ * always draws the same graph: stepping back and forward again lands on what it
+ * landed on before.
+ */
+export function settledNearCursor(
+  timeline: readonly { frame: AgentSseFrame }[],
+  steps: number = cursorHoldSteps
+): ReadonlySet<ToolId> {
+  const held = new Set<ToolId>();
+  for (let at = Math.max(0, timeline.length - steps); at < timeline.length; at += 1) {
+    const toolId = settledToolIdFromFrame(timeline[at].frame);
+    if (toolId != null) held.add(toolId);
+  }
+  return held;
+}
+
+function valueSection(label: string, value: unknown): AgentNodeContext | null {
+  if (value == null) return null;
+  return { label, text: JSON.stringify(value, null, 2), kind: "json" };
 }
 
 export function buildAgentGraph(
@@ -572,6 +835,7 @@ export function buildAgentGraph(
   const showSubagentDispatch = options.showSubagentDispatch ?? true;
   const outputPlacement = options.outputPlacement ?? "external";
   const agentInterface = summarizeAgentInterface(options.agentInterface);
+  const lingeringTools = options.linger ?? noLingeringTools;
   let activeTurn: number | null = null;
   let status: AgentGraph["status"] = "idle";
   let currentUserMessage = "No message received";
@@ -581,6 +845,11 @@ export function buildAgentGraph(
   let modelState = "idle";
   let reasoningState = "idle";
   let reasoningDetail = "";
+  /* When the model call that is doing the thinking opened, and when the last thought
+     fragment landed — the two ends of "Thought for 4s". Both are frame timestamps the
+     stream already stamps; nothing new is measured here. */
+  let reasoningStartTs: number | null = null;
+  let reasoningEndTs: number | null = null;
   let replyText = "";
   let replyState = "waiting";
   let queued = 0;
@@ -590,6 +859,10 @@ export function buildAgentGraph(
   let subagentDetail = "";
   const tools = new Map<ToolId, ToolRuntime>();
   const codeModeChildren = new Map<ToolId, ToolId[]>();
+  /* Children are not in `runtimeNodeOrder` and so are not reached by the fold that
+     drops settled tools. They get their own set, filled from the same call sites, so
+     both halves of the graph answer "has this finished" the same way. */
+  const settledChildToolIds = new Set<ToolId>();
   const activeCodeModeToolIds: ToolId[] = [];
   const activeRuntimeToolIds = new Set<ToolId>();
   let runtimeToolFlowGroup = 0;
@@ -597,6 +870,18 @@ export function buildAgentGraph(
   let inputSeen = false;
   let outputSeen = false;
   let latestNodeId: LocalNodeId | null = null;
+  /**
+   * The last frame that touched each node, so no node can be reduced to an
+   * apology. Every node in this graph exists BECAUSE a frame put it there, and
+   * that frame is a better answer than a sentence saying there is nothing to
+   * read — it is the ground truth the rest of the card is derived from.
+   */
+  const lastFrameByNode = new Map<LocalNodeId, AgentSseFrame["data"]>();
+  let currentFrame: AgentSseFrame | null = null;
+
+  function remember(id: LocalNodeId): void {
+    if (currentFrame) lastFrameByNode.set(id, currentFrame.data);
+  }
 
   function markInput(): void {
     inputSeen = true;
@@ -604,12 +889,14 @@ export function buildAgentGraph(
       markRuntimeNode("input");
     } else {
       latestNodeId = "input";
+      remember("input");
     }
   }
 
   function markRuntimeNode(id: RuntimeNodeId): void {
     if (!runtimeNodeOrder.includes(id)) runtimeNodeOrder.push(id);
     latestNodeId = id;
+    remember(id);
   }
 
   function markOutput(): void {
@@ -618,6 +905,7 @@ export function buildAgentGraph(
       markRuntimeNode("output");
     } else {
       latestNodeId = "output";
+      remember("output");
     }
   }
 
@@ -629,6 +917,7 @@ export function buildAgentGraph(
         codeModeChildren.set(parentToolId, [...childIds, toolId]);
       }
       latestNodeId = nodeId;
+      remember(nodeId);
       return nodeId;
     }
     markRuntimeNode(nodeId);
@@ -644,8 +933,11 @@ export function buildAgentGraph(
     return runtimeToolFlowGroup;
   }
 
+  /* Called from tool_end, tool_error and a denied approval — and pointedly not from a
+     granted one, which tones the card "done" while the call has yet to run. */
   function markToolSettled(toolId: ToolId, parentToolId?: ToolId): void {
-    if (!parentToolId) activeRuntimeToolIds.delete(toolId);
+    if (parentToolId) settledChildToolIds.add(toolId);
+    else activeRuntimeToolIds.delete(toolId);
   }
 
   function toolRuntime(toolId: ToolId, name: string, parentToolId?: ToolId): ToolRuntime {
@@ -660,7 +952,7 @@ export function buildAgentGraph(
     return {
       id: toolId,
       name,
-      status: "requested by model",
+      status: "requested",
       tone: "tool",
       statusTone: "queue",
       subtitle: parentToolId ? "Code Mode host call" : "waiting to dispatch",
@@ -669,8 +961,15 @@ export function buildAgentGraph(
     };
   }
 
+  /* The one list of a host's visible children: both the container's size and the
+     child nodes themselves read it, so a settled child cannot leave a hole the box
+     is still sized around. */
   function codeModeHostChildIds(toolId: ToolId): ToolId[] {
-    return (codeModeChildren.get(toolId) ?? []).filter((childId) => tools.has(childId));
+    return (codeModeChildren.get(toolId) ?? []).filter(
+      (childId) =>
+        tools.has(childId) &&
+        !(options.focus && settledChildToolIds.has(childId) && !lingeringTools.has(childId))
+    );
   }
 
   function childToolParent(toolId: ToolId, isCodeModeTool: boolean): ToolId | undefined {
@@ -690,6 +989,7 @@ export function buildAgentGraph(
   function resetTurnTools(): void {
     tools.clear();
     codeModeChildren.clear();
+    settledChildToolIds.clear();
     activeCodeModeToolIds.splice(0, activeCodeModeToolIds.length);
     activeRuntimeToolIds.clear();
     runtimeToolFlowGroup = 0;
@@ -702,6 +1002,7 @@ export function buildAgentGraph(
 
   for (const frame of frames) {
     if (!("type" in frame.data)) continue;
+    currentFrame = frame;
     if (frame.event === "message_queued") {
       markInput();
       queued += 1;
@@ -718,6 +1019,8 @@ export function buildAgentGraph(
       modelState = "waiting";
       reasoningState = "waiting";
       reasoningDetail = "";
+      reasoningStartTs = null;
+      reasoningEndTs = null;
       replyText = "";
       replyState = "waiting";
       resetTurnTools();
@@ -728,6 +1031,7 @@ export function buildAgentGraph(
       currentModel = frame.data.model ?? "unknown model";
       modelState = "running";
       reasoningState = "waiting";
+      reasoningStartTs = frame.data.timestamp;
     } else if (frame.event === "model_interaction_ended") {
       markRuntimeNode("model");
       currentModel = frame.data.model ?? currentModel;
@@ -737,9 +1041,14 @@ export function buildAgentGraph(
       }
     } else if (frame.event === "thought_summary") {
       markRuntimeNode("reasoning");
-      const text = thoughtText(frame.data.delta);
+      /* Accumulated, not assigned: every producer streams thought text in fragments, so
+         the last frame holds the last few words rather than the thought. Assigning is
+         what made a Gemini card look right — its mock summary arrives whole — while a
+         real one showed its own tail. */
+      reasoningDetail += thoughtDeltaText(frame.data.delta);
       reasoningState = "running";
-      if (text) reasoningDetail = text;
+      reasoningStartTs ??= frame.data.timestamp;
+      reasoningEndTs = frame.data.timestamp;
     } else if (frame.event === "reply_delta") {
       markOutput();
       replyText += frame.data.text;
@@ -751,7 +1060,9 @@ export function buildAgentGraph(
       markOutput();
       status = "replied";
       replyText = textFromReply(frame.data) || replyText;
-      replyState = "reply available";
+      /* "reply available" was wider than the chip, the same way "awaiting
+         approval" was. The noun is carried by the card, which is titled Output. */
+      replyState = "available";
     } else if (frame.event === "error") {
       markOutput();
       status = "error";
@@ -761,7 +1072,10 @@ export function buildAgentGraph(
       activeTurn = frame.data.turn_number;
       status = "idle";
       modelState = "idle";
-      reasoningState = reasoningDetail ? "captured" : "idle";
+      /* A run that thought without summarizing has already been marked captured by the
+         model_interaction_ended above, and downgrading it here would drop the note the
+         card shows in place of the summary it never got. */
+      reasoningState = reasoningDetail || reasoningState === "captured" ? "captured" : "idle";
       runtimeHeaderPrefix = "Turn end";
       latestNodeId = null;
     } else if (
@@ -787,10 +1101,17 @@ export function buildAgentGraph(
         runtime.subtitle = "Code Mode script";
       }
       if ("tool_input" in frame.data) {
-        runtime.detail = JSON.stringify(frame.data.tool_input);
+        // tool_requested carries null when the model streamed arguments the backend could not
+        // parse. Stringifying that puts the literal text "null" on the node, which reads as a
+        // value the model sent rather than as one we lost.
+        runtime.detail =
+          frame.data.tool_input === null
+            ? UNKNOWN_TOOL_INPUT
+            : JSON.stringify(frame.data.tool_input, null, 2);
+        runtime.input = runtime.detail;
       }
       if (frame.event === "tool_requested") {
-        runtime.status = "requested by model";
+        runtime.status = "requested";
         runtime.tone = "tool";
         runtime.statusTone = "queue";
         runtime.subtitle = runtime.isCodeMode
@@ -820,6 +1141,7 @@ export function buildAgentGraph(
             ? "host call running"
             : "execution in progress";
         runtime.detail = frame.data.progress_delta;
+        runtime.output = frame.data.progress_delta;
       } else if (frame.event === "tool_end") {
         runtime.status = "done";
         runtime.tone = "done";
@@ -830,6 +1152,7 @@ export function buildAgentGraph(
             ? "host call completed"
             : "execution completed";
         runtime.detail = frame.data.tool_output;
+        runtime.output = frame.data.tool_output;
         if (runtime.isCodeMode) markCodeModeFinished(frame.data.tool_id);
         markToolSettled(frame.data.tool_id, parentToolId);
       } else if (frame.event === "tool_error") {
@@ -842,6 +1165,7 @@ export function buildAgentGraph(
             ? "host call failed"
             : "execution failed";
         runtime.detail = frame.data.message;
+        runtime.output = frame.data.message;
         if (runtime.isCodeMode) markCodeModeFinished(frame.data.tool_id);
         markToolSettled(frame.data.tool_id, parentToolId);
       }
@@ -865,7 +1189,9 @@ export function buildAgentGraph(
         runtime.script = script;
       }
       if (frame.event === "tool_approval_requested") {
-        runtime.status = "awaiting approval";
+        /* Chip uppercases this on a 230px card; "awaiting approval" overflowed
+           the header the same way "requested by model" did. */
+        runtime.status = "awaiting";
         runtime.tone = "approval";
         runtime.statusTone = "approval";
         runtime.subtitle = runtime.isCodeMode
@@ -873,7 +1199,8 @@ export function buildAgentGraph(
           : parentToolId
             ? "host call approval gate"
             : "human approval gate";
-        runtime.detail = JSON.stringify(frame.data.tool_input);
+        runtime.detail = JSON.stringify(frame.data.tool_input, null, 2);
+        runtime.input = runtime.detail;
       } else {
         runtime.status = frame.data.approved ? "approved" : "denied";
         runtime.tone = frame.data.approved ? "done" : "error";
@@ -904,10 +1231,36 @@ export function buildAgentGraph(
       } else if (frame.event === "subagent_reply_received") {
         subagentState = `reply ${frame.data.outcome}`;
       } else if (frame.event === "subagent_stream_unavailable") {
-        subagentState = "detail unavailable";
+        /* Short enough for the chip to render whole; see replyState above. */
+        subagentState = "unavailable";
       } else {
         subagentState = "stopped";
       }
+    }
+  }
+
+  const retryRedirect = collapseConsecutiveFailedRetries(runtimeNodeOrder, tools);
+  if (latestNodeId && retryRedirect.has(latestNodeId)) {
+    latestNodeId = retryRedirect.get(latestNodeId)!;
+  }
+
+  /* Read before the focus fold, which can drop the reasoning node: the summary
+     below keys "drew a card and said nothing" off the card having existed, and
+     asking runtimeNodeOrder after the splice answers about the wrong thing. */
+  const reasoningSeen = runtimeNodeOrder.includes("reasoning");
+  if (options.focus) {
+    dropSettledTools(runtimeNodeOrder, activeRuntimeToolIds, lingeringTools);
+    /* A finished thought trace is a completed event too, and the transcript
+       holds it either way. While fragments are still arriving it stays. */
+    if (reasoningState !== "running") {
+      const at = runtimeNodeOrder.indexOf("reasoning");
+      if (at >= 0) runtimeNodeOrder.splice(at, 1);
+    }
+    /* Not optional bookkeeping: `active: latestNodeId === id` is what marks the
+       live card, so a turn whose last tool just settled off the canvas would
+       have no active node at all. The newest survivor is where the run is. */
+    if (latestNodeId && !runtimeNodeOrder.includes(latestNodeId)) {
+      latestNodeId = runtimeNodeOrder.at(-1) ?? null;
     }
   }
 
@@ -917,16 +1270,103 @@ export function buildAgentGraph(
   }
   const usage = summarizeCost(frames);
 
-  function nodeDataFor(id: LocalNodeId): AgentNodeData {
+  /**
+   * What the thought card says when the thinking produced no text.
+   *
+   * Keyed on the card existing at all, which is the only state that can render blank: this
+   * node is drawn because a thought_summary frame arrived, so a frame arrived and carried
+   * nothing readable — a Pydantic AI signature-only delta, or a shape newer than the
+   * extractor. A run that asks for no summary (`Reasoning(summary=None)`, which is what
+   * examples/sandbox_tools/coding_agent runs on) streams no such frame and draws no card,
+   * so it is already distinguishable; what was not distinguishable is this.
+   */
+  const reasoningSummary = reasoningDetail || (reasoningSeen ? NO_THOUGHT_SUMMARY : "");
+  /* Only once the thinking is over: while fragments are still arriving the end moves, and a
+     number that climbs while you read it is not a duration. */
+  const reasoningSeconds =
+    reasoningState === "captured" && reasoningStartTs != null && reasoningEndTs != null
+      ? Math.max(0, reasoningEndTs - reasoningStartTs)
+      : null;
+
+  /**
+   * What the inspector shows, per node kind. Every branch here ends with the
+   * frame that last touched the node, so the list is never empty: a node exists
+   * because a frame put it there, and printing that frame beats printing a
+   * sentence about having nothing to print.
+   *
+   * The two synthetic nodes — the tool container and the runtime boundary — have
+   * no frame of their own, so they describe what they are made of instead.
+   */
+  function contextFor(id: LocalNodeId): AgentNodeContext[] {
+    const sections: Array<AgentNodeContext | null> = [];
+
     if (id === "input") {
-      const detail = currentUserMessage || queuedMessage;
+      const raw = currentUserMessage || queuedMessage;
+      const rendered = renderUserMessage(raw);
+      sections.push(textSection("User message", rendered));
+      if (rendered !== raw) sections.push(maybeJsonSection("Raw message", raw));
+    } else if (id === "model") {
+      /* The model's own output and its thinking — the two things asked for by
+         name. Both were already in this scope; nothing reached them because the
+         inspector only ever read `detail`, and this node has never had one. */
+      sections.push(
+        textSection("Model output", replyText),
+        textSection("Thought summary", reasoningSummary),
+        textSection("Model", currentModel)
+      );
+    } else if (id === "reasoning") {
+      sections.push(textSection("Thought summary", reasoningSummary));
+    } else if (id === "output") {
+      sections.push(textSection("Reply", replyText));
+    } else if (id === "subagent") {
+      sections.push(
+        textSection("Subagent", subagentSubtitle),
+        textSection("Workflow", subagentDetail)
+      );
+    } else if (isToolRuntimeNodeId(id)) {
+      const runtime = tools.get(toolIdFromRuntimeNodeId(id));
+      sections.push(
+        runtime?.script ? { label: "Script", text: runtime.script, kind: "code" } : null,
+        maybeJsonSection("Tool input", runtime?.input),
+        maybeJsonSection("Tool output", runtime?.output)
+      );
+    } else if (id === "tool-container") {
+      sections.push(
+        valueSection(
+          "Delegated runtimes",
+          (options.embeddedToolGraphs ?? []).map((graph) => ({
+            status: graph.status,
+            activeTurn: graph.activeTurn,
+            nodes: graph.nodes.length
+          }))
+        )
+      );
+    }
+
+    sections.push(valueSection("Event payload", lastFrameByNode.get(id)));
+    const built = sections.filter((section): section is AgentNodeContext => section != null);
+    /* Unreachable for every id above, and the reason there is no apology string
+       left in this file: a node with nothing else still describes itself. */
+    return built.length > 0 ? built : [{ label: "Node", text: id, kind: "text" }];
+  }
+
+  function nodeDataFor(id: LocalNodeId): AgentNodeData {
+    return { ...baseNodeDataFor(id), context: contextFor(id) };
+  }
+
+  function baseNodeDataFor(id: LocalNodeId): AgentNodeData {
+    if (id === "input") {
       return {
         tone: status === "running" ? "queue" : "neutral",
         title: "Input",
         state: inputState,
         subtitle: "user message",
-        detail,
-        nodeHeight: hasScriptDetail(detail) ? 210 : undefined,
+        /* The text, not the envelope it arrived in. The card used to show the
+           raw `{"type":"ask","payload":{...}}` — barely legible in four lines
+           and plainly wrong now the Result region is big enough to read. The
+           envelope is still in the inspector, as "Raw message". */
+        detail: renderUserMessage(currentUserMessage || queuedMessage),
+        nodeHeight: resultNodeHeight,
         active: latestNodeId === id
       };
     }
@@ -954,34 +1394,46 @@ export function buildAgentGraph(
         dotTone: "reasoning",
         title: "Thought summary",
         state: reasoningState,
+        /* How long it thought, once that is a settled number, because that is the question
+           a finished thought card is asked; the token count is what it answers until then. */
         subtitle:
-          usage.tokens.thought > 0
-            ? `${formatTokens(usage.tokens.thought)} thought tokens`
-            : "thinking trace",
-        detail: reasoningDetail,
+          reasoningSeconds != null && reasoningSeconds >= 1
+            ? `Thought for ${formatDuration(reasoningSeconds)}`
+            : usage.tokens.thought > 0
+              ? `${formatTokens(usage.tokens.thought)} thought tokens`
+              : "thinking trace",
+        detail: reasoningSummary,
+        nodeHeight: resultNodeHeight,
         active: latestNodeId === id
       };
     }
     if (isToolRuntimeNodeId(id)) {
       const runtime = tools.get(toolIdFromRuntimeNodeId(id));
-      const detail = runtime?.detail;
+      /* Always a string: the Result region is a slot the node reserves, not
+         something that appears once the tool has said anything. */
+      const detail = runtime?.detail ?? "";
       const childCount = runtime?.id ? codeModeHostChildIds(runtime.id).length : 0;
       const codeModeDimensions =
         runtime?.isCodeMode && childCount > 0
           ? codeModeContainerDimensions(childCount)
           : null;
+      const toolStatus = runtime?.status ?? "idle";
+      const retryCount = runtime?.retryCount ?? 1;
       return {
         tone: runtime?.tone ?? "neutral",
         dotTone: "tool",
         title: runtime?.name ?? "Tool",
-        state: runtime?.status ?? "idle",
+        state: retryCount > 1 ? `${toolStatus} ×${retryCount}` : toolStatus,
         statusTone: runtime?.statusTone,
         subtitle: runtime?.subtitle ?? "tool lifecycle",
         detail,
         size: codeModeDimensions ? "container" : undefined,
         nodeWidth: codeModeDimensions?.width,
-        nodeHeight: codeModeDimensions?.height ??
-          (detail && hasScriptDetail(detail) ? 210 : undefined),
+        nodeHeight: codeModeDimensions?.height ?? resultNodeHeight,
+        /* Only for a Code Mode host: the container class otherwise squeezes the
+           result body to leave room for children, which is right for the subagent
+           container and wrong for a card showing a script. */
+        resultHeight: codeModeDimensions ? codeModeScriptHeight : undefined,
         active: latestNodeId === id,
         toolId: runtime?.id,
         codeMode: runtime?.isCodeMode,
@@ -1004,7 +1456,7 @@ export function buildAgentGraph(
     if (id === "subagent") {
       return {
         tone:
-          subagentState === "detail unavailable"
+          subagentState === "unavailable"
             ? "error"
             : subagentState === "stopped"
               ? "done"
@@ -1013,6 +1465,7 @@ export function buildAgentGraph(
         state: subagentState,
         subtitle: subagentSubtitle,
         detail: subagentDetail,
+        nodeHeight: resultNodeHeight,
         active: latestNodeId === id
       };
     }
@@ -1023,6 +1476,7 @@ export function buildAgentGraph(
         state: replyState,
         subtitle: "streaming response",
         detail: replyText,
+        nodeHeight: resultNodeHeight,
         active: latestNodeId === id
       };
     }
@@ -1051,7 +1505,36 @@ export function buildAgentGraph(
       headerPrefix: runtimeHeaderPrefix,
       boundaryWidth,
       boundaryHeight,
-      interfaces: agentInterface
+      interfaces: agentInterface,
+      /* The boundary is drawn from state rather than from any one frame, so it
+         says what it contains: the run's status and the functions the agent
+         exposes, of which the card itself only has room for two. */
+      context: [
+        {
+          label: "Runtime",
+          text: JSON.stringify(
+            {
+              status,
+              activeTurn,
+              model: currentModel,
+              nodes: runtimeNodeOrder,
+              tokens: usage.tokens
+            },
+            null,
+            2
+          ),
+          kind: "json"
+        },
+        ...(agentInterface.length > 0
+          ? [
+              {
+                label: "Agent interface",
+                text: JSON.stringify(agentInterface, null, 2),
+                kind: "json" as const
+              }
+            ]
+          : [])
+      ]
     },
     "agentWorkflow"
   );
@@ -1068,11 +1551,13 @@ export function buildAgentGraph(
       )
     )
   );
-  for (const [parentToolId, childToolIds] of codeModeChildren) {
+  for (const parentToolId of codeModeChildren.keys()) {
     const parentNodeId = toolRuntimeNodeId(parentToolId);
     const parentPosition = runtimeLayout.positions.get(parentNodeId);
     if (!parentPosition) continue;
-    for (const [index, childToolId] of childToolIds.entries()) {
+    /* Survivors repack from the first slot, so the grid has no gaps where the
+       finished calls were. */
+    for (const [index, childToolId] of codeModeHostChildIds(parentToolId).entries()) {
       const childNodeId = toolRuntimeNodeId(childToolId);
       const childOffset = codeModeChildPosition(index);
       nodes.push({
@@ -1100,7 +1585,8 @@ export function buildAgentGraph(
         placement.graph,
         toolPosition.x + placement.x,
         toolPosition.y + placement.y,
-        4
+        nestedNodeZIndexBoost,
+        nestedEdgeZIndexBoost
       );
       nodes.push(...embeddedGraph.nodes);
       edges.push(...embeddedGraph.edges);
@@ -1183,6 +1669,22 @@ function scopedGraph(
 ): AgentGraph {
   const scopedNodeId = (id: string) =>
     id.includes("::") ? id : scopedId(agent.workflowId, id);
+  /**
+   * A boundary with nothing inside it is its header, and nothing else.
+   *
+   * runtimeLayoutFor seeds contentWidth/contentHeight with one nominal card
+   * before its loop runs, so a runtime that contributed NO nodes still reserved
+   * room for one: 290px around an 88px header, which is the 202px of nothing
+   * under a stopped subagent whose own stream was never readable.
+   *
+   * Stopped, because empty has to mean empty and not "empty yet". A child enters
+   * the graph the moment the parent announces it and is legitimately childless
+   * until its own first frame is merged — and since `frames` here is scoped to
+   * the replay cursor, that is a position anyone scrubbing the run parks on, not
+   * a flicker at mount. Collapsing there would drop the card and then jump it.
+   * A stopped child with no nodes has none coming.
+   */
+  const emptyBoundary = agent.stopped === true && graph.nodes.length === 1;
   const nodes = graph.nodes.map((item) => ({
     ...item,
     id: scopedNodeId(item.id),
@@ -1197,6 +1699,7 @@ function scopedGraph(
             tone: agent.stopped ? "done" : item.data.tone,
             runtimeRole: agent.role,
             state: agent.stopped ? "stopped" : item.data.state,
+            boundaryHeight: emptyBoundary ? runtimeHeaderHeight : item.data.boundaryHeight,
             title: `${graphSourceLabel(agent)} runtime`,
             subtitle: [graphSourceSubtitle(agent), item.data.subtitle]
               .filter(Boolean)
@@ -1225,8 +1728,13 @@ function composeStatus(statuses: AgentGraph["status"][]): AgentGraph["status"] {
   return "idle";
 }
 
-export function buildAgentTreeGraph(agents: AgentGraphSource[]): AgentGraph {
-  if (agents.length === 0) return buildAgentGraph([]);
+export function buildAgentTreeGraph(
+  agents: AgentGraphSource[],
+  /* Forwarded to every agent in the tree, not just the root: a focus mode that
+     only applied to the parent would leave a busy subagent drawing every card. */
+  options: Pick<AgentGraphOptions, "focus" | "linger"> = {}
+): AgentGraph {
+  if (agents.length === 0) return buildAgentGraph([], options);
 
   const agentByWorkflow = new Map(agents.map((agent) => [agent.workflowId, agent]));
   const childrenByParent = new Map<string, AgentGraphSource[]>();
@@ -1252,7 +1760,9 @@ export function buildAgentTreeGraph(agents: AgentGraphSource[]): AgentGraph {
       showSubagentDispatch: false,
       outputPlacement: agent.role === "subagent" ? "runtime" : "external",
       agentInterface: agent.agentInterface,
-      embeddedToolGraphs: childGraphs
+      embeddedToolGraphs: childGraphs,
+      focus: options.focus,
+      linger: options.linger
     });
     const scoped = scopedGraph(agent, graph, 0, 0);
     builtGraphs.push(scoped);

@@ -5,12 +5,10 @@ import type {
   JsonRecord,
   ToolId
 } from "$lib/api/types";
-import {
-  formatCost,
-  formatTokens,
-  summarizeCost,
-  type UsageTotals
-} from "$lib/cost/pricing";
+import { formatTokens, summarizeCost, type UsageTotals } from "$lib/cost/pricing";
+import { renderUserMessage } from "$lib/state/inboundMessageText";
+import { HISTORY_GAP_NOTE, findHistoryGaps } from "$lib/state/historyGap";
+import { thoughtDeltaText } from "$lib/state/thoughtSummary";
 
 export type ReplayActor =
   | "user"
@@ -58,13 +56,26 @@ export interface ReplayLogRow {
   model?: string | null;
   toolId?: ToolId;
   toolName?: string;
-  input?: JsonRecord;
+  /** Absent means the frame carried no `tool_input`; `null` means it carried one and it was
+   *  unknown (arguments streamed but unparseable), which is not the same as `{}`. The two
+   *  render differently — see formatLogValue in $lib/state/logValue. */
+  input?: JsonRecord | null;
   output?: string;
   citations: FileCitationAnnotation[];
   usage?: UsageTotals;
   estimatedCostUsd?: number | null;
   marker?: ReplayMarkerTone;
   markerLabel?: string;
+  /**
+   * The run's history is discontinuous immediately BEFORE this row — set to
+   * HISTORY_GAP_NOTE, which is the whole of what is known (see historyGap.ts).
+   *
+   * On the row after the seam rather than the one before it, because the seam is
+   * read going forwards: "what follows is not continuous with what precedes it"
+   * is a statement about this row, and the row before it is a complete event that
+   * nothing is wrong with.
+   */
+  gapBefore?: string;
 }
 
 export interface TurnLogSummary {
@@ -110,37 +121,6 @@ export interface ReplayLogFrame {
   parentTurnNumber?: number;
 }
 
-function renderUserMessage(value: string): string {
-  if (!value.startsWith("{")) return value;
-  try {
-    const message = JSON.parse(value) as {
-      type?: string;
-      payload?: { name?: string; arg?: string; text?: string };
-      script?: string;
-    };
-    if (typeof message.payload?.text === "string") return message.payload.text;
-    if (typeof message.script === "string") return message.script;
-    if (
-      (message.type !== "slash" && message.type !== "slash_command") ||
-      !message.payload?.name
-    ) {
-      return value;
-    }
-    const command = message.payload.name === "set-model" ? "model" : message.payload.name;
-    return `/${command}${message.payload.arg ? ` ${message.payload.arg}` : ""}`;
-  } catch {
-    return value;
-  }
-}
-
-function thoughtText(delta: JsonRecord): string {
-  const content = delta.content;
-  if (typeof content === "object" && content != null && "text" in content) {
-    return String((content as { text?: unknown }).text ?? "");
-  }
-  return "";
-}
-
 function textFromReply(data: { text?: unknown; output?: unknown }): string {
   if (typeof data.text === "string") return data.text;
   const output = data.output;
@@ -176,8 +156,8 @@ function citationBody(citations: FileCitationAnnotation[]): string {
     .join(", ");
 }
 
-function modelUsageBody(usage: UsageTotals, cost: number | null): string {
-  return `${formatTokens(usage.total)} tokens, ${formatCost(cost)}`;
+function modelUsageBody(usage: UsageTotals): string {
+  return `${formatTokens(usage.total)} tokens`;
 }
 
 function operatorCommandDisplay(data: {
@@ -319,7 +299,7 @@ function rowFromFrame(
       actor: "model",
       tone: "done",
       label: "Model completed",
-      body: modelUsageBody(summary.tokens, summary.estimatedCostUsd),
+      body: modelUsageBody(summary.tokens),
       model: frame.data.model,
       status: "completed",
       usage: summary.tokens,
@@ -497,7 +477,7 @@ function rowFromFrame(
       actor: "reasoning",
       tone: "model",
       label: "Reasoning summary",
-      body: thoughtText(frame.data.delta)
+      body: thoughtDeltaText(frame.data.delta)
     };
   }
 
@@ -585,9 +565,22 @@ function buildSummary(turnNumber: number, rows: ReplayLogRow[]): TurnLogSummary 
 }
 
 export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): ReplayLog {
-  const rows = input
-    .map((item, index) => rowFromFrame(normalizeReplayLogFrame(item), index))
-    .filter((row): row is ReplayLogRow => row != null);
+  const gapPositions = findHistoryGaps(input);
+  /* Carried forward for the same reason the waterfall carries it: `rowFromFrame`
+     answers null for an event kind this log does not render, and a seam attached to
+     a frame that draws no row would never be seen. */
+  let pendingGap = false;
+  const rows: ReplayLogRow[] = [];
+  input.forEach((item, index) => {
+    if (gapPositions.has(index)) pendingGap = true;
+    const row = rowFromFrame(normalizeReplayLogFrame(item), index);
+    if (!row) return;
+    if (pendingGap) {
+      row.gapBefore = HISTORY_GAP_NOTE;
+      pendingGap = false;
+    }
+    rows.push(row);
+  });
 
   const groupedRows = new Map<number, ReplayLogRow[]>();
   for (const row of rows) {
@@ -608,8 +601,8 @@ export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): Re
   return { rows, groups };
 }
 
-export function buildReplayMarkers(input: Array<AgentSseFrame | ReplayLogFrame>): ReplayMarker[] {
-  return buildReplayLog(input).rows
+export function buildReplayMarkers(log: ReplayLog): ReplayMarker[] {
+  return log.rows
     .filter((row) => row.marker)
     .map((row) => ({
       id: `marker-${row.ordinal}`,
@@ -620,8 +613,60 @@ export function buildReplayMarkers(input: Array<AgentSseFrame | ReplayLogFrame>)
     }));
 }
 
+/* Most statuses restate the label they sit next to ("Tool completed" carries
+   status "done"), so a status has to survive these stems before it is worth
+   showing. Unknown values like a subagent's "timeout" fall through and stay. */
+const IMPLIED_STATUS_STEMS: Record<string, string[]> = {
+  running: ["start", "progress", "stream"],
+  done: ["complet", "final"],
+  complete: ["complet", "final"],
+  idle: ["end"],
+  dispatched: ["sent"],
+  approved: ["grant"],
+  awaiting: ["request"],
+  degraded: ["unavailable"]
+};
+
+/** The row's status, or null when the row's label already carries it. */
+export function statusNote(row: ReplayLogRow): string | null {
+  const status = row.status?.trim();
+  if (!status) return null;
+  const label = row.label.toLowerCase();
+  const value = status.toLowerCase();
+  if (label.includes(value)) return null;
+  if ((IMPLIED_STATUS_STEMS[value] ?? []).some((stem) => label.includes(stem))) return null;
+  return status;
+}
+
+/* Minutes have to roll over into hours: a session left open for three hours read as
+   "200m 05s", which is arithmetically right and useless to a reader. */
 export function formatDuration(seconds: number): string {
   const rounded = Math.max(0, Math.round(seconds));
   if (rounded < 60) return `${rounded}s`;
-  return `${Math.floor(rounded / 60)}m ${String(rounded % 60).padStart(2, "0")}s`;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const minutes = Math.floor(rounded / 60);
+  if (minutes < 60) return `${minutes}m ${pad(rounded % 60)}s`;
+  return `${Math.floor(minutes / 60)}h ${pad(minutes % 60)}m ${pad(rounded % 60)}s`;
+}
+
+/**
+ * The same reading at the resolution one step is watched at, rather than a run.
+ *
+ * Two things are this function's own, and only two. Below a second it answers in
+ * milliseconds, and between one and ten it keeps a tenth — a tool call that took
+ * 2.4s is not a 2s one, and the activity feed is read at that resolution. From ten
+ * seconds up there is nothing here formatDuration does not already own.
+ *
+ * It used to restate the minutes branch instead of delegating, and stopped there,
+ * so a three-hour turn read "200m 05s" in the feed for as long as it took anyone
+ * to notice — the exact bug formatDuration above was written to fix, reintroduced
+ * one component over by copying half of it.
+ */
+export function formatElapsedDuration(deltaMs: number): string {
+  if (deltaMs < 1000) return `${Math.max(1, Math.round(deltaMs))}ms`;
+
+  const seconds = deltaMs / 1000;
+  const tenths = Math.round(seconds * 10) / 10;
+  if (seconds < 10 && !Number.isInteger(tenths)) return `${tenths.toFixed(1)}s`;
+  return formatDuration(seconds);
 }

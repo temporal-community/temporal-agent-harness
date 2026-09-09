@@ -1,3 +1,11 @@
 node_modules/
 dist/
 .svelte-kit/
+
+# tools/ is scratch, all of it: one-off probes and screenshot harnesses written to
+# answer a single question, where once it is answered nobody runs them again. They
+# need a browser binary at a hardcoded path and a running stack, so none of them can
+# join `just app-check`, and a reader who found one would have no way to tell whether
+# it still passes. Anything durable enough to be worth keeping is worth writing as a
+# vitest file next to what it tests, where it runs.
+tools/
