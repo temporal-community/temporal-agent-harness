@@ -467,12 +467,15 @@
   function showLogInApp(row: ReplayLogRow): boolean {
     if (row.turnNumber <= 0) return false;
     if (row.actor === "user") return false;
+    // Rows the transcript already renders in full, plus the pure lifecycle brackets — the
+    // in-app log is the "what else happened" column, not a second copy of the conversation.
     return ![
+      "message_accepted",
+      "message_handler_start",
+      "message_handler_end",
       "turn_started",
       "turn_end",
-      "message_queued",
       "reply_delta",
-      "reply",
       "text_annotation"
     ].includes(row.event);
   }

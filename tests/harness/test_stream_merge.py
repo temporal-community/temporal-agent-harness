@@ -25,7 +25,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     TURN_EVENTS_TOPIC,
     AgentEvent,
     AgentEventType,
-    AgentReply,
+    MessageHandlerEnd,
     SubagentMessageSent,
     SubagentReplyReceived,
     SubagentStarted,
@@ -60,11 +60,11 @@ def _ev(agent_id: str, turn_number: int, payload: Any, *, turn_id: str | None = 
 
 
 def _ts(agent_id: str, turn: int) -> AgentEvent:
-    return _ev(agent_id, turn, TurnStarted(user_message="hi"))
+    return _ev(agent_id, turn, TurnStarted())
 
 
 def _reply(agent_id: str, turn: int) -> AgentEvent:
-    return _ev(agent_id, turn, AgentReply(output={"ok": True}))
+    return _ev(agent_id, turn, MessageHandlerEnd(output={"ok": True}))
 
 
 def _te(agent_id: str, turn: int) -> AgentEvent:
@@ -79,7 +79,7 @@ def _ms(agent_id: str, parent_turn: int, *, child: str, child_turn: int, from_of
             subagent_id=child[:6],
             agent_key="k",
             workflow_id=child,
-            function="f",
+            handler="f",
             subagent_turn=child_turn,
             from_offset=from_offset,
         ),
@@ -94,7 +94,7 @@ def _rr(agent_id: str, parent_turn: int, *, child: str, child_turn: int, outcome
             subagent_id=child[:6],
             agent_key="k",
             workflow_id=child,
-            function="f",
+            handler="f",
             subagent_turn=child_turn,
             outcome=outcome,  # type: ignore[arg-type]
         ),
@@ -419,10 +419,10 @@ async def test_replay_is_deterministic():
         ("C", AgentEventType.TURN_STARTED),
         ("C", AgentEventType.TOOL_START),
         ("C", AgentEventType.TOOL_END),
-        ("C", AgentEventType.REPLY),
+        ("C", AgentEventType.MESSAGE_HANDLER_END),
         ("C", AgentEventType.TURN_END),
         ("P", AgentEventType.SUBAGENT_REPLY_RECEIVED),
-        ("P", AgentEventType.REPLY),
+        ("P", AgentEventType.MESSAGE_HANDLER_END),
         ("P", AgentEventType.TURN_END),
     ]
 
@@ -508,8 +508,8 @@ async def test_send_message_skip_preamble_starts_at_target_turn_started():
             _ts("P", 1),  # offset 0 — prior turn, must be skipped
             _reply("P", 1),  # offset 1 — skipped
             _te("P", 1),  # offset 2 — skipped
-            _ev("P", 2, TurnStarted(user_message="go"), turn_id=target),  # offset 3
-            _ev("P", 2, AgentReply(output={}), turn_id=target),
+            _ev("P", 2, TurnStarted(), turn_id=target),  # offset 3
+            _ev("P", 2, MessageHandlerEnd(output={}), turn_id=target),
             _ev("P", 2, TurnEnded(), turn_id=target),
         ],
     }
@@ -532,7 +532,7 @@ async def test_send_message_skip_preamble_starts_at_target_turn_started():
     # Only the target turn's events, starting at its turn_started.
     assert [m.event.type for m in merged] == [
         AgentEventType.TURN_STARTED,
-        AgentEventType.REPLY,
+        AgentEventType.MESSAGE_HANDLER_END,
         AgentEventType.TURN_END,
     ]
     assert all(m.turn_id == target for m in merged)
@@ -549,7 +549,7 @@ async def test_send_message_resume_mounts_reused_child_at_from_offset():
             _ms("P", 1, child="C", child_turn=1, from_offset=0),
             _rr("P", 1, child="C", child_turn=1),
             _te("P", 1),
-            _ev("P", 2, TurnStarted(user_message="go"), turn_id=target),
+            _ev("P", 2, TurnStarted(), turn_id=target),
             _ms("P", 2, child="C", child_turn=2, from_offset=3),  # C turn 2 begins at child offset 3
             _rr("P", 2, child="C", child_turn=2),
             _ev("P", 2, TurnEnded(), turn_id=target),
@@ -684,7 +684,7 @@ async def test_unreadable_child_does_not_crash_the_merge():
         AgentEventType.TURN_STARTED,
         AgentEventType.SUBAGENT_MESSAGE_SENT,
         AgentEventType.SUBAGENT_REPLY_RECEIVED,
-        AgentEventType.REPLY,
+        AgentEventType.MESSAGE_HANDLER_END,
         AgentEventType.TURN_END,
     ]
     # No actual child turn DETAIL leaked (no C turn_started/reply/turn_end)...
@@ -728,7 +728,7 @@ async def test_dead_child_releases_close_gate_and_parent_completes(select):
         AgentEventType.SUBAGENT_STARTED,
         AgentEventType.SUBAGENT_MESSAGE_SENT,
         AgentEventType.SUBAGENT_REPLY_RECEIVED,
-        AgentEventType.REPLY,
+        AgentEventType.MESSAGE_HANDLER_END,
         AgentEventType.TURN_END,
     ]
     markers = [m for m in merged if m.event.type == AgentEventType.SUBAGENT_STREAM_UNAVAILABLE]
@@ -806,7 +806,7 @@ async def test_child_that_ends_without_turn_end_releases_gate():
     # C's available detail (turn_started, reply) still came through before it ran out.
     assert [m.event.type for m in merged if m.agent_id == "C" and m.event.type != AgentEventType.SUBAGENT_STREAM_UNAVAILABLE] == [
         AgentEventType.TURN_STARTED,
-        AgentEventType.REPLY,
+        AgentEventType.MESSAGE_HANDLER_END,
     ]
     assert sum(m.event.type == AgentEventType.SUBAGENT_STREAM_UNAVAILABLE for m in merged) == 1
 
@@ -885,8 +885,8 @@ async def test_resume_mid_turn_streams_the_rest_of_that_turn_no_fast_forward():
         streams, root="P", select=select_replay, root_from_offset=4
     )
     assert [e.event.type for e in merged] == [
-        AgentEventType.REPLY, AgentEventType.TURN_END,        # rest of turn 2 (from offset 4)
-        AgentEventType.TURN_STARTED, AgentEventType.REPLY, AgentEventType.TURN_END,  # turn 3
+        AgentEventType.MESSAGE_HANDLER_END, AgentEventType.TURN_END,        # rest of turn 2 (from offset 4)
+        AgentEventType.TURN_STARTED, AgentEventType.MESSAGE_HANDLER_END, AgentEventType.TURN_END,  # turn 3
     ]
     assert [e.turn_number for e in merged] == [2, 2, 3, 3, 3]
 
@@ -943,7 +943,7 @@ async def test_resume_inside_subagent_turn_omits_that_subagent_but_parent_flows(
     assert [e.event.type for e in merged if e.agent_id == "P"] == [
         AgentEventType.TOOL_START,
         AgentEventType.SUBAGENT_REPLY_RECEIVED,
-        AgentEventType.REPLY,
+        AgentEventType.MESSAGE_HANDLER_END,
         AgentEventType.TURN_END,
     ]
     assert not [m for m in merged if m.agent_id == "C"]

@@ -25,6 +25,7 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
 from temporal_agent_harness.harness.agent_client import (
+    JoinedTurnError,
     MidTurnRejectedError,
     AgentClient,
     AgentStreamOutput,
@@ -37,7 +38,6 @@ from temporal_agent_harness.harness.agent_client import (
 from temporal_agent_harness.harness.agent_protocol import (
     AgentConfig,
     AgentEvent,
-    AgentEventType,
     AgentMessage,
     AgentStatus,
     SEND_AGENT_MESSAGE_UPDATE,
@@ -264,13 +264,13 @@ def create_agent_harness_app(
             match item:
                 case AgentTurnTimeout():
                     return _sse(
-                        AgentEventType.ERROR,
+                        STREAM_ERROR_SSE_EVENT,
                         {"kind": "timeout", "message": str(item)},
                         resume_offset,
                     )
                 case AgentTurnError():
                     return _sse(
-                        AgentEventType.ERROR,
+                        STREAM_ERROR_SSE_EVENT,
                         {"kind": "agent", "message": str(item)},
                         resume_offset,
                     )
@@ -299,6 +299,21 @@ def create_agent_harness_app(
         return JSONResponse(
             status_code=409,
             content={"error": "stale_turn", "message": str(exc)},
+        )
+
+    @app.exception_handler(JoinedTurnError)
+    async def joined_turn_handler(request, exc):
+        # 409 like the other two, but it is NOT a rejection: the message was accepted and is
+        # running inside the turn it joined. Only the per-turn STREAM is unavailable, so the
+        # body carries the accepted reply — a caller that wants to watch the work attaches and
+        # follows ``message_id``.
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "joined_turn",
+                "message": str(exc),
+                "reply": asdict(exc.reply),
+            },
         )
 
     @app.exception_handler(MidTurnRejectedError)
@@ -597,6 +612,13 @@ def _mount_static_ui(
         raise HTTPException(status_code=404)
 
 
+# SSE event name for a failure the CLIENT side of the stream produced — a turn timeout, or
+# this turn's own ``message_handler_error`` surfaced as the caller's failure signal. Deliberately
+# NOT an ``AgentEventType``: nothing published it on the agent's stream, and the frame carries no
+# turn/message metadata, so a consumer must be able to tell it apart from a real agent event.
+STREAM_ERROR_SSE_EVENT = "stream_error"
+
+
 def _sse(event: str, data: dict, resume_offset: int | None = None) -> bytes:
     payload = {**data}
     if resume_offset is not None:
@@ -612,6 +634,10 @@ def _yield_item(item, resume_offset: int | None = None) -> bytes:
             "agent_id": item.agent_id,
             "turn_id": item.turn_id,
             "turn_number": item.turn_number,
+            # ``None`` for the events that belong to no single message (turn brackets) — sent
+            # explicitly rather than omitted, so a consumer can tell "unattributed" from "an
+            # older server that didn't say".
+            "message_id": item.message_id,
             "timestamp": item.timestamp,
         }
         return _sse(payload.type, data, resume_offset)

@@ -6,10 +6,17 @@
 # A producer constructs a StreamEvent payload (e.g. ``ReplyDelta(text=…)``) that
 # carries ONLY its ``type`` discriminator and semantic fields — never routing
 # metadata. The publisher wraps it in an :class:`AgentEvent` envelope, stamping
-# ``turn_id`` / ``turn_number`` / ``timestamp`` — so those can only ever be set by
-# the harness, never a caller. :data:`AgentStreamItem` is the discriminated union of
-# payloads and the type of ``AgentEvent.event``, so Temporal's Pydantic converter
-# reconstructs the concrete payload subtype on read.
+# ``turn_id`` / ``turn_number`` / ``message_id`` / ``timestamp`` — so those can only
+# ever be set by the harness, never a caller. :data:`AgentStreamItem` is the
+# discriminated union of payloads and the type of ``AgentEvent.event``, so Temporal's
+# Pydantic converter reconstructs the concrete payload subtype on read.
+#
+# CORRELATION. Two ids on the envelope answer "what is this event about": ``turn_id``
+# (the interval the agent was non-idle) and ``message_id`` (the ONE inbound message whose
+# dispatch produced it). They are not interchangeable — a turn is refcounted, so several
+# messages can share one — which is why ``message_id`` is what pairs a reply, a delta, a
+# tool call, etc. with the message that caused it. ``tool_id`` plays the same role one level
+# down, across the events of a single tool call.
 
 from __future__ import annotations
 
@@ -17,6 +24,10 @@ from enum import StrEnum
 from typing import Annotated, Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from temporal_agent_harness.harness.agent_protocol.agent_interface import (
+    MessageDisposition,
+)
 
 # The pubsub topic the agent publishes its turn events on. The workflow must use
 # this exact name when publishing and clients when subscribing.
@@ -36,20 +47,53 @@ class AgentEventType(StrEnum):
     Document the semantics of each event HERE, not in scattered string literals.
     """
 
-    MESSAGE_QUEUED = "message_queued"
-    """A user message was accepted but queued behind an active turn. Only
-    published when there IS a queue. See :class:`MessageQueued`."""
+    MESSAGE_ACCEPTED = "message_accepted"
+    """One inbound message passed admission — the FIRST event of any message's life.
+
+    Published synchronously by the ``send_agent_message`` update as it admits the message,
+    so it precedes everything that message goes on to cause (and, for a message that opens
+    or queues a turn, precedes that turn's TURN_STARTED). Carries what was sent
+    (``handler`` + ``payload``) and what it did to the turn (``disposition``: opened a new
+    one, joined the open one, or queued behind it). The envelope's ``message_id`` is minted
+    here and stamped on every later event of this message's dispatch — it is also returned
+    on ``AgentMessageReply.message_id``, so a sender can correlate without parsing the
+    stream. See :class:`MessageAccepted`."""
+
+    MESSAGE_HANDLER_START = "message_handler_start"
+    """The ``@agent.accepts`` handler for this message has BEGUN RUNNING.
+
+    Separate from MESSAGE_ACCEPTED on purpose: admission and execution are two halves
+    joined by a queue, and only a queued message's pair differs — the gap between them IS
+    the queue latency, directly observable per message rather than reverse-engineered from
+    turn timestamps. Exactly one MESSAGE_HANDLER_END or MESSAGE_HANDLER_ERROR closes it.
+    See :class:`MessageHandlerStart`."""
+
+    MESSAGE_HANDLER_END = "message_handler_end"
+    """This message's handler returned — its output is the message's reply. Terminal for
+    the MESSAGE, not necessarily for the turn: a turn ends only when its LAST participant
+    finishes. See :class:`MessageHandlerEnd`."""
+
+    MESSAGE_HANDLER_ERROR = "message_handler_error"
+    """This message's handler raised. Terminal for the MESSAGE (mirroring
+    MESSAGE_HANDLER_END; the pair is exactly TOOL_END / TOOL_ERROR one level up), and never
+    for the session — the runner surfaces the failure and keeps going. Other participants
+    of the same turn are unaffected, which is why a consumer must attribute this by
+    ``message_id`` rather than by ``turn_id``. See :class:`MessageHandlerError`."""
 
     TURN_STARTED = "turn_started"
-    """A turn has begun processing. If preceded by MESSAGE_QUEUED with the same
-    ``turn_id``, that message is now active. See :class:`TurnStarted`."""
+    """A turn has begun — the agent went from idle to busy. A pure lifecycle bracket: it
+    says nothing about WHICH message opened it (that is the preceding MESSAGE_ACCEPTED,
+    correlated by ``turn_id``), because a turn can carry several messages. Its envelope
+    ``message_id`` is therefore ``None``. See :class:`TurnStarted`."""
 
     TURN_END = "turn_end"
-    """A turn has fully completed and the agent has returned to idle, awaiting the
-    next message — closing the outer loop opened by TURN_STARTED. Emitted for EVERY turn,
-    success or error: the runner's turn loop publishes it in a ``finally`` after the
-    reply (success) or the ERROR event (the handler raised), so it is the single reliable
-    end-of-turn signal a consumer can terminate on. See :class:`TurnEnded`."""
+    """A turn has fully completed and the agent has returned to idle, awaiting the next
+    message — closing the bracket opened by TURN_STARTED. Emitted for EVERY turn, whatever
+    its participants did: the runner publishes it when the LAST participant leaves, after
+    that participant's MESSAGE_HANDLER_END or MESSAGE_HANDLER_ERROR. It is therefore the
+    agent's true quiescence signal — the single reliable point a consumer can terminate on.
+    Like TURN_STARTED it belongs to no one message, so its ``message_id`` is ``None``.
+    See :class:`TurnEnded`."""
 
     MODEL_INTERACTION_STARTED = "model_interaction_started"
     """The agent has begun ONE interaction with the model — a single streaming
@@ -168,7 +212,7 @@ class AgentEventType(StrEnum):
     SUBAGENT_MESSAGE_SENT = "subagent_message_sent"
     """This agent sent a message (one turn) to a downstream subagent it is driving.
     Published whenever the agent communicates with a subagent, naming the target subagent
-    (``subagent_id`` / ``workflow_id``), the ``function`` the message is addressed to, and the
+    (``subagent_id`` / ``workflow_id``), the ``handler`` the message is addressed to, and the
     ``subagent_turn`` it starts (the turn number on the SUBAGENT — distinct from this event's
     envelope ``turn_number``, which is the parent's turn) — so a consumer can correlate it with
     the matching turn on the subagent's OWN stream (mounted via the SUBAGENT_STARTED
@@ -181,13 +225,14 @@ class AgentEventType(StrEnum):
     """This agent received a subagent's reply for one turn it dispatched — the CLOSE marker of
     the ``[subagent_message_sent … subagent_reply_received]`` bracket that
     ``SUBAGENT_MESSAGE_SENT`` opens. Carries the same correlation fields (``subagent_id`` /
-    ``agent_key`` / ``workflow_id`` / ``function`` / ``subagent_turn``) plus an ``outcome``
+    ``agent_key`` / ``workflow_id`` / ``handler`` / ``subagent_turn``) plus an ``outcome``
     (``ok``/``error``). Published IN-WORKFLOW by the parent's ``run_subagent_turn`` once the
     activity returns — i.e. once the AGENT (workflow) actually has the reply in hand — and
     published for EVERY accepted child turn (including an accepted-but-errored one, which still
     emitted its own ``turn_end``), but NEVER for a pre-acceptance rejection (no child turn ran,
     so no bracket to close). The reply *payload* is not carried here (it rides the child's own
-    ``reply`` event and the send-tool's ``tool_end``); this is a thin close/correlation marker.
+    ``message_handler_end`` event and the send-tool's ``tool_end``); this is a thin
+    close/correlation marker.
     A client merging the parent + subagent streams uses it to guarantee a subagent's whole turn
     is ordered before the reply is observed on the parent. See :class:`SubagentReplyReceived`."""
 
@@ -218,13 +263,6 @@ class AgentEventType(StrEnum):
     """A streamed citation/annotation delta, interleaved with REPLY_DELTA so each
     citation sits next to the text it supports. See :class:`TextAnnotationDelta`."""
 
-    REPLY = "reply"
-    """The agent's final text reply. Terminal for the turn. See
-    :class:`AgentReply`."""
-
-    ERROR = "error"
-    """The agent encountered an error. Terminal for the turn. See
-    :class:`AgentError`."""
 
 
 EventTypeT = TypeVar("EventTypeT", bound=AgentEventType)
@@ -268,32 +306,67 @@ class StreamEvent(BaseModel, Generic[EventTypeT]):
         return self
 
 
-class MessageQueued(StreamEvent[Literal[AgentEventType.MESSAGE_QUEUED]]):
-    """A message was accepted and queued behind pending work."""
+class MessageAccepted(StreamEvent[Literal[AgentEventType.MESSAGE_ACCEPTED]]):
+    """One inbound message passed admission — what was sent, and what it did to the turn.
 
-    type: Literal[AgentEventType.MESSAGE_QUEUED] = AgentEventType.MESSAGE_QUEUED
-    user_message: str = Field(
-        description="The user message that was accepted but queued behind an active turn."
+    The first event of a message's life, published from the synchronous admission prologue
+    of ``send_agent_message``. It is the ONLY event carrying the message's content, which is
+    why it is standalone rather than folded into :class:`TurnStarted`: a message that JOINS
+    an open turn starts no turn of its own, so there would be nothing to fold it into.
+    """
+
+    type: Literal[AgentEventType.MESSAGE_ACCEPTED] = AgentEventType.MESSAGE_ACCEPTED
+    handler: str = Field(
+        description="Which ``@agent.accepts`` handler the message is addressed to — the "
+        "``AgentMessage.type`` envelope field, named for what it actually is."
+    )
+    payload: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The message's payload as sent — the JSON of the handler's input model. "
+        "Carried structurally rather than pre-rendered so a consumer can display it however "
+        "it likes (and validate it against the handler's ``parameters`` schema).",
+    )
+    disposition: MessageDisposition = Field(
+        description="What this message did to the agent's turn: OPENED a new one, JOINED the "
+        "turn already open, or QUEUED behind it. The envelope's ``turn_id`` / ``turn_number`` "
+        "name the turn in question — already running for JOINED, still to start for the other "
+        "two."
+    )
+
+
+class MessageHandlerStart(StreamEvent[Literal[AgentEventType.MESSAGE_HANDLER_START]]):
+    """This message's ``@agent.accepts`` handler has begun running.
+
+    Empty by design: everything about the message was already published on
+    :class:`MessageAccepted`, and the envelope's ``message_id`` pairs the two. The gap
+    between them is the message's queue latency.
+    """
+
+    type: Literal[AgentEventType.MESSAGE_HANDLER_START] = (
+        AgentEventType.MESSAGE_HANDLER_START
     )
 
 
 class TurnStarted(StreamEvent[Literal[AgentEventType.TURN_STARTED]]):
-    """A turn has begun processing."""
+    """A turn has begun — the agent went from idle to busy. A pure lifecycle bracket.
+
+    Carries no message: a turn is the interval the agent is non-idle, not the span of one
+    message, and several messages can share it. The message that opened this turn is the
+    :class:`MessageAccepted` published just before it with the same ``turn_id``.
+    """
 
     type: Literal[AgentEventType.TURN_STARTED] = AgentEventType.TURN_STARTED
-    user_message: str = Field(
-        description="The user message this turn is now actively processing."
-    )
 
 
 class TurnEnded(StreamEvent[Literal[AgentEventType.TURN_END]]):
     """A turn has fully completed and the agent is idle, awaiting the next message.
 
-    Closes the outer agent loop opened by :class:`TurnStarted`. Published for EVERY turn —
-    after :class:`AgentReply` on success, or after :class:`AgentError` when the handler
-    raised (the runner emits it in a ``finally``) — so it is the single reliable
-    end-of-turn signal. The envelope's ``turn_id`` / ``turn_number`` identify which turn
-    ended.
+    Closes the bracket opened by :class:`TurnStarted`. Published for EVERY turn, when its
+    LAST participant leaves — after that participant's :class:`MessageHandlerEnd` or
+    :class:`MessageHandlerError` — so it is the agent's true quiescence signal and the
+    single reliable point a consumer can disconnect on. The envelope's ``turn_id`` /
+    ``turn_number`` identify which turn ended; its ``message_id`` is ``None``, since the
+    turn belongs to no single message.
     """
 
     type: Literal[AgentEventType.TURN_END] = AgentEventType.TURN_END
@@ -602,9 +675,10 @@ class SubagentMessageSent(StreamEvent[Literal[AgentEventType.SUBAGENT_MESSAGE_SE
         "correlate this dispatch with the matching turn on the subagent's OWN event stream "
         "(mounted via SubagentStarted; subagent streams are never mirrored onto this one)."
     )
-    function: str = Field(
-        description="The function this message is addressed to on the subagent (the "
-        "send_agent_message envelope 'type' — which of the subagent's accepted messages it is)."
+    handler: str = Field(
+        description="The ``@agent.accepts`` handler this message is addressed to on the "
+        "subagent (the send_agent_message envelope 'type' — which of the subagent's accepted "
+        "messages it is)."
     )
     subagent_turn: int = Field(
         description="The turn number ON THE SUBAGENT that this dispatch starts — distinct from "
@@ -634,9 +708,10 @@ class SubagentReplyReceived(
     parent's ``run_subagent_turn`` once the activity returns and the agent (workflow) actually
     holds the reply — for EVERY accepted child turn (``outcome`` distinguishes success from an
     accepted-but-errored turn, which still emitted its own ``turn_end``), but never for a
-    pre-acceptance rejection. Carries no reply payload (that rides the child's own ``reply``
-    event + the send-tool's ``tool_end``); it is a thin close/correlation signal a stream-merge
-    uses to order a subagent's whole turn ahead of the parent observing its reply.
+    pre-acceptance rejection. Carries no reply payload (that rides the child's own
+    ``message_handler_end`` event + the send-tool's ``tool_end``); it is a thin
+    close/correlation signal a stream-merge uses to order a subagent's whole turn ahead of
+    the parent observing its reply.
     """
 
     type: Literal[AgentEventType.SUBAGENT_REPLY_RECEIVED] = (
@@ -652,8 +727,8 @@ class SubagentReplyReceived(
         description="The replying subagent's real child workflow id (matches the opening "
         "SubagentMessageSent) — the close-gate key a stream-merge correlates against."
     )
-    function: str = Field(
-        description="The function this reply answers (the same send_agent_message envelope "
+    handler: str = Field(
+        description="The handler this reply answers (the same send_agent_message envelope "
         "'type' as the opening SubagentMessageSent)."
     )
     subagent_turn: int = Field(
@@ -726,10 +801,19 @@ class TextAnnotationDelta(StreamEvent[Literal[AgentEventType.TEXT_ANNOTATION]]):
     )
 
 
-class AgentReply(StreamEvent[Literal[AgentEventType.REPLY]]):
-    """The agent's final reply for a turn — the handler's return value. Terminal."""
+class MessageHandlerEnd(StreamEvent[Literal[AgentEventType.MESSAGE_HANDLER_END]]):
+    """One message's handler returned — its reply. Terminal for the MESSAGE.
 
-    type: Literal[AgentEventType.REPLY] = AgentEventType.REPLY
+    Not necessarily terminal for the turn: with several participants sharing a turn there is
+    one of these per message, all under the same ``turn_id``, and :class:`TurnEnded` follows
+    only the last. A consumer pairing a reply with the message that produced it MUST use the
+    envelope's ``message_id``; ``turn_id`` no longer distinguishes them, and reply order is
+    not a workaround (nothing guarantees the turn's opening message replies last).
+    """
+
+    type: Literal[AgentEventType.MESSAGE_HANDLER_END] = (
+        AgentEventType.MESSAGE_HANDLER_END
+    )
     output: dict[str, Any] = Field(
         default_factory=dict,
         description="The handler's return model serialized to JSON (the harness publishes "
@@ -739,12 +823,21 @@ class AgentReply(StreamEvent[Literal[AgentEventType.REPLY]]):
     )
 
 
-class AgentError(StreamEvent[Literal[AgentEventType.ERROR]]):
-    """A terminal error for the turn (e.g. an unhandled workflow exception)."""
+class MessageHandlerError(StreamEvent[Literal[AgentEventType.MESSAGE_HANDLER_ERROR]]):
+    """One message's handler raised. Terminal for the MESSAGE, never for the session.
 
-    type: Literal[AgentEventType.ERROR] = AgentEventType.ERROR
+    The error half of the :class:`MessageHandlerEnd` pair (exactly as ``tool_error`` is to
+    ``tool_end``). It ends only this message: sibling participants of the same turn keep
+    running, and :class:`TurnEnded` still follows once the last of them leaves. Attribute it
+    by the envelope's ``message_id`` — treating it as "the turn failed" would blame work that
+    is still in flight.
+    """
+
+    type: Literal[AgentEventType.MESSAGE_HANDLER_ERROR] = (
+        AgentEventType.MESSAGE_HANDLER_ERROR
+    )
     message: str = Field(
-        description="A description of the terminal error that ended the turn."
+        description="A description of the error the message's handler raised."
     )
 
 
@@ -752,7 +845,10 @@ class AgentError(StreamEvent[Literal[AgentEventType.ERROR]]):
 # type of :attr:`AgentEvent.event`, so Temporal's Pydantic converter reconstructs
 # the right payload subtype when it deserializes an envelope off the stream.
 AgentStreamItem = Annotated[
-    MessageQueued
+    MessageAccepted
+    | MessageHandlerStart
+    | MessageHandlerEnd
+    | MessageHandlerError
     | TurnStarted
     | TurnEnded
     | ModelInteractionStarted
@@ -773,9 +869,7 @@ AgentStreamItem = Annotated[
     | SubagentStreamUnavailable
     | ReplyDelta
     | ThoughtSummaryDelta
-    | TextAnnotationDelta
-    | AgentReply
-    | AgentError,
+    | TextAnnotationDelta,
     Field(discriminator="type"),
 ]
 
@@ -787,9 +881,9 @@ class AgentEvent(BaseModel):
     ``turn_events`` topic. Composes over a :data:`AgentStreamItem` payload
     (``event``) and adds the routing metadata the harness stamps at publish time.
     Producers never build this — they construct a payload and the publisher wraps
-    it — so ``agent_id`` / ``turn_id`` / ``turn_number`` / ``timestamp`` can only ever be set
-    by the harness. Being a concrete type (not a bare union), it is also a clean
-    ``type`` for the workflow-stream topic and subscribe ``result_type``.
+    it — so ``agent_id`` / ``turn_id`` / ``turn_number`` / ``message_id`` / ``timestamp``
+    can only ever be set by the harness. Being a concrete type (not a bare union), it is
+    also a clean ``type`` for the workflow-stream topic and subscribe ``result_type``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -812,6 +906,21 @@ class AgentEvent(BaseModel):
     turn_number: int = Field(
         description="The monotonic number of the turn this event belongs to — stamped by the "
         "harness at publish time; producers never set it."
+    )
+    message_id: str | None = Field(
+        default=None,
+        description="The id of the ONE inbound message whose dispatch produced this event — "
+        "minted at admission (also returned on ``AgentMessageReply.message_id``) and stamped by "
+        "the harness; producers never set it. It lives on the envelope rather than in event "
+        "bodies so EVERY event of a message's dispatch is attributable for free — deltas, tool "
+        "lifecycle, approvals, subagent brackets — exactly the way ``turn_id`` is.\n\n"
+        "``turn_id`` does NOT substitute for it: a turn is refcounted, so a ``MidTurn.ACCEPT`` "
+        "message can join one already open and several messages then publish under one "
+        "``turn_id``. Pair a reply, or attribute a streamed delta, by THIS field.\n\n"
+        "``None`` for events that genuinely are not about one message: ``turn_started`` and "
+        "``turn_end`` (pure turn lifecycle), and the approval/callback resolutions published "
+        "from an update handler driving a policy cascade — which is no more bound to one "
+        "message than it is to one turn.",
     )
     timestamp: float = Field(
         description="When the harness published this envelope (epoch seconds)."

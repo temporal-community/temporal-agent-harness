@@ -120,6 +120,7 @@ type AgentStatusResponse = {
 type PendingTurn = {
   turn_number: number
   turn_id: string
+  message_id: string
   message: string
 }
 
@@ -243,10 +244,16 @@ Submits a message without opening a turn stream.
 type SubmitMessageResponse = {
   turn_number: number
   turn_id: string
+  message_id: string
   accepted_offset: number
-  pending: boolean
+  disposition: "opened" | "joined" | "queued"
 }
 ```
+
+`message_id` identifies this message for the rest of its life: every event its dispatch
+produces carries it on the envelope, so a client correlates its own reply, deltas and tool
+calls without scanning for them. `disposition` says what the message did to the turn — opened
+a new one, joined the one already running (`mid_turn: "accept"`), or queued behind it.
 
 **Tracking `expected_turn`.** Set the next value from the reply's `turn_number + 1`, not
 from a count of messages sent. A message whose handler declares `mid_turn: "accept"` joins
@@ -305,7 +312,11 @@ type ApiErrorResponse = {
 
 Known status codes:
 
-- `409` from `POST /api/chat`: `error` is `stale_turn` or `agent_busy`.
+- `409` from `POST /api/chat`: `error` is `stale_turn`, `mid_turn_rejected`, or
+  `joined_turn`. The last is not a rejection — the message was accepted and is running inside
+  the turn it joined, and the body carries the accepted reply under `reply`; only the per-turn
+  stream is unavailable, because a joined message has no turn of its own to stream. Use
+  `POST /api/messages` plus one `GET /api/attach` instead.
 - `409` from `POST /api/approve`: `error` is usually
   `UnknownToolApproval` or `ToolApprovalAlreadyResolved`.
 - `422` from FastAPI/Pydantic validation: standard FastAPI validation payload.
@@ -327,6 +338,10 @@ For normal agent events, `data` is a flat object containing:
 - `agent_id`, identifying the agent that published the event
 - `turn_id`
 - `turn_number`
+- `message_id`, the message whose dispatch produced this event — or `null` for the
+  `turn_started` / `turn_end` brackets, which belong to the turn rather than to any one
+  message. **Group by this, not by `turn_id`:** a turn is refcounted, so several messages can
+  publish under one `turn_id` and keying on the turn merges concurrent participants together.
 - `timestamp` epoch seconds
 - `resume_offset`, the root-stream cursor the client should pass as `from_offset`
 
@@ -338,22 +353,38 @@ data: {"type":"reply_delta","agent_id":"root","turn_id":"t1","turn_number":1,"ti
 
 ```
 
-`POST /api/chat` can also emit client-side `error` frames for timeout or agent
-turn failure. Those frames have `kind`, `message`, and `resume_offset`, but may
-not have `type` or turn metadata.
+`POST /api/chat` can also emit `stream_error` frames, which the server synthesizes for a turn
+timeout or for this turn's own `message_handler_error`. They are not agent events — nothing
+published them on the stream — so they carry `kind`, `message` and `resume_offset` but no
+`type` or turn/message metadata.
 
 ## SSE Event Payloads
 
 All normal payloads include the metadata described above.
 
 ```ts
-message_queued: {
-  user_message: string
+// Admission — the first event of a message's life, and the only one carrying what was sent.
+message_accepted: {
+  handler: string                                 // the @agent.accepts handler addressed
+  payload: Record<string, unknown>                // that handler's input model, as sent
+  disposition: "opened" | "joined" | "queued"
 }
 
-turn_started: {
-  user_message: string
+// The handler began running. The gap from message_accepted is this message's queue latency.
+message_handler_start: {}
+
+// The handler returned. Terminal for the MESSAGE, not the turn — pair it by message_id.
+message_handler_end: {
+  output?: Record<string, unknown> | null
 }
+
+// The handler raised. Terminal for that message only; siblings in the turn keep running.
+message_handler_error: {
+  message: string
+}
+
+// Pure turn brackets. Both always carry message_id: null.
+turn_started: {}
 
 turn_end: {}
 
@@ -420,7 +451,7 @@ subagent_message_sent: {
   subagent_id: string
   agent_key: string
   workflow_id: string
-  function: string
+  handler: string
   subagent_turn: number
   from_offset: number
 }
@@ -429,7 +460,7 @@ subagent_reply_received: {
   subagent_id: string
   agent_key: string
   workflow_id: string
-  function: string
+  handler: string
   subagent_turn: number
   outcome: "ok" | "error"
 }
@@ -484,23 +515,31 @@ type TokenUsage = {
 A basic text turn can be mocked as:
 
 ```txt
+event: message_accepted
+data: {"type":"message_accepted","agent_id":"root","turn_id":"t1","turn_number":1,"message_id":"m1","timestamp":1710000000,"resume_offset":1,"handler":"ask","payload":{"text":"hello"},"disposition":"opened"}
+
 event: turn_started
-data: {"type":"turn_started","agent_id":"root","turn_id":"t1","turn_number":1,"timestamp":1710000000,"resume_offset":1,"user_message":"hello"}
+data: {"type":"turn_started","agent_id":"root","turn_id":"t1","turn_number":1,"message_id":null,"timestamp":1710000000,"resume_offset":2}
+
+event: message_handler_start
+data: {"type":"message_handler_start","agent_id":"root","turn_id":"t1","turn_number":1,"message_id":"m1","timestamp":1710000000,"resume_offset":3}
 
 event: reply_delta
-data: {"type":"reply_delta","agent_id":"root","turn_id":"t1","turn_number":1,"timestamp":1710000001,"resume_offset":2,"text":"Hi"}
+data: {"type":"reply_delta","agent_id":"root","turn_id":"t1","turn_number":1,"message_id":"m1","timestamp":1710000001,"resume_offset":4,"text":"Hi"}
 
-event: reply
-data: {"type":"reply","agent_id":"root","turn_id":"t1","turn_number":1,"timestamp":1710000002,"resume_offset":3,"output":{"text":"Hi there."}}
+event: message_handler_end
+data: {"type":"message_handler_end","agent_id":"root","turn_id":"t1","turn_number":1,"message_id":"m1","timestamp":1710000002,"resume_offset":5,"output":{"text":"Hi there."}}
 
 event: turn_end
-data: {"type":"turn_end","agent_id":"root","turn_id":"t1","turn_number":1,"timestamp":1710000003,"resume_offset":4}
+data: {"type":"turn_end","agent_id":"root","turn_id":"t1","turn_number":1,"message_id":null,"timestamp":1710000003,"resume_offset":6}
 
 ```
 
-For a queued-message mock, emit `message_queued` immediately after accepting the
-message, then later emit `turn_started` with the same `turn_id` and
-`turn_number`.
+For a queued-message mock, emit `message_accepted` with `disposition: "queued"` immediately
+after accepting the message, then later emit `turn_started` with the same `turn_id` and
+`turn_number`. For a mid-turn join, emit `message_accepted` with `disposition: "joined"`, the
+already-open turn's `turn_id`, and a fresh `message_id` — no second `turn_started`, and a
+second `message_handler_end` under that one `turn_id`.
 
 For an approval mock, emit `tool_requested`, `tool_approval_requested`, wait for
 `POST /api/approve`, then emit `tool_approval_resolved`. If approved, continue

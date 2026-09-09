@@ -2,22 +2,39 @@
 
 The mental model for how a harness agent executes, and what building an SDK integration involves.
 
-## The turn — the unit of execution
+## The turn and the message — two units, two ids
 
-A **turn** is one inbound message processed to completion — the harness's atomic unit.
+A **turn** is the interval during which the agent is non-idle. A **message** is one inbound
+envelope dispatched to one `@agent.accepts` handler. They are *not* the same unit — a turn is
+refcounted, so several messages can share one — and the difference is what the two envelope ids
+exist to express.
 
-- Begins when the runner pops a queued message and calls the matching `@agent.accepts` handler;
-  ends when that handler returns (→ `reply`) or raises (→ `error`).
-- **Strictly sequential** — one handler is awaited to completion before the next. This is what makes
-  "the current turn" unambiguous, so activity-side event publishing always knows which turn it
-  belongs to.
-- Bracketed by guaranteed events: `turn_started` → (`reply` | `error`) → **always** `turn_end`
-  (emitted in a `finally`) — the single reliable end-of-turn signal.
-- A raising handler does **not** end the session — the error becomes an `AgentError` event and the
-  loop continues. The workflow is long-lived, spanning many turns until the `close` signal.
-- Identity: a `turn_id` (uuid) + a monotonic `turn_number`, both stamped on every event.
+**The message** is the unit of *work*:
+
+- Bracketed by `message_accepted` (admission — the only event carrying what was sent, plus the
+  `disposition` it got: `opened`, `joined` or `queued`) → `message_handler_start` → exactly one
+  of `message_handler_end` (its return value) / `message_handler_error` (it raised).
+- Identity: a `message_id`, minted at admission, returned on `AgentMessageReply.message_id`, and
+  stamped on **every** event of its dispatch — deltas, tool lifecycle, approval gates, subagent
+  brackets. Pair a reply, or attribute a streamed delta, by this.
+- A raising handler does **not** end the session, and does not touch its siblings: the error is
+  that message's `message_handler_error` and the loop continues.
+
+**The turn** is the unit of *busyness*:
+
+- Bracketed by `turn_started` … `turn_end`, both empty and both carrying `message_id: null`.
+  `turn_end` fires when the turn's **last** participant leaves, which makes it a true quiescence
+  signal — the point a client can safely disconnect on.
+- Identity: a `turn_id` (uuid) + a monotonic `turn_number`. A `MidTurn.ACCEPT` message JOINS the
+  open turn rather than getting its own, so the counter does not advance for it.
+- At most one turn is open at a time (nothing else opens one), so nested or interleaved turn
+  brackets are unconstructible. Queued messages each get their own turn, one at a time.
 - Nested spans inside a turn: `model_interaction_started/ended` pairs (one per model call, with
   `TokenUsage`) and `tool_*` brackets (one per tool call).
+
+**Do not group by `turn_id`.** Two `MidTurn.ACCEPT` handlers streaming concurrently publish under 
+one `turn_id`, and keying on the turn merges their text into one indistinguishable stream. 
+Everything per-message keys on `message_id`.
 
 ## Driving an agent — the message envelope and interface discovery
 
@@ -37,7 +54,8 @@ AgentMessage(
   (`_validate_send_agent_message`) enforces it *before* any state changes: an unknown `type` →
   `UnknownFunction`, a `payload` that fails the handler's pydantic input model → `MalformedMessage`,
   a stale `expected_turn` → `StaleTurn`. So the dispatch loop only ever sees a known handler + an
-  already-coerced input. The handler's **return value becomes the turn's `reply` event** (see below).
+  already-coerced input. The handler's **return value becomes that message's `message_handler_end`
+  event** (see below).
 - **Discovery, not hardcoding.** A client learns an agent's callable surface at runtime from the
   `agent_interface` query — **every** handler's name, docstring, input/output JSON schemas, plus its
   `mid_turn` and `model_callable`. There is only this one discovery surface, and nothing is filtered
@@ -62,12 +80,14 @@ above (`turn_started`, `reply_delta`, `tool_*`, …).
 - **An `AgentEvent` is a typed record of one thing that happened** — a turn boundary, a model
   interaction, a tool call, an approval, a reply delta. It's a semantic *payload* (e.g.
   `ReplyDelta(text=…)`, `ToolStart(…)`) wrapped in an *envelope* that stamps routing metadata the
-  harness controls: `agent_id` / `turn_id` / `turn_number` / `timestamp`. Producers build only the
-  payload and *cannot* set the envelope, so routing metadata is trustworthy by construction.
+  harness controls: `agent_id` / `turn_id` / `turn_number` / `message_id` / `timestamp`. Producers
+  build only the payload and *cannot* set the envelope, so routing metadata is trustworthy by
+  construction. `message_id` lives on the envelope rather than in bodies precisely so that
+  attribution is free for every event type, present and future — the same reasoning as `turn_id`.
 - **The vocabulary is closed and discriminated.** `AgentStreamItem` unions the ~two dozen event
-  types (`turn_*`, `model_interaction_*` with `TokenUsage`, the full `tool_*` lifecycle incl.
-  approvals, `subagent_*`, `reply_delta`/`thought_summary`/`text_annotation`, terminal
-  `reply`/`error`) keyed on `type`. The *same* vocabulary for every agent
+  types (`message_*`, `turn_*`, `model_interaction_*` with `TokenUsage`, the full `tool_*`
+  lifecycle incl. approvals, `subagent_*`,
+  `reply_delta`/`thought_summary`/`text_annotation`) keyed on `type`. The *same* vocabulary for every agent
   regardless of which SDK wrote the loop → one UI, one analytics pipeline across the fleet. (Defined
   in `agent_protocol/events.py`.)
 - **One topic, two producers.** All events publish to the single `turn_events` topic on the agent's

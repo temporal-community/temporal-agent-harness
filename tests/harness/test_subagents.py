@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel, Field
@@ -14,12 +16,22 @@ from temporalio.exceptions import ApplicationError
 from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
+    MessageHandlerEnd,
+    MessageHandlerError,
+    RunSubagentTurnInput,
     SubagentMessageSent,
     SubagentStarted,
     SubagentStopped,
     ToolApprovalPolicy,
+    TurnEnded,
 )
 from temporal_agent_harness.harness.agent_workflow import _SubagentInstance, _WorkflowStatus
+from temporal_agent_harness.harness import subagent_activities
+from temporal_agent_harness.harness.subagent_activities import (
+    SubagentActivities,
+    _TurnProgress,
+)
+from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
 
 # A minimal child agent for exercising the toolset generator. No @workflow.defn is needed —
@@ -192,13 +204,13 @@ def test_subagent_lifecycle_events_carry_workflow_id_and_round_trip():
 def test_subagent_message_sent_event_round_trips_with_dispatch_details():
     # SubagentMessageSent marks a dispatch to a specific subagent on the parent's stream. It
     # must round-trip through the discriminated union carrying enough to correlate with the
-    # child's own stream: the handle/workflow_id, the target handler function, and the child
-    # turn number.
+    # child's own stream: the handle/workflow_id, the target handler, and the child turn
+    # number.
     ev = SubagentMessageSent(
         subagent_id="a3f9c2",
         agent_key="monty",
         workflow_id="monty-subagent-wf",
-        function="run_script",
+        handler="run_script",
         subagent_turn=3,
     )
     # Envelope turn_number (the parent's turn) is deliberately DIFFERENT from subagent_turn (the
@@ -212,7 +224,7 @@ def test_subagent_message_sent_event_round_trips_with_dispatch_details():
     assert back.event.subagent_id == "a3f9c2"
     assert back.event.agent_key == "monty"
     assert back.event.workflow_id == "monty-subagent-wf"
-    assert back.event.function == "run_script"
+    assert back.event.handler == "run_script"
     assert back.event.subagent_turn == 3
     assert back.turn_number == 5  # the parent turn, on the envelope — not the subagent's
 
@@ -352,3 +364,165 @@ def test_distinct_subagents_have_independent_gates_and_counters():
     a.take_ticket()
     assert a._next_ticket == 1
     assert b._next_ticket == 0
+
+
+# ---------------------------------------------------------------------------
+# The activity picks ITS OWN reply out of a shared child turn
+# ---------------------------------------------------------------------------
+#
+# A child turn is refcounted: a human (or anything else) sending the child a MidTurn.ACCEPT
+# message mid-turn JOINS the turn this activity opened, and the turn then carries one
+# message_handler_end per participant under one turn_id. Selecting "the last reply on the turn"
+# would hand the parent's model ANOTHER message's output as this tool call's result — silent
+# corruption of a tool result, not a rendering gap. These drive _consume_child_turn over a
+# scripted child stream, which is the only way to script that interleaving deterministically.
+
+
+class _FakeItem:
+    """One ``WorkflowStreamItem``: an offset plus the decoded ``AgentEvent``."""
+
+    def __init__(self, offset: int, data: AgentEvent) -> None:
+        self.offset = offset
+        self.data = data
+
+
+class _FakeStream:
+    def __init__(self, items: list[_FakeItem]) -> None:
+        self._items = items
+
+    def subscribe(self, **_kwargs):
+        async def gen():
+            for item in self._items:
+                yield item
+
+        return gen()
+
+
+def _child_event(payload, *, turn_id: str, message_id: str | None) -> AgentEvent:
+    return AgentEvent(
+        agent_id="child",
+        turn_id=turn_id,
+        turn_number=4,
+        message_id=message_id,
+        timestamp=0.0,
+        event=payload,
+    )
+
+
+def _shared_child_turn(*, ours: str, theirs: str) -> list[_FakeItem]:
+    """One child turn with two participants — ours replying FIRST, so "last wins" is wrong."""
+    turn_id = "child-turn-4"
+    payloads = [
+        (MessageHandlerEnd(output={"text": "ours"}), ours),
+        (MessageHandlerEnd(output={"text": "theirs"}), theirs),
+        (TurnEnded(), None),
+    ]
+    return [
+        _FakeItem(i, _child_event(payload, turn_id=turn_id, message_id=mid))
+        for i, (payload, mid) in enumerate(payloads)
+    ]
+
+
+def _consume(items: list[_FakeItem], monkeypatch):
+    """Run ``_consume_child_turn`` over ``items``, returning ``(output, got_reply)``."""
+    activities = SubagentActivities(client=None)  # the stream client is patched out
+    monkeypatch.setattr(
+        subagent_activities,
+        "WorkflowStreamClient",
+        SimpleNamespace(create=lambda _client, _wf: _FakeStream(items)),
+    )
+    req = RunSubagentTurnInput(
+        child_workflow_id="child-wf",
+        type="ask",
+        payload={},
+        expected_turn=4,
+        handle="aaaaaa-bbbbbb",
+        agent_key="sample",
+        parent_stream_context=TurnStreamContext(
+            turn_id="parent-turn-1", turn_number=1, agent_id="aaaaaa"
+        ),
+    )
+    progress = _TurnProgress(
+        sent=True,
+        turn_id="child-turn-4",
+        turn_number=4,
+        message_id="ours",
+        consumed_offset=0,
+    )
+    return asyncio.run(activities._consume_child_turn(req, progress))
+
+
+def test_shared_child_turn_returns_our_reply_not_the_last_one(monkeypatch):
+    output, got_reply = _consume(
+        _shared_child_turn(ours="ours", theirs="theirs"), monkeypatch
+    )
+    assert got_reply is True
+    # "theirs" was published later under the SAME turn_id. Last-reply-wins would return it.
+    assert output == {"text": "ours"}
+
+
+def test_another_participants_error_is_not_our_tool_call_failing(monkeypatch):
+    turn_id = "child-turn-4"
+    items = [
+        _FakeItem(
+            0,
+            _child_event(
+                MessageHandlerError(message="their handler blew up"),
+                turn_id=turn_id,
+                message_id="theirs",
+            ),
+        ),
+        _FakeItem(
+            1,
+            _child_event(
+                MessageHandlerEnd(output={"text": "ours"}),
+                turn_id=turn_id,
+                message_id="ours",
+            ),
+        ),
+        _FakeItem(2, _child_event(TurnEnded(), turn_id=turn_id, message_id=None)),
+    ]
+    # A sibling participant failing says nothing about this tool call, so it must not be
+    # raised as SubagentTurnError — our own reply is right there behind it.
+    output, got_reply = _consume(items, monkeypatch)
+    assert got_reply is True
+    assert output == {"text": "ours"}
+
+
+def test_our_own_error_still_fails_the_tool_call(monkeypatch):
+    turn_id = "child-turn-4"
+    items = [
+        _FakeItem(
+            0,
+            _child_event(
+                MessageHandlerError(message="ours blew up"),
+                turn_id=turn_id,
+                message_id="ours",
+            ),
+        ),
+        _FakeItem(1, _child_event(TurnEnded(), turn_id=turn_id, message_id=None)),
+    ]
+    with pytest.raises(ApplicationError) as excinfo:
+        _consume(items, monkeypatch)
+    assert excinfo.value.type == "SubagentTurnError"
+    assert "ours blew up" in str(excinfo.value)
+
+
+def test_turn_end_with_no_reply_for_us_reports_no_reply(monkeypatch):
+    turn_id = "child-turn-4"
+    items = [
+        _FakeItem(
+            0,
+            _child_event(
+                MessageHandlerEnd(output={"text": "theirs"}),
+                turn_id=turn_id,
+                message_id="theirs",
+            ),
+        ),
+        _FakeItem(1, _child_event(TurnEnded(), turn_id=turn_id, message_id=None)),
+    ]
+    # Only a sibling replied. The activity must report "no reply" (which the caller turns into
+    # SubagentNoReply) rather than adopting someone else's output.
+    output, got_reply = _consume(items, monkeypatch)
+    assert got_reply is False
+    assert output == {}

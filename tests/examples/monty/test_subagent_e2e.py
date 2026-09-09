@@ -31,6 +31,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEventType,
     AgentMessage,
     AgentMessageReply,
+    MessageDisposition,
 )
 from temporal_agent_harness.harness.subagent_activities import SubagentActivities
 
@@ -110,7 +111,7 @@ async def _drive(
     ):
         envelope: AgentEvent = item.data
         events.append(envelope)
-        if envelope.event.type == AgentEventType.REPLY:
+        if envelope.event.type == AgentEventType.MESSAGE_HANDLER_END:
             reply = envelope.event.output.get("text")
         if envelope.event.type == AgentEventType.TURN_END:
             break
@@ -158,7 +159,7 @@ async def test_parent_drives_subagent_across_sequential_turns(client_and_queue):
     assert len(messaged) == 2
     assert all(m.subagent_id == started[0].subagent_id for m in messaged)
     assert all(m.workflow_id == started[0].workflow_id for m in messaged)
-    assert all(m.function == "run_script" for m in messaged)
+    assert all(m.handler == "run_script" for m in messaged)
     assert [m.subagent_turn for m in messaged] == [1, 2]
 
 
@@ -357,14 +358,35 @@ async def test_human_can_message_a_live_subagent_directly(client_and_queue):
         if envelope.event.type == AgentEventType.TURN_END:
             break
 
-    # One turn bracket, opened and closed exactly once — the child ran our message as its own
-    # turn, and turn_end is the terminal (there is no operator-command terminal any more).
-    assert [e.event.type for e in own_turn][0] == AgentEventType.TURN_STARTED
-    assert [e.event.type for e in own_turn][-1] == AgentEventType.TURN_END
-    assert sum(e.event.type == AgentEventType.TURN_END for e in own_turn) == 1
+    # Admission comes first and carries what we sent; the turn bracket opens after it. One
+    # bracket, opened and closed exactly once — the child ran our message as its own turn, and
+    # turn_end is the terminal (there is no operator-command terminal any more).
+    types = [e.event.type for e in own_turn]
+    assert types[0] == AgentEventType.MESSAGE_ACCEPTED
+    assert types[1] == AgentEventType.TURN_STARTED
+    assert types[-1] == AgentEventType.TURN_END
+    assert sum(t == AgentEventType.TURN_END for t in types) == 1
     assert all(e.agent_id == child_agent_id for e in own_turn)
     assert all(e.turn_number == reply.turn_number for e in own_turn)
-    replies = [e.event for e in own_turn if e.event.type == AgentEventType.REPLY]
+
+    accepted = own_turn[0].event
+    assert accepted.handler == "run_script"
+    assert accepted.disposition is MessageDisposition.OPENED
+    assert accepted.payload == {"script": _const_script(7)}
+
+    # EVERY event of our dispatch is stamped with the id the submit handed back — that is what
+    # a client uses to tell its own work apart from anything else sharing the turn. The two
+    # brackets are deliberately unattributed: they are the TURN's, not this message's.
+    assert reply.message_id
+    for e in own_turn:
+        expected = (
+            None
+            if e.event.type in (AgentEventType.TURN_STARTED, AgentEventType.TURN_END)
+            else reply.message_id
+        )
+        assert e.message_id == expected, e.event.type
+
+    replies = [e.event for e in own_turn if e.event.type == AgentEventType.MESSAGE_HANDLER_END]
     assert len(replies) == 1
     assert "7" in json.dumps(replies[0].output)
 

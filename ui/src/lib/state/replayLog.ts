@@ -5,6 +5,7 @@ import type {
   JsonRecord,
   ToolId
 } from "$lib/api/types";
+import { renderUserMessage } from "./userMessage";
 import {
   formatCost,
   formatTokens,
@@ -47,7 +48,9 @@ export interface ReplayLogRow {
   sourceLabel?: string;
   turnId: string;
   timestamp: number;
-  event: AgentEventType;
+  // An agent event's own type, or ``"stream_error"`` for the client-side frame /api/chat
+  // synthesizes — which no agent published, so it is not an AgentEventType.
+  event: AgentEventType | "stream_error";
   actor: ReplayActor;
   tone: ReplayTone;
   label: string;
@@ -107,29 +110,6 @@ export interface ReplayLogFrame {
   role?: "parent" | "subagent";
   label?: string;
   parentTurnNumber?: number;
-}
-
-function renderUserMessage(value: string): string {
-  if (!value.startsWith("{")) return value;
-  try {
-    const message = JSON.parse(value) as {
-      type?: string;
-      payload?: { name?: string; arg?: string; text?: string };
-      script?: string;
-    };
-    if (typeof message.payload?.text === "string") return message.payload.text;
-    if (typeof message.script === "string") return message.script;
-    if (
-      (message.type !== "slash" && message.type !== "slash_command") ||
-      !message.payload?.name
-    ) {
-      return value;
-    }
-    const command = message.payload.name === "set-model" ? "model" : message.payload.name;
-    return `/${command}${message.payload.arg ? ` ${message.payload.arg}` : ""}`;
-  } catch {
-    return value;
-  }
 }
 
 function thoughtText(delta: JsonRecord): string {
@@ -200,7 +180,7 @@ function rowFromFrame(
       sourceLabel: entry.label,
       turnId: "client",
       timestamp: 0,
-      event: "error",
+      event: "stream_error",
       actor: "error",
       tone: "error",
       label: "Stream error",
@@ -231,25 +211,42 @@ function rowFromFrame(
     citations: [] as FileCitationAnnotation[]
   };
 
-  if (frame.event === "turn_started") {
+  if (frame.event === "message_accepted") {
+    // One row for every admitted message, labelled by what it did to the turn — the queued
+    // case is no longer a separate event, and "joined" is a case the old vocabulary could not
+    // express at all.
+    const queued = frame.data.disposition === "queued";
     return {
       ...base,
-      actor: "user",
+      actor: queued ? "queue" : "user",
       tone: "queue",
-      label: "User message received",
-      body: renderUserMessage(frame.data.user_message)
+      label:
+        frame.data.disposition === "joined"
+          ? "Message joined the open turn"
+          : queued
+            ? "Message queued"
+            : "User message received",
+      body: renderUserMessage(frame.data.handler, frame.data.payload),
+      marker: queued ? "queue" : undefined,
+      markerLabel: queued ? "queued turn" : undefined
     };
   }
 
-  if (frame.event === "message_queued") {
+  if (frame.event === "turn_started") {
     return {
       ...base,
-      actor: "queue",
-      tone: "queue",
-      label: "Message queued",
-      body: renderUserMessage(frame.data.user_message),
-      marker: "queue",
-      markerLabel: "queued turn"
+      actor: "system",
+      tone: "neutral",
+      label: "Turn started"
+    };
+  }
+
+  if (frame.event === "message_handler_start") {
+    return {
+      ...base,
+      actor: "system",
+      tone: "neutral",
+      label: "Handler started"
     };
   }
 
@@ -400,7 +397,7 @@ function rowFromFrame(
       actor: "subagent",
       tone: "tool",
       label: "Subagent message sent",
-      body: `${frame.data.function} → turn ${frame.data.subagent_turn}`,
+      body: `${frame.data.handler} → turn ${frame.data.subagent_turn}`,
       detail: `${frame.data.agent_key} · ${frame.data.subagent_id}`,
       status: "dispatched"
     };
@@ -412,7 +409,7 @@ function rowFromFrame(
       actor: "subagent",
       tone: frame.data.outcome === "ok" ? "done" : "error",
       label: "Subagent reply received",
-      body: `${frame.data.function} → turn ${frame.data.subagent_turn}`,
+      body: `${frame.data.handler} → turn ${frame.data.subagent_turn}`,
       detail: `${frame.data.agent_key} · ${frame.data.subagent_id}`,
       status: frame.data.outcome
     };
@@ -477,12 +474,12 @@ function rowFromFrame(
     };
   }
 
-  if (frame.event === "reply") {
+  if (frame.event === "message_handler_end") {
     return {
       ...base,
       actor: "agent",
       tone: "done",
-      label: "Final reply",
+      label: "Handler reply",
       body: textFromReply(frame.data),
       status: "complete"
     };
@@ -498,15 +495,15 @@ function rowFromFrame(
     };
   }
 
-  if (frame.event === "error") {
+  if (frame.event === "message_handler_error") {
     return {
       ...base,
       actor: "error",
       tone: "error",
-      label: "Agent error",
+      label: "Handler error",
       body: frame.data.message,
       marker: "error",
-      markerLabel: "agent error"
+      markerLabel: "handler error"
     };
   }
 

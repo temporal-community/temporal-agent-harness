@@ -16,7 +16,7 @@ nest a subagent turn `T` on child `C` inside markers on `C`'s parent stream:
 
 ```
 parent:  … subagent_message_sent(C,T) … subagent_reply_received(C,T) …
-child:        ⌊ turn_started(T) … reply(T) … turn_end(T) ⌋
+child:        ⌊ turn_started(T) … message_handler_end(T) … turn_end(T) ⌋
 ```
 
 - **Open gate** — a child stream's turn-`T` events wait until the parent's `subagent_message_sent(C,T)`
@@ -141,10 +141,12 @@ stall_grace_seconds)` yields `(AgentEvent, resume_offset)` pairs. `AgentClient` 
 
 > **`send_message` precondition.** It is only valid for a message that gets a **turn of its own**
 > — i.e. a caller that is not already streaming. A `MidTurn.ACCEPT` message that JOINS an open turn
-> has a `turn_started` *behind* its `accepted_offset`, so the skip preamble never matches: the merge
-> emits nothing and the caller waits out `DEFAULT_TURN_TIMEOUT` (300s) for a single
-> `AgentTurnTimeout`. Mid-turn sends go through the contract below instead. (Reachable over HTTP via
-> `POST /api/chat`, which the packaged UI does not use.)
+> has a `turn_started` *behind* its `accepted_offset`, so the skip preamble would never match and
+> the merge would emit nothing. The submit reply's `disposition` says which happened, so that case
+> raises `JoinedTurnError` immediately rather than going silent for `DEFAULT_TURN_TIMEOUT` (300s).
+> The message is still *running* — the exception carries the accepted reply so the caller can find
+> it by `message_id` on a stream it opens itself. Mid-turn sends go through the contract below
+> instead. (Reachable over HTTP via `POST /api/chat`, which the packaged UI does not use.)
 
 ## The client contract — one stream, and how to keep it
 
@@ -154,6 +156,8 @@ rule on every send:
 1. **Send with `submit_message`** — the bare update, no stream. It returns `AgentMessageReply`.
 2. **Then ensure a stream is live.** Already open → keep it, untouched. None open (never attached, or
    the last one ended at quiescence) → `attach(from_offset=<last resume offset>)`.
+
+The packaged UI implements exactly this as `agentRun.svelte.ts`'s `#ensureStreamLive()`.
 
 Three things make this the right shape rather than merely a convenient one.
 
@@ -172,6 +176,11 @@ quiescence (`not turn_active and not pending_turns and highest_completed_turn >=
 message queued behind the open turn makes `pending_turns` non-empty and the live stream continues
 straight through the current `turn_end` into the queued turn. A client never has to decide whether to
 re-attach for a queued message.
+
+One residual race the ordering cannot close: the server may have *already* decided to stop at the
+current `turn_end` before the submit returned. So a client that still has outstanding messages when
+its stream ends naturally should pick a new one up — cheap, and handled where the stream actually
+ends rather than guessed at on every send.
 
 And it still terminates at quiescence, which is the point of the bracket: **`turn_end` is where the
 server sheds a client.** That is a resource decision, not an aesthetic one — every open cursor holds a

@@ -321,6 +321,35 @@ class MidTurn(StrEnum):
     ACCEPT = "accept"
 
 
+class MessageDisposition(StrEnum):
+    """What an admitted message actually did to the agent's turn — the OUTCOME half of
+    :class:`MidTurn`'s declaration.
+
+    ``MidTurn`` is what the handler's author declared should happen mid-turn; this is what
+    happened to one particular message, which also depends on whether the agent was busy at
+    all. An idle agent gives every mode the same answer (:attr:`OPENED`), so a handler
+    declaring ``ENQUEUE`` yields ``OPENED`` or ``QUEUED``, one declaring ``ACCEPT`` yields
+    ``OPENED`` or ``JOINED``, and one declaring ``REJECT`` only ever yields ``OPENED`` (a
+    mid-turn arrival never gets admitted, so it has no disposition at all).
+
+    Reported in two places for two audiences: on :attr:`AgentMessageReply.disposition`, so the
+    SENDER learns what became of its own message, and on the ``message_accepted`` event, so
+    every OBSERVER of the stream learns the same thing.
+    """
+
+    OPENED = "opened"
+    """The agent was idle: this message opened a new turn and runs in it alone (so far)."""
+
+    JOINED = "joined"
+    """A turn was already open and this message's handler declares :attr:`MidTurn.ACCEPT`:
+    it joined that turn, sharing its ``turn_id``, and runs concurrently with it. The turn
+    counter did NOT advance."""
+
+    QUEUED = "queued"
+    """The agent was busy and this message's handler declares :attr:`MidTurn.ENQUEUE`: it
+    holds a reserved slot and will open a turn of its own once the queue reaches it."""
+
+
 class MessageContext(BaseModel):
     """Per-message context the WORKFLOW supplies to a handler that asks for it.
 
@@ -340,14 +369,17 @@ class MessageContext(BaseModel):
     (only possible for :attr:`MidTurn.ACCEPT`). The motivating case is a chat box that should
     start a new prompt when idle but *steer* the model mid-turn.
 
-    ``turn_id`` / ``turn_number`` identify the turn this message is participating in — the
-    same values the caller received from ``send_agent_message`` — so a handler can correlate
-    its own work with the event stream without reaching into the runner.
+    ``turn_id`` / ``turn_number`` identify the turn this message is participating in, and
+    ``message_id`` identifies the message itself — the same three values the caller received
+    from ``send_agent_message`` — so a handler can correlate its own work with the event
+    stream without reaching into the runner. When a turn is shared, ``message_id`` is the one
+    that distinguishes THIS handler's events from a concurrent participant's.
     """
 
     joined_turn: bool
     turn_id: str
     turn_number: int
+    message_id: str
 
 
 # ---------------------------------------------------------------------------
@@ -359,15 +391,23 @@ class MessageContext(BaseModel):
 class AgentMessageReply:
     """Returned by the workflow's ``send_agent_message`` update on acceptance.
 
+    ``message_id`` identifies THIS message for the whole rest of its life: the harness mints
+    it during admission and stamps it on the envelope of every event the message's dispatch
+    produces (:attr:`AgentEvent.message_id`), so a sender can correlate its own reply,
+    deltas and tool calls without parsing the stream for them. It is returned here — rather
+    than left to be read off the ``message_accepted`` event — so a caller that never opens a
+    stream still has it.
+
     ``turn_number`` is the turn this message actually belongs to — a NEW turn for a queued or
     idle message, or the ALREADY-OPEN turn it joined when its handler declares
     :attr:`MidTurn.ACCEPT`. It is the authoritative input to the caller's next
     ``expected_turn`` (``turn_number + 1``); see :attr:`AgentMessage.expected_turn` for why
     counting sends instead is wrong.
 
-    ``pending`` is True if the message was queued behind an active turn rather than being
-    processed immediately. A join reports ``False``: it is running now, inside the turn it
-    joined.
+    ``disposition`` says what the message did to that turn — opened it, joined it, or queued
+    behind it (see :class:`MessageDisposition`). It is what a caller needs to decide how to
+    observe the work: only ``OPENED`` gets a turn of its own to stream, which is the
+    precondition :meth:`AgentClient.send_message` enforces.
 
     ``accepted_offset`` is the agent's stream offset captured at the instant the update was
     accepted (the log head BEFORE this turn publishes anything). It is internal plumbing for the
@@ -381,8 +421,9 @@ class AgentMessageReply:
 
     turn_number: int
     turn_id: str
+    message_id: str
+    disposition: MessageDisposition
     accepted_offset: int = 0
-    pending: bool = False
 
 
 @dataclass
@@ -500,10 +541,16 @@ class PendingCallback:
 
 @dataclass
 class PendingTurn:
-    """A message waiting in the agent's queue."""
+    """A message waiting in the agent's queue.
+
+    ``message_id`` is the same id the sender got back on :attr:`AgentMessageReply.message_id`
+    and that every event of this message's dispatch will carry — so a client that lost track
+    can find its own queued message here rather than guessing from position.
+    """
 
     turn_number: int
     turn_id: str
+    message_id: str
     message: str
 
 

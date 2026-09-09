@@ -11,10 +11,13 @@
 > **Arguments against** is kept deliberately: the trades were made knowingly, not because
 > they went unnoticed.
 >
-> **Follow-on:** making a turn hold several messages left the event vocabulary behind — the
-> stream still encodes a message as `turn_started.user_message`, so a mid-turn message is
-> invisible and replies cannot be paired with the message that produced them. See
-> [`per-message-events.md`](per-message-events.md).
+> **Follow-on, now landed:** making a turn hold several messages left the event vocabulary
+> behind — the stream encoded a message as `turn_started.user_message`, so a mid-turn message
+> was invisible and replies could not be paired with the message that produced them. Fixed by
+> [`per-message-events.md`](per-message-events.md), which put `message_id` on the envelope and
+> replaced `turn_started.user_message` / `message_queued` / `reply` / `error` with
+> `message_accepted` + `message_handler_start` / `_end` / `_error`. Event names in this note
+> predate that change; read them as the `message_handler_*` family.
 
 The harness currently knows what a slash command is. `slash_commands.py`, the
 `operator_interface` query, the `execute_operator_command` update, and the

@@ -80,7 +80,7 @@ async def _run(
     ):
         envelope: AgentEvent = item.data
         events.append(envelope)
-        if envelope.event.type == AgentEventType.REPLY:
+        if envelope.event.type == AgentEventType.MESSAGE_HANDLER_END:
             reply = envelope.event.output.get("text")
         if envelope.event.type == AgentEventType.TURN_END:
             break

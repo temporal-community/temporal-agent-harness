@@ -15,9 +15,13 @@ from temporal_agent_harness.ai_sdks.openai_agents import OpenAIPayloadConverter
 from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
 )
+from temporal_agent_harness.harness.agent_protocol import MessageDisposition
 from temporal_agent_harness.harness.agent_protocol.events import (
     AgentStreamItem,
-    MessageQueued,
+    MessageAccepted,
+    MessageHandlerEnd,
+    MessageHandlerError,
+    MessageHandlerStart,
     ModelInteractionEnded,
     ModelInteractionStarted,
     ReplyDelta,
@@ -32,11 +36,20 @@ from temporal_agent_harness.harness.agent_protocol.events import (
 
 # Representative events — each constructed WITHOUT an explicit `type=` (the real-world path), so
 # the discriminator is only present if the model pins it. Spans the shapes that cross the turn
-# stream: the two that actually broke (turn_started / message_queued), tool lifecycle, model
-# bracket, and the streaming deltas.
+# stream: the message + turn brackets (turn_started is one of the two that actually broke), tool
+# lifecycle, model bracket, and the streaming deltas. The EMPTY payloads matter most here — a
+# body with no fields of its own has nothing but `type` to serialize, so it is where a lossy
+# converter's drop is fatal.
 _EVENTS: list[AgentStreamItem] = [
-    TurnStarted(user_message="what's the weather in boston?"),
-    MessageQueued(user_message="queued one"),
+    MessageAccepted(
+        handler="ask",
+        payload={"text": "what's the weather in boston?"},
+        disposition=MessageDisposition.OPENED,
+    ),
+    MessageHandlerStart(),
+    MessageHandlerEnd(output={"text": "It's sunny"}),
+    MessageHandlerError(message="boom"),
+    TurnStarted(),
     TurnEnded(),
     ReplyDelta(text="It's sunny"),
     ThoughtSummaryDelta(delta={"summary": "thinking"}),
@@ -67,6 +80,7 @@ def test_agent_event_round_trips_through_openai_lossy_converter(event: AgentStre
         agent_id="agent-1",
         turn_id="turn-1",
         turn_number=1,
+        message_id="msg-1",
         timestamp=1234.5,
         event=event,
     )

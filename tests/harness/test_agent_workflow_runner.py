@@ -40,9 +40,10 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
     AgentEventType,
     AgentMessage,
-    AgentReply,
     AgentStatus,
     MessageContext,
+    MessageDisposition,
+    MessageHandlerEnd,
     MidTurn,
     SubagentReplyReceived,
     TextMessage,
@@ -52,8 +53,12 @@ from temporal_agent_harness.harness.agent_protocol import (
 )
 from temporalio.exceptions import ApplicationError
 
-from temporal_agent_harness.harness.agent_client import AgentClient
-from temporal_agent_harness.harness.agent_workflow import Injected, _discover_handlers
+from temporal_agent_harness.harness.agent_client import AgentClient, JoinedTurnError
+from temporal_agent_harness.harness.agent_workflow import (
+    Injected,
+    _Admission,
+    _discover_handlers,
+)
 
 # ---------------------------------------------------------------------------
 # Message models + probe workflows
@@ -118,7 +123,7 @@ class TypedProbeAgent:
 
     @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def boom(self, message: TextMessage) -> TextReply:
-        """Always raises — to prove an errored turn publishes AgentError + turn_end and
+        """Always raises — to prove an errored turn publishes message_handler_error + turn_end and
         the loop survives for the next message."""
         raise RuntimeError(f"boom: {message.text}")
 
@@ -177,7 +182,7 @@ class MidTurnProbeAgent:
         The regression this guards: if the turn id were cleared when the first participant
         finished, this publish would hard-raise instead of landing on the still-open turn."""
         await workflow.wait_condition(lambda: "outlive" in self._released)
-        self._runner.publish(AgentReply(output={"note": "still in the turn"}))
+        self._runner.publish(MessageHandlerEnd(output={"note": "still in the turn"}))
         self._published_after_sibling = True
         return TextReply(text=f"outlived:{message.text}")
 
@@ -314,28 +319,49 @@ async def test_agent_interface_query_announces_handlers(client_and_queue):
     assert "message" in by_name["greet"].output["properties"]
 
 
-async def _collect_until_turn_end(client: Client, workflow_id: str) -> list[AgentEvent]:
+def _subscribe_all(client: Client, workflow_id: str):
+    """Subscribe to a workflow's whole event log from the start (live-tailing)."""
     from datetime import timedelta
 
     from temporalio.contrib.workflow_streams import WorkflowStreamClient
 
-    stream = WorkflowStreamClient.create(client, workflow_id)
+    return WorkflowStreamClient.create(client, workflow_id).subscribe(
+        topics=["turn_events"],
+        from_offset=0,
+        result_type=AgentEvent,
+        poll_cooldown=timedelta(milliseconds=10),
+    )
+
+
+async def _collect_until_turn_end(client: Client, workflow_id: str) -> list[AgentEvent]:
     events: list[AgentEvent] = []
     async with asyncio.timeout(30):
-        async for item in stream.subscribe(
-            topics=["turn_events"],
-            from_offset=0,
-            result_type=AgentEvent,
-            poll_cooldown=timedelta(milliseconds=10),
-        ):
+        async for item in _subscribe_all(client, workflow_id):
             events.append(item.data)
             if item.data.event.type == AgentEventType.TURN_END:
                 break
     return events
 
 
+async def _collect_events(client: Client, workflow_id: str) -> list[AgentEvent]:
+    """Every event published SO FAR, without waiting for anything more.
+
+    ``subscribe`` live-tails, so it never ends on its own; the short timeout is the read —
+    for asserting what has NOT been published yet, which no terminal event can signal."""
+    events: list[AgentEvent] = []
+    try:
+        async with asyncio.timeout(2):
+            async for item in _subscribe_all(client, workflow_id):
+                events.append(item.data)
+    except TimeoutError:
+        pass
+    return events
+
+
 def _reply_text(events: list[AgentEvent]) -> str:
-    reply = next(e.event for e in events if e.event.type == AgentEventType.REPLY)
+    reply = next(
+        e.event for e in events if e.event.type == AgentEventType.MESSAGE_HANDLER_END
+    )
     text = reply.output.get("text")
     assert isinstance(text, str)
     return text
@@ -347,19 +373,25 @@ async def test_reply_is_the_handler_return_value(client_and_queue):
     await _send(handle, "greet", {"name": "Ada"})
 
     events = await _collect_until_turn_end(client, handle.id)
-    reply = next(e.event for e in events if e.event.type == AgentEventType.REPLY)
+    reply = next(
+        e.event for e in events if e.event.type == AgentEventType.MESSAGE_HANDLER_END
+    )
     # The reply carries the handler's return model serialized to a dict.
     assert reply.output == {"message": "hi Ada"}
 
 
-async def test_handler_error_publishes_agent_error_and_loop_survives(client_and_queue):
+async def test_handler_error_publishes_message_handler_error_and_loop_survives(
+    client_and_queue,
+):
     client, task_queue = client_and_queue
     handle = await _start(client, task_queue, TypedProbeAgent)
 
-    # A raising handler → AgentError (then turn_end), and the session stays alive.
+    # A raising handler → message_handler_error (then turn_end), and the session stays alive.
     await _send(handle, "boom", {"text": "x"})
     events = await _collect_until_turn_end(client, handle.id)
-    errors = [e for e in events if e.event.type == AgentEventType.ERROR]
+    errors = [
+        e for e in events if e.event.type == AgentEventType.MESSAGE_HANDLER_ERROR
+    ]
     assert len(errors) == 1 and "boom: x" in errors[0].event.message
     # The next message is still handled normally.
     await _send(handle, "greet", {"name": "Bob"})
@@ -506,10 +538,10 @@ def test_set_approval_policy_resolves_matching_pending(offline_build_policy):
         AgentConfig(), default=ToolApprovalPolicy.always_require_approvals()
     )
     runner._status.register_pending_approval(
-        "t1", "trusted_tool", {"x": 1}, 1, "turn-1", inherently_safe=False
+        "t1", "trusted_tool", {"x": 1}, 1, "turn-1", "msg-1", inherently_safe=False
     )
     runner._status.register_pending_approval(
-        "t2", "other_tool", {}, 1, "turn-1", inherently_safe=False
+        "t2", "other_tool", {}, 1, "turn-1", "msg-1", inherently_safe=False
     )
 
     runner.set_approval_policy(ToolApprovalPolicy.allow_tools(["trusted_tool"]))
@@ -583,7 +615,12 @@ def test_errored_subagent_turn_closes_bracket_on_actual_accepted_turn(offline_bu
     runner = offline_build(AgentConfig())
     # Make a turn active so publish() has a stream context to publish against.
     runner._status.enqueue_message(
-        AgentMessage(type="x", payload={}, expected_turn=1), "turn-1"
+        _Admission(
+            message=AgentMessage(type="x", payload={}, expected_turn=1),
+            turn_id="turn-1",
+            turn_number=1,
+            message_id="msg-1",
+        )
     )
     runner._status.open_next_turn()
     inst = runner._status.register_subagent("aaaaaa-bbbbbb", "child-wf-1", "k")
@@ -733,7 +770,7 @@ async def test_accept_handler_joins_the_open_turn(client_and_queue):
     # Same turn — not a new one, and not queued behind the open one.
     assert steer.turn_id == work.turn_id
     assert steer.turn_number == work.turn_number
-    assert steer.pending is False
+    assert steer.disposition is MessageDisposition.JOINED
 
     # Nothing was queued — a join does not take a queue slot. (We deliberately do NOT assert
     # turn_participants == 2 here: `steer` returns immediately, so the count may already be
@@ -761,9 +798,150 @@ async def test_accept_handler_joins_the_open_turn(client_and_queue):
     assert types.count(AgentEventType.TURN_END) == 1
     assert types[-1] == AgentEventType.TURN_END
     # Both participants replied inside the one bracket.
-    replies = [e.event.output for e in ours if e.event.type == AgentEventType.REPLY]
+    replies = [
+        e.event.output
+        for e in ours
+        if e.event.type == AgentEventType.MESSAGE_HANDLER_END
+    ]
     assert len(replies) == 3  # the opener plus both joins
     assert {r["text"].split(":")[0] for r in replies} == {"worked", "steer"}
+
+
+async def test_shared_turn_pairs_each_reply_with_its_own_message(client_and_queue):
+    """The reason ``message_id`` exists: two participants, one turn, unambiguous replies.
+
+    Under one ``turn_id`` there are now two ``message_handler_end`` events and no ordering
+    guarantee about which comes first — the opener here deliberately finishes LAST. Anything
+    pairing a reply with the message that produced it must key on ``message_id``.
+    """
+    client, task_queue = client_and_queue
+    handle, work = await _hold_a_turn_open(client, task_queue)
+
+    joined = await _send(handle, "outlive", {"text": "after you"})
+    assert joined.turn_id == work.turn_id
+    assert joined.message_id != work.message_id
+
+    # Let the JOINED participant finish first, so the opener's reply is not simply last.
+    await handle.signal(MidTurnProbeAgent.release, "outlive")
+    await handle.signal(MidTurnProbeAgent.release, "work")
+    events = await _collect_until_turn_end(client, handle.id)
+
+    ours = [e for e in events if e.turn_id == work.turn_id]
+    replies = {
+        e.message_id: e.event.output["text"]
+        for e in ours
+        if e.event.type == AgentEventType.MESSAGE_HANDLER_END
+        # The `outlive` handler also publishes a bare reply of its own to prove the turn is
+        # still open; skip that one by keying on the handler's real return shape.
+        and "text" in e.event.output
+    }
+    assert replies[work.message_id].startswith("worked:")
+    assert replies[joined.message_id].startswith("outlived:")
+
+    # One bracket for the turn, and it belongs to neither message.
+    brackets = [
+        e
+        for e in ours
+        if e.event.type in (AgentEventType.TURN_STARTED, AgentEventType.TURN_END)
+    ]
+    assert len(brackets) == 2
+    assert all(e.message_id is None for e in brackets)
+
+    # Every other event of the turn is attributed to one of the two participants.
+    assert {
+        e.message_id
+        for e in ours
+        if e.event.type not in (AgentEventType.TURN_STARTED, AgentEventType.TURN_END)
+    } == {work.message_id, joined.message_id}
+
+
+async def test_message_accepted_reports_what_the_message_did_to_the_turn(client_and_queue):
+    """``message_accepted`` is the only event carrying the message, and it says its fate.
+
+    All three dispositions, on one agent: idle open, queued behind the open turn, and joined
+    into it. The event's ``turn_id`` names the turn in question either way — already running
+    for a join, still to start for the other two.
+    """
+    client, task_queue = client_and_queue
+    handle, work = await _hold_a_turn_open(client, task_queue)
+    queued = await _send(handle, "work", {"text": "next"})
+    joined = await _send(handle, "steer", {"text": "ride along"})
+
+    await handle.signal(MidTurnProbeAgent.release, "work")
+    events: list[AgentEvent] = []
+    async with asyncio.timeout(30):
+        async for item in _subscribe_all(client, handle.id):
+            events.append(item.data)
+            # Two turns run here (the open one, then the queued one), so stop on the second.
+            if (
+                item.data.event.type == AgentEventType.TURN_END
+                and item.data.turn_number == queued.turn_number
+            ):
+                break
+
+    accepted = {
+        e.message_id: e.event
+        for e in events
+        if e.event.type == AgentEventType.MESSAGE_ACCEPTED
+    }
+    assert accepted[work.message_id].disposition is MessageDisposition.OPENED
+    assert accepted[queued.message_id].disposition is MessageDisposition.QUEUED
+    assert accepted[joined.message_id].disposition is MessageDisposition.JOINED
+
+    # The payload rides along structurally — no rendering, no re-parsing.
+    assert accepted[joined.message_id].handler == "steer"
+    assert accepted[joined.message_id].payload == {"text": "ride along"}
+
+    # Admission precedes everything the message causes, including the turn it opens.
+    order = [(e.message_id, e.event.type) for e in events]
+    assert order.index((work.message_id, AgentEventType.MESSAGE_ACCEPTED)) < order.index(
+        (None, AgentEventType.TURN_STARTED)
+    )
+    # ...and a join's admission lands INSIDE the turn it joined, after that turn started.
+    assert order.index((None, AgentEventType.TURN_STARTED)) < order.index(
+        (joined.message_id, AgentEventType.MESSAGE_ACCEPTED)
+    )
+
+
+async def test_message_handler_start_brackets_only_the_handler(client_and_queue):
+    """Admission and execution are separate events, and the gap between them is queue latency.
+
+    A queued message is accepted immediately but does not start until the turn ahead of it
+    finishes — which is exactly the interval a debugging UI wants, and which a single folded
+    event would leave to be reverse-engineered from turn timestamps.
+    """
+    client, task_queue = client_and_queue
+    handle, _work = await _hold_a_turn_open(client, task_queue)
+    queued = await _send(handle, "work", {"text": "next"})
+
+    # Accepted already — while the agent is still busy with the turn ahead of it.
+    events = await _collect_events(client, handle.id)
+    assert any(
+        e.event.type == AgentEventType.MESSAGE_ACCEPTED
+        and e.message_id == queued.message_id
+        for e in events
+    )
+    assert not any(
+        e.event.type == AgentEventType.MESSAGE_HANDLER_START
+        and e.message_id == queued.message_id
+        for e in events
+    )
+
+    await handle.signal(MidTurnProbeAgent.release, "work")
+    events: list[AgentEvent] = []
+    async with asyncio.timeout(30):
+        async for item in _subscribe_all(client, handle.id):
+            events.append(item.data)
+            if (
+                item.data.event.type == AgentEventType.MESSAGE_HANDLER_START
+                and item.data.message_id == queued.message_id
+            ):
+                break
+    ours = [e for e in events if e.message_id == queued.message_id]
+    assert [e.event.type for e in ours] == [
+        AgentEventType.MESSAGE_ACCEPTED,
+        AgentEventType.MESSAGE_HANDLER_START,
+    ]
 
 
 async def test_message_context_distinguishes_joining_from_opening(client_and_queue):
@@ -781,7 +959,7 @@ async def test_message_context_distinguishes_joining_from_opening(client_and_que
             break
         await asyncio.sleep(0.05)
     assert await handle.query("joined", result_type=list[bool]) == [False]
-    assert idle.pending is False
+    assert idle.disposition is MessageDisposition.OPENED
 
     # Mid-turn: joins the open turn.
     _handle2, work = await _hold_a_turn_open(client, task_queue)
@@ -794,6 +972,45 @@ async def test_message_context_distinguishes_joining_from_opening(client_and_que
     assert await _handle2.query("joined", result_type=list[bool]) == [True]
 
     await _handle2.signal(MidTurnProbeAgent.release, "work")
+
+
+async def test_send_message_fast_fails_on_a_join_instead_of_hanging(client_and_queue):
+    """``send_message`` is one message → one turn → one stream, and says so immediately.
+
+    A joining message has its turn's ``turn_started`` BEHIND its ``accepted_offset``, so the
+    merge's skip preamble never matches and the caller would sit in silence until the turn
+    timeout (300s) for a single ``AgentTurnTimeout``. The reply's ``disposition`` makes that
+    knowable at submit time, so it raises instead — and the message is still running, which is
+    what the carried reply is for.
+    """
+    client, task_queue = client_and_queue
+    handle, work = await _hold_a_turn_open(client, task_queue)
+    agent_client = AgentClient(client, handle.id)
+
+    with pytest.raises(JoinedTurnError) as excinfo:
+        await agent_client.send_message(
+            "steer",
+            {"text": "ride along"},
+            await _next_expected_turn(handle),
+            on_item=lambda item, _offset: item,
+        )
+
+    # Not a rejection: it joined, it is running, and the caller can find it on a stream by
+    # the message_id the exception carries.
+    reply = excinfo.value.reply
+    assert reply.disposition is MessageDisposition.JOINED
+    assert reply.turn_id == work.turn_id
+    assert reply.message_id
+
+    await handle.signal(MidTurnProbeAgent.release, "work")
+    events = await _collect_until_turn_end(client, handle.id)
+    joined_replies = [
+        e
+        for e in events
+        if e.message_id == reply.message_id
+        and e.event.type == AgentEventType.MESSAGE_HANDLER_END
+    ]
+    assert len(joined_replies) == 1
 
 
 async def test_joined_handler_keeps_its_turn_after_a_sibling_finishes(client_and_queue):

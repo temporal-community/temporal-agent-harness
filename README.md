@@ -368,9 +368,29 @@ into concurrency with the running turn — an `ACCEPT` handler runs alongside th
 turn *and* alongside other `ACCEPT` handlers, so any agent state it mutates is
 shared and a read-modify-write across an `await` can lose an update.
 
-Because a turn is now the interval the agent is non-idle rather than the span of
-one message, `turn_end` fires when the turn's **last** participant finishes —
-making it a true quiescence signal a client can disconnect on.
+Because a turn is the interval the agent is non-idle rather than the span of one
+message, `turn_end` fires when the turn's **last** participant finishes — making
+it a true quiescence signal a client can disconnect on.
+
+Two ids on the event stream keep that legible. `turn_id` is the busy interval;
+`message_id` is one message's dispatch, minted at admission, returned on the send
+(`AgentMessageReply.message_id`), and stamped on **every** event that message
+causes — its deltas, its tool calls, its reply. A consumer pairs a reply with what
+asked for it by `message_id`, never by `turn_id`: two `ACCEPT` handlers share one
+`turn_id`, and keying on the turn merges them together.
+
+```
+message_accepted{handler, payload, disposition}   # admission — the only event carrying the message
+turn_started                                       # the agent went busy (message_id: null)
+  message_handler_start                            # this message's handler began
+    reply_delta · tool_start · tool_end · …        # everything it causes, all attributed
+  message_handler_end{output}                      # it returned  (or message_handler_error)
+turn_end                                           # the agent went idle again (message_id: null)
+```
+
+`disposition` says what the message did to the turn — `opened` it, `joined` the
+one already running, or `queued` behind it — so a client knows what it got
+without inferring it from the turn counter.
 
 **`model_callable`** (default `True`) — a hint that a parent agent's model may
 drive this handler. Only a hint: the parent's `SubagentToolPolicy` decides, and

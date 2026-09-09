@@ -62,7 +62,7 @@ async def _reply_text(client: Client, workflow_id: str) -> str:
         result_type=AgentEvent,
     ):
         envelope: AgentEvent = item.data
-        if envelope.event.type == AgentEventType.REPLY:
+        if envelope.event.type == AgentEventType.MESSAGE_HANDLER_END:
             # run_script returns a TextReply; read its text off the output dict.
             reply = envelope.event.output.get("text")
         if envelope.event.type == AgentEventType.TURN_END:

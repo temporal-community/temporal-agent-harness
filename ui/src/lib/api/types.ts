@@ -3,6 +3,16 @@ export type ResumeOffset = number;
 export type StreamOffset = ResumeOffset;
 export type WorkflowId = string;
 export type TurnId = string;
+/**
+ * Identifies ONE inbound message for its whole life — returned when it is submitted, and
+ * stamped on the envelope of every event its dispatch produces.
+ *
+ * Not interchangeable with `TurnId`. A turn is the interval the agent is non-idle and is
+ * refcounted, so a `mid_turn: "accept"` message joins the turn already running and several
+ * messages then publish under one `turn_id`. Anything that pairs a reply with what asked for
+ * it, or attributes a streamed delta, keys on this.
+ */
+export type MessageId = string;
 export type ToolId = string;
 export type AgentWorkflowType = string;
 
@@ -65,6 +75,15 @@ export type CreateSessionResponse = Session;
 export type MidTurn = "enqueue" | "reject" | "accept";
 
 /**
+ * What an admitted message actually DID to the turn — the outcome half of `MidTurn`'s
+ * declaration, reported both on the submit response and on the `message_accepted` event.
+ *
+ * An idle agent gives every mode the same answer (`"opened"`), so what a handler declares
+ * only decides the busy case: `"enqueue"` → `"queued"`, `"accept"` → `"joined"`.
+ */
+export type MessageDisposition = "opened" | "joined" | "queued";
+
+/**
  * One `@agent.accepts` handler, as returned by the `agent_interface` discovery query.
  *
  * This is the ONLY thing the UI knows about an agent's inbound surface. Every handler the
@@ -113,8 +132,10 @@ export interface ChatRequest {
 export interface SubmitMessageResponse {
   turn_number: number;
   turn_id: TurnId;
+  /** Correlates this message with its own events on the stream — see {@link MessageId}. */
+  message_id: MessageId;
   accepted_offset: StreamOffset;
-  pending: boolean;
+  disposition: MessageDisposition;
 }
 
 export interface ToolApprovalRequest {
@@ -133,6 +154,7 @@ export interface ToolApprovalResponse {
 export interface PendingTurn {
   turn_number: number;
   turn_id: TurnId;
+  message_id: MessageId;
   message: string;
 }
 
@@ -182,7 +204,10 @@ export interface FastApiValidationErrorResponse {
 // ---------------------------------------------------------------------------
 
 export type AgentEventType =
-  | "message_queued"
+  | "message_accepted"
+  | "message_handler_start"
+  | "message_handler_end"
+  | "message_handler_error"
   | "turn_started"
   | "turn_end"
   | "model_interaction_started"
@@ -201,14 +226,18 @@ export type AgentEventType =
   | "subagent_stream_unavailable"
   | "reply_delta"
   | "thought_summary"
-  | "text_annotation"
-  | "reply"
-  | "error";
+  | "text_annotation";
 
 export interface AgentEventMetadata {
   agent_id: string;
   turn_id: TurnId;
   turn_number: number;
+  /**
+   * The message whose dispatch produced this event, or `null` for the events that belong to
+   * no single message — the `turn_started` / `turn_end` brackets, and an approval or callback
+   * resolution driven by a policy cascade rather than by one message.
+   */
+  message_id: MessageId | null;
   timestamp: UnixEpochSeconds;
   resume_offset: ResumeOffset;
 }
@@ -218,15 +247,28 @@ export interface AgentEventDataBase<TType extends AgentEventType>
   type: TType;
 }
 
-export interface MessageQueuedEvent
-  extends AgentEventDataBase<"message_queued"> {
-  user_message: string;
+/**
+ * One inbound message passed admission — the first event of its life, and the ONLY one
+ * carrying what was sent. `turn_started` says nothing about the message any more, because a
+ * message that joins an open turn starts no turn of its own.
+ */
+export interface MessageAcceptedEvent
+  extends AgentEventDataBase<"message_accepted"> {
+  /** Which `@agent.accepts` handler it is addressed to. */
+  handler: string;
+  /** The payload as sent — the JSON of that handler's input model. */
+  payload: JsonRecord;
+  disposition: MessageDisposition;
 }
 
-export interface TurnStartedEvent extends AgentEventDataBase<"turn_started"> {
-  user_message: string;
-}
+/** The message's handler began running. The gap from `message_accepted` is queue latency. */
+export interface MessageHandlerStartEvent
+  extends AgentEventDataBase<"message_handler_start"> {}
 
+/** A pure lifecycle bracket: the agent went from idle to busy. `message_id` is always null. */
+export interface TurnStartedEvent extends AgentEventDataBase<"turn_started"> {}
+
+/** The agent went back to idle — its last participant left. `message_id` is always null. */
 export interface TurnEndEvent extends AgentEventDataBase<"turn_end"> {}
 
 export interface TokenUsage {
@@ -307,7 +349,7 @@ export interface SubagentMessageSentEvent
   subagent_id: string;
   agent_key: string;
   workflow_id: string;
-  function: string;
+  handler: string;
   subagent_turn: number;
   from_offset: number;
 }
@@ -317,7 +359,7 @@ export interface SubagentReplyReceivedEvent
   subagent_id: string;
   agent_key: string;
   workflow_id: string;
-  function: string;
+  handler: string;
   subagent_turn: number;
   outcome: "ok" | "error";
 }
@@ -373,18 +415,26 @@ export interface CitationMetadata {
   [key: string]: unknown;
 }
 
-export interface ReplyEvent extends AgentEventDataBase<"reply"> {
+/**
+ * One message's handler returned. Terminal for the MESSAGE, not for the turn — with several
+ * participants sharing a turn there is one of these per message under one `turn_id`, so pair
+ * it with what asked for it by `message_id`.
+ */
+export interface MessageHandlerEndEvent
+  extends AgentEventDataBase<"message_handler_end"> {
   output?: JsonRecord | null;
   text?: string | null;
 }
 
-export interface AgentErrorEvent extends AgentEventDataBase<"error"> {
+/** One message's handler raised. Terminal for that message only; siblings keep running. */
+export interface MessageHandlerErrorEvent
+  extends AgentEventDataBase<"message_handler_error"> {
   message: string;
 }
 
-// Emitted by POST /api/chat for client-side timeout or conversion of this
-// turn's AgentError. Unlike normal agent events, these may not include type or
-// turn metadata.
+// Emitted by POST /api/chat for a client-side timeout, or for this turn's own
+// message_handler_error surfaced as the caller's failure. Not an agent event: nothing
+// published it on the stream, so it carries no type or turn/message metadata.
 export interface ClientSideStreamErrorEvent {
   kind: "timeout" | "agent";
   message: string;
@@ -392,7 +442,8 @@ export interface ClientSideStreamErrorEvent {
 }
 
 export interface AgentSseEventMap {
-  message_queued: MessageQueuedEvent;
+  message_accepted: MessageAcceptedEvent;
+  message_handler_start: MessageHandlerStartEvent;
   turn_started: TurnStartedEvent;
   turn_end: TurnEndEvent;
   model_interaction_started: ModelInteractionStartedEvent;
@@ -412,8 +463,9 @@ export interface AgentSseEventMap {
   reply_delta: ReplyDeltaEvent;
   thought_summary: ThoughtSummaryEvent;
   text_annotation: TextAnnotationEvent;
-  reply: ReplyEvent;
-  error: AgentErrorEvent | ClientSideStreamErrorEvent;
+  message_handler_end: MessageHandlerEndEvent;
+  message_handler_error: MessageHandlerErrorEvent;
+  stream_error: ClientSideStreamErrorEvent;
 }
 
 export type AgentStreamEventData =

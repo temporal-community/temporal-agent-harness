@@ -1,16 +1,21 @@
 # Per-message events: the stream needs to encode messages, not just turns
 
-> Status: **design in progress.** Follows on from
-> [`unified-message-dispatch.md`](unified-message-dispatch.md), which is implemented. That
-> change made a turn the interval the agent is non-idle, so several messages can now share
-> one turn — and the event vocabulary has not caught up. Nothing here is built yet.
+> Status: **accepted, and implemented** across the harness, the Python client, the FastAPI
+> layer and the packaged Svelte UI. Follows on from
+> [`unified-message-dispatch.md`](unified-message-dispatch.md), which made a turn the interval
+> the agent is non-idle — so several messages can share one turn, and the event vocabulary had
+> to catch up.
 >
-> The vocabulary and the envelope change are settled (see **Settled**). The
-> admission-ordering question that used to block implementation is **resolved by dissolving
-> it**: it was a question about a stream shape no consumer should ask for. See
-> [**Resolved: the per-turn stream is not the mid-turn surface**](#resolved-the-per-turn-stream-is-not-the-mid-turn-surface).
-> Nothing in that resolution changes the protocol, so the work here is unblocked and
-> independent of it.
+> Implemented as specified below, including the parts **What this leaves undone** deferred:
+> `_consume_child_turn` now selects by `message_id`, `send_message` fast-fails on a join
+> instead of hanging, and the packaged UI keeps its one stream instead of re-attaching. The
+> cheaper staging this note offered (body-side ids first, envelope later) was **not** taken —
+> the envelope change landed whole, which turned out to cost less than the two-step would
+> have; see **What changed on the way in**.
+>
+> The Go connector's `turnEventToDelta` still switches on `reply` / `error` and so no longer
+> matches any event the harness publishes. Deliberate: the Nexus surface is a separate concern
+> and moves with the contract regeneration.
 
 ## The problem
 
@@ -62,11 +67,18 @@ dispatch is attributable for free — deltas, tool lifecycle, approvals, subagen
 exactly the way `turn_id` works today. Body-side would mean adding the field to eight event
 types and still missing anything added later.
 
-`message_id` is `None` for events that genuinely are not about one message: `turn_started`,
-`turn_end`, and the entry-carried approval/callback resolutions that
-`_publish_approval_resolved` / `_publish_callback_resolved` deliberately publish outside any
-participant (an update handler driving a policy cascade is not bound to one message any more
-than it is to one turn).
+`message_id` is `None` for events that genuinely are not about one message: `turn_started` and
+`turn_end`, the two pure turn brackets.
+
+*Revised during implementation.* This note also listed the entry-carried approval/callback
+resolutions as unattributed, reasoning that an update handler driving a policy cascade is bound
+to no one message. True of the *handler* — but the *event* is about one specific gated call,
+and that call always belongs to exactly one message. The `_ApprovalEntry` / `_CallbackEntry`
+already carry `turn_id` for precisely this reason (so the resolution publishes against the
+call's own turn, not the publisher's), so they now carry `message_id` the same way, captured
+from the ambient context at registration. A cascade that resolves several calls at once
+attributes each to the message that made it, which is strictly more useful than `None` and
+costs one field.
 
 The id is minted in the synchronous admission prologue and returned on
 `AgentMessageReply.message_id`, so a sender can correlate its own message without parsing the
@@ -75,15 +87,20 @@ stream.
 ### The vocabulary
 
 ```
-message_accepted      { type, payload, disposition }   # admission
-message_handler_start { }                              # the @agent.accepts method begins
-message_handler_end   { output }                       # it returned
-message_handler_error { message }                      # it raised
-turn_started          { }                              # pure lifecycle bracket
-turn_end              { }                              # pure lifecycle bracket
+message_accepted      { handler, payload, disposition }   # admission
+message_handler_start { }                                 # the @agent.accepts method begins
+message_handler_end   { output }                          # it returned
+message_handler_error { message }                         # it raised
+turn_started          { }                                 # pure lifecycle bracket
+turn_end              { }                                 # pure lifecycle bracket
 ```
 
 `disposition: "opened" | "joined" | "queued"` — what this message did to the turn.
+
+The first field is `handler`, not `type`: `type` is already the event discriminator on every
+payload, and the value names an `@agent.accepts` handler, so calling it what it is costs
+nothing. `SubagentMessageSent` / `SubagentReplyReceived` were renamed to match — they carried
+the same value under the same wrong name.
 
 Named `message_handler_*` rather than `handler_*`: "handler" alone is overloaded (Temporal
 has update/query/signal handlers), and explicitness beats matching `tool_start`'s terseness.
@@ -247,36 +264,59 @@ Two things sank it, both worth keeping written down:
   record everything, withhold only the yield. Same-shaped mechanism, opposite intent; conflating
   them silently unmounts the subagents the design exists to capture, and fails quietly.
 
-### What this leaves undone
+### What this left undone — now done
 
-Neither is a prerequisite for the vocabulary in **Settled**, and neither is fixed by the
-contract above.
+Neither was a prerequisite for the vocabulary in **Settled**; both landed with it.
 
-- **`send_message` must stop hanging on a join.** The precondition is now documented, but a
-  violation still costs 300 seconds of silence. `/api/chat` (`web/app.py:287`) calls
-  `send_message`, so it is reachable over HTTP even though the packaged UI does not use it. A
-  fast-fail needs the reply to say that the message joined — `pending=False` covers both a join
-  and an idle open — which is `disposition` from **The vocabulary**, on `AgentMessageReply`
-  alongside `turn_number`. Cheapest correct version of this note's work.
-- **The client contract needs to be the code.** `agentRun.svelte.ts:911` re-attaches
-  unconditionally; it should attach only when no stream is live.
+- **`send_message` no longer hangs on a join.** `disposition` on the reply made this
+  answerable at submit time, so `send_message` raises `JoinedTurnError` instead of going silent
+  for 300 seconds. It is deliberately *not* a rejection — the message was accepted and is
+  running — so the exception carries the `AgentMessageReply`, and a caller that wants to watch
+  the work attaches and follows its `message_id`. `/api/chat` maps it to a 409 whose body
+  carries that reply.
+- **The client contract is now the code.** `agentRun.svelte.ts` gained `#ensureStreamLive()`,
+  which starts an attach only when no stream is live and otherwise leaves the open one strictly
+  untouched. Two consequences worth recording, because both were behaviors the old
+  re-attach-per-send hid:
+  - `sending` cannot be "the stream went idle" any more — with a shared turn those are
+    different moments. It now clears on *this message's* `message_handler_end` / `_error`,
+    tracked in a small set of outstanding `message_id`s. That is the UI's first real use of the
+    new attribution, and it is what lets a user keep sending into an open turn.
+  - There is one residual race the send-then-ensure ordering cannot close: the server may have
+    *already* decided to stop at the current `turn_end` before our submit returned. So when a
+    stream ends naturally while messages are still outstanding, the UI re-attaches. Rare by
+    construction, and cheap to handle where the stream actually ends.
 
-## Also needs care
+## What changed on the way in
 
-- **Per-message delta attribution is the expensive part.** Envelope-side `message_id` means
-  the id must be available wherever events are published, and activity-side publishing goes
-  through `TurnStreamContext`. That implies a `message_id` on that carrier, a `ContextVar`
-  alongside `_CURRENT_RUNNER` set per participant task, and a touch to every SDK plugin that
-  threads the context (the Gemini and OpenAI streaming paths). A cheaper staging is to land
-  the four events with `message_id` in their bodies — which fixes symptom 2 — and defer
-  envelope-side attribution, leaving symptom 3 until a follow-up.
-- **Consumers to migrate:** `ui/src/lib/state/transcript.ts`, `replayLog.ts`,
-  `agentRun.svelte.ts` (all key on `turn_started.user_message`, `reply`, `error`,
-  `message_queued`), `harness/agent_client.py`'s terminal detection,
-  `subagent_activities.py`'s `_consume_child_turn` (symptom 4 — it must select the `reply`
-  carrying *its own* `message_id` instead of the last one on the turn, and ignore an
-  `AgentError` belonging to another participant), and the Nexus `turnEventToDelta` mapping in
-  the Go connector — which is already pending the deferred Nexus work.
+- **Per-message delta attribution was NOT the expensive part.** This note budgeted for "a touch
+  to every SDK plugin that threads the context (the Gemini and OpenAI streaming paths)" and
+  offered a cheaper two-step staging because of it. Neither was needed: every plugin obtains
+  its `TurnStreamContext` by reading `runner.current_stream_context`, and it reads it from
+  *inside* the handler it is running for. Resolving the ambient `message_id` in that one
+  property therefore attributes every plugin's streamed deltas by construction, with zero
+  plugin changes. Total cost of full envelope-side attribution: a `ContextVar`
+  (`_CURRENT_MESSAGE_ID`, set once per participant task), one field on `TurnStreamContext`, and
+  an ambient default on `_pub`.
+
+  The general lesson, worth keeping: a carrier that is *already* built per-dispatch is the
+  cheapest place to add per-dispatch metadata, and "how many call sites publish?" is the wrong
+  question when they all go through one accessor.
+- **`_pub` needed a three-valued `message_id` argument.** Ambient by default (so a call site
+  inside a dispatch says nothing and is right), explicit `None` for the turn brackets, explicit
+  *value* for `message_accepted` — which is published from the update handler, where there is
+  no ambient id yet. `None` therefore cannot mean "unspecified", hence the `_AMBIENT` sentinel.
+- **Consumers migrated:** `ui/src/lib/state/transcript.ts` (replies and citations now keyed by
+  `message_id`, so two concurrent participants no longer merge into one bubble), `replayLog.ts`,
+  `flowProjection.ts`, `stepTimeline.ts`, `agentRun.svelte.ts`, `harness/agent_client.py`'s
+  terminal detection (which now matches its OWN message's error, not the turn's), and
+  `subagent_activities.py`'s `_consume_child_turn` (symptom 4). The three copies of
+  `renderUserMessage` in the UI collapsed into one `state/userMessage.ts` — they existed only
+  to re-parse the JSON envelope that `turn_started.user_message` flattened, and
+  `message_accepted` carries `handler` + `payload` structurally.
+- **`/api/chat`'s client-side error frame was renamed `stream_error`.** It used to reuse the
+  `error` SSE event name, which is now free but would be actively misleading: nothing published
+  it on the agent's stream, and it carries no turn or message metadata.
 - **Deferred: a per-stream offset vector.** A resume position is a single *root* offset today,
   so a subagent turn that opened before it is never re-mounted and its remaining detail is
   silently absent — no marker, no error (`stream_merge/README.md`, "Quiescent start"). Making
@@ -285,6 +325,7 @@ contract above.
   **Resolved** removes the frequent trigger, leaving the loss only on genuine disconnects. The
   read/emit/stop split rejected above becomes worth revisiting once the vector exists.
 - **`expected_turn` interacts with this.** A join does not advance the turn counter, so a
-  client must set its next `expected_turn` from `AgentMessageReply.turn_number + 1` rather
-  than counting sends. Now that the reply will also carry `message_id`, this is a good moment
-  to make the reply the documented source of truth for both.
+  client sets its next `expected_turn` from `AgentMessageReply.turn_number + 1` rather than
+  counting sends. The reply is now the documented source of truth for all three of
+  `message_id`, `turn_number` and `disposition` — one place a caller reads to know what became
+  of what it sent.

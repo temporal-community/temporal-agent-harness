@@ -5,6 +5,7 @@ import type {
   ToolId
 } from "$lib/api/types";
 import { formatTokens, summarizeCost, type CostSummary } from "$lib/cost/pricing";
+import { renderUserMessage } from "./userMessage";
 
 export type AgentNodeTone =
   | "neutral"
@@ -700,18 +701,22 @@ export function buildAgentGraph(
 
   for (const frame of frames) {
     if (!("type" in frame.data)) continue;
-    if (frame.event === "message_queued") {
+    if (frame.event === "message_accepted") {
+      // The one event carrying what was sent, whatever it did to the turn. Only a QUEUED one
+      // shows in the queue depth; an "opened" message is about to be the turn, and a "joined"
+      // one is already running inside it.
       markInput();
-      queued += 1;
-      queuedMessage = frame.data.user_message;
-      currentUserMessage = frame.data.user_message;
-      inputState = `${queued} queued`;
+      currentUserMessage = renderUserMessage(frame.data.handler, frame.data.payload);
+      if (frame.data.disposition === "queued") {
+        queued += 1;
+        queuedMessage = currentUserMessage;
+        inputState = `${queued} queued`;
+      }
     }
     if (frame.event === "turn_started") {
       markInput();
       activeTurn = frame.data.turn_number;
       status = "running";
-      currentUserMessage = frame.data.user_message;
       inputState = `turn ${frame.data.turn_number}`;
       modelState = "waiting";
       reasoningState = "waiting";
@@ -745,12 +750,12 @@ export function buildAgentGraph(
     } else if (frame.event === "text_annotation") {
       markOutput();
       replyState = "annotated";
-    } else if (frame.event === "reply") {
+    } else if (frame.event === "message_handler_end") {
       markOutput();
       status = "replied";
       replyText = textFromReply(frame.data) || replyText;
       replyState = "reply available";
-    } else if (frame.event === "error") {
+    } else if (frame.event === "message_handler_error") {
       markOutput();
       status = "error";
       replyText = frame.data.message;
@@ -898,7 +903,7 @@ export function buildAgentGraph(
       if (frame.event === "subagent_started") {
         subagentState = "started";
       } else if (frame.event === "subagent_message_sent") {
-        subagentState = `${frame.data.function} → turn ${frame.data.subagent_turn}`;
+        subagentState = `${frame.data.handler} → turn ${frame.data.subagent_turn}`;
       } else if (frame.event === "subagent_reply_received") {
         subagentState = `reply ${frame.data.outcome}`;
       } else if (frame.event === "subagent_stream_unavailable") {

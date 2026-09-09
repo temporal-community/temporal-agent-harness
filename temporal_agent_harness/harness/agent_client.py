@@ -29,6 +29,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     AgentStatus,
     CallbackResult,
+    MessageDisposition,
     CallbackResultAck,
     PendingApproval,
     PendingCallback,
@@ -79,6 +80,30 @@ class MidTurnRejectedError(Exception):
     ``turn_active == False``) and send again, or send a different message whose handler
     declares ``ENQUEUE`` or ``ACCEPT``.
     """
+
+
+class JoinedTurnError(Exception):
+    """The message was admitted, but it JOINED an open turn — so it has no turn to stream.
+
+    Raised by :meth:`AgentClient.send_message`, whose whole shape is "one message, one turn,
+    one stream". A ``MidTurn.ACCEPT`` message sent to a busy agent joins the turn already
+    running: its ``turn_started`` is *behind* its ``accepted_offset``, so the merge's skip
+    preamble would never match and the caller would sit in silence until the turn timeout.
+    Failing here instead makes that a fast, legible error.
+
+    **The message is running.** This is not a rejection and there is nothing to retry: the
+    agent accepted it, the handler is executing, and its reply will be published on the stream
+    under :attr:`reply`'s ``message_id``. Only the streaming half is unavailable. A caller that
+    needs to observe it uses the documented client contract instead — :meth:`submit_message`
+    for every send, one :meth:`attach` stream kept open — which is what an interactive client
+    should be doing anyway (see ``stream_merge/README.md``).
+    """
+
+    def __init__(self, message: str, *, reply: AgentMessageReply) -> None:
+        super().__init__(message)
+        self.reply = reply
+        """The accepted reply — ``message_id`` / ``turn_number`` / ``turn_id`` for the message
+        that is now running, so the caller can find it on a stream it opens itself."""
 
 
 class ToolApprovalError(Exception):
@@ -295,8 +320,8 @@ class AgentClient:
         ``@agent.accepts`` handler (``msg_type``), carries its input-model JSON (``payload``)
         and the ``expected_turn`` the caller believes this message is, builds the
         ``AgentMessage`` envelope internally, and forwards it as the ``send_agent_message``
-        update. Returns the accepted :class:`AgentMessageReply` (``turn_id`` / ``turn_number`` /
-        ``pending``).
+        update. Returns the accepted :class:`AgentMessageReply` (``message_id`` / ``turn_id`` /
+        ``turn_number`` / ``disposition``).
 
         Raises:
             StaleTurnError: The client is behind the workflow.
@@ -328,9 +353,16 @@ class AgentClient:
     ) -> AgentMessageReply:
         """Submit one message to the agent without streaming the accepted turn.
 
-        UI clients that maintain a separate ``attach`` stream should use this to avoid
-        opening one long-lived stream per queued message. The returned
-        :class:`AgentMessageReply` confirms the workflow accepted or queued the turn.
+        This is the send half of the client contract: an interactive client sends EVERY message
+        this way and keeps at most one :meth:`attach` stream, ensured live *after* the send
+        returns (see ``stream_merge/README.md``, "The client contract"). Doing it the other way
+        round — one :meth:`send_message` stream per message — opens a long-lived stream per
+        queued message and cannot observe a joined one at all.
+
+        The returned :class:`AgentMessageReply` carries the message's ``message_id`` (which
+        every event of its dispatch is stamped with), the ``turn_number`` to compute the next
+        ``expected_turn`` from, and the ``disposition`` saying whether it opened, joined or
+        queued behind a turn.
         """
         return await self._submit_message(msg_type, payload, expected_turn)
 
@@ -396,11 +428,13 @@ class AgentClient:
         PRECONDITION — this is for a caller that holds NO stream, sending a message that gets a
         turn OF ITS OWN (a script or connector doing one request/response). It is NOT the mid-turn
         surface. A ``MidTurn.ACCEPT`` message that JOINS an open turn has that turn's
-        ``turn_started`` *behind* its ``accepted_offset``, so the merge's skip preamble never
-        matches: nothing is emitted and the caller waits out ``timeout`` for a single
-        :class:`AgentTurnTimeout`. An interactive client sends every message with
-        :meth:`submit_message` and keeps ONE :meth:`attach` stream open instead — see
-        ``stream_merge/README.md``, "The client contract".
+        ``turn_started`` *behind* its ``accepted_offset``, so the merge's skip preamble would
+        never match and nothing would ever be emitted. The reply's ``disposition`` says which
+        happened, so that case FAILS FAST with :class:`JoinedTurnError` (carrying the accepted
+        reply — the message is running regardless) rather than going silent for ``timeout``
+        seconds. An interactive client sends every message with :meth:`submit_message` and keeps
+        ONE :meth:`attach` stream open instead — see ``stream_merge/README.md``, "The client
+        contract".
 
         Phase 1, :meth:`_submit_message`, runs eagerly here so ``StaleTurnError`` /
         ``MidTurnRejected`` are raised *before* any streaming begins (and before the merge is
@@ -436,8 +470,17 @@ class AgentClient:
         Raises:
             StaleTurnError: The client is behind the workflow.
             MidTurnRejectedError: The handler refuses mid-turn arrival and a turn is open.
+            JoinedTurnError: The message was accepted, but it joined an open turn — it is
+                running, and there is no per-turn stream for it (see the precondition above).
         """
         reply = await self._submit_message(msg_type, payload, expected_turn)
+        if reply.disposition is MessageDisposition.JOINED:
+            raise JoinedTurnError(
+                f"message {reply.message_id} joined open turn {reply.turn_number} and is "
+                f"running; send_message cannot stream a joined turn — submit_message + "
+                f"attach is the mid-turn surface",
+                reply=reply,
+            )
         return self._merged_turn(
             reply,
             on_item=on_item,
@@ -458,10 +501,12 @@ class AgentClient:
         Reads from ``reply.accepted_offset`` and skips to ``reply.turn_id``'s ``turn_started``,
         then merges live (arrival-order interleaving) until that turn's ``turn_end`` on the ROOT
         agent — by which point, via the close gate, every subagent turn it triggered has already
-        been emitted. The turn's own terminal error is surfaced as an :class:`AgentTurnError`
-        (matching the legacy behavior); on timeout an :class:`AgentTurnTimeout` is yielded last.
+        been emitted. THIS MESSAGE's ``message_handler_error`` is surfaced as an
+        :class:`AgentTurnError` — a sibling participant's is not, since it says nothing about
+        the caller's own message; on timeout an :class:`AgentTurnTimeout` is yielded last.
         """
         target_turn_id = reply.turn_id
+        target_message_id = reply.message_id
 
         async def should_stop(cursor: Cursor, ev: AgentEvent) -> bool:
             return (
@@ -485,16 +530,17 @@ class AgentClient:
                 # send_message turn it isn't used to resume (the chat path reattaches via ``attach``),
                 # but we pass it through uniformly so the consumer's bookkeeping stays consistent.
                 async for ev, resume_offset in merged:
-                    # ``turn_id`` is a globally-unique uuid, so it alone identifies OUR turn's
-                    # terminal error (a subagent's error carries a different turn_id) — no need to
-                    # also match on agent_id.
+                    # Match on OUR MESSAGE, not our turn: a ``MidTurn.ACCEPT`` message can join
+                    # the turn we opened, and its failure is not ours to raise. ``message_id`` is
+                    # a globally-unique uuid, so it alone identifies our message's terminal error
+                    # — no need to also match turn_id or agent_id.
                     if (
-                        ev.turn_id == target_turn_id
-                        and ev.event.type == AgentEventType.ERROR
+                        ev.message_id == target_message_id
+                        and ev.event.type == AgentEventType.MESSAGE_HANDLER_ERROR
                     ):
-                        # Surface OUR turn's terminal error as the caller's failure signal in
-                        # place of the raw AgentError event (the merge already streamed the
-                        # subtree; turn_end still follows as the real terminal).
+                        # Surface OUR message's error as the caller's failure signal in place of
+                        # the raw event (the merge already streamed the subtree; turn_end still
+                        # follows as the real terminal).
                         yield on_item(
                             AgentTurnError(ev.event.message or "agent turn failed"),
                             resume_offset,

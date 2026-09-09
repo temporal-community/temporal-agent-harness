@@ -26,6 +26,7 @@ from temporal_agent_harness.harness.agent_client import (
 from temporal_agent_harness.harness.agent_protocol import (
     TURN_EVENTS_TOPIC,
     AgentConfig,
+    MessageDisposition,
     PendingCallback,
     PendingTurn,
     SubagentInfo,
@@ -176,7 +177,11 @@ class AgentServiceHandler:
                 turn_number=reply.turn_number,
                 turn_id=reply.turn_id,
                 stream_head_offset=reply.accepted_offset,
-                pending=reply.pending,
+                # The IDL still models acceptance as a bool; the harness now reports the
+                # richer MessageDisposition (opened / joined / queued), of which "queued" is
+                # exactly what this field meant. The contract regeneration that removes the
+                # operator operations is where this becomes the disposition itself.
+                pending=reply.disposition is MessageDisposition.QUEUED,
             )
         raise HandlerError(
             "send_agent_message: exhausted retries", type=HandlerErrorType.INTERNAL

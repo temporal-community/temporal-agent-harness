@@ -200,7 +200,7 @@ def _types_for(events: list[AgentEvent], tool_id: str) -> list[str]:
 
 
 def _reply_text(events: list[AgentEvent]) -> str:
-    reply = next(e.event for e in events if e.event.type == AgentEventType.REPLY)
+    reply = next(e.event for e in events if e.event.type == AgentEventType.MESSAGE_HANDLER_END)
     return reply.output["text"]
 
 

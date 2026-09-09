@@ -1,4 +1,5 @@
 import type { AgentSseFrame, FileCitationAnnotation } from "$lib/api/types";
+import { messageKey, renderUserMessage } from "./userMessage";
 
 export type TranscriptItem =
   | {
@@ -37,33 +38,6 @@ export type TranscriptItem =
       timestamp: number;
     };
 
-function renderUserMessage(value: string): string {
-  if (!value.startsWith("{")) return value;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return value;
-  }
-  if (!parsed || typeof parsed !== "object") return value;
-  const message = parsed as { type?: unknown; payload?: unknown };
-  const payload = message.payload;
-  if (!payload || typeof payload !== "object") {
-    return typeof message.type === "string" ? message.type : value;
-  }
-  // Handler names and payload shapes are agent-specific, so stay generic: a lone string
-  // field is the common prompt shape (whatever it is named), and anything else is labelled
-  // by handler name. Never assume a particular handler or field exists.
-  const entries = Object.entries(payload as Record<string, unknown>);
-  const strings = entries.filter(([, v]) => typeof v === "string");
-  if (entries.length === 1 && strings.length === 1) return strings[0][1] as string;
-  const rendered = entries
-    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-    .sort()
-    .join(", ");
-  return typeof message.type === "string" ? `${message.type}(${rendered})` : rendered;
-}
-
 function textFromReply(data: { text?: unknown; output?: unknown }): string {
   if (typeof data.text === "string") return data.text;
   const output = data.output;
@@ -88,27 +62,31 @@ function citationAnnotations(frame: AgentSseFrame): FileCitationAnnotation[] {
 
 export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
-  const replyIndexByTurn = new Map<number, number>();
+  // Keyed by MESSAGE, not by turn. A turn is refcounted, so two `mid_turn: "accept"` handlers
+  // can be streaming under one turn_id at once — keying by turn would merge their replies into
+  // one bubble and interleave their text.
+  const replyIndexByMessage = new Map<string, number>();
   const toolIndexById = new Map<string, number>();
-  const citationsByTurn = new Map<number, FileCitationAnnotation[]>();
+  const citationsByMessage = new Map<string, FileCitationAnnotation[]>();
 
   for (const frame of frames) {
     if (!("type" in frame.data)) continue;
     const { turn_number, timestamp } = frame.data;
+    const key = messageKey(frame);
 
-    if (frame.event === "turn_started") {
+    if (frame.event === "message_accepted") {
       items.push({
         kind: "user",
-        id: `user-${frame.data.turn_id}`,
+        id: `user-${key}`,
         turnNumber: turn_number,
-        text: renderUserMessage(frame.data.user_message),
+        text: renderUserMessage(frame.data.handler, frame.data.payload),
         timestamp
       });
     }
 
     if (frame.event === "text_annotation") {
-      const existing = citationsByTurn.get(turn_number) ?? [];
-      citationsByTurn.set(turn_number, [...existing, ...citationAnnotations(frame)]);
+      const existing = citationsByMessage.get(key) ?? [];
+      citationsByMessage.set(key, [...existing, ...citationAnnotations(frame)]);
     }
 
     if (frame.event === "thought_summary") {
@@ -120,7 +98,7 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
       if (text) {
         items.push({
           kind: "thought",
-          id: `thought-${frame.data.turn_id}-${frame.data.timestamp}`,
+          id: `thought-${key}-${frame.data.timestamp}`,
           turnNumber: turn_number,
           text,
           timestamp
@@ -129,13 +107,13 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
     }
 
     if (frame.event === "reply_delta") {
-      let itemIndex = replyIndexByTurn.get(turn_number);
+      let itemIndex = replyIndexByMessage.get(key);
       if (itemIndex == null) {
         itemIndex = items.length;
-        replyIndexByTurn.set(turn_number, itemIndex);
+        replyIndexByMessage.set(key, itemIndex);
         items.push({
           kind: "agent",
-          id: `reply-${frame.data.turn_id}`,
+          id: `reply-${key}`,
           turnNumber: turn_number,
           text: "",
           streaming: true,
@@ -147,27 +125,27 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
       if (item?.kind === "agent") item.text += frame.data.text;
     }
 
-    if (frame.event === "reply") {
+    if (frame.event === "message_handler_end") {
       const text = textFromReply(frame.data);
-      let itemIndex = replyIndexByTurn.get(turn_number);
+      let itemIndex = replyIndexByMessage.get(key);
       if (itemIndex == null) {
         itemIndex = items.length;
-        replyIndexByTurn.set(turn_number, itemIndex);
+        replyIndexByMessage.set(key, itemIndex);
         items.push({
           kind: "agent",
-          id: `reply-${frame.data.turn_id}`,
+          id: `reply-${key}`,
           turnNumber: turn_number,
           text,
           streaming: false,
           timestamp,
-          citations: citationsByTurn.get(turn_number) ?? []
+          citations: citationsByMessage.get(key) ?? []
         });
       } else {
         const item = items[itemIndex];
         if (item?.kind === "agent") {
           item.text = text || item.text;
           item.streaming = false;
-          item.citations = citationsByTurn.get(turn_number) ?? [];
+          item.citations = citationsByMessage.get(key) ?? [];
         }
       }
     }

@@ -17,6 +17,7 @@ import {
 import { buildReplayLog, buildReplayMarkers } from "./replayLog";
 import { buildStepTimeline, type StepTimelineFrame } from "./stepTimeline";
 import { buildTranscript } from "./transcript";
+import { renderUserMessage } from "./userMessage";
 
 export type PlaybackSpeed = 1 | 2 | 5 | 10;
 
@@ -126,32 +127,6 @@ function writeCachedFrames(sessionId: string, frames: AgentSseFrame[]): void {
   }
 }
 
-function renderUserMessage(value: string): string {
-  if (!value.startsWith("{")) return value;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (!parsed || typeof parsed !== "object") return value;
-    const message = parsed as { type?: unknown; payload?: unknown };
-    const payload = message.payload;
-    if (!payload || typeof payload !== "object") {
-      return typeof message.type === "string" ? message.type : value;
-    }
-    // Generic by design: handler names and payload field names are agent-specific, so a
-    // lone string field is shown bare (the common prompt shape, whatever it is called) and
-    // anything else is labelled by handler name.
-    const entries = Object.entries(payload as Record<string, unknown>);
-    const strings = entries.filter(([, v]) => typeof v === "string");
-    if (entries.length === 1 && strings.length === 1) return strings[0][1] as string;
-    const rendered = entries
-      .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-      .sort()
-      .join(", ");
-    return typeof message.type === "string" ? `${message.type}(${rendered})` : rendered;
-  } catch {
-    return value;
-  }
-}
-
 function isAgentMessageObject(message: AgentInboundMessage): message is AgentMessageObject {
   return typeof message === "object" && message !== null;
 }
@@ -218,6 +193,12 @@ export class AgentRunController {
   #connectionVersion = 0;
   #sendVersion = 0;
   #streamAbort: AbortController | null = null;
+  // message_ids submitted whose handler has not published a terminal yet. `sending` is
+  // per-MESSAGE, not per-stream: with a refcounted turn the stream can stay open long after
+  // our own message finished (a sibling participant is still going), and a joined message can
+  // finish while the turn it joined runs on. The stream reaching quiescence is no longer the
+  // signal that our send completed — its own message_handler_end/_error is.
+  #awaitingMessages = new Set<string>();
   #interfaceRequests = new Set<string>();
   #workflowResumeOffsets = new Map<string, number>();
   #workflowAttachAbort = new Map<string, AbortController>();
@@ -270,7 +251,7 @@ export class AgentRunController {
     this.replayTimeline
       .map((entry, index) =>
         entry.role === "parent" &&
-        entry.frame.event === "turn_started" &&
+        entry.frame.event === "message_accepted" &&
         "type" in entry.frame.data
           ? { index, turnNumber: entry.frame.data.turn_number }
           : null
@@ -771,14 +752,12 @@ export class AgentRunController {
     }
   }
 
-  async attach(
-    fromOffset = this.lastResumeOffset,
-    options: { clearSendingOnIdle?: boolean } = {}
-  ): Promise<void> {
+  async attach(fromOffset = this.lastResumeOffset): Promise<void> {
     const session = this.session;
     if (!session) return;
 
     const { controller, signal, streamVersion } = this.#beginStream();
+    let ended = false;
     try {
       for await (const frame of this.#api.attach(session.workflow_id, fromOffset, signal)) {
         if (streamVersion !== this.#streamVersion || this.session?.workflow_id !== session.workflow_id) {
@@ -786,18 +765,49 @@ export class AgentRunController {
         }
         this.#appendFrame(frame);
       }
+      ended = true;
     } catch (error) {
       if (!isAbortError(error)) throw error;
     } finally {
-      if (
-        options.clearSendingOnIdle &&
-        streamVersion === this.#streamVersion &&
-        this.session?.workflow_id === session.workflow_id
-      ) {
-        this.sending = false;
-      }
       this.#finishStream(controller);
     }
+
+    // The server hangs the stream up at quiescence — the point of the turn bracket, and how it
+    // sheds clients rather than holding a long-poll open forever. If a message we are still
+    // awaiting outlived it, that quiescence was decided BEFORE our message was admitted (the
+    // one residual race the send-then-ensure ordering cannot close), so pick the stream back
+    // up rather than going silent.
+    if (
+      ended &&
+      streamVersion === this.#streamVersion &&
+      this.session?.workflow_id === session.workflow_id &&
+      this.#awaitingMessages.size > 0
+    ) {
+      await this.attach(this.lastResumeOffset);
+    }
+  }
+
+  /**
+   * Ensure a merged stream is live, WITHOUT disturbing one that already is.
+   *
+   * The second half of the client contract (`stream_merge/README.md`): submit, then ensure.
+   * Re-attaching instead would be actively lossy — the merge starts at the resume offset with
+   * no skip, so a subagent whose turn began earlier is never re-mounted and the rest of its
+   * turn is dropped with no marker. Keeping the open stream never re-mounts anything, so that
+   * loss stays confined to genuine reconnects.
+   */
+  #ensureStreamLive(): void {
+    if (this.#streamAbort !== null) return;
+    const session = this.session;
+    if (!session) return;
+    void this.attach(this.lastResumeOffset).catch((error: unknown) => {
+      if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
+        this.connectionError =
+          error instanceof Error ? error.message : "Failed to stream messages.";
+        this.#awaitingMessages.clear();
+        this.sending = false;
+      }
+    });
   }
 
   async #attachWorkflow(
@@ -907,16 +917,16 @@ export class AgentRunController {
       //
       // `reply.turn_number` is authoritative in all three cases: the joined turn for a join,
       // and the reserved slot for a queued or idle send.
-      if (reply) this.expectedTurn = reply.turn_number + 1;
-      void this.attach(this.lastResumeOffset, { clearSendingOnIdle: true }).catch(
-        (error: unknown) => {
-          if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
-            this.connectionError =
-              error instanceof Error ? error.message : "Failed to stream messages.";
-            this.sending = false;
-          }
-        }
-      );
+      if (reply) {
+        this.expectedTurn = reply.turn_number + 1;
+        this.#awaitingMessages.add(reply.message_id);
+      }
+      // SEND FIRST, THEN ENSURE — and the order is load-bearing. Checking before the send is
+      // racy: the open stream can stop at the current turn_end because the server's status
+      // re-query at that instant sees an idle agent, our message not being admitted yet. Once
+      // the submit returns it is durably admitted and visible to agent_status, so no later
+      // stop decision can conclude "idle".
+      this.#ensureStreamLive();
     } catch (error) {
       if (isAbortError(error) || this.session?.workflow_id !== session.workflow_id) {
         return;
@@ -924,8 +934,10 @@ export class AgentRunController {
       this.expectedTurn = Math.max(1, expectedTurn);
       this.connectionError =
         error instanceof Error ? error.message : "Failed to send message.";
-      this.sending = false;
-      await this.attach(this.lastResumeOffset);
+      // The send failed, so no message_id was ever handed back and nothing is outstanding
+      // for it. Anything else still in flight keeps its own entry.
+      this.sending = this.#awaitingMessages.size > 0;
+      this.#ensureStreamLive();
     }
   }
 
@@ -1075,6 +1087,7 @@ export class AgentRunController {
   #resetSessionView(): void {
     this.pause();
     this.#stopStream();
+    this.#awaitingMessages.clear();
     this.#stopWorkflowAttachStreams();
     this.frames = [];
     this.observedSubagents = [];
@@ -1134,8 +1147,21 @@ export class AgentRunController {
     ) {
       this.expectedTurn = frame.data.turn_number + 1;
     }
-    if (isRootFrame && frame.event === "turn_started" && frame.data.turn_number === 1) {
-      this.#recordInitialUserMessage(renderUserMessage(frame.data.user_message));
+    // Our own message's terminal is what clears `sending` — not the stream going idle. With a
+    // shared turn those are different moments, and only this one is about the message we sent.
+    if (
+      (frame.event === "message_handler_end" ||
+        frame.event === "message_handler_error") &&
+      frame.data.message_id != null &&
+      this.#awaitingMessages.delete(frame.data.message_id) &&
+      this.#awaitingMessages.size === 0
+    ) {
+      this.sending = false;
+    }
+    if (isRootFrame && frame.event === "message_accepted" && frame.data.turn_number === 1) {
+      this.#recordInitialUserMessage(
+        renderUserMessage(frame.data.handler, frame.data.payload)
+      );
     }
     this.#handleSubagentEvent(frame, publisherWorkflowId);
     if (options.persist !== false) this.#scheduleFrameCacheWrite();

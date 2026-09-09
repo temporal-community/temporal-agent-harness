@@ -140,7 +140,8 @@ small.
 8. **[LOCKED — 2026-06-20] One public path in; every event self-identifies its agent.** There is no
    separate single-turn reader on the public API — `send_message` and `attach` both go through the
    merge. A consumer that wants only one agent's events filters by **`agent_id`**, a field the
-   harness stamps on **every** `AgentEvent` envelope (alongside `turn_id`/`turn_number`/`timestamp`)
+   harness stamps on **every** `AgentEvent` envelope (alongside
+   `turn_id`/`turn_number`/`message_id`/`timestamp`)
    identifying the publishing agent. So the merged stream is always self-describing: each event says
    which agent it belongs to. The private `_stream_turn` primitive is removed; the subagent activity
    keeps a minimal internal single-child-stream reply-capture (it must not recurse — stream
@@ -221,13 +222,16 @@ class SubagentReplyReceived(StreamEvent[Literal[AgentEventType.SUBAGENT_REPLY_RE
 # send-tool's tool_end on this agent's stream.
 ```
 
-The reply *payload* still rides the child's own `reply` event (merged in) and the send-tool's
-`tool_end`; this marker is a thin correlation/close signal, intentionally not the reply body.
+The reply *payload* still rides the child's own `message_handler_end` event (merged in) and the
+send-tool's `tool_end`; this marker is a thin correlation/close signal, intentionally not the reply
+body.
 
 ### `AgentMessageReply` gains `accepted_offset` <a name="acceptance-offset"></a>
 
 `agent_protocol/agent_interface.py` `AgentMessageReply` today carries `{turn_number, turn_id,
-pending}`. Add `accepted_offset: int`. `_handle_send_agent_message` (`agent_workflow.py:1128`)
+pending}`. Add `accepted_offset: int`. *(Since* [`per-message-events.md`](../design/per-message-events.md)
+*it carries `{turn_number, turn_id, message_id, disposition, accepted_offset}` — `pending` became the
+richer `disposition`.)* `_handle_send_agent_message` (`agent_workflow.py:1128`)
 captures the **current stream head at handler entry** and returns it.
 
 ```python
@@ -510,7 +514,8 @@ the merge gives up on a child it:
    deliver a `turn_end`, so a `subagent_reply_received` for it is treated as satisfied
    ([Gates](#gates) `gone` set). Without this, a dead child's `turn_end` that never comes leaves the
    parent's `reply_received` — and, by within-stream order, *everything sequenced after it* (the
-   parent's `reply`, `turn_end`, even other concurrent subagents' later markers) — stranded behind a
+   parent's `message_handler_end`, `turn_end`, even other concurrent subagents' later markers) —
+   stranded behind a
    gate that never opens. That stranding was the observed hang.
 2. **Drops the child cursor**, closing its subscription (freeing its in-flight poll slot).
 3. **Emits a non-fatal `subagent_stream_unavailable` marker** (only when a turn was actually abandoned — its

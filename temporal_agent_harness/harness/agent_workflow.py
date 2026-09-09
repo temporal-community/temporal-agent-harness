@@ -60,18 +60,20 @@ from temporal_agent_harness.harness.agent_protocol import (
     TURN_EVENTS_TOPIC,
     AcceptedFunction,
     AgentConfig,
-    AgentError,
     AgentEvent,
     AgentMessage,
-    AgentReply,
     AgentStatus,
     AgentStreamItem,
     CallbackRequested,
     CallbackResolved,
     CallbackResult,
     CallbackResultAck,
+    MessageAccepted,
     MessageContext,
-    MessageQueued,
+    MessageDisposition,
+    MessageHandlerEnd,
+    MessageHandlerError,
+    MessageHandlerStart,
     MidTurn,
     PendingApproval,
     PendingCallback,
@@ -231,6 +233,35 @@ _CURRENT_TOOL_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "agent_tool_id", default=None
 )
 
+# The id of the inbound message whose dispatch is running in THIS asyncio task — the ambient
+# source for ``AgentEvent.message_id``. Unlike the two above it is NOT scoped to a tool call:
+# ``_run_participant`` sets it once for the whole participant task, so every event that task
+# causes (deltas, tool lifecycle, approvals, subagent brackets, the handler's own terminal) is
+# attributed without a single call site threading it. That is the whole point of putting
+# ``message_id`` on the envelope rather than in event bodies.
+#
+# Task-scoped is exactly the right scope, and it is what makes a SHARED turn attributable:
+# each participant is its own ``asyncio`` task (copying the run loop's context, where this is
+# unset), so two ``MidTurn.ACCEPT`` handlers streaming concurrently under one ``turn_id``
+# still stamp different ids. It reads ``None`` outside a participant — in the run loop and in
+# update handlers — which is precisely where events belong to no one message (``turn_started``
+# / ``turn_end``, and the entry-carried approval/callback resolutions).
+_CURRENT_MESSAGE_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "agent_message_id", default=None
+)
+
+
+class _Ambient:
+    """Sentinel for ``_pub(message_id=...)`` meaning "read :data:`_CURRENT_MESSAGE_ID`".
+
+    A distinct type rather than ``None`` because ``None`` is itself a meaningful value there:
+    the events that belong to no message pass it deliberately, and conflating the two would
+    make "unattributed" indistinguishable from "not specified".
+    """
+
+
+_AMBIENT = _Ambient()
+
 # Workflow-supplied values for the in-flight tool call's *injected* parameters, keyed
 # by parameter name. Set by ``run_tool`` and read at dispatch by the tool machinery
 # (the ``activity_tool_defn`` dispatcher for activity tools, or the ``tool_defn`` path
@@ -328,12 +359,16 @@ async def _apply_approval_policy(
             f"gated tool {tool_name!r} has no active turn to publish its approval against"
         )
 
+    # ``ctx`` is the runner's stream context, which already resolved the ambient message_id
+    # of the participant this tool call belongs to — so the entry records who to attribute the
+    # eventual resolution to, however it is resolved.
     runner._status.register_pending_approval(
         tool_id,
         tool_name,
         tool_input,
         ctx.turn_number,
         ctx.turn_id,
+        ctx.message_id,
         inherently_safe=inherently_safe,
     )
     runner._pub(
@@ -367,12 +402,13 @@ async def _apply_approval_policy(
 
 
 def _render_message(message: AgentMessage) -> str:
-    """Render an inbound message envelope to a display string for status/queue events.
+    """Render an inbound message envelope to a display string for ``PendingTurn.message``.
 
     Compacts just the ``{type, payload}`` envelope content to JSON (the turn-protocol
-    ``expected_turn`` is omitted — it's not part of the message) so the existing
-    ``str``-typed event fields (``user_message``, ``PendingTurn.message``) stay a clean
-    representation of the message. Consumers that want structure can parse it back.
+    ``expected_turn`` is omitted — it's not part of the message) so that ``str``-typed status
+    field stays a clean representation of the message. Consumers that want structure can parse
+    it back — or read the ``message_accepted`` event, which carries ``function`` + ``payload``
+    structurally and needs no rendering at all.
     """
     return message.model_dump_json(include={"type", "payload"})
 
@@ -762,9 +798,15 @@ class TurnEventPublisher:
 
         Producers build the typed payload (e.g. ``ReplyDelta(text=…)``); the
         envelope adds the routing metadata only the harness controls — ``turn_id``
-        / ``turn_number`` / ``agent_id`` (all from the bound :class:`TurnStreamContext`,
-        which the workflow side threaded into the activity) and ``timestamp`` (wall-clock;
-        the workflow side uses ``workflow.time()`` — both serialize identically).
+        / ``turn_number`` / ``message_id`` / ``agent_id`` (all from the bound
+        :class:`TurnStreamContext`, which the workflow side threaded into the activity) and
+        ``timestamp`` (wall-clock; the workflow side uses ``workflow.time()`` — both
+        serialize identically).
+
+        ``message_id`` rides in on the carrier because a ``ContextVar`` cannot cross the
+        activity boundary: the workflow side resolved the ambient one when it built the
+        context, so an activity streaming a model call attributes its deltas to the right
+        message without ever knowing there is such a thing.
         """
         self._events.publish(
             AgentEvent(
@@ -772,6 +814,7 @@ class TurnEventPublisher:
                 agent_id=self._context.agent_id,
                 turn_id=self._context.turn_id,
                 turn_number=self._context.turn_number,
+                message_id=self._context.message_id,
                 timestamp=time.time(),
             )
         )
@@ -807,6 +850,11 @@ class _ApprovalEntry:
     # The turn this call belongs to — retained so the resolution can be published against
     # the owning turn even from an update handler that isn't itself "in" that turn.
     turn_id: str
+    # The message whose dispatch made this call — retained for the same reason as ``turn_id``:
+    # the resolution must be published against the call's OWN message even when it is a policy
+    # cascade in an update handler doing the publishing, where there is no ambient message. A
+    # cascade is bound to no one message; the CALL it resolves always is.
+    message_id: str | None
     # The tool's static ``inherently_safe`` self-assertion, retained so a runtime policy
     # change can re-evaluate this still-PENDING call against the new policy.
     inherently_safe: bool
@@ -856,6 +904,9 @@ class _CallbackEntry:
     # The turn this call belongs to — retained so the resolution can be published against the
     # owning turn even from an update handler that isn't itself "in" that turn.
     turn_id: str
+    # The message whose dispatch made this call — retained for the same reason as ``turn_id``:
+    # the resolution must be published against the call's OWN message.
+    message_id: str | None
     output_adapter: TypeAdapter[Any]
     status: _CallbackStatus = _CallbackStatus.PENDING
     outcome: Literal["ok", "error", "timeout"] = "ok"
@@ -924,6 +975,26 @@ class _SubagentInstance:
         self._serving += 1
 
 
+@dataclass(frozen=True)
+class _Admission:
+    """One admitted message, from the synchronous admission prologue to its dispatch.
+
+    Whatever a message's disposition, admission settles the same facts about it — the envelope,
+    the turn it will run in, and its freshly minted ``message_id`` — so both hand-off queues
+    (``_WorkflowStatus._pending_turns`` for a queued message, the runner's ``_joining`` for one
+    that joined the open turn) carry this rather than a widening tuple.
+
+    ``turn_number`` is settled at admission too, in every case: the already-open turn's number
+    for a join, the reserved slot otherwise. Carrying it means dispatch never has to re-read
+    "the current turn" and hope it still means the same thing.
+    """
+
+    message: AgentMessage
+    turn_id: str
+    turn_number: int
+    message_id: str
+
+
 class _WorkflowStatus:
     """Internal workflow state that owns all status fields and the pending queue.
 
@@ -960,7 +1031,7 @@ class _WorkflowStatus:
         # SYNCHRONOUS admission prologue (never when a handler body starts) so a join can
         # never race a concurrent drop-to-zero and split one turn into two brackets.
         self._turn_participants: int = 0
-        self._pending_turns: list[tuple[AgentMessage, str]] = []
+        self._pending_turns: list[_Admission] = []
         self._approval_policy: ToolApprovalPolicy = approval_policy
         self._has_custom_approval_fallback: bool = has_custom_approval_fallback
         # Gated tool calls awaiting a human decision, keyed by per-call tool id.
@@ -1018,23 +1089,29 @@ class _WorkflowStatus:
 
     @property
     def next_turn_number(self) -> int:
+        return self.reserve_turn_number()
+
+    def reserve_turn_number(self) -> int:
+        """The turn number the next enqueued message will get — its reserved slot.
+
+        Read during admission to stamp :attr:`_Admission.turn_number` before enqueueing, so a
+        queued message knows its own turn from the moment it is accepted."""
         return self._current_turn + len(self._pending_turns) + 1
 
-    def enqueue_message(self, message: AgentMessage, turn_id: str) -> int:
-        """Add a message to the pending queue. Returns its assigned turn number."""
-        self._pending_turns.append((message, turn_id))
-        return self._current_turn + len(self._pending_turns)
+    def enqueue_message(self, admission: _Admission) -> None:
+        """Add an admitted message to the pending queue (at its reserved turn number)."""
+        self._pending_turns.append(admission)
 
-    def open_next_turn(self) -> tuple[AgentMessage, str]:
+    def open_next_turn(self) -> _Admission:
         """Pop the next pending message and OPEN a turn for it (one participant).
 
         Only legal when :attr:`can_open_turn` — a turn never opens while one is already
         open, which is what makes nested/interleaved turn brackets unconstructible."""
-        message, turn_id = self._pending_turns.pop(0)
+        admitted = self._pending_turns.pop(0)
         self._current_turn += 1
-        self._current_turn_id = turn_id
+        self._current_turn_id = admitted.turn_id
         self._turn_participants = 1
-        return message, turn_id
+        return admitted
 
     def join_turn(self) -> tuple[str, int]:
         """Add a participant to the OPEN turn and return its ``(turn_id, turn_number)``.
@@ -1069,6 +1146,7 @@ class _WorkflowStatus:
         tool_input: dict[str, Any],
         turn_number: int,
         turn_id: str,
+        message_id: str | None,
         *,
         inherently_safe: bool,
     ) -> None:
@@ -1080,6 +1158,7 @@ class _WorkflowStatus:
             tool_input=tool_input,
             turn_number=turn_number,
             turn_id=turn_id,
+            message_id=message_id,
             inherently_safe=inherently_safe,
         )
 
@@ -1162,6 +1241,7 @@ class _WorkflowStatus:
         output_schema: dict[str, Any],
         turn_number: int,
         turn_id: str,
+        message_id: str | None,
         output_adapter: TypeAdapter[Any],
     ) -> None:
         """Record a callback tool call as PENDING a client-supplied result. Called by the
@@ -1173,6 +1253,7 @@ class _WorkflowStatus:
             output_schema=output_schema,
             turn_number=turn_number,
             turn_id=turn_id,
+            message_id=message_id,
             output_adapter=output_adapter,
         )
 
@@ -1297,10 +1378,11 @@ class _WorkflowStatus:
             pending_turns=[
                 PendingTurn(
                     turn_number=self._current_turn + i + 1,
-                    turn_id=turn_id,
-                    message=_render_message(message),
+                    turn_id=admitted.turn_id,
+                    message_id=admitted.message_id,
+                    message=_render_message(admitted.message),
                 )
-                for i, (message, turn_id) in enumerate(self._pending_turns)
+                for i, admitted in enumerate(self._pending_turns)
             ],
             pending_approvals=self.pending_approvals(),
             pending_callbacks=self.pending_callbacks(),
@@ -1393,9 +1475,9 @@ class AgentWorkflowRunner:
         )
         self._closed = False
         # Messages admitted as JOINS of the currently-open turn, awaiting dispatch by the run
-        # loop: (envelope, turn_id, turn_number). The participant refcount was already
-        # incremented during admission, so an entry here is accounted for even before it runs.
-        self._joining: list[tuple[AgentMessage, str, int]] = []
+        # loop. The participant refcount was already incremented during admission, so an entry
+        # here is accounted for even before it runs.
+        self._joining: list[_Admission] = []
         # Strong references to in-flight participant tasks. Held only so a spawned task is not
         # garbage-collected mid-flight; turn accounting lives in the refcount, not here.
         self._participant_tasks: set[asyncio.Future[None]] = set()
@@ -1466,11 +1548,16 @@ class AgentWorkflowRunner:
         It does NOT run the handler. Execution is the other half, in :meth:`run` — which is
         what lets the caller have ``accepted_offset`` (and thus start streaming) while the
         work is still in flight.
+
+        The message's ``message_id`` is minted HERE, before anything about it is published, so
+        the ``message_accepted`` event and every later event of its dispatch share one id — and
+        the sender gets that id back on the reply without having to read the stream for it.
         """
         # Read the real log head (``_on_offset``), not a publish counter: activity-published
         # events enter the same global log via signals and would be missed by a counter.
         accepted_offset = self._stream._on_offset()
         handler = self._handlers[message.type]  # validator rejected an unknown type
+        message_id = str(workflow.uuid4())
 
         # A MidTurn.ACCEPT message arriving while a turn is OPEN joins it: same turn_id, one
         # more participant, runs concurrently. Anything else takes a queue slot and will open
@@ -1478,31 +1565,53 @@ class AgentWorkflowRunner:
         # validator already failed it.
         if handler.mid_turn is MidTurn.ACCEPT and self._status.turn_active:
             turn_id, turn_number = self._status.join_turn()
-            self._joining.append((message, turn_id, turn_number))
-            return AgentMessageReply(
-                turn_number=turn_number,
-                turn_id=turn_id,
-                accepted_offset=accepted_offset,
-                # Not pending: it is running now, inside the turn it joined.
-                pending=False,
+            disposition = MessageDisposition.JOINED
+            self._joining.append(
+                _Admission(
+                    message=message,
+                    turn_id=turn_id,
+                    turn_number=turn_number,
+                    message_id=message_id,
+                )
+            )
+        else:
+            turn_id = str(workflow.uuid4())
+            turn_number = self._status.reserve_turn_number()
+            disposition = (
+                MessageDisposition.QUEUED
+                if self._status.has_pending_work
+                else MessageDisposition.OPENED
+            )
+            self._status.enqueue_message(
+                _Admission(
+                    message=message,
+                    turn_id=turn_id,
+                    turn_number=turn_number,
+                    message_id=message_id,
+                )
             )
 
-        turn_id = str(workflow.uuid4())
-        pending = self._status.has_pending_work
-        turn_number = self._status.enqueue_message(message, turn_id)
-
-        if pending:
-            self._pub(
-                turn_id,
-                turn_number,
-                MessageQueued(user_message=_render_message(message)),
-            )
+        # Published for EVERY admitted message, not only a queued one: it is the only event
+        # carrying what was sent, and a joining message gets no ``turn_started`` of its own to
+        # be inferred from. Explicit ``message_id`` because there is no ambient one — this
+        # runs in the update handler's task, not the participant's.
+        self._pub(
+            turn_id,
+            turn_number,
+            MessageAccepted(
+                handler=message.type,
+                payload=message.payload,
+                disposition=disposition,
+            ),
+            message_id=message_id,
+        )
 
         return AgentMessageReply(
             turn_number=turn_number,
             turn_id=turn_id,
+            message_id=message_id,
+            disposition=disposition,
             accepted_offset=accepted_offset,
-            pending=pending,
         )
 
     def _validate_send_agent_message(self, message: AgentMessage) -> None:
@@ -1707,8 +1816,10 @@ class AgentWorkflowRunner:
 
     def _publish_approval_resolved(self, tool_id: str) -> None:
         """Publish the :class:`ToolApprovalResolved` for an already-resolved entry, against
-        the turn that owns the call (not the workflow's notion of the "current" turn — an
-        update handler driving a policy cascade isn't bound to any one turn)."""
+        the turn AND message that own the call — not the publisher's own ambient context. An
+        update handler driving a policy cascade is bound to neither: it may resolve several
+        calls belonging to different messages at once, so the routing has to come off each
+        entry, exactly as ``turn_id`` already did."""
         entry = self._status.approval_entry(tool_id)
         if entry is None:
             return
@@ -1722,6 +1833,7 @@ class AgentWorkflowRunner:
                 reason=entry.reason,
                 remember=entry.remember,
             ),
+            message_id=entry.message_id,
         )
 
     # -- Callback tools -----------------------------------------------------
@@ -1799,8 +1911,9 @@ class AgentWorkflowRunner:
 
     def _publish_callback_resolved(self, tool_id: str) -> None:
         """Publish the :class:`CallbackResolved` for an already-resolved entry, against the turn
-        that owns the call (not the workflow's notion of the "current" turn — an update handler
-        resolving a callback isn't bound to any one turn)."""
+        AND message that own the call — not the publisher's own ambient context, since the
+        update handler resolving a callback is "in" neither (see
+        :meth:`_publish_approval_resolved`)."""
         entry = self._status.callback_entry(tool_id)
         if entry is None:
             return
@@ -1813,6 +1926,7 @@ class AgentWorkflowRunner:
                 outcome=entry.outcome,
                 error=entry.error,
             ),
+            message_id=entry.message_id,
         )
 
     async def await_callback_result(
@@ -1855,6 +1969,7 @@ class AgentWorkflowRunner:
             output_schema,
             ctx.turn_number,
             ctx.turn_id,
+            ctx.message_id,
             output_adapter,
         )
         self._pub(
@@ -1928,13 +2043,22 @@ class AgentWorkflowRunner:
 
     @property
     def current_stream_context(self) -> TurnStreamContext | None:
-        """Carrier identifying the in-flight turn for activity-side publishing.
+        """Carrier identifying the in-flight turn + message for activity-side publishing.
 
         Read by code dispatching activities that need to publish back
         to the workflow's stream (e.g. Gemini's streaming request path).
         Threaded through opaquely — see :class:`TurnStreamContext`.
+
+        The turn half comes from the status; the ``message_id`` half is resolved HERE, from
+        the ambient :data:`_CURRENT_MESSAGE_ID` of the participant task reading the property.
+        That is why an inner loop AI SDK plugin needs no change to attribute its streamed deltas:
+        every plugin already snapshots this carrier from inside the handler it is running for, so
+        it picks up the right message by construction.
         """
-        return self._status.current_stream_context
+        ctx = self._status.current_stream_context
+        if ctx is None:
+            return None
+        return ctx.model_copy(update={"message_id": _CURRENT_MESSAGE_ID.get()})
 
     def _handle_close(self) -> None:
         self._closed = True
@@ -1952,8 +2076,8 @@ class AgentWorkflowRunner:
         :meth:`_handle_send_agent_message`, which only records intent and returns. This loop
         wakes on that intent and runs each admitted message as its own asyncio task, routing
         it to the matching ``@agent.accepts`` handler on ``agent`` (the validator has already
-        rejected unknown functions and coerced the payload) and publishing the handler's
-        return value as a ``reply``.
+        rejected unknown functions and coerced the payload) and bracketing it with
+        ``message_handler_start`` … ``message_handler_end`` (its return value).
 
         A TURN IS THE INTERVAL THE AGENT IS NON-IDLE, and it is refcounted. Opening one
         publishes ``turn_started``; ``turn_end`` follows only when the LAST participant
@@ -1962,8 +2086,9 @@ class AgentWorkflowRunner:
         concurrently with it, sharing its ``turn_id``. At most one turn is open at a time —
         nothing else opens one — so nested or interleaved turn brackets cannot occur.
 
-        A handler that raises does NOT end the session: its error surfaces as an
-        :class:`AgentError` and the loop carries on.
+        A handler that raises does NOT end the session: its error surfaces as that message's
+        :class:`MessageHandlerError` and the loop carries on — other participants of the same
+        turn are untouched.
 
         On close, the loop waits for in-flight participants to finish before returning, so a
         joined handler's work is never silently discarded.
@@ -1978,21 +2103,19 @@ class AgentWorkflowRunner:
             # before opening a new one keeps a participant from being stranded if the open
             # turn finishes in this same task.
             while self._joining:
-                envelope, turn_id, turn_number = self._joining.pop(0)
-                self._spawn_participant(
-                    agent, envelope, turn_id, turn_number, joined=True
-                )
+                self._spawn_participant(agent, self._joining.pop(0), joined=True)
             if self._status.can_open_turn:
-                envelope, turn_id = self._status.open_next_turn()
-                turn_number = self._status.current_turn
+                admitted = self._status.open_next_turn()
+                # A pure bracket, belonging to the TURN and not to the message that opened it
+                # — hence the explicit ``message_id=None``. What opened it is the
+                # ``message_accepted`` already published under this same ``turn_id``.
                 self._pub(
-                    turn_id,
-                    turn_number,
-                    TurnStarted(user_message=_render_message(envelope)),
+                    admitted.turn_id,
+                    admitted.turn_number,
+                    TurnStarted(),
+                    message_id=None,
                 )
-                self._spawn_participant(
-                    agent, envelope, turn_id, turn_number, joined=False
-                )
+                self._spawn_participant(agent, admitted, joined=False)
 
         # CLOSE MUST DRAIN. ``_closed`` is only observed between iterations, so a
         # participant spawned earlier may still be running. Wait on the refcount rather than
@@ -2003,13 +2126,7 @@ class AgentWorkflowRunner:
         await workflow.wait_condition(lambda: not self._status.turn_active)
 
     def _spawn_participant(
-        self,
-        agent: object,
-        envelope: AgentMessage,
-        turn_id: str,
-        turn_number: int,
-        *,
-        joined: bool,
+        self, agent: object, admitted: _Admission, *, joined: bool
     ) -> None:
         """Run one admitted message inside its turn, as its own asyncio task.
 
@@ -2017,37 +2134,40 @@ class AgentWorkflowRunner:
         the loop stays responsive to the next admission. The task is retained until it
         finishes purely to keep a strong reference (a bare ``create_task`` may be
         garbage-collected mid-flight); turn accounting is the refcount's job, not the set's.
+
+        Its own task is also what gives the participant its own ``contextvars`` copy, which is
+        what lets :data:`_CURRENT_MESSAGE_ID` attribute concurrent participants of one shared
+        turn without either of them threading an id anywhere.
         """
         task = asyncio.ensure_future(
-            self._run_participant(
-                agent, envelope, turn_id, turn_number, joined=joined
-            )
+            self._run_participant(agent, admitted, joined=joined)
         )
         self._participant_tasks.add(task)
         task.add_done_callback(self._participant_tasks.discard)
 
     async def _run_participant(
-        self,
-        agent: object,
-        envelope: AgentMessage,
-        turn_id: str,
-        turn_number: int,
-        *,
-        joined: bool,
+        self, agent: object, admitted: _Admission, *, joined: bool
     ) -> None:
         """Dispatch one participant and close its half of the turn bracket.
 
-        Publishes ``reply`` on success or ``error`` if the handler raised, then drops its
-        refcount — publishing ``turn_end`` only if it was the last one out. Every event is
-        stamped with the turn this participant belongs to, which for a join is the turn it
-        joined, not "the current turn".
+        Brackets the handler with ``message_handler_start`` and exactly one of
+        ``message_handler_end`` (its return value) / ``message_handler_error`` (it raised),
+        then drops its refcount — publishing ``turn_end`` only if it was the last one out.
+
+        Every event is stamped with the turn this participant belongs to, which for a join is
+        the turn it JOINED, and with this message's ``message_id``, parked in
+        :data:`_CURRENT_MESSAGE_ID` for the whole task so everything the handler causes —
+        deltas from a model activity, tool lifecycle, approval gates, subagent brackets — is
+        attributed without any of those call sites knowing about it. The var is set and never
+        reset: it is this task's own context, which ends with the task.
         """
+        turn_id, turn_number = admitted.turn_id, admitted.turn_number
+        _CURRENT_MESSAGE_ID.set(admitted.message_id)
+        self._pub(turn_id, turn_number, MessageHandlerStart())
         try:
-            result = await self._dispatch_turn(
-                agent, envelope, turn_id=turn_id, turn_number=turn_number, joined=joined
-            )
+            result = await self._dispatch_turn(agent, admitted, joined=joined)
         except Exception as e:  # noqa: BLE001 — surface ANY failure, keep the agent alive
-            self._pub(turn_id, turn_number, AgentError(message=str(e)))
+            self._pub(turn_id, turn_number, MessageHandlerError(message=str(e)))
         except BaseException:
             # Cancellation or workflow teardown — e.g. the instance is evicted (or the worker
             # shuts down) while this participant is still parked, and the coroutine is resumed
@@ -2060,23 +2180,21 @@ class AgentWorkflowRunner:
             raise
         else:
             self._pub(
-                turn_id, turn_number, AgentReply(output=result.model_dump(mode="json"))
+                turn_id,
+                turn_number,
+                MessageHandlerEnd(output=result.model_dump(mode="json")),
             )
         # Reached whether the handler returned or raised — both are real completions, unlike
         # the teardown path above. Announce turn_end ONLY when this was the turn's LAST
         # participant: it is the quiescence signal a client disconnects on, so emitting it
-        # while a joined handler is still working would be a lie.
+        # while a joined handler is still working would be a lie. ``message_id=None`` because
+        # the bracket closes the TURN, not this message — the ambient id would misattribute it
+        # to whichever participant happened to leave last.
         if self._status.leave_turn():
-            self._pub(turn_id, turn_number, TurnEnded())
+            self._pub(turn_id, turn_number, TurnEnded(), message_id=None)
 
     async def _dispatch_turn(
-        self,
-        agent: object,
-        envelope: AgentMessage,
-        *,
-        turn_id: str,
-        turn_number: int,
-        joined: bool,
+        self, agent: object, admitted: _Admission, *, joined: bool
     ) -> BaseModel:
         """Dispatch one already-validated envelope to its handler, returning its reply model.
 
@@ -2086,12 +2204,16 @@ class AgentWorkflowRunner:
         on whether it opened its turn or joined one without that ever becoming a field a
         caller could set.
         """
+        envelope = admitted.message
         handler = self._handlers[envelope.type]
         arg = handler.input_type.model_validate(envelope.payload)
         kwargs: dict[str, Any] = {}
         if handler.ctx_param is not None:
             kwargs[handler.ctx_param] = MessageContext(
-                joined_turn=joined, turn_id=turn_id, turn_number=turn_number
+                joined_turn=joined,
+                turn_id=admitted.turn_id,
+                turn_number=admitted.turn_number,
+                message_id=admitted.message_id,
             )
         result = await getattr(agent, handler.name)(arg, **kwargs)
         if not isinstance(result, handler.output_type):
@@ -2330,7 +2452,7 @@ class AgentWorkflowRunner:
     def _publish_subagent_reply_received(
         self,
         inst: _SubagentInstance,
-        function: str,
+        handler: str,
         subagent_turn: int,
         *,
         outcome: Literal["ok", "error"],
@@ -2350,7 +2472,7 @@ class AgentWorkflowRunner:
                 subagent_id=inst.handle,
                 agent_key=inst.agent_key,
                 workflow_id=inst.workflow_id,
-                function=function,
+                handler=handler,
                 subagent_turn=subagent_turn,
                 outcome=outcome,
             )
@@ -2474,8 +2596,24 @@ class AgentWorkflowRunner:
 
     # -- Internal -----------------------------------------------------------
 
-    def _pub(self, turn_id: str, turn_number: int, event: AgentStreamItem) -> None:
-        """Wrap ``event`` in an :class:`AgentEvent` envelope and publish it."""
+    def _pub(
+        self,
+        turn_id: str,
+        turn_number: int,
+        event: AgentStreamItem,
+        *,
+        message_id: str | None | _Ambient = _AMBIENT,
+    ) -> None:
+        """Wrap ``event`` in an :class:`AgentEvent` envelope and publish it.
+
+        ``message_id`` defaults to the AMBIENT one — the message whose participant task is
+        running right now (:data:`_CURRENT_MESSAGE_ID`) — which is what makes envelope-side
+        attribution free: a call site inside a dispatch says nothing and gets it right. Pass
+        an explicit ``None`` for the events that deliberately belong to no message
+        (``turn_started`` / ``turn_end``, the entry-carried approval + callback resolutions),
+        and an explicit id only where there is no ambient one to read: the admission prologue,
+        which publishes ``message_accepted`` for a message that has not started running yet.
+        """
         self._events.publish(
             AgentEvent(
                 event=event,
@@ -2485,6 +2623,11 @@ class AgentWorkflowRunner:
                 agent_id=self._agent_id,
                 turn_id=turn_id,
                 turn_number=turn_number,
+                message_id=(
+                    _CURRENT_MESSAGE_ID.get()
+                    if isinstance(message_id, _Ambient)
+                    else message_id
+                ),
                 timestamp=workflow.time(),
             )
         )

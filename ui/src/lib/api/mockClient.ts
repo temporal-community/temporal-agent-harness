@@ -203,8 +203,9 @@ export class MockAgentApi implements AgentApi {
     return {
       turn_number: request.expected_turn,
       turn_id: `mock-turn-${request.expected_turn}`,
+      message_id: `mock-msg-${request.expected_turn}`,
       accepted_offset: 0,
-      pending: false
+      disposition: "opened"
     };
   }
 

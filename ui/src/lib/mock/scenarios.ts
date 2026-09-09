@@ -63,15 +63,23 @@ function frame<T extends keyof AgentSseEventMap>(
     data: {
       ...data,
       agent_id: agentId,
+      // The turn brackets belong to the TURN, so the real server always stamps them
+      // message_id: null. Enforced here rather than at every call site, so the mock cannot
+      // drift into attributing them to a message.
+      ...(event === "turn_started" || event === "turn_end" ? { message_id: null } : {}),
       resume_offset: data.resume_offset ?? resumeOffset
     } as AgentSseEventMap[T]
   } as AgentSseFrame;
 }
 
+// One message per turn in these scenarios, so the message id is derived from the turn — real
+// sessions mint a uuid per message, and a shared turn carries several distinct ones.
 function meta(turn_number: number, deltaSeconds: number) {
+  const padded = String(turn_number).padStart(3, "0");
   return {
-    turn_id: `turn-${String(turn_number).padStart(3, "0")}`,
+    turn_id: `turn-${padded}`,
     turn_number,
+    message_id: `msg-${padded}`,
     timestamp: startedAt + deltaSeconds
   };
 }
@@ -116,11 +124,16 @@ function citation(
 }
 
 const frames: AgentSseFrame[] = [
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(1, 2),
+    handler: "ask",
+    payload: { text: "I am replacing the static UI with Svelte. What API events should the agent UI model first?" },
+    disposition: "opened"
+  }),
   frame("turn_started", {
     type: "turn_started",
-    ...meta(1, 2),
-    user_message:
-      "I am replacing the static UI with Svelte. What API events should the agent UI model first?"
+    ...meta(1, 2)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
@@ -209,25 +222,30 @@ const frames: AgentSseFrame[] = [
     model: "gemini-3.5-flash",
     usage: usage(2100, 360, 140, 620)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(1, 18),
     text:
-      "Model the UI around the event stream: `turn_started`, `message_queued`, model spans, tool spans, approval gates, `reply_delta`, annotations, final `reply`, and `turn_end`. That gives you enough surface area to mock realistic sessions without needing the server running."
+      "Model the UI around the event stream: `message_accepted` (with its disposition), the `turn_started`/`turn_end` brackets, `message_handler_start`/`_end`/`_error` per message, model spans, tool spans, approval gates, `reply_delta` and annotations. Group by `message_id`, not by turn — a turn can carry several messages. That gives you enough surface area to mock realistic sessions without needing the server running."
   }),
   frame("turn_end", {
     type: "turn_end",
     ...meta(1, 19)
   }),
 
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(2, 28),
+    handler: "set_scope",
+    payload: {"scope": "docs"},
+    disposition: "opened"
+  }),
   frame("turn_started", {
     type: "turn_started",
-    ...meta(2, 28),
-    user_message:
-      '{"type":"set_scope","payload":{"scope":"docs"}}'
+    ...meta(2, 28)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(2, 29),
     text: "Scope set to docs only."
   }),
@@ -236,21 +254,28 @@ const frames: AgentSseFrame[] = [
     ...meta(2, 30)
   }),
 
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(3, 39),
+    handler: "ask",
+    payload: { text: "Compare signals, updates, and queries for driving a long-running agent session." },
+    disposition: "opened"
+  }),
   frame("turn_started", {
     type: "turn_started",
-    ...meta(3, 39),
-    user_message:
-      "Compare signals, updates, and queries for driving a long-running agent session."
+    ...meta(3, 39)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(3, 40),
     model: "gemini-3.5-flash"
   }),
-  frame("message_queued", {
-    type: "message_queued",
+  frame("message_accepted", {
+    type: "message_accepted",
     ...meta(4, 41),
-    user_message: "Also tell me if any approvals are waiting."
+    handler: "ask",
+    payload: { text: "Also tell me if any approvals are waiting." },
+    disposition: "queued"
   }),
   frame("tool_requested", {
     type: "tool_requested",
@@ -366,8 +391,8 @@ const frames: AgentSseFrame[] = [
     model: "gemini-3.5-flash",
     usage: usage(2280, 430, 120, 760)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(3, 56),
     text:
       "Use signals for fire-and-forget user input, updates when the caller needs accepted/rejected semantics, and queries for read-only status. The UI should not care which primitive the worker uses. It should see stable REST actions plus an SSE event stream that can resume by offset."
@@ -379,11 +404,10 @@ const frames: AgentSseFrame[] = [
 
   frame("turn_started", {
     type: "turn_started",
-    ...meta(4, 59),
-    user_message: "Also tell me if any approvals are waiting."
+    ...meta(4, 59)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(4, 60),
     text: "No approvals are waiting. One queued message was promoted into this turn."
   }),
@@ -392,11 +416,16 @@ const frames: AgentSseFrame[] = [
     ...meta(4, 61)
   }),
 
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(5, 75),
+    handler: "ask",
+    payload: { text: "Draft a practical rollout runbook for the new Svelte UI, including docs and a community example." },
+    disposition: "opened"
+  }),
   frame("turn_started", {
     type: "turn_started",
-    ...meta(5, 75),
-    user_message:
-      "Draft a practical rollout runbook for the new Svelte UI, including docs and a community example."
+    ...meta(5, 75)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
@@ -544,8 +573,8 @@ const frames: AgentSseFrame[] = [
     model: "gemini-3.5-flash",
     usage: usage(3100, 610, 190, 920)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(5, 105),
     text:
       "Runbook: build against mock streams, shadow saved production-like sessions, verify resume-from-offset, then release to a small internal group. Watch replay gaps, stuck approvals, failed tool states, and worker rollback behavior. The community pattern is deploy capacity first, move traffic gradually, and keep old workers draining."
@@ -555,14 +584,19 @@ const frames: AgentSseFrame[] = [
     ...meta(5, 106)
   }),
 
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(6, 118),
+    handler: "set_model",
+    payload: {"model": "gemini-3.1-flash-lite"},
+    disposition: "opened"
+  }),
   frame("turn_started", {
     type: "turn_started",
-    ...meta(6, 118),
-    user_message:
-      '{"type":"set_model","payload":{"model":"gemini-3.1-flash-lite"}}'
+    ...meta(6, 118)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(6, 119),
     text: "Model set to **gemini-3.1-flash-lite** for faster iteration."
   }),
@@ -571,11 +605,16 @@ const frames: AgentSseFrame[] = [
     ...meta(6, 120)
   }),
 
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(7, 132),
+    handler: "ask",
+    payload: { text: "Estimate the token budget for a 15-turn mocked session with docs lookups and approval gates." },
+    disposition: "opened"
+  }),
   frame("turn_started", {
     type: "turn_started",
-    ...meta(7, 132),
-    user_message:
-      "Estimate the token budget for a 15-turn mocked session with docs lookups and approval gates."
+    ...meta(7, 132)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
@@ -632,16 +671,24 @@ const frames: AgentSseFrame[] = [
     subagent_id: searchSubagentId,
     agent_key: "research",
     workflow_id: searchSubagentWorkflowId,
-    function: "summarize_budget_examples",
+    handler: "summarize_budget_examples",
     subagent_turn: 1,
     from_offset: 0
+  }),
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(1, 138.3),
+    agent_id: searchSubagentId,
+    turn_id: "search-turn-001",
+    handler: "summarize_budget_examples",
+    payload: {"turns": 15},
+    disposition: "opened"
   }),
   frame("turn_started", {
     type: "turn_started",
     ...meta(1, 138.3),
     agent_id: searchSubagentId,
     turn_id: "search-turn-001",
-    user_message: '{"type":"summarize_budget_examples","payload":{"turns":15}}'
   }),
   frame("tool_start", {
     type: "tool_start",
@@ -661,8 +708,8 @@ const frames: AgentSseFrame[] = [
     tool_name: "scan_saved_sessions",
     tool_output: '{"matching_sessions":4,"largest_token_total":68120}'
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(1, 138.7),
     agent_id: searchSubagentId,
     turn_id: "search-turn-001",
@@ -680,7 +727,7 @@ const frames: AgentSseFrame[] = [
     subagent_id: searchSubagentId,
     agent_key: "research",
     workflow_id: searchSubagentWorkflowId,
-    function: "summarize_budget_examples",
+    handler: "summarize_budget_examples",
     subagent_turn: 1,
     outcome: "ok"
   }),
@@ -714,8 +761,8 @@ const frames: AgentSseFrame[] = [
     model: "gemini-3.1-flash-lite",
     usage: usage(1650, 250, 70, 410)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(7, 144),
     text:
       "Use a 60k to 70k token budget for a comprehensive mock session. The useful visual pattern is not a smooth accumulation; it is spikes when model calls finish, especially after document and forum tools."
@@ -725,11 +772,16 @@ const frames: AgentSseFrame[] = [
     ...meta(7, 145)
   }),
 
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(8, 160),
+    handler: "ask",
+    payload: { text: "Can you inspect the real repo routes before we map the component states?" },
+    disposition: "opened"
+  }),
   frame("turn_started", {
     type: "turn_started",
-    ...meta(8, 160),
-    user_message:
-      "Can you inspect the real repo routes before we map the component states?"
+    ...meta(8, 160)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
@@ -788,8 +840,8 @@ const frames: AgentSseFrame[] = [
     model: "gemini-3.1-flash-lite",
     usage: usage(1240, 150, 40, 330)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(8, 173),
     text:
       "I will keep this mock app independent of local filesystem reads. The component states should come from the documented stream contract and realistic event sequences."
@@ -799,11 +851,16 @@ const frames: AgentSseFrame[] = [
     ...meta(8, 174)
   }),
 
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(9, 188),
+    handler: "ask",
+    payload: { text: "Use mock file names instead and show what happens when a tool fails then recovers." },
+    disposition: "opened"
+  }),
   frame("turn_started", {
     type: "turn_started",
-    ...meta(9, 188),
-    user_message:
-      "Use mock file names instead and show what happens when a tool fails then recovers."
+    ...meta(9, 188)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
@@ -870,8 +927,8 @@ const frames: AgentSseFrame[] = [
     model: "gemini-3.1-flash-lite",
     usage: usage(1640, 110, 50, 390, 20)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(9, 201),
     text:
       "The failed file read should appear as a failed tool state, then the recovery tool should show a successful follow-up. That gives the component library examples for both error and recovery without relying on real files."
@@ -881,11 +938,16 @@ const frames: AgentSseFrame[] = [
     ...meta(9, 202)
   }),
 
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(10, 216),
+    handler: "ask",
+    payload: { text: "Map the agent state diagram nodes we should show in Svelte Flow." },
+    disposition: "opened"
+  }),
   frame("turn_started", {
     type: "turn_started",
-    ...meta(10, 216),
-    user_message:
-      "Map the agent state diagram nodes we should show in Svelte Flow."
+    ...meta(10, 216)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
@@ -935,8 +997,8 @@ const frames: AgentSseFrame[] = [
     model: "gemini-3.1-flash-lite",
     usage: usage(2100, 340, 95, 580)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(10, 224),
     text:
       "Use seven stable nodes: ingress, queue, agent, model, tool, approval, and egress. Animate only the active edge, keep failed and denied states visually distinct, and let the transcript carry detailed tool output."
@@ -946,25 +1008,27 @@ const frames: AgentSseFrame[] = [
     ...meta(10, 225)
   }),
 
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(11, 240),
+    handler: "ask",
+    payload: { text: "Show a transient model failure and recovery in the same session." },
+    disposition: "opened"
+  }),
   frame("turn_started", {
     type: "turn_started",
-    ...meta(11, 240),
-    user_message:
-      "Show a transient model failure and recovery in the same session."
+    ...meta(11, 240)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(11, 241),
     model: "gemini-3.1-flash-lite"
   }),
-  frame("error", {
-    type: "error",
+  frame("message_handler_error", {
+    type: "message_handler_error",
     ...meta(11, 242),
     message: "Upstream model stream interrupted after headers were sent."
-  } as Omit<
-    Extract<AgentSseEventMap["error"], { type: "error" }>,
-    "agent_id" | "resume_offset"
-  >),
+  }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(11, 246),
@@ -986,8 +1050,8 @@ const frames: AgentSseFrame[] = [
     model: "gemini-3.1-flash-lite",
     usage: usage(1520, 180, 80, 360)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(11, 250),
     text:
       "A transient model failure should show as an error event, followed by a new model span if the worker retries. The replay should preserve both so the UI can explain why a response took longer."
@@ -997,11 +1061,16 @@ const frames: AgentSseFrame[] = [
     ...meta(11, 251)
   }),
 
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(12, 268),
+    handler: "ask",
+    payload: { text: "Export the current design notes to a markdown artifact." },
+    disposition: "opened"
+  }),
   frame("turn_started", {
     type: "turn_started",
-    ...meta(12, 268),
-    user_message:
-      "Export the current design notes to a markdown artifact."
+    ...meta(12, 268)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
@@ -1068,8 +1137,8 @@ const frames: AgentSseFrame[] = [
     model: "gemini-3.1-flash-lite",
     usage: usage(1980, 130, 70, 420, 35)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(12, 283),
     text:
       "I wrote a mock markdown artifact with sections for the API contract, replay controls, state diagram examples, and known UI states."
@@ -1079,11 +1148,16 @@ const frames: AgentSseFrame[] = [
     ...meta(12, 284)
   }),
 
+  frame("message_accepted", {
+    type: "message_accepted",
+    ...meta(13, 300),
+    handler: "ask",
+    payload: { text: "Give me the next frontend tasks and keep it focused on component library quality." },
+    disposition: "opened"
+  }),
   frame("turn_started", {
     type: "turn_started",
-    ...meta(13, 300),
-    user_message:
-      "Give me the next frontend tasks and keep it focused on component library quality."
+    ...meta(13, 300)
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
@@ -1108,8 +1182,8 @@ const frames: AgentSseFrame[] = [
     model: "gemini-3.1-flash-lite",
     usage: usage(1760, 280, 65, 500)
   }),
-  frame("reply", {
-    type: "reply",
+  frame("message_handler_end", {
+    type: "message_handler_end",
     ...meta(13, 306),
     text:
       "Next tasks: add component states for empty/loading/error/streaming, create fixture-driven examples for transcript, graph, and replay controls, and keep stress cases for queued turns, denied approvals, failed tools, model retries, and long sessions."
