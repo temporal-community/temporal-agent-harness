@@ -3,6 +3,7 @@ import type {
   AgentInboundMessage,
   AgentInterfaceFunction,
   AgentSseFrame,
+  CatalogResource,
   OperatorCommand,
   OperatorCommandResponse,
   ToolId,
@@ -19,6 +20,7 @@ import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
 import { chooseBootSession } from "./bootSession";
 import {
   readCachedFrames,
+  clearStoredActiveSessionId,
   readOperatorPrefs,
   readStoredActiveSessionId,
   readUrlSessionId,
@@ -846,7 +848,6 @@ export class AgentRunController {
       if (!defaultAgent) {
         if (accountMode) {
           this.connectionError = null;
-          this.#scheduleAgentRegistrationRetry();
           return;
         }
         throw new Error("No agent is registered.");
@@ -866,6 +867,10 @@ export class AgentRunController {
 
       if (openable) {
         this.session = openable;
+      } else if (accountMode) {
+        this.session = null;
+        clearStoredActiveSessionId();
+        return;
       } else {
         this.session = await this.#api.createSession({
           agent_workflow_type: defaultAgent.workflow_type,
@@ -1052,22 +1057,20 @@ export class AgentRunController {
     return this.#api.listToolCalls(serverName);
   }
 
-  #scheduleAgentRegistrationRetry(): void {
-    if (typeof window === "undefined" || this.#agentRegistrationTimer != null) return;
-    this.#agentRegistrationTimer = window.setTimeout(async () => {
-      this.#agentRegistrationTimer = null;
-      try {
-        const agents = await this.#loadAgents();
-        if (!this.session && agents.length > 0 && !this.creatingSession) {
-          await this.refreshAccountOverview();
-          await this.startNewSession(agents[0].workflow_type);
-          return;
-        }
-      } catch {
-        // Keep retrying while an account UI has no usable registration.
-      }
-      this.#scheduleAgentRegistrationRetry();
-    }, agentRegistrationRetryMs);
+  async loadCatalog(): Promise<CatalogResource[]> {
+    return (await this.#api.catalog()).resources;
+  }
+
+  async installCatalogResource(resourceId: string): Promise<CatalogResource[]> {
+    await this.#api.installCatalogResource(resourceId);
+    await this.refreshAccountOverview();
+    return this.loadCatalog();
+  }
+
+  async removeCatalogResource(resourceId: string): Promise<CatalogResource[]> {
+    await this.#api.removeCatalogResource(resourceId);
+    await this.refreshAccountOverview();
+    return this.loadCatalog();
   }
 
   async startNewSession(workflowType?: string): Promise<void> {
@@ -2146,10 +2149,6 @@ export class AgentRunController {
     if (this.#frameCacheTimer != null) {
       window.clearTimeout(this.#frameCacheTimer);
       this.#frameCacheTimer = null;
-    }
-    if (this.#agentRegistrationTimer != null) {
-      window.clearTimeout(this.#agentRegistrationTimer);
-      this.#agentRegistrationTimer = null;
     }
   }
 }

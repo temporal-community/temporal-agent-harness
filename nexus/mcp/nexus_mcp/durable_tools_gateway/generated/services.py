@@ -14,6 +14,8 @@ from .models import (
     ListAccountEntriesOutput,
     RegisterExternalInput,
     RegisterSubagentInput,
+    ResolveAccountToolboxInput,
+    ResolveAccountToolboxOutput,
     StartSubagentInput,
     StartSubagentOutput,
     StopSubagentInput,
@@ -26,6 +28,7 @@ class RegistryService:
     proxies calls to them. Native Nexus services are reached directly by the agent and
     never go through this gateway.
     """
+
     register_external: Operation[
         RegisterExternalInput,
         None,
@@ -43,6 +46,12 @@ class RegistryService:
         ListAccountEntriesOutput,
     ] = Operation(name="ListAccountEntries")
     """All registered 3rd-party tools for one account_id."""
+
+    resolve_account_toolbox: Operation[
+        ResolveAccountToolboxInput,
+        ResolveAccountToolboxOutput,
+    ] = Operation(name="resolve_account_toolbox")
+    """Resolve a stable per-turn snapshot of an account's installed resources."""
 
     call_tool: Operation[
         CallToolInput,

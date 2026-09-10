@@ -1,11 +1,12 @@
 # Account gateway and brokered agent UI
 
-The gateway stores one durable registry workflow per `account_id`. An account owns its
-external MCP servers, subagent providers, mountable agents, and UI sessions. The UI never
+The gateway stores one durable registry workflow per `account_id`, backed by a global
+catalog of installable resources. An account owns its MCP servers, mountable agents, and
+UI sessions. The UI never
 uses Temporal visibility or the agent's namespace: it resolves a session through the
 account registry and reaches a harness-native agent through the registered Nexus endpoint.
 
-Harness code opts into the same toolbox explicitly:
+Harness code resolves the same toolbox dynamically:
 
 ```python
 gateway = nexus_gateway("account-123")
@@ -25,8 +26,7 @@ CONNECTOR_NAMESPACE=gateway just ui-tunnel
 
 TEMPORAL_NAMESPACE=gateway \
 GATEWAY_UI_ACCOUNT_ID=account-123 \
-GATEWAY_SEED_ACCOUNT_ID=account-123 \
-GATEWAY_SEED_AGENTS='[{"agent_id":"qa","kind":"harness_nexus","label":"QA","description":"QA agent","nexus_endpoint":"qa-agent-endpoint"}]' \
+GATEWAY_CATALOG_FILE=examples/nexus_hello/catalog.json \
 uv run --extra nexus-mcp python -m nexus_mcp.durable_tools_gateway.worker
 ```
 

@@ -88,6 +88,21 @@ export function writeStoredActiveSessionId(sessionId: string): void {
   }
 }
 
+export function clearStoredActiveSessionId(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(activeSessionStorageKey);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("s");
+    const next = `${url.pathname}${url.search}`;
+    if (next !== `${window.location.pathname}${window.location.search}`) {
+      window.history.replaceState(null, "", next);
+    }
+  } catch {
+    // Ignore storage failures; an empty account can still render without persistence.
+  }
+}
+
 export function readCachedFrames(sessionId: string): AgentSseFrame[] {
   if (typeof window === "undefined") return [];
   try {
