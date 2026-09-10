@@ -1159,13 +1159,18 @@ export class AgentRunController {
     const isCurrentStream = (): boolean =>
       streamVersion === this.#streamVersion &&
       this.session?.workflow_id === session.workflow_id;
+    const markConnected = (): void => {
+      if (!isCurrentStream()) return;
+      this.connecting = false;
+      this.creatingSession = false;
+    };
     let offset = Math.max(0, fromOffset);
     let attempt = 0;
     try {
       while (isCurrentStream()) {
         let delivered = false;
         try {
-          for await (const frame of this.#api.attach(session.workflow_id, offset, signal)) {
+          for await (const frame of this.#api.attach(session.workflow_id, offset, signal, markConnected)) {
             if (!isCurrentStream()) break;
             /* An in-band error frame is a fact about the CONNECTION, not about
                the run, so it must not count as the stream having carried
@@ -1178,7 +1183,13 @@ export class AgentRunController {
                is the one code that says retrying is pointless. This covers the
                other direction: `stream_unavailable` genuinely is worth
                retrying, so the budget has to be allowed to run out. */
-            if (!isClientSideStreamError(frame.data)) delivered = true;
+            if (!isClientSideStreamError(frame.data)) {
+              delivered = true;
+              // An active tool can keep this attach open for minutes. The first
+              // real frame proves it is connected; waiting for EOF leaves a
+              // healthy, visibly updating session labelled "Connecting".
+              markConnected();
+            }
             this.#appendFrame(frame);
           }
         } catch (error) {

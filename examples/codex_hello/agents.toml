@@ -1,0 +1,9 @@
+[[agents]]
+key = "codex-hello"
+workflow_type = "CodexHelloAgent"
+task_queue = "codex-hello"
+label = "Codex Hello"
+description = """
+A repository guide powered by Codex CLI. Ask about the worker's configured repository;
+it inspects real files with read-only commands and streams Codex actions and replies
+into the harness UI. Uses the worker's saved Codex login."""

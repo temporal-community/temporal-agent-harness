@@ -26,7 +26,12 @@ export interface AgentApi {
   agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]>;
   operatorInterface(sessionId: WorkflowId): Promise<OperatorCommand[]>;
   executeOperatorCommand(request: OperatorCommandRequest): Promise<OperatorCommandResponse>;
-  attach(sessionId: WorkflowId, fromOffset?: number, signal?: AbortSignal): AsyncIterable<AgentSseFrame>;
+  attach(
+    sessionId: WorkflowId,
+    fromOffset?: number,
+    signal?: AbortSignal,
+    onConnected?: () => void
+  ): AsyncIterable<AgentSseFrame>;
   submitMessage(request: ChatRequest, signal?: AbortSignal): Promise<SubmitMessageResponse>;
   chat(request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame>;
   approve(request: ToolApprovalRequest): Promise<ToolApprovalResponse>;

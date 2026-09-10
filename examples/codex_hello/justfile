@@ -1,0 +1,33 @@
+# Run `just <recipe>` from examples/codex_hello; each service needs its own terminal.
+import '../../scripts/untagged-notice.just'
+
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+set positional-arguments := true
+
+root := justfile_directory() / ".." / ".."
+export TEMPORAL_CONFIG_FILE := env_var_or_default("TEMPORAL_CONFIG_FILE", "temporal.local.toml")
+export TEMPORAL_PROFILE := env_var_or_default("TEMPORAL_PROFILE", "default")
+
+default:
+    @just --list
+
+temporal:
+    temporal server start-dev
+
+session-manager:
+    cd "{{root}}" && uv run --group examples python -m examples.session_manager_worker
+
+# Serve the committed UI build; no Node/pnpm needed.
+server:
+    cd "{{root}}" && uv run --group examples python -m examples.app "{{justfile_directory()}}/agents.toml" --host 127.0.0.1 --port 8000 --manager-id codex-hello-sessions
+
+# Optional arguments, for example `just worker --workspace /path/to/repository`.
+worker *args:
+    cd "{{root}}" && uv run --group examples python -m examples.codex_hello.worker "$@"
+
+check:
+    cd "{{root}}" && uv run --group examples python -m examples.codex_hello.worker --check
+
+client *args:
+    cd "{{root}}" && uv run --group examples python -m examples.codex_hello.client "$@"

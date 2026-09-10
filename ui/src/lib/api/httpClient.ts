@@ -126,7 +126,8 @@ export class HttpAgentApi implements AgentApi {
   async *attach(
     sessionId: WorkflowId,
     fromOffset = 0,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onConnected?: () => void
   ): AsyncIterable<AgentSseFrame> {
     const response = await fetch(
       apiPath(`attach?session_id=${encodeURIComponent(sessionId)}&from_offset=${fromOffset}`),
@@ -135,6 +136,9 @@ export class HttpAgentApi implements AgentApi {
     if (!response.ok) {
       throw new Error(await responseErrorMessage(response, `Attach failed (${response.status})`));
     }
+    // A resumed stream can be quiet after cached history has already loaded.
+    // Receiving its headers proves connection without waiting for a new event.
+    onConnected?.();
     yield* readSse(response);
   }
 

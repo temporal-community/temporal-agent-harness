@@ -184,6 +184,7 @@ server:
     set -a; [ -f .env.local ] && . ./.env.local; set +a
     uv run --group examples python -m examples.app \
         examples/openai_hello/agents.toml \
+        examples/codex_hello/agents.toml \
         examples/pydantic_ai_hello/agents.toml \
         examples/react_agent/agents.toml \
         examples/monty/agents.toml \
@@ -202,6 +203,15 @@ ui-dev:
 worker-openai-hello:
     cd "{{justfile_directory()}}/examples/openai_hello" && just worker
 
+# Requires installed/authenticated Codex; accepts e.g. --workspace /path/to/project.
+[positional-arguments]
+worker-codex-hello *ARGS:
+    cd "{{justfile_directory()}}/examples/codex_hello" && just worker "$@"
+
+# Check the Codex CLI and saved login without starting a worker or calling a model.
+codex-check:
+    cd "{{justfile_directory()}}/examples/codex_hello" && just check
+
 worker-pydantic:
     cd "{{justfile_directory()}}/examples/pydantic_ai_hello" && just worker
 
@@ -217,8 +227,8 @@ worker-wiki:
 worker-coding:
     cd "{{justfile_directory()}}/examples/callback_tools/coding_agent" && just worker
 
-# Co-launch all six agent workers in one terminal (Ctrl-C stops them all; logs interleave).
-# Requires every agent's prerequisites at once (both API keys, the F1 MCP server, etc.).
+# Co-launch all seven agent workers in one terminal (Ctrl-C stops them all; logs interleave).
+# Requires every agent's prerequisites at once (both API keys, Codex login, the F1 MCP server, etc.).
 workers:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -228,6 +238,7 @@ workers:
     # foreground process group; this makes the intent explicit and cleans up any straggler.)
     trap 'trap - INT TERM EXIT; kill 0' INT TERM EXIT
     just worker-openai-hello &
+    just worker-codex-hello &
     just worker-pydantic &
     just worker-react &
     just worker-monty &
@@ -235,7 +246,13 @@ workers:
     just worker-coding &
     wait
 
-# --- Clients / external processes for the human-in-the-loop & callback agents ---
+# --- Clients / external processes ---
+
+# Codex client: ask a repository question, or --watch an existing session's events.
+[positional-arguments]
+codex-client *ARGS:
+    cd "{{justfile_directory()}}/examples/codex_hello" && just client "$@"
+
 # ReAct client: answers the `ask_user` callback (plain chat also works in the web UI).
 react-client *ARGS:
     cd "{{justfile_directory()}}/examples/react_agent" && just client {{ARGS}}
