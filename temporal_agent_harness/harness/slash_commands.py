@@ -12,12 +12,23 @@ from temporal_agent_harness.harness.agent_protocol import (
     OperatorCommand,
     OperatorCommandArgument,
     SlashCommand,
+    SubagentClosePolicy,
+    SubagentReusePolicy,
     TextReply,
     ToolApprovalPolicy,
 )
 
 APPROVAL_MODE_CHOICES = ("strict", "safe", "skip")
-DEFAULT_COMMAND_NAMES = ("approvals", "allow-tools", "status", "stop")
+SUBAGENT_CLOSE_POLICY_CHOICES = tuple(policy.value for policy in SubagentClosePolicy)
+SUBAGENT_REUSE_POLICY_CHOICES = tuple(policy.value for policy in SubagentReusePolicy)
+DEFAULT_COMMAND_NAMES = (
+    "approvals",
+    "allow-tools",
+    "subagent-close-policy",
+    "subagent-reuse",
+    "status",
+    "stop",
+)
 
 
 @dataclass(frozen=True)
@@ -26,7 +37,11 @@ class SlashCommandContext:
 
     current_status: AgentStatus
     current_approval_policy: ToolApprovalPolicy
+    current_subagent_close_policy: SubagentClosePolicy
+    current_subagent_reuse_policy: SubagentReusePolicy
     set_approval_policy: Callable[[ToolApprovalPolicy], None]
+    set_subagent_close_policy: Callable[[SubagentClosePolicy], None]
+    set_subagent_reuse_policy: Callable[[SubagentReusePolicy], None]
     close: Callable[[], None]
 
 
@@ -52,9 +67,7 @@ class SlashCommandDefinition:
             or name in self.command.aliases
         )
 
-    def execute(
-        self, context: SlashCommandContext, command: SlashCommand
-    ) -> TextReply:
+    def execute(self, context: SlashCommandContext, command: SlashCommand) -> TextReply:
         return self.handler(context, command)
 
 
@@ -163,6 +176,36 @@ def status() -> SlashCommandDefinition:
     )
 
 
+def subagent_close_policy() -> SlashCommandDefinition:
+    return command(
+        name="subagent-close-policy",
+        payload_name="set-subagent-close-policy",
+        label="/subagent-close-policy",
+        description="Choose how this agent may stop active subagents.",
+        argument=enum_arg(
+            SUBAGENT_CLOSE_POLICY_CHOICES,
+            placeholder="keep-open | close | ask-user",
+        ),
+        source="harness",
+        handler=_handle_subagent_close_policy,
+    )
+
+
+def subagent_reuse() -> SlashCommandDefinition:
+    return command(
+        name="subagent-reuse",
+        payload_name="set-subagent-reuse",
+        label="/subagent-reuse",
+        description="Choose whether starting a subagent reuses a matching active one.",
+        argument=enum_arg(
+            SUBAGENT_REUSE_POLICY_CHOICES,
+            placeholder="use-existing | always-new",
+        ),
+        source="harness",
+        handler=_handle_subagent_reuse,
+    )
+
+
 def stop() -> SlashCommandDefinition:
     return command(
         name="stop",
@@ -188,9 +231,7 @@ def model_selector(
 ) -> SlashCommandDefinition:
     model_choices = tuple(choices)
 
-    def handle(
-        _context: SlashCommandContext, slash_command: SlashCommand
-    ) -> TextReply:
+    def handle(_context: SlashCommandContext, slash_command: SlashCommand) -> TextReply:
         selected = _normalize_slash_arg(slash_command.arg)
         if selected not in model_choices:
             return TextReply(
@@ -232,6 +273,8 @@ def _canonical_command_name(name: str) -> str:
     aliases = {
         "set-approvals": "approvals",
         "allow-tool": "allow-tools",
+        "set-subagent-close-policy": "subagent-close-policy",
+        "set-subagent-reuse": "subagent-reuse",
         "stop-agent": "stop",
     }
     canonical = aliases.get(normalized, normalized)
@@ -301,6 +344,8 @@ def _render_harness_status(status: AgentStatus) -> str:
         f"- Approvals: `{_approval_policy_label(status.approval_policy)}`",
         f"- Auto-approved tools: {_format_inline_code(allowed) if allowed else 'none'}",
         f"- Pending approvals: {', '.join(pending_approvals) if pending_approvals else 'none'}",
+        f"- Subagent close policy: `{status.subagent_close_policy.value}`",
+        f"- Subagent reuse policy: `{status.subagent_reuse_policy.value}`",
         f"- Active subagents: {subagents}",
     ]
     return "\n".join(lines)
@@ -337,6 +382,32 @@ def _handle_allow_tools(
     )
 
 
+def _handle_subagent_close_policy(
+    context: SlashCommandContext, slash_command: SlashCommand
+) -> TextReply:
+    try:
+        policy = SubagentClosePolicy(_normalize_slash_arg(slash_command.arg).lower())
+    except ValueError:
+        return TextReply(
+            text=f"Choose one of: {_format_inline_code(SUBAGENT_CLOSE_POLICY_CHOICES)}."
+        )
+    context.set_subagent_close_policy(policy)
+    return TextReply(text=f"Subagent close policy set to **{policy.value}**.")
+
+
+def _handle_subagent_reuse(
+    context: SlashCommandContext, slash_command: SlashCommand
+) -> TextReply:
+    try:
+        policy = SubagentReusePolicy(_normalize_slash_arg(slash_command.arg).lower())
+    except ValueError:
+        return TextReply(
+            text=f"Choose one of: {_format_inline_code(SUBAGENT_REUSE_POLICY_CHOICES)}."
+        )
+    context.set_subagent_reuse_policy(policy)
+    return TextReply(text=f"Subagent reuse policy set to **{policy.value}**.")
+
+
 def _handle_status(
     context: SlashCommandContext, _slash_command: SlashCommand
 ) -> TextReply:
@@ -353,6 +424,8 @@ def _handle_stop(
 _BUILTIN_COMMAND_FACTORIES: dict[str, Callable[[], SlashCommandDefinition]] = {
     "approvals": approvals,
     "allow-tools": allow_tools,
+    "subagent-close-policy": subagent_close_policy,
+    "subagent-reuse": subagent_reuse,
     "status": status,
     "stop": stop,
 }
@@ -361,6 +434,8 @@ _BUILTIN_COMMAND_FACTORIES: dict[str, Callable[[], SlashCommandDefinition]] = {
 __all__ = [
     "APPROVAL_MODE_CHOICES",
     "DEFAULT_COMMAND_NAMES",
+    "SUBAGENT_CLOSE_POLICY_CHOICES",
+    "SUBAGENT_REUSE_POLICY_CHOICES",
     "SlashCommandContext",
     "SlashCommandDefinition",
     "SlashCommandHandler",
@@ -373,6 +448,8 @@ __all__ = [
     "model_selector",
     "status",
     "stop",
+    "subagent_close_policy",
+    "subagent_reuse",
     "text_arg",
     "tool_names_arg",
 ]

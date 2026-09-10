@@ -35,25 +35,12 @@ class ChildWorkflowTransport:
             config,
             id=workflow_id,
             task_queue=self._task_queue,
-            # EXPLICIT: a subagent is owned by its parent and must never outlive it. Normal
-            # harness shutdown asks every registered child to close gracefully; if the parent
-            # instead fails, is cancelled, or is terminated before that cleanup runs, the
-            # Temporal server terminates this child. We pin TERMINATE rather than rely on the SDK
-            # default so the ownership guarantee can't silently change.
-            #
-            # TODO: we may prefer to handle abnormal parent shutdown more gracefully than a hard
-            # TERMINATE (which kills the child mid-turn with no cleanup — no `close` handling,
-            # no chance to finalize in-flight work). Two candidate approaches:
-            #   1. REQUEST_CANCEL — the server requests cancellation of the child on parent
-            #      close, letting a child that handles cancellation tear down gracefully
-            #      (requires the harness agent loop to treat cancellation as a clean stop).
-            #   2. A workflow finalization/cleanup hook on the parent that, before it exits,
-            #      stops every still-registered subagent through the SAME "front door" a
-            #      human/UI uses — i.e. `stop_subagent` → the `close` signal — so children
-            #      shut down via their normal graceful path rather than being killed by the
-            #      server. The runner does this for its normal `close` path today; extending
-            #      that guarantee to failure/cancellation still needs explicit handling.
-            parent_close_policy=workflow.ParentClosePolicy.TERMINATE,
+            # The runner applies its live subagent close policy during graceful shutdown.
+            # ABANDON is required because Temporal cannot change a child workflow's
+            # parent-close policy after it has started: ``keep-open`` and ``ask-user`` must be
+            # able to leave the child alive, while ``close`` explicitly stops it through the
+            # same front door used by a human/UI.
+            parent_close_policy=workflow.ParentClosePolicy.ABANDON,
         )
         return workflow_id
 

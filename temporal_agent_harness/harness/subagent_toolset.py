@@ -77,7 +77,9 @@ def declared_handler(
         [
             inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
             inspect.Parameter(
-                param_name, inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=input_type
+                param_name,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=input_type,
             ),
         ],
         return_annotation=output_type,
@@ -102,10 +104,12 @@ def _make_start_tool(
     _start.__name__ = f"start_{key}"
     _start.__qualname__ = _start.__name__
     _start.__doc__ = (
-        f"Start a new {key} subagent and return its short handle. Call this first; then "
+        f"Acquire a {key} subagent and return its short handle. The active subagent reuse "
+        f"policy decides whether this returns an existing instance or starts a new one. "
+        f"Call this first; then "
         f"pass the returned handle as the `subagent` argument to the {key}_* tools to drive "
-        f"that instance, and to stop_{key} to shut it down. You may start several instances "
-        f"to work on subtasks in parallel — each returns its own handle."
+        f"that instance, and to stop_{key} to shut it down. Set the policy to `always-new` "
+        f"before acquiring several instances for parallel subtasks."
     )
     _start.__signature__ = inspect.Signature([], return_annotation=str)  # type: ignore[attr-defined]
     _start.__annotations__ = {"return": str}
@@ -115,15 +119,23 @@ def _make_start_tool(
 def _make_stop_tool(*, key: str) -> Callable[..., Awaitable[str]]:
     """Build the ``stop_<key>`` tool: close a subagent instance addressed by its handle."""
 
+    async def _authorize_stop(tool_name: str, tool_input: dict[str, Any]) -> None:
+        await _current_runner().authorize_subagent_stop(
+            tool_name, str(tool_input["subagent"])
+        )
+
     async def _stop(subagent: str) -> str:
-        await _current_runner().stop_subagent(subagent)
+        runner = _current_runner()
+        if not await runner.request_subagent_stop(subagent):
+            return f"kept subagent {subagent!r} open by lifecycle policy"
         return f"stopped subagent {subagent!r}"
 
     _stop.__name__ = f"stop_{key}"
     _stop.__qualname__ = _stop.__name__
     _stop.__doc__ = (
-        f"Stop the {key} subagent identified by `subagent` (the handle returned by "
-        f"start_{key}). Use it when that instance's work is done."
+        f"Request that the {key} subagent identified by `subagent` be stopped. The "
+        f"active subagent close policy decides whether it stays open, closes "
+        f"immediately, or requires user approval."
     )
     _stop.__signature__ = inspect.Signature(  # type: ignore[attr-defined]
         [
@@ -134,7 +146,7 @@ def _make_stop_tool(*, key: str) -> Callable[..., Awaitable[str]]:
         return_annotation=str,
     )
     _stop.__annotations__ = {"subagent": str, "return": str}
-    return tool_defn()(_stop)
+    return tool_defn(_approval_gate=_authorize_stop)(_stop)
 
 
 def _make_send_tool(
@@ -253,7 +265,9 @@ def subagent_toolset(
             f"as a subagent toolset."
         )
 
-    tools: list[Callable[..., Awaitable[Any]]] = [_make_start_tool(key=key, transport=transport)]
+    tools: list[Callable[..., Awaitable[Any]]] = [
+        _make_start_tool(key=key, transport=transport)
+    ]
     tools.extend(
         _make_send_tool(key=key, handler=handler) for handler in handlers.values()
     )
