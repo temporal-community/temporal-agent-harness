@@ -1,153 +1,78 @@
 package teamsinbound
 
 import (
-	"encoding/json"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
-	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/mocks"
 )
 
-func expectWorkflowStart(
-	t *testing.T,
-	tc *mocks.Client,
-	wfID string,
-	matchesInput func(router.Input) bool,
-) {
-	t.Helper()
-	tc.On(
-		"ExecuteWorkflow",
-		mock.Anything,
-		mock.MatchedBy(func(options client.StartWorkflowOptions) bool {
-			return options.ID == wfID && options.TaskQueue == "teams-task-queue"
-		}),
-		router.WorkflowName,
-		mock.MatchedBy(matchesInput),
-	).Return(nil, nil).Once()
+type fakeTunnel struct {
+	sessionID string
+	input     router.SendAndMountInput
+	control   router.ControlInput
 }
 
-func TestHandleMessagesStartsMessageWorkflow(t *testing.T) {
-	tc := mocks.NewClient(t)
-	expectWorkflowStart(t, tc, "connector-default-teams:conversation-1-message-1", func(input router.Input) bool {
-		return input.Message != nil && input.Approval == nil && input.Message.Text == "question"
-	})
-	server := NewServer(tc, "teams-task-queue")
-	request := httptest.NewRequest(http.MethodPost, routeMessages, strings.NewReader(`{
-		"type":"message",
-		"id":"message-1",
-		"text":"question",
+func (f *fakeTunnel) SendAndMount(_ context.Context, sessionID, _ string, input router.SendAndMountInput) (router.TurnAccepted, error) {
+	f.sessionID, f.input = sessionID, input
+	return router.TurnAccepted{}, nil
+}
+
+func (f *fakeTunnel) Control(_ context.Context, sessionID, _ string, input router.ControlInput) (router.ControlOutput, error) {
+	f.sessionID, f.control = sessionID, input
+	return router.ControlOutput{Accepted: true}, nil
+}
+
+func (*fakeTunnel) Exists(context.Context, string) bool { return false }
+
+func post(t *testing.T, tunnel *fakeTunnel, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	server := NewServer(tunnel, "teams-driver-queue")
+	request := httptest.NewRequest(http.MethodPost, routeMessages, strings.NewReader(body))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	return response
+}
+
+func TestHandleMessagesMountsA2ATunnel(t *testing.T) {
+	tunnel := &fakeTunnel{}
+	response := post(t, tunnel, `{
+		"type":"message", "id":"message-1", "text":"question",
+		"serviceUrl":"https://example.test/teams/", "channelId":"msteams",
 		"from":{"id":"user-1"},
 		"conversation":{"id":"conversation-1","conversationType":"personal"}
-	}`))
-	response := httptest.NewRecorder()
-
-	server.ServeHTTP(response, request)
-
-	assert.Equal(t, http.StatusOK, response.Code)
+	}`)
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, "teams:conversation-1", tunnel.sessionID)
+	require.Equal(t, "ask", tunnel.input.Message.MessageType)
+	require.Equal(t, "question", tunnel.input.Message.Payload["text"])
+	require.Equal(t, "TeamsDeliverA2A", tunnel.input.Subscriber.Delivery.Activity)
+	require.Equal(t, "teams-driver-queue", tunnel.input.Subscriber.Delivery.TaskQueue)
 }
 
-func TestHandleMessagesStartsApprovalWorkflowWithEmptyText(t *testing.T) {
-	tc := mocks.NewClient(t)
-	expectWorkflowStart(t, tc, "connector-default-teams:conversation-1-approval-tool-1", func(input router.Input) bool {
-		return input.Message == nil && input.Approval != nil && input.Approval.ToolID == "tool-1"
-	})
-	server := NewServer(tc, "teams-task-queue")
-	request := httptest.NewRequest(http.MethodPost, routeMessages, strings.NewReader(`{
-		"type":"message",
-		"replyToId":"card-1",
+func TestHandleMessagesResolvesApprovalThroughTunnel(t *testing.T) {
+	tunnel := &fakeTunnel{}
+	response := post(t, tunnel, `{
+		"type":"message", "replyToId":"card-1",
 		"value":{"s":"teams:conversation-1","t":"tool-1","n":"deploy","a":true}
-	}`))
-	response := httptest.NewRecorder()
-
-	server.ServeHTTP(response, request)
-
-	assert.Equal(t, http.StatusOK, response.Code)
+	}`)
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, "approve-tool-call", tunnel.control.Kind)
+	require.Equal(t, "TeamsAcknowledgeApproval", tunnel.control.Delivery.Activity)
 }
 
-func TestHandleMessagesRejectsEmptyOrdinaryMessage(t *testing.T) {
-	tc := mocks.NewClient(t)
-	server := NewServer(tc, "teams-task-queue")
-	request := httptest.NewRequest(http.MethodPost, routeMessages, strings.NewReader(`{
-		"type":"message",
-		"id":"message-1",
-		"from":{"id":"user-1"},
-		"conversation":{"id":"conversation-1"}
-	}`))
-	response := httptest.NewRecorder()
-
-	server.ServeHTTP(response, request)
-
-	assert.Equal(t, http.StatusBadRequest, response.Code)
-	tc.AssertNotCalled(t, "ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-}
-
-func TestHandleMessagesRejectsMessageWithoutConversation(t *testing.T) {
-	tc := mocks.NewClient(t)
-	server := NewServer(tc, "teams-task-queue")
-	request := httptest.NewRequest(http.MethodPost, routeMessages, strings.NewReader(`{
-		"type":"message",
-		"id":"message-1",
-		"text":"question",
-		"from":{"id":"user-1"}
-	}`))
-	response := httptest.NewRecorder()
-
-	server.ServeHTTP(response, request)
-
-	assert.Equal(t, http.StatusBadRequest, response.Code)
-	tc.AssertNotCalled(t, "ExecuteWorkflow", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-}
-
-func TestMessageWorkflowInputPropagatesConversationType(t *testing.T) {
-	for _, conversationType := range []string{"personal", "channel", "groupChat"} {
-		t.Run(conversationType, func(t *testing.T) {
-			var activity teamMessageActivity
-			require.NoError(t, json.Unmarshal([]byte(`{
-				"type":"message",
-				"id":"message-1",
-				"text":"question",
-				"serviceUrl":"https://example.test/teams/",
-				"channelId":"msteams",
-				"from":{"id":"user-1"},
-				"conversation":{"id":"conversation-1","conversationType":"`+conversationType+`"}
-			}`), &activity))
-
-			workflowID, input := messageWorkflowInput(activity)
-
-			assert.Equal(t, "connector-default-teams:conversation-1-message-1", workflowID)
-			require.NotNil(t, input.Message)
-			assert.Equal(t, conversationType, input.Message.ConversationType)
-			assert.Equal(t, "https://example.test/teams/", input.Message.ServiceURL)
-			assert.Equal(t, "msteams", input.Message.ChannelID)
-		})
+func TestHandleMessagesRejectsInvalidOrdinaryMessage(t *testing.T) {
+	for _, body := range []string{
+		`{"type":"message","id":"message-1","from":{"id":"user-1"},"conversation":{"id":"conversation-1"}}`,
+		`{"type":"message","id":"message-1","text":"question","from":{"id":"user-1"}}`,
+	} {
+		tunnel := &fakeTunnel{}
+		response := post(t, tunnel, body)
+		require.Equal(t, http.StatusBadRequest, response.Code)
+		require.Empty(t, tunnel.sessionID)
 	}
-}
-
-func TestApprovalWorkflowInputPropagatesCardRouting(t *testing.T) {
-	activity := teamMessageActivity{
-		ReplyToID:  "card-1",
-		ServiceURL: "https://example.test/teams/",
-		ChannelID:  "msteams",
-	}
-	value := approvalButtonValue{
-		SessionID: "teams:conversation-1",
-		ToolID:    "tool-1",
-		ToolName:  "deploy",
-		Approved:  true,
-	}
-
-	workflowID, input := approvalWorkflowInput(activity, value)
-
-	assert.Equal(t, "connector-default-teams:conversation-1-approval-tool-1", workflowID)
-	require.NotNil(t, input.Approval)
-	assert.Equal(t, "card-1", input.Approval.ActivityID)
-	assert.Equal(t, "https://example.test/teams/", input.Approval.ServiceURL)
-	assert.Equal(t, "msteams", input.Approval.ChannelID)
 }

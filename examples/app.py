@@ -17,6 +17,7 @@ agent behind one server.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -34,7 +35,13 @@ def create_app(*registry_paths: str | Path) -> FastAPI:
     if not registry_paths:
         raise ValueError("create_app requires at least one registry path.")
     registry = load_agent_registries(registry_paths)
-    return create_agent_harness_app(registry=registry)
+    nexus_endpoint = os.environ.get("NEXUS_UI_ENDPOINT", "").strip() or None
+    return create_agent_harness_app(
+        registry=registry,
+        nexus_endpoint=nexus_endpoint,
+        connector_namespace=os.environ.get("CONNECTOR_NAMESPACE", "connector"),
+        connector_task_queue=os.environ.get("CONNECTOR_TASK_QUEUE", "nexus-ui-tunnel"),
+    )
 
 
 def main() -> None:

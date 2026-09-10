@@ -7,10 +7,8 @@ from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from datetime import timedelta
 
-from nexus_a2a import a2a_payload_converters
-from temporal_agent_harness.ai_sdks.integration_helpers import ObserverFactory
-
 import pydantic
+import temporalio.api.common.v1
 from agents import ModelProvider, Trace, set_trace_provider
 from agents.run import get_default_agent_runner, set_default_agent_runner
 from agents.tracing import get_trace_provider
@@ -20,20 +18,6 @@ from agents.tracing.provider import DefaultTraceProvider
 # one the SDK uses to parse live API responses. It is in a private module but
 # has no public alias.
 from openai._models import construct_type
-
-import temporalio.api.common.v1
-from temporal_agent_harness.ai_sdks.openai_agents._invoke_model_activity import ModelActivity
-from temporal_agent_harness.ai_sdks.openai_agents._model_parameters import ModelActivityParameters
-from temporal_agent_harness.ai_sdks.openai_agents._openai_runner import (
-    TemporalOpenAIRunner,
-)
-from temporal_agent_harness.ai_sdks.openai_agents._temporal_trace_provider import (
-    TemporalTraceProvider,
-)
-from temporal_agent_harness.ai_sdks.openai_agents._trace_interceptor import (
-    OpenAIAgentsContextPropagationInterceptor,
-)
-from temporal_agent_harness.ai_sdks.openai_agents.workflow import AgentsWorkflowError
 from temporalio.contrib.opentelemetry._tracer_provider import ReplaySafeTracerProvider
 from temporalio.contrib.pydantic import (
     PydanticJSONPlainPayloadConverter,
@@ -47,6 +31,25 @@ from temporalio.converter import (
 from temporalio.plugin import SimplePlugin
 from temporalio.worker import WorkflowRunner
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
+
+from nexus_a2a import a2a_payload_converters
+from temporal_agent_harness.ai_sdks.integration_helpers import ObserverFactory
+from temporal_agent_harness.ai_sdks.openai_agents._invoke_model_activity import (
+    ModelActivity,
+)
+from temporal_agent_harness.ai_sdks.openai_agents._model_parameters import (
+    ModelActivityParameters,
+)
+from temporal_agent_harness.ai_sdks.openai_agents._openai_runner import (
+    TemporalOpenAIRunner,
+)
+from temporal_agent_harness.ai_sdks.openai_agents._temporal_trace_provider import (
+    TemporalTraceProvider,
+)
+from temporal_agent_harness.ai_sdks.openai_agents._trace_interceptor import (
+    OpenAIAgentsContextPropagationInterceptor,
+)
+from temporal_agent_harness.ai_sdks.openai_agents.workflow import AgentsWorkflowError
 
 if typing.TYPE_CHECKING:
     from temporal_agent_harness.ai_sdks.openai_agents import (

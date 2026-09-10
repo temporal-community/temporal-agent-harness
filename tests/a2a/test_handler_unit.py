@@ -11,6 +11,7 @@ from temporalio.converter import DataConverter
 from temporal_agent_harness.a2a.control_handler import (
     HarnessControlServiceHandler,
     _is_workflow_not_found,
+    _nexus_operator_command,
 )
 from temporal_agent_harness.a2a.generated import (
     ProvideCallbackResultInput,
@@ -18,6 +19,7 @@ from temporal_agent_harness.a2a.generated import (
 )
 from temporal_agent_harness.harness.agent_protocol.agent_interface import (
     CallbackResultAck,
+    OperatorCommand,
 )
 
 _payload_converter = DataConverter.default.payload_converter
@@ -42,6 +44,21 @@ def test_provide_callback_result_input_result_round_trips() -> None:
     )
     decoded = _round_trip(inp, ProvideCallbackResultInput)
     assert decoded.result.additional_properties == {"ok": True}
+
+
+def test_operator_command_preserves_routing_metadata_over_nexus() -> None:
+    command = _nexus_operator_command(
+        OperatorCommand(
+            name="stop",
+            payload_name="stop-agent",
+            label="/stop",
+            description="Stop the agent.",
+            aliases=("stop-agent",),
+        )
+    )
+
+    assert command.payload_name == "stop-agent"
+    assert command.aliases == ["stop-agent"]
 
 
 @patch("temporal_agent_harness.a2a.control_handler.AgentClient")
