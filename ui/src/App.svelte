@@ -541,6 +541,10 @@
           onSelectSession={(sessionId) => run.selectSession(sessionId)}
           onRefreshSessions={() => run.refreshSessions()}
           onEnsureSessions={() => run.ensureSessionsEnriched()}
+          onEnsureAgents={() => run.ensureAgents()}
+          onRefreshAgents={() => run.refreshAgents()}
+          refreshingAgents={run.refreshingAgents}
+          agentsError={run.agentsError}
         />
       {/snippet}
 
