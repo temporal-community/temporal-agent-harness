@@ -1,6 +1,7 @@
 import type {
   AcceptedMessageTypesResponse,
   AgentInterfaceFunction,
+  AccountOverview,
   AgentRegistryResponse,
   AgentSseFrame,
   ChatRequest,
@@ -10,6 +11,7 @@ import type {
   OperatorCommandRequest,
   OperatorCommandResponse,
   Session,
+  SubagentCloseResolution,
   SubmitMessageResponse,
   ToolApprovalRequest,
   ToolApprovalResponse,
@@ -18,9 +20,15 @@ import type {
 } from "./types";
 
 export interface AgentApi {
+  accountOverview(): Promise<AccountOverview>;
   listAgents(): Promise<AgentRegistryResponse>;
   listSessions(): Promise<Session[]>;
+  refreshSessions(): Promise<Session[]>;
   createSession(request: CreateSessionRequest): Promise<CreateSessionResponse>;
+  closeSession(
+    sessionId: WorkflowId,
+    resolution?: SubagentCloseResolution
+  ): Promise<void>;
   workflowStatus(workflowId: WorkflowId): Promise<WorkflowExecutionState>;
   acceptedMessageTypes(sessionId: WorkflowId): Promise<AcceptedMessageTypesResponse>;
   agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]>;

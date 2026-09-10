@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import TranscriptPanel, {
     type TranscriptFilter
   } from "$lib/components/agent/TranscriptPanel.svelte";
@@ -11,6 +12,7 @@
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import { Keyboard } from "@lucide/svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
+  import AccountOverview from "$lib/components/account/AccountOverview.svelte";
   import PaneRail, { type PaneDescription } from "$lib/panes/PaneRail.svelte";
   import PaneMinimap from "$lib/panes/PaneMinimap.svelte";
   import PaneLinkNotice from "$lib/panes/PaneLinkNotice.svelte";
@@ -95,6 +97,8 @@
   $effect(() => {
     void run.initialize();
   });
+
+  onDestroy(() => run.dispose());
 
   /* Sessions this UI did not start still belong in the list, and coming back to a
      tab that sat behind another one for an hour is when that list is most likely to
@@ -509,6 +513,7 @@
 
 <main
   class="app"
+  class:with-account={run.account != null}
   class:bleed={bleeding}
   class:bleed-drawer={drawer.bleedingPane != null}
   class:has-drawer={drawer.groups.length > 0}
@@ -532,10 +537,12 @@
           sending={run.sending}
           creatingSession={run.creatingSession}
           refreshingSessions={run.refreshingSessions}
+          showSessionPicker={run.account == null}
           closed={run.sessionClosed}
           closedWorkflowIds={run.closedWorkflowIds}
           error={run.connectionError}
           sessionsError={run.sessionsError}
+          awaitingRegistration={run.account != null && run.agents.length === 0}
           {pendingApprovalCount}
           onNewSession={(workflowType) => run.startNewSession(workflowType)}
           onSelectSession={(sessionId) => run.selectSession(sessionId)}
@@ -575,6 +582,23 @@
     {/if}
   </div>
 
+  {#if run.account}
+    <aside class="account-sidebar" aria-label="Account resources">
+      <AccountOverview
+        account={run.account}
+        sessions={run.sessions}
+        sessionId={run.runInfo.sessionId}
+        activeAgentId={run.session?.agent_workflow_type ?? null}
+        mounting={run.creatingSession}
+        refreshingSessions={run.refreshingSessions}
+        onMountAgent={(agentId) => run.startNewSession(agentId)}
+        onSelectSession={(sessionId) => run.selectSession(sessionId)}
+        onRefreshSessions={() => run.refreshSessions()}
+        onCloseSession={(sessionId, resolution) => run.closeSession(sessionId, resolution)}
+      />
+    </aside>
+  {/if}
+
   <PaneRail
     bind:this={rail}
     {stack}
@@ -613,6 +637,7 @@
           creatingSession={run.creatingSession}
           closed={run.sessionClosed}
           error={run.connectionError}
+          awaitingRegistration={run.account != null && run.agents.length === 0}
           onSend={(message) => run.sendMessage(message)}
           onOperatorCommand={(name, arg, workflowId) =>
             run.executeOperatorCommand(name, arg, workflowId)}
@@ -714,9 +739,41 @@
     height: 100vh;
     min-height: 0;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) auto;
     background: var(--surface-0);
     color: var(--text-1);
+  }
+
+  .app.with-account {
+    grid-template-columns: 286px minmax(0, 1fr);
+  }
+
+  .chrome,
+  .app.with-account > :global(.step-controller),
+  .app.with-account > .drawer {
+    grid-column: 1 / -1;
+  }
+
+  .account-sidebar {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app.with-account > :global(.rail) {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .app.bleed .account-sidebar {
+    display: none;
+  }
+
+  .app.bleed.with-account > :global(.rail) {
+    grid-column: 1 / -1;
   }
 
   /* The drawer opens under the transport and takes its height off the RAIL, which is
@@ -1009,5 +1066,17 @@
 
   .pane-content :global(.roll) {
     flex: 1 1 120px;
+  }
+
+  @media (max-width: 980px) {
+    .app.with-account {
+      grid-template-columns: 240px minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 700px) {
+    .app.with-account {
+      grid-template-columns: 210px minmax(0, 1fr);
+    }
   }
 </style>

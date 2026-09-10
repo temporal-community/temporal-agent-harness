@@ -36,8 +36,8 @@ with workflow.unsafe.imports_passed_through():
 
     from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
         harness_tool_as_openai_tool,
+        nexus_gateway,
         nexus_native_mcp_server,
-        nexus_tools_gateway,
     )
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
@@ -49,10 +49,12 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
     from .native_subagent import NativeResearchSubagentWorkflow
+    from .whimsical_workflow import WhimsicalAgentWorkflow
 
 TASK_QUEUE = "nexus-hello"
 WORKFLOW_NAME = "NexusHelloAgent"
 DEFAULT_MODEL = "gpt-5.1"
+ACCOUNT_ID = "NexusHelloAccount"
 
 SYSTEM_INSTRUCTION = """\
 You are a friendly assistant. Answer the user in brief, natural prose.
@@ -60,6 +62,8 @@ You are a friendly assistant. Answer the user in brief, natural prose.
 
 RESEARCH_SUBAGENT_ENDPOINT = "nexus-hello-subagent-endpoint"
 RESEARCH_KEY = "research"
+WHIMSICAL_SUBAGENT_ENDPOINT = "nexus-hello-whimsical-agent-endpoint"
+WHIMSICAL_KEY = "whimsical-agent"
 WRITER_KEY = "writer"
 WRITER_ALIAS = "writer"
 
@@ -92,11 +96,16 @@ class NexusHelloAgentWorkflow:
 
         The model may also delegate parts of the question to its A2A subagents.
         """
-        nexus_gateway = nexus_tools_gateway()
-        subagent_gateway = agent.nexus_subagent_gateway()
+        account_gateway = nexus_gateway(ACCOUNT_ID)
+        subagent_gateway = agent.nexus_subagent_gateway(ACCOUNT_ID)
 
         research_tools = agent.nexus_native_subagent(
             NativeResearchSubagentWorkflow, RESEARCH_SUBAGENT_ENDPOINT, key=RESEARCH_KEY
+        )
+        whimsical_tools = agent.nexus_native_subagent(
+            WhimsicalAgentWorkflow,
+            WHIMSICAL_SUBAGENT_ENDPOINT,
+            key=WHIMSICAL_KEY,
         )
         writer_tools = subagent_gateway.subagent(
             [
@@ -117,12 +126,12 @@ class NexusHelloAgentWorkflow:
             instructions=SYSTEM_INSTRUCTION,
             model=DEFAULT_MODEL,
             mcp_servers=[
-                nexus_gateway.mcp_servers("demo"),
+                account_gateway.mcp_servers("demo"),
                 nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
             ],
             tools=[
                 harness_tool_as_openai_tool(fn)
-                for fn in [*research_tools, *writer_tools]
+                for fn in [*research_tools, *whimsical_tools, *writer_tools]
             ],
         )
         input_items: list[TResponseInputItem] = [

@@ -10,8 +10,8 @@ from .models import (
     DeregisterSubagentInput,
     DispatchSubagentTurnInput,
     DispatchSubagentTurnOutput,
-    ListAgentEntriesInput,
-    ListAgentEntriesOutput,
+    ListAccountEntriesInput,
+    ListAccountEntriesOutput,
     RegisterExternalInput,
     RegisterSubagentInput,
     StartSubagentInput,
@@ -22,7 +22,7 @@ from .models import (
 
 @service
 class RegistryService:
-    """Durable Tools Gateway. Registers 3rd-party MCP servers under an agent_id, and
+    """Durable Tools Gateway. Registers 3rd-party MCP servers under an account_id, and
     proxies calls to them. Native Nexus services are reached directly by the agent and
     never go through this gateway.
     """
@@ -30,19 +30,19 @@ class RegistryService:
         RegisterExternalInput,
         None,
     ] = Operation(name="RegisterExternal")
-    """Register a 3rd-party MCP server under one agent_id."""
+    """Register a 3rd-party MCP server under one account_id."""
 
     deregister: Operation[
         DeregisterInput,
         None,
     ] = Operation(name="Deregister")
-    """Remove one registration under one agent_id."""
+    """Remove one registration under one account_id."""
 
-    list_agent_entries: Operation[
-        ListAgentEntriesInput,
-        ListAgentEntriesOutput,
-    ] = Operation(name="ListAgentEntries")
-    """All registered 3rd-party tools for one agent_id."""
+    list_account_entries: Operation[
+        ListAccountEntriesInput,
+        ListAccountEntriesOutput,
+    ] = Operation(name="ListAccountEntries")
+    """All registered 3rd-party tools for one account_id."""
 
     call_tool: Operation[
         CallToolInput,
@@ -54,13 +54,13 @@ class RegistryService:
         RegisterSubagentInput,
         None,
     ] = Operation(name="register_subagent")
-    """Register a non-Nexus subagent's URL under one agent_id."""
+    """Register a non-Nexus subagent's URL under one account_id."""
 
     deregister_subagent: Operation[
         DeregisterSubagentInput,
         None,
     ] = Operation(name="deregister_subagent")
-    """Remove one subagent registration under one agent_id."""
+    """Remove one subagent registration under one account_id."""
 
     start_subagent: Operation[
         StartSubagentInput,
