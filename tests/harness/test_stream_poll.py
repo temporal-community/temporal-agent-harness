@@ -6,6 +6,8 @@ from temporalio.exceptions import ApplicationError
 
 from temporal_agent_harness.harness.stream_poll import (
     AgentStreamPollInput,
+    AgentStreamPollItem,
+    bounded_poll_result,
     replay_stream_state,
 )
 
@@ -54,3 +56,41 @@ def test_completed_stream_replay_rejects_a_truncated_specific_cursor() -> None:
 
     with pytest.raises(ApplicationError, match="has been truncated"):
         replay_stream_state(state, _input(2))
+
+
+def test_bounded_poll_result_pages_before_temporal_payload_warning() -> None:
+    items = [
+        AgentStreamPollItem(topic="turn_events", data="a" * 140_000, offset=4),
+        AgentStreamPollItem(topic="turn_events", data="b" * 140_000, offset=5),
+    ]
+
+    result = bounded_poll_result(
+        items,
+        next_offset=6,
+        more_ready=False,
+        closed=False,
+    )
+
+    assert result.items == items[:1]
+    assert result.next_offset == 5
+    assert result.more_ready
+    assert not result.closed
+
+
+def test_bounded_poll_result_advances_past_one_oversized_semantic_event() -> None:
+    items = [
+        AgentStreamPollItem(topic="turn_events", data="a" * 300_000, offset=4),
+        AgentStreamPollItem(topic="turn_events", data="next", offset=5),
+    ]
+
+    result = bounded_poll_result(
+        items,
+        next_offset=6,
+        more_ready=False,
+        closed=True,
+    )
+
+    assert result.items == items[:1]
+    assert result.next_offset == 5
+    assert result.more_ready
+    assert result.closed

@@ -33,6 +33,9 @@ from openai.types.responses.response_usage import (
 )
 
 from temporal_agent_harness.ai_sdks import openai_agents_harness as h
+from temporal_agent_harness.ai_sdks.openai_agents._invoke_model_activity import (
+    _append_compacted_stream_event,
+)
 from temporal_agent_harness.harness.agent_protocol import (
     AgentEventType,
     ModelInteractionEnded,
@@ -107,6 +110,27 @@ def _fn_call_added(item_id: str, call_id: str, name: str) -> ResponseOutputItemA
     return ResponseOutputItemAddedEvent.model_construct(
         type="response.output_item.added", item=item, output_index=0
     )
+
+
+def test_activity_result_compacts_adjacent_text_deltas() -> None:
+    events = []
+
+    _append_compacted_stream_event(events, _text_delta("hel"))
+    _append_compacted_stream_event(events, _text_delta("lo"))
+
+    assert len(events) == 1
+    assert isinstance(events[0], ResponseTextDeltaEvent)
+    assert events[0].delta == "hello"
+
+
+def test_activity_result_keeps_semantic_event_boundaries() -> None:
+    events = []
+
+    _append_compacted_stream_event(events, _text_delta("before"))
+    _append_compacted_stream_event(events, _reasoning_delta("thought"))
+    _append_compacted_stream_event(events, _text_delta("after"))
+
+    assert [event.delta for event in events] == ["before", "thought", "after"]
 
 
 def _args_delta(item_id: str, delta: str) -> ResponseFunctionCallArgumentsDeltaEvent:
