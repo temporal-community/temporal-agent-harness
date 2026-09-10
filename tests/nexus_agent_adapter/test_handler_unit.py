@@ -4,14 +4,19 @@
 
 from __future__ import annotations
 
+import dataclasses
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from temporalio.contrib.workflow_streams import PollResult
+from temporalio.contrib.workflow_streams._types import _WorkflowStreamWireItem
 from temporalio.converter import DataConverter
 
 from temporal_agent_harness.harness.agent_protocol.agent_interface import CallbackResultAck
 from temporal_agent_harness.nexus_agent_adapter.generated import (
+    PollMessagesOutput,
     ProvideCallbackResultInput,
     ProvideCallbackResultInputResult,
+    StreamItem,
 )
 from temporal_agent_harness.nexus_agent_adapter.handler import (
     AgentServiceHandler,
@@ -87,3 +92,46 @@ def test_is_workflow_already_completed_false_for_unrelated_error() -> None:
     err = MagicMock()
     err.__str__.return_value = "deadline exceeded"
     assert _is_workflow_already_completed(err) is False
+
+
+# ---------------------------------------------------------------------------
+# pollMessages wire-shape mirror
+# ---------------------------------------------------------------------------
+#
+# poll_messages returns the SDK's TemporalOperationResult unchanged, so the poll
+# update's own result IS the operation's result -- decoded here on the sync path, and
+# decoded by the caller when the async callback delivers it. That only works while
+# PollMessagesOutput mirrors WorkflowStream's PollResult field for field. If the IDL
+# drifts, the async path breaks where nothing can catch it: the server delivers that
+# payload directly and the handler never runs. These tests fail first instead.
+
+
+def test_poll_result_decodes_as_poll_messages_output() -> None:
+    poll_result = PollResult(
+        items=[_WorkflowStreamWireItem(topic="turn_events", data="cGF5", offset=7)],
+        next_offset=8,
+        more_ready=True,
+    )
+
+    decoded = _round_trip(poll_result, PollMessagesOutput)
+
+    assert isinstance(decoded, PollMessagesOutput)
+    assert decoded.next_offset == 8
+    assert decoded.more_ready is True
+    assert [(i.topic, i.data, i.offset) for i in decoded.items] == [
+        ("turn_events", "cGF5", 7)
+    ]
+    # Absent on the wire: only the already-completed sync path sets it.
+    assert decoded.closed is None
+
+
+def test_poll_result_and_poll_messages_output_have_the_same_wire_fields() -> None:
+    # The mirror stated as a field-set equality, so an added PollResult field is caught
+    # even if no test happens to carry a value for it.
+    poll_result_fields = {f.name for f in dataclasses.fields(PollResult)}
+    output_fields = {f.name for f in dataclasses.fields(PollMessagesOutput)}
+
+    assert poll_result_fields == output_fields - {"closed"}
+    assert {f.name for f in dataclasses.fields(_WorkflowStreamWireItem)} == {
+        f.name for f in dataclasses.fields(StreamItem)
+    }
