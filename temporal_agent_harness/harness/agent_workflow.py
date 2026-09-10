@@ -239,6 +239,10 @@ _CURRENT_RUNNER: contextvars.ContextVar[AgentWorkflowRunner | None] = (
     contextvars.ContextVar("agent_workflow_runner", default=None)
 )
 
+# Where ``run()`` records the runner on the workflow instance, and where
+# :meth:`AgentWorkflowRunner.current` reads it back.
+_RUNNER_ATTR = "__harness_agent_runner__"
+
 # The id of the tool call currently being executed. Per-invocation (so the same tool
 # requested several times in one turn each gets its own id).
 _CURRENT_TOOL_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -1913,6 +1917,21 @@ class AgentWorkflowRunner:
         """
         return self._status.current_stream_context
 
+    @staticmethod
+    def current() -> AgentWorkflowRunner | None:
+        """The runner of the agent executing this code, or ``None`` if there is none.
+
+        ``run()`` records it on the workflow instance. Code the harness does not call,
+        such as an AI SDK invoking its own MCP server, has no other route to the
+        approval policy and the turn stream.
+        """
+        if not workflow.in_workflow():
+            return None
+        return cast(
+            "AgentWorkflowRunner | None",
+            getattr(workflow.instance(), _RUNNER_ATTR, None),
+        )
+
     def _handle_close(self) -> None:
         self._closed = True
 
@@ -1938,6 +1957,11 @@ class AgentWorkflowRunner:
         does NOT end the session: its error surfaces as an :class:`AgentError` and the loop
         continues with the next message.
         """
+        # Setting this attribute allows tool calls that don't have the runner context to
+        # resolve the runner, in order to emit tool events and enforce approval policies.
+        # I.e., this happens in MCP tool calls where the MCP server may not have the runner
+        #       passed in.
+        setattr(agent, _RUNNER_ATTR, self)
         while not self._closed:
             await workflow.wait_condition(
                 lambda: self._status.has_pending_turns or self._closed

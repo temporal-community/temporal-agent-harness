@@ -495,9 +495,10 @@ def _require_harness_tool(tool_callable: Callable[..., Any]) -> None:
 def _runner_from_ctx(ctx: RunContext[Any], *, tool_name: str) -> AgentWorkflowRunner:
     """Read the live :class:`AgentWorkflowRunner` the author threaded onto ``ctx.deps``.
 
-    This is the explicit-threading contract (see :class:`HarnessDeps`): the runner is NOT assumed off
-    ``workflow.instance()`` — it is whatever the author passed as ``agent.run(deps=HarnessDeps(
-    runner=...))``. A harness tool runs in-workflow, where ``deps`` is still that live object, so the
+    This is the explicit-threading contract (see :class:`HarnessDeps`): on this path the runner is
+    whatever the author passed as ``agent.run(deps=HarnessDeps(runner=...))``, not what
+    ``AgentWorkflowRunner.current()`` resolves. Pydantic AI gives a tool its ``RunContext``, so there
+    is a typed slot to read. A harness tool runs in-workflow, where ``deps`` is still that live object, so the
     runner is available here. If it is missing, the tool was most likely run inside a Temporal
     activity (its ``tool_activity_config`` wrapper was not disabled) or ``deps`` did not carry the
     runner; raise with guidance."""
