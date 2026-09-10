@@ -14,6 +14,9 @@ from mcp import types
 
 from nexus_mcp.authoring import LIST_TOOLS_OPERATION
 
+# MCP uses reverse-DNS names for application metadata.
+IDEMPOTENCY_KEY_META_KEY = "io.temporal/idempotencyKey"
+
 
 @dataclass(frozen=True)
 class RequestContext:
