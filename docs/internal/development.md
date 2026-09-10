@@ -96,8 +96,8 @@ just package
 The resulting artifacts are written to `dist/`:
 
 ```text
-dist/temporal_agent_harness-0.1.0.tar.gz
-dist/temporal_agent_harness-0.1.0-py3-none-any.whl
+dist/temporal_agent_harness-0.2.0.tar.gz
+dist/temporal_agent_harness-0.2.0-py3-none-any.whl
 ```
 
 The wheel and sdist include:
