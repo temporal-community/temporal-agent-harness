@@ -1,6 +1,6 @@
 [project]
 name = "temporal-agent-harness"
-version = "0.1.0"
+version = "0.2.0"
 description = "Temporal-native agent harness (experimental) — durable agents on Temporal, with the AI SDKs you already use."
 readme = "README.md"
 requires-python = ">=3.11"

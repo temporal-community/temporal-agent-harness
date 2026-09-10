@@ -36,7 +36,7 @@ see [Versioning and stability](#versioning-and-stability) for why that matters.
 Clone at a release tag. No Node/pnpm needed: the browser UI ships prebuilt.
 
 ```bash
-git clone --branch 0.1.0 https://github.com/temporal-community/temporal-agent-harness.git
+git clone --branch 0.2.0 https://github.com/temporal-community/temporal-agent-harness.git
 cd temporal-agent-harness
 ```
 
@@ -55,7 +55,7 @@ project:
 
 ```bash
 # core harness — define and run agent workflows
-uv add "temporal-agent-harness @ git+https://github.com/temporal-community/temporal-agent-harness.git@0.1.0"
+uv add "temporal-agent-harness @ git+https://github.com/temporal-community/temporal-agent-harness.git@0.2.0"
 ```
 
 Or declare it in `pyproject.toml` — depend on the package (with any extras you need) and point
@@ -68,7 +68,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-temporal-agent-harness = { git = "https://github.com/temporal-community/temporal-agent-harness.git", tag = "0.1.0" }
+temporal-agent-harness = { git = "https://github.com/temporal-community/temporal-agent-harness.git", tag = "0.2.0" }
 ```
 
 Then run `uv sync`.

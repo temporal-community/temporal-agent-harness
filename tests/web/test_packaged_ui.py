@@ -480,7 +480,14 @@ def test_built_distributions_include_packaged_ui_assets(
         _assert_ui_assets_present(names)
         assert "temporal_agent_harness/web/worker.py" in names
 
-        metadata = wheel.read("temporal_agent_harness-0.1.0.dist-info/METADATA").decode()
+        # The dist-info directory name embeds the package version, so match it rather than
+        # hardcoding it — cutting a release shouldn't require editing this test.
+        (metadata_name,) = [
+            name
+            for name in names
+            if re.fullmatch(r"temporal_agent_harness-[^/]+\.dist-info/METADATA", name)
+        ]
+        metadata = wheel.read(metadata_name).decode()
         assert "Provides-Extra: ui" in metadata
         assert 'Requires-Dist: fastapi[standard]>=0.136.3; extra == "ui"' in metadata
 
