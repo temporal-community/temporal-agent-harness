@@ -26,9 +26,11 @@
 # DESIGN — Temporal Client: the activity needs a ``Client`` to talk to
 # the *child* (both the ``send_agent_message`` update and the stream subscribe). It can't use
 # ``WorkflowStreamClient.from_within_activity()`` (that targets the activity's own parent).
-# So this is a CLASS that closes over the worker's client; register the bound method as the
-# activity (``activities=[SubagentActivities(client).run_subagent_turn]``). A future harness
-# worker plugin will instantiate it from the worker's client automatically.
+# So this is a CLASS that closes over the worker's client; the bound method is what gets
+# registered as the activity. ``AgentHarnessPlugin`` does that instantiation from the worker's
+# own client (it is why the plugin overrides ``configure_worker``), so agents normally never
+# touch this class — reach for it directly only when hand-building a worker's activity list
+# (``activities=[SubagentActivities(client).run_subagent_turn]``).
 
 from __future__ import annotations
 
@@ -81,15 +83,15 @@ class _TurnProgress(BaseModel):
 class SubagentActivities:
     """Harness activities for driving subagents, bound to a Temporal :class:`Client`.
 
-    Construct with the worker's client (closed over so the activity can talk to *child*
-    workflows) and register the bound activity method on the worker::
+    ``AgentHarnessPlugin`` constructs this from the worker's own client and registers the
+    bound activity method, so agents normally never name this class. Do it by hand only when
+    assembling a worker's activity list yourself::
 
         subagents = SubagentActivities(client)
         Worker(..., activities=[subagents.run_subagent_turn, ...])
 
     Kept a class (rather than a module-level client global) so the client is an explicit
-    construction dependency; a future harness worker plugin instantiates this from the
-    worker's client automatically.
+    construction dependency — which is what lets the plugin supply the worker's own.
     """
 
     def __init__(self, client: Client) -> None:

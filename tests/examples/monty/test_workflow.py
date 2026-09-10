@@ -29,7 +29,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessageReply,
 )
 
-from temporal_agent_harness.harness.code_mode.activities import CODE_MODE_ACTIVITIES
+from temporal_agent_harness.plugin import AgentHarnessPlugin
 
 from examples.monty import activities
 from examples.monty.workflow import MontyDynamicAgentWorkflow
@@ -41,11 +41,14 @@ async def client_and_queue():
         data_converter=pydantic_data_converter
     )
     task_queue = f"monty-agent-test-{uuid.uuid4()}"
+    # Mirrors examples/monty/worker.py: the harness plugin registers the travel tools' activity
+    # bodies and the Code Mode stepping activities. (Passed to the Worker rather than the
+    # client because the test env's client is already connected.)
     async with Worker(
         env.client,
         task_queue=task_queue,
         workflows=[MontyDynamicAgentWorkflow],
-        activities=[*activities.ALL_ACTIVITIES, *CODE_MODE_ACTIVITIES],
+        plugins=[AgentHarnessPlugin(tools=activities.ALL_TOOLS)],
     ):
         try:
             yield env.client, task_queue

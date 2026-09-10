@@ -90,10 +90,9 @@ want the built-in session manager and UI use `temporal_agent_harness.web`:
 
 ```python
 from temporalio.client import Client
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
 
-from temporal_agent_harness.utils.large_payload import with_large_payload_offload
+from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporal_agent_harness.web import (
     create_agent_harness_app,
     create_session_manager_worker,
@@ -102,10 +101,7 @@ from temporal_agent_harness.web import (
 
 async def run_session_manager() -> None:
     connect_config = ClientConfig.load_client_connect_config()
-    client = await Client.connect(
-        **connect_config,
-        data_converter=await with_large_payload_offload(pydantic_data_converter),
-    )
+    client = await Client.connect(**connect_config, plugins=[AgentHarnessPlugin()])
     worker = create_session_manager_worker(client)
     await worker.run()
 
@@ -294,6 +290,40 @@ class TravelAgent:
         ...
 ```
 
+## Running a worker — one plugin
+
+An agent is a Temporal workflow, so it runs on a Temporal worker. `AgentHarnessPlugin` is the
+single registration that wires that worker (and its client) for the harness — you never
+assemble the harness's activity list or its data converter by hand:
+
+```python
+from temporalio.client import Client
+from temporalio.envconfig import ClientConfig
+from temporalio.worker import Worker
+
+from temporal_agent_harness.plugin import AgentHarnessPlugin
+
+client = await Client.connect(
+    **ClientConfig.load_client_connect_config(),
+    # Your AI SDK's plugin first, the harness plugin last.
+    plugins=[OpenAIAgentsPlugin(model_params=...), AgentHarnessPlugin(tools=MY_TOOLS)],
+)
+
+worker = Worker(client, task_queue="my-agent", workflows=[TravelAgent])
+await worker.run()
+```
+
+The worker declares only its workflows. Adding the plugin brings:
+
+- the harness's **data converter** (Pydantic + large-payload offload) — add the plugin to every
+  client, worker, and server in the deployment so they all agree on it;
+- the durable **activity body** of each `@agent.activity_tool_defn` tool in `tools=` (pass your
+  whole toolset — tools with no worker-side body are skipped);
+- the **subagent** and **Code Mode** activities.
+
+Order it last, after any AI SDK's plugin, so that SDK's payload converter wins. Registering it
+on the client is enough — Temporal applies a client's plugins to workers built from it.
+
 ## Code Mode
 
 Most agents call tools one at a time — a round-trip per call. **Code Mode** hands the model a
@@ -337,19 +367,15 @@ run_code = agent.code_mode_tool(
 - **Several per agent.** Give one agent multiple `code_mode_tool`s (distinct `name`s) over
   disjoint or overlapping tool sets.
 
-A worker that hosts a Code Mode agent registers the two sandbox-stepping activities (this needs
-the `code-mode` extra, which pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/),
-the sandbox scripts run in) alongside the durable bodies of any activity-backed host tools:
+A worker that hosts a Code Mode agent needs the two sandbox-stepping activities and the durable
+bodies of any activity-backed host tools. Both come from
+[`AgentHarnessPlugin`](#running-a-worker--one-plugin) — the stepping activities as soon as the
+`code-mode` extra (which pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/),
+the sandbox the scripts run in) is installed:
 
 ```python
-from temporal_agent_harness.harness.code_mode.activities import CODE_MODE_ACTIVITIES
-
-worker = Worker(
-    client,
-    task_queue=...,
-    workflows=[MyAgent],
-    activities=[*CODE_MODE_ACTIVITIES, *(agent.tool_activity(t) for t in my_activity_tools)],
-)
+client = await Client.connect(..., plugins=[AgentHarnessPlugin(tools=my_tools)])
+worker = Worker(client, task_queue=..., workflows=[MyAgent])
 ```
 
 See [`examples/monty`](examples/monty) for three agents all built on Code Mode: a no-model script

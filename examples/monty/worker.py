@@ -30,15 +30,12 @@ import os
 import sys
 
 from google.genai import Client as GeminiClient
-from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
-from temporal_agent_harness.utils.large_payload import with_large_payload_offload
 from temporalio.client import Client
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
-from temporal_agent_harness.harness.code_mode.activities import CODE_MODE_ACTIVITIES
-from temporal_agent_harness.harness.subagent_activities import SubagentActivities
+from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
 
 from . import activities
 from .conversational_subagent_workflow import MontyChatSubagentWorkflow
@@ -62,25 +59,31 @@ async def main() -> None:
 
     task_queue = os.environ.get("MONTY_AGENT_TASK_QUEUE", TASK_QUEUE)
 
-    # Match the session-manager worker + server: the large-payload offload codec. Monty
-    # snapshot bytes cross the activity boundary and land in workflow history, so they can
-    # exceed Temporal's payload limit; the codec offloads big payloads to external storage
-    # and stores a reference. Every process that reads these payloads uses the same codec, so
-    # the converters MUST match or offloaded payloads can't be read back.
-    # The conversational Monty agent (MontyChatAgent) drives the Gemini Interactions API,
-    # so this worker now needs the Gemini plugin (it auto-registers the interactions
-    # activity). The original script-only MontyDynamicAgent doesn't use it, but sharing one
-    # worker keeps the demo simple.
+    # The conversational Monty agent (MontyChatAgent) drives the Gemini Interactions API, so
+    # this worker needs the Gemini plugin (it auto-registers the interactions activity). The
+    # original script-only MontyDynamicAgent doesn't use it, but sharing one worker keeps the
+    # demo simple.
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         sys.exit("error: GEMINI_API_KEY env var not set")
-    plugin = GoogleGenAIPlugin(GeminiClient(api_key=api_key))
 
+    # Two plugins, harness LAST so the Gemini plugin's payload converter wins:
+    #   * GoogleGenAIPlugin  — the Gemini interactions activity.
+    #   * AgentHarnessPlugin — everything the harness itself needs on this worker: the
+    #     large-payload offload converter (Monty snapshot bytes cross the activity boundary
+    #     and land in workflow history, so they can exceed Temporal's payload limit — and
+    #     every process reading them must use the SAME converter, which is exactly what
+    #     adding this plugin everywhere guarantees), the Code Mode sandbox-stepping
+    #     activities (all three agents run their scripts through Code Mode), the
+    #     subagent-turn activity (drives the script-runner child for MontyChatSubagentAgent),
+    #     and the durable activity body of every travel tool in ALL_TOOLS.
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
         **connect_config,
-        plugins=[plugin],
-        data_converter=await with_large_payload_offload(pydantic_data_converter),
+        plugins=[
+            GoogleGenAIPlugin(GeminiClient(api_key=api_key)),
+            AgentHarnessPlugin(tools=activities.ALL_TOOLS),
+        ],
     )
 
     # All three Monty agents run here: the script-only MontyDynamicAgent, the inline
@@ -89,10 +92,8 @@ async def main() -> None:
     # session manager is hosted by its own worker, not here; it dispatches these agents
     # to this queue by name.
     #
-    # SubagentActivities closes over this worker's client so its run_subagent_turn activity can
-    # send updates to + stream the reply from the child MontyDynamicAgent workflow. It's the
-    # activity the subagent toolset's monty_run_script tool dispatches each turn.
-    subagents = SubagentActivities(client)
+    # No `activities=` at all: a client plugin is applied to the workers built from that
+    # client, so both plugins register their own activities here.
     worker = Worker(
         client,
         task_queue=task_queue,
@@ -100,16 +101,6 @@ async def main() -> None:
             MontyDynamicAgentWorkflow,
             MontyChatAgentWorkflow,
             MontyChatSubagentWorkflow,
-        ],
-        # The travel-booking activities (the host functions, dispatched by Code Mode) plus the
-        # Code Mode sandbox-stepping activities (shared by all three agents — every one runs its
-        # scripts through the harness Code Mode). Plus the subagent-turn activity (drives the
-        # script-runner child for MontyChatSubagentAgent). The Gemini interactions activity is
-        # registered by the plugin above.
-        activities=[
-            *activities.ALL_ACTIVITIES,
-            *CODE_MODE_ACTIVITIES,
-            subagents.run_subagent_turn,
         ],
     )
     print(

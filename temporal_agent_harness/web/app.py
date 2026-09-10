@@ -19,7 +19,7 @@ from temporalio.api.enums.v1 import EventType
 from temporalio.api.history.v1 import HistoryEvent
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowHandle
 from temporalio.common import WorkflowIDConflictPolicy
-from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.converter import ExternalStorage
 from temporalio.envconfig import ClientConfig
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
@@ -44,8 +44,9 @@ from temporal_agent_harness.harness.agent_protocol import (
     OperatorCommandResult,
     SEND_AGENT_MESSAGE_UPDATE,
 )
+from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporal_agent_harness.ui import packaged_ui_dist
-from temporal_agent_harness.utils.large_payload import with_large_payload_offload
+from temporal_agent_harness.utils.large_payload import DEFAULT_PAYLOAD_STORAGE
 from temporal_agent_harness.web.registry import load_agent_registry
 from temporal_agent_harness.web.session_manager import (
     SESSION_MANAGER_ID,
@@ -113,6 +114,7 @@ def create_agent_harness_app(
     static_dir: Path | str | None = None,
     index_file: str = "index.html",
     states_file: str | None = None,
+    large_payload_offload: ExternalStorage | None = DEFAULT_PAYLOAD_STORAGE,
 ) -> FastAPI:
     """Create the reusable harness web API.
 
@@ -125,6 +127,12 @@ def create_agent_harness_app(
             the packaged Vite UI is served if it is present in the installed package.
         index_file: File in ``static_dir`` served from ``/``.
         states_file: Optional file in ``static_dir`` served from ``/states``.
+        large_payload_offload: Where oversized payloads are offloaded, forwarded to
+            ``AgentHarnessPlugin``. Must match what every agent worker and the
+            session-manager worker use, or this server can't read their payloads. The
+            default is single-host only; build
+            :func:`~temporal_agent_harness.utils.large_payload.s3_payload_storage` in your
+            own async startup and pass it for a multi-host deploy.
     """
 
     static_path = Path(static_dir) if static_dir is not None else packaged_ui_dist()
@@ -132,9 +140,14 @@ def create_agent_harness_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         connect_config = ClientConfig.load_client_connect_config()
+        # The harness plugin is where the data converter is DEFINED — the same one every agent
+        # worker and the session-manager worker get by adding the same plugin. An offloaded
+        # payload is only readable by a process using the matching converter, so this app must
+        # not spell one out of its own. The plugin's activity registration is a WORKER concern
+        # and this app hosts no worker, so it simply doesn't apply here.
         app.state.temporal = await Client.connect(
             **connect_config,
-            data_converter=await with_large_payload_offload(pydantic_data_converter),
+            plugins=[AgentHarnessPlugin(large_payload_offload=large_payload_offload)],
         )
 
         resolved_registry = _resolve_registry(registry, registry_path)

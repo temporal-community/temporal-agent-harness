@@ -9,4 +9,7 @@ Subpackages:
     the agent/subagent protocol, tool definitions, and human-in-the-loop tool approvals.
   * :mod:`temporal_agent_harness.ai_sdks`  — integrations that make AI SDK calls durable
     Temporal activities (currently the Google Gemini SDK).
+  * :mod:`temporal_agent_harness.plugin`   — ``AgentHarnessPlugin``, the one Temporal plugin
+    that wires a client + worker for all of the above: it supplies the harness's data
+    converter and registers its activities, so a worker declares only its workflows.
 """

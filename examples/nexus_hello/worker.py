@@ -25,6 +25,7 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
+from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporal_agent_harness.ai_sdks.openai_agents import (
     ModelActivityParameters,
     OpenAIAgentsPlugin,
@@ -57,8 +58,12 @@ async def main() -> None:
         observer_factory=harness_observer_factory,
     )
 
+    # Harness plugin LAST so the OpenAI plugin's payload converter wins; it then adds the
+    # harness's data-converter requirements and activities on top.
     connect_config = ClientConfig.load_client_connect_config()
-    client = await Client.connect(**connect_config, plugins=[plugin])
+    client = await Client.connect(
+        **connect_config, plugins=[plugin, AgentHarnessPlugin()]
+    )
 
     worker = Worker(
         client,

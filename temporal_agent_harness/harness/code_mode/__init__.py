@@ -12,10 +12,16 @@ the sandbox engine (the optional ``code-mode`` extra):
   * Workflow-safe (this ``__init__`` and the ``batch_models`` / ``stubs`` / ``driver`` / ``tool``
     modules): safe to import anywhere, including inside a workflow. ``code_mode_tool`` and
     ``CodeModeStubError`` are the public surface, re-exported here.
-  * Worker-side (:mod:`.activities`): imports ``pydantic_monty`` and defines the sandbox-stepping
-    activities. A worker registers them via ``from ...code_mode.activities import
-    CODE_MODE_ACTIVITIES``; nothing here imports that module, so the workflow-safe surface stays
-    free of the engine dependency.
+  * Worker-side (:mod:`.activities`): the two sandbox-stepping activities.
+    ``AgentHarnessPlugin`` registers them on every worker (a worker can also register
+    ``CODE_MODE_ACTIVITIES`` from that module by hand); nothing here imports that module, so
+    the workflow-safe surface stays free of it. It imports no Monty itself — it checks that
+    the ``code-mode`` extra is installed and then delegates — so it loads without the extra
+    and a misconfigured worker fails a Code Mode call with an actionable, non-retryable error
+    instead of leaving the activity names unregistered, which Temporal retries forever.
+  * Worker-side engine (:mod:`.monty_stepper`): the stepping logic, and the only module that
+    imports ``pydantic_monty``. Kept separate purely so it can import Monty normally and be
+    type-checked against it; import it only after that extra check.
 """
 
 from .stubs import CodeModeStubError

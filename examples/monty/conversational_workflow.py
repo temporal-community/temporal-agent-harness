@@ -62,7 +62,7 @@ with workflow.unsafe.imports_passed_through():
 
 
 TASK_QUEUE = "monty-dynamic-agent"
-SUPPORTED_MODELS = ("gemini-3.5-flash", "gemini-3.1-flash-lite")
+SUPPORTED_MODELS = ("gemini-3.8-flash", "gemini-3.1-flash-lite")
 DEFAULT_MODEL = SUPPORTED_MODELS[0]
 
 
@@ -120,13 +120,7 @@ class MontyChatAgentWorkflow:
         # Python script that calls the travel operations as async host functions; each host call
         # runs as a durable, approval-gated activity via run_tool.
         self._code_tool = agent.code_mode_tool(
-            [
-                activities.search_flights_activity,
-                activities.search_hotels_activity,
-                activities.book_flight_activity,
-                activities.book_hotel_activity,
-                activities.get_trip_summary_activity,
-            ],
+            activities.ALL_TOOLS,
             name="run_travel_code",
         )
 

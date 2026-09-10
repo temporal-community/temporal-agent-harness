@@ -8,9 +8,11 @@ tool with no worker-side body, so there are no harness tool activities to regist
 `AgentPlugin` registers the agent's activities (model request/stream, event_stream_handler, and the
 toolset's call_tool) itself.
 
-Two plugins, mirroring the upstream Pydantic AI Temporal setup:
+Three plugins — the upstream Pydantic AI Temporal setup plus the harness's own:
   * ``PydanticAIPlugin`` on the CLIENT — installs the Pydantic-compatible data converter and the
     workflow-sandbox passthroughs the SDK needs.
+  * ``AgentHarnessPlugin`` on the CLIENT, after it — the harness's data-converter requirements
+    and activities.
   * ``AgentPlugin(temporal_agent)`` on the WORKER — registers the durable agent's activities.
 
 The harness streaming path is wired on the agent itself (in workflow.py): its
@@ -36,6 +38,8 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
+from temporal_agent_harness.plugin import AgentHarnessPlugin
+
 from .workflow import TASK_QUEUE, PydanticAIHelloAgentWorkflow, _TEMPORAL_AGENT
 
 
@@ -51,17 +55,20 @@ async def main() -> None:
     if not os.environ.get("OPENAI_API_KEY"):
         sys.exit("error: OPENAI_API_KEY env var not set")
 
-    # PydanticAIPlugin supplies the Pydantic-compatible data converter + sandbox passthroughs.
+    # PydanticAIPlugin supplies the Pydantic-compatible data converter + sandbox passthroughs;
+    # AgentHarnessPlugin (last) leaves that converter in place and adds the harness's own
+    # requirements — the large-payload offload plus its activities.
     connect_config = ClientConfig.load_client_connect_config()
-    client = await Client.connect(**connect_config, plugins=[PydanticAIPlugin()])
+    client = await Client.connect(
+        **connect_config, plugins=[PydanticAIPlugin(), AgentHarnessPlugin()]
+    )
 
     worker = Worker(
         client,
         task_queue=task_queue,
         workflows=[PydanticAIHelloAgentWorkflow],
-        # No harness tool activities: get_weather is an inline workflow tool. The durable agent's
-        # activities are registered by AgentPlugin.
-        activities=[],
+        # No activities to declare: get_weather is an inline workflow tool, the durable agent's
+        # activities come from AgentPlugin, and the harness's own come from AgentHarnessPlugin.
         plugins=[AgentPlugin(_TEMPORAL_AGENT)],
     )
     print(

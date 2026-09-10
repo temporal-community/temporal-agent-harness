@@ -17,7 +17,6 @@ from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
@@ -27,7 +26,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     AgentMessageReply,
 )
-from temporal_agent_harness.harness.code_mode.activities import CODE_MODE_ACTIVITIES
+from temporal_agent_harness.plugin import AgentHarnessPlugin
 
 from ._code_mode_e2e_parent import CODE_MODE_TOOLS, CodeModeE2EParentWorkflow
 
@@ -42,12 +41,9 @@ async def client_and_queue():
         env.client,
         task_queue=task_queue,
         workflows=[CodeModeE2EParentWorkflow],
-        # The generic Code Mode stepping activities + the durable bodies of the host tools
-        # (registered the normal way, like any @agent.activity_tool_defn).
-        activities=[
-            *CODE_MODE_ACTIVITIES,
-            *(agent.tool_activity(t) for t in CODE_MODE_TOOLS),
-        ],
+        # One plugin supplies both the generic Code Mode stepping activities and the durable
+        # bodies of the host tools.
+        plugins=[AgentHarnessPlugin(tools=CODE_MODE_TOOLS)],
     ):
         try:
             yield env.client, task_queue

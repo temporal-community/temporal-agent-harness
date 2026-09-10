@@ -1,41 +1,39 @@
-"""Tests for the large-payload storage-driver selection.
+"""Tests for the large-payload storage factories.
 
 The S3 round-trip uses a threaded moto server (the reliable way to exercise
 aioboto3/aiobotocore, which talk real HTTP) reached via the standard AWS
-endpoint env var — the same mechanism _s3_storage_driver() relies on in prod.
+endpoint env var — the same mechanism s3_payload_storage() relies on in prod.
 
 Run with: `uv run pytest tests/utils/test_large_payload.py -v`
 """
 
-import importlib
 import os
 
 import pytest
 from moto.server import ThreadedMotoServer
 from temporalio.api.common.v1 import Payload
+from temporalio.contrib.pydantic import pydantic_data_converter
+
+from temporal_agent_harness.utils.large_payload import (
+    DEFAULT_PAYLOAD_SIZE_THRESHOLD,
+    DEFAULT_PAYLOAD_STORAGE,
+    LocalFileStorageDriver,
+    local_payload_storage,
+    s3_payload_storage,
+    with_large_payload_offload,
+)
 
 BUCKET = "large-payload-test-bucket"
 
 
-def _reload_with_driver(kind: str):
-    """Reimport large_payload so module-level _DRIVER_KIND picks up LARGE_PAYLOAD_DRIVER."""
-    os.environ["LARGE_PAYLOAD_DRIVER"] = kind
-    from temporal_agent_harness.utils import large_payload
-
-    return importlib.reload(large_payload)
-
-
 @pytest.fixture(autouse=True)
 def _restore_env():
-    """Snapshot/restore the env this module mutates, so the reload-based driver
-    selection can't leak LARGE_PAYLOAD_DRIVER (etc.) into other test files."""
+    """Snapshot/restore the AWS env the S3 fixture sets, so it can't leak between files."""
     keys = (
         "AWS_ENDPOINT_URL",
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "AWS_DEFAULT_REGION",
-        "LARGE_PAYLOAD_DRIVER",
-        "LARGE_PAYLOAD_S3_BUCKET",
     )
     prev = {k: os.environ.get(k) for k in keys}
     try:
@@ -58,7 +56,6 @@ def s3_server():
     os.environ["AWS_ACCESS_KEY_ID"] = "testing"
     os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
     os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
-    os.environ["LARGE_PAYLOAD_S3_BUCKET"] = BUCKET
     try:
         import boto3
 
@@ -68,11 +65,65 @@ def s3_server():
         server.stop()
 
 
-async def test_s3_driver_round_trip(s3_server):
+# ---------------------------------------------------------------- local
+
+
+def test_local_storage_defaults():
+    storage = local_payload_storage()
+    [driver] = storage.drivers
+    assert isinstance(driver, LocalFileStorageDriver)
+    assert driver.name() == "local-file"
+    assert storage.payload_size_threshold == DEFAULT_PAYLOAD_SIZE_THRESHOLD
+
+
+def test_local_storage_takes_its_config_as_arguments(tmp_path):
+    """No env vars: the directory and threshold are passed in by the caller."""
+    storage = local_payload_storage(base_dir=tmp_path, payload_size_threshold=10)
+    assert storage.payload_size_threshold == 10
+    assert storage.drivers[0]._base == tmp_path
+
+
+async def test_local_driver_round_trip(tmp_path):
+    [driver] = local_payload_storage(base_dir=tmp_path).drivers
+
+    payload = Payload(metadata={"encoding": b"json/plain"}, data=b"y" * 2_000_000)
+    claims = await driver.store(_ctx(), [payload])
+    assert len(claims) == 1
+    assert list(tmp_path.glob("*.bin")), "payload should have landed on disk"
+
+    [restored] = await driver.retrieve(_ctx(), claims)
+    assert restored.data == payload.data
+    assert restored.metadata["encoding"] == b"json/plain"
+
+
+async def test_local_driver_rejects_a_traversing_claim_key(tmp_path):
+    [driver] = local_payload_storage(base_dir=tmp_path).drivers
+    from temporalio.converter import StorageDriverClaim
+
+    with pytest.raises(ValueError, match="invalid storage claim key"):
+        await driver.retrieve(_ctx(), [StorageDriverClaim(claim_data={"key": "../x"})])
+
+
+def test_the_shared_default_is_local_storage():
+    """Everything that doesn't configure a backend must land on the SAME instance.
+
+    The plugin, the packaged web app, and any hand-built converter all default to this one
+    object; an offloaded payload is only readable by a process using the matching backend.
+    """
+    [driver] = DEFAULT_PAYLOAD_STORAGE.drivers
+    assert isinstance(driver, LocalFileStorageDriver)
+    assert DEFAULT_PAYLOAD_STORAGE.payload_size_threshold == DEFAULT_PAYLOAD_SIZE_THRESHOLD
+
+
+# ---------------------------------------------------------------- s3
+
+
+async def test_s3_storage_round_trip(s3_server):
     import boto3
 
-    large_payload = _reload_with_driver("s3")
-    driver = await large_payload._s3_storage_driver()
+    storage = await s3_payload_storage(bucket=BUCKET)
+    assert storage.payload_size_threshold == DEFAULT_PAYLOAD_SIZE_THRESHOLD
+    [driver] = storage.drivers
 
     payload = Payload(metadata={"encoding": b"json/plain"}, data=b"x" * 3_000_000)
 
@@ -89,23 +140,22 @@ async def test_s3_driver_round_trip(s3_server):
     assert restored.metadata["encoding"] == b"json/plain"
 
 
-async def test_s3_driver_requires_bucket(s3_server):
-    large_payload = _reload_with_driver("s3")
-    os.environ.pop("LARGE_PAYLOAD_S3_BUCKET")
-    with pytest.raises(RuntimeError, match="LARGE_PAYLOAD_S3_BUCKET"):
-        await large_payload._s3_storage_driver()
+# ---------------------------------------------------------------- converter helper
 
 
-async def test_default_local_driver():
-    large_payload = _reload_with_driver("local")
-    driver = await large_payload._build_storage_driver()
-    assert isinstance(driver, large_payload.LocalFileStorageDriver)
+def test_with_large_payload_offload_applies_the_given_storage(tmp_path):
+    storage = local_payload_storage(base_dir=tmp_path)
+    converted = with_large_payload_offload(pydantic_data_converter, storage)
+    assert converted.external_storage is storage
+    assert pydantic_data_converter.external_storage is None, "must not mutate the input"
 
 
-async def test_unknown_driver_rejected():
-    large_payload = _reload_with_driver("bogus")
-    with pytest.raises(ValueError, match="unknown LARGE_PAYLOAD_DRIVER"):
-        await large_payload._build_storage_driver()
+def test_with_large_payload_offload_refuses_to_clobber_existing_storage(tmp_path):
+    already = with_large_payload_offload(
+        pydantic_data_converter, local_payload_storage(base_dir=tmp_path)
+    )
+    with pytest.raises(ValueError, match="already has external_storage"):
+        with_large_payload_offload(already, local_payload_storage(base_dir=tmp_path))
 
 
 def _ctx():

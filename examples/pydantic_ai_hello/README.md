@@ -39,7 +39,7 @@ harness needs. The harness only supplies a thin glue module.
 | File | Role |
 |---|---|
 | `workflow.py` | `PydanticAIHelloAgent` — the harness agent; one `ask` handler, one `get_weather` tool, driven by `TemporalAgent.run` + the harness event-stream handler. |
-| `worker.py` | Worker hosting the workflow; `PydanticAIPlugin` on the client, `AgentPlugin(agent)` on the worker. |
+| `worker.py` | Worker hosting the workflow; `PydanticAIPlugin` + `AgentHarnessPlugin` on the client, `AgentPlugin(agent)` on the worker. |
 | `agents.toml` | Registry entry that makes this agent selectable in the shared web UI. |
 
 There is **no per-example client**: like the other examples, this agent is driven by the shared

@@ -30,7 +30,7 @@ streaming activity, to the live turn stream the web UI consumes.
 | File | Role |
 |---|---|
 | `workflow.py` | `OpenAIHelloAgent` — the harness agent; one `ask` handler, one `get_weather` tool, driven by `Runner.run_streamed`. |
-| `worker.py` | Worker hosting the workflow; wires the plugin for the harness streaming seam. |
+| `worker.py` | Worker hosting the workflow; wires the OpenAI plugin for the harness streaming seam, plus `AgentHarnessPlugin` for the harness's own converter and activities. |
 | `agents.toml` | Registry entry that makes this agent selectable in the shared web UI. |
 
 There is **no per-example client**: like the Monty example, this agent is driven by the shared
