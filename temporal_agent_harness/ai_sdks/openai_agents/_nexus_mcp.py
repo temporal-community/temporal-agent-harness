@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult, GetPromptResult, ListPromptsResult
     from mcp.types import Tool as MCPTool
 
+    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+
 _INSTALL_MESSAGE = (
     "Nexus-brokered MCP support requires the root project's optional `nexus-mcp` "
     "extra and Python >=3.13. The extra installs the local `temporal-nexus-mcp` "
@@ -86,18 +88,39 @@ class NexusGateway:
         self._gateway_name = gateway_name
         self._gateway_endpoint = gateway_endpoint
 
-    def mcp_servers(self, *aliases: str) -> MCPServer:
+    def mcp_servers(
+        self,
+        *aliases: str,
+        runner: "AgentWorkflowRunner",
+        inherently_safe: bool = False,
+    ) -> MCPServer:
         """One MCPServer exposing the given registered aliases' tools, fetched with a
         single Nexus call. An alias that isn't actually registered is silently skipped
-        for now (no error handling yet -- this is a prototype).
+        for now.
+
+        TODO(long-nt-tran): more granular error handling.
+
+        ``runner`` is the agent's own runner. Governance needs it, and the SDK calls
+        ``call_tool`` with no run context.
+
+        ``inherently_safe`` declares whether tools exposed from the server(s) are
+        safe, as a hint for the ToolApprovalPolicy.
         """
+        from temporal_agent_harness.ai_sdks.openai_agents_harness import (
+            as_harness_mcp_server,
+        )
+
         display_name = f"{self._agent_id}-{self._gateway_name}-{self._gateway_endpoint}"
-        return _NexusGatewayMCPServer(
-            self._agent_id,
-            frozenset(aliases),
-            self._gateway_name,
-            self._gateway_endpoint,
-            display_name,
+        return as_harness_mcp_server(
+            _NexusGatewayMCPServer(
+                self._agent_id,
+                frozenset(aliases),
+                self._gateway_name,
+                self._gateway_endpoint,
+                display_name,
+            ),
+            runner,
+            inherently_safe=inherently_safe,
         )
 
 

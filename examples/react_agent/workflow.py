@@ -124,7 +124,11 @@ class ReactAgentWorkflow:
             # caching each step re-runs the MCP `list_tools` activity. The F1 tool set is static, so
             # cache it — one `list_tools` per turn instead of one per model step. (The reference is
             # rebuilt each turn, so the cache is per-turn, not per-session.)
-            mcp_servers=[stateless_mcp_server(MCP_SERVER_NAME, cache_tools_list=True)],
+            mcp_servers=[
+                stateless_mcp_server(
+                    MCP_SERVER_NAME, cache_tools_list=True, runner=self._runner
+                )
+            ],
         )
         input_items: list[TResponseInputItem] = [
             *self._conversation,

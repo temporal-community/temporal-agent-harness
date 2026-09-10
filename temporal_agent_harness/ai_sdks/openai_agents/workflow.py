@@ -36,6 +36,7 @@ if typing.TYPE_CHECKING:
     from agents.mcp import MCPServer
 
     from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import NexusGateway
+    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
 
 def activity_as_tool(
@@ -283,6 +284,9 @@ def stateless_mcp_server(
     config: ActivityConfig | None = None,
     cache_tools_list: bool = False,
     factory_argument: Any | None = None,
+    *,
+    runner: "AgentWorkflowRunner",
+    inherently_safe: bool = False,
 ) -> "MCPServer":
     """A stateless MCP server implementation for Temporal workflows.
 
@@ -299,13 +303,25 @@ def stateless_mcp_server(
                Defaults to 1-minute start-to-close timeout.
         cache_tools_list: If true, the list of tools will be cached for the duration of the server
         factory_argument: Optional argument to be provided to the factory when producing an MCPServer
+        runner: The agent's runner. Governance needs it, and the SDK calls call_tool
+               with no run context.
+        inherently_safe: Declares every tool on this server safe under any input. The
+               agent's ToolApprovalPolicy decides whether that skips the approval gate.
     """
-    from temporal_agent_harness.ai_sdks.openai_agents._mcp import (
-        _StatelessMCPServerReference,
-    )
+    # Passed through: a sandbox re-import would give the runner's isinstance check a
+    # different class object.
+    with temporal_workflow.unsafe.imports_passed_through():
+        from temporal_agent_harness.ai_sdks.openai_agents._mcp import (
+            _StatelessMCPServerReference,
+        )
+        from temporal_agent_harness.ai_sdks.openai_agents_harness import (
+            as_harness_mcp_server,
+        )
 
-    return _StatelessMCPServerReference(
-        name, config, cache_tools_list, factory_argument
+    return as_harness_mcp_server(
+        _StatelessMCPServerReference(name, config, cache_tools_list, factory_argument),
+        runner,
+        inherently_safe=inherently_safe,
     )
 
 
@@ -314,6 +330,9 @@ def stateful_mcp_server(
     config: ActivityConfig | None = None,
     server_session_config: ActivityConfig | None = None,
     factory_argument: Any | None = None,
+    *,
+    runner: "AgentWorkflowRunner",
+    inherently_safe: bool = False,
 ) -> AbstractAsyncContextManager["MCPServer"]:
     """A stateful MCP server implementation for Temporal workflows.
 
@@ -335,19 +354,38 @@ def stateful_mcp_server(
         server_session_config: Optional activity configuration for the connection activity.
                        Defaults to 1-hour start-to-close timeout.
         factory_argument: Optional argument to be provided to the factory when producing an MCPServer
+        runner: See stateless_mcp_server.
+        inherently_safe: See stateless_mcp_server.
     """
-    from temporal_agent_harness.ai_sdks.openai_agents._mcp import (
-        _StatefulMCPServerReference,
-    )
+    # Passed through: see stateless_mcp_server.
+    with temporal_workflow.unsafe.imports_passed_through():
+        from temporal_agent_harness.ai_sdks.openai_agents._mcp import (
+            _StatefulMCPServerReference,
+        )
+        from temporal_agent_harness.ai_sdks.openai_agents_harness import (
+            as_harness_mcp_server,
+        )
 
-    return _StatefulMCPServerReference(
-        name, config, server_session_config, factory_argument
+    # Governance mutates the reference and returns it, so this is still the async
+    # context manager the caller enters. The cast restores that in the type.
+    return typing.cast(
+        AbstractAsyncContextManager["MCPServer"],
+        as_harness_mcp_server(
+            _StatefulMCPServerReference(
+                name, config, server_session_config, factory_argument
+            ),
+            runner,
+            inherently_safe=inherently_safe,
+        ),
     )
 
 
 def nexus_native_mcp_server(
     name: str,
     endpoint: str,
+    *,
+    runner: "AgentWorkflowRunner",
+    inherently_safe: bool = False,
     **kwargs: Any,
 ) -> "MCPServer":
     """OpenAI Agents MCP adapter for one native Nexus tool service.
@@ -362,6 +400,8 @@ def nexus_native_mcp_server(
     Args:
         name: The service's real Nexus service name.
         endpoint: The Nexus endpoint name that reaches it.
+        runner: See stateless_mcp_server.
+        inherently_safe: See stateless_mcp_server.
         **kwargs: Forwarded to agents.mcp.MCPServer.__init__.
 
     Example:
@@ -373,7 +413,15 @@ def nexus_native_mcp_server(
     with temporal_workflow.unsafe.imports_passed_through():
         from nexus_mcp.integrations.openai_agents import WorkflowNexusMCPServer
 
-    return WorkflowNexusMCPServer.for_service(name, endpoint, **kwargs)
+        from temporal_agent_harness.ai_sdks.openai_agents_harness import (
+            as_harness_mcp_server,
+        )
+
+    return as_harness_mcp_server(
+        WorkflowNexusMCPServer.for_service(name, endpoint, **kwargs),
+        runner,
+        inherently_safe=inherently_safe,
+    )
 
 
 def nexus_tools_gateway(
@@ -403,7 +451,9 @@ def nexus_tools_gateway(
             nexus_gateway.mcp_servers("foo-mcp", "bar-mcp"),
         ])
     """
-    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import NexusGateway
+    # Passed through: see stateless_mcp_server.
+    with temporal_workflow.unsafe.imports_passed_through():
+        from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import NexusGateway
 
     resolved_agent_id = agent_id or temporal_workflow.info().workflow_type
     return NexusGateway(resolved_agent_id, gateway_name=gateway_name, gateway_endpoint=gateway_endpoint)
