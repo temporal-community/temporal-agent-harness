@@ -14,7 +14,7 @@ from nexusrpc import HandlerError, HandlerErrorType
 from nexusrpc.handler import StartOperationContext, service_handler, sync_operation
 from temporalio import nexus
 from temporalio.client import Client
-from temporalio.contrib.workflow_streams import PollInput, PollResult
+from temporalio.contrib.workflow_streams import PollInput
 from temporalio.service import RPCError
 
 from temporal_agent_harness.harness.agent_client import (
@@ -57,7 +57,6 @@ from .generated import (
     QuerySessionInput,
     SendAgentMessageInput,
     SendMessageOutput,
-    StreamItem,
     SubagentInfo as NexusSubagentInfo,
 )
 from .generated import AgentService as AgentServiceDefinition
@@ -65,7 +64,6 @@ from .generated import AgentService as AgentServiceDefinition
 # WorkflowStream's private poll-update name (not part of its public API), hardcoded since
 # pollMessages must attach to it for any agent without importing that agent's workflow code.
 _WORKFLOW_STREAM_POLL_UPDATE = "__temporal_workflow_stream_poll"
-DEFAULT_POLL_TIMEOUT_SECONDS = 30.0
 _MAX_SEND_RETRIES = 5
 
 
@@ -344,38 +342,28 @@ class AgentServiceHandler:
         input: PollMessagesInput,
     ) -> nexus.TemporalOperationResult[PollMessagesOutput]:
         """Long-polls WorkflowStream via update-with-callback. Returns closed=True
-        synchronously if the target workflow has already completed."""
-        workflow_id = self._workflow_id(input.session_id)
-        timeout_seconds = input.timeout_seconds or DEFAULT_POLL_TIMEOUT_SECONDS
+        synchronously if the target workflow has already completed.
 
+        Note that this bypasses the WorkflowStream abstraction and directly calling the
+        update handler for the stream, since we haven't implemented Nexus + WorkflowStreamh
+        higher-level APIs.
+
+        TODO(long-nt-tran): implement + use higher level utils when available
+        """
         try:
-            result = await client.start_workflow_update(
-                workflow_id,
+            return await client.start_workflow_update(
+                self._workflow_id(input.session_id),
                 _WORKFLOW_STREAM_POLL_UPDATE,
                 PollInput(from_offset=input.cursor, topics=[TURN_EVENTS_TOPIC]),
-                result_type=PollResult,
+                result_type=PollMessagesOutput,
             )
         except RPCError as e:
-            if _is_workflow_already_completed(e):
-                return nexus.TemporalOperationResult.sync(
-                    PollMessagesOutput(
-                        items=[], more_ready=False, next_offset=input.cursor, closed=True
-                    )
+            if not _is_workflow_already_completed(e):
+                raise
+            # In case the workflow (aka the agent) is already closed, we can propagate
+            # this to the caller via the `closed=True` field.
+            return nexus.TemporalOperationResult.sync(
+                PollMessagesOutput(
+                    items=[], more_ready=False, next_offset=input.cursor, closed=True
                 )
-            raise
-
-        if result.token is not None:
-            return nexus.TemporalOperationResult.async_token(result.token)
-
-        poll_result: PollResult = result.value
-        return nexus.TemporalOperationResult.sync(
-            PollMessagesOutput(
-                items=[
-                    StreamItem(topic=item.topic, data=item.data, offset=item.offset)
-                    for item in poll_result.items
-                ],
-                more_ready=poll_result.more_ready,
-                next_offset=poll_result.next_offset,
-                closed=False,
             )
-        )
