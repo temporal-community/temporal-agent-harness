@@ -18,6 +18,18 @@ dependencies = [
     "temporalio>=1.15.0",
 ]
 
+[project.optional-dependencies]
+openai-agents = [
+    "openai-agents>=0.22.0",
+]
+pydantic-ai = [
+    "pydantic-ai-slim>=2.13",
+]
+integrations = [
+    "openai-agents>=0.22.0",
+    "pydantic-ai-slim>=2.13",
+]
+
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
@@ -31,6 +43,8 @@ asyncio_mode = "auto"
 
 [dependency-groups]
 dev = [
+    "openai-agents>=0.22.0",
+    "pydantic-ai-slim>=2.13",
     "pytest>=8.0",
     "pytest-asyncio>=1.0",
 ]
