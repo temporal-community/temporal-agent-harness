@@ -42,7 +42,11 @@
 #     @agent.activity_tool_defn()
 #     async def read_page(store: Injected[str], page_url: str) -> str: ...
 
-from temporal_agent_harness.harness.agent_protocol import ToolApprovalContext, ToolApprovalPolicy
+from temporal_agent_harness.a2a.subagent_transport import NexusA2ASubagentTransport
+from temporal_agent_harness.harness.agent_protocol import (
+    ToolApprovalContext,
+    ToolApprovalPolicy,
+)
 from temporal_agent_harness.harness.agent_workflow import (
     AgentToolContext,
     CallbackToolError,
@@ -56,14 +60,26 @@ from temporal_agent_harness.harness.agent_workflow import (
     tool_activity,
     tool_defn,
 )
+from temporal_agent_harness.harness.child_workflow_subagent_transport import (
+    ChildWorkflowTransport,
+)
 from temporal_agent_harness.harness.code_mode import code_mode_tool
-from temporal_agent_harness.harness.subagent_toolset import subagent_toolset
+from temporal_agent_harness.harness.subagent_toolset import (
+    SubagentGateway,
+    declared_handler,
+    nexus_native_subagent,
+    nexus_subagent_gateway,
+    subagent_toolset,
+)
 
 __all__ = [
     "AgentToolContext",
     "CallbackToolError",
+    "ChildWorkflowTransport",
     "CustomApprovalFallback",
     "Injected",
+    "NexusA2ASubagentTransport",
+    "SubagentGateway",
     "ToolApprovalContext",
     "ToolApprovalDenied",
     "ToolApprovalPolicy",
@@ -71,7 +87,10 @@ __all__ = [
     "activity_tool_defn",
     "callback_tool_defn",
     "code_mode_tool",
+    "declared_handler",
     "defn",
+    "nexus_native_subagent",
+    "nexus_subagent_gateway",
     "subagent_toolset",
     "tool_activity",
     "tool_defn",

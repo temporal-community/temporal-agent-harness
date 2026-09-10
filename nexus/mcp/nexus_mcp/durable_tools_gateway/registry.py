@@ -1,9 +1,11 @@
 """ToolRegistryWorkflow -- routing table for 3rd-party MCP servers, per agent_id.
 
+The same workflow now also records 3rd-party A2A subagents and their bound instances.
+
 Native Nexus services never register here -- they're reached directly by the agent
-(see nexus_native_mcp_server). This workflow only tracks 3rd-party server URLs.
-No tool content cached: RegistryServiceHandler fetches tools live, on every
-list_agent_entries/call_tool call.
+(see nexus_native_mcp_server and nexus_native_subagent). This workflow only tracks
+3rd-party server URLs and their bound subagent instances. No tool content cached:
+RegistryServiceHandler fetches MCP tools live, on every list_agent_entries/call_tool call.
 
 Workflow ID:  REGISTRY_WORKFLOW_ID  (singleton per namespace)
 Task queue:   "mcp-registry"
@@ -17,6 +19,8 @@ from typing import Any
 
 from mcp.client import Client as MCPClient
 from temporalio import activity, workflow
+from temporalio.common import RetryPolicy
+from temporalio.exceptions import ApplicationError
 
 REGISTRY_WORKFLOW_ID = "mcp-tool-registry"
 REGISTRY_TASK_QUEUE = "mcp-registry"
@@ -49,12 +53,25 @@ class AgentEntries:
     remote_servers: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class SubagentInstanceRoute:
+    """Route for one instance created by a registered factory."""
+
+    alias: str
+    url: str
+    provider_instance_id: str
+
+
 @workflow.defn(sandboxed=False, name="ToolRegistry")
 class ToolRegistryWorkflow:
-    """Perpetual routing-table workflow for the Durable Tool Call Gateway."""
+    """Perpetual routing-table workflow for the Durable MCP and A2A Gateway."""
 
     def __init__(self) -> None:
         self._remote_entries: dict[str, dict[str, str]] = {}  # agent_id -> {alias: url}
+        self._subagent_entries: dict[str, dict[str, str]] = {}  # agent_id -> {alias: url}
+        self._subagent_instances: dict[
+            str, dict[str, SubagentInstanceRoute]
+        ] = {}
 
     @workflow.run
     async def run(self) -> None:
@@ -71,7 +88,11 @@ class ToolRegistryWorkflow:
         self._remote_entries.setdefault(agent_id, {})[name] = url
         try:
             tools = await workflow.execute_activity(
-                fetch_external_tools, args=[name, url], start_to_close_timeout=timedelta(seconds=60)
+                fetch_external_tools,
+                args=[name, url],
+                schedule_to_close_timeout=timedelta(seconds=60),
+                start_to_close_timeout=timedelta(seconds=45),
+                retry_policy=RetryPolicy(maximum_attempts=3),
             )
         except Exception as exc:
             workflow.logger.warning(
@@ -90,7 +111,60 @@ class ToolRegistryWorkflow:
     def clear_all(self) -> None:
         """Remove every registration, for every agent."""
         self._remote_entries.clear()
+        self._subagent_entries.clear()
         workflow.logger.info("[registry] cleared all entries")
+
+    @workflow.signal
+    def register_subagent(self, agent_id: str, alias: str, url: str) -> None:
+        """Register a non-Nexus subagent's URL under one agent_id."""
+        self._subagent_entries.setdefault(agent_id, {})[alias] = url
+        workflow.logger.info("[registry] registered subagent %r at %s", alias, url)
+
+    @workflow.signal
+    def deregister_subagent(self, agent_id: str, alias: str) -> None:
+        """Remove one subagent registration under one agent_id."""
+        if self._subagent_entries.get(agent_id, {}).pop(alias, None) is not None:
+            workflow.logger.info(
+                "[registry] deregistered subagent %r for agent %r", alias, agent_id
+            )
+
+    @workflow.update
+    def bind_subagent_instance(
+        self,
+        agent_id: str,
+        instance_id: str,
+        route: SubagentInstanceRoute,
+    ) -> None:
+        """Bind a gateway task to one provider route.
+
+        A2A starts third-party tasks lazily: the first binding knows the alias and
+        URL, while the provider task ID arrives with the first response.  Permit
+        that one-way promotion, and make a retried provisional bind a no-op once
+        the provider ID is known.  Neither case may change the selected provider.
+        """
+        routes = self._subagent_instances.setdefault(agent_id, {})
+        existing = routes.get(instance_id)
+        if existing is not None:
+            same_provider = existing.alias == route.alias and existing.url == route.url
+            provider_id_is_compatible = (
+                existing.provider_instance_id == route.provider_instance_id
+                or not existing.provider_instance_id
+                or not route.provider_instance_id
+            )
+            if not same_provider or not provider_id_is_compatible:
+                raise ApplicationError(
+                    f"subagent instance {instance_id!r} has a different route",
+                    type="SubagentInstanceConflict",
+                    non_retryable=True,
+                )
+            if existing.provider_instance_id and not route.provider_instance_id:
+                return
+        routes[instance_id] = route
+
+    @workflow.update
+    def unbind_subagent_instance(self, agent_id: str, instance_id: str) -> None:
+        """Remove one gateway instance route."""
+        self._subagent_instances.get(agent_id, {}).pop(instance_id, None)
 
     # -- queries -----------------------------------------------------------------
 
@@ -98,6 +172,18 @@ class ToolRegistryWorkflow:
     def find(self, agent_id: str, name: str) -> str | None:
         """The URL registered for one alias under one agent_id, or None."""
         return self._remote_entries.get(agent_id, {}).get(name)
+
+    @workflow.query
+    def find_subagent(self, agent_id: str, alias: str) -> str | None:
+        """The URL registered for one subagent alias under one agent_id, or None."""
+        return self._subagent_entries.get(agent_id, {}).get(alias)
+
+    @workflow.query
+    def find_subagent_instance(
+        self, agent_id: str, instance_id: str
+    ) -> SubagentInstanceRoute | None:
+        """Return the provider route for one gateway instance."""
+        return self._subagent_instances.get(agent_id, {}).get(instance_id)
 
     @workflow.query
     def list_agent_entries(self, agent_id: str) -> AgentEntries:

@@ -11,6 +11,7 @@ from ._definitions import (
     ValidationError,
     Violation,
     _collect,
+    _parse_spec_integer,
     _transfer_type_convertible,
 )
 
@@ -350,6 +351,245 @@ class DeregisterInput:
     additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
 
 
+class _DeregisterSubagentInputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["DeregisterSubagentInput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["DeregisterSubagentInput"]
+    ) -> "DeregisterSubagentInput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        agent_id_value: str = typing.cast("typing.Any", None)
+        if "agent_id" not in raw or raw["agent_id"] is None:
+            violations.append(Violation(path="agent_id", reason="required"))
+        else:
+            agent_id_value_raw = raw["agent_id"]
+            if not isinstance(agent_id_value_raw, str):
+                violations.append(Violation(path="agent_id", reason="expected string"))
+            else:
+                agent_id_value = agent_id_value_raw
+
+        alias_value: str = typing.cast("typing.Any", None)
+        if "alias" not in raw or raw["alias"] is None:
+            violations.append(Violation(path="alias", reason="required"))
+        else:
+            alias_value_raw = raw["alias"]
+            if not isinstance(alias_value_raw, str):
+                violations.append(Violation(path="alias", reason="expected string"))
+            else:
+                alias_value = alias_value_raw
+
+        for key in raw:
+            if key != "agent_id" and key != "alias":
+                violations.append(Violation(path=key, reason="unknown field"))
+        if violations:
+            raise ValidationError(violations)
+        return DeregisterSubagentInput(
+            agent_id=agent_id_value,
+            alias=alias_value,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "DeregisterSubagentInput") -> typing.Any:
+        out: dict[str, typing.Any] = {}
+        out["agent_id"] = value.agent_id
+        out["alias"] = value.alias
+        return out
+
+
+@_transfer_type_convertible(_DeregisterSubagentInputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class DeregisterSubagentInput:
+    """Input for removing one subagent registration."""
+
+    agent_id: str
+
+    alias: str
+
+
+class _DispatchSubagentTurnInputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["DispatchSubagentTurnInput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["DispatchSubagentTurnInput"]
+    ) -> "DispatchSubagentTurnInput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        agent_id_value: str = typing.cast("typing.Any", None)
+        if "agent_id" not in raw or raw["agent_id"] is None:
+            violations.append(Violation(path="agent_id", reason="required"))
+        else:
+            agent_id_value_raw = raw["agent_id"]
+            if not isinstance(agent_id_value_raw, str):
+                violations.append(Violation(path="agent_id", reason="expected string"))
+            else:
+                agent_id_value = agent_id_value_raw
+
+        instance_id_value: str = typing.cast("typing.Any", None)
+        if "instance_id" not in raw or raw["instance_id"] is None:
+            violations.append(Violation(path="instance_id", reason="required"))
+        else:
+            instance_id_value_raw = raw["instance_id"]
+            if not isinstance(instance_id_value_raw, str):
+                violations.append(Violation(path="instance_id", reason="expected string"))
+            else:
+                instance_id_value = instance_id_value_raw
+
+        msg_type_value: str = typing.cast("typing.Any", None)
+        if "msg_type" not in raw or raw["msg_type"] is None:
+            violations.append(Violation(path="msg_type", reason="required"))
+        else:
+            msg_type_value_raw = raw["msg_type"]
+            if not isinstance(msg_type_value_raw, str):
+                violations.append(Violation(path="msg_type", reason="expected string"))
+            else:
+                msg_type_value = msg_type_value_raw
+
+        payload_value: str = typing.cast("typing.Any", None)
+        if "payload" not in raw or raw["payload"] is None:
+            violations.append(Violation(path="payload", reason="required"))
+        else:
+            payload_value_raw = raw["payload"]
+            if not isinstance(payload_value_raw, str):
+                violations.append(Violation(path="payload", reason="expected string"))
+            else:
+                payload_value = payload_value_raw
+
+        expected_turn_value: int = typing.cast("typing.Any", None)
+        if "expected_turn" not in raw or raw["expected_turn"] is None:
+            violations.append(Violation(path="expected_turn", reason="required"))
+        else:
+            expected_turn_value_raw = raw["expected_turn"]
+            expected_turn_value_parsed = _parse_spec_integer(expected_turn_value_raw, "expected_turn", violations)
+            if expected_turn_value_parsed is not None:
+                expected_turn_value = expected_turn_value_parsed
+
+        for key in raw:
+            if key != "agent_id" and key != "instance_id" and key != "msg_type" and key != "payload" and key != "expected_turn":
+                violations.append(Violation(path=key, reason="unknown field"))
+        if violations:
+            raise ValidationError(violations)
+        return DispatchSubagentTurnInput(
+            agent_id=agent_id_value,
+            instance_id=instance_id_value,
+            msg_type=msg_type_value,
+            payload=payload_value,
+            expected_turn=expected_turn_value,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "DispatchSubagentTurnInput") -> typing.Any:
+        out: dict[str, typing.Any] = {}
+        out["agent_id"] = value.agent_id
+        out["instance_id"] = value.instance_id
+        out["msg_type"] = value.msg_type
+        out["payload"] = value.payload
+        out["expected_turn"] = value.expected_turn
+        return out
+
+
+@_transfer_type_convertible(_DispatchSubagentTurnInputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class DispatchSubagentTurnInput:
+    """Input for sending one turn to a subagent instance."""
+
+    agent_id: str
+
+    instance_id: str
+    """Instance returned by startSubagent."""
+
+    msg_type: str
+    """Name of the target handler on the subagent."""
+
+    payload: str
+    """JSON-encoded input for msg_type."""
+
+    expected_turn: int
+    """Caller-known next turn number."""
+
+
+class _DispatchSubagentTurnOutputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["DispatchSubagentTurnOutput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["DispatchSubagentTurnOutput"]
+    ) -> "DispatchSubagentTurnOutput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        output_value: str = typing.cast("typing.Any", None)
+        if "output" not in raw or raw["output"] is None:
+            violations.append(Violation(path="output", reason="required"))
+        else:
+            output_value_raw = raw["output"]
+            if not isinstance(output_value_raw, str):
+                violations.append(Violation(path="output", reason="expected string"))
+            else:
+                output_value = output_value_raw
+
+        turn_id_value: str = typing.cast("typing.Any", None)
+        if "turn_id" not in raw or raw["turn_id"] is None:
+            violations.append(Violation(path="turn_id", reason="required"))
+        else:
+            turn_id_value_raw = raw["turn_id"]
+            if not isinstance(turn_id_value_raw, str):
+                violations.append(Violation(path="turn_id", reason="expected string"))
+            else:
+                turn_id_value = turn_id_value_raw
+
+        turn_number_value: int = typing.cast("typing.Any", None)
+        if "turn_number" not in raw or raw["turn_number"] is None:
+            violations.append(Violation(path="turn_number", reason="required"))
+        else:
+            turn_number_value_raw = raw["turn_number"]
+            turn_number_value_parsed = _parse_spec_integer(turn_number_value_raw, "turn_number", violations)
+            if turn_number_value_parsed is not None:
+                turn_number_value = turn_number_value_parsed
+
+        for key in raw:
+            if key != "output" and key != "turn_id" and key != "turn_number":
+                violations.append(Violation(path=key, reason="unknown field"))
+        if violations:
+            raise ValidationError(violations)
+        return DispatchSubagentTurnOutput(
+            output=output_value,
+            turn_id=turn_id_value,
+            turn_number=turn_number_value,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "DispatchSubagentTurnOutput") -> typing.Any:
+        out: dict[str, typing.Any] = {}
+        out["output"] = value.output
+        out["turn_id"] = value.turn_id
+        out["turn_number"] = value.turn_number
+        return out
+
+
+@_transfer_type_convertible(_DispatchSubagentTurnOutputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class DispatchSubagentTurnOutput:
+    """The subagent's reply to one turn."""
+
+    output: str
+    """JSON-encoded reply."""
+
+    turn_id: str
+
+    turn_number: int
+
+
 class _ListAgentEntriesInputTransferTypeConverter(
     temporalio.converter.TransferTypeConverter["ListAgentEntriesInput", typing.Any]
 ):
@@ -656,3 +896,244 @@ class RegisterExternalInput:
     url: str | None = None
 
     additional_properties: dict[str, typing.Any] = dataclasses.field(default_factory=dict)
+
+
+class _RegisterSubagentInputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["RegisterSubagentInput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["RegisterSubagentInput"]
+    ) -> "RegisterSubagentInput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        agent_id_value: str = typing.cast("typing.Any", None)
+        if "agent_id" not in raw or raw["agent_id"] is None:
+            violations.append(Violation(path="agent_id", reason="required"))
+        else:
+            agent_id_value_raw = raw["agent_id"]
+            if not isinstance(agent_id_value_raw, str):
+                violations.append(Violation(path="agent_id", reason="expected string"))
+            else:
+                agent_id_value = agent_id_value_raw
+
+        alias_value: str = typing.cast("typing.Any", None)
+        if "alias" not in raw or raw["alias"] is None:
+            violations.append(Violation(path="alias", reason="required"))
+        else:
+            alias_value_raw = raw["alias"]
+            if not isinstance(alias_value_raw, str):
+                violations.append(Violation(path="alias", reason="expected string"))
+            else:
+                alias_value = alias_value_raw
+
+        url_value: str = typing.cast("typing.Any", None)
+        if "url" not in raw or raw["url"] is None:
+            violations.append(Violation(path="url", reason="required"))
+        else:
+            url_value_raw = raw["url"]
+            if not isinstance(url_value_raw, str):
+                violations.append(Violation(path="url", reason="expected string"))
+            else:
+                url_value = url_value_raw
+
+        for key in raw:
+            if key != "agent_id" and key != "alias" and key != "url":
+                violations.append(Violation(path=key, reason="unknown field"))
+        if violations:
+            raise ValidationError(violations)
+        return RegisterSubagentInput(
+            agent_id=agent_id_value,
+            alias=alias_value,
+            url=url_value,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "RegisterSubagentInput") -> typing.Any:
+        out: dict[str, typing.Any] = {}
+        out["agent_id"] = value.agent_id
+        out["alias"] = value.alias
+        out["url"] = value.url
+        return out
+
+
+@_transfer_type_convertible(_RegisterSubagentInputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class RegisterSubagentInput:
+    """Input for registering a non-Nexus subagent's URL."""
+
+    agent_id: str
+
+    alias: str
+
+    url: str
+
+
+class _StartSubagentInputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["StartSubagentInput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["StartSubagentInput"]
+    ) -> "StartSubagentInput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        agent_id_value: str = typing.cast("typing.Any", None)
+        if "agent_id" not in raw or raw["agent_id"] is None:
+            violations.append(Violation(path="agent_id", reason="required"))
+        else:
+            agent_id_value_raw = raw["agent_id"]
+            if not isinstance(agent_id_value_raw, str):
+                violations.append(Violation(path="agent_id", reason="expected string"))
+            else:
+                agent_id_value = agent_id_value_raw
+
+        alias_value: str = typing.cast("typing.Any", None)
+        if "alias" not in raw or raw["alias"] is None:
+            violations.append(Violation(path="alias", reason="required"))
+        else:
+            alias_value_raw = raw["alias"]
+            if not isinstance(alias_value_raw, str):
+                violations.append(Violation(path="alias", reason="expected string"))
+            else:
+                alias_value = alias_value_raw
+
+        for key in raw:
+            if key != "agent_id" and key != "alias":
+                violations.append(Violation(path=key, reason="unknown field"))
+        if violations:
+            raise ValidationError(violations)
+        return StartSubagentInput(
+            agent_id=agent_id_value,
+            alias=alias_value,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "StartSubagentInput") -> typing.Any:
+        out: dict[str, typing.Any] = {}
+        out["agent_id"] = value.agent_id
+        out["alias"] = value.alias
+        return out
+
+
+@_transfer_type_convertible(_StartSubagentInputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class StartSubagentInput:
+    """Input for starting one subagent instance."""
+
+    agent_id: str
+
+    alias: str
+
+
+class _StartSubagentOutputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["StartSubagentOutput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["StartSubagentOutput"]
+    ) -> "StartSubagentOutput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        instance_id_value: str = typing.cast("typing.Any", None)
+        if "instance_id" not in raw or raw["instance_id"] is None:
+            violations.append(Violation(path="instance_id", reason="required"))
+        else:
+            instance_id_value_raw = raw["instance_id"]
+            if not isinstance(instance_id_value_raw, str):
+                violations.append(Violation(path="instance_id", reason="expected string"))
+            else:
+                instance_id_value = instance_id_value_raw
+
+        for key in raw:
+            if key != "instance_id":
+                violations.append(Violation(path=key, reason="unknown field"))
+        if violations:
+            raise ValidationError(violations)
+        return StartSubagentOutput(
+            instance_id=instance_id_value,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "StartSubagentOutput") -> typing.Any:
+        out: dict[str, typing.Any] = {}
+        out["instance_id"] = value.instance_id
+        return out
+
+
+@_transfer_type_convertible(_StartSubagentOutputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class StartSubagentOutput:
+    """A new subagent instance."""
+
+    instance_id: str
+
+
+class _StopSubagentInputTransferTypeConverter(
+    temporalio.converter.TransferTypeConverter["StopSubagentInput", typing.Any]
+):
+    @typing_extensions.override
+    def from_transfer_type(
+        self, value: typing.Any, type_hint: type["StopSubagentInput"]
+    ) -> "StopSubagentInput":
+        violations: list[Violation] = []
+        if not isinstance(value, dict):
+            raise ValidationError([Violation(path="", reason="expected object")])
+        raw = typing.cast("dict[str, typing.Any]", value)
+
+        agent_id_value: str = typing.cast("typing.Any", None)
+        if "agent_id" not in raw or raw["agent_id"] is None:
+            violations.append(Violation(path="agent_id", reason="required"))
+        else:
+            agent_id_value_raw = raw["agent_id"]
+            if not isinstance(agent_id_value_raw, str):
+                violations.append(Violation(path="agent_id", reason="expected string"))
+            else:
+                agent_id_value = agent_id_value_raw
+
+        instance_id_value: str = typing.cast("typing.Any", None)
+        if "instance_id" not in raw or raw["instance_id"] is None:
+            violations.append(Violation(path="instance_id", reason="required"))
+        else:
+            instance_id_value_raw = raw["instance_id"]
+            if not isinstance(instance_id_value_raw, str):
+                violations.append(Violation(path="instance_id", reason="expected string"))
+            else:
+                instance_id_value = instance_id_value_raw
+
+        for key in raw:
+            if key != "agent_id" and key != "instance_id":
+                violations.append(Violation(path=key, reason="unknown field"))
+        if violations:
+            raise ValidationError(violations)
+        return StopSubagentInput(
+            agent_id=agent_id_value,
+            instance_id=instance_id_value,
+        )
+
+    @typing_extensions.override
+    def to_transfer_type(self, value: "StopSubagentInput") -> typing.Any:
+        out: dict[str, typing.Any] = {}
+        out["agent_id"] = value.agent_id
+        out["instance_id"] = value.instance_id
+        return out
+
+
+@_transfer_type_convertible(_StopSubagentInputTransferTypeConverter)
+@dataclasses.dataclass(slots=True, kw_only=True)
+class StopSubagentInput:
+    """Input for closing a subagent instance."""
+
+    agent_id: str
+
+    instance_id: str
+    """Instance returned by startSubagent."""

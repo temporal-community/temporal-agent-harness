@@ -37,6 +37,10 @@ services:
         description: "Fulfill a pending callback tool call (a tool with no worker-side body - an attached client executes it and submits the outcome here). Mirrors AgentClient.provide_callback_result(). Exactly one of result/error should be set."
         input: { $ref: "#/$defs/ProvideCallbackResultInput" }
         output: { $ref: "#/$defs/ProvideCallbackResultOutput" }
+      closeSession:
+        description: "Signal the target agent workflow to close gracefully. Mirrors AgentClient.close() / the harness 'close' signal a human/UI uses."
+        input: { $ref: "#/$defs/QuerySessionInput" }
+        output: { $ref: "#/$defs/CloseSessionOutput" }
 
 $defs:
   SendAgentMessageInput:
@@ -51,6 +55,9 @@ $defs:
       payload:
         type: string
         description: "JSON-encoded input matching the target handler's input model (e.g. '{\"text\":\"hello\"}' for the 'ask' handler)"
+      expectedTurn:
+        type: integer
+        description: "Caller-known next turn number. Set this when the caller already tracks turn state (e.g. a subagent-driving parent) - the send fails fast with StaleTurn on a mismatch instead of guessing. Omit to fall back to guess-and-retry (e.g. Slack, which has no local turn state)."
     required:
       - sessionId
       - msgType
@@ -150,6 +157,16 @@ $defs:
         description: "Provider-prefixed session identifier"
     required:
       - sessionId
+    additionalProperties: false
+
+  CloseSessionOutput:
+    type: object
+    properties:
+      closed:
+        type: boolean
+        description: "Always true on success"
+    required:
+      - closed
     additionalProperties: false
 
   AgentInterfaceOutput:

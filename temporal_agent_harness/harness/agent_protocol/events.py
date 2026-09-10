@@ -18,9 +18,7 @@ from typing import Annotated, Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-# The pubsub topic the agent publishes its turn events on. The workflow must use
-# this exact name when publishing and clients when subscribing.
-TURN_EVENTS_TOPIC = "turn_events"
+from temporal_agent_harness._streaming import TURN_EVENTS_TOPIC
 
 
 class AgentEventType(StrEnum):
