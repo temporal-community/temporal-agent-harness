@@ -116,9 +116,9 @@ function boot({ sessions, streamFor, statusFor, listSessionsFor = async () => []
         closed: status !== "RUNNING"
       };
     },
-    attach(sessionId, fromOffset, signal) {
+    attach(sessionId, fromOffset, signal, onConnected) {
       attachCalls.push({ sessionId, fromOffset, at: Date.now() });
-      return streamFor(sessionId, attachCalls.length, signal);
+      return streamFor(sessionId, attachCalls.length, signal, onConnected);
     }
   };
   const controller = new AgentRunController(api);
@@ -143,6 +143,72 @@ async function* silent() {
 }
 
 describe("a caught-up attach", () => {
+  it("marks a quiet resumed stream connected when HTTP headers arrive", async () => {
+    let finish;
+    const heldOpen = new Promise((resolve) => { finish = resolve; });
+    const { controller, attachCalls } = boot({
+      sessions: [session("wf-quiet-live")],
+      streamFor: (_id, _call, _signal, onConnected) => (async function* () {
+        onConnected();
+        await heldOpen;
+      })(),
+      statusFor: () => "RUNNING"
+    });
+
+    void controller.selectSession("wf-quiet-live");
+    try {
+      await waitFor("a connected stream without waiting for events", () => attachCalls.length > 0 && !controller.connecting);
+      assert.equal(controller.frames.length, 0, "connection does not invent an agent action");
+    } finally {
+      finish();
+    }
+  });
+
+  it("marks a long-running attach connected as soon as a real frame arrives", async () => {
+    let finish;
+    const heldOpen = new Promise((resolve) => { finish = resolve; });
+    const { controller } = boot({
+      sessions: [session("wf-live-tool")],
+      streamFor: () => (async function* () {
+        yield frame(0);
+        await heldOpen;
+      })(),
+      statusFor: () => "RUNNING"
+    });
+
+    void controller.selectSession("wf-live-tool");
+    try {
+      await waitFor("a connected live stream without waiting for EOF", () => !controller.connecting);
+      assert.equal(controller.connectionError, null);
+    } finally {
+      finish();
+    }
+  });
+
+  it("does not treat an in-band connection error as a successful connection", async () => {
+    let finish;
+    let deliveredError = false;
+    const heldOpen = new Promise((resolve) => { finish = resolve; });
+    const { controller } = boot({
+      sessions: [session("wf-error-open")],
+      streamFor: () => (async function* () {
+        yield errorFrame("stream_unavailable");
+        deliveredError = true;
+        await heldOpen;
+      })(),
+      statusFor: () => "RUNNING"
+    });
+
+    void controller.selectSession("wf-error-open");
+    try {
+      await waitFor("the in-band connection error", () => deliveredError);
+      assert.equal(controller.connecting, true);
+      assert.match(controller.connectionError, /stream_unavailable/);
+    } finally {
+      finish();
+    }
+  });
+
   // Every attach answers empty and ends, which is what the dev server does at an
   // offset the reader already holds. The retries that follow are background
   // liveness and must not present as loading.

@@ -40,3 +40,6 @@ nexus/devserver/temporal-server
 
 # Local LLM configs
 .claude/
+
+# Local Codex plugin subprocess logs and final replies.
+.codex-runs/

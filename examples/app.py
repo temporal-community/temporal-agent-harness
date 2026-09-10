@@ -22,10 +22,11 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from temporal_agent_harness.web import create_agent_harness_app
+from temporal_agent_harness.web.session_manager import SESSION_MANAGER_ID
 from temporal_agent_harness.web.registry import load_agent_registries
 
 
-def create_app(*registry_paths: str | Path) -> FastAPI:
+def create_app(*registry_paths: str | Path, manager_workflow_id: str = SESSION_MANAGER_ID) -> FastAPI:
     """Build the packaged harness web app serving the merged agents from ``registry_paths``.
 
     A single path serves just that example's agent(s) (standalone behavior); multiple paths merge
@@ -34,7 +35,7 @@ def create_app(*registry_paths: str | Path) -> FastAPI:
     if not registry_paths:
         raise ValueError("create_app requires at least one registry path.")
     registry = load_agent_registries(registry_paths)
-    return create_agent_harness_app(registry=registry)
+    return create_agent_harness_app(registry=registry, manager_workflow_id=manager_workflow_id)
 
 
 def main() -> None:
@@ -48,11 +49,13 @@ def main() -> None:
     )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--manager-id", default=SESSION_MANAGER_ID,
+                        help="Separate session manager for a registry alongside an existing UI")
     args = parser.parse_args()
 
     import uvicorn
 
-    uvicorn.run(create_app(*args.registry_paths), host=args.host, port=args.port)
+    uvicorn.run(create_app(*args.registry_paths, manager_workflow_id=args.manager_id), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

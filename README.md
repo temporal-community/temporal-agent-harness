@@ -187,6 +187,7 @@ Support is growing across the Python AI SDKs and agent frameworks Temporal integ
 | [Google Gemini](temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
 | [OpenAI Agents SDK](temporal_agent_harness/ai_sdks/openai_agents) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
 | [Pydantic AI](temporal_agent_harness/ai_sdks/pydantic_ai_harness.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
+| [Codex CLI](temporal_agent_harness/ai_sdks/codex) | ✅ Available now | Codex's inner agent loop runs in a Temporal activity and streams native tool events. Installed CLI and saved login required. |
 | [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | - |
 | [Strands Agents](https://docs.temporal.io/develop/python/integrations/strands-agents) | 🟡 Planned | - |
 | [LangGraph](https://docs.temporal.io/develop/python/integrations/langgraph) | 🟡 Planned | - |
@@ -437,7 +438,8 @@ cp .env.example .env.local
 ```
 
 Set the creds for whichever agents you'll run: `OPENAI_API_KEY` (react_agent, openai_hello,
-pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding). The default committed
+pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding). Codex Hello uses an installed
+Codex CLI and saved `codex login`; run `just codex-check` to verify it. The default committed
 `temporal.local.toml` profile points at a local Temporal dev server.
 
 ### One example, standalone
@@ -467,7 +469,7 @@ each in its own terminal:
 just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
 just session-manager   # shared session-manager worker
 just server            # serves the MERGED registry (all agents) on http://localhost:8000
-just workers           # co-launch all six agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
+just workers           # co-launch all seven agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
 ```
 
 Then create a session for any agent in the UI. A few need extra setup or a client:
@@ -475,10 +477,16 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | Agent | Needs |
 |---|---|
 | OpenAI Hello · Pydantic AI Hello | `OPENAI_API_KEY`; chat directly in the UI |
+| [Codex Hello](examples/codex_hello) | Installed Codex CLI and saved login; verify with `just codex-check`. Included in `just workers`; ask repository questions and watch read-only commands in the UI. |
 | Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
 | Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client --wiki-dir ./wiki`** — required, or its tool calls hang |
 | Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
+
+To run only the Codex worker, use `just worker-codex-hello` instead of `just workers`.
+It reads this checkout by default; `just worker-codex-hello --workspace /path/to/project`
+selects another repository. `just codex-client` sends a demo question and prints its events;
+it also forwards arguments such as `--id codex-demo "Where are the tests?"`.
 
 **Gotcha — the session manager caches its registry.** The server seeds the `session-manager`
 workflow with the registry on first start and reuses the existing one after that. So when you switch
