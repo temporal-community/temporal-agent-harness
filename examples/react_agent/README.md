@@ -68,9 +68,9 @@ Ask it a question and it chains tools to find the answer:
 | File | Role |
 |---|---|
 | `workflow.py` | `ReactAgent` — the harness agent; one `ask` handler, local tools + `ask_user` adapted onto the SDK plus the F1 MCP server, driven by `Runner.run_streamed`. |
-| `tool_activities.py` | The four location/weather tools as `@agent.activity_tool_defn` activities (httpx), plus `ALL_TOOLS` / `ALL_ACTIVITIES`. |
+| `tool_activities.py` | The four location/weather tools as `@agent.activity_tool_defn` activities (httpx), plus `ALL_TOOLS` — the list the worker hands to `AgentHarnessPlugin(tools=...)`. |
 | `human_tools.py` | The `ask_user` human-in-the-loop **callback tool** (`@agent.callback_tool_defn`), plus `HUMAN_TOOLS`. No activity body — fulfilled by a client. |
-| `worker.py` | Worker hosting the workflow + the four tool activities; registers the F1 MCP provider and wires the plugin for the harness streaming seam. |
+| `worker.py` | Worker hosting the workflow. Declares no activities: `AgentHarnessPlugin(tools=...)` registers the four tool bodies (skipping the bodiless `ask_user`) and the OpenAI plugin registers the model activities. Also registers the F1 MCP provider and wires the harness streaming seam. |
 | `client.py` | A terminal client: a session picker that shows which sessions are **waiting on an `ask_user`**, then lets you answer open questions, chat, or create a session — all over HTTP. |
 | `agents.toml` | Registry entry that makes this agent selectable in the shared web UI. |
 

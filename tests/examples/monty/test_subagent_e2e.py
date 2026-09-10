@@ -31,11 +31,9 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     AgentMessageReply,
 )
-from temporal_agent_harness.harness.subagent_activities import SubagentActivities
+from temporal_agent_harness.plugin import AgentHarnessPlugin
 
 from temporal_agent_harness.harness.agent_client import AgentClient
-
-from temporal_agent_harness.harness.code_mode.activities import CODE_MODE_ACTIVITIES
 
 from examples.monty import activities
 from examples.monty.workflow import MontyDynamicAgentWorkflow
@@ -52,9 +50,9 @@ async def client_and_queue():
     )
     task_queue = f"subagent-e2e-{uuid.uuid4()}"
     # One worker hosts BOTH the parent and the child agent (the parent starts the child on this
-    # same queue), the Monty batch + host activities the child needs, and the subagent-turn
-    # activity the parent's runner dispatches — closed over the env client so it can talk to the
-    # child workflow.
+    # same queue). The harness plugin supplies everything else: the Monty batch + host
+    # activities the child needs, and the subagent-turn activity the parent's runner dispatches
+    # — the latter bound to this worker's client so it can talk to the child workflow.
     async with Worker(
         env.client,
         task_queue=task_queue,
@@ -63,11 +61,7 @@ async def client_and_queue():
             ApprovalGatedSubagentParentWorkflow,
             MontyDynamicAgentWorkflow,
         ],
-        activities=[
-            *activities.ALL_ACTIVITIES,
-            *CODE_MODE_ACTIVITIES,
-            SubagentActivities(env.client).run_subagent_turn,
-        ],
+        plugins=[AgentHarnessPlugin(tools=activities.ALL_TOOLS)],
     ):
         try:
             yield env.client, task_queue

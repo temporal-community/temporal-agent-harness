@@ -10,8 +10,8 @@ Each is an ``@agent.activity_tool_defn``, so when the workflow dispatches it (vi
 ``run_tool``) the activity publishes its own ``tool_start``/``tool_end`` lifecycle events
 on the turn stream — each host call the script makes shows up as a distinct tool
 invocation, like any other harness tool. The decorated object is the in-workflow
-dispatcher; ``agent.tool_activity(tool)`` returns the activity body the worker registers
-(see ``ALL_ACTIVITIES``).
+dispatcher; the worker registers each one's durable activity body by handing ``ALL_TOOLS``
+to ``AgentHarnessPlugin(tools=...)``.
 
 No ``from __future__ import annotations`` here, for consistency with the rest of the
 agent's Temporal-facing modules (stringized annotations trip the pydantic converter).
@@ -237,16 +237,14 @@ async def get_trip_summary_activity(request: TripSummaryRequest) -> TripSummaryR
     return TripSummaryResponse(summary="\n".join(lines))
 
 
-# Convenience list for registering all activities with a Temporal worker — the durable
-# activity body of each tool (the module-level names above are the in-workflow dispatchers
-# the workflow calls via run_tool; tool_activity() returns the activity defn to register).
-ALL_ACTIVITIES = [
-    agent.tool_activity(t)
-    for t in (
-        search_flights_activity,
-        search_hotels_activity,
-        book_flight_activity,
-        book_hotel_activity,
-        get_trip_summary_activity,
-    )
+# The agent's toolset, declared once. The module-level names above are the in-workflow
+# dispatchers; each workflow wraps this list in a Code Mode tool (exposing them to the script
+# as host functions), and the worker hands the same list to ``AgentHarnessPlugin(tools=...)``,
+# which registers each one's durable activity body.
+ALL_TOOLS = [
+    search_flights_activity,
+    search_hotels_activity,
+    book_flight_activity,
+    book_hotel_activity,
+    get_trip_summary_activity,
 ]

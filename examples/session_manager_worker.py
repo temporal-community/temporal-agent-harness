@@ -17,10 +17,9 @@ import asyncio
 import logging
 
 from temporalio.client import Client
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
 
-from temporal_agent_harness.utils.large_payload import with_large_payload_offload
+from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporal_agent_harness.web import (
     SESSION_MANAGER_TASK_QUEUE,
     create_session_manager_worker,
@@ -34,11 +33,13 @@ async def main() -> None:
         force=True,
     )
 
+    # The session manager hosts no agent workflows and no tools, so what it needs from the
+    # harness plugin is the shared data converter. That is the point — the manager, the web
+    # server, and every agent worker read the same payloads because they all add the same
+    # plugin. The harness activities come along too and are simply never called here (nothing
+    # schedules a tool, a Code Mode step, or a subagent turn on this queue).
     connect_config = ClientConfig.load_client_connect_config()
-    client = await Client.connect(
-        **connect_config,
-        data_converter=await with_large_payload_offload(pydantic_data_converter),
-    )
+    client = await Client.connect(**connect_config, plugins=[AgentHarnessPlugin()])
 
     worker = create_session_manager_worker(client)
     print(

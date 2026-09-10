@@ -5,7 +5,7 @@ over httpx. Because they do network I/O they run as Temporal activities, never i
 workflow. Each is adapted onto the OpenAI Agents SDK in ``workflow.py`` via
 ``as_openai_agent_tools``, so the harness still owns the approval gate and each tool's
 ``tool_start`` / ``tool_end`` / ``tool_error`` events; the worker registers each activity body
-with ``agent.tool_activity(...)`` (see ``worker.py``, which uses ``ALL_ACTIVITIES``).
+by handing ``ALL_TOOLS`` to ``AgentHarnessPlugin(tools=...)`` (see ``worker.py``).
 
 The tool schema the model sees (name, description, parameters) is derived from each function's
 signature and docstring, so the first docstring line becomes the tool description and the
@@ -97,7 +97,6 @@ async def get_weather(latitude: float, longitude: float) -> str:
 
 
 # The in-workflow tool dispatchers (what workflow.py adapts onto the SDK via
-# as_openai_agent_tools) and the matching @activity.defn bodies the worker registers.
-# tool_activity() returns the durable activity body for each dispatcher.
+# as_openai_agent_tools). The worker hands this same list to ``AgentHarnessPlugin(tools=...)``,
+# which registers each dispatcher's durable @activity.defn body.
 ALL_TOOLS = [get_ip_address, get_location_info, get_coordinates, get_weather]
-ALL_ACTIVITIES = [agent.tool_activity(t) for t in ALL_TOOLS]

@@ -55,13 +55,7 @@ class MontyDynamicAgentWorkflow:
         # Code Mode over the travel tools: one tool that runs a script calling them as host
         # functions. The run_script handler dispatches the caller's script straight through it.
         self._run_code = agent.code_mode_tool(
-            [
-                activities.search_flights_activity,
-                activities.search_hotels_activity,
-                activities.book_flight_activity,
-                activities.book_hotel_activity,
-                activities.get_trip_summary_activity,
-            ],
+            activities.ALL_TOOLS,
             name="run_travel_code",
         )
 

@@ -374,6 +374,13 @@ already landed in A).
 > `agent_client.py` split into `_submit_message` / `_stream_turn` (both reused by the activity).
 > The only deferred piece is closing the residual double-submit window — that's Workstream B.
 
+> **Follow-up shipped (2026-09-10).** The "future harness worker plugin" the locked shape below
+> defers is now `temporal_agent_harness.plugin.AgentHarnessPlugin`: it instantiates
+> `SubagentActivities` from the worker's own client and registers `run_subagent_turn`, so the
+> manual wiring described below is no longer what agents write. (Binding to the worker's client
+> is precisely why the plugin overrides `configure_worker` rather than passing an `activities`
+> callable to `SimplePlugin` — that hook never sees the worker config.)
+
 > **Locked shape (2026-06-15).** The activity is a method of a small **class that closes
 > over a Temporal `Client`** (`SubagentActivities(client).run_subagent_turn`), NOT a
 > module-level `_TEMPORAL_CLIENT` global. The worker registers the **bound method** as the

@@ -5,7 +5,8 @@ Run from the repo root with:
 
 Hosts only the OpenAIHelloAgent workflow. Its one tool (`get_weather`) is an inline workflow
 tool with no worker-side body, so there are no tool activities to register — the OpenAI Agents
-plugin registers the model activities (including the streaming one) itself.
+plugin registers the model activities (including the streaming one) itself, and
+`AgentHarnessPlugin` supplies the harness's data converter and activities.
 
 The plugin is wired for the HARNESS STREAMING PATH:
   * ``model_params.stream_to_provider=stream_to_provider`` — resolves each streamed model
@@ -32,6 +33,7 @@ from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
+from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporal_agent_harness.ai_sdks.openai_agents import (
     ModelActivityParameters,
     OpenAIAgentsPlugin,
@@ -68,17 +70,21 @@ async def main() -> None:
         observer_factory=harness_observer_factory,
     )
 
-    # The plugin supplies its own (OpenAI-aware, pydantic-compatible) data converter.
+    # Two plugins, harness LAST so the OpenAI plugin's (OpenAI-aware, pydantic-compatible)
+    # payload converter wins; the harness plugin then adds the large-payload offload on top,
+    # matching the session-manager worker and the web server.
     connect_config = ClientConfig.load_client_connect_config()
-    client = await Client.connect(**connect_config, plugins=[plugin])
+    client = await Client.connect(
+        **connect_config, plugins=[plugin, AgentHarnessPlugin()]
+    )
 
     worker = Worker(
         client,
         task_queue=task_queue,
         workflows=[OpenAIHelloAgentWorkflow],
-        # No tool activities: get_weather is an inline workflow tool. The OpenAI model
-        # activities (incl. invoke_model_activity_streaming) are registered by the plugin.
-        activities=[],
+        # No activities to declare: get_weather is an inline workflow tool, the OpenAI model
+        # activities (incl. invoke_model_activity_streaming) come from the OpenAI plugin, and
+        # the harness's own activities come from AgentHarnessPlugin.
     )
     print(
         f"OpenAI hello agent worker ready: "
