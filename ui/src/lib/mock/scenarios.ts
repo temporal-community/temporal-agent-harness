@@ -22,7 +22,14 @@ const agents: AgentDescriptor[] = [
     task_queue: "qa-agent",
     label: "Q&A Agent",
     description:
-      "Conversational Q&A over Temporal docs and community forum with grounded citations."
+      "Conversational Q&A over Temporal docs and community forum with grounded citations.",
+    worker: {
+      status: "ready",
+      task_queue: "qa-agent",
+      poller_count: 1,
+      last_seen: startedAt,
+      error: null
+    }
   },
   {
     key: "monty",
@@ -30,7 +37,17 @@ const agents: AgentDescriptor[] = [
     task_queue: "monty-dynamic-agent",
     label: "Monty (Dynamic)",
     description:
-      "Runs sandboxed Python scripts that orchestrate durable travel-booking activities."
+      "Runs sandboxed Python scripts that orchestrate durable travel-booking activities.",
+    /* The mock stands for a healthy stack, so both agents have a worker. The `no_worker`
+       row is covered in agentWorkerReadiness.test.mjs, and seen live by simply not starting
+       one — which is the situation the whole feature exists to name. */
+    worker: {
+      status: "ready",
+      task_queue: "monty-dynamic-agent",
+      poller_count: 2,
+      last_seen: startedAt,
+      error: null
+    }
   }
 ];
 

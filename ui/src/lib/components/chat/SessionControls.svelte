@@ -45,6 +45,13 @@
     onRefreshSessions?: () => void | Promise<void>;
     /** Quiet enrich when the picker opens (age-gated). */
     onEnsureSessions?: () => void | Promise<void>;
+    /** Quiet re-list when the agent picker opens. Not age-gated — see `openNewSessionMenu`. */
+    onEnsureAgents?: () => void | Promise<void>;
+    /** The refresh control, in agent-picker mode: re-ask which agents have a worker. */
+    onRefreshAgents?: () => void | Promise<void>;
+    refreshingAgents?: boolean;
+    /** Agent re-list failure — shown in the picker, like `sessionsError`. */
+    agentsError?: string | null;
   }
 
   let {
@@ -63,7 +70,11 @@
     onNewSession,
     onSelectSession,
     onRefreshSessions,
-    onEnsureSessions
+    onEnsureSessions,
+    onEnsureAgents,
+    onRefreshAgents,
+    refreshingAgents = false,
+    agentsError = null
   }: Props = $props();
 
   /**
@@ -125,6 +136,18 @@
   );
   const agentTitle = $derived(
     activeAgent?.label ?? activeSession?.agent_workflow_type ?? "No session"
+  );
+  /* One control, two errands. The popover's header is shared by both views, so the refresh
+     button belongs to whichever list is on screen — refreshing sessions while looking at
+     the agent picker was the bug: it spun, and nothing the reader was looking at changed. */
+  const refreshingCurrent = $derived(
+    menuTab === "new" ? refreshingAgents : refreshingSessions
+  );
+  const canRefreshCurrent = $derived(
+    Boolean(menuTab === "new" ? onRefreshAgents : onRefreshSessions)
+  );
+  const refreshLabel = $derived(
+    menuTab === "new" ? "Re-check for workers" : "Refresh sessions"
   );
   const statusTone = $derived(STATUS_TONES[statusKind]);
   const spokenStatus = $derived(SPOKEN_KINDS.has(statusKind) ? statusLabel : null);
@@ -200,6 +223,96 @@
     return agent.description?.trim() || agent.workflow_type;
   }
 
+  /**
+   * The agent row's readiness chip.
+   *
+   * This used to be a hardcoded "Ready" on every row, which was a claim about a worker made
+   * from the registry alone — the one thing the registry cannot tell you. Clicking an agent
+   * whose worker was down produced a session that started and then hung, its workflow tasks
+   * sitting on a queue nobody polls.
+   *
+   * `ready` is stated flatly rather than hedged. Temporal requires every worker on a task
+   * queue to register the same workflow types, so a poller on the queue serves every agent
+   * declared for it; hedging would be hedging against a configuration Temporal does not
+   * support. A server that could not ask says `unknown` — never a quiet "Ready".
+   */
+  function agentWorkerStatusKind(agent: AgentDescriptor): StatusKind {
+    switch (agent.worker?.status) {
+      case "ready":
+        return "available";
+      case "no_worker":
+        return "blocked";
+      default:
+        return "idle";
+    }
+  }
+
+  function agentWorkerStatusLabel(agent: AgentDescriptor): string {
+    switch (agent.worker?.status) {
+      case "ready":
+        return "Ready";
+      case "no_worker":
+        return "No worker";
+      default:
+        return "Unknown";
+    }
+  }
+
+  /**
+   * The line under the description, for the two states that ask something of the reader.
+   *
+   * It carries the whole message — the condition AND what to do about it — because there is
+   * no reliable hover surface here to put the second half on. The app's `data-tip` is
+   * painted with the host's own pseudo-elements (app.css: "painted, not portalled"), and
+   * this list is a scroll box, so a bubble above the first row is clipped away by
+   * `.agent-list` exactly when someone hovers the thing they cannot click. A native `title`
+   * survives that but costs a second of still hover to appear, which is too well hidden for
+   * the one line that says why the row will not open.
+   *
+   * So it is always on screen: no hover, no delay, and it reads the same to a keyboard or
+   * touch user. `ready` gets nothing — the chip already said it, and the poller count is
+   * trivia.
+   */
+  function agentWorkerNote(
+    agent: AgentDescriptor
+  ): { lead: string; tail: string } | null {
+    switch (agent.worker?.status) {
+      case "ready":
+        return null;
+      case "no_worker":
+        return { lead: "No worker polling", tail: " — start one to use this agent" };
+      default:
+        return { lead: "Could not check for workers on", tail: "" };
+    }
+  }
+
+  function agentGlyphStatus(agent: AgentDescriptor): "available" | "idle" {
+    return agent.worker?.status === "ready" ? "available" : "idle";
+  }
+
+  /**
+   * Only `no_worker` blocks the row. `unknown` means the server could not ask — refusing on
+   * that would turn a failed health check into a locked door, which is a worse lie than the
+   * hardcoded "Ready" this all replaced.
+   */
+  function agentBlocked(agent: AgentDescriptor): boolean {
+    return agent.worker?.status === "no_worker";
+  }
+
+  /**
+   * Why the row will not open, as a native `title`.
+   *
+   * Not the app's `data-tip`: that bubble is painted with the host's own pseudo-elements
+   * (app.css says so in as many words — "painted, not portalled"), and this list is a
+   * scroll container inside a popover that hides its overflow. A tip on the first row would
+   * be clipped away by `.agent-list` exactly when someone hovers the thing they cannot
+   * click. `title` is the browser's, drawn above everything, and cannot be cut off.
+   */
+  function agentBlockedReason(agent: AgentDescriptor): string | undefined {
+    if (!agentBlocked(agent)) return undefined;
+    return `Start a worker polling ${agent.task_queue} before opening a session with this agent.`;
+  }
+
   function sessionMatchesSearch(session: Session, term: string): boolean {
     return [
       sessionInitialMessage(session),
@@ -244,7 +357,14 @@
     menuTab = "sessions";
   }
 
-  /** Strip New chip: open (or toggle shut) the popover already on the new mode. */
+  /**
+   * Strip New chip: open (or toggle shut) the popover already on the new mode.
+   *
+   * Every open re-lists the agents, with no age gate — unlike the sessions side. The rows
+   * now carry whether a worker is polling each agent's task queue, and that can change
+   * between two opens; a stale "Ready" is what sent people into a session that started and
+   * then hung on an unpolled queue.
+   */
   function openNewSessionMenu(): void {
     if (!canCreateSession) return;
     if (menuOpen && menuTab === "new") {
@@ -253,6 +373,7 @@
     }
     menuTab = "new";
     menuOpen = true;
+    void onEnsureAgents?.();
   }
 
   /* Opening a picker puts focus on what answers the question — search for
@@ -263,9 +384,15 @@
     else agentListElement?.querySelector<HTMLElement>(".agent-row")?.focus();
   });
 
-  async function startNewSession(workflowType: string): Promise<void> {
-    if (!workflowType || !onNewSession || creatingSession) return;
-    await onNewSession(workflowType);
+  /**
+   * Takes the agent, not just its type, so the no-worker refusal lives with the press rather
+   * than only in the markup — a row that renders inert must also be inert when activated by
+   * a keyboard, which `aria-disabled` alone does not arrange.
+   */
+  async function startNewSession(agent: AgentDescriptor): Promise<void> {
+    if (agentBlocked(agent)) return;
+    if (!agent.workflow_type || !onNewSession || creatingSession) return;
+    await onNewSession(agent.workflow_type);
     closeMenu();
   }
 
@@ -277,9 +404,10 @@
     closeMenu();
   }
 
-  async function refreshSessions(): Promise<void> {
-    if (!onRefreshSessions || refreshingSessions) return;
-    await onRefreshSessions();
+  async function refreshCurrent(): Promise<void> {
+    if (refreshingCurrent) return;
+    if (menuTab === "new") await onRefreshAgents?.();
+    else await onRefreshSessions?.();
   }
 </script>
 
@@ -349,14 +477,14 @@
         </span>
 
         <div class="session-popover-actions">
-          {#if onRefreshSessions}
+          {#if canRefreshCurrent}
             <IconButton
-              class={refreshingSessions ? "session-refresh spinning" : "session-refresh"}
-              label="Refresh sessions"
+              class={refreshingCurrent ? "session-refresh spinning" : "session-refresh"}
+              label={refreshLabel}
               data-tip-below
               data-tip-align="end"
-              disabled={refreshingSessions}
-              onclick={() => void refreshSessions()}
+              disabled={refreshingCurrent}
+              onclick={() => void refreshCurrent()}
             >
               <RefreshCw size={14} />
             </IconButton>
@@ -374,27 +502,53 @@
 
       <div class="session-panel" aria-labelledby="session-menu-heading">
         {#if menuTab === "new"}
+          {#if agentsError}
+            <p class="session-empty">{agentsError}</p>
+          {/if}
           <div class="agent-list" role="menu" bind:this={agentListElement}>
             <!-- Keyed on `key`, which load_agent_registry refuses to let repeat.
                  `workflow_type` it does not check, and a Svelte duplicate key throws
                  in production too — so keying on it would turn a survivable typo in
                  agents.toml into an uncaught throw while rendering this list. -->
             {#each agents as agent (agent.key)}
+              <!-- `aria-disabled`, never `disabled`: the whole point of the state is the
+                   explanation attached to it, and `disabled` drops the row out of the tab
+                   order and suppresses its tooltip — deleting that explanation for a
+                   keyboard user at precisely the moment it becomes true. Same call
+                   IconButton and StepController already make. -->
               <button
                 type="button"
                 class="agent-row"
                 role="menuitem"
-                onclick={() => void startNewSession(agent.workflow_type)}
+                aria-disabled={agentBlocked(agent) ? "true" : undefined}
+                title={agentBlockedReason(agent)}
+                onclick={() => void startNewSession(agent)}
               >
                 <AgentGlyph
                   label={agent.label}
-                  status="available"
+                  status={agentGlyphStatus(agent)}
                 />
                 <span class="agent-copy">
                   <strong>{agent.label}</strong>
                   <small>{agentDescription(agent)}</small>
+                  <!-- Named queue, not just "no worker": the reader's next move is to start
+                       that worker, and they need to know which one. -->
+                  {#if agentWorkerNote(agent)}
+                    {@const note = agentWorkerNote(agent)!}
+                    <small
+                      class={agent.worker?.status === "no_worker"
+                        ? "agent-note warn"
+                        : "agent-note"}
+                    >
+                      {note.lead} <code>{agent.task_queue}</code>{note.tail}
+                    </small>
+                  {/if}
                 </span>
-                <StatusChip label="Ready" kind="available" compact />
+                <StatusChip
+                  label={agentWorkerStatusLabel(agent)}
+                  kind={agentWorkerStatusKind(agent)}
+                  compact
+                />
               </button>
             {/each}
           </div>
@@ -663,11 +817,33 @@
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .agent-row:hover {
+    .agent-row:hover:not([aria-disabled="true"]) {
       border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
       background: color-mix(in srgb, var(--accent) 7%, var(--surface-2));
       transform: translateY(-1px);
     }
+  }
+
+  /* Dead to the pointer, because the look IS the message: a row that says "no worker" must
+     not also say "press me". It keeps its focus ring and its place in the tab order — see
+     the button's own comment for why that matters here.
+
+     The app's other inert controls take `opacity: var(--disabled-opacity)` wholesale, and
+     this one deliberately does not. Those are icons and one-word labels, where dimming
+     costs nothing; here the row's own body text is the explanation for why it is dim, and
+     `opacity` composites the whole subtree — a child cannot paint back through its parent's
+     alpha, so there is no exempting the one line worth reading. So the inertness is said
+     with the frame instead: the invitation (accent border, lifted hover) is withdrawn and
+     the glyph and title recede, while the description and the warning stay legible. */
+  .agent-row[aria-disabled="true"] {
+    border-color: var(--border);
+    background: color-mix(in srgb, var(--surface-2) 20%, var(--surface-1));
+    cursor: default;
+  }
+
+  .agent-row[aria-disabled="true"] :global(.agent-glyph),
+  .agent-row[aria-disabled="true"] .agent-copy strong {
+    opacity: var(--disabled-opacity);
   }
 
   .agent-copy {
@@ -693,6 +869,29 @@
     font-size: var(--font-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Louder than the description above it when it is a warning, because it is the one line
+     on the row that changes what the reader does next. `unknown` stays muted — it reports
+     that the server could not ask, which is not the agent's fault and not yet the reader's
+     problem. Both keep the ellipsis discipline of their sibling: a long queue name must not
+     widen the popover. */
+  .agent-copy small.agent-note.warn {
+    color: var(--error);
+  }
+
+  /* The one line allowed to wrap. Its siblings ellipse because a description is expendable
+     past the first clause; this one ends in the instruction, so clipping it would cut off
+     the half that says what to do. */
+  .agent-copy small.agent-note {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .agent-copy small.agent-note code {
+    font-family: var(--font-mono);
+    font-size: inherit;
   }
 
   .session-list {

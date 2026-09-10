@@ -229,6 +229,9 @@ export class AgentRunController {
   refreshingSessions = $state(false);
   /** List-load failure for the picker; never the stream connection banner. */
   sessionsError = $state<string | null>(null);
+  /** The agent-picker's own pair, so a worker re-check reports where it was asked for. */
+  refreshingAgents = $state(false);
+  agentsError = $state<string | null>(null);
   #connectionError = $state<string | null>(null);
   #connectionErrorCode = $state<string | null>(null);
   playbackSpeed = $state<PlaybackSpeed>(1);
@@ -241,6 +244,8 @@ export class AgentRunController {
   #connectionVersion = 0;
   #sendVersion = 0;
   #syncingSessions = false;
+  /** Single-flight promise for listAgents loads. */
+  #agentsLoad: Promise<void> | null = null;
   /** Single-flight promise for listSessions loads. */
   #sessionsLoad: Promise<void> | null = null;
   /** When the last listSessions finished (ms). */
@@ -1498,6 +1503,66 @@ export class AgentRunController {
     const { agents } = await this.#api.listAgents();
     this.agents = agents;
     return agents;
+  }
+
+  /**
+   * Re-list the agents, unconditionally.
+   *
+   * `#loadAgents` caches forever, which is right for the registry half — the set of
+   * launchable agents does not change while the page is open — and wrong for the worker
+   * half now riding along with it. A worker can come up or go down between two opens of
+   * the picker, so a cached "Ready" is the exact claim this is meant to stop making.
+   * Hence no age gate anywhere below: every ask goes to the server.
+   *
+   * One flight at a time: a double-click on New would otherwise race two lists into
+   * `agents`, and the loser could be the older answer.
+   */
+  #loadAgentsFresh(): Promise<void> {
+    if (this.#agentsLoad) return this.#agentsLoad;
+    this.#agentsLoad = (async () => {
+      try {
+        const { agents } = await this.#api.listAgents();
+        this.agents = agents;
+      } finally {
+        this.#agentsLoad = null;
+      }
+    })();
+    return this.#agentsLoad;
+  }
+
+  /**
+   * The picker opening. Quiet: the click wants the list *now*, so a failure must not raise
+   * the connection banner over the chat pane — the rows keep whatever readiness they last
+   * had, and `unknown` covers the case where they never had any. The refresh button is the
+   * loud path, and it is the one that gets to report.
+   *
+   * Mirrors `ensureSessionsEnriched`, minus its age gate — see `#loadAgentsFresh`.
+   */
+  async ensureAgents(): Promise<void> {
+    try {
+      await this.#loadAgentsFresh();
+    } catch {
+      // Quiet: the refresh button can surface a failure.
+    }
+  }
+
+  /**
+   * The refresh button, in agent-picker mode. Loud, like `refreshSessions`: it spins its
+   * control and reports into the popover, because someone asked for this one out loud and
+   * a silent no-op would read as "checked, still no worker" — the opposite of the truth.
+   */
+  async refreshAgents(): Promise<void> {
+    if (this.refreshingAgents) return;
+    this.refreshingAgents = true;
+    this.agentsError = null;
+    try {
+      await this.#loadAgentsFresh();
+    } catch (error) {
+      this.agentsError =
+        error instanceof Error ? error.message : "Failed to refresh agents.";
+    } finally {
+      this.refreshingAgents = false;
+    }
   }
 
   #messageForSession(message: AgentInboundMessage, session: Session): AgentInboundMessage {

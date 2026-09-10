@@ -32,12 +32,34 @@ export type JsonRecord = Record<string, unknown>;
 // Agent registry and sessions
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether a worker is actually polling an agent's task queue, as of the last look.
+ *
+ * `ready` is the whole answer, not a hedge: Temporal requires every worker on a task
+ * queue to register the same workflow types, so in a supported configuration a poller
+ * on the queue serves every agent declared for it. `unknown` is only ever the server
+ * failing to ask — never the server asking and being unsure.
+ */
+export type AgentWorkerStatus = "ready" | "no_worker" | "unknown";
+
+export interface AgentWorker {
+  status: AgentWorkerStatus;
+  task_queue: string;
+  poller_count: number;
+  /** Most recent poll across live pollers, epoch seconds. Null when there are none. */
+  last_seen: UnixEpochSeconds | null;
+  /** Populated only for `unknown` — why the describe call failed. */
+  error: string | null;
+}
+
 export interface AgentDescriptor {
   key: string;
   workflow_type: AgentWorkflowType;
   task_queue: string;
   label: string;
   description: string;
+  /** Absent from older servers, and from fixtures that predate worker readiness. */
+  worker?: AgentWorker;
 }
 
 export interface AgentRegistryResponse {

@@ -55,6 +55,7 @@ from temporal_agent_harness.web.session_manager import (
     Session,
     SessionManagerWorkflow,
 )
+from temporal_agent_harness.web.task_queue_status import describe_task_queue_workers
 
 RegistrySource = AgentRegistry | Callable[[], AgentRegistry]
 _SESSION_PREVIEW_HISTORY_PAGE_SIZE = 16
@@ -163,11 +164,31 @@ def create_agent_harness_app(
 
     @app.get("/api/agents")
     async def list_agents():
+        """The launchable agents, each with whether a worker is actually polling its queue.
+
+        The readiness half is live rather than registry-derived, so this is ``no-store`` and
+        the UI refetches on every agent-picker open — a worker can come up or go down between
+        one look and the next, and a cached "Ready" is the exact lie this endpoint exists to
+        stop telling.
+        """
         registry_result: AgentRegistry = await app.state.manager_handle.query(
             SessionManagerWorkflow.available_agents,
             result_type=AgentRegistry,
         )
-        return asdict(registry_result)
+        workers = await describe_task_queue_workers(
+            app.state.temporal,
+            (agent.task_queue for agent in registry_result.agents),
+        )
+        content = {
+            "agents": [
+                {
+                    **asdict(agent),
+                    "worker": asdict(workers.for_task_queue(agent.task_queue)),
+                }
+                for agent in registry_result.agents
+            ]
+        }
+        return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/sessions")
     async def list_sessions():
