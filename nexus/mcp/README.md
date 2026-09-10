@@ -1,62 +1,65 @@
 # Temporal Nexus MCP
 
-`nexus_mcp` exposes Nexus service operations as MCP tools. You can author one
-Nexus tool service and use it from:
+The `nexus_mcp` package exposes Nexus service operations as MCP tools. It
+supports direct OpenAI Agents and Pydantic AI integrations, Temporal workflow
+calls, standard MCP clients, and MCP Tasks.
 
-- a Temporal workflow, with direct Nexus calls;
-- a stateful MCP client, with the MCP initialization flow;
-- a stateless MCP client, with independent MCP requests;
-- a task-capable MCP client, with a durable Nexus operation behind each task.
+For component design, execution paths, and protocol behavior, see
+[Architecture](ARCHITECTURE.md).
 
-The package uses the MCP Python SDK for the protocol. The SDK owns
-initialization, protocol negotiation, sessions, Streamable HTTP, request
-validation, and normal MCP errors. This package adds the Nexus execution path
-and the MCP Tasks extension.
+## Install the package
 
-## Install
+The package requires Python 3.13 or later. The distribution name is
+`temporal-nexus-mcp`. The Python import name is `nexus_mcp`.
 
-The package requires Python 3.13 or later. Its distribution name is
-`temporal-nexus-mcp`. Its Python import name is `nexus_mcp`.
+An unrelated project owns the `nexus-mcp` name on PyPI. Do not run
+`pip install nexus-mcp` or `uv add nexus-mcp`.
 
-An unrelated project owns the `nexus-mcp` name on PyPI. Do not use
-`pip install nexus-mcp` or `uv add nexus-mcp`. Those commands install the
-unrelated project.
-
-From this repository:
+From this repository, run:
 
 ```sh
 uv sync --extra nexus-mcp
 ```
 
-For an editable package-only installation:
+For an editable package-only installation, run:
 
 ```sh
 uv pip install -e ./nexus/mcp
 ```
 
-To install from GitHub before this distribution is published:
+Install the optional dependency for the AI SDK that you use:
+
+```sh
+uv pip install -e './nexus/mcp[openai-agents]'
+uv pip install -e './nexus/mcp[pydantic-ai]'
+```
+
+To install from GitHub before the package is published, run:
 
 ```sh
 uv add "temporal-nexus-mcp @ git+https://github.com/temporal-community/temporal-agent-harness.git#subdirectory=nexus/mcp"
 ```
 
-## Choose a use case
+## Select an API
 
-| Goal | API | MCP connection |
+| Goal | API | Tool transport |
 | --- | --- | --- |
-| Call tools inside a Temporal workflow | `NexusToolResolver` and `WorkflowNexusExecutor` | None |
-| Call tools from a normal Python process | `NexusToolResolver` | None |
-| Serve Nexus tools to MCP clients | `NexusMCPBridge` | MCP SDK managed |
-| Run long tool calls as MCP tasks | `NexusMCPBridge` and Tasks helpers | Stateless MCP 2026 |
-| Reach an existing HTTP MCP server through Temporal | Durable Tools Gateway | Gateway opens the remote connection |
+| Add Nexus tools to an OpenAI agent outside a workflow | `NexusMCPServer` | Nexus |
+| Add Nexus tools to Pydantic AI outside a workflow | `NexusToolset` | Nexus |
+| Add Nexus tools to an OpenAI agent workflow | `nexus_native_mcp_server` | Nexus |
+| Call Nexus tools from a workflow without an AI SDK | `NexusToolResolver` with `WorkflowNexusExecutor` | Nexus |
+| Serve Nexus tools to a standard MCP client | `NexusMCPBridge` | stdio, then Nexus |
+| Run long calls as MCP tasks | `NexusMCPBridge` with Tasks support | stdio, then Nexus |
+| Call an existing HTTP MCP server through Temporal | Durable Tools Gateway | Nexus, then HTTP |
 
-Use a native Nexus tool service when you own the tool implementation. Use the
-Durable Tools Gateway when a tool already exists as an MCP server.
+Use a native Nexus tool service when you control the tool implementation. Use
+the Durable Tools Gateway when the tool is already available from an HTTP MCP
+server.
 
-## Author a Nexus tool service
+## Author a native Nexus tool service
 
-Inherit from `MCPOverNexusServiceHandler`. Use `@nexus_mcp_tool` for a short
-operation.
+Inherit from `MCPOverNexusServiceHandler`. Add `@nexus_mcp_tool` to each short
+operation that you want to expose.
 
 ```python
 import nexusrpc.handler
@@ -80,62 +83,32 @@ class WeatherTools(MCPOverNexusServiceHandler):
         annotations=ToolAnnotations(read_only_hint=True)
     )
 
-    @nexus_mcp_tool(
-        title="Get a weather forecast",
-        annotations=ToolAnnotations(idempotent_hint=True),
-    )
+    @nexus_mcp_tool(title="Get a weather forecast")
     async def forecast(self, city: str) -> Forecast:
-        """Get the current forecast."""
         return Forecast(city=city, summary="Clear")
 ```
 
-The method can use `def` or `async def`. The decorator creates a synchronous
-Nexus operation in both cases. Use it only for work that can finish within the
-Nexus handler deadline.
+The decorator creates the input and output schemas, the synchronous Nexus
+operation, the public MCP name, and the exact route to the operation. It accepts
+both `def` and `async def` methods. Use it only for work that can finish before
+the Nexus handler deadline.
 
-The package generates:
+Use `MCPToolConfig` for service defaults. Values on `@nexus_mcp_tool` override
+the defaults. Only marked operations appear in `tools/list`.
 
-- the public MCP name `weather_forecast`;
-- an input schema from the typed parameters;
-- an output schema from the return type;
-- the title, description, icons, annotations, and `_meta` values;
-- an exact route from `weather_forecast` to its Nexus operation.
+Service names and complete generated tool names must match
+`[a-zA-Z0-9_-]{1,64}`.
 
-`MCPToolConfig` sets defaults for the service. Values on the tool decorator
-override those defaults. MCP annotations are hints for clients. They do not
-enforce authorization or safe execution.
+### Define the Nexus operation directly
 
-Only marked operations appear in `tools/list`. Other operations on the same
-Nexus service cannot be called by guessing their names.
-
-### Authoring directly against a Nexus operation
-
-Use `@nexus_mcp_operation` above a Nexus operation decorator when you need a
-workflow-backed operation or custom Nexus behavior.
+Use `@nexus_mcp_operation` when you need direct control of the input and output
+types, operation name, operation context, or execution model. Put it above the
+Nexus operation decorator.
 
 ```python
 import nexusrpc.handler
 import temporalio.nexus
 from nexus_mcp.authoring import MCPOverNexusServiceHandler, nexus_mcp_operation
-from pydantic import BaseModel
-from temporalio import workflow
-
-
-class DelayedForecastInput(BaseModel):
-    city: str
-    delay_seconds: float = 5.0
-
-
-class DelayedForecastOutput(BaseModel):
-    summary: str
-
-
-@workflow.defn(sandboxed=False)
-class DelayedForecastWorkflow:
-    @workflow.run
-    async def run(self, input: DelayedForecastInput) -> DelayedForecastOutput:
-        await workflow.sleep(input.delay_seconds)
-        return DelayedForecastOutput(summary=f"Clear in {input.city}")
 
 
 @nexusrpc.handler.service_handler(name="weather")
@@ -147,7 +120,6 @@ class WeatherTools(MCPOverNexusServiceHandler):
         ctx: temporalio.nexus.WorkflowRunOperationContext,
         input: DelayedForecastInput,
     ) -> temporalio.nexus.WorkflowHandle[DelayedForecastOutput]:
-        """Get a forecast after a durable delay."""
         return await ctx.start_workflow(
             DelayedForecastWorkflow.run,
             input,
@@ -155,29 +127,112 @@ class WeatherTools(MCPOverNexusServiceHandler):
         )
 ```
 
-The Nexus decorator defines the input model, output model, operation name, and
-execution behavior. The MCP decorator adds MCP metadata. The Temporal data
-converter constructs the Pydantic input. Your operation returns its declared
-output type.
+The Nexus decorator defines the operation contract and execution behavior.
+`@nexus_mcp_operation` exposes the operation as an MCP tool and adds MCP
+metadata. The operation can be synchronous or workflow-backed. See the
+[Nexus hello service](../../examples/nexus_hello/nexus_tool_service.py) for a
+complete workflow-backed example.
 
-Register the service handler and any backing workflows on a Temporal worker.
-Create a Nexus endpoint that targets that worker task queue.
+Register the service handler and its workflows on a Temporal worker. Create a
+Nexus endpoint that targets the worker task queue.
 
-```sh
-temporal operator nexus endpoint create \
-    --name weather-endpoint \
-    --target-namespace default \
-    --target-task-queue weather-tools
+## Add Nexus tools to an AI SDK
+
+The OpenAI Agents and Pydantic AI integrations run in the caller process. They
+call Nexus directly and do not start an MCP protocol server. The Temporal
+server must enable standalone Nexus operations for these integrations. For a
+local Temporal server, set `nexusoperation.enableStandalone=true`.
+
+### OpenAI Agents outside a workflow
+
+Pass a connected Temporal client to
+[`NexusMCPServer`](nexus_mcp/integrations/openai_agents.py). Add the server to
+`Agent.mcp_servers`.
+
+```python
+from agents import Agent, Runner
+from nexus_mcp.integrations.openai_agents import NexusMCPServer
+from temporalio.client import Client
+
+temporal = await Client.connect("localhost:7233")
+nexus_tools = NexusMCPServer.for_service(
+    temporal,
+    "weather",
+    "weather-endpoint",
+)
+agent = Agent(name="weather-agent", mcp_servers=[nexus_tools])
+result = await Runner.run(agent, "What is the forecast for Boston?")
 ```
 
-Service names and complete generated tool names must match
-`[a-zA-Z0-9_-]{1,64}`.
+The caller owns the Temporal client. The adapter's `connect()` and `cleanup()`
+methods do not start or stop a process.
 
-## Call tools from a Temporal workflow
+Use the mapping constructor to expose more than one service:
 
-Compose `NexusToolResolver` with `WorkflowNexusExecutor`. This path uses
-`workflow.create_nexus_client`. It does not create an MCP connection or
-initialize an MCP session.
+```python
+nexus_tools = NexusMCPServer(
+    temporal,
+    {
+        "weather": "weather-endpoint",
+        "calendar": "calendar-endpoint",
+    },
+)
+```
+
+The optional `request_context_factory` callback receives MCP `_meta`, or `None`
+during tool discovery. By default,
+`_meta["io.temporal/idempotencyKey"]` sets the Nexus idempotency key.
+
+### OpenAI Agents in an Agent Harness workflow
+
+Use the Agent Harness
+[`nexus_native_mcp_server`](../../temporal_agent_harness/ai_sdks/openai_agents/workflow.py)
+factory inside a Temporal workflow:
+
+```python
+from agents import Agent
+from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+    nexus_native_mcp_server,
+)
+
+agent = Agent(
+    name="weather-agent",
+    mcp_servers=[nexus_native_mcp_server("weather", "weather-endpoint")],
+)
+```
+
+The factory creates `WorkflowNexusMCPServer`, which uses
+`WorkflowNexusExecutor`.
+
+### Pydantic AI outside a workflow
+
+Pass a connected Temporal client to
+[`NexusToolset`](nexus_mcp/integrations/pydantic_ai.py). Add the toolset to
+`Agent.toolsets`.
+
+```python
+from nexus_mcp.integrations.pydantic_ai import NexusToolset
+from pydantic_ai import Agent
+from temporalio.client import Client
+
+temporal = await Client.connect("localhost:7233")
+nexus_tools = NexusToolset.for_service(
+    temporal,
+    "weather",
+    "weather-endpoint",
+)
+agent = Agent("openai:gpt-5.1", toolsets=[nexus_tools])
+result = await agent.run("What is the forecast for Boston?")
+```
+
+Tool errors become `ModelRetry` errors. The optional
+`request_context_factory` receives the Pydantic AI run context, tool name, and
+tool arguments. The tool name and arguments are `None` during discovery.
+
+## Call tools directly from a workflow
+
+Use `NexusToolResolver` with `WorkflowNexusExecutor` when you do not use an AI
+SDK adapter.
 
 ```python
 from temporalio import workflow
@@ -199,135 +254,51 @@ class WeatherWorkflow:
         return result.structured_content
 ```
 
-A call first reads the service tool manifest. It then uses the exact route from
-that manifest. The caller does not need to call `list_tools()` first. This
-discovery step prevents a caller from reaching an unlisted operation by
-constructing a name with the correct service prefix.
-
 Use `allowed_servers` to expose only part of a shared service map.
 
-The Temporal Agent Harness provides an OpenAI Agents adapter:
+## Serve a standard MCP client
 
-```python
-from agents import Agent
-from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
-    nexus_native_mcp_server,
-)
-
-agent = Agent(
-    name="weather-agent",
-    mcp_servers=[nexus_native_mcp_server("weather", "weather-endpoint")],
-)
-```
-
-This adapter composes `NexusToolResolver` and `WorkflowNexusExecutor`. The
-`nexus_mcp` package does not depend on the OpenAI Agents SDK.
-
-## Call tools from a normal Python process
-
-Use `StandaloneNexusExecutor` with a connected Temporal client.
-
-```python
-from nexus_mcp.execution import StandaloneNexusExecutor
-from nexus_mcp.resolver import NexusToolResolver
-from temporalio.client import Client
-
-client = await Client.connect("localhost:7233")
-resolver = NexusToolResolver(
-    {"weather": "weather-endpoint"},
-    StandaloneNexusExecutor(client),
-)
-
-tools = await resolver.list_tools()
-result = await resolver.call_tool("weather_forecast", {"city": "New York"})
-```
-
-This API returns MCP SDK types, but it does not use MCP on the wire. A local
-Temporal server must enable standalone Nexus operations:
-
-```text
-nexusoperation.enableStandalone=true
-```
-
-## Serve Nexus tools to MCP clients
-
-Build one `NexusMCPBridge`. The MCP SDK supplies both connection models.
+Use `NexusMCPBridge` when the caller requires an MCP protocol server. The
+bridge accepts MCP requests over stdio and sends discovery and tool calls
+through Nexus.
 
 ```python
 from nexus_mcp.execution import StandaloneNexusExecutor
 from nexus_mcp.frontends import NexusMCPBridge
 from nexus_mcp.resolver import NexusToolResolver
-from temporalio.client import Client as TemporalClient
+from temporalio.client import Client
 
-temporal_client = await TemporalClient.connect("localhost:7233")
+temporal = await Client.connect("localhost:7233")
 resolver = NexusToolResolver(
     {"weather": "weather-endpoint"},
-    StandaloneNexusExecutor(temporal_client),
+    StandaloneNexusExecutor(temporal),
 )
-bridge = NexusMCPBridge(
-    resolver,
-    name="weather-over-nexus",
-    version="1.0.0",
-    instructions="Use these tools for weather questions.",
-)
-```
-
-For a stateful stdio client:
-
-```python
+bridge = NexusMCPBridge(resolver, name="weather-over-nexus", version="1.0.0")
 await bridge.run_stdio_async()
 ```
 
-The client sends `initialize`. The MCP SDK owns initialization, capability
-negotiation, and session state.
-
-For Streamable HTTP with sessions:
-
-```python
-app = bridge.streamable_http_app(stateless_http=False)
-```
-
-For independent stateless requests:
-
-```python
-app = bridge.streamable_http_app(
-    stateless_http=True,
-    json_response=True,
-)
-```
-
-Serve the returned ASGI app with Uvicorn or another ASGI server. The MCP SDK
-owns `server/discover`, version checks, MCP headers, request envelopes, and
-result validation. Configure authentication, TLS, rate limits, and deployment
-policy in the application host or MCP SDK options.
-
-The bridge supports legacy and modern clients by mapping MCP to Nexus operations:
-
-```mermaid
-flowchart LR
-    legacy[Stateful MCP client] -->|initialize and requests| protocol[MCP protocol boundary]
-    modern[Stateless MCP client] -->|discover or direct requests| protocol
-    protocol --> tools[Tool discovery and dispatch]
-    tools --> nexus[Temporal Nexus]
-    nexus --> service[Native Nexus tool service]
-```
+The MCP client starts this module as a local stdio server. A local Temporal
+server must set `nexusoperation.enableStandalone=true`.
 
 ## Use MCP Tasks
 
-When the resolver uses `StandaloneNexusExecutor`, `NexusMCPBridge` advertises
-the `io.modelcontextprotocol/tasks` extension for protocol version
-`2026-07-28`. A task-capable tool call starts a standalone Nexus operation. The
-first response can return immediately with a durable task ID.
-
-A Python client can ask for the task handle and poll it:
+MCP Tasks are available through `NexusMCPBridge` when it uses
+`StandaloneNexusExecutor`. Configure the client for protocol version
+`2026-07-28` and add `NexusTasksClientExtension`.
 
 ```python
+from mcp import StdioServerParameters
 from mcp.client import Client
 from nexus_mcp import NexusTasksClientExtension
 from nexus_mcp.tasks import CreateTaskResult, get_task
 
+stdio_server = StdioServerParameters(
+    command="python",
+    args=["weather_bridge.py"],
+)
+
 async with Client(
-    "http://localhost:8000/mcp",
+    stdio_server,
     mode="2026-07-28",
     extensions=[NexusTasksClientExtension()],
 ) as client:
@@ -340,55 +311,15 @@ async with Client(
     current = await get_task(client.session, task.task_id)
 ```
 
-Use `cancel_task()` to request cancellation. `update_task()` is available for
-the protocol method, but Nexus operations in this package do not request more
-input while they run.
-
-For a simple blocking client experience, use the same client extension with
-the high-level call:
-
-```python
-result = await client.call_tool(
-    "weather_delayed_forecast",
-    {"city": "New York", "delay_seconds": 5},
-)
-```
-
-The extension polls `tasks/get` and returns the final `CallToolResult`. The
-caller waits, but the MCP request that created the task has already ended.
-
-Clients that do not advertise Tasks receive the normal blocking tool result.
-Legacy clients also receive the normal result. Task IDs are Nexus operation
-IDs, so a new bridge process can read an existing task. The bridge does not
-keep an in-memory task table.
-
-```mermaid
-sequenceDiagram
-    participant Client as Task-capable MCP client
-    participant Protocol as MCP task boundary
-    participant Nexus as Durable Nexus operation
-
-    Client->>Protocol: tools/call
-    Protocol->>Nexus: start operation
-    Protocol-->>Client: taskId
-    loop Until terminal
-        Client->>Protocol: tasks/get(taskId)
-        Protocol->>Nexus: read operation state
-        Protocol-->>Client: working or completed result
-    end
-```
-
-`task_ttl_ms` defaults to 24 hours. `task_poll_interval_ms` defaults to one
-second. Set both values on `NexusMCPBridge` when needed. Protect task methods
-with the same authorization policy as tool calls. This package does not bind a
-task ID to an application user.
+The direct OpenAI Agents and Pydantic AI integrations wait for the Nexus
+operation result. They do not expose the MCP Tasks protocol. See
+[MCP Tasks architecture](ARCHITECTURE.md#mcp-tasks) for the task lifecycle and
+failure behavior.
 
 ## Proxy an existing MCP server
 
-The Durable Tools Gateway is for an existing MCP server that cannot become a
-native Nexus service. It registers a server URL under an agent ID and alias.
-It fetches the remote tool list and runs each remote call in a standalone
-Temporal activity.
+Use the Durable Tools Gateway for an existing HTTP MCP server that cannot
+become a native Nexus service.
 
 ```python
 from agents import Agent
@@ -403,93 +334,14 @@ agent = Agent(
 )
 ```
 
-The gateway opens an MCP connection to the remote server for each operation.
-It is separate from the native Nexus tool path. See the
-[Nexus hello example](../../examples/nexus_hello/README.md).
+The gateway path is separate from the native Nexus tool path. See the
+[Nexus hello example](../../examples/nexus_hello/README.md) and the
+[gateway architecture](ARCHITECTURE.md#durable-tools-gateway).
 
-## Result and failure behavior
+## Further reading
 
-The resolver preserves an existing `CallToolResult`. It converts a Pydantic
-model to a dictionary. It returns a dictionary as text and as
-`structured_content`. It converts other values to text. An exception from a
-listed Nexus operation becomes a tool error result.
-
-Tool discovery is strict:
-
-- every listed public name must have an exact Nexus operation route;
-- duplicate public names across configured services fail discovery;
-- an unknown or constructed tool name does not reach Nexus;
-- discovery failure is visible instead of producing a partial, ambiguous list.
-
-Use authentication and authorization at the MCP and Nexus boundaries. Exact
-routing limits accidental reachability. It is not a replacement for access
-control.
-
-## Architecture
-
-The package has four logical domains. The arrows show responsibility boundaries and the table underneath shows modules that are responsible for each domain.
-
-```mermaid
-flowchart LR
-    mcp[MCP client]
-    workflow[Temporal workflow]
-    application[Python application]
-
-    subgraph protocol[MCP protocol]
-        edge[Accept MCP requests and tasks]
-    end
-
-    subgraph tools[Tool resolution]
-        resolve[Discover, validate, and resolve tools]
-    end
-
-    subgraph temporal[Temporal Nexus]
-        invoke[Call or manage an operation]
-    end
-
-    service[Native Nexus tool service]
-
-    mcp --> edge
-    edge --> resolve
-    workflow --> resolve
-    application --> resolve
-    resolve --> invoke
-    invoke --> service
-```
-
-The public types map to these domains:
-
-| Domain | Responsibility | Implementation |
-| --- | --- | --- |
-| MCP protocol | MCP initialization, requests, responses, and Tasks | `NexusMCPBridge` and the MCP SDK |
-| Tool resolution | Live discovery, manifest validation, exact routes, and result conversion | `NexusToolResolver` |
-| Nexus invocation | Calls from a workflow or a normal process; durable operation handles | `WorkflowNexusExecutor` or `StandaloneNexusExecutor` |
-| Tool service | Tool metadata and business logic | `MCPOverNexusServiceHandler` and authoring decorators |
-
-Workflow callers compose `NexusToolResolver` with `WorkflowNexusExecutor`. An
-MCP client enters through `NexusMCPBridge`. Application code can use
-`NexusToolResolver` directly.
-
-### Native service authoring
-
-```mermaid
-flowchart LR
-    author[Service author] --> helpers[Authoring helpers]
-    helpers --> service[Native Nexus tool service]
-    service --> manifest[Tool manifest and exact routes]
-```
-
-`MCPOverNexusServiceHandler` produces the tool manifest and exact route map.
-The decorators turn marked methods or existing Nexus operations into MCP tools.
-
-### Existing third-party MCP servers
-
-```mermaid
-flowchart LR
-    caller[Nexus caller] --> gateway[Durable Tools Gateway]
-    gateway --> activity[Standalone activity]
-    activity -->|MCP| existing[Existing HTTP MCP server]
-```
-
-The gateway is separate from the native Nexus tool path. It opens an MCP
-connection to an existing server for each list or call operation.
+- [Package architecture](ARCHITECTURE.md)
+- [Nexus hello example](../../examples/nexus_hello/README.md)
+- [Authoring helpers](nexus_mcp/authoring/authoring_helpers.py)
+- [OpenAI Agents integration](nexus_mcp/integrations/openai_agents.py)
+- [Pydantic AI integration](nexus_mcp/integrations/pydantic_ai.py)

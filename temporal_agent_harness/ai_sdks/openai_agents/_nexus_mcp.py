@@ -1,8 +1,7 @@
-"""OpenAI Agents MCP server adapters backed by Nexus."""
+"""Expose Durable Tools Gateway tools to the OpenAI Agents SDK."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from agents.mcp import MCPServer
@@ -28,10 +27,7 @@ try:
             ListAgentEntriesInput,
             RegistryService,
         )
-        from nexus_mcp.execution import WorkflowNexusExecutor
         from nexus_mcp.resolver import (
-            NexusToolResolver,
-            UnknownToolError,
             coerce_call_tool_result,
         )
 except ModuleNotFoundError as exc:
@@ -73,40 +69,6 @@ class _BaseNexusMCPServer(MCPServer):  # type: ignore[misc]
         self, name: str, arguments: dict[str, Any] | None = None
     ) -> GetPromptResult:
         raise NotImplementedError(f"MCP server {self.name!r} does not support prompts.")
-
-
-class _NexusNativeMCPServer(_BaseNexusMCPServer):
-    """Expose native Nexus tools through the OpenAI Agents MCP interface."""
-
-    def __init__(
-        self,
-        registered_servers: Mapping[str, str],
-        name: str | None = None,
-        allowed_servers: frozenset[str] | None = None,
-        **kwargs: Any,
-    ) -> None:
-        MCPServer.__init__(self, **kwargs)
-        self._resolver = NexusToolResolver(
-            registered_servers,
-            WorkflowNexusExecutor(),
-            name=name or "nexus-native",
-            allowed_servers=allowed_servers,
-        )
-
-    @property
-    def name(self) -> str:
-        return self._resolver.name
-
-    async def list_tools(self, run_context: Any = None, agent: Any = None) -> list[MCPTool]:
-        return await self._resolver.list_tools()
-
-    async def call_tool(
-        self, tool_name: str, arguments: dict[str, Any] | None, meta: dict[str, Any] | None = None
-    ) -> CallToolResult:
-        try:
-            return await self._resolver.call_tool(tool_name, arguments)
-        except UnknownToolError as exc:
-            return _error_result(exc)
 
 
 class NexusGateway:

@@ -4,7 +4,7 @@ import functools
 import inspect
 import json
 import typing
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any
@@ -370,11 +370,10 @@ def nexus_native_mcp_server(
             nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
         ])
     """
-    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
-        _NexusNativeMCPServer,
-    )
+    with temporal_workflow.unsafe.imports_passed_through():
+        from nexus_mcp.integrations.openai_agents import WorkflowNexusMCPServer
 
-    return _NexusNativeMCPServer({name: endpoint}, name=name, **kwargs)
+    return WorkflowNexusMCPServer.for_service(name, endpoint, **kwargs)
 
 
 def nexus_tools_gateway(

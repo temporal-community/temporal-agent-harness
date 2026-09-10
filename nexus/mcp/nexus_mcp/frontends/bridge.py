@@ -10,11 +10,12 @@ from mcp.server.caching import CacheHint
 from mcp.server.mcpserver import Context, Extension, MCPServer
 from mcp.shared.exceptions import MCPError
 
-from nexus_mcp.resolver import NexusToolResolver, RequestContext, UnknownToolError
-
-# This follows the MCP guidance (https://modelcontextprotocol.io/specification/draft/basic#_meta)
-# to use reverse DNS notation.
-IDEMPOTENCY_KEY_META_KEY = "io.temporal/idempotencyKey"
+from nexus_mcp.resolver import (
+    IDEMPOTENCY_KEY_META_KEY,
+    NexusToolResolver,
+    RequestContext,
+    UnknownToolError,
+)
 
 
 def request_context_from_mcp(context: Context[Any, Any]) -> RequestContext:

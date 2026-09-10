@@ -136,8 +136,12 @@ class TemporalOpenAIRunner(AgentRunner):
             )
             from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
                 _NexusGatewayMCPServer,
-                _NexusNativeMCPServer,
             )
+
+            with workflow.unsafe.imports_passed_through():
+                from nexus_mcp.integrations.openai_agents import (
+                    WorkflowNexusMCPServer,
+                )
 
             for s in starting_agent.mcp_servers:
                 if not isinstance(
@@ -145,7 +149,7 @@ class TemporalOpenAIRunner(AgentRunner):
                     (
                         _StatelessMCPServerReference,
                         _StatefulMCPServerReference,
-                        _NexusNativeMCPServer,
+                        WorkflowNexusMCPServer,
                         _NexusGatewayMCPServer,
                     ),
                 ):
