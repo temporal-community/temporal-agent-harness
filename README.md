@@ -4,6 +4,8 @@
 
 > ⚠️ **Experimental.** An early, fast-moving project from Temporal Technologies. APIs will change.
 
+[Demo Video](https://www.youtube.com/watch?v=z3L41NvF6wE)
+
 The Temporal Agent Harness gives your agents capabilities that are painful and error-prone to
 build yourself:
 
