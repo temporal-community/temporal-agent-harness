@@ -5,8 +5,9 @@ and dispatches. The work lives in the modules the subcommands name — ``web.ser
 app process and ``web.session_manager_worker`` for the session-manager worker — so neither is reachable only
 through a CLI.
 
-Adding the harness to a project with the ``ui`` extra puts this command on PATH, so a project
-gets the whole web-facing harness with no repo checkout, no Node/pnpm, and no ``examples/`` tree.
+Adding the harness to a project with the ``ui`` extra installs this command into the project's
+environment (reachable as ``uv run temporal-agent-harness``), so a project gets the whole
+web-facing harness with no repo checkout, no Node/pnpm, and no ``examples/`` tree.
 A normal dev setup runs both subcommands:
 
     uv add 'temporal-agent-harness[ui]'
