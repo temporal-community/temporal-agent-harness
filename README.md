@@ -1,6 +1,10 @@
 # Temporal Agent Harness
 
-**Build durable, composable AI agents with a rich tool-approval policy engine that can seamlessly elevate to a human with built-in human-in-the-loop.**
+[![PyPI](https://img.shields.io/pypi/v/temporal-agent-harness.svg)](https://pypi.org/project/temporal-agent-harness/)
+[![Python](https://img.shields.io/pypi/pyversions/temporal-agent-harness.svg)](https://pypi.org/project/temporal-agent-harness/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**Temporal-native agent harness (experimental) — build durable, composable AI agents on Temporal, with the AI SDKs you already use.**
 
 > ⚠️ **Experimental.** An early, fast-moving project from Temporal Technologies. APIs will change.
 
@@ -30,8 +34,16 @@ agent development, so you get the power without hand-rolling the orchestration.
 
 ## Installation
 
-There are two ways in, depending on what you want to do. Both pin to a **tagged release** —
-see [Versioning and stability](#versioning-and-stability) for why that matters.
+Two ways in, depending on what you want:
+
+| I want to… | Do this |
+| --- | --- |
+| **See it work** — chat with real agents in a browser | [Run the example agents](#try-it--run-the-example-agents) from a checkout |
+| **Build my own agent** | [Install from PyPI](#build-with-it--install-from-pypi) |
+
+The examples are the fastest path to something running, and they are **not shipped in the
+package** — they live only in this repo. So even if you'll ultimately install from PyPI, it's
+worth cloning once to watch the whole stack work.
 
 ### Try it — run the example agents
 
@@ -40,84 +52,90 @@ Clone at a release tag. No Node/pnpm needed: the browser UI ships prebuilt.
 ```bash
 git clone --branch 0.3.0 https://github.com/temporal-community/temporal-agent-harness.git
 cd temporal-agent-harness
+cp .env.example .env.local   # then set GEMINI_API_KEY (and/or OPENAI_API_KEY)
 ```
+
+Then run [`examples/monty`](examples/monty) — a conversational Code Mode travel agent — with one
+recipe per terminal:
+
+```bash
+cd examples/monty
+just temporal          # 1. local Temporal dev server (needs the `temporal` CLI)
+just session-manager   # 2. worker hosting the packaged SessionManagerWorkflow
+just server            # 3. browser UI + JSON API on :8000
+just worker            # 4. this example's agent worker
+```
+
+Open <http://localhost:8000> and start a session. There's no install step — `uv` fetches
+dependencies on demand. Every example follows the same four recipes; see
+[Run the examples](#run-the-examples) for the rest of them, including running all six behind
+one UI.
 
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
 the tag rather than on a branch. Later, move to a newer release with
 `git fetch --tags && git checkout <version>`, or see what changed between two of them with
-`git diff 0.1.0 0.2.0`.
+`git diff 0.2.0 0.3.0`.
 
-Then jump to [Run the examples](#run-the-examples). You'll need
-[uv](https://docs.astral.sh/uv/), [just](https://just.systems/), and the Temporal cli (or Temporal Cloud).
+### Build with it — install from PyPI
 
-### Build with it — add the harness to your own project
-
-Add it as a **git dependency pinned to a tag**. In a [`uv`](https://docs.astral.sh/uv/)-managed
-project:
+The harness is published to
+[PyPI](https://pypi.org/project/temporal-agent-harness/). In a
+[`uv`](https://docs.astral.sh/uv/)-managed project:
 
 ```bash
-# core harness — define and run agent workflows
-uv add "temporal-agent-harness @ git+https://github.com/temporal-community/temporal-agent-harness.git@0.3.0"
+uv add 'temporal-agent-harness[ui]==0.3.0'
 ```
 
-Or declare it in `pyproject.toml` — depend on the package (with any extras you need) and point
-its source at the tag:
+Or declare it in `pyproject.toml` — an ordinary dependency, no `[tool.uv.sources]` needed:
 
 ```toml
 [project]
 dependencies = [
-    "temporal-agent-harness[ui]",
+    # Everything past the base install is an opt-in extra — combine as many as you need
+    # in the one spec, e.g. [ui,code-mode,genai]:
+    #
+    #   ui              the browser UI and the `temporal-agent-harness` CLI
+    #   code-mode       the sandbox a worker runs Code Mode scripts in
+    #   genai           the Google Gemini integration
+    #   openai-agents   the OpenAI Agents SDK integration
+    #   pydantic-ai     the Pydantic AI integration
+    #   s3              S3-backed offload for large payloads
+    #
+    # What each one pulls in, and when you actually need it, is in the Extras table below.
+    "temporal-agent-harness[ui]==0.3.0",
 ]
-
-[tool.uv.sources]
-temporal-agent-harness = { git = "https://github.com/temporal-community/temporal-agent-harness.git", tag = "0.3.0" }
 ```
 
-Then run `uv sync`.
+Then run `uv sync`. Pin the exact version: this project is pre-1.0 and APIs change between
+releases — see [Versioning and stability](#versioning-and-stability).
 
-**Extras:**
+#### Run the web UI — no checkout, no Node
 
-- **`ui`** — the reusable FastAPI server and packaged browser UI (pulls in `fastapi[standard]`,
-  including Uvicorn). The built Svelte assets are always in the artifact; only the server runtime
-  dependencies are gated behind this extra, so core agent-worker installs stay smaller.
-- **`code-mode`** — for workers that host **Code Mode** agents; pulls in
-  [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in.
-  (The workflow-side `agent.code_mode_tool` factory itself needs nothing extra, so importing it
-  never requires this dependency.)
-
-Combine extras in the dependency spec, e.g. `"temporal-agent-harness[ui,code-mode]"`.
-
-Agent authors use the harness runtime from `temporal_agent_harness.harness`. Applications that
-want the built-in session manager and UI use `temporal_agent_harness.web`:
-
-```python
-from temporalio.client import Client
-from temporalio.envconfig import ClientConfig
-
-from temporal_agent_harness.plugin import AgentHarnessPlugin
-from temporal_agent_harness.web import (
-    create_agent_harness_app,
-    create_session_manager_worker,
-)
-
-
-async def run_session_manager() -> None:
-    connect_config = ClientConfig.load_client_connect_config()
-    client = await Client.connect(**connect_config, plugins=[AgentHarnessPlugin()])
-    worker = create_session_manager_worker(client)
-    await worker.run()
-
-
-app = create_agent_harness_app(registry_path="agents.toml")
-```
-
-Then serve the app with Uvicorn:
+The `ui` extra installs a `temporal-agent-harness` command into your project's environment —
+`uv run` it, the way you would any other project tool. It serves the browser UI built into the
+wheel: nothing to clone, nothing to build. One command per terminal:
 
 ```bash
-uvicorn my_app.web:app --host 0.0.0.0 --port 8000
+# 1. A local Temporal dev server (needs the `temporal` CLI). Its own Web UI: http://localhost:8233
+temporal server start-dev
+
+# 2. The packaged session-manager worker. It hosts SessionManagerWorkflow, which starts your
+#    agents as child workflows — without it the server comes up but has nothing to answer
+#    /api/agents or session creation, since both are workflow queries.
+uv run temporal-agent-harness session-manager
+
+# 3. The prebuilt Svelte UI + JSON API on http://localhost:8000
+uv run temporal-agent-harness serve ./agents.toml
+
+# 4. Your own worker, hosting your agent workflows on their own task queue
+uv run python -m my_app.worker
 ```
 
-The registry lists the launchable agents the UI can create:
+Open <http://localhost:8000> and create a session. `serve` accepts several registries and merges
+them (`serve one/agents.toml two/agents.toml`), so a single UI can list agents from more than one
+project.
+
+That registry is what lists the launchable agents:
 
 ```toml
 [[agents]]
@@ -128,23 +146,58 @@ label = "My Agent"
 description = "A short description shown in the UI."
 ```
 
-The app factory serves both `/api/*` and the packaged Svelte UI. The helper
-`create_session_manager_worker` only registers the packaged session-manager
-workflow; run your own agent workflows on their own workers and task queues.
+Both subcommands resolve their Temporal connection through temporalio's standard client config,
+so they land on the same namespace. With nothing configured they use `localhost:7233` — the
+`start-dev` default. Note that a `temporal.toml` in the **current directory is not picked up
+automatically**; point at a project-local file (or a Temporal Cloud profile) explicitly:
+
+```bash
+TEMPORAL_CONFIG_FILE=./temporal.toml TEMPORAL_PROFILE=cloud \
+    uv run temporal-agent-harness serve ./agents.toml
+```
+
+`uv run temporal-agent-harness --help` documents the full precedence order.
+
+Need the API and UI mounted inside your own FastAPI service instead? See
+[Self-hosting the web app](#self-hosting-the-web-app).
+
+#### Extras
+
+Agent authors import the runtime from `temporal_agent_harness.harness`; the base install carries
+only `temporalio` and `pydantic`, so nothing drags in an AI SDK you don't use. Everything else is
+opt-in:
+
+| Extra | Add it when you… |
+| --- | --- |
+| `ui` | want the browser UI and the `temporal-agent-harness` CLI (pulls in `fastapi[standard]`, including Uvicorn). The built Svelte assets are always in the wheel; only the server runtime is gated here, so agent-worker installs stay small. |
+| `code-mode` | run a worker that hosts **Code Mode** agents; pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in. The workflow-side `agent.code_mode_tool` factory needs nothing extra. |
+| `genai` | use the **Google Gemini** integration (`ai_sdks.google_genai_plugin`). |
+| `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
+| `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
+| `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
+
+Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.3.0'`.
 
 ## Versioning and stability
 
-**Install from a tagged release.** Every release is listed on the
-[releases page](https://github.com/temporal-community/temporal-agent-harness/releases), and each
-tag marks a commit that is known-good at the moment it was cut: the tests passed, and the
-prebuilt browser UI matches the source it was built from.
+**Pin to a release.** Every release is listed on the
+[releases page](https://github.com/temporal-community/temporal-agent-harness/releases) and
+published to [PyPI](https://pypi.org/project/temporal-agent-harness/). A release tag marks a
+commit that is known-good at the moment it was cut: the tests passed, and the prebuilt browser
+UI matches the source it was built from.
 
-**This project is very early and experimental - `main` may break at any time.** 
+Two artifacts come out of a release, and they pin differently:
 
-Releases are cut manually, when the maintainers judge the state stable. This project is 
-**experimental** and pre-1.0: APIs will change between releases, without warning. Pinning to a 
-tag is what keeps that churn from reaching you unannounced — so pin, and upgrade deliberately 
-when you want to try out new harness capabilities.
+- **The library** — pin an exact version from PyPI (`temporal-agent-harness==0.3.0`).
+- **The examples** — check out the matching git tag. They are *not* shipped in the package, so a
+  PyPI install gives you the library, the packaged UI, and the CLI, but no `examples/` tree.
+
+**This project is very early and experimental - `main` may break at any time.**
+
+Releases are cut manually, when the maintainers judge the state stable. This project is
+**experimental** and pre-1.0: APIs will change between releases, without warning. Pinning is what
+keeps that churn from reaching you unannounced — so pin, and upgrade deliberately when you want
+to try out new harness capabilities.
 
 ## What you get
 
@@ -443,11 +496,17 @@ self._runner = AgentWorkflowRunner(
 
 ## Requirements
 
+To build with the harness:
+
 - Python **3.11+**
 - [uv](https://docs.astral.sh/uv/) for dependency management
+- A Temporal service — a local dev server (`temporal server start-dev`) or Temporal Cloud
+
+To run the bundled examples from a checkout, additionally:
+
 - [just](https://just.systems/) for the example recipes
-- A Temporal service. `just temporal` starts a local dev server if you have the `temporal`
-  CLI installed.
+- The [`temporal` CLI](https://docs.temporal.io/cli), which `just temporal` starts a local dev
+  server with
 
 [pnpm](https://pnpm.io/) is **not** required to run anything: the browser UI ships prebuilt in
 `temporal_agent_harness/ui/dist`, both in release archives and in the repo. You only need it to
@@ -514,6 +573,50 @@ between a single-example server and the all-agents server (or change the set), r
 `just reset-manager` before the next `just server`, or start a fresh Temporal dev server. Also: an
 agent whose worker isn't running will accept a created session but never progress (it parks) — start
 its worker.
+
+## Self-hosting the web app
+
+Most projects want the packaged CLI above — `temporal-agent-harness serve` runs exactly this app.
+Reach for the factories here when you need the harness API and UI *inside* your own FastAPI
+service: your own routes alongside it, auth middleware, a registry built in code rather than
+read from a TOML file, or a different ASGI deployment.
+
+`create_agent_harness_app` returns the FastAPI app, serving both `/api/*` and the packaged Svelte
+UI. `create_session_manager_worker` builds the same agent-agnostic worker that
+`temporal-agent-harness session-manager` runs for you:
+
+```python
+from temporalio.client import Client
+from temporalio.envconfig import ClientConfig
+
+from temporal_agent_harness.plugin import AgentHarnessPlugin
+from temporal_agent_harness.web import (
+    create_agent_harness_app,
+    create_session_manager_worker,
+)
+
+
+async def run_session_manager() -> None:
+    connect_config = ClientConfig.load_client_connect_config()
+    client = await Client.connect(**connect_config, plugins=[AgentHarnessPlugin()])
+    worker = create_session_manager_worker(client)
+    await worker.run()
+
+
+app = create_agent_harness_app(registry_path="agents.toml")
+```
+
+Then serve the app with Uvicorn:
+
+```bash
+uvicorn my_app.web:app --host 0.0.0.0 --port 8000
+```
+
+`create_session_manager_worker` only registers the packaged session-manager workflow; run your
+own agent workflows on their own workers and task queues. It takes an already-connected client,
+so the harness plugin goes on that client — see
+[Running a worker](#running-a-worker--one-plugin).
+
 
 ## Status & docs
 
