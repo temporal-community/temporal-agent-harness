@@ -32,6 +32,12 @@ jobs:
     # Must match the environment name given to PyPI's trusted publisher. Also the place to add
     # required reviewers if you want a human gate on every upload.
     environment: pypi
+    env:
+      # Pin the interpreter instead of taking the runner's default (3.12), which silently
+      # excluded 28 tests: temporal-nexus-mcp is declared `python_version >= '3.13'`, so on 3.12
+      # the tests/nexus_mcp modules skip collection entirely. A release gate that quietly runs
+      # 302 of 330 tests is not a gate — and 3.13 is what the project develops against.
+      UV_PYTHON: "3.13"
     permissions:
       contents: read
       # Mints the short-lived OIDC token PyPI exchanges for an upload token. Without this the
