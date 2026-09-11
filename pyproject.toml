@@ -1,9 +1,27 @@
 [project]
 name = "temporal-agent-harness"
-version = "0.2.0"
+version = "0.3.0"
 description = "Temporal-native agent harness (experimental) — durable agents on Temporal, with the AI SDKs you already use."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Temporal Technologies Inc." }]
+keywords = [
+    "temporal",
+    "workflow",
+    "agents",
+    "harness",
+    "llm",
+    "ai",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
 # Core runtime deps are deliberately minimal: the harness itself only needs Temporal and
 # pydantic. AI-SDK and external-storage needs are opt-in extras below, so installing the
 # harness doesn't drag in Gemini or boto3.
@@ -11,6 +29,19 @@ dependencies = [
     "temporalio>=1.31.0",  # provides temporalio.contrib.workflow_streams (experimental)
     "pydantic>=2.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/temporal-community/temporal-agent-harness"
+Repository = "https://github.com/temporal-community/temporal-agent-harness"
+Issues = "https://github.com/temporal-community/temporal-agent-harness/issues"
+Changelog = "https://github.com/temporal-community/temporal-agent-harness/releases"
+
+# Serves the prebuilt UI shipped in the wheel (temporal_agent_harness/ui/dist) over one or
+# more agents.toml registries — a plain `uv add 'temporal-agent-harness[ui]'` is enough to
+# run the app, no repo checkout and no Node/pnpm. Needs the `ui` extra for FastAPI/uvicorn; the
+# script itself imports them lazily and says so if they're missing.
+[project.scripts]
+temporal-agent-harness = "temporal_agent_harness.web.cli:main"
 
 [project.optional-dependencies]
 # The Google Gemini SDK integration: temporal_agent_harness.ai_sdks.google_genai_plugin.
@@ -49,7 +80,9 @@ ui = [
 # (temporal_agent_harness.harness.code_mode). Only the worker-side stepping activities import
 # it; the workflow-side factory (agent.code_mode_tool) stays free of this dependency.
 code-mode = [
-    "pydantic-monty>=0.0.18",
+    # TODO: 0.0.19 swapped Monty's script-compiler API for a process pool (checkout/session).
+    # Port monty_stepper.py to it, then unpin.
+    "pydantic-monty==0.0.18",
 ]
 # Nexus-brokered MCP servers: temporal_agent_harness.ai_sdks.openai_agents.workflow.
 # nexus_brokered_mcp_server. Lets an Agent reach an MCP tool over a Temporal Nexus endpoint,
@@ -76,7 +109,7 @@ nexus-mcp = [
 examples = [
     "google-genai>=2.0.0",
     "google-auth>=2.53.0",
-    "pydantic-monty>=0.0.18",  # the Monty sandbox the monty example runs scripts in
+    "pydantic-monty==0.0.18",  # Monty sandbox; pinned per the code-mode extra's TODO
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
     "openai-agents>=0.22.0",  # the OpenAI Agents SDK example (examples/openai_hello, examples/react_agent)
     "pydantic-ai-slim[temporal]>=2.13",  # the Pydantic AI example (examples/pydantic_ai_hello)

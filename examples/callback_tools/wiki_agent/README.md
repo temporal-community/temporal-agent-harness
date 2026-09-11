@@ -42,8 +42,8 @@ until something fulfills it. That's fine for this demo.
 | `justfile` | Recipes for the local stack. |
 
 The web server and session-manager worker are **shared across examples** — `just server` points the
-shared `examples/app.py` at this example's `agents.toml`, and `just session-manager` runs the shared
-`examples/session_manager_worker.py`. The `POST /api/callback-result` route the client uses lives in
+packaged `temporal-agent-harness serve` at this example's `agents.toml`, and `just session-manager`
+runs the packaged `temporal-agent-harness session-manager`. The `POST /api/callback-result` route the client uses lives in
 the packaged server.
 
 ## Setup

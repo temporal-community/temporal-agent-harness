@@ -34,8 +34,12 @@ app-build:
     pnpm --dir "{{ui}}" run build
 
 # Build, test, and create the wheel/sdist in dist/.
+# Clears dist/ first: `uv build` only ADDS to it, so artifacts from a previously released
+# version linger there indefinitely. That matters at publish time — `uv publish` uploads
+# dist/* by default, so a stale wheel would be pushed to PyPI alongside the current one.
 package: app-build app-check
     uv run pytest
+    rm -rf "{{justfile_directory()}}/dist"
     uv build
 
 # Start the custom Temporal server with Nexus callback/update dynamic config enabled.
@@ -163,13 +167,13 @@ teams-webhook:
 temporal:
     temporal server start-dev
 
-# Run the shared, agent-agnostic session-manager worker (hosts only SessionManagerWorkflow).
+# Run the packaged, agent-agnostic session-manager worker (hosts only SessionManagerWorkflow).
 session-manager:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{justfile_directory()}}"
     set -a; [ -f .env.local ] && . ./.env.local; set +a
-    uv run --group examples python -m examples.session_manager_worker
+    uv run --group examples temporal-agent-harness session-manager
 
 # Serves the COMMITTED UI build in temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
 # a downloaded release archive runs as-is. If you changed anything under ui/, rebuild it first
@@ -182,7 +186,7 @@ server:
     set -euo pipefail
     cd "{{justfile_directory()}}"
     set -a; [ -f .env.local ] && . ./.env.local; set +a
-    uv run --group examples python -m examples.app \
+    uv run --group examples temporal-agent-harness serve \
         examples/openai_hello/agents.toml \
         examples/pydantic_ai_hello/agents.toml \
         examples/react_agent/agents.toml \

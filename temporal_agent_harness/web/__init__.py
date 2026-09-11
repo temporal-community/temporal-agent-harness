@@ -21,7 +21,7 @@ from temporal_agent_harness.web.session_manager import (
 # ``__getattr__`` still does the lazy loading.
 if TYPE_CHECKING:
     from temporal_agent_harness.web.app import create_agent_harness_app
-    from temporal_agent_harness.web.worker import create_session_manager_worker
+    from temporal_agent_harness.web.session_manager_worker import create_session_manager_worker
 
 
 def __getattr__(name: str):
@@ -30,7 +30,7 @@ def __getattr__(name: str):
 
         return create_agent_harness_app
     if name == "create_session_manager_worker":
-        from temporal_agent_harness.web.worker import create_session_manager_worker
+        from temporal_agent_harness.web.session_manager_worker import create_session_manager_worker
 
         return create_session_manager_worker
     raise AttributeError(name)
