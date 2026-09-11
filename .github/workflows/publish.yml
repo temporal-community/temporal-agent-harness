@@ -1,0 +1,70 @@
+name: Publish to PyPI
+
+# Publishes the wheel + sdist to PyPI using a GitHub OIDC trusted publisher — no API token is
+# stored anywhere. PyPI verifies that the request came from THIS repo, THIS workflow file, and
+# THIS environment, so the three must match the publisher configured at
+# https://pypi.org/manage/project/temporal-agent-harness/settings/publishing/ exactly.
+#
+# No Node toolchain here on purpose: the browser UI is committed prebuilt to
+# temporal_agent_harness/ui/dist, and the "UI dist" workflow already fails on main if that build
+# has drifted from ui/. So the commit a release is cut from is verified before we get here, and
+# `uv build` alone produces a complete wheel.
+
+on:
+  # The normal path: cut a GitHub release for the tag, and it publishes.
+  release:
+    types: [published]
+  # Manual fallback — dispatch this against the TAG, not a branch, so the artifacts come from
+  # the released commit. Needed for a release that was created before this workflow existed.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    # Must match the environment name given to PyPI's trusted publisher. Also the place to add
+    # required reviewers if you want a human gate on every upload.
+    environment: pypi
+    permissions:
+      contents: read
+      # Mints the short-lived OIDC token PyPI exchanges for an upload token. Without this the
+      # publish step fails with "no OIDC token discovered".
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      # A release is irreversible and a version can never be reused, so gate on the suite.
+      - name: Run the test suite
+        run: uv run pytest -q
+
+      - name: Build the wheel and sdist
+        run: uv build
+
+      # The version lives in pyproject.toml and is bumped by hand, so a tag and a version CAN
+      # disagree. Catch that here rather than discovering that 0.4.0 shipped 0.3.0's code.
+      - name: Check the built version matches the release tag
+        if: github.event_name == 'release'
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="$(python -c '
+          import tomllib, pathlib
+          print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])
+          ')"
+          echo "tag=${tag} pyproject version=${version}"
+          if [ "${tag#v}" != "${version}" ]; then
+            echo "::error::Release tag ${tag} does not match pyproject version ${version}."
+            exit 1
+          fi
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
