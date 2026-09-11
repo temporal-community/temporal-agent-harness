@@ -40,9 +40,10 @@ Ask it a question and it chains tools to find the answer:
   with `StatelessMCPServerProvider` and referenced in the workflow with
   `stateless_mcp_server("f1-data")`. Each MCP `list_tools` / `call_tool` runs as a Temporal
   activity — durable, retryable, and visible in the Temporal Web UI.
-  - **Caveat — MCP tools bypass the harness.** MCP calls do **not** go through `run_tool`, so they
-    do not appear as harness tool cards on the turn stream and are **not** approval-gateable. The
-    harness-wrapped weather tools still show full lifecycle. This illustrates the harness boundary.
+  - **MCP tools are under harness governance too, with no extra wiring.** Each MCP call is
+    approval-gateable and publishes `tool_start` / `tool_end` / `tool_error` under the same
+    `tool_id` as its `tool_requested`, so its turn-stream card resolves like any other
+    tool's.
 - **Streaming is a toggle.** By default (`REACT_AGENT_STREAM` unset/`1`) the turn runs
   `Runner.run_streamed(...)`, so model calls route through the streaming activity and the harness
   observer translates raw OpenAI events into the live turn stream (`model_interaction_started` →
