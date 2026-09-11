@@ -49,8 +49,8 @@ phase isn't throttled by approving one thing at a time.
 | `justfile` | Recipes for the local stack. |
 
 The web server and session-manager worker are **shared across examples** — `just server` points
-the shared `examples/app.py` at this example's `agents.toml`, and `just session-manager` runs the
-shared `examples/session_manager_worker.py`.
+the packaged `temporal-agent-harness serve` at this example's `agents.toml`, and
+`just session-manager` runs the packaged `temporal-agent-harness session-manager`.
 
 ## Setup
 

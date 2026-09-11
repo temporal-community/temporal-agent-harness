@@ -75,7 +75,7 @@ Ask it a question and it chains tools to find the answer:
 | `agents.toml` | Registry entry that makes this agent selectable in the shared web UI. |
 
 The agent is driven by the shared example stack — the packaged `SessionManagerWorkflow` worker plus
-the FastAPI app and web UI (`examples/app.py`); registering it in `agents.toml` is all that takes.
+the FastAPI app and web UI (`temporal-agent-harness serve`); registering it in `agents.toml` is all that takes.
 Unlike the simpler examples, it **also ships a terminal `client.py`** — needed to answer `ask_user`,
 since the packaged web UI has no affordance for fulfilling a callback tool.
 
@@ -156,8 +156,8 @@ picker, and `:quit` exits.
 Without `just`, the equivalent commands (from the repo root):
 
 ```sh
-uv run --group examples python -m examples.session_manager_worker
-uv run --group examples python -m examples.app examples/react_agent/agents.toml --host 0.0.0.0 --port 8000
+uv run --group examples temporal-agent-harness session-manager
+uv run --group examples temporal-agent-harness serve examples/react_agent/agents.toml --host 0.0.0.0 --port 8000
 uv run --group examples python -m examples.react_agent.worker
 uv run --group examples python -m examples.react_agent.client
 ```

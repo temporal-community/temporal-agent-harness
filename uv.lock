@@ -2943,7 +2943,7 @@ wheels = [
 
 [[package]]
 name = "temporal-agent-harness"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -3017,7 +3017,7 @@ requires-dist = [
     { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.22.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], marker = "extra == 'pydantic-ai'", specifier = ">=2.13" },
-    { name = "pydantic-monty", marker = "extra == 'code-mode'", specifier = ">=0.0.18" },
+    { name = "pydantic-monty", marker = "extra == 'code-mode'", specifier = "==0.0.18" },
     { name = "temporal-nexus-mcp", marker = "python_full_version >= '3.13' and extra == 'nexus-mcp'", editable = "nexus/mcp" },
     { name = "temporalio", specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["aioboto3"], marker = "extra == 's3'", specifier = ">=1.31.0" },
@@ -3036,7 +3036,7 @@ dev = [
     { name = "moto", extras = ["server"], specifier = ">=5.2.1" },
     { name = "openai-agents", specifier = ">=0.22.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
-    { name = "pydantic-monty", specifier = ">=0.0.18" },
+    { name = "pydantic-monty", specifier = "==0.0.18" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "setuptools", specifier = ">=83.0.0" },
@@ -3051,7 +3051,7 @@ examples = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "openai-agents", specifier = ">=0.22.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
-    { name = "pydantic-monty", specifier = ">=0.0.18" },
+    { name = "pydantic-monty", specifier = "==0.0.18" },
 ]
 
 [[package]]

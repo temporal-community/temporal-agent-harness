@@ -35,7 +35,7 @@ streaming activity, to the live turn stream the web UI consumes.
 
 There is **no per-example client**: like the Monty example, this agent is driven by the shared
 example stack — the packaged `SessionManagerWorkflow` worker plus the FastAPI app and web UI
-(`examples/app.py`), which send messages and stream turns through the harness's built-in
+(`temporal-agent-harness serve`), which send messages and stream turns through the harness's built-in
 `AgentClient`. Registering the agent in `agents.toml` is all it takes to make it driveable.
 
 ## Run it
@@ -61,7 +61,7 @@ event produced by the observer translating a raw OpenAI event in the streaming a
 Without `just`, the equivalent commands (from the repo root):
 
 ```sh
-uv run --group examples python -m examples.session_manager_worker
-uv run --group examples python -m examples.app examples/openai_hello/agents.toml --host 0.0.0.0 --port 8000
+uv run --group examples temporal-agent-harness session-manager
+uv run --group examples temporal-agent-harness serve examples/openai_hello/agents.toml --host 0.0.0.0 --port 8000
 uv run --group examples python -m examples.openai_hello.worker
 ```

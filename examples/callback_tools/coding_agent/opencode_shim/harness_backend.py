@@ -1,7 +1,7 @@
 """A Temporal-harness-backed :class:`AgentBackend` for the coding agent.
 
 This is the shim's real front end for the durable ``CodingAgent`` workflow. It reaches the agent
-**through the packaged harness HTTP server** (``examples/app.py`` on :8000) — the same server the
+**through the packaged harness HTTP server** (``temporal-agent-harness serve`` on :8000) — the same server the
 Svelte UI uses — so every session is created via the session-manager and is visible/debuggable in
 that UI while the user chats in OpenCode.
 

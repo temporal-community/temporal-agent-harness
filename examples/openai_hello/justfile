@@ -38,16 +38,16 @@ config:
 temporal:
     temporal server start-dev
 
-# Run the shared session-manager worker (examples/session_manager_worker.py).
+# Run the packaged session-manager worker (`temporal-agent-harness session-manager`).
 session-manager:
-    cd "{{root}}" && uv run --group examples python -m examples.session_manager_worker
+    cd "{{root}}" && uv run --group examples temporal-agent-harness session-manager
 
 # Serves the COMMITTED UI build in temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
 # a downloaded release archive runs as-is. Rebuild with `just app-build` if you changed ui/.
 #
 # Serve the packaged FastAPI API + UI on http://localhost:8000, pointed at this example's registry.
 server:
-    cd "{{root}}" && uv run --group examples python -m examples.app "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+    cd "{{root}}" && uv run --group examples temporal-agent-harness serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
 
 # Build the shared Svelte UI into temporal_agent_harness/ui/dist for the server to serve.
 # Runs FROM the ui dir (not `pnpm --dir`) so corepack reads ui/package.json's pinned pnpm
