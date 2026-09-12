@@ -29,10 +29,12 @@ from typing import (
     Any,
     Literal,
     ParamSpec,
+    Protocol,
     TypeVar,
     cast,
     get_type_hints,
     overload,
+    runtime_checkable,
 )
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -162,6 +164,53 @@ _InjectedT = TypeVar("_InjectedT")
 # ``Foo`` (``Annotated`` metadata is invisible to type checkers and to pydantic), so the
 # tool body sees the unwrapped type.
 Injected = Annotated[_InjectedT, _INJECTED]
+
+
+@runtime_checkable
+class LazyInjection(Protocol):
+    """An injected value that is resolved per run, at the moment a tool call dispatches.
+
+    Most injections are plain values the caller already has, so they are passed straight into
+    ``run_tool(injections=...)``. But an SDK adapter typically builds its toolset ONCE (module
+    level, so one agent object serves every concurrent workflow), which means anything in that
+    static ``injections`` mapping is also static — no good for a dependency that belongs to a
+    single run, like a sandbox claimed for this conversation.
+
+    A ``LazyInjection`` closes that gap: put the *declaration* in the static mapping and let
+    ``run_tool`` resolve it against the live runner. Resolution is awaited, so an implementation may
+    dispatch activities (acquire a resource on first use, for instance) and may cache per-run state
+    on :attr:`AgentWorkflowRunner.injection_slots`.
+
+    Implementations must be idempotent per run: ``run_tool`` resolves on every call, so anything
+    expensive should be memoised in the runner's slots rather than repeated.
+    """
+
+    async def resolve_injection(self, runner: AgentWorkflowRunner) -> Any:
+        """Return the value to inject for the in-flight tool call."""
+        ...
+
+
+async def _resolve_injections(
+    injections: Mapping[str, Any] | None, runner: AgentWorkflowRunner
+) -> Mapping[str, Any] | None:
+    """Replace any :class:`LazyInjection` in ``injections`` with its resolved value.
+
+    Returns the mapping untouched (same object) when nothing needs resolving, which is the common
+    case — so a tool call with only plain injections pays one ``isinstance`` per entry and nothing
+    else.
+    """
+    if not injections:
+        return injections
+    if not any(isinstance(v, LazyInjection) for v in injections.values()):
+        return injections
+    resolved: dict[str, Any] = {}
+    for name, value in injections.items():
+        resolved[name] = (
+            await value.resolve_injection(runner)
+            if isinstance(value, LazyInjection)
+            else value
+        )
+    return resolved
 
 
 class ToolApprovalDenied(Exception):
@@ -1306,6 +1355,12 @@ class AgentWorkflowRunner:
             has_custom_approval_fallback=custom_approval_fallback is not None,
         )
         self._closed = False
+        # Per-run scratch space for LazyInjection implementations to memoise what they resolve
+        # (a claimed resource, a cached handle). Keyed by whatever the implementation chooses.
+        # Workflow state, so it survives across turns and is reconstructed by replay.
+        self._injection_slots: dict[str, Any] = {}
+        # Cleanups to run when the turn loop ends — see add_completion_hook.
+        self._completion_hooks: list[Callable[[], Awaitable[None]]] = []
 
         # Register protocol handlers dynamically so the containing workflow doesn't need to.
         workflow.set_update_handler(
@@ -1586,6 +1641,41 @@ class AgentWorkflowRunner:
     def current_status(self) -> AgentStatus:
         """A current :class:`AgentStatus` snapshot for in-workflow handlers."""
         return self._status.to_agent_status()
+
+    def add_completion_hook(self, hook: Callable[[], Awaitable[None]]) -> None:
+        """Register a cleanup to run when the agent's turn loop ends.
+
+        Hooks run inside the workflow, after the loop exits, whether it ended by ``close`` or by
+        raising — so they may dispatch activities to release whatever they own. They run in
+        registration order, and a hook that raises is logged and skipped rather than allowed to
+        mask the run's outcome or block the hooks after it.
+
+        Intended for a per-run resource whose lifetime should track the agent's rather than an
+        external TTL. Note this fires at loop exit, which is not the same as durability against a
+        terminated workflow: a hard terminate stops the workflow without running hooks, so anything
+        that must not leak needs a backstop on the owning service too.
+        """
+        self._completion_hooks.append(hook)
+
+    async def _run_completion_hooks(self) -> None:
+        """Run every registered completion hook, surviving individual failures."""
+        for hook in self._completion_hooks:
+            try:
+                await hook()
+            except Exception:
+                # Cleanup is best-effort by construction: the agent has already finished, and a
+                # failure to release a resource must not rewrite how the run itself ended.
+                workflow.logger.exception("agent completion hook failed")
+
+    @property
+    def injection_slots(self) -> dict[str, Any]:
+        """Per-run scratch space for :class:`LazyInjection` implementations.
+
+        A resolver that must not repeat work on every tool call — claiming a sandbox, opening a
+        session — memoises it here. This is ordinary workflow state, so it is reconstructed by
+        replay and shared across the run's turns. Keys are namespaced by the resolver.
+        """
+        return self._injection_slots
 
     def set_approval_policy(self, policy: ToolApprovalPolicy) -> None:
         """Swap the agent's tool-approval policy at runtime.
@@ -1937,7 +2027,18 @@ class AgentWorkflowRunner:
         — the single reliable end-of-turn signal — before looping. A handler that raises
         does NOT end the session: its error surfaces as an :class:`AgentError` and the loop
         continues with the next message.
+
+        When the loop ends, any hooks registered via :meth:`add_completion_hook` run, so per-run
+        resources are released whether the agent closed cleanly or the loop raised.
         """
+        try:
+            await self._turn_loop(agent)
+        finally:
+            # Release per-run resources however the loop ended — normally, or by raising.
+            await self._run_completion_hooks()
+
+    async def _turn_loop(self, agent: object) -> None:
+        """The turn loop itself; see :meth:`run` for the contract it implements."""
         while not self._closed:
             await workflow.wait_condition(
                 lambda: self._status.has_pending_turns or self._closed
@@ -2354,6 +2455,10 @@ class AgentWorkflowRunner:
         dispatches activities nor publishes — that lives in the tool object so
         ``tool_start`` means "now executing."
         """
+        # Resolve any per-run injection declared as a LazyInjection before parking the mapping —
+        # awaited here, in the workflow, where a resolver may dispatch activities of its own.
+        # Done before the ambient context is set so a resolver cannot observe a half-built call.
+        injections = await _resolve_injections(injections, self)
         runner_token = _CURRENT_RUNNER.set(self)
         tool_id_token = _CURRENT_TOOL_ID.set(call_id)
         injections_token = _CURRENT_TOOL_INJECTIONS.set(injections)
