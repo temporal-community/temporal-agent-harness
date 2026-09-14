@@ -8,6 +8,7 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -23,6 +24,22 @@ EXECUTE_OPERATOR_COMMAND_UPDATE = "execute_operator_command"
 AGENT_STATUS_QUERY = "agent_status"
 AGENT_INTERFACE_QUERY = "agent_interface"
 OPERATOR_INTERFACE_QUERY = "operator_interface"
+
+
+class SubagentClosePolicy(StrEnum):
+    """How an agent handles model-requested and parent-shutdown child closure."""
+
+    KEEP_OPEN = "keep-open"
+    CLOSE = "close"
+    ASK_USER = "ask-user"
+
+
+class SubagentReusePolicy(StrEnum):
+    """Whether starting a subagent may reuse one already owned by this parent."""
+
+    USE_EXISTING = "use-existing"
+    ALWAYS_NEW = "always-new"
+
 
 # Width (hex chars) of ONE segment of an agent's short id. A top-level agent's id is a single
 # segment; a subagent's id is its parent's id plus one fresh segment, joined by ``-`` (see
@@ -196,6 +213,13 @@ class AgentConfig(BaseModel):
     The developer's separate *custom fallback* predicate is not part of this contract and
     is never overridable from the config (it is non-serializable).
 
+    ``subagent_close_policy`` controls generated ``stop_<agent>`` requests and what happens
+    to active children when this agent closes. ``ask-user`` gates model-requested stops on
+    human tool approval and otherwise safely behaves as ``keep-open``.
+    ``subagent_reuse_policy`` controls whether ``start_<agent>`` returns the
+    most recently used matching child or always creates a new one. These policies govern
+    only children owned by this workflow and are not inherited by those children.
+
     ``agent_id`` — the short, tree-unique id this agent stamps on every event it publishes (and
     reports on its ``agent_status`` query); see :data:`AgentId` for the segment shape. A PARENT sets
     this when starting a subagent — pushing down the same ``handle`` it uses to reference the child
@@ -207,6 +231,8 @@ class AgentConfig(BaseModel):
 
     is_message_queuing_enabled: bool | None = None
     approval_policy: ToolApprovalPolicy | None = None
+    subagent_close_policy: SubagentClosePolicy | None = None
+    subagent_reuse_policy: SubagentReusePolicy | None = None
     agent_id: AgentId | None = None
 
 
@@ -527,6 +553,8 @@ class AgentStatus:
         default_factory=ToolApprovalPolicy.always_require_approvals
     )
     has_custom_approval_fallback: bool = False
+    subagent_close_policy: SubagentClosePolicy = SubagentClosePolicy.ASK_USER
+    subagent_reuse_policy: SubagentReusePolicy = SubagentReusePolicy.USE_EXISTING
 
 
 class AcceptedFunction(BaseModel):
