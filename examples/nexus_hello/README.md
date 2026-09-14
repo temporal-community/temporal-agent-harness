@@ -1,9 +1,9 @@
 # Nexus hello agent
 
-This example gives one agent access to three tools through Temporal Nexus. The
-preferred path uses Nexus as the transport for an `MCPServer`-shaped AI SDK
-adapter. The example also shows a compatibility path for an existing external
-HTTP MCP server.
+This example gives one agent access to three tools and two subagents through
+Temporal Nexus. Nexus is the transport for both MCP tool calls and A2A agent
+calls. The example also shows compatibility paths for existing HTTP MCP and
+A2A servers.
 
 The agent uses two access paths:
 
@@ -11,6 +11,10 @@ The agent uses two access paths:
   native Nexus tool service.
 - `nexus_tools_gateway().mcp_servers(...)` connects the agent to selected
   external MCP servers through the Durable Tools Gateway.
+- `agent.nexus_native_subagent(...)` connects the agent directly to a
+  harness-native A2A agent.
+- `agent.nexus_subagent_gateway().subagent(...)` connects the agent to an
+  external HTTP A2A agent through the Durable Tools Gateway.
 
 The complete agent workflow is in [`workflow.py`](workflow.py). It configures
 both paths in one `Agent`:
@@ -21,6 +25,17 @@ mcp_servers = [
     nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
     nexus_gateway.mcp_servers("demo"),
 ]
+
+research = agent.nexus_native_subagent(
+    NativeResearchSubagentWorkflow,
+    "nexus-hello-subagent-endpoint",
+    key="research",
+)
+writer = agent.nexus_subagent_gateway().subagent(
+    [agent.declared_handler("ask", "...", TextMessage, TextReply)],
+    "writer",
+    key="writer",
+)
 ```
 
 The example provides these tools:
@@ -30,6 +45,13 @@ The example provides these tools:
 | `demo-nexus_get_lucky_number` | Synchronous Nexus operation | Direct Nexus call |
 | `demo-nexus_get_delayed_lucky_number` | Workflow-backed Nexus operation | Direct Nexus call |
 | `demo_get_fun_fact` | External HTTP MCP server | Durable Tools Gateway compatibility path |
+
+The agent can also use these subagents:
+
+| Subagent | Implementation | Access path |
+| --- | --- | --- |
+| `research` | Harness agent exposed as A2A | Direct Nexus call |
+| `writer` | External HTTP A2A agent | Durable Tools Gateway compatibility path |
 
 ## Data flow of the example
 
@@ -59,6 +81,8 @@ flowchart LR
     end
 
     external[External HTTP MCP server]
+    native_agent[Native A2A agent]
+    external_agent[External A2A agent]
 
     agent -->|Nexus: discover tools| manifest
     agent -->|Nexus: call immediate tool| lucky
@@ -71,6 +95,9 @@ flowchart LR
     gateway -->|start for tool call| proxy
     fetch -->|MCP tools/list| external
     proxy -->|MCP tools/call| external
+    agent -->|A2A over Nexus| native_agent
+    agent -->|Nexus| gateway
+    gateway -->|A2A over HTTP| external_agent
 ```
 
 ### Native Nexus tools
@@ -163,6 +190,51 @@ activity.enableStandalone=true
 
 The `just temporal` recipe sets both values.
 
+### Subagents over A2A
+
+Subagents use A2A for discovery, messaging, task lifecycle, and streaming.
+Nexus is the durable transport binding for both access paths.
+
+The reusable [`nexus-a2a`](../../nexus/a2a/README.md) package defines the Nexus
+transport without depending on this harness. `temporal_agent_harness.a2a` is a
+thin adapter that maps the harness workflow and its rich event stream to that
+binding. An ordinary process can also use the official Python A2A client API
+with a Temporal client; the caller does not have to be a workflow or use this
+harness.
+
+```mermaid
+flowchart LR
+    caller[A2A client]
+    nexus[Temporal Nexus]
+    native[Harness A2A backend]
+    gateway[Durable Tools Gateway]
+    external[External HTTP A2A agent]
+
+    caller -->|A2A over Nexus| nexus
+    nexus --> native
+    nexus --> gateway
+    gateway -->|A2A over HTTP| external
+```
+
+The native `research` agent is a normal harness agent in the
+`nexus-subagent-server` namespace. `SendMessage` starts or advances its A2A
+task. `GetTask` returns retained history and a continuation cursor.
+`SubscribeToTask` reads bounded pages of live events until the turn ends.
+`CancelTask` closes the child. A closed child can still replay its history from
+`GetTask`.
+
+The gateway-backed `writer` agent is an HTTP A2A service. The registry stores
+its URL under the `writer` alias. The gateway keeps each A2A task bound to the
+provider route that created it, so later registration changes cannot redirect
+an existing task.
+
+With the services running, this optional command demonstrates the transport
+from a standalone OpenAI Agents SDK process:
+
+```sh
+just standalone-a2a-caller "Ask Nexus Hello what it can do"
+```
+
 ### Agent identifiers
 
 This example uses two agent identifiers:
@@ -183,6 +255,8 @@ identifiers do not have to match.
 | [`worker.py`](worker.py) | Runs the agent worker in the `default` namespace. |
 | [`tool_server.py`](tool_server.py) | Runs the external MCP server for `demo_get_fun_fact`. |
 | [`nexus_tool_service.py`](nexus_tool_service.py) | Runs the native Nexus service and the delayed workflow. |
+| [`native_subagent.py`](native_subagent.py) | Runs the native research agent and its A2A Nexus service. |
+| [`subagent_server.py`](subagent_server.py) | Runs the external HTTP A2A writer agent. |
 | [`agents.toml`](agents.toml) | Adds the agent to the example UI. |
 | [`justfile`](justfile) | Starts the local services and creates the Nexus resources. |
 
@@ -212,21 +286,28 @@ Run each command in a separate terminal. Run the commands in the listed order.
 ```sh
 just temporal
 just setup-nexus
-just tool-server
+just third-party-mcp-server
+just third-party-subagent
 just registry
 just nexus-tool-service
-just register-third-party
+just nexus-subagent
+just register-third-party-mcp-server
+just register-third-party-subagent
 just session-manager
 just server
 just worker
 ```
 
-`just setup-nexus` creates the three namespaces and two Nexus endpoints. Run it
-once for each new Temporal development server. `just register-third-party`
-registers the `demo` URL under agent ID `NexusHelloAgent`. You can run both
-commands again if necessary.
+`just setup-nexus` creates the four namespaces and four Nexus endpoints. Run it
+once for each new Temporal development server.
+`just register-third-party-mcp-server` registers the `demo` MCP URL under agent
+ID `NexusHelloAgent`. `just register-third-party-subagent` registers the
+`writer` A2A URL under the same ID. You can run these setup commands again if
+necessary.
 
-Open <http://localhost:8000>. Select **Nexus Hello**, and start a chat.
+Open <http://localhost:8000>. Select **Nexus Hello**, and start a chat. Ask for
+research and writing to let the model use both subagents alongside the MCP
+tools.
 
 The agent waits on its Nexus operation handle when it calls the delayed tool.
 The harness adapter does not use the MCP Tasks extension. The

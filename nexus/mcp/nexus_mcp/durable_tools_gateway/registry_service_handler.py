@@ -14,26 +14,60 @@ Agent harness --- (Nexus) ---> Gateway --- (Standalone Activity) ---> 3rd-party 
 This enables end-to-end durability and visibility of tool calls without requiring the
 agent harness to be a workflow, and all credential concerns will be managed by the
 gateway.
+
+The gateway now applies the same routing and standalone-activity boundary to registered
+HTTP A2A subagents as well; native Nexus MCP and A2A resources still bypass it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from datetime import timedelta
-from typing import Any
+from typing import Any, TypeVar
 
+import httpx
 import nexusrpc
 import nexusrpc.handler
 import temporalio.nexus
+from a2a.client import ClientConfig, ClientFactory
+from a2a.types import (
+    AgentCard,
+    Artifact,
+    CancelTaskRequest,
+    GetExtendedAgentCardRequest,
+    GetTaskRequest,
+    ListTasksRequest,
+    ListTasksResponse,
+    Message,
+    Part,
+    Role,
+    SendMessageRequest,
+    SendMessageResponse,
+    Task,
+    TaskState,
+    TaskStatus,
+)
+from google.protobuf.json_format import MessageToDict
+from google.protobuf.timestamp_pb2 import Timestamp
 from mcp.client import Client as MCPClient
 from mcp.types import CallToolResult
+from nexus_a2a import (
+    A2ABackendError,
+    BackendErrorKind,
+    OperationContext,
+    SubscribeToTaskInput,
+    SubscribeToTaskOutput,
+    make_agent_card,
+)
 from nexusrpc.handler import StartOperationContext
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 from temporalio import activity
 from temporalio.client import ActivityFailureError, Client
-from temporalio.common import RetryPolicy
+from temporalio.common import ActivityIDConflictPolicy, RetryPolicy
+from temporalio.exceptions import ApplicationError
 
 from nexus_mcp.authoring import validate_service_name
 
@@ -42,15 +76,23 @@ from .generated import (
     CallToolOutput,
     CallToolOutputResult,
     DeregisterInput,
+    DeregisterSubagentInput,
+    DispatchSubagentTurnInput,
+    DispatchSubagentTurnOutput,
     ListAgentEntriesInput,
     ListAgentEntriesOutput,
     ListAgentEntriesOutputRemoteTools,
     ListAgentEntriesOutputRemoteToolsValueItem,
     RegisterExternalInput,
+    RegisterSubagentInput,
     RegistryService,
+    StartSubagentInput,
+    StartSubagentOutput,
+    StopSubagentInput,
 )
 from .registry import (
     REGISTRY_WORKFLOW_ID,
+    SubagentInstanceRoute,
     ToolRegistryWorkflow,
     fetch_external_tools,
 )
@@ -58,6 +100,7 @@ from .registry import (
 REGISTRY_NEXUS_ENDPOINT = "mcp-registry-endpoint"
 
 logger = logging.getLogger(__name__)
+_ResponseModel = TypeVar("_ResponseModel", bound=BaseModel)
 
 
 class ExternalMCPCallInput(BaseModel):
@@ -97,6 +140,187 @@ async def mcp_proxy_activity(input: ExternalMCPCallInput) -> CallToolResult:
     return result
 
 
+class SubagentStartInput(BaseModel):
+    url: str
+    idempotency_key: str
+
+
+class SubagentStartResult(BaseModel):
+    instance_id: str = Field(min_length=1)
+
+
+class SubagentDispatchInput(BaseModel):
+    """Input for one HTTP call to a non-Nexus subagent's turn endpoint."""
+
+    url: str
+    instance_id: str
+    msg_type: str
+    payload: str  # JSON-encoded handler input
+    expected_turn: int
+    idempotency_key: str
+
+
+class SubagentDispatchOutput(BaseModel):
+    output: str
+    turn_id: str
+    turn_number: int
+    provider_instance_id: str = ""
+
+
+class SubagentTurnResponse(BaseModel):
+    output: dict[str, Any]
+    turn_id: str = Field(min_length=1)
+    turn_number: int = Field(ge=1)
+
+
+class SubagentStopInput(BaseModel):
+    url: str
+    instance_id: str
+
+
+def _provider_url(url: str) -> str:
+    return url.rstrip("/")
+
+
+def _check_subagent_response(response: httpx.Response) -> None:
+    """Reject provider protocol errors without retrying them."""
+    if 400 <= response.status_code < 500 and response.status_code not in {
+        408,
+        425,
+        429,
+    }:
+        try:
+            body = response.json()
+            detail = (
+                body.get("detail", response.text)
+                if isinstance(body, dict)
+                else response.text
+            )
+        except ValueError:
+            detail = response.text
+        raise ApplicationError(
+            f"subagent provider returned HTTP {response.status_code}: {detail}",
+            type="SubagentProtocolError",
+            non_retryable=True,
+        )
+    response.raise_for_status()
+
+
+def _parse_subagent_response(
+    model: type[_ResponseModel], response: httpx.Response
+) -> _ResponseModel:
+    """Validate a provider response without retrying invalid data."""
+    try:
+        return model.model_validate(response.json())
+    except (ValueError, ValidationError) as exc:
+        raise ApplicationError(
+            "subagent provider returned an invalid response body",
+            type="SubagentProtocolError",
+            non_retryable=True,
+        ) from exc
+
+
+@activity.defn
+async def subagent_start_activity(input: SubagentStartInput) -> SubagentStartResult:
+    """Allocate a deterministic A2A task ID; the first message starts it lazily."""
+    return SubagentStartResult(
+        instance_id=uuid.uuid5(uuid.NAMESPACE_URL, input.idempotency_key).hex
+    )
+
+
+@activity.defn
+async def subagent_proxy_activity(input: SubagentDispatchInput) -> SubagentDispatchOutput:
+    """Send one turn to a third-party agent using standard A2A HTTP+JSON."""
+    activity.logger.info(
+        "[subagent-proxy] dispatching turn %d to %s", input.expected_turn, input.url
+    )
+    heartbeat_task = asyncio.create_task(_heartbeat_every(15))
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as http:
+            factory = ClientFactory(
+                ClientConfig(
+                    streaming=True,
+                    httpx_client=http,
+                    supported_protocol_bindings=["HTTP+JSON"],
+                )
+            )
+            a2a_client = await factory.create_from_url(_provider_url(input.url))
+            try:
+                payload = json.loads(input.payload)
+                text = str(payload.get("text", ""))
+                output_text = ""
+                message_kwargs: dict[str, Any] = {}
+                if input.instance_id:
+                    message_kwargs.update(
+                        task_id=input.instance_id, context_id=input.instance_id
+                    )
+                provider_task_id = input.instance_id
+                async for response in a2a_client.send_message(
+                    SendMessageRequest(
+                        message=Message(
+                            message_id=input.idempotency_key,
+                            role=Role.ROLE_USER,
+                            parts=[Part(text=text)],
+                            metadata={"temporal.io/message-type": input.msg_type},
+                            **message_kwargs,
+                        )
+                    )
+                ):
+                    if response.HasField("task"):
+                        provider_task_id = response.task.id
+                    elif response.HasField("artifact_update"):
+                        provider_task_id = response.artifact_update.task_id
+                    elif response.HasField("status_update"):
+                        provider_task_id = response.status_update.task_id
+                    elif response.HasField("message"):
+                        provider_task_id = response.message.task_id
+                    if response.HasField("artifact_update"):
+                        output_text += "".join(
+                            part.text
+                            for part in response.artifact_update.artifact.parts
+                            if part.HasField("text")
+                        )
+                    elif response.HasField("message"):
+                        output_text += "".join(
+                            part.text
+                            for part in response.message.parts
+                            if part.HasField("text")
+                        )
+            finally:
+                await a2a_client.close()
+    finally:
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except asyncio.CancelledError:
+            pass
+    activity.logger.info("[subagent-proxy] turn %d completed", input.expected_turn)
+    return SubagentDispatchOutput(
+        output=json.dumps({"text": output_text}),
+        turn_id=f"{provider_task_id}-turn-{input.expected_turn}",
+        turn_number=input.expected_turn,
+        provider_instance_id=provider_task_id,
+    )
+
+
+@activity.defn
+async def subagent_stop_activity(input: SubagentStopInput) -> None:
+    """Cancel the third-party agent's A2A task."""
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        factory = ClientFactory(
+            ClientConfig(
+                streaming=False,
+                httpx_client=http,
+                supported_protocol_bindings=["HTTP+JSON"],
+            )
+        )
+        a2a_client = await factory.create_from_url(_provider_url(input.url))
+        try:
+            await a2a_client.cancel_task(CancelTaskRequest(id=input.instance_id))
+        finally:
+            await a2a_client.close()
+
+
 async def _fetch_tools_grouped(client: Client, servers: dict[str, str]) -> dict[str, list[dict[str, Any]]]:
     """Fetch each {alias: url}'s tool list live, grouped by alias. Unreachable servers
     are logged and skipped."""
@@ -109,7 +333,9 @@ async def _fetch_tools_grouped(client: Client, servers: dict[str, str]) -> dict[
             args=[name, url],
             id=f"mcp-list-tools-{name}-{uuid.uuid4()}",
             task_queue=temporalio.nexus.info().task_queue,
-            start_to_close_timeout=timedelta(seconds=60),
+            schedule_to_close_timeout=timedelta(seconds=60),
+            start_to_close_timeout=timedelta(seconds=45),
+            retry_policy=RetryPolicy(maximum_attempts=3),
         )
 
     results = await asyncio.gather(
@@ -122,6 +348,211 @@ async def _fetch_tools_grouped(client: Client, servers: dict[str, str]) -> dict[
             continue
         grouped[name] = result
     return grouped
+
+
+def _a2a_timestamp() -> Timestamp:
+    value = Timestamp()
+    value.GetCurrentTime()
+    return value
+
+
+class GatewayA2ABackend:
+    """Implement A2A tasks by routing to the gateway's registered HTTP agents."""
+
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    def _registry_handle(self):
+        return self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+
+    async def send_message(
+        self, context: OperationContext, request: SendMessageRequest
+    ) -> SendMessageResponse:
+        metadata = MessageToDict(request.metadata, preserving_proto_field_name=True)
+        message_metadata = MessageToDict(
+            request.message.metadata, preserving_proto_field_name=True
+        )
+        owner_id = str(metadata.get("owner_id", ""))
+        alias = str(metadata.get("agent_id", ""))
+        task_id = request.message.task_id
+        expected_turn = int(metadata.get("expected_turn", 1))
+        if not owner_id or not alias or not task_id:
+            raise A2ABackendError(
+                "A2A request requires owner_id, agent_id, and Message.task_id",
+                kind=BackendErrorKind.BAD_REQUEST,
+            )
+
+        registry = self._registry_handle()
+        route: SubagentInstanceRoute | None = await registry.query(
+            ToolRegistryWorkflow.find_subagent_instance,
+            args=[owner_id, task_id],
+        )
+        if route is None:
+            url: str | None = await registry.query(
+                ToolRegistryWorkflow.find_subagent,
+                args=[owner_id, alias],
+            )
+            if url is None:
+                raise A2ABackendError(
+                    f"A2A agent {alias!r} is not registered for {owner_id!r}",
+                    kind=BackendErrorKind.NOT_FOUND,
+                )
+            route = SubagentInstanceRoute(
+                alias=alias, url=url, provider_instance_id=""
+            )
+            await registry.execute_update(
+                ToolRegistryWorkflow.bind_subagent_instance,
+                args=[owner_id, task_id, route],
+                id=f"a2a-bind-{task_id}",
+            )
+
+        text = "".join(
+            part.text for part in request.message.parts if part.HasField("text")
+        )
+        msg_type = str(message_metadata.get("temporal.io/message-type", "ask"))
+        try:
+            result = await self._client.execute_activity(
+                subagent_proxy_activity,
+                SubagentDispatchInput(
+                    url=route.url,
+                    instance_id=route.provider_instance_id,
+                    msg_type=msg_type,
+                    payload=json.dumps({"text": text}),
+                    expected_turn=expected_turn,
+                    idempotency_key=request.message.message_id,
+                ),
+                id=f"a2a-dispatch-{task_id}-{expected_turn}",
+                id_conflict_policy=ActivityIDConflictPolicy.USE_EXISTING,
+                task_queue=temporalio.nexus.info().task_queue,
+                schedule_to_close_timeout=timedelta(minutes=5),
+                start_to_close_timeout=timedelta(seconds=75),
+                heartbeat_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=5),
+            )
+        except ActivityFailureError as exc:
+            raise A2ABackendError(
+                str(exc.cause or exc),
+                kind=BackendErrorKind.INTERNAL,
+            ) from exc
+
+        if result.provider_instance_id != route.provider_instance_id:
+            route = SubagentInstanceRoute(
+                alias=route.alias,
+                url=route.url,
+                provider_instance_id=result.provider_instance_id,
+            )
+            await registry.execute_update(
+                ToolRegistryWorkflow.bind_subagent_instance,
+                args=[owner_id, task_id, route],
+                id=f"a2a-provider-bind-{task_id}-{result.provider_instance_id}",
+            )
+
+        output = json.loads(result.output)
+        output_text = (
+            str(output.get("text", "")) if isinstance(output, dict) else str(output)
+        )
+        return SendMessageResponse(
+            task=Task(
+                id=task_id,
+                context_id=request.message.context_id or task_id,
+                status=TaskStatus(
+                    state=TaskState.TASK_STATE_INPUT_REQUIRED,
+                    timestamp=_a2a_timestamp(),
+                ),
+                artifacts=[
+                    Artifact(
+                        artifact_id=result.turn_id,
+                        name="answer",
+                        parts=[Part(text=output_text)],
+                    )
+                ],
+                history=[request.message],
+                metadata={
+                    "temporal.io/turn-number": result.turn_number,
+                    "temporal.io/turn-id": result.turn_id,
+                },
+            )
+        )
+
+    async def cancel_task(
+        self, context: OperationContext, request: CancelTaskRequest
+    ) -> Task:
+        metadata = MessageToDict(request.metadata, preserving_proto_field_name=True)
+        owner_id = str(metadata.get("owner_id", ""))
+        if not owner_id:
+            raise A2ABackendError(
+                "A2A request metadata requires owner_id",
+                kind=BackendErrorKind.BAD_REQUEST,
+            )
+        registry = self._registry_handle()
+        route: SubagentInstanceRoute | None = await registry.query(
+            ToolRegistryWorkflow.find_subagent_instance,
+            args=[owner_id, request.id],
+        )
+        if route is not None:
+            if route.provider_instance_id:
+                await self._client.execute_activity(
+                    subagent_stop_activity,
+                    SubagentStopInput(
+                        url=route.url, instance_id=route.provider_instance_id
+                    ),
+                    id=f"a2a-stop-{context.request_id}",
+                    task_queue=temporalio.nexus.info().task_queue,
+                    start_to_close_timeout=timedelta(seconds=15),
+                    retry_policy=RetryPolicy(maximum_attempts=5),
+                )
+            await registry.execute_update(
+                ToolRegistryWorkflow.unbind_subagent_instance,
+                args=[owner_id, request.id],
+                id=f"a2a-unbind-{context.request_id}",
+            )
+        return Task(
+            id=request.id,
+            context_id=request.id,
+            status=TaskStatus(
+                state=TaskState.TASK_STATE_CANCELED,
+                timestamp=_a2a_timestamp(),
+            ),
+        )
+
+    async def get_task(
+        self, _context: OperationContext, request: GetTaskRequest
+    ) -> Task:
+        return Task(
+            id=request.id,
+            context_id=request.id,
+            status=TaskStatus(
+                state=TaskState.TASK_STATE_INPUT_REQUIRED,
+                timestamp=_a2a_timestamp(),
+            ),
+        )
+
+    async def list_tasks(
+        self, _context: OperationContext, _request: ListTasksRequest
+    ) -> ListTasksResponse:
+        return ListTasksResponse(tasks=[])
+
+    async def subscribe_to_task(
+        self,
+        _context: OperationContext,
+        _client: temporalio.nexus.TemporalNexusClient,
+        request: SubscribeToTaskInput,
+    ) -> temporalio.nexus.TemporalOperationResult[SubscribeToTaskOutput]:
+        return temporalio.nexus.TemporalOperationResult.sync(
+            SubscribeToTaskOutput(items=[], next_cursor=request.cursor, closed=True)
+        )
+
+    async def get_extended_agent_card(
+        self, _context: OperationContext, _request: GetExtendedAgentCardRequest
+    ) -> AgentCard:
+        return make_agent_card(
+            name="A2A gateway",
+            description="Routes A2A requests to registered HTTP agents.",
+            endpoint=REGISTRY_NEXUS_ENDPOINT,
+            skills=(("route", "Route to a registered A2A agent."),),
+            tags=("router",),
+            streaming=False,
+        )
 
 
 @nexusrpc.handler.service_handler(service=RegistryService)
@@ -239,4 +670,188 @@ class RegistryServiceHandler:
                     mode="json", by_alias=True, exclude_none=True
                 )
             )
+        )
+
+    @nexusrpc.handler.sync_operation
+    async def register_subagent(
+        self, ctx: StartOperationContext, input: RegisterSubagentInput
+    ) -> None:
+        """Register a non-Nexus subagent's URL under one agent_id."""
+        agent_id = input.agent_id or ""
+        alias = input.alias or ""
+        if not agent_id or not alias:
+            raise nexusrpc.HandlerError(
+                "agent_id and alias are required", type=nexusrpc.HandlerErrorType.BAD_REQUEST
+            )
+        if not input.url:
+            raise nexusrpc.HandlerError("url is required", type=nexusrpc.HandlerErrorType.BAD_REQUEST)
+
+        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        await handle.signal(ToolRegistryWorkflow.register_subagent, args=[agent_id, alias, input.url])
+
+    @nexusrpc.handler.sync_operation
+    async def deregister_subagent(
+        self, ctx: StartOperationContext, input: DeregisterSubagentInput
+    ) -> None:
+        """Remove one subagent registration under one agent_id."""
+        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        await handle.signal(
+            ToolRegistryWorkflow.deregister_subagent, args=[input.agent_id, input.alias]
+        )
+
+    @nexusrpc.handler.sync_operation
+    async def start_subagent(
+        self, ctx: StartOperationContext, input: StartSubagentInput
+    ) -> StartSubagentOutput:
+        """Start one instance from a registered provider."""
+        agent_id = input.agent_id
+        alias = input.alias
+        if not agent_id or not alias:
+            raise nexusrpc.HandlerError(
+                "agent_id and alias are required", type=nexusrpc.HandlerErrorType.BAD_REQUEST
+            )
+
+        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        url: str | None = await handle.query(
+            ToolRegistryWorkflow.find_subagent, args=[agent_id, alias]
+        )
+        if url is None:
+            raise nexusrpc.HandlerError(
+                f"subagent {alias!r} is not registered for agent {agent_id!r}.",
+                type=nexusrpc.HandlerErrorType.NOT_FOUND,
+            )
+
+        idempotency_key = f"{agent_id}:{alias}:start:{ctx.request_id}"
+        instance_id = uuid.uuid5(uuid.NAMESPACE_URL, idempotency_key).hex
+        try:
+            result = await self._client.execute_activity(
+                subagent_start_activity,
+                SubagentStartInput(url=url, idempotency_key=idempotency_key),
+                id=f"subagent-start-{ctx.request_id}",
+                task_queue=temporalio.nexus.info().task_queue,
+                schedule_to_close_timeout=timedelta(seconds=50),
+                start_to_close_timeout=timedelta(seconds=15),
+                retry_policy=RetryPolicy(maximum_attempts=5),
+            )
+        except ActivityFailureError as exc:
+            raise nexusrpc.HandlerError(
+                str(exc.cause or exc),
+                type=nexusrpc.HandlerErrorType.INTERNAL,
+                retryable_override=False,
+            ) from exc
+        await handle.execute_update(
+            ToolRegistryWorkflow.bind_subagent_instance,
+            args=[
+                agent_id,
+                instance_id,
+                SubagentInstanceRoute(
+                    alias=alias,
+                    url=url,
+                    provider_instance_id=result.instance_id,
+                ),
+            ],
+            id=f"subagent-bind-{instance_id}",
+        )
+        return StartSubagentOutput(instance_id=instance_id)
+
+    @nexusrpc.handler.sync_operation
+    async def dispatch_subagent_turn(
+        self, ctx: StartOperationContext, input: DispatchSubagentTurnInput
+    ) -> DispatchSubagentTurnOutput:
+        """Send one turn through a retryable standalone activity."""
+        agent_id = input.agent_id
+        instance_id = input.instance_id
+        if not agent_id or not instance_id or input.expected_turn < 1:
+            raise nexusrpc.HandlerError(
+                "agent_id, instance_id, and a positive expected_turn are required",
+                type=nexusrpc.HandlerErrorType.BAD_REQUEST,
+            )
+
+        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        route: SubagentInstanceRoute | None = await handle.query(
+            ToolRegistryWorkflow.find_subagent_instance,
+            args=[agent_id, instance_id],
+        )
+        if route is None:
+            raise nexusrpc.HandlerError(
+                f"subagent instance {instance_id!r} was not found for agent {agent_id!r}.",
+                type=nexusrpc.HandlerErrorType.NOT_FOUND,
+            )
+
+        idempotency_key = f"{agent_id}:{instance_id}:{input.expected_turn}"
+        try:
+            result = await self._client.execute_activity(
+                subagent_proxy_activity,
+                SubagentDispatchInput(
+                    url=route.url,
+                    instance_id=route.provider_instance_id,
+                    msg_type=input.msg_type,
+                    payload=input.payload,
+                    expected_turn=input.expected_turn,
+                    idempotency_key=idempotency_key,
+                ),
+                id=f"subagent-dispatch-{ctx.request_id}",
+                task_queue=temporalio.nexus.info().task_queue,
+                schedule_to_close_timeout=timedelta(minutes=5),
+                start_to_close_timeout=timedelta(seconds=75),
+                heartbeat_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(maximum_attempts=5),
+            )
+        except ActivityFailureError as exc:
+            raise nexusrpc.HandlerError(
+                str(exc.cause or exc), type=nexusrpc.HandlerErrorType.INTERNAL, retryable_override=False
+            ) from exc
+        if result.turn_number != input.expected_turn:
+            raise nexusrpc.HandlerError(
+                f"subagent {instance_id!r} returned turn {result.turn_number}; "
+                f"expected {input.expected_turn}",
+                type=nexusrpc.HandlerErrorType.INTERNAL,
+                retryable_override=False,
+            )
+        return DispatchSubagentTurnOutput(
+            output=result.output, turn_id=result.turn_id, turn_number=result.turn_number
+        )
+
+    @nexusrpc.handler.sync_operation
+    async def stop_subagent(
+        self, ctx: StartOperationContext, input: StopSubagentInput
+    ) -> None:
+        """Close a subagent instance."""
+        agent_id = input.agent_id
+        instance_id = input.instance_id
+        if not agent_id or not instance_id:
+            raise nexusrpc.HandlerError(
+                "agent_id and instance_id are required",
+                type=nexusrpc.HandlerErrorType.BAD_REQUEST,
+            )
+        handle = self._client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
+        route: SubagentInstanceRoute | None = await handle.query(
+            ToolRegistryWorkflow.find_subagent_instance,
+            args=[agent_id, instance_id],
+        )
+        if route is None:
+            return  # Stop is idempotent.
+        try:
+            await self._client.execute_activity(
+                subagent_stop_activity,
+                SubagentStopInput(
+                    url=route.url,
+                    instance_id=route.provider_instance_id,
+                ),
+                id=f"subagent-stop-{ctx.request_id}",
+                task_queue=temporalio.nexus.info().task_queue,
+                schedule_to_close_timeout=timedelta(seconds=50),
+                start_to_close_timeout=timedelta(seconds=15),
+                retry_policy=RetryPolicy(maximum_attempts=5),
+            )
+        except ActivityFailureError as exc:
+            raise nexusrpc.HandlerError(
+                str(exc.cause or exc),
+                type=nexusrpc.HandlerErrorType.INTERNAL,
+                retryable_override=False,
+            ) from exc
+        await handle.execute_update(
+            ToolRegistryWorkflow.unbind_subagent_instance,
+            args=[agent_id, instance_id],
+            id=f"subagent-unbind-{ctx.request_id}",
         )

@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from datetime import timedelta
 
+from nexus_a2a import a2a_payload_converters
 from temporal_agent_harness.ai_sdks.integration_helpers import ObserverFactory
 
 import pydantic
@@ -42,7 +43,6 @@ from temporalio.converter import (
     CompositePayloadConverter,
     DataConverter,
     DefaultPayloadConverter,
-    JSONPlainPayloadConverter,
 )
 from temporalio.plugin import SimplePlugin
 from temporalio.worker import WorkflowRunner
@@ -134,14 +134,7 @@ class OpenAIPayloadConverter(CompositePayloadConverter):
         json_payload_converter = _OpenAIJSONPlainPayloadConverter(
             ToJsonOptions(exclude_unset=True)
         )
-        super().__init__(
-            *(
-                c
-                if not isinstance(c, JSONPlainPayloadConverter)
-                else json_payload_converter
-                for c in DefaultPayloadConverter.default_encoding_payload_converters
-            )
-        )
+        super().__init__(*a2a_payload_converters(json_payload_converter))
 
 
 def _data_converter(converter: DataConverter | None) -> DataConverter:
