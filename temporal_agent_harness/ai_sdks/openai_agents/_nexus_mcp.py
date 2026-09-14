@@ -86,18 +86,32 @@ class NexusGateway:
         self._gateway_name = gateway_name
         self._gateway_endpoint = gateway_endpoint
 
-    def mcp_servers(self, *aliases: str) -> MCPServer:
+    def mcp_servers(
+        self, *aliases: str, inherently_safe: bool = False
+    ) -> MCPServer:
         """One MCPServer exposing the given registered aliases' tools, fetched with a
         single Nexus call. An alias that isn't actually registered is silently skipped
-        for now (no error handling yet -- this is a prototype).
+        for now.
+
+        TODO(long-nt-tran): more granular error handling.
+
+        ``inherently_safe`` declares whether tools exposed from the server(s) are
+        safe, as a hint for the ToolApprovalPolicy.
         """
+        from temporal_agent_harness.ai_sdks.openai_agents_harness import (
+            as_harness_mcp_server,
+        )
+
         display_name = f"{self._agent_id}-{self._gateway_name}-{self._gateway_endpoint}"
-        return _NexusGatewayMCPServer(
-            self._agent_id,
-            frozenset(aliases),
-            self._gateway_name,
-            self._gateway_endpoint,
-            display_name,
+        return as_harness_mcp_server(
+            _NexusGatewayMCPServer(
+                self._agent_id,
+                frozenset(aliases),
+                self._gateway_name,
+                self._gateway_endpoint,
+                display_name,
+            ),
+            inherently_safe=inherently_safe,
         )
 
 

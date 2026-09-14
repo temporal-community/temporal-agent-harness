@@ -2,9 +2,10 @@
 # harness-specific that the vendored `openai_agents/` package deliberately does NOT know about:
 # the live translator (`OpenAIStreamObserver`) that folds raw OpenAI Responses stream events into
 # the harness turn-stream vocabulary, the observer factory + `stream_to_provider` that route those
-# events to the in-flight turn with zero explicit threading, and `as_openai_agent_tool(s)` adapting
-# harness tools onto the SDK. Kept a sibling of the vendored tree (not inside it) so that tree stays
-# pristine for future upstream merges. Mirrors the structure of the Gemini plugin's
+# events to the in-flight turn with zero explicit threading, `as_openai_agent_tool(s)` adapting
+# harness tools onto the SDK, and `as_harness_mcp_server(s)` putting an SDK MCP server under the
+# same approval policy and tool lifecycle. Kept a sibling of the vendored tree (not inside it) so
+# that tree stays pristine for future upstream merges. Mirrors the structure of the Gemini plugin's
 # `_interactions_activity._StreamEventPublisher`.
 
 """Harness integration for the OpenAI Agents SDK.
@@ -36,9 +37,10 @@ vocabulary the Gemini plugin produces.
 from __future__ import annotations
 
 import importlib
+import inspect
 import json
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import AsyncExitStack
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Self
@@ -67,17 +69,24 @@ from temporal_agent_harness.harness.agent_protocol import (
     TextAnnotationDelta,
     ThoughtSummaryDelta,
     TokenUsage,
+    ToolEndEvent,
+    ToolErrorEvent,
     ToolRequested,
+    ToolStartEvent,
 )
 from temporal_agent_harness.harness.agent_workflow import (
     AgentWorkflowRunner,
+    ToolApprovalDenied,
     TurnEventPublisher,
+    _apply_approval_policy,
 )
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
 if TYPE_CHECKING:
     from agents import Tool
     from agents.items import TResponseStreamEvent
+    from agents.mcp import MCPServer
+    from mcp.types import CallToolResult
 
 __all__ = [
     "OpenAIStreamObserver",
@@ -85,6 +94,9 @@ __all__ = [
     "stream_to_provider",
     "as_openai_agent_tool",
     "as_openai_agent_tools",
+    "as_harness_mcp_server",
+    "as_harness_mcp_servers",
+    "is_harness_mcp_server",
 ]
 
 _INSTALL_MESSAGE = (
@@ -510,3 +522,203 @@ def _stringify_tool_result(result: Any) -> str:
     if isinstance(result, (dict, list, tuple, int, float, bool)) or result is None:
         return json.dumps(result, default=str)
     return str(result)
+
+
+# ---------------------------------------------------------------------------
+# MCP adapter: harness gating + tool lifecycle events for an SDK MCP server
+# ---------------------------------------------------------------------------
+#
+# ``as_harness_mcp_server`` wraps the server's ``call_tool`` so the call funnels
+# through ``run_tool`` exactly like a harness tool: policy gate first, then
+# ``tool_start`` -> ``tool_end`` / ``tool_error``.
+#
+# This allows us to provide tool approval and event emission for MCP tool calls
+# without the user of our harness to manually wire these up.
+
+_MCP_TOOL_CALL_ID_META_KEY = "temporal.harness/tool_call_id"
+_MCP_WRAPPED_ATTR = "__harness_mcp_governed__"
+
+
+def as_harness_mcp_server(
+    server: "MCPServer", *, inherently_safe: bool = False
+) -> "MCPServer":
+    """Put an OpenAI Agents SDK MCP server under harness tool governance.
+
+    Returns the same server object with its ``call_tool`` wrapped so every MCP tool call:
+
+    - is evaluated against the agent's `ToolApprovalPolicy`, and waits for HITL when the
+      policy does not auto-approve it;
+    - publishes ``tool_start`` and then ``tool_end`` or ``tool_error``, under the same
+      ``tool_id`` as the ``tool_requested`` the model stream produced.
+
+    The runner is resolved per call via :meth:`AgentWorkflowRunner.current`. A call made
+    outside a harness agent has no policy to apply and no turn stream to publish to, so
+    it passes straight through.
+
+    ``inherently_safe`` is the same static safety hint as present in ``@agent.tool_defn(...)``
+    decorator, so that it can be forwarded to ``_apply_approval_policy(...)``
+
+    A denied call returns an ``is_error`` result to the model instead of raising, so the
+    agent loop can continue.
+
+    Wrapping an already-wrapped server is a no-op, so it is safe to call twice.
+    """
+    if getattr(server, _MCP_WRAPPED_ATTR, False):
+        return server
+    inner_call_tool = server.call_tool
+    inner_meta_resolver = getattr(server, "tool_meta_resolver", None)
+
+    async def tool_meta_resolver(context: Any) -> dict[str, Any] | None:
+        """Add the SDK call id to the request ``_meta``. Chains any existing resolver."""
+        meta: dict[str, Any] = {}
+        if inner_meta_resolver is not None:
+            resolved = inner_meta_resolver(context)
+            if inspect.isawaitable(resolved):
+                resolved = await resolved
+            if resolved:
+                meta.update(resolved)
+        call_id = getattr(getattr(context, "run_context", None), "tool_call_id", None)
+        if isinstance(call_id, str) and call_id:
+            meta[_MCP_TOOL_CALL_ID_META_KEY] = call_id
+        return meta or None
+
+    async def call_tool(
+        tool_name: str,
+        arguments: dict[str, Any] | None,
+        meta: dict[str, Any] | None = None,
+    ) -> "CallToolResult":
+        forwarded_meta, tool_id = _take_mcp_tool_call_id(meta, tool_name)
+
+        async def forward() -> "CallToolResult":
+            if forwarded_meta is None:
+                return await inner_call_tool(tool_name, arguments)
+            return await inner_call_tool(tool_name, arguments, meta=forwarded_meta)
+
+        runner = AgentWorkflowRunner.current()
+        if runner is None:
+            return await forward()  # not a harness agent: nothing to gate or publish.
+
+        tool_input = dict(arguments or {})
+
+        async def invoke() -> "CallToolResult":
+            try:
+                await _apply_approval_policy(
+                    tool_name, tool_input, inherently_safe=inherently_safe
+                )
+            except ToolApprovalDenied as denied:
+                # The gate already published tool_approval_resolved(approved=False); the
+                # call never starts, so it gets no tool_start/tool_error bracket.
+                return _mcp_error_result(str(denied))
+
+            runner.publish(
+                ToolStartEvent(
+                    tool_id=tool_id, tool_name=tool_name, tool_input=tool_input
+                )
+            )
+            try:
+                result = await forward()
+            except Exception as exc:
+                # Close the bracket, then let the error travel on. Same shape as the
+                # tool_defn / activity_tool_defn wrappers.
+                runner.publish(
+                    ToolErrorEvent(
+                        tool_id=tool_id, tool_name=tool_name, message=str(exc)
+                    )
+                )
+                raise
+            # An MCP server reports a failed call in the result, not by raising.
+            if _mcp_result_is_error(result):
+                runner.publish(
+                    ToolErrorEvent(
+                        tool_id=tool_id,
+                        tool_name=tool_name,
+                        message=_mcp_result_text(result),
+                    )
+                )
+            else:
+                runner.publish(
+                    ToolEndEvent(
+                        tool_id=tool_id,
+                        tool_name=tool_name,
+                        tool_output=_mcp_result_text(result),
+                    )
+                )
+            return result
+
+        return await runner.run_tool(tool_id, invoke)
+
+    server.tool_meta_resolver = tool_meta_resolver
+    server.call_tool = call_tool  # type: ignore[method-assign]
+    setattr(server, _MCP_WRAPPED_ATTR, True)
+    return server
+
+
+def is_harness_mcp_server(server: "MCPServer") -> bool:
+    """Whether ``server`` is already under harness governance."""
+    return bool(getattr(server, _MCP_WRAPPED_ATTR, False))
+
+
+def as_harness_mcp_servers(
+    servers: "Iterable[MCPServer]", *, inherently_safe: bool = False
+) -> "list[MCPServer]":
+    """Put several MCP servers under harness tool governance. See
+    :func:`as_harness_mcp_server`."""
+    return [
+        as_harness_mcp_server(server, inherently_safe=inherently_safe)
+        for server in servers
+    ]
+
+
+def _take_mcp_tool_call_id(
+    meta: dict[str, Any] | None, tool_name: str
+) -> tuple[dict[str, Any] | None, str]:
+    """Split the harness call id out of a request ``_meta``.
+
+    Returns the meta to forward (``None`` when nothing else is left, matching what the
+    SDK sends for an empty meta) and the ``tool_id`` for the lifecycle events. Falls back
+    to a fresh id if the resolver did not run -- the events then form their own card
+    rather than being dropped.
+    """
+    forwarded = dict(meta) if meta else None
+    call_id = forwarded.pop(_MCP_TOOL_CALL_ID_META_KEY, None) if forwarded else None
+    if not forwarded:
+        forwarded = None
+    if isinstance(call_id, str) and call_id:
+        return forwarded, call_id
+    return forwarded, _new_tool_call_id(tool_name)
+
+
+def _mcp_result_is_error(result: "CallToolResult") -> bool:
+    """Whether an MCP result reports a failed call. The field is ``is_error`` on the
+    MCP v2 types and ``isError`` on v1, so read both."""
+    flag = getattr(result, "is_error", None)
+    if flag is None:
+        flag = getattr(result, "isError", None)
+    return bool(flag)
+
+
+def _mcp_result_text(result: "CallToolResult") -> str:
+    """Render an MCP result as the single string a ``tool_end`` / ``tool_error`` carries.
+
+    Joins the text blocks. A result with no text block (an image, say) falls back to its
+    JSON form so the UI shows something rather than an empty card.
+    """
+    texts = [
+        block.text
+        for block in getattr(result, "content", None) or []
+        if getattr(block, "type", None) == "text"
+    ]
+    if texts:
+        return "\n".join(texts)
+    dump = getattr(result, "model_dump_json", None)
+    return str(dump(exclude_none=True)) if callable(dump) else str(result)
+
+
+def _mcp_error_result(message: str) -> "CallToolResult":
+    """An ``is_error`` MCP result carrying ``message`` -- what the model sees."""
+    from mcp import types
+
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=message)],
+        is_error=True,
+    )

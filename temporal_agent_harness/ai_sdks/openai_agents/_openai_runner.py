@@ -130,17 +130,20 @@ class TemporalOpenAIRunner(AgentRunner):
                 )
 
         if starting_agent.mcp_servers:
-            from temporal_agent_harness.ai_sdks.openai_agents._mcp import (
-                _StatefulMCPServerReference,
-                _StatelessMCPServerReference,
-            )
-            from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
-                _NexusGatewayMCPServer,
-            )
-
             with workflow.unsafe.imports_passed_through():
                 from nexus_mcp.integrations.openai_agents import (
                     WorkflowNexusMCPServer,
+                )
+
+                from temporal_agent_harness.ai_sdks.openai_agents._mcp import (
+                    _StatefulMCPServerReference,
+                    _StatelessMCPServerReference,
+                )
+                from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
+                    _NexusGatewayMCPServer,
+                )
+                from temporal_agent_harness.ai_sdks.openai_agents_harness import (
+                    is_harness_mcp_server,
                 )
 
             for s in starting_agent.mcp_servers:
@@ -155,6 +158,16 @@ class TemporalOpenAIRunner(AgentRunner):
                 ):
                     raise ValueError(
                         f"Unknown mcp_server type {type(s)} may not work durably."
+                    )
+
+                # Statically assert that MCP servers here are wrapped with
+                # as_harness_mcp_server() so the harness can handle approval and
+                # tool_start/tool_end/tool_error events.
+                if not is_harness_mcp_server(s):
+                    raise ValueError(
+                        f"{type(s).__name__} was not built by a harness mcp_server "
+                        f"factory. Build it with one, or wrap it with "
+                        f"as_harness_mcp_server()."
                     )
 
         if isinstance(kwargs.get("session"), SQLiteSession):
