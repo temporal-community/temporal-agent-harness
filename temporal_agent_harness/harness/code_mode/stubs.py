@@ -18,7 +18,9 @@ that cannot be rendered faithfully raises :class:`CodeModeStubError` (naming the
 offending parameter/field) rather than degrading to ``Any``. Result shapes reflect what a script
 actually observes — a tool's return value rendered with ``model_dump(mode="json")`` — so
 ``datetime`` / ``UUID`` / ``Decimal`` / ``bytes`` become ``str``, enums become a ``Literal`` of
-their values, and sets/tuples become lists.
+their values, sets/tuples become lists, and a model field with a default becomes
+``NotRequired`` (it is optional at the boundary, so a stub calling it required would reject
+calls the tool accepts).
 
 The generated stub begins with ``from __future__ import annotations``, so every ``TypedDict``
 field and function annotation is a lazy string: the checker resolves names regardless of
@@ -94,6 +96,7 @@ class _StubBuilder:
         self._used_names: set[str] = set()
         self._uses_any = False
         self._uses_literal = False
+        self._uses_not_required = False
 
     def build(
         self, tools: list[Callable[..., Awaitable[Any]]], *, with_doc: bool
@@ -110,6 +113,8 @@ class _StubBuilder:
             typing_imports.append("Any")
         if self._uses_literal:
             typing_imports.append("Literal")
+        if self._uses_not_required:
+            typing_imports.append("NotRequired")
 
         header = ["from __future__ import annotations"]
         if typing_imports:
@@ -291,6 +296,13 @@ class _StubBuilder:
         for field_name, field_info in model.model_fields.items():
             annotation = hints.get(field_name, field_info.annotation)
             rendered = self._render_type(annotation, f"{model.__name__}.{field_name}")
+            # A field with a default is optional at the boundary — pydantic fills it in — so
+            # the stub has to say so. Rendered as required, the type checker rejects a script
+            # that leaves it out, which is a script the tool would have accepted: the stub
+            # would be refusing a call on the strength of its own inaccuracy.
+            if not field_info.is_required():
+                self._uses_not_required = True
+                rendered = f"NotRequired[{rendered}]"
             field_lines.append(f"    {field_name}: {rendered}")
         self._fields_by_model[model] = field_lines
         return name

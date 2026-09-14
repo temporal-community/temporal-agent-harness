@@ -43,6 +43,7 @@ import {
   isAgentMessageObject,
   renderUserMessage
 } from "./inboundMessageText";
+import { buildAgentStateDocs } from "./agentState";
 import { buildReplayLog, buildReplayMarkers } from "./replayLog";
 import { buildReplayTimeline } from "./replayTimeline";
 import { buildStepBoundaries, buildStepTimeline } from "./stepTimeline";
@@ -427,6 +428,16 @@ export class AgentRunController {
   currentLogRow = $derived(
     this.fullReplayLog.rows.find((row) => row.index === this.viewIndex) ?? null
   );
+  /**
+   * Observable agent state as of the playhead — every state the agents in this
+   * run registered, folded out of their snapshot and patch events.
+   *
+   * Off `visibleReplayTimeline` rather than `visibleFrames`, because that one
+   * drops the subagents, and a subagent gets its own runner and registers its own
+   * state. The entries carry which agent published each frame, which is also what
+   * keeps two agents' `plan` from folding into one document.
+   */
+  agentStates = $derived(buildAgentStateDocs(this.visibleReplayTimeline));
   usage = $derived(summarizeCost(this.visibleReplayFrames));
   usageTimeline = $derived(buildUsageTimeline(this.allReplayFrames));
   stepTimeline = $derived(buildStepTimeline(this.replayTimeline));

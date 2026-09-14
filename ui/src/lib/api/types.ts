@@ -284,7 +284,9 @@ export type AgentEventType =
   | "thought_summary"
   | "text_annotation"
   | "reply"
-  | "error";
+  | "error"
+  | "state_snapshot"
+  | "state_patch";
 
 export interface AgentEventMetadata {
   agent_id: string;
@@ -506,6 +508,52 @@ export interface AgentErrorEvent extends AgentEventDataBase<"error"> {
   message: string;
 }
 
+/**
+ * One RFC 6902 operation off an agent's observable state.
+ *
+ * The harness derives these — nothing in a workflow author's code builds one —
+ * and its own docs promise it emits only these three kinds, never `move`,
+ * `copy` or `test`. Typed to that promise rather than to the whole of RFC 6902,
+ * so a reader of this file learns what actually arrives; the applier still
+ * refuses an op it does not recognize rather than trusting the annotation.
+ */
+export interface JsonPatchOp {
+  op: "add" | "replace" | "remove";
+  /** RFC 6901 pointer. `""` is the whole document; a trailing `/-` appends. */
+  path: string;
+  /** Absent on `remove`, and only on `remove`. */
+  value?: JsonValue;
+}
+
+/**
+ * The full value of one piece of observable agent state, published once when the
+ * workflow author registered it with `runner.state(...)`.
+ *
+ * A consumer needs exactly one of these to start applying patches, and there is
+ * exactly one per state for the life of the agent — it is published in
+ * `@workflow.init`, at the very front of the log. A stream attached from a later
+ * offset therefore never sees it, and no amount of waiting will produce another:
+ * see `UNSYNCED_NOTE` in $lib/state/agentState, which is where that is handled.
+ */
+export interface AgentStateSnapshotEvent
+  extends AgentEventDataBase<"state_snapshot"> {
+  state_id: string;
+  version: number;
+  value: JsonRecord;
+}
+
+/**
+ * What one committed `mutate()` block changed. Ops apply in order, and a version
+ * exists only because something was touched — a block that changed nothing
+ * publishes no event at all, so versions are contiguous across the patches that
+ * do arrive.
+ */
+export interface AgentStatePatchEvent extends AgentEventDataBase<"state_patch"> {
+  state_id: string;
+  version: number;
+  ops: JsonPatchOp[];
+}
+
 // Emitted by POST /api/chat for client-side timeout or conversion of this
 // turn's AgentError. Unlike normal agent events, these may not include type or
 // turn metadata.
@@ -541,6 +589,8 @@ export interface AgentSseEventMap {
   text_annotation: TextAnnotationEvent;
   reply: ReplyEvent;
   error: AgentErrorEvent | ClientSideStreamErrorEvent;
+  state_snapshot: AgentStateSnapshotEvent;
+  state_patch: AgentStatePatchEvent;
 }
 
 export type AgentStreamEventData =

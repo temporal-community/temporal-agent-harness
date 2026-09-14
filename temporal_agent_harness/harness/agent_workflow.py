@@ -46,6 +46,8 @@ from temporalio.contrib.workflow_streams import (
 from temporalio.exceptions import ApplicationError
 from temporalio.workflow import ActivityConfig
 
+from temporal_agent_harness.harness.state import HarnessState, StateRef
+from temporal_agent_harness.harness.state.events import StateEvent, StateSnapshot
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_ID_LENGTH,
     AGENT_INTERFACE_QUERY,
@@ -65,6 +67,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEvent,
     AgentMessage,
     AgentReply,
+    AgentStatePatch,
+    AgentStateSnapshot,
     AgentStatus,
     AgentStreamItem,
     CallbackRequested,
@@ -1215,6 +1219,9 @@ class _WorkflowStatus:
 # ---------------------------------------------------------------------------
 
 
+StateT = TypeVar("StateT", bound=HarnessState)
+
+
 class AgentWorkflowRunner:
     """Workflow-side agent runtime: discovers ``@agent.accepts`` handlers and dispatches.
 
@@ -1306,6 +1313,10 @@ class AgentWorkflowRunner:
             has_custom_approval_fallback=custom_approval_fallback is not None,
         )
         self._closed = False
+        # Observable state the workflow author opted into with ``state()``, keyed by the
+        # id they registered it under. The runner holds the refs only to reject duplicate
+        # ids; the author holds the handle they actually use.
+        self._states: dict[str, StateRef[Any]] = {}
 
         # Register protocol handlers dynamically so the containing workflow doesn't need to.
         workflow.set_update_handler(
@@ -1902,6 +1913,65 @@ class AgentWorkflowRunner:
             set_approval_policy=self.set_approval_policy,
             close=self._handle_close,
         )
+
+    def state(self, state_id: str, initial: StateT) -> StateRef[StateT]:
+        """Register observable state and stream every change to it. The whole opt-in.
+
+        This one call is the entire contract a workflow author has with state tracking::
+
+            @workflow.init
+            def __init__(self, config: AgentConfig) -> None:
+                self._runner = AgentWorkflowRunner(config, stream=WorkflowStream(), ...)
+                self._plan = self._runner.state("plan", PlanState())
+
+        From here the author only ever reads ``self._plan.current`` and writes inside
+        ``with self._plan.mutate() as d:``. They never choose a topic, build an event,
+        pick a granularity, or decide when to publish: the runner publishes an
+        :class:`AgentStateSnapshot` now and an :class:`AgentStatePatch` after every
+        ``mutate()`` block that actually changed something, onto the same
+        ``turn_events`` stream as the rest of the agent's events. So the patches are
+        durable, replayable and offset-addressed for free, and they arrive *ordered
+        against* ``tool_start`` / ``reply_delta`` — a consumer can see exactly where in
+        a turn the state moved.
+
+        Call it from ``@workflow.init`` (or any workflow-side code); ``state_id`` must be
+        unique within this agent. Mutating the returned ref is deterministic and
+        replay-safe: the ops a commit produces are a pure function of the mutations made,
+        and set-valued fields serialize in sorted order rather than hash order.
+        """
+        if state_id in self._states:
+            raise ValueError(
+                f"state id {state_id!r} is already registered on agent {self._agent_id!r}; "
+                "each piece of observable state needs its own id"
+            )
+        ref: StateRef[StateT] = StateRef(state_id, initial, self._publish_state_event)
+        self._states[state_id] = ref
+        self._publish_state_event(ref.snapshot())
+        return ref
+
+    def _publish_state_event(self, event: StateEvent) -> None:
+        """Translate a state-layer event into a stream payload and publish it.
+
+        The state layer never imports the protocol (it is a leaf package), so the
+        translation lives here. Outside a turn — registration in ``@workflow.init``, or a
+        mutation driven by an operator command — this follows the operator-command
+        convention of ``turn_number=0``, so a consumer can replay these durably without
+        folding them into an agent-turn summary.
+        """
+        payload: AgentStreamItem
+        if isinstance(event, StateSnapshot):
+            payload = AgentStateSnapshot(
+                state_id=event.state_id, version=event.version, value=event.value
+            )
+        else:
+            payload = AgentStatePatch(
+                state_id=event.state_id, version=event.version, ops=event.ops
+            )
+        ctx = self.current_stream_context
+        if ctx is None:
+            self._pub("", 0, payload)
+        else:
+            self._pub(ctx.turn_id, ctx.turn_number, payload)
 
     @property
     def current_stream_context(self) -> TurnStreamContext | None:

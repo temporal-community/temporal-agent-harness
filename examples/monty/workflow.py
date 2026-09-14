@@ -29,7 +29,7 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_protocol import AgentConfig, TextReply, ToolApprovalPolicy
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
-    from . import activities
+    from . import activities, trip_board
     from .models import RunScript
 
 
@@ -52,11 +52,21 @@ class MontyDynamicAgentWorkflow:
             # session via AgentConfig.approval_policy.
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
-        # Code Mode over the travel tools: one tool that runs a script calling them as host
-        # functions. The run_script handler dispatches the caller's script straight through it.
+        # Observable state: the agent's running board of trips. One call is the whole opt-in
+        # — from here, every committed `mutate()` the board tools make is published to this
+        # agent's turn_events stream as JSON Patch ops, which is what the console's AGENT
+        # STATE pane renders. There is no model in this agent, so the script is what keeps
+        # the board current; see `trip_board.py`.
+        self._board = self._runner.state("trip_board", trip_board.TripBoard())
+        # Code Mode over the travel tools plus the board tools: one tool that runs a script
+        # calling them all as host functions. The run_script handler dispatches the caller's
+        # script straight through it.
         self._run_code = agent.code_mode_tool(
-            activities.ALL_TOOLS,
+            [*activities.ALL_TOOLS, *trip_board.BOARD_TOOLS],
             name="run_travel_code",
+            # Supplied per host call and hidden from the script: a script names a trip, never
+            # the state the board lives in.
+            injections={"board": self._board},
         )
 
     @workflow.run
@@ -105,16 +115,54 @@ class MontyDynamicAgentWorkflow:
           • ``get_trip_summary({"booking_refs": [str, ...]}) -> dict``
                 Returns ``{"summary": str}`` — a human-readable itinerary from confirmation codes.
 
-        Example — concurrently search, then book, then summarize::
+        The remaining host functions keep the agent's **trip board** — its running TODO list of
+        the trips it is collecting, which is observable state: every call publishes JSON Patch
+        ops on the turn stream, so a watching client sees the board change as the script runs.
+        Open a trip before searching, and record each booking as it happens rather than at the
+        end. All take one dict and return one dict (``read_trip_board`` takes nothing and
+        returns a string); every board response carries ``trip_id``, ``status``, ``remaining``,
+        ``note`` and a rendered ``board``.
+
+          • ``open_trip({"description": str, "traveler": str, "tasks": [str, ...]}) -> dict``
+                Puts a trip on the board and returns its ``trip_id``. ``tasks`` is the starting
+                checklist; omit or leave empty for the standard one.
+          • ``record_booking({"trip_id": str, "kind": "flight"|"hotel", "confirmation_code": str,
+            "detail": str, "price_usd": float, "completes": [str, ...]}) -> dict``
+                Records a booking and ticks off the checklist items it finishes, in one commit.
+                Use a confirmation code a booking call actually returned.
+          • ``complete_trip_tasks({"trip_id": str, "tasks": [str, ...]}) -> dict``
+                Ticks items off by their text (exact, or a distinctive part of it).
+          • ``add_trip_tasks({"trip_id": str, "tasks": [str, ...]}) -> dict``
+                Adds items the trip turned out to need.
+          • ``set_trip_status({"trip_id": str, "status": "collecting"|"booked"|"cancelled"}) -> dict``
+          • ``read_trip_board() -> str``
+                The whole board, rendered. Takes no arguments.
+
+        ``trip_id`` accepts ``"latest"`` for the most recently opened trip.
+
+        Example — open the board, search concurrently, book, record, summarize::
 
             import asyncio
             async def main():
+                trip = await open_trip({
+                    "description": "SFO to JFK, Jul 1-5",
+                    "traveler": "Ada Lovelace",
+                })
                 flights, hotels = await asyncio.gather(
                     search_flights({"origin": "SFO", "destination": "JFK", "date": "2026-07-01"}),
                     search_hotels({"city": "New York", "check_in": "2026-07-01", "check_out": "2026-07-05"}),
                 )
                 cheapest = min(flights["flights"], key=lambda f: f["price_usd"])
                 flight = await book_flight({"flight_id": cheapest["flight_id"], "passenger_name": "Ada Lovelace"})
+                await record_booking({
+                    "trip_id": trip["trip_id"],
+                    "kind": "flight",
+                    "confirmation_code": flight["confirmation_code"],
+                    "detail": f"{cheapest['airline']} {cheapest['flight_id']} "
+                              f"{cheapest['departure_time']}-{cheapest['arrival_time']}",
+                    "price_usd": cheapest["price_usd"],
+                    "completes": ["outbound flight"],
+                })
                 summary = await get_trip_summary({"booking_refs": [flight["confirmation_code"]]})
                 return summary["summary"]
             asyncio.run(main())

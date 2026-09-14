@@ -182,7 +182,27 @@ def test_recursive_model_terminates_and_references_itself():
 
     src = render_type_check_stubs([f])
     assert _typed_dict_names(src).count("Node") == 1
-    assert "children: list[Node]" in src
+    # The self-reference is what this pins; `children` has a default_factory, so the field
+    # itself is NotRequired (see test_defaulted_field_is_not_required).
+    assert "children: NotRequired[list[Node]]" in src
+
+
+def test_defaulted_field_is_not_required():
+    """A field pydantic can fill in is optional at the boundary, and the stub must say so.
+
+    Rendered as required, the checker rejects a script that omits the key — a call the tool
+    would have accepted — so the stub would be refusing work on the strength of its own
+    inaccuracy. `Node.value` has no default and stays required, which is the other half:
+    NotRequired is not applied to everything with a type.
+    """
+
+    async def f(n: Node) -> Node: ...
+
+    src = render_type_check_stubs([f])
+    assert "value: int" in src
+    assert "value: NotRequired" not in src
+    assert "children: NotRequired[list[Node]]" in src
+    assert "NotRequired" in src.split("\n")[1], "the import has to be emitted too"
 
 
 def test_enum_renders_as_literal_of_values():
