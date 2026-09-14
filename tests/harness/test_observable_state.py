@@ -7,39 +7,51 @@
 # Run end-to-end against the Temporal time-skipping test server, because the thing under
 # test is precisely that these events survive the workflow -> stream -> client round trip.
 #
+# The last section runs the state layer under the DEFAULT (sandboxed) workflow runner, which
+# the agent tests above deliberately do not: `mutate()` generates a `Draft[C]` class with
+# `type()` *inside* a workflow task, and the sandbox is where that either works or does not.
+#
 # Run with: uv run pytest tests/harness/test_observable_state.py -v
 
 from __future__ import annotations
 
 import asyncio
+import gc
 import uuid
 from datetime import timedelta
 from typing import Any
 
-import jsonpatch
-import pytest
-import pytest_asyncio
 from temporalio import workflow
-from temporalio.client import Client, WorkflowHandle
-from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamClient
-from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from temporal_agent_harness.harness import agent
-from temporal_agent_harness.harness.agent_protocol import (
-    SEND_AGENT_MESSAGE_UPDATE,
-    AgentConfig,
-    AgentEvent,
-    AgentEventType,
-    AgentMessage,
-    AgentMessageReply,
-    TextMessage,
-    TextReply,
-    ToolApprovalPolicy,
-)
-from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
-from temporal_agent_harness.harness.state import HarnessState, StateRef
+# The sandboxed workflow at the bottom lives in this module, so the Temporal sandbox
+# re-imports this whole file once per workflow instance. Everything the file imports is
+# passed through so that re-import stays cheap and the only things the sandbox actually
+# rebuilds are this module's own classes -- which is the behaviour under test.
+with workflow.unsafe.imports_passed_through():
+    import jsonpatch
+    import pytest
+    import pytest_asyncio
+    from temporalio.client import Client, WorkflowHandle
+    from temporalio.contrib.pydantic import pydantic_data_converter
+    from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamClient
+    from temporalio.testing import WorkflowEnvironment
+    from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+
+    from temporal_agent_harness.harness import agent
+    from temporal_agent_harness.harness.agent_protocol import (
+        SEND_AGENT_MESSAGE_UPDATE,
+        AgentConfig,
+        AgentEvent,
+        AgentEventType,
+        AgentMessage,
+        AgentMessageReply,
+        TextMessage,
+        TextReply,
+        ToolApprovalPolicy,
+    )
+    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_harness.harness.state import HarnessState, StateRef
+    from temporal_agent_harness.harness.state import drafts as _drafts
 
 # ---------------------------------------------------------------------------
 # An author's state, and an agent that opts in
@@ -248,3 +260,182 @@ async def test_duplicate_state_ids_are_rejected():
 
     with pytest.raises(ValueError, match="already registered"):
         AgentWorkflowRunner.state(runner, "plan", PlanState())
+
+
+# ---------------------------------------------------------------------------
+# The same state layer, under the DEFAULT (sandboxed) workflow runner
+# ---------------------------------------------------------------------------
+#
+# `mutate()` calls `drafts.draft_class()`, which builds a `Draft[C]` subclass of the
+# author's class with `type()` — inside a workflow task. Everything above runs
+# unsandboxed, so none of it says whether that is allowed where real agents run. These
+# workflows carry no agent runner: the sandbox is the only variable.
+
+
+class SandboxPlan(HarnessState):
+    """Declared in this module on purpose: the sandbox re-imports the workflow's own
+    module per workflow instance, so this class object is NEW for every run."""
+
+    goal: str = ""
+    steps: list[Step] = []
+    scratch: dict[str, str] = {}
+
+
+@workflow.defn(name="SandboxStateProbe")
+class SandboxStateProbe:
+    @workflow.run
+    async def run(self, goal: str) -> dict[str, Any]:
+        ops: list[dict[str, Any]] = []
+        ref: StateRef[SandboxPlan] = StateRef(
+            "plan", SandboxPlan(), publish=lambda event: ops.extend(event.ops)
+        )
+        snapshot = ref.snapshot().value
+
+        with ref.mutate() as d:
+            d.goal = goal
+            d.steps.append(Step(name="research"))
+            d.steps.append(Step(name="write"))
+        with ref.mutate() as d:
+            d.steps[0].done = True
+            d.scratch["note"] = "research finished"
+        with ref.mutate() as d:
+            del d.steps[0]
+
+        draft_cls = _drafts.draft_class(SandboxPlan)
+        return {
+            "snapshot": snapshot,
+            "ops": ops,
+            "committed": ref.snapshot().value,
+            "version": ref.version,
+            # Proof the generated subclass is the thing that did the work, built here.
+            "draft_class_name": draft_cls.__name__,
+            "draft_is_subclass": issubclass(draft_cls, SandboxPlan),
+            "draft_at_rest_is_state_class": draft_cls.__harness_at_rest__ is SandboxPlan,
+            # The draft class must hang off the state class and nowhere else, so that it
+            # dies with the module the sandbox re-imported for this workflow instance.
+            "draft_on_state_class": (
+                SandboxPlan.__dict__.get("__harness_draft_class__") is draft_cls
+            ),
+        }
+
+
+@pytest_asyncio.fixture
+async def sandboxed_queue():
+    """A worker on the DEFAULT workflow runner — i.e. the real sandbox."""
+    env = await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter
+    )
+    task_queue = f"sandboxed-state-test-{uuid.uuid4()}"
+    async with Worker(env.client, task_queue=task_queue, workflows=[SandboxStateProbe]):
+        try:
+            yield env.client, task_queue
+        finally:
+            await env.shutdown()
+
+
+async def _run_sandboxed(client: Client, task_queue: str, goal: str) -> dict[str, Any]:
+    return await client.execute_workflow(
+        SandboxStateProbe.run,
+        goal,
+        id=f"SandboxStateProbe-{uuid.uuid4()}",
+        task_queue=task_queue,
+    )
+
+
+async def test_mutation_works_under_the_sandboxed_runner(sandboxed_queue):
+    """Generating `Draft[C]` with `type()` is allowed inside a workflow task.
+
+    The sandbox swaps in its own import hooks and a restricted `builtins`; if either
+    objected to building a class at workflow time — or to pydantic's metaclass running
+    there — every mutate() block in every real agent would fail. Nothing above catches
+    that, because everything above opts out of the sandbox.
+    """
+    client, task_queue = sandboxed_queue
+    result = await _run_sandboxed(client, task_queue, "ship the feature")
+
+    assert result["draft_class_name"] == "Draft[SandboxPlan]"
+    assert result["draft_is_subclass"]
+    assert result["draft_at_rest_is_state_class"]
+    assert result["draft_on_state_class"]
+    assert result["version"] == 3
+    assert result["committed"] == {
+        "goal": "ship the feature",
+        "steps": [{"name": "write", "done": False}],
+        "scratch": {"note": "research finished"},
+    }
+
+
+async def test_sandboxed_ops_replay_to_the_sandboxed_agents_state(sandboxed_queue):
+    """The layer's invariant, checked where the draft classes are actually generated."""
+    client, task_queue = sandboxed_queue
+    result = await _run_sandboxed(client, task_queue, "ship the feature")
+
+    document = result["snapshot"]
+    for op in result["ops"]:
+        document = jsonpatch.apply_patch(document, [op])
+    assert document == result["committed"]
+
+
+async def test_two_sandboxed_instances_agree_op_for_op(sandboxed_queue):
+    """Each instance gets a fresh `SandboxPlan`, so each generates its own `Draft[C]`.
+
+    The generated class must therefore be a pure function of its input: two workflow
+    instances on one worker have to publish byte-identical ops, or a replay on a second
+    worker diverges from the history.
+    """
+    client, task_queue = sandboxed_queue
+    first = await _run_sandboxed(client, task_queue, "ship the feature")
+    second = await _run_sandboxed(client, task_queue, "ship the feature")
+
+    assert first["ops"] == second["ops"]
+    assert first["snapshot"] == second["snapshot"]
+    assert first["committed"] == second["committed"]
+
+
+def _live_draft_classes() -> int:
+    """How many generated `Draft[...]` classes this process is still holding.
+
+    Counted out of the garbage collector rather than out of a cache, because the fix for
+    the leak was to stop having a cache: `Draft[C]` hangs off `C`, so the only honest
+    question is whether the class objects survive. `C` and `Draft[C]` refer to each
+    other, so collecting them is a cycle collection, not a refcount drop — hence the
+    explicit passes.
+    """
+    for _ in range(3):
+        gc.collect()
+    return sum(
+        1
+        for obj in gc.get_objects()
+        if isinstance(obj, type) and obj.__dict__.get("__harness_is_draft__", False)
+    )
+
+
+async def test_the_draft_class_cache_does_not_grow_per_workflow_instance(sandboxed_queue):
+    """`Draft[C]` costs per state CLASS; a worker must not pay per workflow RUN.
+
+    `SandboxPlan` is declared in the workflow's own module, so the sandbox builds a
+    brand-new class object for every workflow instance — the pattern a state class
+    declared next to its `@workflow.defn` gets by default. Anything that retains those
+    classes (a module-level `dict[type, type]` keyed on them, say) turns one run's
+    garbage into a permanent ~107 kB of RSS and never evicts it: an OOM, not a plateau.
+
+    Measured as a plateau rather than an absolute count, because the sandbox does hold
+    onto one module copy of its own; the claim under test is that traffic adds nothing
+    on top of it. Two equal batches, and the second must add zero.
+    """
+    client, task_queue = sandboxed_queue
+
+    runs = 5
+    for _ in range(runs):
+        await _run_sandboxed(client, task_queue, "warm the process")
+    warm = _live_draft_classes()
+
+    for _ in range(runs):
+        await _run_sandboxed(client, task_queue, "again")
+
+    growth = _live_draft_classes() - warm
+    assert growth == 0, (
+        f"{runs} more workflow instances left {growth} more Draft[...] classes alive "
+        f"({growth / runs:.1f} per instance): generated classes are accumulating with "
+        f"traffic rather than with the number of declared state classes"
+    )

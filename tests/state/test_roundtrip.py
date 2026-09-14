@@ -1,5 +1,5 @@
-# ABOUTME: copy/deepcopy/pickle/model_copy/JSON round-trips on at-rest values, and the
-# order-stable set serialization that makes a whole-set `replace` op match a snapshot exactly.
+# ABOUTME: copy/deepcopy/pickle/model_copy/JSON round-trips on at-rest values — that a frozen
+# container survives every one of them as itself, and compares equal to the plain one.
 
 """copy / pickle / model_copy / JSON round-trips on at-rest values."""
 
@@ -11,7 +11,7 @@ import pickle
 
 import pytest
 
-from temporal_agent_harness.harness.state.containers import FrozenDict, FrozenList, FrozenSet
+from temporal_agent_harness.harness.state.containers import FrozenDict, FrozenList
 
 from .models import AgentState, Group, Todo
 
@@ -20,9 +20,9 @@ from .models import AgentState, Group, Todo
 def value() -> AgentState:
     return AgentState(
         model="m",
-        groups=[Group(name="g", todos=[Todo(id="t", tags={"a"})], meta={"k": "v"})],
+        groups=[Group(name="g", todos=[Todo(id="t", tags=["a"])], meta={"k": "v"})],
         index={"a": [Todo(id="x")]},
-        tags={"one", "two"},
+        tags=["one", "two"],
         pair=(1, "z"),
         matrix=([1, 2], [3]),
     )
@@ -34,7 +34,7 @@ def test_deepcopy(value: AgentState):
     assert clone is not value
     assert type(clone.groups) is FrozenList
     assert type(clone.groups[0].meta) is FrozenDict
-    assert type(clone.tags) is FrozenSet
+    assert type(clone.tags) is FrozenList
     assert clone.groups[0] is not value.groups[0]
 
 
@@ -48,11 +48,11 @@ def test_pickle(value: AgentState):
     assert clone == value
     assert type(clone.groups) is FrozenList
     assert type(clone.index) is FrozenDict
-    assert type(clone.tags) is FrozenSet
+    assert type(clone.tags) is FrozenList
 
 
 def test_pickle_containers_directly():
-    for container in (FrozenList([1, 2]), FrozenDict({"a": 1}), FrozenSet({1, 2})):
+    for container in (FrozenList([1, 2]), FrozenDict({"a": 1})):
         clone = pickle.loads(pickle.dumps(container))
         assert clone == container
         assert type(clone) is type(container)
@@ -73,7 +73,7 @@ def test_json_round_trip(value: AgentState):
 def test_frozen_containers_compare_equal_to_plain_ones(value: AgentState):
     assert value.groups[0].meta == {"k": "v"}
     assert value.index["a"] == [Todo(id="x")]
-    assert value.tags == {"one", "two"}
+    assert value.tags == ["one", "two"]
     assert FrozenList([1, 2]) == [1, 2]
     assert [1, 2] == FrozenList([1, 2])
 
@@ -84,6 +84,14 @@ def test_plain_json_dumps_of_frozen_containers():
     )
 
 
-def test_set_serialization_is_order_stable():
-    value = AgentState(tags={"zebra", "alpha", "mid"})
-    assert value.model_dump(mode="json")["tags"] == ["alpha", "mid", "zebra"]
+def test_list_serialization_keeps_the_order_the_author_chose():
+    """A list is published in ITS order, not a normalized one.
+
+    This replaces a test that asserted `set[str]` serialized in *sorted* order — a trick the
+    layer needed because CPython's set iteration is hash-ordered and varies per process, so two
+    workers would otherwise publish different arrays for one value. Sets are rejected outright
+    now (see test_schema), which is why there is nothing here to normalize: a list's order is a
+    fact the author wrote down, and it round-trips as itself.
+    """
+    value = AgentState(tags=["zebra", "alpha", "mid"])
+    assert value.model_dump(mode="json")["tags"] == ["zebra", "alpha", "mid"]

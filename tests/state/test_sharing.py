@@ -20,7 +20,7 @@ def _seeded():
                 for i in range(4)
             ],
             index={"a": [Todo(id="x")]},
-            tags={"one"},
+            tags=["one"],
         ),
     )
     return ref

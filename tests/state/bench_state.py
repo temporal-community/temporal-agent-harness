@@ -82,6 +82,24 @@ def test_commit_of_an_untouched_large_tree(benchmark, big: Big):
     assert ref.current.lookup is lookup
 
 
+def test_assign_a_large_list_of_models(benchmark, big: Big):
+    """The case the draft-aliasing guard walks in full.
+
+    Assigning a whole container is the one shape where `assert_no_drafts` is O(tree)
+    rather than O(1), so it is the shape that would show it if the walk were expensive.
+    It is not: the same value goes straight on to `validate_python`, which walks it too.
+    """
+    ref = StateHost().state("big", big)
+    rows = [Row(id=i) for i in range(N)]
+
+    def one():
+        with ref.mutate() as d:
+            d.rows = rows
+
+    benchmark(one)
+    assert len(ref.current.rows) == N
+
+
 def test_noop_commit(benchmark, big: Big):
     ref = StateHost().state("big", big)
 

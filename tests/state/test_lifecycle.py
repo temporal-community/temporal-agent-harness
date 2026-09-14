@@ -15,10 +15,12 @@ from temporal_agent_harness.harness.state import (
     HarnessState,
     RevokedDraftError,
     StatePatch,
+    StateSchemaError,
     StateSnapshot,
 )
-from temporal_agent_harness.harness.state.drafts import _DRAFT_CLASSES, draft_class
+from temporal_agent_harness.harness.state.drafts import draft_class
 
+from .replay import replay
 from .support import StateHost
 from .models import AgentState, Flat, Group, Inner, Outer, Todo
 
@@ -107,7 +109,7 @@ def test_draft_is_revoked_on_exit(harness_and_ref):
     with pytest.raises(RevokedDraftError):
         groups.append(Group(name="g"))
     with pytest.raises(RevokedDraftError):
-        tags.add("x")
+        tags.append("x")
 
 
 def test_concurrent_mutation_is_rejected(harness_and_ref):
@@ -218,14 +220,45 @@ def test_at_rest_value_may_be_reassigned_anywhere(harness_and_ref):
     assert ref.current.index["copy"][0] == todo
 
 
-def test_draft_class_is_generated_once():
-    before = len(_DRAFT_CLASSES)
+def test_draft_class_is_generated_once_and_lives_on_the_state_class():
+    """One `Draft[C]` per declared class, reachable only from `C` itself.
+
+    Holding it anywhere else — a module-level dict, say — outlives every class the
+    Temporal sandbox re-imports per workflow instance, and that is an unbounded leak
+    rather than a cache (see `test_the_draft_class_cache_does_not_grow_per_workflow_instance`).
+    """
     first = draft_class(Flat)
     second = draft_class(Flat)
     assert first is second
-    assert len(_DRAFT_CLASSES) in (before, before + 1)
+    assert Flat.__dict__["__harness_draft_class__"] is first
     assert issubclass(first, Flat)
     assert first.__harness_at_rest__ is Flat
+
+
+def test_the_draft_class_is_built_when_the_state_class_is_declared():
+    """Class generation belongs at definition time, not on a workflow task."""
+
+    class Declared(HarnessState):
+        n: int = 0
+
+    assert Declared.__dict__["__harness_draft_class__"].__name__ == "Draft[Declared]"
+
+
+def test_a_subclass_gets_its_own_draft_class():
+    """`cls.__dict__`, never `getattr`: an inherited draft class drops the new fields."""
+
+    class Parent(HarnessState):
+        a: int = 0
+
+    class Child(Parent):
+        b: int = 0
+
+    assert draft_class(Child) is not draft_class(Parent)
+
+    ref = StateHost().state("c", Child())
+    with ref.mutate() as d:
+        d.b = 7
+    assert ref.current.b == 7
 
 
 def test_draft_is_an_instance_of_the_user_class():
@@ -361,3 +394,210 @@ def test_the_commit_strategy_can_be_forced_either_way():
     with ref2.mutate() as d:
         d.n = 3
     assert ref2.current.n == 3
+
+
+# --------------------------------------------------------------------------- #
+# aliasing holes: a draft node reached through a model the guard does not walk  #
+# --------------------------------------------------------------------------- #
+#
+# `assert_no_drafts` returns as soon as it meets a `BaseModel`, and `freeze()`
+# returns a model untouched, so a model *built inside the block* can carry a live
+# draft node straight into at-rest state.  `DraftSet._coerce` skips the guard
+# entirely.  Every test below is a hole; each asserts the contract, not the bug.
+
+
+def test_draft_model_cannot_be_smuggled_inside_a_newly_built_model(harness_and_ref):
+    """A draft reached through a *new* model's field is still a draft."""
+    _, ref = harness_and_ref
+    with ref.mutate() as d:
+        d.groups.append(Group(name="g", todos=[Todo(id="t1")]))
+    with pytest.raises(DraftAliasError):
+        with ref.mutate() as d:
+            smuggled = d.groups[0].todos[0]  # Draft[Todo]
+            d.groups.append(Group(name="copy", todos=[smuggled]))
+
+
+def test_draft_model_cannot_be_smuggled_through_a_model_typed_field():
+    """The same hole through a plain model-typed field rather than a list."""
+
+    class Pair(HarnessState):
+        left: Inner = Inner()
+        right: Inner = Inner()
+
+    class Root(HarnessState):
+        pair: Pair = Pair()
+
+    ref = StateHost().state("r", Root(pair=Pair(left=Inner(value=1))))
+    with pytest.raises(DraftAliasError):
+        with ref.mutate() as d:
+            d.pair = Pair(left=d.pair.left, right=Inner(value=2))
+
+
+def test_at_rest_state_never_holds_a_draft_node(harness_and_ref):
+    """Whatever the guard does, nothing draft-flavoured may survive commit."""
+    _, ref = harness_and_ref
+    with ref.mutate() as d:
+        d.groups.append(Group(name="g", todos=[Todo(id="t1")]))
+    try:
+        with ref.mutate() as d:
+            d.groups.append(Group(name="copy", todos=[d.groups[0].todos[0]]))
+    except DraftAliasError:
+        return  # guarded at the assignment line, which is the desired behaviour
+    node = list.__getitem__(ref.current.groups[1].todos, 0)
+    assert not type(node).__dict__.get("__harness_is_draft__", False), (
+        f"a live {type(node).__name__} is sitting in ref.current"
+    )
+    assert node.text == ""  # must not raise RevokedDraftError from at-rest data
+
+
+def test_smuggled_draft_does_not_desynchronize_the_op_stream(harness_and_ref):
+    """The patch stream must always reproduce the committed value."""
+    events, ref = harness_and_ref
+    with ref.mutate() as d:
+        d.groups.append(Group(name="g", todos=[Todo(id="t1", text="orig")]))
+    try:
+        with ref.mutate() as d:
+            smuggled = d.groups[0].todos[0]
+            d.groups.append(Group(name="copy", todos=[smuggled]))
+            smuggled.text = "changed"  # recorded for /groups/0 only
+    except DraftAliasError:
+        return
+    assert replay(events) == ref.current.model_dump(mode="json")
+
+
+def test_a_set_field_cannot_be_declared_at_all(harness_and_ref):
+    """The set-shaped hole in ``assert_no_drafts`` is closed by there being no sets.
+
+    This replaces two tests that pinned real defects: ``DraftSet._coerce`` skipped both
+    ``assert_no_drafts`` and ``freeze``, so ``d.chosen.add(d.steps[0])`` put a LIVE draft into a
+    set; and because ``HarnessState.__hash__`` hashes ``tuple(self.__dict__.values())``, editing
+    that draft afterwards moved its hash, so the member fell out of its own bucket, re-adding it
+    duplicated it, and the published patch carried a set serialized with two identical members
+    while ``commit`` re-hashed it back down to one.
+
+    None of that is fixed here — it is *unreachable*, because a class declaring a set no longer
+    defines. That is the honest reason to keep this test: it pins the assumption the deletion of
+    ``DraftSet`` rests on.
+    """
+    with pytest.raises(StateSchemaError):
+
+        class Plan(HarnessState):
+            steps: list[Todo] = []
+            chosen: set[Todo] = set()
+
+
+# --------------------------------------------------------------------------- #
+# a commit that raises: the ref must be whole, not half-unwound                #
+# --------------------------------------------------------------------------- #
+#
+# `_MutateContext.__exit__` revokes the session and clears `ref._open` *before*
+# calling `commit()`, so a class validator firing at commit propagates out of the
+# `with` from a ref that is already unlocked.  The two tests above pin that
+# `current` and `version` survive it; these pin the rest of the contract, which is
+# what a consumer of the patch stream actually depends on: nothing is published,
+# no untouched subtree is disturbed, the next block starts from the *original*
+# value, and snapshot-plus-patches still reproduces `current`.
+
+
+def test_a_failed_commit_leaves_no_trace_and_the_ref_fully_usable():
+    from pydantic import field_validator
+
+    class Leaf(HarnessState):
+        n: int = 0
+
+        @field_validator("n")
+        @classmethod
+        def _small(cls, value: int) -> int:
+            if value > 100:
+                raise ValueError("n too large")
+            return value
+
+    class Branch(HarnessState):
+        leaves: list[Leaf] = []
+        label: str = ""
+
+    class Tree(HarnessState):
+        branch: Branch = Branch()
+        note: str = ""
+
+    events: list = []
+    ref = StateHost(events.append).state(
+        "tree", Tree(branch=Branch(leaves=[Leaf(n=1), Leaf(n=2)], label="L"))
+    )
+    original = ref.current
+    original_branch = ref.current.branch
+    original_leaves = ref.current.branch.leaves
+    original_leaf0 = ref.current.branch.leaves[0]
+
+    with pytest.raises(ValidationError):
+        with ref.mutate() as d:
+            d.note = "touched"
+            d.branch.label = "touched"
+            d.branch.leaves[0].n = 7  # this node commits cleanly, *before* the failure
+            d.branch.leaves[1].n = 999  # only the class validator rejects it, at commit
+            draft = d
+
+    # nothing moved, by identity - so no untouched subtree was rebuilt either, and
+    # the sibling that already committed left no trace.
+    assert ref.current is original
+    assert ref.current.branch is original_branch
+    assert ref.current.branch.leaves is original_leaves
+    assert ref.current.branch.leaves[0] is original_leaf0
+    assert ref.current.branch.leaves[0].n == 1
+    assert ref.version == 0
+
+    # the recorded ops are dropped whole: still just the version-0 snapshot.
+    assert len(events) == 1
+    assert isinstance(events[0], StateSnapshot)
+
+    # the value is still deeply frozen and the draft is still revoked.
+    with pytest.raises(FrozenError):
+        ref.current.note = "z"
+    with pytest.raises(FrozenError):
+        ref.current.branch.leaves.append(Leaf())
+    with pytest.raises(RevokedDraftError):
+        draft.note = "z"
+
+    # `_open` was cleared, so the next block is not locked out - and it drafts from
+    # the ORIGINAL value, so its ops carry nothing from the abandoned block.
+    with ref.mutate() as d:
+        d.note = "second"
+    assert ref.version == 1  # 0 -> 1, not 0 -> 2
+    patch = events[-1]
+    assert isinstance(patch, StatePatch)
+    assert patch.version == 1
+    assert patch.ops == [{"op": "replace", "path": "/note", "value": "second"}]
+    assert ref.current.branch.label == "L"
+    assert ref.current.branch.leaves[0].n == 1
+
+    # the stream a consumer sees still reproduces the value the ref holds.
+    assert replay(events) == ref.current.model_dump(mode="json")
+
+
+def test_failed_commits_never_desynchronize_the_patch_stream():
+    """Failures interleaved with successes keep the versions contiguous."""
+    from pydantic import field_validator
+
+    class Counter(HarnessState):
+        n: int = 0
+
+        @field_validator("n")
+        @classmethod
+        def _not_thirteen(cls, value: int) -> int:
+            if value == 13:
+                raise ValueError("unlucky")
+            return value
+
+    events: list = []
+    ref = StateHost(events.append).state("c", Counter())
+    for target in (1, 13, 2, 13, 13, 3):
+        try:
+            with ref.mutate() as d:
+                d.n = target
+        except ValidationError:
+            pass  # the failures must be invisible to the stream
+
+    assert ref.current.n == 3
+    assert ref.version == 3
+    assert [event.version for event in events] == [0, 1, 2, 3]
+    assert replay(events) == ref.current.model_dump(mode="json")

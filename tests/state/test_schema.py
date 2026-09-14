@@ -23,6 +23,12 @@ from pydantic.errors import PydanticSchemaGenerationError
 from temporal_agent_harness.harness.state import HarnessState, StateSchemaError
 
 
+class _Member(HarnessState):
+    """A state model, so `set[_Member]` is a set the checker once accepted."""
+
+    n: int = 0
+
+
 def _rejects(name: str, annotation: Any) -> StateSchemaError:
     with pytest.raises(StateSchemaError) as info:
         type(
@@ -75,7 +81,7 @@ def test_typeddict_is_rejected():
 
 
 def test_bare_containers_are_rejected():
-    for annotation in (list, dict, set, tuple, frozenset):
+    for annotation in (list, dict, tuple):
         assert "element type" in str(_rejects("field", annotation)) or "parameterized" in str(
             _rejects("field", annotation)
         )
@@ -186,12 +192,35 @@ def test_self_referencing_model_is_accepted():
     assert tree.children[0].name == "leaf"
 
 
-def test_frozenset_and_tuple_forms():
+def test_tuple_forms():
     class Shapes(HarnessState):
-        fs: frozenset[int] = frozenset()
         fixed: tuple[int, str] = (0, "")
         variadic: tuple[int, ...] = ()
         empty: tuple[()] = ()
 
-    shapes = Shapes(fs={1, 2}, fixed=(1, "a"), variadic=(1, 2, 3))
-    assert shapes.fs == frozenset({1, 2})
+    shapes = Shapes(fixed=(1, "a"), variadic=(1, 2, 3))
+    assert shapes.fixed == (1, "a")
+    assert shapes.variadic == (1, 2, 3)
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [set, frozenset, set[str], frozenset[str], set[int | str], set[_Member]],
+    ids=["bare-set", "bare-frozenset", "set-str", "frozenset-str", "set-union", "set-model"],
+)
+def test_sets_are_rejected_whatever_their_shape(annotation):
+    """No set may be state, and the message has to say why rather than just refuse.
+
+    JSON has no set and RFC 6902 has no set operation, so a set could only ever be published by
+    re-sending the whole collection — the coarsest op in a layer whose point is that a change
+    costs what it touched. Keeping that array stable across workers meant sorting on every read,
+    which only works when the elements are orderable: `set[str | None]` fell through to CPython's
+    hash order, so two workers replaying one history published different bytes.
+
+    Parameterizing it is not the fix, so a bare `set` must NOT be told to add an element type —
+    it gets the same answer as `set[str]`.
+    """
+    error = _rejects("tags", annotation)
+    assert "RFC 6902" in str(error)
+    assert "list[...]" in str(error)
+    assert "element type" not in str(error)

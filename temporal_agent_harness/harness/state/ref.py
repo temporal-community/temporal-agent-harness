@@ -46,7 +46,7 @@ class _MutateContext(AbstractContextManager[T]):
                 f"state {ref.state_id!r} already has an open mutate() block; "
                 "mutate() is synchronous and must not span an await"
             )
-        self._session = DraftSession(ref)
+        self._session = DraftSession()
         self._root = make_model_draft(ref._current, self._session, None, None)
         ref._open = self
         return self._root

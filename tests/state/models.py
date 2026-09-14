@@ -1,5 +1,6 @@
 # ABOUTME: Representative HarnessState schemas shared by the state-layer tests —
-# nesting, lists of models, dicts of lists, sets, tuples and enums in one place.
+# nesting, lists of models, dicts of lists, tuples and enums in one place. No sets: the schema
+# checker rejects them (see test_schema), so a fixture carrying one would not define.
 
 """Representative state schemas shared by the test modules."""
 
@@ -20,7 +21,7 @@ class Todo(HarnessState):
     id: str
     text: str = ""
     done: bool = False
-    tags: set[str] = set()
+    tags: list[str] = []
     priority: Priority = Priority.LOW
 
 
@@ -40,7 +41,7 @@ class AgentState(HarnessState):
     groups: list[Group] = []
     index: dict[str, list[Todo]] = {}
     scores: dict[int, int] = {}
-    tags: set[str] = set()
+    tags: list[str] = []
     pair: tuple[int, str] = (0, "")
     matrix: tuple[list[int], ...] = ()
 

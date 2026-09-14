@@ -11,14 +11,12 @@ from typing import Any, TypeVar, cast
 
 from pydantic import BaseModel
 
-from .base import ANY_NODE, AdapterNode, HarnessState
+from .base import ANY_NODE, AdapterNode, HarnessState, bind_drafts
 from .containers import (
     DraftDict,
     DraftList,
-    DraftSet,
     FrozenDict,
     FrozenList,
-    FrozenSet,
     bind,
     freeze,
 )
@@ -28,6 +26,7 @@ from .session import DraftSession, escape
 __all__ = [
     "DraftMeta",
     "draft_class",
+    "build_draft_class",
     "make_model_draft",
     "wrap",
     "commit",
@@ -60,7 +59,7 @@ class DraftMeta:
 def meta_of(node: Any) -> DraftMeta | None:
     """Return the ``DraftMeta`` of ``node``, or ``None`` if it is not a draft."""
     cls = type(node)
-    if cls is DraftList or cls is DraftDict or cls is DraftSet:
+    if cls is DraftList or cls is DraftDict:
         return node._meta  # type: ignore[attr-defined]
     if isinstance(node, BaseModel) and cls.__dict__.get("__harness_is_draft__", False):
         private = object.__getattribute__(node, "__pydantic_private__")
@@ -90,23 +89,50 @@ def mark_dirty(meta: DraftMeta | None) -> None:
         meta = meta.parent
 
 
+# Leaves the walk below can stop at without looking inside.  Exact types, not
+# isinstance: a subclass of `str` is still a leaf, but a subclass of `list` is not.
+_LEAF_TYPES = frozenset({str, int, float, bool, bytes, type(None)})
+
+
 def assert_no_drafts(value: Any) -> None:
-    """A draft node has exactly one parent; it may never be stored elsewhere."""
+    """A draft node has exactly one parent; it may never be stored elsewhere.
+
+    The whole value is walked, models included.  Stopping at a ``BaseModel`` used to
+    leave a hole wide enough to desynchronize the stream: ``revalidate_instances="never"``
+    means pydantic accepts a ``Draft[Todo]`` wherever a ``Todo`` is annotated — it is a
+    real subclass — and keeps the live draft object, so
+    ``Group(name="copy", todos=[draft_todo])`` carried the draft into at-rest state.
+    Mutating it afterwards recorded the op against its *original* path while both
+    locations shared the node by identity, and replay stopped reproducing ``current``.
+
+    There is deliberately no fast path for ``Frozen*`` containers: ``_freeze_containers``
+    runs on models built *inside* a ``mutate()`` block too, so a ``FrozenList`` is no
+    evidence at all of being at rest, and the one in the repro held the draft.
+
+    The cost is O(tree) on something the caller just constructed, and it does not change
+    the asymptotics of the callers: every one of them already hands the same value to
+    ``validate_python``, which walks it too.
+    """
+    if type(value) in _LEAF_TYPES:
+        return
     if meta_of(value) is not None:
         raise DraftAliasError(
             "a draft node cannot be assigned to another location; assign a value "
             "taken from ref.current, or build a new one"
         )
     if isinstance(value, BaseModel):
+        for item in value.__dict__.values():
+            assert_no_drafts(item)
+        extra = value.__pydantic_extra__
+        if extra:
+            for item in extra.values():
+                assert_no_drafts(item)
         return
     if isinstance(value, (list, tuple)):
         for item in value:
             assert_no_drafts(item)
     elif isinstance(value, dict):
         for item in value.values():
-            assert_no_drafts(item)
-    elif isinstance(value, (set, frozenset)):
-        for item in value:
             assert_no_drafts(item)
 
 
@@ -150,25 +176,102 @@ class _ModelDraftMixin:
             f"cannot delete field {name!r}: state fields are declared by the schema"
         )
 
+    def __eq__(self, other: object) -> bool:
+        """A draft equals the value it drafts.  ``Draft[C]`` is substitutable for ``C``.
 
-_DRAFT_CLASSES: dict[type, type] = {}
+        Pydantic's ``BaseModel.__eq__`` requires ``type(a) is type(b)``, which is exactly
+        wrong here, because a draft node appears *inside* a container the author is still
+        reading: ``DraftList._read`` swaps an element for its draft wrapper in place, so
+        every by-value list method — ``in``, ``count``, ``index``, ``remove``, ``==`` —
+        was comparing a ``Draft[C]`` against a ``C`` and being told they differ.  The
+        loud half raised; the quiet half just answered wrongly, so
+
+            if incoming not in d.todos: d.todos.append(incoming)
+
+        appended a duplicate whenever something earlier in the turn had iterated the
+        list, with no exception and no replay divergence to show for it.
+
+        Comparing against the at-rest class fixes every one of those at once, including
+        ``d.todos == [...]`` and ``DraftDict.__eq__``, because ``Draft[C]`` is a proper
+        subclass of ``C`` and Python therefore gives this method priority even when the
+        at-rest value is the left operand.  Nothing in the layer detects a draft by
+        comparison — ``meta_of``, ``wrap``, ``commit`` and ``assert_no_drafts`` all test
+        ``__harness_is_draft__``, and the two write-back guards use ``is`` — so no guard
+        loses anything to this.
+
+        ``__pydantic_private__`` is deliberately not compared: on a draft it holds the
+        ``DraftMeta``, which is bookkeeping, not value.  The schema checker forbids every
+        other private attribute, so there is nothing else in there to miss.
+        """
+        if self is other:
+            return True
+        ga = object.__getattribute__
+        at_rest = ga(self, "__harness_at_rest__")
+        other_cls = type(other)
+        if other_cls.__dict__.get("__harness_at_rest__", other_cls) is not at_rest:
+            return NotImplemented
+        return bool(
+            ga(self, "__dict__") == ga(other, "__dict__")
+            and ga(self, "__pydantic_extra__") == ga(other, "__pydantic_extra__")
+        )
+
+    def __hash__(self) -> int:
+        """Hashed as the value it drafts, so ``__eq__`` and ``__hash__`` agree.
+
+        Defined explicitly because a class that defines ``__eq__`` and not ``__hash__``
+        gets ``__hash__ = None`` and becomes unhashable — which would take away
+        something drafts of scalar-only models can do today.
+
+        A draft of a model with a container field stays unhashable, as it was before:
+        ``DraftList`` inherits ``list.__hash__``, which is ``None``.  That is the honest
+        answer for a value the author is in the middle of changing — a hash taken at the
+        top of a ``mutate()`` block would not survive to the bottom of it.
+        """
+        ga = object.__getattribute__
+        return hash((ga(self, "__harness_at_rest__"), tuple(ga(self, "__dict__").values())))
+
+
+def build_draft_class(cls: type[C]) -> type[C]:
+    """Generate ``Draft[C]`` and hang it off ``C`` itself.
+
+    Called once per ``HarnessState`` subclass, from ``__pydantic_init_subclass__`` —
+    i.e. at class-definition time, on the thread that is defining the class, and never
+    on a workflow task.
+
+    The generated class is stored **on the state class** rather than in a module-level
+    cache, and that is the whole point: a module-level dict keyed on ``cls`` outlives
+    every class the Temporal sandbox re-imports per workflow instance, so a state class
+    declared next to its ``@workflow.defn`` leaks one entry (plus its draft subclass and
+    both pydantic cores, ~107 kB RSS) per workflow *run*, forever.  ``C`` and ``Draft[C]``
+    referring to each other is one ordinary gc-collectable cycle that dies with the
+    re-imported module.
+    """
+    generated = type(
+        f"Draft[{cls.__name__}]",
+        (_ModelDraftMixin, cls),
+        {
+            "__harness_is_draft__": True,
+            "__harness_at_rest__": cls,
+            "__module__": cls.__module__,
+            "__qualname__": f"Draft[{cls.__qualname__}]",
+        },
+    )
+    setattr(cls, "__harness_draft_class__", generated)
+    return generated  # type: ignore[return-value]
 
 
 def draft_class(cls: type[C]) -> type[C]:
-    """The generated ``Draft[C]`` subclass of ``C``.  One per user class, cached."""
-    generated = _DRAFT_CLASSES.get(cls)
+    """The generated ``Draft[C]`` subclass of ``C``.
+
+    ``cls.__dict__`` and never ``getattr``: a subclass inherits its parent's draft class
+    attribute, and drafting a ``Child`` through ``Draft[Parent]`` would silently drop
+    every field ``Child`` added.  Normally the lookup hits, because the class was built
+    when ``C`` was defined; the fallback covers a class that somehow reached here without
+    the definition-time hook, and stores its result the same way.
+    """
+    generated = cls.__dict__.get("__harness_draft_class__")
     if generated is None:
-        generated = type(
-            f"Draft[{cls.__name__}]",
-            (_ModelDraftMixin, cls),
-            {
-                "__harness_is_draft__": True,
-                "__harness_at_rest__": cls,
-                "__module__": cls.__module__,
-                "__qualname__": f"Draft[{cls.__qualname__}]",
-            },
-        )
-        _DRAFT_CLASSES[cls] = generated
+        generated = build_draft_class(cls)
     return generated  # type: ignore[return-value]
 
 
@@ -217,13 +320,13 @@ def draft_set_field(obj: Any, meta: DraftMeta, name: str, value: Any) -> None:
 
 
 def wrappable(value: Any) -> bool:
-    return isinstance(value, (BaseModel, list, dict, set))
+    return isinstance(value, (BaseModel, list, dict))
 
 
 def wrap(value: Any, node: AdapterNode, parent: DraftMeta, key: str | int) -> Any:
     """Identity for leaves and existing drafts; a draft node for everything else."""
     cls = type(value)
-    if cls is DraftList or cls is DraftDict or cls is DraftSet:
+    if cls is DraftList or cls is DraftDict:
         return value
     if isinstance(value, BaseModel):
         if cls.__dict__.get("__harness_is_draft__", False):
@@ -242,12 +345,6 @@ def wrap(value: Any, node: AdapterNode, parent: DraftMeta, key: str | int) -> An
             DraftMeta(session, parent, key, value),
             node.dict_key or ANY_NODE,
             node.dict_val or ANY_NODE,
-        )
-    if isinstance(value, set):  # frozenset is not a set subclass: it stays a leaf
-        return DraftSet(
-            value,
-            DraftMeta(session, parent, key, value),
-            node.set_elem or ANY_NODE,
         )
     return value
 
@@ -270,11 +367,6 @@ def commit(value: Any) -> Any:
         if not meta.dirty:
             return meta.original
         return FrozenDict((k, commit(v)) for k, v in dict.items(value))
-    if cls is DraftSet:
-        meta = value._meta
-        if not meta.dirty:
-            return meta.original
-        return FrozenSet(set.__iter__(value))
     if isinstance(value, BaseModel) and cls.__dict__.get("__harness_is_draft__", False):
         meta = object.__getattribute__(value, "__pydantic_private__")["_draft"]
         if not meta.dirty:
@@ -308,6 +400,11 @@ def _restore_untouched(rebuilt: Any, original: Any, data: dict[str, Any]) -> Non
         if item is original_dict.get(name) and rebuilt_dict.get(name) is not item:
             rebuilt_dict[name] = item
 
+
+bind_drafts(
+    build_draft_class=build_draft_class,
+    draft_set_field=draft_set_field,
+)
 
 bind(
     wrap=wrap,

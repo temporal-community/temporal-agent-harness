@@ -6,12 +6,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import Any, Final
 
 from .errors import RevokedDraftError
-
-if TYPE_CHECKING:  # pragma: no cover
-    from .ref import StateRef
 
 __all__ = ["DraftSession", "escape", "MISSING"]
 
@@ -41,10 +38,9 @@ class DraftSession:
     Revocation on exit is a single flag flip, never a tree walk.
     """
 
-    __slots__ = ("ref", "ops", "alive")
+    __slots__ = ("ops", "alive")
 
-    def __init__(self, ref: "StateRef[Any] | None" = None) -> None:
-        self.ref = ref
+    def __init__(self) -> None:
         self.ops: list[dict[str, Any]] = []
         self.alive: bool = True
 

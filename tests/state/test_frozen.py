@@ -10,7 +10,7 @@ import random
 import pytest
 
 from temporal_agent_harness.harness.state import FrozenError
-from temporal_agent_harness.harness.state.containers import FrozenDict, FrozenList, FrozenSet
+from temporal_agent_harness.harness.state.containers import FrozenDict, FrozenList
 
 from .support import StateHost
 from .models import AgentState, Group, Todo
@@ -21,7 +21,7 @@ def value() -> AgentState:
     return AgentState(
         groups=[Group(name="g", todos=[Todo(id="t")], meta={"k": "v"})],
         index={"a": [Todo(id="x")]},
-        tags={"one", "two"},
+        tags=["one", "two"],
         matrix=([1, 2], [3]),
     )
 
@@ -32,12 +32,11 @@ def test_containers_are_frozen_subclasses(value: AgentState):
     assert type(value.groups[0].meta) is FrozenDict
     assert type(value.index) is FrozenDict
     assert type(value.index["a"]) is FrozenList
-    assert type(value.tags) is FrozenSet
-    assert type(value.groups[0].todos[0].tags) is FrozenSet
+    assert type(value.tags) is FrozenList
+    assert type(value.groups[0].todos[0].tags) is FrozenList
     # they are still the stdlib types for isinstance, == and serialization
     assert isinstance(value.groups, list)
     assert isinstance(value.index, dict)
-    assert isinstance(value.tags, set)
 
 
 def test_containers_inside_a_tuple_are_frozen(value: AgentState):
@@ -100,35 +99,9 @@ def test_every_blocked_dict_method_raises(call):
         call(frozen)
 
 
-@pytest.mark.parametrize(
-    "call",
-    [
-        lambda s: s.add(9),
-        lambda s: s.discard(1),
-        lambda s: s.remove(1),
-        lambda s: s.pop(),
-        lambda s: s.clear(),
-        lambda s: s.update({9}),
-        lambda s: s.__ior__({9}),
-        lambda s: s.__iand__({1}),
-        lambda s: s.__isub__({1}),
-        lambda s: s.__ixor__({1}),
-        lambda s: s.intersection_update({1}),
-        lambda s: s.difference_update({1}),
-        lambda s: s.symmetric_difference_update({1}),
-    ],
-)
-def test_every_blocked_set_method_raises(call):
-    frozen = FrozenSet({1, 2})
-    with pytest.raises(FrozenError):
-        call(frozen)
-
-
 def test_non_mutating_operations_still_work():
     assert FrozenList([1, 2]) + [3] == [1, 2, 3]
     assert FrozenDict({"a": 1}) | {"b": 2} == {"a": 1, "b": 2}
-    assert FrozenSet({1, 2}) | {3} == {1, 2, 3}
-    assert sorted(FrozenSet({2, 1})) == [1, 2]
     assert FrozenList([1, 2])[0] == 1
 
 
@@ -136,7 +109,6 @@ def test_frozen_containers_are_hashable(value: AgentState):
     assert isinstance(hash(value), int)
     assert isinstance(hash(value.groups), int)
     assert isinstance(hash(value.groups[0].meta), int)
-    assert isinstance(hash(value.tags), int)
 
 
 def test_committed_values_are_frozen_too():
@@ -145,12 +117,12 @@ def test_committed_values_are_frozen_too():
         d.groups.append(Group(name="g"))
         d.groups[0].todos.append(Todo(id="t"))
         d.index["k"] = [Todo(id="u")]
-        d.tags.add("x")
+        d.tags.append("x")
     current = ref.current
     assert type(current.groups) is FrozenList
     assert type(current.groups[0].todos) is FrozenList
     assert type(current.index) is FrozenDict
     assert type(current.index["k"]) is FrozenList
-    assert type(current.tags) is FrozenSet
+    assert type(current.tags) is FrozenList
     with pytest.raises(FrozenError):
         current.groups[0].todos.append(Todo(id="z"))

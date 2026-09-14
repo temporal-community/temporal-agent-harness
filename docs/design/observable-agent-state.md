@@ -75,6 +75,22 @@ exit the harness builds the next immutable value — sharing every untouched sub
 previous one by identity — and hands the ops to the publisher. There is no diffing and no
 reconciliation pass: cost is proportional to what was touched, not to the size of the state.
 
+A draft *is* the value, all the way down to `==`: `Draft[Step]` compares equal to the `Step` it
+was drafted from, and hashes the same. That is not cosmetic. A draft container replaces an
+element with its draft wrapper the first time the author reads it, so without substitutable
+equality every by-value list method — `in`, `count`, `index`, `remove`, `==` — would answer
+differently depending on whether some unrelated earlier line had iterated the list, and
+`if x not in d.todos: d.todos.append(x)` would append a duplicate with no exception and no
+replay divergence to show for it. Pydantic's own `__eq__` requires `type(a) is type(b)`, which
+is exactly the wrong test here; `Draft[C]` overrides it to compare against `C`.
+
+`Draft[PlanState]` is generated once, when `PlanState` is declared, and hangs off `PlanState`
+itself. Both halves matter: definition time keeps class creation off the workflow task and out
+of the way of two workflow threads drafting the same class at once, and hanging it off the class
+means it dies with the class — a module-level cache keyed on the class would outlive every
+state class the Temporal sandbox re-imports per workflow *instance*, which is a leak measured in
+~107 kB of RSS per run, not a cache.
+
 Outside a draft, every write raises `FrozenError` naming the fix. This is Immer's model
 (`produce(state, draft => ...)`) plus React's "state is a value; the setter is the only place
 it changes."
@@ -103,13 +119,28 @@ State registered in `@workflow.init` has no turn to belong to, so its snapshot p
 
 ## Determinism
 
-Publishing happens in-workflow, so every op must be a pure function of the mutations made.
-Two places where that needed care:
+Publishing happens in-workflow, so every op must be a pure function of the mutations made — and
+it is, unconditionally, because the one type that could not honour that is not state.
 
-- **Set ordering.** Sets serialize as JSON arrays, and CPython set iteration order depends on
-  string hashing — which varies per process. A frozen set here iterates in *sorted* order when
-  its elements are orderable, so the same mutation yields the same array on any worker.
-  Without this, replay on a different worker could produce a different patch payload.
+- **No sets.** `set[...]` and `frozenset[...]` are rejected at class-definition time. JSON has no
+  set and RFC 6902 has no set operation, so a set could only ever be published by re-sending the
+  whole collection — the coarsest op in a layer whose whole claim is that a change costs what it
+  touched. Keeping that array stable across workers meant sorting on every read, which is only
+  possible when the elements are orderable: `set[str | None]` fell through to CPython's hash
+  order, which is salted per process, so two workers replaying one history published different
+  bytes. `frozenset` fields were worse — their *snapshots* diverged, and a snapshot is the base
+  every patch applies to. A `list` says the same thing honestly: the author owns the order and
+  the de-duplication, and an addition becomes `add /tags/-` instead of a re-send of every tag.
+- **No ambiguous dict keys.** A `dict[K, V]` key whose JSON rendering is not injective is
+  rejected at class-definition time, which in practice means union keys: `dict[int | str, V]`,
+  `dict[date | str, V]`. A snapshot *is* a JSON object and JSON object keys are strings, so `1`
+  and `"1"` are two Python keys but one key there — `model_dump` silently keeps one of them, and
+  a patch path can only ever name the survivor, so `del d.mapping[1]` publishes
+  `remove /mapping/1` and the consumer deletes the other entry. This is the one defect in the
+  layer that cannot be fixed at the pointer level: any disambiguating pointer scheme would
+  describe a document `model_dump` does not produce. A pointer segment is otherwise built from
+  the *key* serializer pydantic itself uses, which is not the value serializer — a `bool` key is
+  `true`/`false` in the snapshot where `str(True)` would say `True`.
 - **Commit rebuilds.** A dirty node is rebuilt with `model_construct` when the class declares
   no validators and no validation-affecting config, and with `model_validate` otherwise (so a
   `field_validator` still fails the commit). Both paths are deterministic; the choice is made
@@ -129,8 +160,14 @@ Two places where that needed care:
   open a bracket for turn 0, so that was not a delay but a strand — and a held event stays its
   cursor's head, so the child's whole stream queued behind it. Turn-0 child events are now
   exempt from the open gate, which is also what operator commands on a subagent needed.
-- **Root must be a `HarnessState`.** `runner.state("tags", set())` is not supported.
+- **Root must be a `HarnessState`.** `runner.state("plan", [])` is not supported.
 - **No op coalescing.** `d.x = 1; d.x = 2` emits two ops.
+- **Commit-time validators must not mutate their own state.** `mutate()` unlocks the ref before
+  it commits, so that a commit that raises cannot wedge it. The cost is that a `model_validator`
+  which reentrantly opens `mutate()` on the very `StateRef` it is validating runs against an
+  unlocked ref: its update is overwritten by the commit in progress while its patch stays on the
+  stream, and replay stops reproducing `current`. A validator with a side effect on the state it
+  validates is pathological, and this is the reason not to write one.
 
 ## In the console
 

@@ -1,7 +1,13 @@
-# ABOUTME: The two halves of every list/dict/set in agent state — Frozen* (at rest: every
-# mutating method raises FrozenError) and Draft* (inside mutate(): the same stdlib semantics,
-# recording one JSON Patch op per mutation). They are real list/dict/set subclasses, so
-# isinstance, ==, and pydantic serialization all behave, and the static type stays list[E].
+# ABOUTME: The two halves of every list/dict in agent state — Frozen* (at rest: every mutating
+# method raises FrozenError) and Draft* (inside mutate(): the same stdlib semantics, recording one
+# JSON Patch op per mutation). They are real list/dict subclasses, so isinstance, ==, and pydantic
+# serialization all behave, and the static type stays list[E].
+#
+# There is deliberately no Set half. JSON has no set and RFC 6902 has no set operation, so a set
+# could only ever be re-sent whole — the coarsest op in the layer — and keeping its serialization
+# stable across workers meant sorting on every read, with a hash-order fallback whenever the
+# elements were not orderable. That fallback was not defensive, it was a determinism hole. See
+# `_check_annotation` in base.py, which rejects `set[...]` and says so.
 
 """Frozen containers (state at rest) and draft containers (state inside ``mutate()``).
 
@@ -23,10 +29,8 @@ from .session import MISSING, escape
 __all__ = [
     "FrozenList",
     "FrozenDict",
-    "FrozenSet",
     "DraftList",
     "DraftDict",
-    "DraftSet",
     "freeze",
     "bind",
 ]
@@ -64,7 +68,6 @@ def bind(**kwargs: Any) -> None:
 
 _LIST_MSG = "list is part of harness state; mutate it inside ref.mutate()"
 _DICT_MSG = "dict is part of harness state; mutate it inside ref.mutate()"
-_SET_MSG = "set is part of harness state; mutate it inside ref.mutate()"
 
 
 class FrozenList(list):
@@ -127,46 +130,6 @@ class FrozenDict(dict):
         return out
 
 
-class FrozenSet(set):
-    """A ``set`` whose mutating methods raise.
-
-    Iteration is sorted when the elements are orderable so that serialization is
-    stable: JSON has no set, and a patch that replaces a set must produce exactly
-    the array a snapshot would.
-    """
-
-    __slots__ = ()
-
-    def _blocked(self, *args: Any, **kwargs: Any) -> Any:
-        raise FrozenError(_SET_MSG)
-
-    add = discard = remove = pop = clear = update = _blocked
-    __ior__ = __iand__ = __isub__ = __ixor__ = _blocked
-    intersection_update = difference_update = symmetric_difference_update = _blocked
-
-    def __iter__(self) -> Iterator[Any]:
-        try:
-            return iter(sorted(set.__iter__(self)))
-        except TypeError:
-            return set.__iter__(self)
-
-    def __hash__(self) -> int:  # type: ignore[override]
-        return hash(frozenset(set.__iter__(self)))
-
-    def __reduce__(self) -> Any:
-        return (type(self), (list(set.__iter__(self)),))
-
-    def __copy__(self) -> "FrozenSet":
-        return self
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> "FrozenSet":
-        import copy as _copy
-
-        out = type(self)(_copy.deepcopy(x, memo) for x in set.__iter__(self))
-        memo[id(self)] = out
-        return out
-
-
 _SCALAR_TYPES = (str, int, float, bool, bytes, type(None))
 
 
@@ -181,15 +144,12 @@ def freeze(value: Any) -> Any:
     if isinstance(value, BaseModel):
         return value
     cls = type(value)
-    if cls is FrozenList or cls is FrozenDict or cls is FrozenSet:
+    if cls is FrozenList or cls is FrozenDict:
         return value
     if isinstance(value, list):
         return FrozenList(freeze(x) for x in value)
     if isinstance(value, dict):
         return FrozenDict((k, freeze(v)) for k, v in value.items())
-    if isinstance(value, (set, frozenset)):
-        # Set members are hashable, hence already immutable.
-        return value if isinstance(value, frozenset) else FrozenSet(value)
     if isinstance(value, tuple):
         frozen = tuple(freeze(x) for x in value)
         return frozen
@@ -377,7 +337,7 @@ class DraftList(list):
         items = list(list.__iter__(self))
         list.clear(self)
         for _ in range(int(count)):
-                list.extend(self, items)
+            list.extend(self, items)
         self._rekey(0)
         self._rec("replace", self._path(), self._dump_all())
         return self
@@ -429,9 +389,20 @@ class DraftDict(dict):
         return freeze(self._val.adapter.validate_python(value))
 
     def _seg(self, key: Any) -> str:
-        # mode="json" is how the key reaches a consumer, so the pointer segment
-        # has to be built from the same rendering.
-        return escape(str(self._key.adapter.dump_python(key, mode="json")))
+        # mode="json" is how the key reaches a consumer, so the pointer segment has to
+        # be built from the same rendering -- with one correction.  Pydantic serializes
+        # a dict KEY through a different path than a value, and the two disagree about
+        # `bool`: a bool key becomes the JSON object key `true`/`false`, while
+        # `str(True)` is `True`.  Left uncorrected, every op on a bool-keyed dict pointed
+        # at a key that does not exist in the snapshot -- broken on the first write, with
+        # no union needed.  Every other allowed scalar renders identically through both
+        # paths, which `test_paths.py` pins against drift rather than trusting.
+        rendered = self._key.adapter.dump_python(key, mode="json")
+        if rendered is True:
+            return "true"
+        if rendered is False:
+            return "false"
+        return escape(str(rendered))
 
     def _dump(self, value: Any) -> Any:
         return self._val.adapter.dump_python(value, mode="json")
@@ -541,134 +512,3 @@ class DraftDict(dict):
         self._chk()
         dict.clear(self)
         self._rec("replace", self._path(), {})
-
-
-class DraftSet(set):
-    """The working set for one set field inside a ``mutate()`` block.
-
-    JSON has no set and RFC 6902 has no set ops, so every mutation emits one
-    ``replace`` carrying the whole serialized set.
-    """
-
-    __slots__ = ("_meta", "_elem")
-
-    def __new__(cls, iterable: Iterable[Any] = (), meta: Any = None, elem: Any = None):
-        return set.__new__(cls)
-
-    def __init__(
-        self, iterable: Iterable[Any] = (), meta: Any = None, elem: Any = None
-    ) -> None:
-        set.__init__(self, iterable)
-        self._meta = meta
-        self._elem = elem if elem is not None else _rt.any_node
-
-    def _chk(self) -> None:
-        self._meta.session.check()
-
-    def _coerce(self, value: Any) -> Any:
-        return self._elem.adapter.validate_python(value)
-
-    def _dump_all(self) -> list[Any]:
-        dump = self._elem.adapter.dump_python
-        values = [dump(x, mode="json") for x in set.__iter__(self)]
-        try:
-            values.sort()
-        except TypeError:
-            pass
-        return values
-
-    def _emit(self) -> None:
-        _rt.mark_dirty(self._meta)
-        self._meta.session.record("replace", _rt.path_of(self._meta), self._dump_all())
-
-    def __iter__(self) -> Iterator[Any]:
-        self._chk()
-        try:
-            return iter(sorted(set.__iter__(self)))
-        except TypeError:
-            return set.__iter__(self)
-
-    def add(self, value: Any) -> None:
-        self._chk()
-        item = self._coerce(value)
-        if item in self:
-            return
-        set.add(self, item)
-        self._emit()
-
-    def discard(self, value: Any) -> None:
-        self._chk()
-        item = self._coerce(value)
-        if item not in self:
-            return
-        set.discard(self, item)
-        self._emit()
-
-    def remove(self, value: Any) -> None:
-        self._chk()
-        item = self._coerce(value)
-        if item not in self:
-            raise KeyError(value)
-        set.discard(self, item)
-        self._emit()
-
-    def pop(self) -> Any:
-        self._chk()
-        value = set.pop(self)
-        self._emit()
-        return value
-
-    def clear(self) -> None:
-        self._chk()
-        if not set.__len__(self):
-            return
-        set.clear(self)
-        self._emit()
-
-    def _apply(self, op: str, others: tuple[Any, ...]) -> None:
-        self._chk()
-        sets = [{self._coerce(x) for x in other} for other in others]
-        before = set(set.__iter__(self))
-        after = set(before)
-        for other in sets:
-            if op == "update":
-                after |= other
-            elif op == "intersection_update":
-                after &= other
-            elif op == "difference_update":
-                after -= other
-            else:
-                after ^= other
-        if after == before:
-            return
-        set.clear(self)
-        set.update(self, after)
-        self._emit()
-
-    def update(self, *others: Any) -> None:
-        self._apply("update", others)
-
-    def intersection_update(self, *others: Any) -> None:
-        self._apply("intersection_update", others)
-
-    def difference_update(self, *others: Any) -> None:
-        self._apply("difference_update", others)
-
-    def symmetric_difference_update(self, *others: Any) -> None:
-        self._apply("symmetric_difference_update", others)
-
-    def __ior__(self, other: Any) -> "DraftSet":  # type: ignore[misc,override]
-        self._apply("update", (other,))
-        return self
-
-    def __iand__(self, other: Any) -> "DraftSet":  # type: ignore[misc,override]
-        self._apply("intersection_update", (other,))
-        return self
-
-    def __isub__(self, other: Any) -> "DraftSet":  # type: ignore[misc,override]
-        self._apply("difference_update", (other,))
-        return self
-
-    def __ixor__(self, other: Any) -> "DraftSet":  # type: ignore[misc,override]
-        self._apply("symmetric_difference_update", (other,))
-        return self
