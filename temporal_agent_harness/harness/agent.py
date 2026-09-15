@@ -41,6 +41,11 @@
 #
 #     @agent.activity_tool_defn()
 #     async def read_page(store: Injected[str], page_url: str) -> str: ...
+#
+# An injected value may also be resolved per RUN rather than passed as a fixed value, by
+# implementing ``LazyInjection`` — useful when an SDK adapter builds its toolset once at
+# module level but the dependency belongs to a single run. See
+# ``harness.sandbox.SandboxRef`` for the canonical implementation.
 
 from temporal_agent_harness.harness.agent_protocol import ToolApprovalContext, ToolApprovalPolicy
 from temporal_agent_harness.harness.agent_workflow import (
@@ -48,6 +53,7 @@ from temporal_agent_harness.harness.agent_workflow import (
     CallbackToolError,
     CustomApprovalFallback,
     Injected,
+    LazyInjection,
     ToolApprovalDenied,
     accepts,
     activity_tool_defn,
@@ -64,6 +70,7 @@ __all__ = [
     "CallbackToolError",
     "CustomApprovalFallback",
     "Injected",
+    "LazyInjection",
     "ToolApprovalContext",
     "ToolApprovalDenied",
     "ToolApprovalPolicy",
