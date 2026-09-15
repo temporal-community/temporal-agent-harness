@@ -42,6 +42,8 @@ from temporal_agent_harness.harness.agent_protocol.agent_interface import (
 from temporal_agent_harness.harness.agent_protocol.events import (
     TURN_EVENTS_TOPIC,
     AgentError,
+    AgentStatePatch,
+    AgentStateSnapshot,
     AgentEvent,
     AgentEventType,
     AgentReply,
@@ -154,6 +156,8 @@ __all__ = [
     "TokenUsage",
     "AgentReply",
     "AgentError",
+    "AgentStatePatch",
+    "AgentStateSnapshot",
     "AgentStreamItem",
     "AgentEvent",
     # Subagent-turn activity contract (parent workflow ↔ harness activity)

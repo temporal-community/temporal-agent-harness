@@ -122,6 +122,12 @@ examples = [
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
+    # The state layer's property test (tests/state/test_property.py) generates random draft
+    # mutations and asserts the emitted JSON Patch ops replay into the committed value.
+    # `jsonpatch` is TEST-ONLY — the state layer never diffs and never applies a patch.
+    "hypothesis>=6.140.0",
+    "jsonpatch>=1.33",
+    "pytest-benchmark>=5.1.0",  # tests/state/bench_state.py performance guards
     "setuptools>=83.0.0",  # package artifact tests call the build backend directly
     "moto[server]>=5.2.1",  # threaded S3 mock for the utils/large_payload S3-driver test
     "temporalio[aioboto3]>=1.31.0",  # S3 storage driver under test (mirrors the `s3` extra)

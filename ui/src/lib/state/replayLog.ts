@@ -2,6 +2,7 @@ import type {
   AgentEventType,
   AgentSseFrame,
   FileCitationAnnotation,
+  JsonPatchOp,
   JsonRecord,
   ToolId
 } from "$lib/api/types";
@@ -154,6 +155,19 @@ function citationBody(citations: FileCitationAnnotation[]): string {
         "Source"
     )
     .join(", ");
+}
+
+/**
+ * Which paths one state commit touched, short enough for a log row.
+ *
+ * The paths, not the count: a commit's ops are the whole of what it did, and
+ * "4 ops" says only that something happened. Three of them is enough to tell two
+ * commits apart at a glance; the state pane has the rest, with the values.
+ */
+function stateOpsBody(ops: JsonPatchOp[]): string {
+  const shown = ops.slice(0, 3).map((op) => `${op.op} ${op.path || "/"}`);
+  const rest = ops.length - shown.length;
+  return rest > 0 ? `${shown.join(", ")}, +${rest} more` : shown.join(", ");
 }
 
 function modelUsageBody(usage: UsageTotals): string {
@@ -534,6 +548,32 @@ function rowFromFrame(
       body: frame.data.message,
       marker: "error",
       markerLabel: "agent error"
+    };
+  }
+
+  /* State rides this stream rather than a topic of its own precisely so that a
+     commit is ORDERED against the tool call and the reply delta around it. Rows
+     here are what cashes that in: leave them out and the log quietly asserts
+     that nothing happened between two model calls. */
+  if (frame.event === "state_snapshot") {
+    return {
+      ...base,
+      actor: "system",
+      tone: "neutral",
+      label: "State registered",
+      body: frame.data.state_id,
+      status: `v${frame.data.version}`
+    };
+  }
+
+  if (frame.event === "state_patch") {
+    return {
+      ...base,
+      actor: "system",
+      tone: "neutral",
+      label: "State changed",
+      body: `${frame.data.state_id} — ${stateOpsBody(frame.data.ops ?? [])}`,
+      status: `v${frame.data.version}`
     };
   }
 

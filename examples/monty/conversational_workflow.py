@@ -58,7 +58,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
-    from . import activities
+    from . import activities, trip_board
 
 
 TASK_QUEUE = "monty-dynamic-agent"
@@ -91,7 +91,23 @@ book, or summarize) so you can react to results.
 - After a tool result, read it and reply to the user in plain, friendly prose — summarize \
 options, prices, confirmations. You may run more scripts in follow-up turns as the \
 conversation continues.
-- Never invent flight/hotel ids or confirmation codes — only use ones returned by a script."""
+- Never invent flight/hotel ids or confirmation codes — only use ones returned by a script.
+
+Keep the trip board current. The same script can call the board host functions — \
+`open_trip`, `record_booking`, `complete_trip_tasks`, `add_trip_tasks`, `set_trip_status`, \
+`read_trip_board` — and they are how the user watches you work. The board is not a summary you \
+write at the end; it is the running state of the trip, so:
+- `open_trip` as soon as you know which trip this is, BEFORE you search anything. Keep the \
+`trip_id` it returns and use it for every later call (or pass "latest").
+- In the SAME script that books something, `record_booking` it with the confirmation code the \
+booking returned, and name the checklist items it finishes in `completes`. Never let the board \
+show a booked flight next to an outstanding "book the flight".
+- `complete_trip_tasks` as soon as a task is genuinely done, and `add_trip_tasks` the moment you \
+find the trip needs something the plan did not have.
+- `set_trip_status` to "booked" once nothing is left, or "cancelled" if the user calls it off.
+- `read_trip_board` at the start of a follow-up request to recall where you left off.
+Board calls are cheap and are not gated on the user's approval — there is nothing to approve \
+about your own notes — so there is never a reason to batch them up or skip them."""
 
 
 @workflow.defn(name="MontyChatAgent")
@@ -102,11 +118,17 @@ class MontyChatAgentWorkflow:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            # Demo stance: require human approval for EVERY tool call — both the
-            # `run_travel_code` tool and each host call the script makes (search/book flights &
-            # hotels), since every call is dispatched through run_tool and gated.
-            # always_require_approvals does not auto-approve even inherently_safe tools.
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            # Demo stance: require human approval for EVERY tool call that reaches the outside
+            # world — both the `run_travel_code` tool and each travel host call the script makes
+            # (search/book flights & hotels), since every call is dispatched through run_tool and
+            # gated. The trip-board tools are allowed by name, and only those: they write to the
+            # agent's own notes, so there is nothing for a human to approve, and gating them
+            # would mean a click between every step and the board that is supposed to be showing
+            # the steps. Named rather than `allow_inherently_safe()`, which would also stop
+            # gating the run-code tool itself and take the script review off the table.
+            approval_policy_default=ToolApprovalPolicy.allow_tools(
+                trip_board.BOARD_TOOL_NAMES
+            ),
             slash_commands=[
                 *slash_commands.default_commands(),
                 model_slash_command(self._set_model),
@@ -119,9 +141,19 @@ class MontyChatAgentWorkflow:
         # The single model-facing tool: Code Mode over the travel tools. The model writes a
         # Python script that calls the travel operations as async host functions; each host call
         # runs as a durable, approval-gated activity via run_tool.
+        # THE OPT-IN, and the whole of it: one call, and from here every committed
+        # `mutate()` on this ref is published to the agent's turn_events stream as JSON
+        # Patch ops. Nothing below ever mentions an event, a topic, or publishing.
+        self._board = self._runner.state("trip_board", trip_board.TripBoard())
         self._code_tool = agent.code_mode_tool(
-            activities.ALL_TOOLS,
+            # The travel tools plus the board tools, in one sandbox: a script can book a
+            # flight and record it on the board without a round trip through the model, so
+            # the board cannot drift from what was actually booked.
+            [*activities.ALL_TOOLS, *trip_board.BOARD_TOOLS],
             name="run_travel_code",
+            # Hidden from the model and from the generated stubs: the script names the
+            # trip, never the state it lives in.
+            injections={"board": self._board},
         )
 
     @workflow.run

@@ -146,6 +146,38 @@ const frames: AgentSseFrame[] = [
     user_message:
       "I am replacing the static UI with Svelte. What API events should the agent UI model first?"
   }),
+  /* This agent registers its state on first use rather than in `@workflow.init`, which
+     `runner.state()` allows and which is why the snapshot carries a turn number at all.
+     The placement is also load-bearing for a neighbour: turnNavigation.test.mjs is
+     calibrated on this run having a turn marker at index 0, so nothing may be published
+     ahead of the first `turn_started`.
+
+     Every `state_patch` below applies to THIS document. The mock is the contract as much
+     as it is a fixture — agentState.test.mjs replays this session and checks the fold — so
+     the ops have to be ones that really land. */
+  frame("state_snapshot", {
+    type: "state_snapshot",
+    ...meta(1, 2),
+    state_id: "plan",
+    version: 0,
+    value: {
+      goal: "",
+      status: "idle",
+      steps: [],
+      scratch: { cwd: "/repo" },
+      tags: ["docs"]
+    }
+  }),
+  frame("state_patch", {
+    type: "state_patch",
+    ...meta(1, 2),
+    state_id: "plan",
+    version: 1,
+    ops: [
+      { op: "replace", path: "/goal", value: "Model the agent UI on the event stream" },
+      { op: "replace", path: "/status", value: "thinking" }
+    ]
+  }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(1, 3),
@@ -206,6 +238,24 @@ const frames: AgentSseFrame[] = [
     tool_output:
       '{"routes":["GET /api/agents","GET /api/sessions","POST /api/sessions","POST /api/chat","GET /api/status/{session_id}","POST /api/tool-approval","GET /api/stream/{session_id}"]}'
   }),
+  /* One `mutate()` block, three ops, one version — which is the whole shape of the
+     feature: an append, a nested field of the thing just appended, and a dict key,
+     all at exact pointers rather than a re-send of the list. */
+  frame("state_patch", {
+    type: "state_patch",
+    ...meta(1, 12),
+    state_id: "plan",
+    version: 2,
+    ops: [
+      {
+        op: "add",
+        path: "/steps/-",
+        value: { name: "read the route outline", done: false }
+      },
+      { op: "replace", path: "/steps/0/done", value: true },
+      { op: "add", path: "/scratch/last_tool", value: "get_api_outline" }
+    ]
+  }),
   frame("model_interaction_started", {
     type: "model_interaction_started",
     ...meta(1, 13),
@@ -238,6 +288,13 @@ const frames: AgentSseFrame[] = [
     ...meta(1, 18),
     text:
       "Model the UI around the event stream: `turn_started`, `message_queued`, model spans, tool spans, approval gates, `reply_delta`, annotations, final `reply`, and `turn_end`. That gives you enough surface area to mock realistic sessions without needing the server running."
+  }),
+  frame("state_patch", {
+    type: "state_patch",
+    ...meta(1, 18),
+    state_id: "plan",
+    version: 3,
+    ops: [{ op: "replace", path: "/status", value: "idle" }]
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -351,6 +408,25 @@ const frames: AgentSseFrame[] = [
     tool_name: "search_forum",
     tool_output:
       '{"hits":[{"title":"Use Updates for command acknowledgment","score":0.86},{"title":"Signals for fire-and-forget messages","score":0.78}]}'
+  }),
+  /* A set has no JSON representation and RFC 6902 has no set op, so a change to one
+     is a `replace` carrying the whole array — in sorted order, which is what makes it
+     byte-identical on any worker. The panel marks the array, because that is honestly
+     the granularity the stream carries here. */
+  frame("state_patch", {
+    type: "state_patch",
+    ...meta(3, 49),
+    state_id: "plan",
+    version: 4,
+    ops: [
+      {
+        op: "add",
+        path: "/steps/-",
+        value: { name: "compare signals, updates and queries", done: true }
+      },
+      { op: "replace", path: "/tags", value: ["docs", "forum"] },
+      { op: "remove", path: "/scratch/cwd" }
+    ]
   }),
   frame("model_interaction_started", {
     type: "model_interaction_started",

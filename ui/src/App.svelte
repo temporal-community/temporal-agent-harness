@@ -11,6 +11,7 @@
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import { Keyboard } from "@lucide/svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
+  import AgentStatePanel from "$lib/components/agent/AgentStatePanel.svelte";
   import PaneRail, { type PaneDescription } from "$lib/panes/PaneRail.svelte";
   import PaneMinimap from "$lib/panes/PaneMinimap.svelte";
   import PaneLinkNotice from "$lib/panes/PaneLinkNotice.svelte";
@@ -226,6 +227,15 @@
         return { title: "Latency waterfall" };
       case "usage":
         return { title: PANE_META.usage.kindLabel };
+      case "state":
+        /* The count, not a status: there is nothing here to act on, and how many
+           states the agents declared is the one thing the badge does not say. */
+        return {
+          title: PANE_META.state.kindLabel,
+          statusLabel:
+            run.agentStates.length > 0 ? `${run.agentStates.length} declared` : null,
+          statusTone: null
+        };
       default: {
         const _exhaustive: never = pane.kind;
         throw new Error(`unhandled pane kind: ${_exhaustive}`);
@@ -639,6 +649,11 @@
           viewIndex={run.viewIndex}
           unmeasured={run.runUnmeasured}
         />
+      {:else if pane.kind === "state"}
+        <!-- Handed the fold, not the frames: what an agent's state holds at the
+             playhead is a projection like every other reading in the console, so
+             scrubbing moves it and nothing here subscribes to anything. -->
+        <AgentStatePanel states={run.agentStates} />
       {:else if pane.kind === "logs"}
         <TranscriptPanel
           groups={run.replayLog.groups}

@@ -1,4 +1,4 @@
-export type PaneKind = "chat" | "graph" | "logs" | "latency" | "usage";
+export type PaneKind = "chat" | "graph" | "logs" | "latency" | "usage" | "state";
 
 export interface PaneMeta {
   /** Uppercase eyebrow shown in the pane header and on the collapsed spine. */
@@ -77,6 +77,23 @@ export const PANE_META: Record<PaneKind, PaneMeta> = {
     minSize: 300,
     content: "document",
     titleNames: "kind"
+  },
+  state: {
+    kindLabel: "Agent state",
+    /* --accent, not a hue of its own. The semantic hues name what an event IS —
+       --model, --reasoning, --tool — and agent state is not an event kind; it is
+       whatever the workflow author declared. Latency and tokens took the two
+       hues that did fit; inventing a sixth for this one would be colour spent on
+       nothing the reader can act on. */
+    accent: "--accent",
+    /* Wider than the log at rest: a state document is JSON, and a nested value
+       wrapping at 320px costs more rows than the extra 100px costs columns. */
+    defaultSize: 420,
+    minSize: 320,
+    /* A plan an agent keeps appending to has no end, so the pane holds its size
+       and scrolls itself rather than growing the rail. */
+    content: "viewport",
+    titleNames: "kind"
   }
 };
 
@@ -87,7 +104,7 @@ export const PANE_META: Record<PaneKind, PaneMeta> = {
  * Those were two lists until they were found to hold the same five names. The
  * launcher list was the views with no parent to drill in from — and there is
  * nothing else, so "root" had stopped distinguishing anything. Derived from
- * PANE_META rather than restated, so a sixth kind is in both by existing.
+ * PANE_META rather than restated, so a new kind is in both by existing.
  */
 export const PANE_KINDS = Object.keys(PANE_META) as PaneKind[];
 
@@ -99,7 +116,7 @@ export const SPINE_SIZE = 42;
  * can be opened unscoped ("logs") or scoped to a workflow ("logs:wf-123"), and
  * both may be on screen at the same time.
  */
-const SINGLETON_KINDS = new Set<PaneKind>(["chat", "graph", "usage"]);
+const SINGLETON_KINDS = new Set<PaneKind>(["chat", "graph", "usage", "state"]);
 
 export function isSingletonKind(kind: PaneKind): boolean {
   return SINGLETON_KINDS.has(kind);
@@ -168,7 +185,7 @@ export function parsePaneId(id: string): { kind: PaneKind; key: string | null } 
  * Only ever asked about a token the registry has already turned down, and the
  * answer is only ever shown to the reader as a guess — the desk never opens it.
  * Prefix only: a truncation (`log` for `logs`) is the common miss. A tie, or
- * anything that is not a unique prefix of one of the five kinds, returns
+ * anything that is not a unique prefix of exactly one kind, returns
  * nothing — the cost of no guess is that the reader reads the list of kinds,
  * and the cost of a wrong one is that they go and try it.
  */

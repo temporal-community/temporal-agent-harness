@@ -242,6 +242,19 @@ class AgentEventType(StrEnum):
     """The agent encountered an error. Terminal for the turn. See
     :class:`AgentError`."""
 
+    STATE_SNAPSHOT = "state_snapshot"
+    """A whole-document snapshot of one piece of observable agent state, published
+    once when the workflow author registers it with ``AgentWorkflowRunner.state()``.
+    Every later change to that state arrives as :attr:`STATE_PATCH`, so a consumer
+    needs exactly one snapshot to start applying. See :class:`AgentStateSnapshot`."""
+
+    STATE_PATCH = "state_patch"
+    """The changes one ``with ref.mutate() as d:`` block made to a piece of state,
+    as ordered RFC 6902 JSON Patch ops. Applying every patch for a ``state_id`` in
+    version order to its snapshot reproduces the state exactly — which is the whole
+    point: a consumer tracks agent state without polling and without missing
+    anything between polls. See :class:`AgentStatePatch`."""
+
 
 EventTypeT = TypeVar("EventTypeT", bound=AgentEventType)
 
@@ -819,6 +832,46 @@ class AgentError(StreamEvent[Literal[AgentEventType.ERROR]]):
     )
 
 
+class AgentStateSnapshot(StreamEvent[Literal[AgentEventType.STATE_SNAPSHOT]]):
+    """The full value of one piece of observable agent state.
+
+    Published when the author registers the state, and again on nothing else — the
+    ``version`` here is the base every subsequent :class:`AgentStatePatch` for the
+    same ``state_id`` builds on.
+    """
+
+    type: Literal[AgentEventType.STATE_SNAPSHOT] = AgentEventType.STATE_SNAPSHOT
+    state_id: str = Field(
+        description="The name the workflow author registered this state under. Unique "
+        "per agent; a consumer keys its local copy by it."
+    )
+    version: int = Field(
+        description="The state's version at the moment of the snapshot. Patches carry "
+        "strictly increasing versions from here."
+    )
+    value: dict[str, Any] = Field(
+        description="The whole state, as ``model_dump(mode='json')`` — the same "
+        "serialization the patch ops' values use, so pointers line up."
+    )
+
+
+class AgentStatePatch(StreamEvent[Literal[AgentEventType.STATE_PATCH]]):
+    """What one committed ``mutate()`` block changed, as RFC 6902 ops.
+
+    The harness derives these; nothing in the author's workflow code builds or sees
+    them. Ops are applied in order, and a version is produced only by a block that
+    actually touched something — a no-op ``mutate()`` publishes nothing at all.
+    """
+
+    type: Literal[AgentEventType.STATE_PATCH] = AgentEventType.STATE_PATCH
+    state_id: str = Field(description="Which registered state these ops apply to.")
+    version: int = Field(description="The version this patch produces.")
+    ops: list[dict[str, Any]] = Field(
+        description="RFC 6902 operations, applied in order to the `version - 1` document. "
+        "The harness only ever emits ``add`` / ``replace`` / ``remove``."
+    )
+
+
 # Discriminated union of every concrete payload, keyed on ``type``. This is the
 # type of :attr:`AgentEvent.event`, so Temporal's Pydantic converter reconstructs
 # the right payload subtype when it deserializes an envelope off the stream.
@@ -849,7 +902,9 @@ AgentStreamItem = Annotated[
     | ThoughtSummaryDelta
     | TextAnnotationDelta
     | AgentReply
-    | AgentError,
+    | AgentError
+    | AgentStateSnapshot
+    | AgentStatePatch,
     Field(discriminator="type"),
 ]
 
