@@ -2,8 +2,10 @@
 
     nexus_gateway = nexus_tools_gateway()  # agent_id inferred from workflow_type
     mcp_servers=[
-        nexus_gateway.mcp_servers("demo"),
-        nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
+        nexus_gateway.mcp_servers("demo", runner=self._runner),
+        nexus_native_mcp_server(
+            "demo-nexus", "nexus-hello-demo-endpoint", runner=self._runner
+        ),
     ]
 
 For this demo, the tools are:
@@ -76,8 +78,10 @@ class NexusHelloAgentWorkflow:
             instructions=SYSTEM_INSTRUCTION,
             model=DEFAULT_MODEL,
             mcp_servers=[
-                nexus_gateway.mcp_servers("demo"),
-                nexus_native_mcp_server("demo-nexus", "nexus-hello-demo-endpoint"),
+                nexus_gateway.mcp_servers("demo", runner=self._runner),
+                nexus_native_mcp_server(
+                    "demo-nexus", "nexus-hello-demo-endpoint", runner=self._runner
+                ),
             ],
         )
         input_items: list[TResponseInputItem] = [

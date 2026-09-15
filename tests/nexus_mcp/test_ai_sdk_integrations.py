@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -100,7 +100,10 @@ def test_workflow_openai_adapter_has_a_distinct_type() -> None:
 
 
 def test_agent_harness_factory_uses_the_shared_workflow_adapter() -> None:
-    server = nexus_native_mcp_server("weather", "weather-endpoint")
+    # The runner is only closed over by governance; the adapter type is what matters here.
+    server = nexus_native_mcp_server(
+        "weather", "weather-endpoint", runner=cast("Any", object())
+    )
 
     assert isinstance(server, WorkflowNexusMCPServer)
 
