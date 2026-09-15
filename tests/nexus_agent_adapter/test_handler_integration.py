@@ -34,25 +34,18 @@ from temporal_agent_harness.nexus_agent_adapter.generated import (
 )
 from temporal_agent_harness.nexus_agent_adapter.handler import AgentServiceHandler, Config
 
-# Custom dev-server build with the Nexus-update-callback dynamic config surface (matches
-# sdk-python's own tests/conftest.py for PR #1631 — the stock time-skipping test server and
-# ordinary dev-server releases don't have these flags).
-_DEV_SERVER_VERSION = "v1.7.1-system-nexus-operations"
+# The time-skipping test server has no dynamic config, so these run on a real dev server.
+# A stock `temporal` CLI release carries the features; only the flags below need enabling.
 _DEV_SERVER_ARGS = [
     "--dynamic-config-value",
-    "history.enableChasm=true",
-    "--dynamic-config-value",
-    "history.enableTransitionHistory=true",
-    "--dynamic-config-value",
-    "history.enableCHASMCallbacks=true",
-    "--dynamic-config-value",
-    "history.enableCHASMSignalBacklinks=true",
+    "history.enableUpdateCallbacks=true",
     "--dynamic-config-value",
     "nexusoperation.enableStandalone=true",
     "--dynamic-config-value",
-    'system.system.refreshNexusEndpointsMinWait="0s"',
+    "activity.enableStandalone=true",
+    # Endpoint registration is cached; 0s keeps create_nexus_endpoint visible immediately.
     "--dynamic-config-value",
-    "history.enableUpdateCallbacks=true",
+    'system.system.refreshNexusEndpointsMinWait="0s"',
 ]
 
 
@@ -141,7 +134,6 @@ class CallerWorkflow:
 async def env() -> AsyncGenerator[WorkflowEnvironment, None]:
     env = await WorkflowEnvironment.start_local(
         data_converter=pydantic_data_converter,
-        dev_server_download_version=_DEV_SERVER_VERSION,
         dev_server_extra_args=_DEV_SERVER_ARGS,
     )
     yield env

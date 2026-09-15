@@ -506,7 +506,9 @@ To run the bundled examples from a checkout, additionally:
 
 - [just](https://just.systems/) for the example recipes
 - The [`temporal` CLI](https://docs.temporal.io/cli), which `just temporal` starts a local dev
-  server with
+  server with. The Nexus example (`examples/nexus_hello`) needs **1.9.1 or later** — older
+  builds reject the Nexus dynamic config its `just temporal` recipe sets. Its recipes check the
+  version and fail with a message. The other examples work with any recent release.
 
 [pnpm](https://pnpm.io/) is **not** required to run anything: the browser UI ships prebuilt in
 `temporal_agent_harness/ui/dist`, both in release archives and in the repo. You only need it to

@@ -1,4 +1,4 @@
-.PHONY: generate generate-from-local install-nexgen build test test-go test-python test-contract lint lint-python fmt vet workflowcheck ci run-teams-activity-worker install-dev-server start-dev-server
+.PHONY: generate generate-from-local install-nexgen build test test-go test-python test-contract lint lint-python fmt vet workflowcheck ci run-teams-activity-worker require-temporal-cli start-dev-server
 
 CONTRACT_URL := https://raw.githubusercontent.com/temporal-community/temporal-agent-harness/main/temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml
 
@@ -71,20 +71,24 @@ run-teams-activity-worker:
 
 ci: vet workflowcheck lint lint-python test
 
-TEMPORAL_SERVER_REPO ?= https://github.com/temporalio/temporal.git
-TEMPORAL_SERVER_REF ?= main
+# Minimum `temporal` CLI for the Nexus recipes. Older builds reject the dynamic config
+# keys below, so fail here rather than at the first Nexus call.
+TEMPORAL_CLI_MIN ?= 1.9.1
 
-install-dev-server:
-	@BUILDDIR=$$(pwd)/.build/temporal-server-src && \
-	if [ ! -d $$BUILDDIR ]; then \
-		echo "Cloning $(TEMPORAL_SERVER_REPO)@$(TEMPORAL_SERVER_REF)..." && \
-		mkdir -p $$(dirname $$BUILDDIR) && \
-		git clone --depth=1 -b $(TEMPORAL_SERVER_REF) $(TEMPORAL_SERVER_REPO) $$BUILDDIR; \
-	fi && \
-	cd $$BUILDDIR && \
-	echo "Building temporal-server..." && \
-	GOWORK=off GOFLAGS= go build -o $$(go env GOPATH)/bin/temporal-server ./cmd/server && \
-	echo "Installed temporal-server to $$(go env GOPATH)/bin/temporal-server"
+require-temporal-cli:
+	@have=$$(temporal --version 2>/dev/null | awk '{print $$3}'); \
+	if [ -z "$$have" ]; then \
+		echo "error: no 'temporal' CLI on PATH. Nexus needs >= $(TEMPORAL_CLI_MIN): https://docs.temporal.io/cli" >&2; exit 1; \
+	fi; \
+	if [ "$$(printf '%s\n%s\n' "$(TEMPORAL_CLI_MIN)" "$$have" | sort -V | head -1)" != "$(TEMPORAL_CLI_MIN)" ]; then \
+		echo "error: temporal CLI $$have is too old. Nexus needs >= $(TEMPORAL_CLI_MIN)." >&2; exit 1; \
+	fi
 
-start-dev-server:
-	temporal-server --config-file ../devserver/config.yaml --allow-no-auth start
+start-dev-server: require-temporal-cli
+	temporal server start-dev \
+		--dynamic-config-value 'system.maxCallbacksPerWorkflow=500' \
+		--dynamic-config-value 'component.nexusoperations.callback.endpoint.template="http://localhost:7243/namespaces/{{.NamespaceName}}/nexus/callback"' \
+		--dynamic-config-value 'callback.allowedAddresses=[{"Pattern":"*","AllowInsecure":true}]' \
+		--dynamic-config-value 'history.enableUpdateCallbacks=true' \
+		--dynamic-config-value 'nexusoperation.enableStandalone=true' \
+		--dynamic-config-value 'activity.enableStandalone=true'
