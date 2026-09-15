@@ -49,6 +49,7 @@ with workflow.unsafe.imports_passed_through():
         TextReply,
         ToolApprovalPolicy,
     )
+    from temporal_agent_harness.harness.agent_client import AgentClient
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
     from temporal_agent_harness.harness.state import HarnessState, StateRef
     from temporal_agent_harness.harness.state import drafts as _drafts
@@ -260,6 +261,48 @@ async def test_duplicate_state_ids_are_rejected():
 
     with pytest.raises(ValueError, match="already registered"):
         AgentWorkflowRunner.state(runner, "plan", PlanState())
+
+
+async def test_attach_to_a_brand_new_session_delivers_the_snapshot_and_stops(
+    client_and_queue,
+):
+    """A fresh session's entire history is one turn-0 snapshot, and attach must finish on it.
+
+    `should_stop` would only ask whether the workflow was idle on a *terminal* root event --
+    a `turn_end`, or an operator command's terminal -- and a `state_snapshot` is neither. So
+    the moment registering state put an event at offset 0, attach delivered it and then
+    blocked forever waiting for a `turn_end` that could not arrive until somebody sent a
+    message.
+
+    In the console that closed a loop: `creatingSession` is cleared when the first attach
+    goes idle, and it gates the composer, so the session the user had just created could not
+    be sent anything -- and with nothing sent, nothing would ever end the attach. A reload
+    was the only way out, because that path never sets the flag.
+
+    The timeout is the assertion. Before the fix this test hangs rather than failing, which
+    is also exactly how the bug presented.
+    """
+    client, task_queue = client_and_queue
+    handle = await client.start_workflow(
+        StateProbeAgent.run,
+        AgentConfig(),
+        id=f"StateProbeAgent-{uuid.uuid4()}",
+        task_queue=task_queue,
+    )
+    agent_client = AgentClient(client, handle.id)
+
+    stream = await agent_client.attach(
+        from_offset=0,
+        on_item=lambda item, _resume_offset: item,
+    )
+    items: list[AgentEvent] = []
+    async with asyncio.timeout(10):
+        async for item in stream:
+            items.append(item)
+
+    assert [item.event.type for item in items] == [AgentEventType.STATE_SNAPSHOT]
+    assert items[0].event.version == 0
+    assert items[0].turn_number == 0
 
 
 # ---------------------------------------------------------------------------

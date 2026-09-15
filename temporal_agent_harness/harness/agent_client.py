@@ -621,7 +621,26 @@ class AgentClient:
                 AgentEventType.OPERATOR_COMMAND_COMPLETED,
                 AgentEventType.OPERATOR_COMMAND_FAILED,
             }
-            if ev.event.type != AgentEventType.TURN_END and not terminal_operator_event:
+            # State registration is the one thing that publishes BEFORE any turn exists:
+            # `runner.state(...)` is called in `@workflow.init`, so its snapshot lands at
+            # the very front of the stream stamped `turn_number=0`, which is why it is
+            # matched on that rather than on being a snapshot. It is the only event a
+            # replay can end on that no `turn_end` will ever follow, so it has to be able
+            # to end one. Without this, attach delivered a brand-new session's one-event
+            # history and then blocked forever -- and in the console that closed a loop,
+            # because `creatingSession` is cleared when the first attach goes idle and it
+            # gates the composer, so the session just created could not be sent the message
+            # that would have ended the attach. (An agent registering several states puts
+            # one of these at each of offsets 0..n-1; the head guard below is what keeps
+            # all but the last from ending the replay early.)
+            registration_snapshot = (
+                ev.event.type == AgentEventType.STATE_SNAPSHOT and ev.turn_number == 0
+            )
+            if (
+                ev.event.type != AgentEventType.TURN_END
+                and not terminal_operator_event
+                and not registration_snapshot
+            ):
                 return False
             if ev.event.type == AgentEventType.TURN_END:
                 highest_completed_turn = max(highest_completed_turn, ev.turn_number)
