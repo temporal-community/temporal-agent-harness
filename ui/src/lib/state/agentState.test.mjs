@@ -99,6 +99,61 @@ describe("folding agent state out of the stream", () => {
     assert.ok(seen > 0);
   });
 
+  it("keeps every op a commit carried, even two that name the same path", () => {
+    /* The state layer records an op per write and never coalesces per path, so one mutate()
+       block can publish two ops with one pointer between them — and not only from a doubled
+       assignment: `d.x = 1; d.x = 2`, two `pop(0)`s draining the head of a list, and a 
+       `sort()` followed by a `reverse()` each emit two ops at one path without the author
+       writing anything twice. AgentStatePanel keyed its change list on `op + path`, which
+       collides on every one of those, and Svelte throws `each_key_duplicate` in production
+       as well as in dev — with no boundary around the pane, so the console died on a commit
+       the agent was perfectly entitled to publish. The panel is unkeyed now; what is pinned
+       here is the fold's half of the contract, which is that it does NOT deduplicate. A
+       change list that quietly dropped the second op would agree with the panel and lie
+       about the commit. */
+    const cases = {
+      "one field written twice": [
+        { op: "replace", path: "/steps/0/done", value: true },
+        { op: "replace", path: "/steps/0/done", value: true }
+      ],
+      "one field, two values": [
+        { op: "replace", path: "/status", value: "working" },
+        { op: "replace", path: "/status", value: "idle" }
+      ],
+      "two removes off the head of a list": [
+        { op: "remove", path: "/steps/0" },
+        { op: "remove", path: "/steps/0" }
+      ]
+    };
+    for (const [name, ops] of Object.entries(cases)) {
+      const [doc] = buildAgentStateDocs([
+        snapshot("plan", { status: "idle", steps: [{ name: "a" }, { name: "b" }] }),
+        patch("plan", 1, ops)
+      ]);
+      assert.equal(doc.problem, null, name);
+      assert.equal(doc.changed.length, 2, `${name}: an op went missing`);
+      const keys = new Set(doc.changed.map((change) => change.op + change.path));
+      assert.equal(keys.size, 1, `${name}: the two ops stopped sharing a path`);
+    }
+  });
+
+  it("resolves two appends to different pointers, which is why the key looked safe", () => {
+    /* The case that made the collision above hard to believe: `/steps/-` is resolved
+       against the array it landed in, so the commonest repeated op in a commit — two
+       appends — really does produce two distinct paths. Every other repeat does not. */
+    const [doc] = buildAgentStateDocs([
+      snapshot("plan", { steps: [] }),
+      patch("plan", 1, [
+        { op: "add", path: "/steps/-", value: { name: "a" } },
+        { op: "add", path: "/steps/-", value: { name: "b" } }
+      ])
+    ]);
+    assert.deepEqual(
+      doc.changed.map((change) => change.path),
+      ["/steps/0", "/steps/1"]
+    );
+  });
+
   it("shows the snapshot alone before any commit has landed", () => {
     const [doc] = buildAgentStateDocs([snapshot("plan", { goal: "", steps: [] })]);
     assert.equal(doc.version, 0);

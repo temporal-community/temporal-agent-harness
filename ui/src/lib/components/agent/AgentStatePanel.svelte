@@ -199,7 +199,16 @@
 
     {#if current.changed.length > 0}
       <ul class="changes" aria-label="What this commit changed">
-        {#each current.changed as change (change.op + change.path)}
+        <!-- Deliberately unkeyed. One commit can carry two ops at the SAME path: the state
+             layer records an op per write and never coalesces per path, so `d.x = 1; d.x = 2`,
+             two `pop(0)`s draining a list head, and a `sort()` followed by a `reverse()` all
+             emit two ops with one pointer between them — the last two without the author
+             writing anything twice. A key built from the op and the path collides on every one
+             of those, and Svelte throws `each_key_duplicate` in production as well as in dev,
+             which with no boundary around this pane took the whole console down. These rows
+             hold no component state and no transition, and the list is rebuilt whenever the
+             cursor moves, so their position is all the identity they have to have. -->
+        {#each current.changed as change}
           <li class={`change ${change.op}`}>
             <span class="kicker op">{change.op}</span>
             <span class="path">{change.path || "/ (whole document)"}</span>
