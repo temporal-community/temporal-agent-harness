@@ -30,8 +30,6 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-_DEV_SERVER_VERSION = "v1.7.1-system-nexus-operations"
-
 
 class _DelayedGreetingInput(BaseModel):
     name: str
@@ -144,18 +142,14 @@ async def test_workflow_stateful_and_stateless_callers() -> None:
     task_queue = f"matrix-task-queue-{uuid.uuid4()}"
     async with await WorkflowEnvironment.start_local(
         data_converter=pydantic_data_converter,
-        dev_server_download_version=_DEV_SERVER_VERSION,
         dev_server_extra_args=[
+            "--dynamic-config-value",
+            "history.enableUpdateCallbacks=true",
             "--dynamic-config-value",
             "nexusoperation.enableStandalone=true",
             "--dynamic-config-value",
-            "history.enableChasm=true",
-            "--dynamic-config-value",
-            "history.enableTransitionHistory=true",
-            "--dynamic-config-value",
-            "history.enableCHASMCallbacks=true",
-            "--dynamic-config-value",
-            "history.enableUpdateCallbacks=true",
+            "activity.enableStandalone=true",
+            # Endpoint registration is cached; 0s keeps create_nexus_endpoint visible immediately.
             "--dynamic-config-value",
             'system.system.refreshNexusEndpointsMinWait="0s"',
         ],

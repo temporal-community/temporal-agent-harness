@@ -28,6 +28,7 @@
 #
 # Open the UI and start chatting. All three tools are available.
 #
+# Requires the `temporal` CLI >= 1.9.1 (older builds reject the Nexus dynamic config below).
 # Requires the `nexus-mcp` extra (Python >=3.13): `uv sync --extra nexus-mcp` (or a plain
 # `uv sync` picks it up too, since the repo's `dev` group includes it on 3.13+).
 # First-time setup: `cp .env.example .env.local` from the repo root and fill in OPENAI_API_KEY.
@@ -67,18 +68,33 @@ config:
     @echo "TEMPORAL_CONFIG_FILE = ${TEMPORAL_CONFIG_FILE:-<unset — set it in the repo-root .env.local>}"
     @echo "TEMPORAL_PROFILE     = ${TEMPORAL_PROFILE:-default}"
 
+# Minimum `temporal` CLI for the Nexus recipes. Older builds reject the dynamic config
+# keys below, so fail here rather than at the first Nexus call.
+temporal_cli_min := "1.9.1"
+
+# Fail if the `temporal` CLI is missing or older than temporal_cli_min.
+_require-temporal-cli:
+    #!/usr/bin/env bash
+    set -eu
+    have=$(temporal --version 2>/dev/null | awk '{print $3}')
+    if [ -z "${have}" ]; then
+        echo "error: no 'temporal' CLI on PATH. Nexus needs >= {{temporal_cli_min}}: https://docs.temporal.io/cli" >&2
+        exit 1
+    fi
+    if [ "$(printf '%s\n%s\n' "{{temporal_cli_min}}" "${have}" | sort -V | head -1)" != "{{temporal_cli_min}}" ]; then
+        echo "error: temporal CLI ${have} is too old. Nexus needs >= {{temporal_cli_min}}." >&2
+        exit 1
+    fi
+
 # Start a local Temporal dev server (Web UI: http://localhost:8233), with the dynamic config
-# Nexus RPC needs (cross-namespace endpoints, callbacks).
-temporal:
+# Nexus RPC needs (cross-namespace endpoints, callbacks). A stock `temporal` CLI release is
+# enough — no custom server build.
+temporal: _require-temporal-cli
     temporal server start-dev \
-        --dynamic-config-value 'limit.maxIDLength=255' \
         --dynamic-config-value 'system.maxCallbacksPerWorkflow=500' \
         --dynamic-config-value 'component.nexusoperations.callback.endpoint.template="http://localhost:7243/namespaces/{{{{.NamespaceName}}/nexus/callback"' \
         --dynamic-config-value 'callback.allowedAddresses=[{"Pattern":"*","AllowInsecure":true}]' \
         --dynamic-config-value 'history.enableUpdateCallbacks=true' \
-        --dynamic-config-value 'history.enableTransitionHistory=true' \
-        --dynamic-config-value 'history.enableChasm=true' \
-        --dynamic-config-value 'history.enableCHASMCallbacks=true' \
         --dynamic-config-value 'nexusoperation.enableStandalone=true' \
         --dynamic-config-value 'activity.enableStandalone=true'
 

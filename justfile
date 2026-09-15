@@ -14,8 +14,6 @@ import 'scripts/untagged-notice.just'
 ui := justfile_directory() / "ui"
 monty := justfile_directory() / "examples" / "monty"
 nexus_dir := justfile_directory() / "nexus"
-devserver_dir := nexus_dir / "devserver"
-build_dir := justfile_directory() / ".build"
 
 # List available recipes.
 default:
@@ -42,33 +40,35 @@ package: app-build app-check
     rm -rf "{{justfile_directory()}}/dist"
     uv build
 
-# Start the custom Temporal server with Nexus callback/update dynamic config enabled.
-temporal-latest:
+# Minimum `temporal` CLI for the Nexus recipes. Older builds reject the dynamic config
+# keys below, so fail here rather than at the first Nexus call.
+temporal_cli_min := "1.9.1"
+
+# Fail if the `temporal` CLI is missing or older than temporal_cli_min.
+_require-temporal-cli:
     #!/usr/bin/env bash
-    set -euo pipefail
+    set -eu
+    have=$(temporal --version 2>/dev/null | awk '{print $3}')
+    if [ -z "${have}" ]; then
+        echo "error: no 'temporal' CLI on PATH. Nexus needs >= {{temporal_cli_min}}: https://docs.temporal.io/cli" >&2
+        exit 1
+    fi
+    if [ "$(printf '%s\n%s\n' "{{temporal_cli_min}}" "${have}" | sort -V | head -1)" != "{{temporal_cli_min}}" ]; then
+        echo "error: temporal CLI ${have} is too old. Nexus needs >= {{temporal_cli_min}}." >&2
+        exit 1
+    fi
 
-    temporal_build_dir="{{build_dir}}/temporal-src"
-    rm -rf "${temporal_build_dir}"
-    mkdir -p "${temporal_build_dir}"
-
-    echo "Cloning temporalio/temporal@main..."
-    git clone --depth=1 https://github.com/temporalio/temporal.git "${temporal_build_dir}"
-
-    echo "Building temporal-server binary..."
-    cd "${temporal_build_dir}"
-    GOWORK=off GOFLAGS= go build -o "{{devserver_dir}}/temporal-server" ./cmd/server
-
-    rm -rf "${temporal_build_dir}"
-    echo "Built: {{devserver_dir}}/temporal-server"
-
-    cd "{{devserver_dir}}"
-    ./temporal-server --config-file config.yaml --allow-no-auth start
-
-# Start Temporal UI on http://localhost:8233 and point it at the custom server.
-temporal-latest-ui:
-    docker run --rm -p 8233:8080 \
-        -e TEMPORAL_ADDRESS=host.docker.internal:7233 \
-        temporalio/ui
+# Start a local Temporal dev server with the dynamic config Nexus needs (callbacks,
+# update-with-callback, standalone Nexus operations/activities). Web UI: http://localhost:8233.
+# A stock `temporal` CLI release is enough — no custom server build.
+temporal-nexus: _require-temporal-cli
+    temporal server start-dev \
+        --dynamic-config-value 'system.maxCallbacksPerWorkflow=500' \
+        --dynamic-config-value 'component.nexusoperations.callback.endpoint.template="http://localhost:7243/namespaces/{{{{.NamespaceName}}/nexus/callback"' \
+        --dynamic-config-value 'callback.allowedAddresses=[{"Pattern":"*","AllowInsecure":true}]' \
+        --dynamic-config-value 'history.enableUpdateCallbacks=true' \
+        --dynamic-config-value 'nexusoperation.enableStandalone=true' \
+        --dynamic-config-value 'activity.enableStandalone=true'
 
 # Create/update the namespaces and Nexus endpoint needed by the chat connector.
 setup-nexus:
