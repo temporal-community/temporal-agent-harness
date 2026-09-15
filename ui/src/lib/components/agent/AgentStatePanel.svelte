@@ -37,6 +37,12 @@
     states.find((doc) => doc.key === chosenKey) ?? states[0] ?? null
   );
 
+  /* One state is a label, not a choice. The bar is a switch between documents,
+     and most runs declare exactly one — so with nothing to switch to the chip
+     renders as a plain chip rather than a button that answers a click with
+     nothing. */
+  const selectable = $derived(states.length > 1);
+
   /**
    * Where the commit at the cursor landed, as pointers the document can be asked for.
    *
@@ -173,9 +179,9 @@
           size="xs"
           fill="quiet"
           active={doc.key === current.key}
-          aria-pressed={doc.key === current.key}
+          aria-pressed={selectable ? doc.key === current.key : undefined}
           data-tip={`${doc.label} · v${doc.version}`}
-          onclick={() => (chosenKey = doc.key)}
+          onclick={selectable ? () => (chosenKey = doc.key) : undefined}
         />
       {/each}
     </div>
