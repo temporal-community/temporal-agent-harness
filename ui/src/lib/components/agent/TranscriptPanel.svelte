@@ -16,7 +16,6 @@
     if (row.actor === "approval" || status.includes("approval") || status.includes("await")) {
       return "approval";
     }
-    if (row.actor === "operator") return "queued";
     if (row.actor === "tool" || status.includes("tool")) return "tool";
     if (row.actor === "model") return "model";
     if (row.actor === "reasoning") return "reasoning";
@@ -245,7 +244,6 @@
     if (row.actor === "model") return `${prefix}Model`;
     if (row.actor === "tool") return `${prefix}${row.toolName ?? "Tool"}`;
     if (row.actor === "approval") return `${prefix}Approval`;
-    if (row.actor === "operator") return `${prefix}Operator`;
     if (row.actor === "subagent") return "Subagent";
     if (row.actor === "queue") return `${prefix}Queue`;
     if (row.actor === "reasoning") return `${prefix}Reasoning`;
@@ -383,8 +381,6 @@
                     {/if}
                   {:else if row.actor === "queue"}
                     <MessageSquarePlus size={15} />
-                  {:else if row.actor === "operator"}
-                    <Radio size={15} />
                   {:else if row.actor === "error"}
                     <AlertTriangle size={15} />
                   {:else if row.tone === "done"}

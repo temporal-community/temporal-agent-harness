@@ -1,4 +1,5 @@
 import type { AgentSseFrame } from "$lib/api/types";
+import { renderUserMessage } from "$lib/state/inboundMessageText";
 import { findHistoryGaps } from "$lib/state/historyGap";
 
 export type SpanKind = "model" | "tool" | "approval";
@@ -300,10 +301,15 @@ export function buildStepTimeline(input: Array<AgentSseFrame | StepTimelineFrame
     }
 
     switch (frame.event) {
-      case "turn_started":
-        previewByScope.set(scope.key, frame.data.user_message);
-        if (scope.role === "parent") turnFor(scope, timestamp).preview = frame.data.user_message;
+      case "message_accepted": {
+        // The turn's preview comes from admission, not from turn_started — a joining message
+        // has no turn_started of its own, and a shared turn's preview is simply the last
+        // message admitted into it.
+        const preview = renderUserMessage(frame.data.handler, frame.data.payload);
+        previewByScope.set(scope.key, preview);
+        if (scope.role === "parent") turnFor(scope, timestamp).preview = preview;
         break;
+      }
       case "model_interaction_started":
         closeOpenSpan(
           openModel,
@@ -376,7 +382,7 @@ export function buildStepTimeline(input: Array<AgentSseFrame | StepTimelineFrame
         );
         break;
       }
-      case "error": {
+      case "message_handler_error": {
         closeOpenSpansForTurn(scope, timestamp, index, "error", frame.data.message);
         break;
       }

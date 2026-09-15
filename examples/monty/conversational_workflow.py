@@ -9,9 +9,9 @@ durable, approval-gated activity, and the script can combine many with real cont
 ``asyncio.gather`` concurrency).
 
 The conversational front end is a Gemini Interactions tool-calling loop exposing that one Code
-Mode tool. It uses only a custom *function* tool, which chains cleanly across turns via 
-``previous_interaction_id`` — so multi-turn conversation works. The Code Mode tool advertises the 
-exact host-function signatures + result shapes in its own (generated) description, so the system 
+Mode tool. It uses only a custom *function* tool, which chains cleanly across turns via
+``previous_interaction_id`` — so multi-turn conversation works. The Code Mode tool advertises the
+exact host-function signatures + result shapes in its own (generated) description, so the system
 prompt only needs to set the persona and point the model at the tool.
 """
 
@@ -21,8 +21,9 @@ import asyncio
 import json
 from datetime import timedelta
 from functools import partial
-from typing import Sequence
+from typing import Literal, Sequence
 
+from pydantic import BaseModel
 from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.exceptions import ApplicationError
@@ -47,11 +48,14 @@ with workflow.unsafe.imports_passed_through():
         DeltaText,
     )
     from google.genai.client import AsyncClient
-    from temporal_agent_harness.ai_sdks.google_genai_plugin import function_param, google_genai_client
-    from temporal_agent_harness.harness import agent, slash_commands
+    from temporal_agent_harness.ai_sdks.google_genai_plugin import (
+        function_param,
+        google_genai_client,
+    )
+    from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
-        SlashCommand,
+        MidTurn,
         TextMessage,
         TextReply,
         ToolApprovalPolicy,
@@ -66,12 +70,20 @@ SUPPORTED_MODELS = ("gemini-3.8-flash", "gemini-3.1-flash-lite")
 DEFAULT_MODEL = SUPPORTED_MODELS[0]
 
 
-def model_slash_command(set_model) -> slash_commands.SlashCommandDefinition:
-    return slash_commands.model_selector(
-        choices=SUPPORTED_MODELS,
-        set_model=set_model,
-        description="Set the model for this Monty session.",
-    )
+class SetModel(BaseModel):
+    """Which model this Monty session should use for subsequent turns."""
+
+    # A Literal (not a bare str) so the choice is enforced rather than merely suggested:
+    # pydantic rejects anything else at the update boundary, and the same constraint shows up
+    # as an enum in this handler's `parameters` JSON schema — which is what lets a generic
+    # client render a dropdown without knowing anything about Monty.
+    model: Literal[SUPPORTED_MODELS]  # type: ignore[valid-type]
+
+
+class PolicyUpdate(BaseModel):
+    """Selected tool approval policy name."""
+
+    new_policy: Literal["allow_safe", "strict", "dangerously_skip_all"]
 
 
 SYSTEM_INSTRUCTION = """\
@@ -129,10 +141,6 @@ class MontyChatAgentWorkflow:
             approval_policy_default=ToolApprovalPolicy.allow_tools(
                 trip_board.BOARD_TOOL_NAMES
             ),
-            slash_commands=[
-                *slash_commands.default_commands(),
-                model_slash_command(self._set_model),
-            ],
         )
         self._model: str = DEFAULT_MODEL
         # Server-side conversation chaining id (Interactions API); updated each turn. Safe to
@@ -168,7 +176,7 @@ class MontyChatAgentWorkflow:
         )
         await self._runner.run(self)
 
-    @agent.accepts
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def ask(self, message: TextMessage) -> TextReply:
         """Chat with the travel assistant. Describe the trip you want (flights, hotels,
         dates, traveler name) in plain text; the assistant converses, writes and runs Python
@@ -176,18 +184,32 @@ class MontyChatAgentWorkflow:
         reply_text = await self._handle_chat_turn(self._gemini, message.text)
         return TextReply(text=reply_text)
 
-    @agent.accepts
-    async def slash(self, command: SlashCommand) -> TextReply:
-        """Apply a slash command to this parent agent session."""
-        return TextReply(
-            text=(
-                f"Unknown Monty slash command: `{command.name}`. Try `/model`. "
-                "Harness commands include `/approvals`, `/allow-tools`, and `/status`."
-            )
-        )
+    # ACCEPT: reconfiguring the session is not work, so it should not wait behind work. It
+    # joins the open turn and applies immediately, which is the whole point of being able to
+    # switch models while the agent is mid-conversation. model_callable=False keeps it off a
+    # parent agent's generated toolset by default — choosing the model is an operator's call,
+    # not something a driving model should do to its own child.
+    @agent.accepts(mid_turn=MidTurn.ACCEPT, model_callable=False)
+    async def set_model(self, message: SetModel) -> TextReply:
+        """Set the model this session uses for subsequent turns. Takes effect on the next
+        model call, so a turn already in flight finishes on the model it started with."""
+        self._model = message.model
+        return TextReply(text=f"Model set to **{message.model}**.")
 
-    def _set_model(self, model: str) -> None:
-        self._model = model
+    @agent.accepts(mid_turn=MidTurn.ACCEPT, model_callable=False)
+    async def set_approval_policy(self, policy_update: PolicyUpdate) -> TextReply:
+        """Update the agent's tool approval policy."""
+        match policy_update.new_policy:
+            case "allow_safe":
+                updated_policy = ToolApprovalPolicy.allow_inherently_safe()
+            case "strict":
+                updated_policy = ToolApprovalPolicy.always_require_approvals()
+            case "dangerously_skip_all":
+                updated_policy = ToolApprovalPolicy.dangerously_skip_all()
+            case _:
+                return TextReply(text=f"Unknown approval policy requested: {policy_update}")
+        self._runner.set_approval_policy(updated_policy)
+        return TextReply(text=f"Updated tool approval policy to: {policy_update}")
 
     # ------------------------------------------------------------------ chat loop
 
@@ -216,9 +238,7 @@ class MontyChatAgentWorkflow:
             if not pending_calls:
                 return reply_text
 
-            next_input = await asyncio.gather(
-                *(self._run_one_tool(fc) for fc in pending_calls)
-            )
+            next_input = await asyncio.gather(*(self._run_one_tool(fc) for fc in pending_calls))
 
     async def _run_one_tool(self, call: FunctionCallStep) -> FunctionResultStepParam:
         """Execute one ``run_travel_code`` call via ``run_tool`` and return its result.
@@ -228,9 +248,7 @@ class MontyChatAgentWorkflow:
         try:
             if call.name != self._code_tool.__name__:
                 raise ValueError(f"unknown tool: {call.name!r}")
-            result = await self._runner.run_tool(
-                call.id, self._code_tool, **call.arguments
-            )
+            result = await self._runner.run_tool(call.id, self._code_tool, **call.arguments)
             response: FunctionResultStepParam = {
                 "type": "function_result",
                 "call_id": call.id,
@@ -279,9 +297,7 @@ class MontyChatAgentWorkflow:
             stream=True,
         )
         if previous_interaction_id:
-            stream = await interactions_create_fn(
-                previous_interaction_id=previous_interaction_id
-            )
+            stream = await interactions_create_fn(previous_interaction_id=previous_interaction_id)
         else:
             stream = await interactions_create_fn()
 
@@ -292,16 +308,12 @@ class MontyChatAgentWorkflow:
         async for event in stream:
             match event:
                 case ErrorEvent(error=Error(message=msg, code=code)):
-                    raise ApplicationError(
-                        msg or "stream error", type=code or "stream_error"
-                    )
+                    raise ApplicationError(msg or "stream error", type=code or "stream_error")
                 case ErrorEvent():
                     raise ApplicationError("unknown stream error", type="stream_error")
                 case StepStart(index=idx, step=FunctionCallStep() as call):
                     calls_by_index[idx] = call
-                case StepDelta(
-                    index=idx, delta=DeltaArgumentsDelta(arguments=args)
-                ) if args:
+                case StepDelta(index=idx, delta=DeltaArgumentsDelta(arguments=args)) if args:
                     arg_buffers[idx] = arg_buffers.get(idx, "") + args
                 case StepDelta(delta=DeltaText(text=text)) if text:
                     text_parts.append(text)
@@ -315,9 +327,7 @@ class MontyChatAgentWorkflow:
             )
 
         function_calls = [
-            calls_by_index[idx].model_copy(
-                update={"arguments": json.loads(arg_buffers[idx])}
-            )
+            calls_by_index[idx].model_copy(update={"arguments": json.loads(arg_buffers[idx])})
             if arg_buffers.get(idx)
             else calls_by_index[idx]
             for idx in sorted(calls_by_index)

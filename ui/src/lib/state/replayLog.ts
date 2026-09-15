@@ -20,7 +20,6 @@ export type ReplayActor =
   | "queue"
   | "reasoning"
   | "subagent"
-  | "operator"
   | "system"
   | "error";
 
@@ -47,7 +46,9 @@ export interface ReplayLogRow {
   sourceLabel?: string;
   turnId: string;
   timestamp: number;
-  event: AgentEventType;
+  // An agent event's own type, or "stream_error" for the client-side frame /api/chat
+  // synthesizes — which no agent published, so it is not an AgentEventType.
+  event: AgentEventType | "stream_error";
   actor: ReplayActor;
   tone: ReplayTone;
   label: string;
@@ -174,15 +175,6 @@ function modelUsageBody(usage: UsageTotals): string {
   return `${formatTokens(usage.total)} tokens`;
 }
 
-function operatorCommandDisplay(data: {
-  command_label: string;
-  command_name: string;
-  arg?: string | null;
-}): string {
-  const label = data.command_label || `/${data.command_name}`;
-  return `${label}${data.arg ? ` ${data.arg}` : ""}`;
-}
-
 function normalizeReplayLogFrame(item: AgentSseFrame | ReplayLogFrame): ReplayLogFrame {
   return "frame" in item ? item : { frame: item, role: "parent" };
 }
@@ -204,7 +196,7 @@ function rowFromFrame(
       sourceLabel: entry.label,
       turnId: "client",
       timestamp: 0,
-      event: "error",
+      event: "stream_error",
       actor: "error",
       tone: "error",
       label: "Stream error",
@@ -235,62 +227,42 @@ function rowFromFrame(
     citations: [] as FileCitationAnnotation[]
   };
 
+  if (frame.event === "message_accepted") {
+    // One row for every admitted message, labelled by what it did to the turn — the queued
+    // case is no longer a separate event, and "joined" is a case the old vocabulary could not
+    // express at all.
+    const queued = frame.data.disposition === "queued";
+    return {
+      ...base,
+      actor: queued ? "queue" : "user",
+      tone: "queue",
+      label:
+        frame.data.disposition === "joined"
+          ? "Message joined the open turn"
+          : queued
+            ? "Message queued"
+            : "User message received",
+      body: renderUserMessage(frame.data.handler, frame.data.payload),
+      marker: queued ? "queue" : undefined,
+      markerLabel: queued ? "queued turn" : undefined
+    };
+  }
+
   if (frame.event === "turn_started") {
     return {
       ...base,
-      actor: "user",
-      tone: "queue",
-      label: "User message received",
-      body: renderUserMessage(frame.data.user_message)
+      actor: "system",
+      tone: "neutral",
+      label: "Turn started"
     };
   }
 
-  if (frame.event === "message_queued") {
+  if (frame.event === "message_handler_start") {
     return {
       ...base,
-      actor: "queue",
-      tone: "queue",
-      label: "Message queued",
-      body: renderUserMessage(frame.data.user_message),
-      marker: "queue",
-      markerLabel: "queued turn"
-    };
-  }
-
-  if (frame.event === "operator_command_started") {
-    return {
-      ...base,
-      actor: "operator",
-      tone: "queue",
-      label: "Operator command started",
-      body: operatorCommandDisplay(frame.data),
-      status: "running"
-    };
-  }
-
-  if (frame.event === "operator_command_completed") {
-    return {
-      ...base,
-      actor: "operator",
-      tone: "done",
-      label: "Operator command completed",
-      body: frame.data.text,
-      detail: operatorCommandDisplay(frame.data),
-      status: "completed"
-    };
-  }
-
-  if (frame.event === "operator_command_failed") {
-    return {
-      ...base,
-      actor: "operator",
-      tone: "error",
-      label: "Operator command failed",
-      body: frame.data.message,
-      detail: operatorCommandDisplay(frame.data),
-      status: "failed",
-      marker: "error",
-      markerLabel: "operator command failed"
+      actor: "system",
+      tone: "neutral",
+      label: "Handler started"
     };
   }
 
@@ -441,7 +413,7 @@ function rowFromFrame(
       actor: "subagent",
       tone: "tool",
       label: "Subagent message sent",
-      body: `${frame.data.function} → turn ${frame.data.subagent_turn}`,
+      body: `${frame.data.handler} → turn ${frame.data.subagent_turn}`,
       detail: `${frame.data.agent_key} · ${frame.data.subagent_id}`,
       status: "dispatched"
     };
@@ -453,7 +425,7 @@ function rowFromFrame(
       actor: "subagent",
       tone: frame.data.outcome === "ok" ? "done" : "error",
       label: "Subagent reply received",
-      body: `${frame.data.function} → turn ${frame.data.subagent_turn}`,
+      body: `${frame.data.handler} → turn ${frame.data.subagent_turn}`,
       detail: `${frame.data.agent_key} · ${frame.data.subagent_id}`,
       status: frame.data.outcome
     };
@@ -518,12 +490,12 @@ function rowFromFrame(
     };
   }
 
-  if (frame.event === "reply") {
+  if (frame.event === "message_handler_end") {
     return {
       ...base,
       actor: "agent",
       tone: "done",
-      label: "Final reply",
+      label: "Handler reply",
       body: textFromReply(frame.data),
       status: "complete"
     };
@@ -539,15 +511,15 @@ function rowFromFrame(
     };
   }
 
-  if (frame.event === "error") {
+  if (frame.event === "message_handler_error") {
     return {
       ...base,
       actor: "error",
       tone: "error",
-      label: "Agent error",
+      label: "Handler error",
       body: frame.data.message,
       marker: "error",
-      markerLabel: "agent error"
+      markerLabel: "handler error"
     };
   }
 

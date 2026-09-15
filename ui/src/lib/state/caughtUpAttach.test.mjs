@@ -69,6 +69,8 @@ const session = (id) => ({
   closed: false
 });
 
+const MESSAGE_ID = "m-hello";
+
 const frame = (offset) => ({
   event: "reply_delta",
   data: {
@@ -76,10 +78,30 @@ const frame = (offset) => ({
     agent_id: "root",
     turn_id: "t1",
     turn_number: 1,
+    message_id: MESSAGE_ID,
     timestamp: offset,
     resume_offset: offset + 1,
     event_offset: offset,
     delta: `#${offset} `,
+    replay: true
+  }
+});
+
+/* The terminal for the message submitMessage() above accepted. `sending` is
+   per-message and this is what clears it — not the stream going idle, which with
+   a refcounted turn is a different moment. */
+const handlerEnd = (offset) => ({
+  event: "message_handler_end",
+  data: {
+    type: "message_handler_end",
+    agent_id: "root",
+    turn_id: "t1",
+    turn_number: 1,
+    message_id: MESSAGE_ID,
+    timestamp: offset,
+    resume_offset: offset + 1,
+    event_offset: offset,
+    output: { text: "done" },
     replay: true
   }
 });
@@ -93,7 +115,13 @@ function boot({ sessions, streamFor, statusFor, listSessionsFor = async () => []
       return [{ key: "qa", label: "QA", workflow_type: "X", task_queue: "q", description: "" }];
     },
     async submitMessage() {
-      return { ok: true };
+      return {
+        turn_number: 1,
+        turn_id: "t1",
+        message_id: MESSAGE_ID,
+        accepted_offset: 0,
+        disposition: "opened"
+      };
     },
     async listSessions() {
       return listSessionsFor();
@@ -132,7 +160,7 @@ function boot({ sessions, streamFor, statusFor, listSessionsFor = async () => []
  * _attach_error in web/app.py.
  */
 const errorFrame = (code) => ({
-  event: "error",
+  event: "stream_error",
   data: { kind: "unavailable", code, message: `synthetic ${code}` }
 });
 
@@ -263,10 +291,12 @@ describe("a caught-up attach", () => {
   // The slow one, and the only case that reaches the end of the backoff. Two
   // things are only observable there.
   //
-  // `sending` gates the composer, and it was cleared in attach()'s `finally` —
-  // after every retry. So a reply that had fully arrived left the input locked
+  // `sending` gates the composer, and it was once cleared in attach()'s `finally`
+  // — after every retry. So a reply that had fully arrived left the input locked
   // for the whole budget: measured at 31,536ms, against a run that finished in
-  // under a second.
+  // under a second. It now clears on the message's own `message_handler_end`,
+  // the moment the reply is known to be complete, which the stream's fate cannot
+  // move.
   //
   // And a budget that runs out must stay silent. It does today, because a
   // caught-up stream ends cleanly and only the `catch` branch rethrows, so
@@ -279,7 +309,10 @@ describe("a caught-up attach", () => {
       streamFor: (_id, call) =>
         (async function* () {
           // The reply lands on the first attach; every later one is caught up.
-          if (call === 1) for (let i = 0; i < 4; i += 1) yield frame(i);
+          if (call === 1) {
+            for (let i = 0; i < 3; i += 1) yield frame(i);
+            yield handlerEnd(3);
+          }
         })(),
       statusFor: () => "RUNNING"
     });

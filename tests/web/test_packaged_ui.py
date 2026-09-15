@@ -137,24 +137,6 @@ def test_submit_message_request_rejects_client_supplied_from_offset() -> None:
     assert any("from_offset" in item.get("loc", []) for item in detail)
 
 
-def test_operator_command_request_rejects_client_supplied_from_offset() -> None:
-    app = create_agent_harness_app(registry=AgentRegistry())
-    client = TestClient(app)
-
-    response = client.post(
-        "/api/operator-commands",
-        json={
-            "session_id": "agent-session-test",
-            "name": "status",
-            "from_offset": 10,
-        },
-    )
-
-    assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert any("from_offset" in item.get("loc", []) for item in detail)
-
-
 def test_legacy_session_manager_example_folder_is_removed() -> None:
     legacy_example = ROOT / "examples" / "session_manager"
 
@@ -233,7 +215,6 @@ async def test_session_execution_state_reports_completed_workflow_closed() -> No
         created_at=123.0,
         label="Session 1",
         agent_workflow_type="TestAgent",
-        is_message_queuing_enabled=True,
     )
 
     result = await _session_with_execution_state(temporal, session)
@@ -243,7 +224,6 @@ async def test_session_execution_state_reports_completed_workflow_closed() -> No
         "created_at": 123.0,
         "label": "Session 1",
         "agent_workflow_type": "TestAgent",
-        "is_message_queuing_enabled": True,
         "is_discovered": False,
         "execution_status": "COMPLETED",
         "closed": True,
@@ -268,7 +248,6 @@ async def test_session_execution_state_includes_initial_user_message() -> None:
         created_at=123.0,
         label="Session 1",
         agent_workflow_type="TestAgent",
-        is_message_queuing_enabled=True,
     )
 
     result = await _session_with_execution_state(temporal, session)

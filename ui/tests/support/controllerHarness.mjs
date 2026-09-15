@@ -106,7 +106,6 @@ export function session(id, over = {}) {
     created_at: 1,
     label: id,
     agent_workflow_type: "IncidentTriageWorkflow",
-    is_message_queuing_enabled: false,
     run_id: `${id}-run`,
     execution_status: "RUNNING",
     closed: false,

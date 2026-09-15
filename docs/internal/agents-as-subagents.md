@@ -64,15 +64,15 @@ adapter that lets one harness agent drive another through that same standardized
   and `_stream_turn()` (phase 2). These are in-package primitives the harness reuses (e.g. the
   subagent activity); B adds idempotency to the `_submit_message` path.
 - `harness/agent_protocol/agent_interface.py` — `AgentConfig`, `AgentMessage`,
-  `UserInput`, `UserInputResult`, the `user_input` validator's `StaleTurn` / `AgentBusy` /
+  `UserInput`, `UserInputResult`, the `user_input` validator's `StaleTurn` / `MidTurnRejected` /
   `MalformedMessage` rejections. Workstream A: the `user_input` update → **`send_agent_message`**;
   its payload → an `AgentMessage{type, payload}` **envelope** (`type` names the target
   handler; `payload` is that handler's input-model JSON) — note `AgentMessage` is
   **repurposed** from "input base class w/ discriminator" to "the wire envelope". The old
   discriminator requirement and `_discriminator_value` are removed. `AcceptedMessageTypes`
   is **replaced** by `list[AcceptedFunction]` under the renamed `agent_interface` query.
-- `harness/agent_protocol/events.py` — `AgentReply` (`reply`), `TurnEnded` (`turn_end`).
-  `AgentReply.output: dict[str, Any]` carries the handler's **return value**
+- `harness/agent_protocol/events.py` — `MessageHandlerEnd` (`message_handler_end`), `TurnEnded` (`turn_end`).
+  `MessageHandlerEnd.output: dict[str, Any]` carries the handler's **return value**
   (`result.model_dump(mode="json")`, no manual publish). A `dict` round-trips trivially on
   the shared stream union; a consumer that knows the expected type (from `agent_interface`)
   re-validates it — i.e. boundary validation, rather than making `AgentEvent` generic over
@@ -124,11 +124,13 @@ adapter that lets one harness agent drive another through that same standardized
    consumed that turn) and surface `is_error`; on a pre-acceptance rejection (abnormal under
    the gate — e.g. an external driver) advance nothing and surface `is_error`.
 
-   **Consequence (explicit):** this **bypasses the child's own message-queuing mechanism** for
-   parent-driven turns — the parent serializes caller-side instead, so `AgentBusy` /
-   `is_message_queuing_enabled` never surface to the parent. A deliberate reversal of the
-   earlier "expose the child's queuing model" intent, traded for race-freedom at no throughput
-   cost. Gates are per-subagent, so calls to *different* subagents still run concurrently.
+   **Consequence (explicit):** this **serializes parent-driven turns caller-side**, so the child's
+   own mid-turn behavior never comes into play for them — a `MidTurn.REJECT` handler is not
+   spuriously refused just because the parent issued two calls at once, because the gate means the
+   second call is not sent until the first finishes. A deliberate reversal of the earlier "expose
+   the child's queuing model" intent, traded for race-freedom at no throughput cost. Gates are
+   per-subagent, so calls to *different* subagents still run concurrently. A human addressing the
+   same child directly is NOT behind this gate, so the child's declared `mid_turn` governs there.
 3. **[OPEN — Workstream B, deferred] Hash-retention scope** — retain only the last K turns'
    `turn_number → hash` (dedupe window is the activity-retry window, ~seconds), vs.
    unbounded. Leaning bounded-K. Only relevant once idempotency is picked up.
@@ -164,7 +166,7 @@ adapter that lets one harness agent drive another through that same standardized
    the child's stream. So the lifecycle signal exists on the parent stream; only the
    *consuming* of the child streams is deferred. In addition, each **dispatch** to a subagent
    emits **`subagent_message_sent`** (2026-06-17) — same `handle` + `agent_key` + `workflow_id`
-   plus the target `function` and the **`subagent_turn`** (the turn number ON THE CHILD —
+   plus the target `handler` and the **`subagent_turn`** (the turn number ON THE CHILD —
    deliberately NOT named `turn_number`, since the enclosing `AgentEvent` envelope already carries
    the *parent's* `turn_number`; several dispatches in one parent turn share that envelope turn but
    get distinct `subagent_turn`s) — so a per-turn message to a specific subagent is distinguishable
@@ -187,7 +189,7 @@ adapter that lets one harness agent drive another through that same standardized
 after a successful REPLY; a turn that ends in ERROR does not emit it" — contradicting the
 implementation (and `agent_client.py`), which always emits it. **Canonical = always emit.**
 Workstream A's `runner.run(self)` loop publishes `turn_end` in a `finally` for every turn
-(after `AgentReply` on success, after `AgentError` on a raise), and the stale `events.py`
+(after `MessageHandlerEnd` on success, after `MessageHandlerError` on a raise), and the stale `events.py`
 docstrings were corrected to match (2026-06-15).
 
 ---
@@ -204,10 +206,10 @@ Each is intended to be separable and potentially worked in its own session. Stat
 
 > **Implemented (2026-06-15).** `@agent.accepts` + `_discover_handlers` + `agent_handlers`
 > (`harness/agent_workflow.py`); `defn` stamps `__agent_handlers__` at import. Runner
-> rewritten: name-routed `send_agent_message` validator (`StaleTurn`/`AgentBusy`/
+> rewritten: name-routed `send_agent_message` validator (`StaleTurn`/`MidTurnRejected`/
 > `UnknownFunction`/`MalformedMessage`, all with structured `details`), `agent_interface`
 > query → `list[AcceptedFunction]`, and `runner.run(self)` turn loop (publishes the
-> handler's return as the reply, `AgentError`+`turn_end` on raise, loop survives). Removed
+> handler's return as the reply, `MessageHandlerError`+`turn_end` on raise, loop survives). Removed
 > `Turn`/`AgentRunContext`/`turns()`/`start()`/`add_accepted_message`/the `M` type param —
 > **and the whole builder**: `_runner_builder.py`, `Generic[M]`, and the sentinel-key guard
 > are deleted; the runner is constructed directly,
@@ -215,14 +217,14 @@ Each is intended to be separable and potentially worked in its own session. Stat
 > with config-vs-default resolution in `__init__` (`stream` + `approval_policy_default`
 > required). Protocol: `AgentMessage{type, payload, expected_turn}` envelope (the
 > `expected_turn` is folded onto it; `UserInput` deleted), `AcceptedFunction`, `TextMessage`/
-> `TextReply` built-ins (plain models, no discriminator), `AgentReply{output: dict}` (the
+> `TextReply` built-ins (plain models, no discriminator), `MessageHandlerEnd{output: dict}` (the
 > handler's return model dumped to JSON — no `text`/`output_type`); `user_input`→
 > `send_agent_message`, `accepted_message_types`→`agent_interface`. Client:
 > `send_message(msg_type, payload, expected_turn, ...)` (flattened — callers don't import
 > `AgentMessage`; builds the envelope internally), `get_agent_interface`. Migrated: QaAgent
 > (`ask`/`slash`), MontyDynamicAgent (`run_script`), `server/app.py` (`/api/agent-interface`,
 > hardcodes the `ask` text handler), `server/mcp/cli.py` (hardcodes `ask`), `chat.html`
-> (slash UI + envelope) and `states.html` (agent-agnostic: renders `AgentReply.output` as
+> (slash UI + envelope) and `states.html` (agent-agnostic: renders `MessageHandlerEnd.output` as
 > raw JSON). All harness + Monty tests pass (40). pyflakes clean; no new pyright errors.
 > **Not done (deferred to B):** message-hash dedupe / idempotent resend — the `details`
 > payloads are in place, but `DuplicateMessage` + `submit_message` are Workstream B.
@@ -230,7 +232,7 @@ Each is intended to be separable and potentially worked in its own session. Stat
 **Problem this solves.** We need (a) the subagent generator to read a subagent's accepted
 messages — with input/output schemas + descriptions — **statically, no workflow started**,
 and (b) the strongest possible static guarantee that an agent replies with the declared
-type. The earlier `turns()`-iterator + manual `turn.publish(AgentReply(...))` model can't
+type. The earlier `turns()`-iterator + manual `turn.publish(MessageHandlerEnd(...))` model can't
 give (b): the output type is detached from the input, so a wrong reply is a runtime
 problem. (We explored an import-time `AgentSpec[M]` with a `RepliesWith[O]` phantom mixin;
 it type-checked, but it was a phantom carrier and still allowed `turn.reply(WrongInput(),
@@ -257,14 +259,16 @@ class QaAgentWorkflow:
     async def run(self, config: AgentConfig) -> None:
         await self._runner.run(self)          # internal loop: validate → route by type → publish return
 
-    @agent.accepts
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def on_text(self, msg: TextMessage) -> TextReply:
         """Answer a free-form question about the docs."""        # docstring → function description
         ...
 
-    @agent.accepts
-    async def slash(self, cmd: SlashCommand) -> SlashCommandResult:
-        """Apply a slash command to the session."""
+    # ACCEPT so it applies to a session that is mid-turn; not model_callable, so the default
+    # SubagentToolPolicy leaves it out of a parent's generated toolset.
+    @agent.accepts(mid_turn=MidTurn.ACCEPT, model_callable=False)
+    async def set_scope(self, msg: SetScope) -> TextReply:
+        """Narrow which docs this session searches."""
         ...
 ```
 
@@ -302,7 +306,7 @@ class QaAgentWorkflow:
   `MalformedMessage` (details). Dispatch coerces `payload` via the named handler's input model.
 - `runner.run(self)` — the internal loop replacing `turns()`/`Turn`/`AgentRunContext`:
   await `send_agent_message`, resolve+coerce by name, `await` the handler, validate + publish
-  the return as the typed reply, emit `turn_end` (and `AgentError` on raise — same semantics
+  the return as the typed reply, emit `turn_end` (and `MessageHandlerError` on raise — same semantics
   as the old `__aexit__`). Remove `turns()`, `Turn`, `AgentRunContext`.
 - Delete `_runner_builder.py` (and `Generic[M]` / `add_accepted_message` / sentinel key);
   construct `AgentWorkflowRunner(config, stream=..., approval_policy_default=..., ...)`
@@ -317,7 +321,7 @@ class QaAgentWorkflow:
   pydantic model — no base/discriminator) + `TextReply{text}`, used as a handler's
   input/output. There is **no** implicit bare-`str` channel anymore — free text is just
   `send_agent_message(type="on_text", payload={"text": ...})`.
-- `AgentReply.output: dict[str, Any]` = the handler's return model dumped to JSON; harness
+- `MessageHandlerEnd.output: dict[str, Any]` = the handler's return model dumped to JSON; harness
   publishes it. Consumers re-validate against the known output type (boundary validation —
   see Workstream C's consume side). `expected_turn` is carried **on the `AgentMessage`
   envelope** (no `UserInput` wrapper); the dedupe hash (Workstream B) must cover only
@@ -334,7 +338,7 @@ correctness-of-the-feature requirement, so it must not gate the working demo.
 
 > **Already shipped in A (not part of this deferred work):** the *structured rejection
 > `details`* on every `send_agent_message` rejection —
-> `StaleTurn {expected_turn, next_turn}` · `AgentBusy {current_turn}` ·
+> `StaleTurn {expected_turn, next_turn}` · `MidTurnRejected {function, current_turn, turn_participants}` ·
 > `UnknownFunction {name, known}` · `MalformedMessage {function, error}`. Those payloads are
 > in place precisely so this workstream can add `DuplicateMessage` later without reworking
 > the rejection surface.
@@ -390,7 +394,7 @@ already landed in A).
 > update and the stream subscribe against the *child* — but **not by re-implementing them**:
 > the activity drives the child through the same `AgentClient` front door a human/UI uses.
 > `agent_client.py` was refactored into two **private** composable halves of `send_message` —
-> `_submit_message(...)` (phase 1: the update + `StaleTurn`/`AgentBusy` mapping) and
+> `_submit_message(...)` (phase 1: the update + `StaleTurn`/`MidTurnRejected` mapping) and
 > `_stream_turn(turn_id=…, from_offset=…, timeout=…)` (phase 2: the turn-id/error/turn_end
 > reduce loop, `timeout: float | None` so `None` = wait indefinitely). `send_message` (the one
 > PUBLIC way to drive a turn) is now just `_submit_message` + `_stream_turn`, and the activity
@@ -455,14 +459,16 @@ child_workflow_id)` against the **child**, NOT the parent.
     consumed_offset: head})`.
   - *already sent* (retry landed after the send) → **skip the send**; resume from the
     heartbeated `consumed_offset`.
-- **Then stream:** subscribe to the child's stream from the offset, filter to `turn_id`,
-  capture `AgentReply.output`, terminate on that turn's `turn_end` (surface an `error` event
-  as failure — mirror `AgentClient.send_message`'s reduce loop, the exact template).
+- **Then stream:** subscribe to the child's stream from the offset, capture the
+  `MessageHandlerEnd.output` carrying **our own** `message_id` (NOT the last one on the turn — a
+  child turn is refcounted and can carry several participants), terminate on that turn's
+  `turn_end`, and surface our own `message_handler_error` as the failure (a sibling's is not
+  this tool call's).
   **Heartbeat `{… consumed_offset: latest}` every N sec** (default ~5s); the dispatching tool
   sets a default **`heartbeat_timeout`** (~30s).
 - **Return contract:** the **raw `output` dict** (+ `turn_id`/`turn_number`); the inline
   `send_<function>` tool re-validates against the handler's statically-known `output_type`
-  (boundary validation). A turn that ends via `turn_end` with **no** preceding `AgentReply`
+  (boundary validation). A turn that ends via `turn_end` with **no** preceding `MessageHandlerEnd`
   (e.g. error-only) raises, so the tool surfaces an `is_error` result.
 - **Best-effort, NOT idempotent (B still required).** The memo skips re-send on the common
   retry path, but a crash in the tiny window *between the update returning and the first

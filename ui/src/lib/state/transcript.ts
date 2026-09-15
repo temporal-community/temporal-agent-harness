@@ -1,5 +1,5 @@
 import type { AgentSseFrame, FileCitationAnnotation } from "$lib/api/types";
-import { renderUserMessage } from "$lib/state/inboundMessageText";
+import { messageKey, renderUserMessage } from "$lib/state/inboundMessageText";
 import { thoughtDeltaText } from "$lib/state/thoughtSummary";
 
 export type TranscriptItem =
@@ -39,15 +39,6 @@ export type TranscriptItem =
       turnNumber: number;
       text: string;
       timestamp: number;
-    }
-  | {
-      kind: "operator";
-      id: string;
-      turnNumber: number;
-      command: string;
-      text: string;
-      status: "running" | "completed" | "failed";
-      timestamp: number;
     };
 
 function textFromReply(data: { text?: unknown; output?: unknown }): string {
@@ -72,72 +63,33 @@ function citationAnnotations(frame: AgentSseFrame): FileCitationAnnotation[] {
   );
 }
 
-function operatorCommandDisplay(data: {
-  command_label: string;
-  command_name: string;
-  arg?: string | null;
-}): string {
-  const label = data.command_label || `/${data.command_name}`;
-  return `${label}${data.arg ? ` ${data.arg}` : ""}`;
-}
-
 export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
-  const replyIndexByTurn = new Map<number, number>();
+  // Keyed by MESSAGE, not by turn. A turn is refcounted, so two `mid_turn: "accept"` handlers
+  // can be streaming under one turn_id at once — keying by turn would merge their replies into
+  // one bubble and interleave their text.
+  const replyIndexByMessage = new Map<string, number>();
   const toolIndexById = new Map<string, number>();
-  const operatorIndexById = new Map<string, number>();
-  const citationsByTurn = new Map<number, FileCitationAnnotation[]>();
+  const citationsByMessage = new Map<string, FileCitationAnnotation[]>();
 
   for (const frame of frames) {
     if (!("type" in frame.data)) continue;
     const { turn_number, timestamp } = frame.data;
+    const key = messageKey(frame);
 
-    if (frame.event === "turn_started") {
+    if (frame.event === "message_accepted") {
       items.push({
         kind: "user",
-        id: `user-${frame.data.turn_id}`,
+        id: `user-${key}`,
         turnNumber: turn_number,
-        text: renderUserMessage(frame.data.user_message),
+        text: renderUserMessage(frame.data.handler, frame.data.payload),
         timestamp
       });
     }
 
-    if (
-      frame.event === "operator_command_started" ||
-      frame.event === "operator_command_completed" ||
-      frame.event === "operator_command_failed"
-    ) {
-      const command = operatorCommandDisplay(frame.data);
-      let itemIndex = operatorIndexById.get(frame.data.operator_command_id);
-      if (itemIndex == null) {
-        itemIndex = items.length;
-        operatorIndexById.set(frame.data.operator_command_id, itemIndex);
-        items.push({
-          kind: "operator",
-          id: `operator-${frame.data.operator_command_id}`,
-          turnNumber: turn_number,
-          command,
-          text: "Running...",
-          status: "running",
-          timestamp
-        });
-      }
-      const item = items[itemIndex];
-      if (!item || item.kind !== "operator") continue;
-      item.timestamp = timestamp;
-      item.command = command;
-      if (frame.event === "operator_command_completed") {
-        item.status = "completed";
-        item.text = frame.data.text;
-      } else if (frame.event === "operator_command_failed") {
-        item.status = "failed";
-        item.text = frame.data.message;
-      }
-    }
-
     if (frame.event === "text_annotation") {
-      const existing = citationsByTurn.get(turn_number) ?? [];
-      citationsByTurn.set(turn_number, [...existing, ...citationAnnotations(frame)]);
+      const existing = citationsByMessage.get(key) ?? [];
+      citationsByMessage.set(key, [...existing, ...citationAnnotations(frame)]);
     }
 
     if (frame.event === "thought_summary") {
@@ -145,7 +97,7 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
       if (text) {
         items.push({
           kind: "thought",
-          id: `thought-${frame.data.turn_id}-${frame.data.timestamp}`,
+          id: `thought-${key}-${frame.data.timestamp}`,
           turnNumber: turn_number,
           text,
           timestamp
@@ -154,13 +106,13 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
     }
 
     if (frame.event === "reply_delta") {
-      let itemIndex = replyIndexByTurn.get(turn_number);
+      let itemIndex = replyIndexByMessage.get(key);
       if (itemIndex == null) {
         itemIndex = items.length;
-        replyIndexByTurn.set(turn_number, itemIndex);
+        replyIndexByMessage.set(key, itemIndex);
         items.push({
           kind: "agent",
-          id: `reply-${frame.data.turn_id}`,
+          id: `reply-${key}`,
           turnNumber: turn_number,
           text: "",
           streaming: true,
@@ -172,27 +124,27 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
       if (item?.kind === "agent") item.text += frame.data.text;
     }
 
-    if (frame.event === "reply") {
+    if (frame.event === "message_handler_end") {
       const text = textFromReply(frame.data);
-      let itemIndex = replyIndexByTurn.get(turn_number);
+      let itemIndex = replyIndexByMessage.get(key);
       if (itemIndex == null) {
         itemIndex = items.length;
-        replyIndexByTurn.set(turn_number, itemIndex);
+        replyIndexByMessage.set(key, itemIndex);
         items.push({
           kind: "agent",
-          id: `reply-${frame.data.turn_id}`,
+          id: `reply-${key}`,
           turnNumber: turn_number,
           text,
           streaming: false,
           timestamp,
-          citations: citationsByTurn.get(turn_number) ?? []
+          citations: citationsByMessage.get(key) ?? []
         });
       } else {
         const item = items[itemIndex];
         if (item?.kind === "agent") {
           item.text = text || item.text;
           item.streaming = false;
-          item.citations = citationsByTurn.get(turn_number) ?? [];
+          item.citations = citationsByMessage.get(key) ?? [];
         }
       }
     }

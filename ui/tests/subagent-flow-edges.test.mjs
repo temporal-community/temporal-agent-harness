@@ -24,7 +24,7 @@ const parent = {
     frame("turn_started", { user_message: "delegate", turn_number: 1 }),
     frame("model_interaction_started", { model: "gpt-5.1" }),
     frame("subagent_started", { subagent_id: "s1", workflow_id: "wf-a", agent_key: "task" }),
-    frame("reply", { output: { text: "delegated" } })
+    frame("message_handler_end", { output: { text: "delegated" } })
   ],
   agentInterface: []
 };
@@ -40,7 +40,7 @@ const sub = {
     frame("turn_started", { user_message: "summarize the README", turn_number: 2 }),
     frame("model_interaction_started", { model: "gpt-5.1" }),
     frame("model_interaction_ended", { model: "gpt-5.1" }),
-    frame("reply", { output: { text: "one concise paragraph" } }),
+    frame("message_handler_end", { output: { text: "one concise paragraph" } }),
     frame("turn_end", { turn_number: 2 })
   ],
   agentInterface: [{ name: "ask", description: "ask the subagent something" }],

@@ -83,8 +83,8 @@
   once Monty migrated.
 - **Close-while-pending is verified via a query, not the post-close stream.**
   `WorkflowStreamClient` events are served by the *live* workflow; once the workflow
-  COMPLETES (which closing does), the trailing `tool_approval_resolved` / `reply` /
-  `turn_end` are no longer replayable. The test therefore asserts the durable outcome
+  COMPLETES (which closing does), the trailing `tool_approval_resolved` /
+  `message_handler_end` / `turn_end` are no longer replayable. The test therefore asserts the durable outcome
   with a `last_reply` query after completion. The approve/deny/concurrent tests read the
   live stream normally (their workflow stays running).
 - The E2E tests (`harness/test_tool_approvals.py`) run against a real workflow + activity

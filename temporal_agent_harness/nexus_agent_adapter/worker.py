@@ -48,7 +48,6 @@ async def main() -> None:
         agent_task_queue=agent_task_queue,
         workflow_name=agent_workflow_name,
         workflow_id_prefix=workflow_id_prefix,
-        is_message_queuing_enabled=True,
     )
     worker = Worker(
         client,

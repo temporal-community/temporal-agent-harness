@@ -160,7 +160,7 @@ async def test_the_board_streams_and_replays_into_what_the_agent_holds(client_an
     assert [task["done"] for task in trip["remaining"]] == [True, True, False, False, False]
 
     # The reply the model would have read back names the trip the board is holding.
-    reply = next(e for e in events if e.event.type == AgentEventType.REPLY)
+    reply = next(e for e in events if e.event.type == AgentEventType.MESSAGE_HANDLER_END)
     assert trip["trip_id"] in reply.event.output["text"]
 
 

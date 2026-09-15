@@ -191,13 +191,13 @@
   function sessionStatusKind(session: Session): StatusKind {
     if (sessionClosedById(session.workflow_id)) return "closed";
     if (session.workflow_id === sessionId) return statusKind;
-    return session.is_message_queuing_enabled ? "queued" : "idle";
+    return "idle";
   }
 
   function sessionStatusLabel(session: Session): string {
     if (sessionClosedById(session.workflow_id)) return "Closed";
     if (session.workflow_id === sessionId) return "Active";
-    return session.is_message_queuing_enabled ? "Queue on" : "Idle";
+    return "Idle";
   }
 
   function sessionClosedById(nextSessionId: string): boolean {
