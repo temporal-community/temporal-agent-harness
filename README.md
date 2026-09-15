@@ -50,7 +50,7 @@ worth cloning once to watch the whole stack work.
 Clone at a release tag. No Node/pnpm needed: the browser UI ships prebuilt.
 
 ```bash
-git clone --branch 0.3.0 https://github.com/temporal-community/temporal-agent-harness.git
+git clone --branch 0.4.0 https://github.com/temporal-community/temporal-agent-harness.git
 cd temporal-agent-harness
 cp .env.example .env.local   # then set GEMINI_API_KEY (and/or OPENAI_API_KEY)
 ```
@@ -74,7 +74,7 @@ one UI.
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
 the tag rather than on a branch. Later, move to a newer release with
 `git fetch --tags && git checkout <version>`, or see what changed between two of them with
-`git diff 0.2.0 0.3.0`.
+`git diff 0.3.0 0.4.0`.
 
 ### Build with it — install from PyPI
 
@@ -83,7 +83,7 @@ The harness is published to
 [`uv`](https://docs.astral.sh/uv/)-managed project:
 
 ```bash
-uv add 'temporal-agent-harness[ui]==0.3.0'
+uv add 'temporal-agent-harness[ui]==0.4.0'
 ```
 
 Or declare it in `pyproject.toml` — an ordinary dependency, no `[tool.uv.sources]` needed:
@@ -102,7 +102,7 @@ dependencies = [
     #   s3              S3-backed offload for large payloads
     #
     # What each one pulls in, and when you actually need it, is in the Extras table below.
-    "temporal-agent-harness[ui]==0.3.0",
+    "temporal-agent-harness[ui]==0.4.0",
 ]
 ```
 
@@ -176,7 +176,7 @@ opt-in:
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 
-Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.3.0'`.
+Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.4.0'`.
 
 ## Versioning and stability
 
@@ -188,7 +188,7 @@ UI matches the source it was built from.
 
 Two artifacts come out of a release, and they pin differently:
 
-- **The library** — pin an exact version from PyPI (`temporal-agent-harness==0.3.0`).
+- **The library** — pin an exact version from PyPI (`temporal-agent-harness==0.4.0`).
 - **The examples** — check out the matching git tag. They are *not* shipped in the package, so a
   PyPI install gives you the library, the packaged UI, and the CLI, but no `examples/` tree.
 
