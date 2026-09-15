@@ -2,8 +2,6 @@ import type {
   AgentInboundMessage,
   AgentInterfaceFunction,
   AgentSseFrame,
-  OperatorCommand,
-  OperatorCommandResponse,
   ToolId,
   WorkflowExecutionState
 } from "$lib/api/types";
@@ -38,11 +36,7 @@ import {
   publishAtChunkBoundary,
   settleIsLive
 } from "./hydration";
-import {
-  displayTextForMessage,
-  isAgentMessageObject,
-  renderUserMessage
-} from "./inboundMessageText";
+import { displayTextForMessage, renderUserMessage } from "./inboundMessageText";
 import { buildReplayLog, buildReplayMarkers } from "./replayLog";
 import { buildReplayTimeline } from "./replayTimeline";
 import { buildStepBoundaries, buildStepTimeline } from "./stepTimeline";
@@ -67,16 +61,22 @@ export interface ObservedSubagent {
   agentKey: string;
   label: string;
   agentInterface?: AgentInterfaceFunction[];
-  operatorInterface?: OperatorCommand[];
   targetTurn: number | null;
   stopped: boolean;
 }
 
-export interface OperatorTarget {
+/**
+ * One agent a message can be addressed to: the session's parent, or a live subagent of it.
+ *
+ * Carries that agent's OWN discovered handler surface, because a subagent generally accepts
+ * different messages than its parent — the composer reads `agentInterface` from whichever
+ * target is selected rather than assuming the parent's surface applies everywhere.
+ */
+export interface MessageTarget {
   workflowId: string;
   role: "parent" | "subagent";
   label: string;
-  operatorInterface: OperatorCommand[];
+  agentInterface: AgentInterfaceFunction[];
   closed: boolean;
 }
 
@@ -111,24 +111,6 @@ function now(): number {
  * here.
  */
 const reattachBackoffMs = [500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000];
-
-/** Sleep, unless the stream is abandoned first. */
-function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    let timer: ReturnType<typeof setTimeout>;
-    const settle = (): void => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", settle);
-      resolve();
-    };
-    timer = setTimeout(settle, ms);
-    signal.addEventListener("abort", settle, { once: true });
-  });
-}
 
 /**
  * Hand the main thread back so the browser can paint and answer input.
@@ -185,6 +167,31 @@ export function frameKey(frame: AgentSseFrame): string {
   return `${frame.event}|${JSON.stringify(identityData)}`;
 }
 
+/**
+ * Exported for replayTimeline.test.mjs and turnNavigation.test.mjs, which assert on the
+ * shipped rule rather than on a hand-copied twin of it.
+ */
+export function turnMarkersOf(
+  timeline: ReadonlyArray<{ role: string; frame: AgentSseFrame }>
+): Array<{ index: number; turnNumber: number }> {
+  const markers: Array<{ index: number; turnNumber: number }> = [];
+  timeline.forEach((entry, index) => {
+    if (entry.role !== "parent" || !("type" in entry.frame.data)) return;
+    if (entry.frame.event !== "turn_started") return;
+    const turnNumber = entry.frame.data.turn_number;
+    const previous = index > 0 ? timeline[index - 1] : null;
+    const openedBy =
+      previous != null &&
+      previous.role === "parent" &&
+      previous.frame.event === "message_accepted" &&
+      "type" in previous.frame.data &&
+      previous.frame.data.turn_number === turnNumber &&
+      previous.frame.data.disposition === "opened";
+    markers.push({ index: openedBy ? index - 1 : index, turnNumber });
+  });
+  return markers;
+}
+
 function isAbortError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -194,18 +201,6 @@ function isAbortError(error: unknown): boolean {
   );
 }
 
-function isOperatorCommandFrame(frame: AgentSseFrame): boolean {
-  return (
-    frame.event === "operator_command_started" ||
-    frame.event === "operator_command_completed" ||
-    frame.event === "operator_command_failed"
-  );
-}
-
-function isStopOperatorCommandName(name: string): boolean {
-  return name === "stop-agent" || name === "stop";
-}
-
 export class AgentRunController {
   #api: AgentApi;
   #initialized = false;
@@ -213,7 +208,6 @@ export class AgentRunController {
   frames = $state<AgentSseFrame[]>([]);
   observedSubagents = $state<ObservedSubagent[]>([]);
   agentInterfaces = $state<Record<string, AgentInterfaceFunction[]>>({});
-  operatorInterfaces = $state<Record<string, OperatorCommand[]>>({});
   closedWorkflowIds = $state<string[]>([]);
   viewIndex = $state(0);
   playing = $state(false);
@@ -251,8 +245,21 @@ export class AgentRunController {
   /** When the last listSessions finished (ms). */
   #sessionsLoadedAt = 0;
   #streamAbort: AbortController | null = null;
+  /**
+   * Wakes the stream's backoff sleep early. Set only while `attach` is sleeping between
+   * attempts, so a send that lands in that window re-opens the stream now rather than
+   * after the rest of the wait.
+   */
+  #streamWake: (() => void) | null = null;
+  /**
+   * message_ids submitted whose handler has not published a terminal yet. `sending` is
+   * per-MESSAGE, not per-stream: with a refcounted turn the stream can stay open long after
+   * our own message finished (a sibling participant is still going), and a joined message can
+   * finish while the turn it joined runs on. The stream reaching quiescence is no longer the
+   * signal that our send completed — its own message_handler_end/_error is.
+   */
+  #awaitingMessages = new Set<string>();
   #interfaceRequests = new Set<string>();
-  #operatorInterfaceRequests = new Set<string>();
   #workflowResumeOffsets = new Map<string, number>();
   #workflowAttachAbort = new Map<string, AbortController>();
   #frameKeys = new Set<string>();
@@ -407,7 +414,7 @@ export class AgentRunController {
       linger: this.graphLinger
     })
   );
-  operatorTargets = $derived(this.#operatorTargets());
+  messageTargets = $derived(this.#messageTargets());
   sessionClosed = $derived(
     this.session != null && this.#isWorkflowClosed(this.session.workflow_id)
   );
@@ -420,7 +427,7 @@ export class AgentRunController {
   chatTranscript = $derived(
     buildTranscript(
       this.replayTimeline
-        .filter((entry) => entry.role === "parent" || isOperatorCommandFrame(entry.frame))
+        .filter((entry) => entry.role === "parent")
         .map((entry) => entry.frame)
     )
   );
@@ -432,17 +439,16 @@ export class AgentRunController {
   stepTimeline = $derived(buildStepTimeline(this.replayTimeline));
   stepBoundaries = $derived(buildStepBoundaries(this.stepTimeline));
   anomalyMarkers = $derived(buildReplayMarkers(this.fullReplayLog));
-  turnMarkers = $derived(
-    this.replayTimeline
-      .map((entry, index) =>
-        entry.role === "parent" &&
-        entry.frame.event === "turn_started" &&
-        "type" in entry.frame.data
-          ? { index, turnNumber: entry.frame.data.turn_number }
-          : null
-      )
-      .filter((item): item is { index: number; turnNumber: number } => item != null)
-  );
+  /**
+   * Where each of the root's turns begins in the timeline: its `turn_started`, or
+   * the `message_accepted` immediately before it when that admission opened the
+   * turn. The message is the first thing a reader wants to land on, and for an
+   * opened message it sits one frame ahead of the bracket; a queued message was
+   * admitted much earlier, inside the previous turn, so its turn is entered at
+   * the bracket itself rather than at a marker parked mid-way through another
+   * turn's work.
+   */
+  turnMarkers = $derived(turnMarkersOf(this.replayTimeline));
 
   get total(): number {
     // buildReplayTimeline() emits exactly one entry per frame, so this matches
@@ -546,8 +552,6 @@ export class AgentRunController {
           frames: visibleSubagentFrames.get(agent.workflowId) ?? [],
           agentInterface:
             this.agentInterfaces[agent.workflowId] ?? agent.agentInterface ?? [],
-          operatorInterface:
-            this.operatorInterfaces[agent.workflowId] ?? agent.operatorInterface ?? [],
           stopped: agent.stopped || this.#isWorkflowClosed(agent.workflowId)
         }))
     ];
@@ -622,6 +626,8 @@ export class AgentRunController {
     this.closedWorkflowIds = [...this.closedWorkflowIds, workflowId];
     if (workflowId === this.session?.workflow_id) {
       this.#stopStream();
+      /* A closed workflow publishes nothing more, so no awaited terminal can arrive. */
+      this.#settleOutstandingMessages();
     } else {
       this.#stopWorkflowAttach(workflowId);
     }
@@ -679,7 +685,7 @@ export class AgentRunController {
     return this.#workflowResumeOffsets.get(workflowId) ?? 0;
   }
 
-  #operatorTargets(): OperatorTarget[] {
+  #messageTargets(): MessageTarget[] {
     const session = this.session;
     if (!session) return [];
     return [
@@ -687,59 +693,18 @@ export class AgentRunController {
         workflowId: session.workflow_id,
         role: "parent",
         label: this.runInfo.agentLabel,
-        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? [],
+        agentInterface: this.agentInterfaces[session.workflow_id] ?? [],
         closed: this.#isWorkflowClosed(session.workflow_id)
       },
-      ...this.observedSubagents
-        .map((agent) => ({
-          workflowId: agent.workflowId,
-          role: agent.role,
-          label: agent.label,
-          operatorInterface:
-            this.operatorInterfaces[agent.workflowId] ??
-            agent.operatorInterface ??
-            [],
-          closed: agent.stopped || this.#isWorkflowClosed(agent.workflowId)
-        }))
+      ...this.observedSubagents.map((agent) => ({
+        workflowId: agent.workflowId,
+        role: "subagent" as const,
+        label: agent.label,
+        agentInterface:
+          this.agentInterfaces[agent.workflowId] ?? agent.agentInterface ?? [],
+        closed: agent.stopped || this.#isWorkflowClosed(agent.workflowId)
+      }))
     ];
-  }
-
-  operatorTargetForWorkflow(workflowId?: string | null): OperatorTarget | null {
-    const session = this.session;
-    if (!session) return null;
-    if (!workflowId || workflowId === session.workflow_id) {
-      return {
-        workflowId: session.workflow_id,
-        role: "parent",
-        label: this.runInfo.agentLabel,
-        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? [],
-        closed: this.#isWorkflowClosed(session.workflow_id)
-      };
-    }
-
-    const subagent = this.observedSubagents.find(
-      (agent) => agent.workflowId === workflowId
-    );
-    if (!subagent) {
-      return {
-        workflowId: session.workflow_id,
-        role: "parent",
-        label: this.runInfo.agentLabel,
-        operatorInterface: this.operatorInterfaces[session.workflow_id] ?? [],
-        closed: this.#isWorkflowClosed(session.workflow_id)
-      };
-    }
-
-    return {
-      workflowId: subagent.workflowId,
-      role: "subagent",
-      label: subagent.label,
-      operatorInterface:
-        this.operatorInterfaces[subagent.workflowId] ??
-        subagent.operatorInterface ??
-        [],
-      closed: subagent.stopped || this.#isWorkflowClosed(subagent.workflowId)
-    };
   }
 
   #subagentLabel(agentKey: string, subagentId: string): string {
@@ -768,8 +733,6 @@ export class AgentRunController {
       label: this.#subagentLabel(agentKey, data.subagent_id),
       agentInterface:
         this.agentInterfaces[data.workflow_id] ?? existing?.agentInterface,
-      operatorInterface:
-        this.operatorInterfaces[data.workflow_id] ?? existing?.operatorInterface,
       targetTurn:
         data.targetTurn == null
           ? existing?.targetTurn ?? null
@@ -805,32 +768,6 @@ export class AgentRunController {
     }
   }
 
-  async #fetchOperatorInterface(workflowId: string): Promise<void> {
-    if (
-      this.operatorInterfaces[workflowId] ||
-      this.#operatorInterfaceRequests.has(workflowId)
-    ) {
-      return;
-    }
-    this.#operatorInterfaceRequests.add(workflowId);
-    try {
-      const operatorInterface = await this.#api.operatorInterface(workflowId);
-      this.operatorInterfaces = {
-        ...this.operatorInterfaces,
-        [workflowId]: operatorInterface
-      };
-      if (this.observedSubagents.some((agent) => agent.workflowId === workflowId)) {
-        this.observedSubagents = this.observedSubagents.map((agent) =>
-          agent.workflowId === workflowId ? { ...agent, operatorInterface } : agent
-        );
-      }
-    } catch {
-      // Operator-interface discovery is auxiliary UI metadata; streaming remains authoritative.
-    } finally {
-      this.#operatorInterfaceRequests.delete(workflowId);
-    }
-  }
-
   async initialize(): Promise<void> {
     if (this.#initialized) return;
     this.#initialized = true;
@@ -859,14 +796,12 @@ export class AgentRunController {
         this.session = openable;
       } else {
         this.session = await this.#api.createSession({
-          agent_workflow_type: defaultAgent.workflow_type,
-          is_message_queuing_enabled: true
+          agent_workflow_type: defaultAgent.workflow_type
         });
         this.sessions = [...this.sessions, this.session];
       }
       this.#rememberActiveSession(this.session.workflow_id);
       void this.#fetchAgentInterface(this.session.workflow_id);
-      void this.#fetchOperatorInterface(this.session.workflow_id);
       /* Awaited so the cache lands before the live stream opens: interleaving
          the two would order the buffer by arrival rather than by event. */
       await this.#hydrateCachedFrames(this.session.workflow_id);
@@ -1035,8 +970,7 @@ export class AgentRunController {
       if (!agent) throw new Error("No agent is registered.");
 
       const session = await this.#api.createSession({
-        agent_workflow_type: agent.workflow_type,
-        is_message_queuing_enabled: true
+        agent_workflow_type: agent.workflow_type
       });
 
       this.sessions = [...this.sessions.filter((item) => item.workflow_id !== session.workflow_id), session];
@@ -1047,7 +981,6 @@ export class AgentRunController {
       this.session = session;
       this.#rememberActiveSession(session.workflow_id);
       void this.#fetchAgentInterface(session.workflow_id);
-      void this.#fetchOperatorInterface(session.workflow_id);
       await this.#refreshWorkflowExecutionState(session.workflow_id);
       if (!this.#isCurrentConnection(connectionVersion)) return;
       if (this.#isWorkflowClosed(session.workflow_id)) return;
@@ -1095,7 +1028,6 @@ export class AgentRunController {
     this.session = session;
     this.#rememberActiveSession(session.workflow_id);
     void this.#fetchAgentInterface(session.workflow_id);
-    void this.#fetchOperatorInterface(session.workflow_id);
     await this.#hydrateCachedFrames(session.workflow_id);
 
     let streaming = false;
@@ -1149,10 +1081,7 @@ export class AgentRunController {
     return !this.#isWorkflowClosed(workflowId);
   }
 
-  async attach(
-    fromOffset = this.lastResumeOffset,
-    options: { clearSendingOnIdle?: boolean } = {}
-  ): Promise<void> {
+  async attach(fromOffset = this.lastResumeOffset): Promise<void> {
     const session = this.session;
     if (!session) return;
 
@@ -1240,14 +1169,13 @@ export class AgentRunController {
         if (isCurrentStream()) {
           this.connecting = false;
           this.creatingSession = false;
-          if (options.clearSendingOnIdle) this.sending = false;
         }
         /* A stream that carried something earned a fresh budget, so hours of
            occasional blips do not add up to an exhausted one. */
         if (delivered) attempt = 0;
         if (attempt >= reattachBackoffMs.length) break;
         if (!(await this.#streamDroppedMidRun(session.workflow_id))) break;
-        await sleepUnlessAborted(reattachBackoffMs[attempt], signal);
+        await this.#sleepUnlessWoken(reattachBackoffMs[attempt], signal);
         attempt += 1;
         /* Resume only from an offset the server already proved it holds, by
            having sent it. An offset past the end answers 200 and then hangs
@@ -1259,11 +1187,14 @@ export class AgentRunController {
       if (!isAbortError(error)) throw error;
     } finally {
       const sameSession = this.session?.workflow_id === session.workflow_id;
-      /* `sending` belongs to the newest stream: a superseded one clearing it would
-         drop the spinner on a send it knows nothing about. The version guard is
-         right here and stays. */
+      /* The stream gave up for good — a closed workflow, or the retry budget spent
+         on a quiet one — so nothing more can arrive on it, and a message still
+         awaited here will never see its terminal. Release the composer rather than
+         leave it locked. `sending` belongs to the newest stream: a superseded one
+         clearing it would drop the spinner on a send it knows nothing about, so
+         the version guard is right here and stays. */
       if (streamVersion === this.#streamVersion && sameSession) {
-        if (options.clearSendingOnIdle) this.sending = false;
+        this.#settleOutstandingMessages();
       }
       /* The tail is the opposite case, for the reason the in-loop flush above
          spells out — and this is the path that one cannot reach. Learning the
@@ -1277,6 +1208,77 @@ export class AgentRunController {
       if (sameSession) this.#flushStreamTail();
       this.#finishStream(controller);
     }
+  }
+
+  /**
+   * The backoff sleep between attach attempts, cut short by a send.
+   *
+   * `#streamAbort` is set for the whole of an attach, sleeps included, so
+   * #ensureStreamLive sees a sleeping stream as live — which it is, in the sense
+   * that matters: it will re-open on its own. But "on its own" can be eight
+   * seconds away, and a message sent in that window would sit unseen until
+   * then. Waking the sleep re-opens it now.
+   */
+  #sleepUnlessWoken(ms: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve) => {
+      if (signal.aborted) {
+        resolve();
+        return;
+      }
+      let timer: ReturnType<typeof setTimeout>;
+      const settle = (): void => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", settle);
+        if (this.#streamWake === settle) this.#streamWake = null;
+        resolve();
+      };
+      timer = setTimeout(settle, ms);
+      signal.addEventListener("abort", settle, { once: true });
+      this.#streamWake = settle;
+    });
+  }
+
+  /**
+   * Forget every message still awaiting its terminal, and drop the spinner with them.
+   *
+   * For the moments when no terminal can arrive any more: the workflow closed, or
+   * the stream gave up on a quiet one. Anything still outstanding then is a
+   * message whose end this client missed, and holding the composer for it would
+   * hold it forever.
+   */
+  #settleOutstandingMessages(): void {
+    if (this.#awaitingMessages.size === 0) return;
+    this.#awaitingMessages.clear();
+    this.sending = false;
+  }
+
+  /**
+   * Ensure a merged stream is live, WITHOUT disturbing one that already is.
+   *
+   * The second half of the client contract (`stream_merge/README.md`): submit, then
+   * ensure. Re-attaching instead would be actively lossy — the merge starts at the
+   * resume offset with no skip, so a subagent whose turn began earlier is never
+   * re-mounted and the rest of its turn is dropped with no marker. Keeping the open
+   * stream never re-mounts anything, so that loss stays confined to genuine
+   * reconnects.
+   *
+   * A stream between attempts in its backoff counts as live — it will re-open by
+   * itself — but it is woken so the wait does not add to the round trip.
+   */
+  #ensureStreamLive(): void {
+    const session = this.session;
+    if (!session) return;
+    if (this.#streamAbort !== null) {
+      this.#streamWake?.();
+      return;
+    }
+    void this.attach(this.lastResumeOffset).catch((error: unknown) => {
+      if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
+        this.connectionError =
+          error instanceof Error ? error.message : "Failed to stream messages.";
+        this.#settleOutstandingMessages();
+      }
+    });
   }
 
   /**
@@ -1340,24 +1342,43 @@ export class AgentRunController {
     }
   }
 
-  async sendMessage(message: AgentInboundMessage): Promise<void> {
+  async sendMessage(
+    message: AgentInboundMessage,
+    workflowId?: string | null
+  ): Promise<void> {
     const displayText = displayTextForMessage(message);
     if (!displayText) return;
     await this.initialize();
     const session = this.session;
     if (!session) return;
+
+    // A message can target the parent OR one of its live subagents — a subagent is addressed
+    // at its own workflow_id (which the parent advertises on `subagent_started`). There is no
+    // separate operator channel to reach a child with any more: it is the same front door.
+    const targetWorkflowId =
+      workflowId && this.#isKnownWorkflowId(workflowId)
+        ? workflowId
+        : session.workflow_id;
+    const targetsParent = targetWorkflowId === session.workflow_id;
+
     try {
-      await this.#refreshWorkflowExecutionState(session.workflow_id);
+      await this.#refreshWorkflowExecutionState(targetWorkflowId);
     } catch (error) {
       this.connectionError =
-        error instanceof Error
-          ? error.message
-          : "Failed to check workflow status.";
+        error instanceof Error ? error.message : "Failed to check workflow status.";
       return;
     }
-    if (this.#isWorkflowClosed(session.workflow_id)) {
+    if (this.#isWorkflowClosed(targetWorkflowId)) {
       this.connectionError = null;
-      this.sending = false;
+      if (targetsParent) {
+        this.#settleOutstandingMessages();
+        this.sending = false;
+      }
+      return;
+    }
+
+    if (!targetsParent) {
+      await this.#sendToSubagent(targetWorkflowId, message);
       return;
     }
 
@@ -1371,26 +1392,47 @@ export class AgentRunController {
 
     const submitted = this.#submitQueue.then(async () => {
       if (this.session?.workflow_id !== session.workflow_id) return;
-      await this.#api.submitMessage({
+      return await this.#api.submitMessage({
         session_id: session.workflow_id,
-        message: this.#messageForSession(message, session),
+        message,
         expected_turn: expectedTurn
       });
     });
-    this.#submitQueue = submitted.catch(() => {});
+    // Keep the queue a bare Promise<void>: it only serializes submits, and must not carry
+    // the reply (or a rejection) forward to the next sender.
+    this.#submitQueue = submitted.then(
+      () => {},
+      () => {}
+    );
 
     try {
-      await submitted;
+      const reply = await submitted;
       if (this.session?.workflow_id !== session.workflow_id) return;
-      void this.attach(this.lastResumeOffset, { clearSendingOnIdle: true }).catch(
-        (error: unknown) => {
-          if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
-            this.connectionError =
-              error instanceof Error ? error.message : "Failed to stream messages.";
-            this.sending = false;
-          }
+      // RECONCILE FROM THE REPLY — the optimistic `+= 1` above is only a provisional guess,
+      // and it is WRONG whenever the message joined an already-open turn: a `mid_turn:
+      // "accept"` handler shares that turn rather than taking a slot, so the agent's turn
+      // counter does not advance and the next message must still claim the same number.
+      // Blindly incrementing per *send* over-counts and wedges every later send with
+      // StaleTurn, which the stream reconciliation cannot repair (a join publishes under the
+      // joined turn's lower number, so the `>=` check in #ingestFrame never fires).
+      //
+      // `reply.turn_number` is authoritative in all three cases: the joined turn for a join,
+      // and the reserved slot for a queued or idle send.
+      if (reply) {
+        this.expectedTurn = reply.turn_number + 1;
+        if (typeof reply.message_id === "string") {
+          this.#awaitingMessages.add(reply.message_id);
+        } else {
+          // Nothing to pair a terminal with, so there is no moment to release on later.
+          this.sending = this.#awaitingMessages.size > 0;
         }
-      );
+      }
+      // SEND FIRST, THEN ENSURE — and the order is load-bearing. Checking before the send is
+      // racy: the open stream can stop at the current turn_end because the server's status
+      // re-query at that instant sees an idle agent, our message not being admitted yet. Once
+      // the submit returns it is durably admitted and visible to agent_status, so no later
+      // stop decision can conclude "idle".
+      this.#ensureStreamLive();
     } catch (error) {
       if (isAbortError(error) || this.session?.workflow_id !== session.workflow_id) {
         return;
@@ -1398,75 +1440,79 @@ export class AgentRunController {
       this.expectedTurn = Math.max(1, expectedTurn);
       this.connectionError =
         error instanceof Error ? error.message : "Failed to send message.";
-      this.sending = false;
-      await this.attach(this.lastResumeOffset);
+      // The send failed, so no message_id was ever handed back and nothing is outstanding
+      // for it. Anything else still in flight keeps its own entry.
+      this.sending = this.#awaitingMessages.size > 0;
+      this.#ensureStreamLive();
     }
   }
 
-  async executeOperatorCommand(
-    name: string,
-    arg?: string | null,
-    workflowId?: string | null
-  ): Promise<OperatorCommandResponse> {
+  /**
+   * Send to a live subagent at its own workflow_id, then re-attach that child's stream so
+   * its resulting turn events actually surface (the parent attach does not carry them).
+   *
+   * `expected_turn` is read from the CHILD's status rather than tracked optimistically: the
+   * parent has usually already driven turns on it, so the UI has no local count to trust.
+   */
+  async #sendToSubagent(
+    workflowId: string,
+    message: AgentInboundMessage
+  ): Promise<void> {
+    this.connectionError = null;
+    try {
+      const status = await this.#api.agentStatus(workflowId);
+      await this.#api.submitMessage({
+        session_id: workflowId,
+        message,
+        expected_turn: status.current_turn + status.pending_turns.length + 1
+      });
+    } catch (error) {
+      this.connectionError =
+        error instanceof Error ? error.message : "Failed to send message to subagent.";
+      return;
+    }
+    void this.#attachWorkflow(
+      workflowId,
+      this.#resumeOffsetForWorkflow(workflowId)
+    ).catch((error: unknown) => {
+      if (!isAbortError(error)) {
+        this.connectionError =
+          error instanceof Error
+            ? error.message
+            : "Failed to stream subagent events.";
+      }
+    });
+  }
+
+  /**
+   * Stop an agent (the parent, or a named subagent) via the harness `close` signal.
+   *
+   * A first-class control-plane action, not a message: it works on any agent whatever it
+   * accepts, and it is what a human uses instead of hoping the agent happens to declare a
+   * stop handler.
+   */
+  async stopAgent(workflowId?: string | null): Promise<void> {
     await this.initialize();
     const session = this.session;
-    if (!session) throw new Error("No active session.");
+    if (!session) return;
     const targetWorkflowId =
       workflowId && this.#isKnownWorkflowId(workflowId)
         ? workflowId
         : session.workflow_id;
-
     this.connectionError = null;
     try {
-      if (!isStopOperatorCommandName(name)) {
-        await this.#refreshWorkflowExecutionState(targetWorkflowId);
-        if (this.#isWorkflowClosed(targetWorkflowId)) {
-          return { text: "Agent is closed." };
-        }
-      }
-      const result = await this.#api.executeOperatorCommand({
-        session_id: targetWorkflowId,
-        name,
-        arg: arg ?? null
-      });
-      if (isStopOperatorCommandName(name)) {
-        this.#markWorkflowClosed(targetWorkflowId);
-        if (targetWorkflowId === session.workflow_id) {
-          this.sending = false;
-        } else {
-          this.#markObservedSubagentStopped(targetWorkflowId);
-        }
-        return result;
-      }
-      if (targetWorkflowId === session.workflow_id) {
-        const shouldClearSendingOnIdle = this.sending;
-        void this.attach(this.lastResumeOffset, {
-          clearSendingOnIdle: shouldClearSendingOnIdle
-        }).catch((error: unknown) => {
-          if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
-            this.connectionError =
-              error instanceof Error ? error.message : "Failed to stream operator events.";
-            if (shouldClearSendingOnIdle) this.sending = false;
-          }
-        });
-      } else {
-        void this.#attachWorkflow(
-          targetWorkflowId,
-          this.#resumeOffsetForWorkflow(targetWorkflowId)
-        ).catch((error: unknown) => {
-          if (!isAbortError(error) && this.session?.workflow_id === session.workflow_id) {
-            this.connectionError =
-              error instanceof Error
-                ? error.message
-                : "Failed to stream operator events.";
-          }
-        });
-      }
-      return result;
+      await this.#api.closeSession(targetWorkflowId);
     } catch (error) {
       this.connectionError =
-        error instanceof Error ? error.message : "Failed to execute operator command.";
-      throw error;
+        error instanceof Error ? error.message : "Failed to stop the agent.";
+      return;
+    }
+    this.#markWorkflowClosed(targetWorkflowId);
+    if (targetWorkflowId === session.workflow_id) {
+      this.#settleOutstandingMessages();
+      this.sending = false;
+    } else {
+      this.#markObservedSubagentStopped(targetWorkflowId);
     }
   }
 
@@ -1565,14 +1611,6 @@ export class AgentRunController {
     }
   }
 
-  #messageForSession(message: AgentInboundMessage, session: Session): AgentInboundMessage {
-    if (isAgentMessageObject(message)) return message;
-    if (session.agent_workflow_type === "MontyDynamicAgent") {
-      return { type: "run_script", payload: { script: message } };
-    }
-    return message;
-  }
-
   #recordInitialUserMessage(message: string): void {
     const session = this.session;
     if (!session) return;
@@ -1633,6 +1671,7 @@ export class AgentRunController {
   #resetSessionView(): void {
     this.pause();
     this.#stopStream();
+    this.#awaitingMessages.clear();
     this.#stopWorkflowAttachStreams();
     this.frames = [];
     this.observedSubagents = [];
@@ -1711,18 +1750,21 @@ export class AgentRunController {
     ) {
       this.expectedTurn = frame.data.turn_number + 1;
     }
-    if (isRootFrame && frame.event === "turn_started" && frame.data.turn_number === 1) {
-      this.#recordInitialUserMessage(renderUserMessage(frame.data.user_message));
-    }
+    // Our own message's terminal is what clears `sending` — not the stream going idle. With a
+    // shared turn those are different moments, and only this one is about the message we sent.
     if (
-      publisherWorkflowId &&
-      frame.event === "operator_command_completed" &&
-      "type" in frame.data &&
-      isStopOperatorCommandName(frame.data.command_name)
+      (frame.event === "message_handler_end" ||
+        frame.event === "message_handler_error") &&
+      frame.data.message_id != null &&
+      this.#awaitingMessages.delete(frame.data.message_id) &&
+      this.#awaitingMessages.size === 0
     ) {
-      this.#markWorkflowClosed(publisherWorkflowId);
-      if (!isRootFrame) this.#markObservedSubagentStopped(publisherWorkflowId);
-      if (isRootFrame) this.sending = false;
+      this.sending = false;
+    }
+    if (isRootFrame && frame.event === "message_accepted" && frame.data.turn_number === 1) {
+      this.#recordInitialUserMessage(
+        renderUserMessage(frame.data.handler, frame.data.payload)
+      );
     }
     this.#handleSubagentEvent(frame, publisherWorkflowId);
     if (options.persist !== false) this.#scheduleFrameCacheWrite();
@@ -1930,7 +1972,6 @@ export class AgentRunController {
     if (frame.event === "subagent_started") {
       this.#upsertSubagent(frame.data, parentWorkflowId);
       void this.#fetchAgentInterface(frame.data.workflow_id);
-      void this.#fetchOperatorInterface(frame.data.workflow_id);
       return;
     }
 
@@ -1940,7 +1981,6 @@ export class AgentRunController {
         parentWorkflowId
       );
       void this.#fetchAgentInterface(frame.data.workflow_id);
-      void this.#fetchOperatorInterface(frame.data.workflow_id);
       return;
     }
 
@@ -1950,7 +1990,6 @@ export class AgentRunController {
         parentWorkflowId
       );
       void this.#fetchAgentInterface(frame.data.workflow_id);
-      void this.#fetchOperatorInterface(frame.data.workflow_id);
       return;
     }
 
@@ -1969,15 +2008,14 @@ export class AgentRunController {
   /**
    * Ask Temporal what became of a child whose stream could not be read.
    *
-   * Without this an operator's `/stop` on a subagent renders as still running
-   * for anyone who did not watch it happen. The stop completes the child
-   * workflow, and a completed workflow's stream cannot be mounted at all, so
-   * the merge gives up and sends this marker — while the two events that DO say
-   * "closed" both miss: `subagent_stopped` only fires when the parent stopped
-   * the child, and the `operator_command_completed` carrying the stop is on the
-   * child's own stream, which by then does not exist. A tab that saw the stop
-   * live recovers from its frame cache; a second tab, or a cold load off the
-   * session list, has nothing to recover from.
+   * Without this an operator stopping a subagent (the `close` signal, sent from
+   * the composer's stop control) renders as still running for anyone who did
+   * not watch it happen. The stop completes the child workflow, and a completed
+   * workflow's stream cannot be mounted at all, so the merge gives up and sends
+   * this marker — while the one event that DOES say "closed" misses:
+   * `subagent_stopped` only fires when the parent stopped the child. A tab that
+   * issued the stop marks the child closed itself; a second tab, or a cold load
+   * off the session list, has nothing to recover from.
    *
    * Asking rather than assuming, because an unreadable stream is not proof of a
    * closed workflow — history aged out or a worker down produces this same

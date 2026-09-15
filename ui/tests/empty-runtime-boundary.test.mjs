@@ -31,7 +31,7 @@ const parent = {
 const busyFrames = [
   frame("turn_started", { user_message: "do the thing", turn_number: 1 }),
   frame("model_interaction_started", { model: "gpt-5.1" }),
-  frame("reply", { output: { text: "done" } })
+  frame("message_handler_end", { output: { text: "done" } })
 ];
 
 const sub = (workflowId, subagentId, frames, stopped = true) => ({

@@ -239,7 +239,10 @@ async def _run_turn(
                     print("\nwiki> ", end="", flush=True)
                     printed_reply_prefix = True
                 print(data.get("text", ""), end="", flush=True)
-            elif event_type == "error":
+            elif event_type in ("stream_error", "message_handler_error"):
+                # ``stream_error`` is the server's own frame — a turn timeout, or this
+                # message's failure surfaced as the caller's — and
+                # ``message_handler_error`` is the agent's, published on its stream.
                 print(f"\n[error] {data.get('message', 'unknown error')}")
     if printed_reply_prefix:
         print()  # end the streamed reply line

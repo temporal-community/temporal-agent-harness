@@ -2,7 +2,6 @@ import type { Edge, Node } from "@xyflow/svelte";
 import type {
   AgentInterfaceFunction,
   AgentSseFrame,
-  OperatorCommand,
   ToolId
 } from "$lib/api/types";
 import { formatTokens, summarizeCost, type CostSummary } from "$lib/cost/pricing";
@@ -85,7 +84,6 @@ export interface AgentGraphSource {
   subagentId?: string;
   agentKey?: string;
   agentInterface?: AgentInterfaceFunction[];
-  operatorInterface?: OperatorCommand[];
   stopped?: boolean;
 }
 
@@ -840,6 +838,9 @@ export function buildAgentGraph(
   let status: AgentGraph["status"] = "idle";
   let currentUserMessage = "No message received";
   let queuedMessage = "";
+  /* The envelope the rendered text came from — `{type, payload}` as the message was sent —
+     so the inspector can show the raw message next to the readable one. */
+  let currentUserEnvelope = "";
   let inputState = "waiting";
   let currentModel = "model idle";
   let modelState = "idle";
@@ -1003,18 +1004,26 @@ export function buildAgentGraph(
   for (const frame of frames) {
     if (!("type" in frame.data)) continue;
     currentFrame = frame;
-    if (frame.event === "message_queued") {
+    if (frame.event === "message_accepted") {
+      // The one event carrying what was sent, whatever it did to the turn. Only a QUEUED one
+      // shows in the queue depth; an "opened" message is about to be the turn, and a "joined"
+      // one is already running inside it.
       markInput();
-      queued += 1;
-      queuedMessage = frame.data.user_message;
-      currentUserMessage = frame.data.user_message;
-      inputState = `${queued} queued`;
+      currentUserMessage = renderUserMessage(frame.data.handler, frame.data.payload);
+      currentUserEnvelope = JSON.stringify({
+        type: frame.data.handler,
+        payload: frame.data.payload
+      });
+      if (frame.data.disposition === "queued") {
+        queued += 1;
+        queuedMessage = currentUserMessage;
+        inputState = `${queued} queued`;
+      }
     }
     if (frame.event === "turn_started") {
       markInput();
       activeTurn = frame.data.turn_number;
       status = "running";
-      currentUserMessage = frame.data.user_message;
       inputState = `turn ${frame.data.turn_number}`;
       modelState = "waiting";
       reasoningState = "waiting";
@@ -1056,14 +1065,14 @@ export function buildAgentGraph(
     } else if (frame.event === "text_annotation") {
       markOutput();
       replyState = "annotated";
-    } else if (frame.event === "reply") {
+    } else if (frame.event === "message_handler_end") {
       markOutput();
       status = "replied";
       replyText = textFromReply(frame.data) || replyText;
       /* "reply available" was wider than the chip, the same way "awaiting
          approval" was. The noun is carried by the card, which is titled Output. */
       replyState = "available";
-    } else if (frame.event === "error") {
+    } else if (frame.event === "message_handler_error") {
       markOutput();
       status = "error";
       replyText = frame.data.message;
@@ -1227,7 +1236,7 @@ export function buildAgentGraph(
       if (frame.event === "subagent_started") {
         subagentState = "started";
       } else if (frame.event === "subagent_message_sent") {
-        subagentState = `${frame.data.function} → turn ${frame.data.subagent_turn}`;
+        subagentState = `${frame.data.handler} → turn ${frame.data.subagent_turn}`;
       } else if (frame.event === "subagent_reply_received") {
         subagentState = `reply ${frame.data.outcome}`;
       } else if (frame.event === "subagent_stream_unavailable") {
@@ -1301,10 +1310,11 @@ export function buildAgentGraph(
     const sections: Array<AgentNodeContext | null> = [];
 
     if (id === "input") {
-      const raw = currentUserMessage || queuedMessage;
-      const rendered = renderUserMessage(raw);
+      const rendered = currentUserMessage || queuedMessage;
       sections.push(textSection("User message", rendered));
-      if (rendered !== raw) sections.push(maybeJsonSection("Raw message", raw));
+      if (currentUserEnvelope && currentUserEnvelope !== rendered) {
+        sections.push(maybeJsonSection("Raw message", currentUserEnvelope));
+      }
     } else if (id === "model") {
       /* The model's own output and its thinking — the two things asked for by
          name. Both were already in this scope; nothing reached them because the
@@ -1365,7 +1375,7 @@ export function buildAgentGraph(
            raw `{"type":"ask","payload":{...}}` — barely legible in four lines
            and plainly wrong now the Result region is big enough to read. The
            envelope is still in the inspector, as "Raw message". */
-        detail: renderUserMessage(currentUserMessage || queuedMessage),
+        detail: currentUserMessage || queuedMessage,
         nodeHeight: resultNodeHeight,
         active: latestNodeId === id
       };

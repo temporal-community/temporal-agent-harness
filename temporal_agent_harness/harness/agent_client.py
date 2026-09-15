@@ -19,8 +19,6 @@ from temporalio.common import WorkflowIDConflictPolicy
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
-    EXECUTE_OPERATOR_COMMAND_UPDATE,
-    OPERATOR_INTERFACE_QUERY,
     PROVIDE_CALLBACK_RESULT_UPDATE,
     SEND_AGENT_MESSAGE_UPDATE,
     TOOL_APPROVAL_UPDATE,
@@ -31,10 +29,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     AgentStatus,
     CallbackResult,
+    MessageDisposition,
     CallbackResultAck,
-    OperatorCommand,
-    OperatorCommandRequest,
-    OperatorCommandResult,
     PendingApproval,
     PendingCallback,
     ToolApprovalDecision,
@@ -75,8 +71,39 @@ class StaleTurnError(Exception):
     """
 
 
-class AgentBusyError(Exception):
-    """A turn is already in progress and message queuing is disabled."""
+class MidTurnRejectedError(Exception):
+    """The target handler declares ``mid_turn=MidTurn.REJECT`` and a turn is already open.
+
+    Not a staleness problem, so retrying with a fresh ``expected_turn`` will not help — the
+    handler's author declared that this message must not pile up behind in-flight work. The
+    caller should wait for the agent to go idle (``turn_end``, or ``agent_status`` reporting
+    ``turn_active == False``) and send again, or send a different message whose handler
+    declares ``ENQUEUE`` or ``ACCEPT``.
+    """
+
+
+class JoinedTurnError(Exception):
+    """The message was admitted, but it JOINED an open turn — so it has no turn to stream.
+
+    Raised by :meth:`AgentClient.send_message`, whose whole shape is "one message, one turn,
+    one stream". A ``MidTurn.ACCEPT`` message sent to a busy agent joins the turn already
+    running: its ``turn_started`` is *behind* its ``accepted_offset``, so the merge's skip
+    preamble would never match and the caller would sit in silence until the turn timeout.
+    Failing here instead makes that a fast, legible error.
+
+    **The message is running.** This is not a rejection and there is nothing to retry: the
+    agent accepted it, the handler is executing, and its reply will be published on the stream
+    under :attr:`reply`'s ``message_id``. Only the streaming half is unavailable. A caller that
+    needs to observe it uses the documented client contract instead — :meth:`submit_message`
+    for every send, one :meth:`attach` stream kept open — which is what an interactive client
+    should be doing anyway (see ``stream_merge/README.md``).
+    """
+
+    def __init__(self, message: str, *, reply: AgentMessageReply) -> None:
+        super().__init__(message)
+        self.reply = reply
+        """The accepted reply — ``message_id`` / ``turn_number`` / ``turn_id`` for the message
+        that is now running, so the caller can find it on a stream it opens itself."""
 
 
 class ToolApprovalError(Exception):
@@ -278,36 +305,6 @@ class AgentClient:
             AGENT_INTERFACE_QUERY, result_type=list[AcceptedFunction]
         )
 
-    async def get_operator_interface(self) -> list[OperatorCommand]:
-        """Query the workflow for operator-only slash command metadata.
-
-        This is intentionally separate from :meth:`get_agent_interface`: operator commands
-        are for UI/control-plane clients and must not become parent-agent tool surfaces.
-        """
-        handle = self._temporal.get_workflow_handle(self._workflow_id)
-        return await handle.query(
-            OPERATOR_INTERFACE_QUERY, result_type=list[OperatorCommand]
-        )
-
-    async def execute_operator_command(
-        self, name: str, *, arg: str | None = None, update_id: str | None = None
-    ) -> OperatorCommandResult:
-        """Execute an operator-only command without creating an agent turn.
-
-        This is the execution counterpart to :meth:`get_operator_interface`. It routes to
-        the workflow's first-class operator update rather than ``send_agent_message``, so
-        it can change runtime controls even while a model turn is busy.
-
-        ``update_id`` — see :meth:`approve_tool`'s note on caller-supplied idempotency keys.
-        """
-        handle = self._temporal.get_workflow_handle(self._workflow_id)
-        return await handle.execute_update(
-            EXECUTE_OPERATOR_COMMAND_UPDATE,
-            OperatorCommandRequest(name=name, arg=arg),
-            id=update_id,
-            result_type=OperatorCommandResult,
-        )
-
     async def _submit_message(
         self,
         msg_type: str,
@@ -323,12 +320,12 @@ class AgentClient:
         ``@agent.accepts`` handler (``msg_type``), carries its input-model JSON (``payload``)
         and the ``expected_turn`` the caller believes this message is, builds the
         ``AgentMessage`` envelope internally, and forwards it as the ``send_agent_message``
-        update. Returns the accepted :class:`AgentMessageReply` (``turn_id`` / ``turn_number`` /
-        ``pending``).
+        update. Returns the accepted :class:`AgentMessageReply` (``message_id`` / ``turn_id`` /
+        ``turn_number`` / ``disposition``).
 
         Raises:
             StaleTurnError: The client is behind the workflow.
-            AgentBusyError: The agent is busy and does not support enqueuing.
+            MidTurnRejectedError: The handler refuses mid-turn arrival and a turn is open.
         """
         handle = self._temporal.get_workflow_handle(self._workflow_id)
         try:
@@ -344,8 +341,8 @@ class AgentClient:
             error_type = getattr(cause, "type", None) if cause else None
             if error_type == "StaleTurn":
                 raise StaleTurnError(str(cause)) from e
-            if error_type == "AgentBusy":
-                raise AgentBusyError(str(cause)) from e
+            if error_type == "MidTurnRejected":
+                raise MidTurnRejectedError(str(cause)) from e
             raise
 
     async def submit_message(
@@ -356,9 +353,16 @@ class AgentClient:
     ) -> AgentMessageReply:
         """Submit one message to the agent without streaming the accepted turn.
 
-        UI clients that maintain a separate ``attach`` stream should use this to avoid
-        opening one long-lived stream per queued message. The returned
-        :class:`AgentMessageReply` confirms the workflow accepted or queued the turn.
+        This is the send half of the client contract: an interactive client sends EVERY message
+        this way and keeps at most one :meth:`attach` stream, ensured live *after* the send
+        returns (see ``stream_merge/README.md``, "The client contract"). Doing it the other way
+        round — one :meth:`send_message` stream per message — opens a long-lived stream per
+        queued message and cannot observe a joined one at all.
+
+        The returned :class:`AgentMessageReply` carries the message's ``message_id`` (which
+        every event of its dispatch is stamped with), the ``turn_number`` to compute the next
+        ``expected_turn`` from, and the ``disposition`` saying whether it opened, joined or
+        queued behind a turn.
         """
         return await self._submit_message(msg_type, payload, expected_turn)
 
@@ -383,7 +387,7 @@ class AgentClient:
 
         Raises:
             StaleTurnError: The client is behind the workflow.
-            AgentBusyError: The agent is busy and does not support enqueuing.
+            MidTurnRejectedError: The handler refuses mid-turn arrival and a turn is open.
         """
         start_op = WithStartWorkflowOperation(
             workflow_name,
@@ -405,8 +409,8 @@ class AgentClient:
             error_type = getattr(cause, "type", None) if cause else None
             if error_type == "StaleTurn":
                 raise StaleTurnError(str(cause)) from e
-            if error_type == "AgentBusy":
-                raise AgentBusyError(str(cause)) from e
+            if error_type == "MidTurnRejected":
+                raise MidTurnRejectedError(str(cause)) from e
             raise
 
     async def send_message(
@@ -421,9 +425,20 @@ class AgentClient:
     ) -> AsyncIterator[T]:
         """Send a message and stream the resulting turn — including any subagents — as ONE stream.
 
+        PRECONDITION — this is for a caller that holds NO stream, sending a message that gets a
+        turn OF ITS OWN (a script or connector doing one request/response). It is NOT the mid-turn
+        surface. A ``MidTurn.ACCEPT`` message that JOINS an open turn has that turn's
+        ``turn_started`` *behind* its ``accepted_offset``, so the merge's skip preamble would
+        never match and nothing would ever be emitted. The reply's ``disposition`` says which
+        happened, so that case FAILS FAST with :class:`JoinedTurnError` (carrying the accepted
+        reply — the message is running regardless) rather than going silent for ``timeout``
+        seconds. An interactive client sends every message with :meth:`submit_message` and keeps
+        ONE :meth:`attach` stream open instead — see ``stream_merge/README.md``, "The client
+        contract".
+
         Phase 1, :meth:`_submit_message`, runs eagerly here so ``StaleTurnError`` /
-        ``AgentBusyError`` are raised *before* any streaming begins (and before the merge is even
-        constructed — there is no failure path after the agent has accepted). The update returns an
+        ``MidTurnRejected`` are raised *before* any streaming begins (and before the merge is
+        even constructed — there is no failure path after the agent has accepted). The update returns an
         ``accepted_offset``; phase 2 then drives the client-side stream-merge from there: it skips
         to this turn's ``turn_started`` (a quiescent start) and yields every event of the turn,
         coalescing the agent's own stream with each subagent stream it drives (recursively), in a
@@ -454,9 +469,18 @@ class AgentClient:
 
         Raises:
             StaleTurnError: The client is behind the workflow.
-            AgentBusyError: The agent is busy and does not support enqueuing.
+            MidTurnRejectedError: The handler refuses mid-turn arrival and a turn is open.
+            JoinedTurnError: The message was accepted, but it joined an open turn — it is
+                running, and there is no per-turn stream for it (see the precondition above).
         """
         reply = await self._submit_message(msg_type, payload, expected_turn)
+        if reply.disposition is MessageDisposition.JOINED:
+            raise JoinedTurnError(
+                f"message {reply.message_id} joined open turn {reply.turn_number} and is "
+                f"running; send_message cannot stream a joined turn — submit_message + "
+                f"attach is the mid-turn surface",
+                reply=reply,
+            )
         return self._merged_turn(
             reply,
             on_item=on_item,
@@ -477,10 +501,12 @@ class AgentClient:
         Reads from ``reply.accepted_offset`` and skips to ``reply.turn_id``'s ``turn_started``,
         then merges live (arrival-order interleaving) until that turn's ``turn_end`` on the ROOT
         agent — by which point, via the close gate, every subagent turn it triggered has already
-        been emitted. The turn's own terminal error is surfaced as an :class:`AgentTurnError`
-        (matching the legacy behavior); on timeout an :class:`AgentTurnTimeout` is yielded last.
+        been emitted. THIS MESSAGE's ``message_handler_error`` is surfaced as an
+        :class:`AgentTurnError` — a sibling participant's is not, since it says nothing about
+        the caller's own message; on timeout an :class:`AgentTurnTimeout` is yielded last.
         """
         target_turn_id = reply.turn_id
+        target_message_id = reply.message_id
 
         async def should_stop(cursor: Cursor, ev: AgentEvent) -> bool:
             return (
@@ -504,16 +530,17 @@ class AgentClient:
                 # send_message turn it isn't used to resume (the chat path reattaches via ``attach``),
                 # but we pass it through uniformly so the consumer's bookkeeping stays consistent.
                 async for ev, resume_offset in merged:
-                    # ``turn_id`` is a globally-unique uuid, so it alone identifies OUR turn's
-                    # terminal error (a subagent's error carries a different turn_id) — no need to
-                    # also match on agent_id.
+                    # Match on OUR MESSAGE, not our turn: a ``MidTurn.ACCEPT`` message can join
+                    # the turn we opened, and its failure is not ours to raise. ``message_id`` is
+                    # a globally-unique uuid, so it alone identifies our message's terminal error
+                    # — no need to also match turn_id or agent_id.
                     if (
-                        ev.turn_id == target_turn_id
-                        and ev.event.type == AgentEventType.ERROR
+                        ev.message_id == target_message_id
+                        and ev.event.type == AgentEventType.MESSAGE_HANDLER_ERROR
                     ):
-                        # Surface OUR turn's terminal error as the caller's failure signal in
-                        # place of the raw AgentError event (the merge already streamed the
-                        # subtree; turn_end still follows as the real terminal).
+                        # Surface OUR message's error as the caller's failure signal in place of
+                        # the raw event (the merge already streamed the subtree; turn_end still
+                        # follows as the real terminal).
                         yield on_item(
                             AgentTurnError(ev.event.message or "agent turn failed"),
                             resume_offset,
@@ -572,11 +599,11 @@ class AgentClient:
         ``subagent_stall_grace_seconds`` — see :meth:`send_message`; same liveness backstop, applied
         to the merge that backs this attach.
 
-        Termination mirrors the per-turn close, with one addition for operator-only events:
-        on each ROOT terminal event (``turn_end`` or an operator command terminal event) we
-        re-query status and stop once the workflow is idle and this attach has emitted every
-        root event that existed when it started. This lets a replay that ends with
-        out-of-band operator commands drain them without waiting for a nonexistent turn.
+        Termination mirrors the per-turn close: on each root ``turn_end`` we re-query status
+        and stop once the workflow is idle and this attach has emitted every root event that
+        existed when it started. ``turn_end`` is the only terminal there is — it fires when
+        the last participant of a turn finishes, so it is a true quiescence signal — which is
+        what lets a caller safely disconnect instead of holding the stream open forever.
         """
         stream = WorkflowStreamClient.create(self._temporal, self._workflow_id)
         status = await self.get_status()
@@ -617,14 +644,11 @@ class AgentClient:
             nonlocal highest_completed_turn
             if cursor.is_child:
                 return False
-            terminal_operator_event = ev.event.type in {
-                AgentEventType.OPERATOR_COMMAND_COMPLETED,
-                AgentEventType.OPERATOR_COMMAND_FAILED,
-            }
-            if ev.event.type != AgentEventType.TURN_END and not terminal_operator_event:
+            # Every terminal is a turn_end now: a turn is the interval the agent is
+            # non-idle, so there is no out-of-band action that completes without one.
+            if ev.event.type != AgentEventType.TURN_END:
                 return False
-            if ev.event.type == AgentEventType.TURN_END:
-                highest_completed_turn = max(highest_completed_turn, ev.turn_number)
+            highest_completed_turn = max(highest_completed_turn, ev.turn_number)
             if cursor.head_offset + 1 < stop_at_root_offset:
                 return False
             try:

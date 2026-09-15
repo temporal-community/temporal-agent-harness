@@ -22,6 +22,16 @@ class TurnStreamContext(BaseModel):
 
     turn_id: str = Field(description="The id of the turn to publish against.")
     turn_number: int = Field(description="The monotonic number of that turn.")
+    message_id: str | None = Field(
+        default=None,
+        description="The id of the inbound message whose dispatch this activity is part of — "
+        "stamped onto every event the activity publishes (``AgentEvent.message_id``) so a "
+        "streamed delta or tool call is attributable to the message that caused it, not merely "
+        "to the turn. Resolved workflow-side from the ambient per-participant context when the "
+        "carrier is built (``AgentWorkflowRunner.current_stream_context``), so an activity "
+        "threads it without knowing it exists. ``None`` when the work belongs to no single "
+        "message.",
+    )
     agent_id: str = Field(
         description="The short id of the agent that owns this turn — stamped onto every event the "
         "activity publishes (``AgentEvent.agent_id``). Threaded here because an activity can't "

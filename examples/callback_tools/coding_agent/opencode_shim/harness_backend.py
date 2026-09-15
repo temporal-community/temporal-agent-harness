@@ -227,11 +227,15 @@ class HarnessBackend:
             if handle is not None:
                 await handle.error(data.get("message", "tool error"))
 
-        elif event_type == "error":
+        elif event_type in ("message_handler_error", "stream_error"):
+            # ``message_handler_error`` is the agent's own terminal for this message;
+            # ``stream_error`` is the server's frame for a turn timeout (or that same error
+            # surfaced as the caller's failure). Either way the turn is over.
             raise RuntimeError(data.get("message", "agent error"))
 
-        # Ignored: tool_requested, tool_approval_resolved, callback_resolved, turn_started,
-        # turn_end, reply — the shim's own bookkeeping (begin/finish) and reply_delta cover them.
+        # Ignored: tool_requested, tool_approval_resolved, callback_resolved, message_accepted,
+        # message_handler_start, turn_started, turn_end, message_handler_end — the shim's own
+        # bookkeeping (begin/finish) and reply_delta cover them.
 
     @staticmethod
     def _permission_type(tool_name: str) -> str:

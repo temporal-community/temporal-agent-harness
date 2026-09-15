@@ -211,8 +211,8 @@ async def _start(
     return handle
 
 
-async def _send(handle, text: str, expected_turn: int) -> None:
-    await handle.execute_update(
+async def _send(handle, text: str, expected_turn: int) -> AgentMessageReply:
+    return await handle.execute_update(
         SEND_AGENT_MESSAGE_UPDATE,
         AgentMessage(type="act", payload={"text": text}, expected_turn=expected_turn),
         result_type=AgentMessageReply,
@@ -247,7 +247,7 @@ def _types_for(events: list[AgentEvent], tool_id: str) -> list[str]:
 
 def _reply_text(events: list[AgentEvent]) -> str:
     # The probes reply with TextReply(text=...), so the reply's output dict carries `text`.
-    reply = next(e.event for e in events if e.event.type == AgentEventType.REPLY)
+    reply = next(e.event for e in events if e.event.type == AgentEventType.MESSAGE_HANDLER_END)
     return reply.output["text"]
 
 
@@ -291,6 +291,55 @@ async def test_approved_tool_executes_after_approval(env_and_client):
     )
     assert resolved.approved is True
     assert _reply_text(events) == "act:S"
+
+
+async def test_every_event_of_a_dispatch_carries_its_message_id(env_and_client):
+    """Envelope-side attribution, end to end — the point of putting ``message_id`` there.
+
+    A gated ACTIVITY tool exercises every publisher at once: the workflow (approval requested,
+    tool lifecycle), the update handler resolving the gate from OUTSIDE the participant, and
+    the activity, which publishes across a process boundary where a ContextVar cannot reach.
+    All three must stamp the same id, and only the two turn brackets may be unattributed.
+    """
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue)
+    reply = await _send(handle, "single", expected_turn=1)
+    agent_client = AgentClient(client, handle.id)
+
+    events: list[AgentEvent] = []
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            ev = item.data
+            events.append(ev)
+            if (
+                ev.event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and ev.event.tool_id == "g1"
+            ):
+                await agent_client.approve_tool("g1", approved=True)
+            if ev.event.type == AgentEventType.TURN_END:
+                break
+
+    assert reply.message_id
+    brackets = {AgentEventType.TURN_STARTED, AgentEventType.TURN_END}
+    for ev in events:
+        expected = None if ev.event.type in brackets else reply.message_id
+        assert ev.message_id == expected, ev.event.type
+
+    # Not a vacuous pass: the interesting publishers really are in there.
+    seen = {e.event.type for e in events}
+    assert {
+        AgentEventType.MESSAGE_ACCEPTED,
+        AgentEventType.MESSAGE_HANDLER_START,
+        AgentEventType.TOOL_APPROVAL_REQUESTED,
+        # Published by the ``tool_approval`` UPDATE handler, which is in no participant task —
+        # it reads the id off the approval entry, so a policy cascade resolving several calls
+        # attributes each to the message that made it.
+        AgentEventType.TOOL_APPROVAL_RESOLVED,
+        # Published from inside the activity, via TurnStreamContext.
+        AgentEventType.TOOL_START,
+        AgentEventType.TOOL_END,
+        AgentEventType.MESSAGE_HANDLER_END,
+    } <= seen
 
 
 async def test_denied_tool_does_not_execute(env_and_client):

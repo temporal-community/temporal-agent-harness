@@ -19,11 +19,9 @@
   import { fade } from "svelte/transition";
   import type {
     AgentInboundMessage,
+    AgentInterfaceFunction,
     FileCitationAnnotation,
-    OperatorCommand,
-    OperatorCommandResponse,
-    Session,
-    SlashCommandMessage,
+    Session
   } from "$lib/api/types";
   import { formatTokens } from "$lib/cost/pricing";
   import Chip from "$lib/components/primitives/Chip.svelte";
@@ -33,25 +31,31 @@
   import { formatElapsedDuration, type ReplayLogRow } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
+  import SchemaForm from "$lib/components/chat/SchemaForm.svelte";
+  import {
+    buildPayload,
+    describeSchema,
+    emptyValues,
+    singleStringField,
+    validate
+  } from "$lib/components/chat/schemaForm";
 
-  type OperatorTargetRole = "parent" | "subagent";
-  interface OperatorTargetOption {
+  type MessageTargetRole = "parent" | "subagent";
+  /**
+   * One agent a message can be addressed to, with its OWN discovered handler surface.
+   * A subagent generally accepts different messages than its parent.
+   */
+  interface MessageTargetOption {
     workflowId: string;
-    role: OperatorTargetRole;
+    role: MessageTargetRole;
     label: string;
-    operatorInterface: OperatorCommand[];
+    agentInterface: AgentInterfaceFunction[];
     closed?: boolean;
   }
-  type SlashMenuItem =
-    | { kind: "target"; id: string; target: OperatorTargetOption }
-    | { kind: "command"; id: string; command: OperatorCommand }
-    | { kind: "choice"; id: string; command: OperatorCommand; value: string }
-    | { kind: "tool"; id: string; command: OperatorCommand; tool: string };
-  type ParsedOperatorCommand = {
-    name: string;
-    arg?: string;
-    displayText: string;
-  };
+  /** A row in the `/` picker: either choose the target agent, or choose one of its handlers. */
+  type PickerItem =
+    | { kind: "target"; id: string; target: MessageTargetOption }
+    | { kind: "handler"; id: string; handler: AgentInterfaceFunction };
 
   interface Props {
     items: TranscriptItem[];
@@ -59,22 +63,24 @@
     sessions?: Session[];
     agentLabel: string;
     sessionId: string;
-    operatorInterface?: OperatorCommand[];
-    operatorTargetLabel?: string;
-    operatorTargetRole?: OperatorTargetRole;
-    operatorTargets?: OperatorTargetOption[];
+    agentInterface?: AgentInterfaceFunction[];
+    messageTargetLabel?: string;
+    messageTargetRole?: MessageTargetRole;
+    /** Every agent a message can be sent to — the parent plus any live subagents. */
+    messageTargets?: MessageTargetOption[];
     currentAgentWorkflowType?: string | null;
     connecting?: boolean;
     sending?: boolean;
     creatingSession?: boolean;
     closed?: boolean;
     error?: string | null;
-    onSend?: (message: AgentInboundMessage) => void | Promise<void>;
-    onOperatorCommand?: (
-      name: string,
-      arg?: string | null,
+    /** Send a message, optionally to a subagent rather than the session's parent. */
+    onSend?: (
+      message: AgentInboundMessage,
       workflowId?: string | null
-    ) => OperatorCommandResponse | Promise<OperatorCommandResponse>;
+    ) => void | Promise<void>;
+    /** Stop an agent via the harness close signal — a control action, not a message. */
+    onStopAgent?: (workflowId?: string | null) => void | Promise<void>;
     onApproveTool?: (
       workflowId: string,
       toolId: string,
@@ -85,7 +91,7 @@
 
   interface ChatMessage {
     id: string;
-    role: "user" | "assistant" | "operator-user" | "operator-assistant";
+    role: "user" | "assistant";
     turnNumber?: number;
     text: string;
     timestamp: number;
@@ -105,10 +111,10 @@
     sessions = [],
     agentLabel,
     sessionId,
-    operatorInterface = [],
-    operatorTargetLabel = "",
-    operatorTargetRole = "parent",
-    operatorTargets = [],
+    agentInterface = [],
+    messageTargetLabel = "",
+    messageTargetRole = "parent",
+    messageTargets = [],
     currentAgentWorkflowType = null,
     connecting = false,
     sending = false,
@@ -116,7 +122,7 @@
     closed = false,
     error = null,
     onSend,
-    onOperatorCommand,
+    onStopAgent,
     onApproveTool
   }: Props = $props();
   let draft = $state("");
@@ -132,15 +138,21 @@
   let resolvingApprovalIds = $state<string[]>([]);
   let approvalErrors = $state<Record<string, string>>({});
   let messageListElement = $state<HTMLDivElement | null>(null);
-  let slashSelectionIndex = $state(0);
-  let slashMenuSignature = $state("");
-  let slashTargetWorkflowId = $state<string | null>(null);
+  let pickerSelectionIndex = $state(0);
+  let pickerSignature = $state("");
+  // Which agent the composer is addressing (null = the session's parent).
+  let messageTargetWorkflowId = $state<string | null>(null);
+  // Which handler the composer is addressing. Null until resolved from the target's surface.
+  let selectedHandlerName = $state<string | null>(null);
+  // Form values for a handler that is not single-string-shaped, keyed by field name.
+  let handlerFormValues = $state<Record<string, unknown>>({});
+  let handlerFormError = $state<string | null>(null);
 
   const transcriptMessages = $derived(seedMessages(items));
   const messages = $derived([...transcriptMessages, ...localMessages]);
   const sentUserMessages = $derived(
     messages
-      .filter((message) => message.role === "user" || message.role === "operator-user")
+      .filter((message) => message.role === "user")
       .map((message) => message.text)
   );
   const logsByTurn = $derived(groupLogsByTurn(logs));
@@ -150,89 +162,102 @@
   const activeSession = $derived(
     sessions.find((item) => item.workflow_id === sessionId) ?? null
   );
-  const operatorCommandTargets = $derived.by(() => {
-    if (operatorTargets.length > 0) return operatorTargets;
+  const targets = $derived.by<MessageTargetOption[]>(() => {
+    if (messageTargets.length > 0) return messageTargets;
     return [
       {
         workflowId: sessionId,
-        role: operatorTargetRole,
-        label: operatorTargetLabel || agentLabel,
-        operatorInterface,
+        role: messageTargetRole,
+        label: messageTargetLabel || agentLabel,
+        agentInterface,
         closed
       }
     ];
   });
-  const slashTarget = $derived.by(() => {
-    if (operatorCommandTargets.length === 1) {
-      const onlyTarget = operatorCommandTargets[0] ?? null;
-      return onlyTarget?.closed ? null : onlyTarget;
-    }
+  const activeTarget = $derived.by(() => {
+    const chosen = targets.find(
+      (target) => target.workflowId === messageTargetWorkflowId && !target.closed
+    );
+    if (chosen) return chosen;
+    const parent = targets.find((target) => target.role === "parent");
+    return parent && !parent.closed ? parent : (targets.find((t) => !t.closed) ?? null);
+  });
+  const targetsSubagent = $derived(activeTarget?.role === "subagent");
+  const showTargetPicker = $derived(targets.filter((t) => !t.closed).length > 1);
+  /** Every handler of the selected target — the composer's entire source of truth. */
+  const handlers = $derived(activeTarget?.agentInterface ?? []);
+  /**
+   * The handler the composer will send to. Falls back to the first single-string-shaped one
+   * (so a chat-shaped agent opens as a chat box) and otherwise to the first declared handler.
+   * Deliberately name-agnostic: no handler is privileged by name.
+   */
+  const selectedHandler = $derived.by(() => {
+    if (handlers.length === 0) return null;
+    const chosen = handlers.find((fn) => fn.name === selectedHandlerName);
+    if (chosen) return chosen;
     return (
-      operatorCommandTargets.find(
-        (target) => target.workflowId === slashTargetWorkflowId && !target.closed
-      ) ??
-      null
+      handlers.find((fn) => singleStringField(fn.parameters) != null) ?? handlers[0]
     );
   });
-  const slashNeedsTargetSelection = $derived(
-    operatorCommandTargets.length > 1 && slashTarget == null
+  /** Non-null when the selected handler renders as a plain text box; the field's name. */
+  const textFieldName = $derived(
+    selectedHandler ? singleStringField(selectedHandler.parameters) : null
   );
-  const availableSlashCommands = $derived(slashTarget?.operatorInterface ?? []);
-  const acceptsSlashCommands = $derived(
-    !closed &&
-      operatorCommandTargets.some(
-        (target) => !target.closed && target.operatorInterface.length > 0
-      )
+  const handlerFields = $derived(
+    selectedHandler && textFieldName == null
+      ? describeSchema(selectedHandler.parameters)
+      : []
   );
-  const slashTargetLabel = $derived(slashTarget?.label ?? agentLabel);
-  const slashTargetsSubagent = $derived(slashTarget?.role === "subagent");
-  const showSlashTarget = $derived(
-    slashTarget != null &&
-      !slashNeedsTargetSelection &&
-      (operatorCommandTargets.length > 1 || slashTargetsSubagent)
+  const canSendToTarget = $derived(
+    !closed && activeTarget != null && !activeTarget.closed && handlers.length > 0
   );
-  const isMonty = $derived(currentAgentWorkflowType === "MontyDynamicAgent");
-  const composerPlaceholder = $derived(
-    closed
-      ? `${agentLabel} is closed`
-      : isMonty
-        ? "Send a Python script to Monty"
-        : `Ask ${agentLabel}`
-  );
-  const messageQueueingEnabled = $derived(
-    activeSession?.is_message_queuing_enabled ?? false
-  );
-  const sendingBlocksInput = $derived(sending && !messageQueueingEnabled);
+  const composerPlaceholder = $derived.by(() => {
+    if (closed) return `${agentLabel} is closed`;
+    if (activeTarget?.closed) return `${activeTarget.label} is closed`;
+    if (handlers.length === 0) return "This agent declares no messages";
+    if (!selectedHandler) return `Message ${agentLabel}`;
+    // The field's own title is the best hint we have, and it comes from the schema — so the
+    // prompt reads naturally for `text`, `script`, `prompt`, or anything else.
+    const field = textFieldName
+      ? describeSchema(selectedHandler.parameters).find((f) => f.name === textFieldName)
+      : null;
+    const what = field?.title ?? selectedHandler.name;
+    return `${what} \u2192 ${activeTarget?.label ?? agentLabel}`;
+  });
+  /**
+   * Whether sending is possible while a turn is already running — the selected handler's own
+   * declared mid-turn behavior, not an agent-level setting. `enqueue` queues behind the turn
+   * and `accept` joins it, so both stay available; `reject` would fail the update, so the
+   * composer disables instead of letting the user discover that the hard way.
+   */
+  const midTurn = $derived(selectedHandler?.mid_turn ?? "reject");
+  const sendingBlocksInput = $derived(sending && midTurn === "reject");
   const connectingBlocksInput = $derived(connecting && activeSession == null);
   const composerDisabled = $derived(closed || connectingBlocksInput || creatingSession);
-  const slashDraft = $derived(parseSlashDraft(draft));
-  const slashMenuOpen = $derived(
-    acceptsSlashCommands &&
-      draft.trimStart().startsWith("/") &&
-      !composerDisabled
+  const pickerDraft = $derived(parsePickerDraft(draft));
+  /**
+   * Typing `/` as the first character opens the handler picker. This is purely a client-side
+   * convention for a familiar affordance — the harness has no notion of a slash, and the rows
+   * are just whatever `agent_interface` returned.
+   */
+  const pickerOpen = $derived(
+    canSendToTarget && draft.trimStart().startsWith("/") && !composerDisabled
   );
-  const slashCommand = $derived(commandForSlashDraft(slashDraft.command));
-  const slashEnumChoices = $derived(filteredSlashEnumChoices(slashDraft.arg, slashCommand));
-  const slashToolSuggestions = $derived(uniqueToolSuggestions());
-  const slashToolChoices = $derived(filteredSlashToolChoices(slashDraft.arg, slashToolSuggestions));
-  const slashMenuItems = $derived(
-    buildSlashMenuItems(
-      slashMenuOpen,
-      slashNeedsTargetSelection,
-      operatorCommandTargets,
-      slashDraft,
-      slashCommand,
-      slashEnumChoices,
-      slashToolChoices
-    )
+  const pickerItems = $derived(
+    buildPickerItems(pickerOpen, targets, handlers, pickerDraft, showTargetPicker)
+  );
+  const composerBusy = $derived(
+    sendingBlocksInput || connectingBlocksInput || creatingSession || closed
   );
   const canSendDraft = $derived(
     Boolean(draft.trim()) &&
-      !closed &&
-      !sendingBlocksInput &&
-      !connectingBlocksInput &&
-      !creatingSession &&
-      (!draft.trimStart().startsWith("/") || operatorCommandForDraft(draft) != null)
+      canSendToTarget &&
+      !composerBusy &&
+      textFieldName != null &&
+      !draft.trimStart().startsWith("/")
+  );
+  const canSubmitForm = $derived(
+    canSendToTarget && !composerBusy && textFieldName == null && handlerFields.length > 0
   );
   const latestMessage = $derived(messages[messages.length - 1] ?? null);
   const latestLog = $derived(logs[logs.length - 1] ?? null);
@@ -292,35 +317,43 @@
     });
   });
 
-  $effect(() => {
-    if (!draft.trimStart().startsWith("/")) {
-      slashTargetWorkflowId = null;
-    }
-  });
-
+  // Drop a target that went away or was stopped, so the composer falls back to the parent.
   $effect(() => {
     if (
-      slashTargetWorkflowId &&
-      !operatorCommandTargets.some(
-        (target) => target.workflowId === slashTargetWorkflowId && !target.closed
+      messageTargetWorkflowId &&
+      !targets.some(
+        (target) => target.workflowId === messageTargetWorkflowId && !target.closed
       )
     ) {
-      slashTargetWorkflowId = null;
+      messageTargetWorkflowId = null;
+    }
+  });
+
+  // Keep the selection valid as the target (and therefore its handler surface) changes, and
+  // reset the form to the newly selected handler's own fields.
+  $effect(() => {
+    const resolved = selectedHandler?.name ?? null;
+    if (resolved !== selectedHandlerName) {
+      selectedHandlerName = resolved;
+      handlerFormError = null;
+      handlerFormValues = resolved && textFieldName == null
+        ? emptyValues(describeSchema(selectedHandler!.parameters))
+        : {};
     }
   });
 
   $effect(() => {
-    const signature = slashMenuItems.map((item) => item.id).join("|");
-    if (signature !== slashMenuSignature) {
-      slashMenuSignature = signature;
-      slashSelectionIndex = defaultSlashSelectionIndex(slashMenuItems);
+    const signature = pickerItems.map((item) => item.id).join("|");
+    if (signature !== pickerSignature) {
+      pickerSignature = signature;
+      pickerSelectionIndex = defaultPickerSelectionIndex(pickerItems);
       return;
     }
 
-    if (slashMenuItems.length === 0) {
-      slashSelectionIndex = 0;
-    } else if (slashSelectionIndex >= slashMenuItems.length) {
-      slashSelectionIndex = slashMenuItems.length - 1;
+    if (pickerItems.length === 0) {
+      pickerSelectionIndex = 0;
+    } else if (pickerSelectionIndex >= pickerItems.length) {
+      pickerSelectionIndex = pickerItems.length - 1;
     }
   });
 
@@ -329,9 +362,7 @@
     const emittedUsers = new Set<number>();
 
     for (const item of transcriptItems) {
-      if (item.kind === "user" && item.text.startsWith("/")) {
-        emittedUsers.add(item.turnNumber);
-      } else if (item.kind === "user") {
+      if (item.kind === "user") {
         emittedUsers.add(item.turnNumber);
         messages.push({
           id: `chat-user-${item.turnNumber}`,
@@ -354,25 +385,6 @@
           citations: item.citations
         });
       }
-
-      if (item.kind === "operator") {
-        messages.push({
-          id: `${item.id}-command`,
-          role: "operator-user",
-          turnNumber: item.turnNumber,
-          text: item.command,
-          timestamp: item.timestamp,
-          citations: []
-        });
-        messages.push({
-          id: `${item.id}-result`,
-          role: "operator-assistant",
-          turnNumber: item.turnNumber,
-          text: item.text,
-          timestamp: item.timestamp,
-          citations: []
-        });
-      }
     }
 
     return messages;
@@ -381,12 +393,15 @@
   function showLogInApp(row: ReplayLogRow): boolean {
     if (row.turnNumber <= 0) return false;
     if (row.actor === "user") return false;
+    // Rows the transcript already renders in full, plus the pure lifecycle brackets — the
+    // in-app log is the "what else happened" column, not a second copy of the conversation.
     return ![
+      "message_accepted",
+      "message_handler_start",
+      "message_handler_end",
       "turn_started",
       "turn_end",
-      "message_queued",
       "reply_delta",
-      "reply",
       "text_annotation"
     ].includes(row.event);
   }
@@ -800,77 +815,34 @@
     return sources.slice(0, 2);
   }
 
-  function parseSlashDraft(value: string): { command: string; arg: string } {
+  /** Split a `/name ...` draft into the typed handler-name prefix and the rest. */
+  function parsePickerDraft(value: string): { name: string; rest: string } {
     const trimmed = value.trimStart();
-    if (!trimmed.startsWith("/")) return { command: "", arg: "" };
-    const withoutSlash = trimmed.slice(1);
-    const [command = "", ...rest] = withoutSlash.split(/\s+/);
-    return {
-      command: command.toLowerCase(),
-      arg: rest.join(" ").trim()
-    };
+    if (!trimmed.startsWith("/")) return { name: "", rest: "" };
+    const [name = "", ...rest] = trimmed.slice(1).split(/\s+/);
+    return { name: name.toLowerCase(), rest: rest.join(" ").trim() };
   }
 
-  function operatorCommandNames(command: OperatorCommand): string[] {
-    return [command.name, ...command.aliases].map((name) => name.toLowerCase());
+  function handlerMatchesDraft(handler: AgentInterfaceFunction, typed: string): boolean {
+    return !typed || handler.name.toLowerCase().startsWith(typed);
   }
 
-  function commandForSlashDraft(commandName: string): OperatorCommand | null {
-    const normalized = commandName.toLowerCase();
-    return (
-      availableSlashCommands.find((command) =>
-        operatorCommandNames(command).includes(normalized)
-      ) ?? null
-    );
-  }
-
-  function commandMatchesDraft(command: OperatorCommand, draftCommand: string): boolean {
-    const normalized = draftCommand.toLowerCase();
-    if (!normalized) return true;
-    return operatorCommandNames(command).some((name) => name.startsWith(normalized));
-  }
-
-  function filteredSlashEnumChoices(
-    value: string,
-    command: OperatorCommand | null
-  ): string[] {
-    const choices = command?.argument?.kind === "enum" ? command.argument.choices : [];
-    const normalized = value.toLowerCase();
-    if (!normalized) return choices;
-    return choices.filter((choice) => choice.toLowerCase().includes(normalized));
-  }
-
-  function uniqueToolSuggestions(): string[] {
-    const pendingTools = pendingApprovalRows
-      .map((row) => row.toolName)
-      .filter((name): name is string => Boolean(name));
-    const commandChoices =
-      slashCommand?.argument?.kind === "tool_names" ? slashCommand.argument.choices : [];
-    return [...new Set([...pendingTools, ...commandChoices])].sort((a, b) =>
-      a.localeCompare(b)
-    );
-  }
-
-  function filteredSlashToolChoices(value: string, tools: string[]): string[] {
-    const normalized = value.toLowerCase();
-    if (!normalized) return tools;
-    return tools.filter((tool) => tool.toLowerCase().includes(normalized));
-  }
-
-  function buildSlashMenuItems(
+  /**
+   * Rows for the `/` picker: the target agent first when there is a choice of them, then the
+   * selected target's handlers filtered by what has been typed.
+   */
+  function buildPickerItems(
     open: boolean,
-    needsTargetSelection: boolean,
-    targets: OperatorTargetOption[],
-    parsed: { command: string; arg: string },
-    command: OperatorCommand | null,
-    enumChoices: string[],
-    tools: string[]
-  ): SlashMenuItem[] {
+    allTargets: MessageTargetOption[],
+    available: AgentInterfaceFunction[],
+    draftParts: { name: string; rest: string },
+    includeTargets: boolean
+  ): PickerItem[] {
     if (!open) return [];
-    const items: SlashMenuItem[] = [];
-    if (needsTargetSelection) {
+    const items: PickerItem[] = [];
+    if (includeTargets) {
       items.push(
-        ...targets
+        ...allTargets
           .filter((target) => !target.closed)
           .map((target) => ({
             kind: "target" as const,
@@ -878,265 +850,122 @@
             target
           }))
       );
-      return items;
     }
-    if (command == null) {
-      items.push(
-        ...availableSlashCommands
-          .filter((item) => commandMatchesDraft(item, parsed.command))
-          .map((item) => ({
-            kind: "command" as const,
-            id: item.name,
-            command: item
-          }))
-      );
-      return items;
-    }
-    if (command.argument?.kind === "enum") {
-      items.push(
-        ...enumChoices.map((choice) => ({
-          kind: "choice" as const,
-          id: `${command.name}:${choice}`,
-          command,
-          value: choice
+    items.push(
+      ...available
+        .filter((handler) => handlerMatchesDraft(handler, draftParts.name))
+        .map((handler) => ({
+          kind: "handler" as const,
+          id: `handler:${handler.name}`,
+          handler
         }))
-      );
-    }
-    if (command.argument?.kind === "tool_names") {
-      items.push(
-        ...tools.map((tool) => ({
-          kind: "tool" as const,
-          id: `${command.name}:${tool}`,
-          command,
-          tool
-        }))
-      );
-    }
+    );
     return items;
   }
 
-  function defaultSlashSelectionIndex(items: SlashMenuItem[]): number {
-    const firstChoiceIndex = items.findIndex((item) => item.kind !== "command");
-    return firstChoiceIndex === -1 ? 0 : firstChoiceIndex;
+  function defaultPickerSelectionIndex(items: PickerItem[]): number {
+    const firstHandler = items.findIndex((item) => item.kind === "handler");
+    return firstHandler >= 0 ? firstHandler : 0;
   }
 
-  function operatorCommandForDraft(value: string): ParsedOperatorCommand | null {
-    if (slashNeedsTargetSelection || slashTarget == null || slashTarget.closed) return null;
-    const parsed = parseSlashDraft(value);
-    const command = commandForSlashDraft(parsed.command);
-    if (command == null) return null;
-    const argument = command.argument;
-    if (argument == null) {
-      if (parsed.arg) return null;
-      return {
-        name: command.payload_name,
-        displayText: `/${command.name}`
-      };
-    }
-    if (argument.required && !parsed.arg) return null;
-    if (argument.kind === "enum" && !argument.choices.includes(parsed.arg)) return null;
-    return {
-      name: command.payload_name,
-      arg: parsed.arg || undefined,
-      displayText: `/${command.name}${parsed.arg ? ` ${parsed.arg}` : ""}`
-    };
+  /** How a handler's mid-turn behavior reads in the picker and the composer badge. */
+  function midTurnLabel(mode: AgentInterfaceFunction["mid_turn"]): string {
+    if (mode === "enqueue") return "queues";
+    if (mode === "accept") return "joins";
+    return "needs idle";
   }
 
-  function slashMessageForDraft(value: string): SlashCommandMessage | null {
-    const parsed = parseSlashDraft(value);
-    const command = commandForSlashDraft(parsed.command);
-    if (command == null) return null;
-    const argument = command.argument;
-    if (argument == null) {
-      if (parsed.arg) return null;
-      return { type: "slash", payload: { name: command.payload_name } };
-    }
-    if (argument.required && !parsed.arg) return null;
-    if (argument.kind === "enum" && !argument.choices.includes(parsed.arg)) return null;
-    return {
-      type: "slash",
-      payload: parsed.arg
-        ? { name: command.payload_name, arg: parsed.arg }
-        : { name: command.payload_name }
-    };
+  function midTurnHint(mode: AgentInterfaceFunction["mid_turn"]): string {
+    if (mode === "enqueue") return "Sent while busy: waits its turn behind the current work.";
+    if (mode === "accept") return "Sent while busy: joins the running turn and applies now.";
+    return "Sent while busy: refused — this message needs an idle agent.";
   }
 
-  function commandDisplayText(message: AgentInboundMessage): string {
-    if (typeof message === "string") return message;
-    if (
-      message.type === "slash" &&
-      typeof message.payload === "object" &&
-      message.payload != null &&
-      "name" in message.payload &&
-      typeof message.payload.name === "string"
-    ) {
-      const command = slashDisplayCommand(message.payload.name);
-      const arg =
-        "arg" in message.payload && typeof message.payload.arg === "string"
-          ? message.payload.arg
-          : "";
-      return `/${command}${arg ? ` ${arg}` : ""}`;
-    }
-    return JSON.stringify(message);
+  function selectTarget(target: MessageTargetOption): void {
+    messageTargetWorkflowId = target.workflowId;
+    selectedHandlerName = null;
+    draft = "/";
+    composerInput?.focus();
   }
 
-  function slashDisplayCommand(name: string): string {
-    return (
-      availableSlashCommands.find(
-        (command) =>
-          command.payload_name === name ||
-          command.name === name ||
-          command.aliases.includes(name)
-      )?.name ?? name
-    );
+  function selectHandler(handler: AgentInterfaceFunction): void {
+    selectedHandlerName = handler.name;
+    handlerFormError = null;
+    const single = singleStringField(handler.parameters);
+    handlerFormValues = single ? {} : emptyValues(describeSchema(handler.parameters));
+    // Clear the `/` draft: the handler is chosen now, so the box (or the form) takes over.
+    draft = "";
+    composerInput?.focus();
   }
 
-  async function sendCommandArgument(
-    command: OperatorCommand,
-    value: string
-  ): Promise<void> {
-    await sendMessage(`/${command.name} ${value}`);
-  }
-
-  function targetRoleLabel(target: OperatorTargetOption): string {
-    if (target.closed) return "Closed";
-    return target.role === "subagent" ? "Subagent" : "Parent agent";
-  }
-
-  function selectSlashTarget(target: OperatorTargetOption): void {
-    if (target.closed) return;
-    slashTargetWorkflowId = target.workflowId;
-    if (!draft.trimStart().startsWith("/")) draft = "/";
-  }
-
-  function isStopOperatorCommand(command: ParsedOperatorCommand): boolean {
-    return command.name === "stop-agent" || command.name === "stop";
-  }
-
-  function selectSlashCommand(command: OperatorCommand): void {
-    if (command.argument == null) {
-      void sendMessage(`/${command.name}`);
-      return;
-    }
-    draft = `/${command.name} `;
-  }
-
+  /**
+   * Send the text box's contents to the selected handler.
+   *
+   * Only reachable when the handler is single-string-shaped; anything else goes through
+   * `submitHandlerForm`. The payload's field name comes from the schema, so this works for a
+   * handler whose field is `text`, `script`, `prompt`, or anything else.
+   */
   async function sendMessage(text = draft): Promise<void> {
     const question = text.trim();
-    const operatorCommand = operatorCommandForDraft(question);
+    const handler = selectedHandler;
+    const field = textFieldName;
     if (
       !question ||
-      closed ||
-      sendingBlocksInput ||
-      connectingBlocksInput ||
-      creatingSession ||
-      (question.startsWith("/") && operatorCommand == null)
+      question.startsWith("/") ||
+      !handler ||
+      !field ||
+      !canSendToTarget ||
+      composerBusy
     ) {
       return;
     }
 
     draft = "";
     historyIndex = -1;
-    if (operatorCommand != null) {
-      const commandTarget = slashTarget;
-      if (onOperatorCommand) {
-        try {
-          const result = await onOperatorCommand(
-            operatorCommand.name,
-            operatorCommand.arg,
-            commandTarget?.workflowId
-          );
-          slashTargetWorkflowId = null;
-          if (isStopOperatorCommand(operatorCommand)) {
-            const now = Date.now() / 1000;
-            localMessages = [
-              ...localMessages,
-              {
-                id: `local-operator-user-${now}`,
-                role: "operator-user",
-                text: operatorCommand.displayText,
-                timestamp: now,
-                citations: []
-              },
-              {
-                id: `local-operator-assistant-${now}`,
-                role: "operator-assistant",
-                text: result.text,
-                timestamp: Date.now() / 1000,
-                citations: []
-              }
-            ];
-          }
-        } catch (error) {
-          slashTargetWorkflowId = null;
-          const now = Date.now() / 1000;
-          localMessages = [
-            ...localMessages,
-            {
-              id: `local-operator-user-${now}`,
-              role: "operator-user",
-              text: operatorCommand.displayText,
-              timestamp: now,
-              citations: []
-            },
-            {
-              id: `local-operator-error-${now}`,
-              role: "operator-assistant",
-              text:
-                error instanceof Error
-                  ? error.message
-                  : "Operator command failed.",
-              timestamp: Date.now() / 1000,
-              citations: []
-            }
-          ];
-        }
-        return;
-      }
+    await dispatchMessage(handler, { [field]: question }, question);
+  }
 
-      slashTargetWorkflowId = null;
-      const now = Date.now() / 1000;
-      try {
-        localMessages = [
-          ...localMessages,
-          {
-            id: `local-operator-user-${now}`,
-            role: "operator-user",
-            text: operatorCommand.displayText,
-            timestamp: now,
-            citations: []
-          },
-          {
-            id: `local-operator-assistant-${now}`,
-            role: "operator-assistant",
-            text: responseFor(operatorCommand.displayText),
-            timestamp: Date.now() / 1000,
-            citations: []
-          }
-        ];
-      } catch (error) {
-        localMessages = [
-          ...localMessages,
-          {
-            id: `local-operator-error-${now}`,
-            role: "operator-assistant",
-            text:
-              error instanceof Error
-                ? error.message
-                : "Operator command failed.",
-            timestamp: Date.now() / 1000,
-            citations: []
-          }
-        ];
-      }
+  /** Send the schema-driven form's values to the selected handler. */
+  async function submitHandlerForm(): Promise<void> {
+    const handler = selectedHandler;
+    if (!handler || !canSubmitForm) return;
+    const problems = validate(handlerFields, handlerFormValues);
+    if (problems.length > 0) {
+      handlerFormError = problems.join(" ");
       return;
     }
+    let payload;
+    try {
+      payload = buildPayload(handlerFields, handlerFormValues);
+    } catch (error) {
+      handlerFormError =
+        error instanceof Error ? error.message : "Could not build the payload.";
+      return;
+    }
+    handlerFormError = null;
+    await dispatchMessage(handler, payload, summarizePayload(handler.name, payload));
+    handlerFormValues = emptyValues(handlerFields);
+  }
 
-    const slashMessage = slashMessageForDraft(question);
-    const outbound: AgentInboundMessage = slashMessage ?? question;
-    const displayText = commandDisplayText(outbound);
+  function summarizePayload(name: string, payload: Record<string, unknown>): string {
+    const entries = Object.entries(payload);
+    const strings = entries.filter(([, v]) => typeof v === "string");
+    if (entries.length === 1 && strings.length === 1) return strings[0][1] as string;
+    const rendered = entries
+      .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+      .join(", ");
+    return `${name}(${rendered})`;
+  }
+
+  async function dispatchMessage(
+    handler: AgentInterfaceFunction,
+    payload: Record<string, unknown>,
+    displayText: string
+  ): Promise<void> {
+    const outbound: AgentInboundMessage = { type: handler.name, payload };
+    const target = activeTarget;
     if (onSend) {
-      await onSend(outbound);
+      await onSend(outbound, target?.workflowId ?? null);
       return;
     }
 
@@ -1161,46 +990,30 @@
     ];
   }
 
-  function selectedSlashMenuItem(): SlashMenuItem | null {
-    return slashMenuItems[slashSelectionIndex] ?? slashMenuItems[0] ?? null;
+  function selectedPickerItem(): PickerItem | null {
+    return pickerItems[pickerSelectionIndex] ?? pickerItems[0] ?? null;
   }
 
-  function slashItemActive(item: SlashMenuItem): boolean {
-    return selectedSlashMenuItem()?.id === item.id;
+  function pickerItemActive(item: PickerItem): boolean {
+    return selectedPickerItem()?.id === item.id;
   }
 
-  function acceptSlashSelection(): boolean {
-    if (!slashMenuOpen) return false;
-    const selected = selectedSlashMenuItem();
+  function acceptPickerSelection(): boolean {
+    if (!pickerOpen) return false;
+    const selected = selectedPickerItem();
     if (!selected) return false;
-
     if (selected.kind === "target") {
-      selectSlashTarget(selected.target);
+      selectTarget(selected.target);
       return true;
     }
-
-    if (selected.kind === "choice") {
-      void sendCommandArgument(selected.command, selected.value);
-      return true;
-    }
-
-    if (selected.kind === "tool") {
-      void sendCommandArgument(selected.command, selected.tool);
-      return true;
-    }
-
-    if (selected.kind === "command") {
-      selectSlashCommand(selected.command);
-      return true;
-    }
-
-    return false;
+    selectHandler(selected.handler);
+    return true;
   }
 
-  function moveSlashSelection(delta: number): boolean {
-    if (!slashMenuOpen || slashMenuItems.length === 0) return false;
-    slashSelectionIndex =
-      (slashSelectionIndex + delta + slashMenuItems.length) % slashMenuItems.length;
+  function movePickerSelection(delta: number): boolean {
+    if (!pickerOpen || pickerItems.length === 0) return false;
+    pickerSelectionIndex =
+      (pickerSelectionIndex + delta + pickerItems.length) % pickerItems.length;
     return true;
   }
 
@@ -1247,7 +1060,7 @@
     if (event.altKey || event.ctrlKey || event.metaKey) return;
 
     if (event.key === "ArrowDown" || event.key === "ArrowRight") {
-      if (moveSlashSelection(1)) {
+      if (movePickerSelection(1)) {
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -1261,7 +1074,7 @@
     }
 
     if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
-      if (moveSlashSelection(-1)) {
+      if (movePickerSelection(-1)) {
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -1275,7 +1088,7 @@
     }
 
     if ((event.key === "Tab" && !event.shiftKey) || event.key === "Enter") {
-      if (!acceptSlashSelection()) return;
+      if (!acceptPickerSelection()) return;
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -1334,21 +1147,14 @@
 
       {#each messages as message}
         <article class={`message ${message.role}`}>
-          {#if message.role === "assistant" || message.role === "operator-assistant"}
+          {#if message.role === "assistant"}
             <div class="assistant-avatar" aria-hidden="true">
-              {#if message.role === "operator-assistant"}
-                <span>/</span>
-              {:else}
-                <Sparkles size={15} />
-              {/if}
+              <Sparkles size={15} />
             </div>
           {/if}
 
           <div class="bubble">
-            <MarkdownMessage
-              text={message.text}
-              citations={message.role === "assistant" ? message.citations : []}
-            />
+            <MarkdownMessage text={message.text} citations={message.citations} />
           </div>
         </article>
 
@@ -1548,152 +1354,140 @@
     {/if}
 
     <div class="composer-wrap">
-      {#if slashMenuOpen}
-        <section class="slash-menu" aria-label="Slash commands">
-          {#if showSlashTarget}
-            <div class="slash-target" title={`Slash commands target ${slashTargetLabel}`}>
-              <span aria-hidden="true">/</span>
-              <strong>{slashTargetLabel}</strong>
-            </div>
-          {/if}
-
-          {#if slashNeedsTargetSelection}
-            {#each operatorCommandTargets as target}
-              {@const targetItem = { kind: "target", id: `target:${target.workflowId}`, target } as const}
+      {#if pickerOpen}
+        <section class="handler-picker" aria-label="Accepted messages">
+          <p class="picker-hint">
+            {handlers.length === 0
+              ? "This agent declares no accepted messages."
+              : `Send to ${activeTarget?.label ?? agentLabel}`}
+          </p>
+          {#each pickerItems as item (item.id)}
+            {#if item.kind === "target"}
               <button
                 type="button"
-                class={`slash-row slash-target-row ${target.closed ? "closed" : ""} ${slashItemActive(targetItem) ? "active" : ""}`}
-                disabled={target.closed}
-                onclick={() => selectSlashTarget(target)}
+                class="picker-row target"
+                class:active={pickerItemActive(item)}
+                onclick={() => selectTarget(item.target)}
               >
-                {#if target.role === "subagent"}
-                  <MessageCircle size={15} />
-                {:else}
-                  <Sparkles size={15} />
-                {/if}
-                <span>
-                  <strong>{target.label}</strong>
-                  <small>{targetRoleLabel(target)}</small>
-                </span>
+                <strong>{item.target.label}</strong>
+                <small>
+                  {item.target.role === "parent" ? "this session" : "subagent"} ·
+                  {item.target.agentInterface.length} message{item.target.agentInterface
+                    .length === 1
+                    ? ""
+                    : "s"}
+                </small>
               </button>
-            {/each}
-          {:else}
-            {#each availableSlashCommands.filter((command) => commandMatchesDraft(command, slashDraft.command)) as command}
-              {#if slashCommand == null}
-                {@const commandItem = { kind: "command", id: command.name, command } as const}
-                <button
-                  type="button"
-                  class={`slash-row ${slashItemActive(commandItem) ? "active" : ""}`}
-                  onclick={() => selectSlashCommand(command)}
-                >
-                  {#if command.payload_name === "set-model"}
-                    <BrainCircuit class="model-command-icon" size={15} />
-                  {:else if command.payload_name === "set-approvals"}
-                    <ShieldCheck size={15} />
-                  {:else if command.payload_name === "status"}
-                    <span class="status-dot" aria-hidden="true"></span>
-                  {:else if command.payload_name === "stop-agent"}
-                    <XCircle class="stop-command-icon" size={15} />
-                  {:else if command.payload_name === "allow-tools"}
-                    <Wrench class="allow-tools-icon" size={15} fill="currentColor" strokeWidth={0} />
-                  {:else}
-                    <Wrench size={15} />
-                  {/if}
-                  <span>
-                    <strong>{command.label}</strong>
-                    <small>{command.description}</small>
+            {:else}
+              <button
+                type="button"
+                class="picker-row"
+                class:active={pickerItemActive(item)}
+                title={midTurnHint(item.handler.mid_turn)}
+                onclick={() => selectHandler(item.handler)}
+              >
+                <span class="picker-name">
+                  <strong>{item.handler.name}</strong>
+                  <span class="mid-turn {item.handler.mid_turn}">
+                    {midTurnLabel(item.handler.mid_turn)}
                   </span>
-                </button>
-              {/if}
-            {/each}
-
-            {#if slashCommand}
-              <div class="slash-row slash-command-summary">
-                {#if slashCommand.payload_name === "set-model"}
-                  <BrainCircuit class="model-command-icon" size={15} />
-                {:else if slashCommand.payload_name === "set-approvals"}
-                  <ShieldCheck size={15} />
-                {:else if slashCommand.payload_name === "status"}
-                  <span class="status-dot" aria-hidden="true"></span>
-                {:else if slashCommand.payload_name === "stop-agent"}
-                  <XCircle class="stop-command-icon" size={15} />
-                {:else if slashCommand.payload_name === "allow-tools"}
-                  <Wrench class="allow-tools-icon" size={15} fill="currentColor" strokeWidth={0} />
-                {:else}
-                  <Wrench size={15} />
-                {/if}
-                <span>
-                  <strong>{slashCommand.label}</strong>
-                  <small>{slashCommand.description}</small>
                 </span>
-              </div>
+                <small>{item.handler.description}</small>
+              </button>
             {/if}
-
-            {#if slashCommand?.argument?.kind === "enum"}
-              <div class="slash-models" aria-label="Argument choices">
-                {#each slashEnumChoices as choice}
-                  {@const choiceItem = { kind: "choice", id: `${slashCommand.name}:${choice}`, command: slashCommand, value: choice } as const}
-                  <button
-                    type="button"
-                    class={`slash-row model-choice ${slashItemActive(choiceItem) ? "active" : ""}`}
-                    onclick={() => void sendCommandArgument(slashCommand, choice)}
-                  >
-                    {#if slashCommand.payload_name === "set-model"}
-                      <Cpu size={15} />
-                    {:else if slashCommand.payload_name === "set-approvals"}
-                      <ShieldCheck size={15} />
-                    {:else}
-                      <Wrench size={15} />
-                    {/if}
-                    <span>
-                      <strong>{choice}</strong>
-                      <small>{slashCommand.payload_name}</small>
-                    </span>
-                  </button>
-                {/each}
-              </div>
-            {/if}
-            {#if slashCommand?.argument?.kind === "tool_names"}
-              <div class="slash-models" aria-label="Tool choices">
-                {#each slashToolChoices as tool}
-                  {@const toolItem = { kind: "tool", id: `${slashCommand.name}:${tool}`, command: slashCommand, tool } as const}
-                  <button
-                    type="button"
-                    class={`slash-row model-choice ${slashItemActive(toolItem) ? "active" : ""}`}
-                    onclick={() => void sendCommandArgument(slashCommand, tool)}
-                  >
-                    <Wrench size={15} />
-                    <span>
-                      <strong>{tool}</strong>
-                      <small>{slashCommand.payload_name}</small>
-                    </span>
-                  </button>
-                {/each}
-              </div>
-            {/if}
-          {/if}
+          {/each}
         </section>
       {/if}
 
-      <form class="composer" class:closed={closed} onsubmit={handleSubmit}>
-        <Search size={17} />
-        <input
-          bind:this={composerInput}
-          bind:value={draft}
-          placeholder={composerPlaceholder}
-          aria-label={`Message ${agentLabel}`}
-          disabled={composerDisabled}
-          onkeydown={handleComposerKeydown}
-        />
-        <IconButton
-          type="submit"
-          label="Send message"
-          tone="primary"
-          disabled={!canSendDraft}
+      <!-- Which handler is being addressed, and what sending mid-turn will do. Shown whenever
+           there is more than one handler or more than one target, so a single-handler chat
+           agent still looks like a plain chat box. -->
+      {#if selectedHandler && (handlers.length > 1 || targetsSubagent || showTargetPicker)}
+        <div class="composer-target">
+          <button
+            type="button"
+            class="target-chip"
+            disabled={composerDisabled}
+            title="Choose which message to send (or type / in the box)"
+            onclick={() => {
+              draft = "/";
+              composerInput?.focus();
+            }}
+          >
+            <strong>{selectedHandler.name}</strong>
+            {#if targetsSubagent || showTargetPicker}
+              <span class="target-of">&rarr; {activeTarget?.label ?? agentLabel}</span>
+            {/if}
+            <ChevronDown size={12} aria-hidden="true" />
+          </button>
+          <span class="mid-turn {selectedHandler.mid_turn}" title={midTurnHint(selectedHandler.mid_turn)}>
+            {midTurnLabel(selectedHandler.mid_turn)}
+          </span>
+        </div>
+      {/if}
+
+      {#if selectedHandler && textFieldName == null && handlerFields.length > 0}
+        <!-- The selected handler takes more than a single string, so it is rendered as a form
+             generated from its input JSON Schema. Enum fields become dropdowns. -->
+        <form
+          class="handler-form"
+          onsubmit={(event) => {
+            event.preventDefault();
+            void submitHandlerForm();
+          }}
         >
-          <ArrowUp size={17} />
-        </IconButton>
-      </form>
+          <SchemaForm
+            fields={handlerFields}
+            bind:values={handlerFormValues}
+            disabled={composerDisabled}
+            idPrefix={`handler-${selectedHandler.name}`}
+          />
+          {#if handlerFormError}
+            <p class="form-error">{handlerFormError}</p>
+          {/if}
+          <div class="form-actions">
+            <button type="submit" class="form-send" disabled={!canSubmitForm}>
+              Send {selectedHandler.name}
+            </button>
+          </div>
+        </form>
+      {:else}
+        <form class="composer" class:closed={closed} onsubmit={handleSubmit}>
+          <Search size={17} />
+          <input
+            bind:this={composerInput}
+            bind:value={draft}
+            placeholder={composerPlaceholder}
+            aria-label={`Message ${activeTarget?.label ?? agentLabel}`}
+            disabled={composerDisabled || !canSendToTarget}
+            onkeydown={handleComposerKeydown}
+          />
+          <IconButton
+            type="submit"
+            label="Send message"
+            tone="primary"
+            disabled={!canSendDraft}
+          >
+            <ArrowUp size={17} />
+          </IconButton>
+        </form>
+      {/if}
+
+      {#if onStopAgent && activeTarget && !activeTarget.closed}
+        <!-- Stopping is a control-plane action (the harness close signal), not a message — so
+             it works whatever the agent happens to accept. -->
+        <div class="composer-actions">
+          <button
+            type="button"
+            class="stop-agent"
+            disabled={creatingSession}
+            onclick={() => void onStopAgent?.(activeTarget?.workflowId ?? null)}
+          >
+            <XCircle size={13} aria-hidden="true" />
+            Stop {activeTarget.label}
+          </button>
+        </div>
+      {/if}
     </div>
   </div>
 
@@ -1779,12 +1573,7 @@
     justify-content: flex-end;
   }
 
-  .message.operator-user {
-    justify-content: flex-end;
-  }
-
-  .message.assistant,
-  .message.operator-assistant {
+  .message.assistant {
     justify-content: flex-start;
   }
 
@@ -1802,16 +1591,6 @@
     color: var(--accent);
   }
 
-  .operator-assistant .assistant-avatar {
-    border-color: color-mix(in srgb, var(--model) 34%, transparent);
-    background: color-mix(in srgb, var(--model) 16%, var(--surface-2));
-    color: color-mix(in srgb, var(--model) 85%, var(--text-1));
-    font-family: var(--font-mono);
-    font-size: var(--font-display);
-    font-weight: 750;
-    line-height: 1;
-  }
-
   .bubble {
     max-width: min(720px, 82%);
     min-width: 0;
@@ -1824,27 +1603,6 @@
   }
 
   .message.assistant .bubble {
-    --markdown-font-family: var(--font-sans);
-    --markdown-body-size: 14px;
-    --markdown-body-line-height: 1.6;
-    --markdown-heading-size: 14.5px;
-    --markdown-heading-line-height: 1.42;
-    --markdown-block-gap: 11px;
-    --markdown-list-gap: 7px;
-    --markdown-strong-weight: 680;
-  }
-
-  .message.operator-user .bubble {
-    max-width: min(620px, 82%);
-    border-color: color-mix(in srgb, var(--model) 44%, var(--border));
-    background: color-mix(in srgb, var(--model) 20%, var(--surface-2));
-    color: var(--text-1);
-    font-family: var(--font-mono);
-    font-size: var(--font-lg);
-    font-weight: 650;
-  }
-
-  .message.operator-assistant .bubble {
     --markdown-font-family: var(--font-sans);
     --markdown-body-size: 14px;
     --markdown-body-line-height: 1.6;
@@ -2304,7 +2062,7 @@
     margin: 0 12px 12px;
   }
 
-  .slash-menu {
+  .handler-picker {
     position: absolute;
     right: 0;
     bottom: calc(100% + 8px);
@@ -2312,6 +2070,8 @@
     z-index: 12;
     display: grid;
     gap: 6px;
+    max-height: 300px;
+    overflow-y: auto;
     padding: 8px;
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-md);
@@ -2319,57 +2079,18 @@
     box-shadow: var(--shadow-dropdown);
   }
 
-  .slash-target {
-    min-width: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    justify-self: start;
-    max-width: 100%;
-    padding: 5px 8px;
-    border: 1px solid color-mix(in srgb, var(--model) 36%, var(--border));
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--model) 13%, var(--surface-2));
-    color: var(--text-2);
+  .picker-hint {
+    margin: 0 2px 2px;
+    color: var(--text-3);
     font-size: var(--font-sm);
-  }
-
-  .slash-target span {
-    width: 17px;
-    height: 17px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: 0 0 auto;
-    border-radius: var(--radius-sm);
-    background: color-mix(in srgb, var(--model) 28%, var(--surface-1));
-    color: color-mix(in srgb, var(--model) 88%, var(--text-1));
-    font-family: var(--font-mono);
-    font-size: var(--font-lg);
-    font-weight: 750;
-  }
-
-  .slash-target strong {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
     font-weight: 680;
+    letter-spacing: 0.02em;
   }
 
-  .slash-models {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
-  }
-
-  .slash-row {
+  .picker-row {
     min-width: 0;
-    min-height: 42px;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 9px;
-    align-items: center;
+    gap: 3px;
     padding: 8px 10px;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
@@ -2380,83 +2101,200 @@
     font: inherit;
   }
 
-  .slash-row:focus-visible,
-  .slash-row.active {
+  .picker-row:focus-visible,
+  .picker-row.active {
     border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
     background: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
+    outline: 0;
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .slash-row:hover:not(.slash-command-summary) {
+    .picker-row:hover {
       border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
       background: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
     }
+  }
 
-    /* Still inside the guard: it exists to take the hover styling back off a
-       row that cannot be chosen, so it is only needed where hover happens. */
-    .slash-row:disabled:hover,
-    .slash-row.closed:hover {
-      border-color: var(--border);
-      background: var(--surface-2);
+  .picker-row.target {
+    border-color: color-mix(in srgb, var(--model) 36%, var(--border));
+    background: color-mix(in srgb, var(--model) 13%, var(--surface-2));
+  }
+
+  .picker-row strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--font-md);
+    font-weight: 680;
+  }
+
+  .picker-row small {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--text-2);
+    font-size: var(--font-sm);
+    line-height: 1.4;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .picker-name {
+    min-width: 0;
+    display: flex;
+    gap: 7px;
+    align-items: center;
+  }
+
+  /* mid_turn badge: neutral for enqueue, accent-positive for a join, warning for one that
+     needs an idle agent — so "what will sending do right now" reads at a glance. */
+  .mid-turn {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-chip);
+    background: var(--surface-3);
+    color: var(--text-3);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .mid-turn.accept {
+    border-color: color-mix(in srgb, var(--success) 32%, var(--border));
+    background: color-mix(in srgb, var(--success) 15%, var(--surface-2));
+    color: color-mix(in srgb, var(--success) 82%, var(--text-1));
+  }
+
+  .mid-turn.reject {
+    border-color: color-mix(in srgb, var(--warning) 32%, var(--border));
+    background: color-mix(in srgb, var(--warning) 15%, var(--surface-2));
+    color: color-mix(in srgb, var(--warning) 82%, var(--text-1));
+  }
+
+  .composer-target {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+    margin-bottom: 7px;
+  }
+
+  .target-chip {
+    min-width: 0;
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    padding: 5px 9px;
+    border: 1px solid color-mix(in srgb, var(--model) 36%, var(--border));
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--model) 13%, var(--surface-2));
+    color: var(--text-1);
+    font: inherit;
+    font-size: var(--font-sm);
+    cursor: pointer;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .target-chip:hover:not(:disabled) {
+      border-color: color-mix(in srgb, var(--model) 58%, var(--border));
     }
   }
 
-  .slash-row:disabled,
-  .slash-row.closed {
+  .target-chip:disabled {
     cursor: default;
     opacity: var(--disabled-opacity);
   }
 
-  .slash-row :global(svg) {
-    color: var(--accent);
+  .target-chip strong {
+    font-weight: 680;
   }
 
-  .slash-row :global(svg.model-command-icon) {
-    color: var(--warning);
-  }
-
-  .slash-row :global(svg.allow-tools-icon) {
+  .target-chip :global(svg) {
     color: var(--text-3);
   }
 
-  .slash-row :global(svg.stop-command-icon) {
-    color: var(--error);
-  }
-
-  .status-dot {
-    width: 11px;
-    height: 11px;
-    justify-self: center;
-    border-radius: var(--radius-chip);
-    background: var(--success);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
-  }
-
-  .slash-command-summary {
-    cursor: default;
-  }
-
-  .slash-row span {
+  .target-of {
     min-width: 0;
-    display: grid;
-    gap: 1px;
-  }
-
-  .slash-row strong,
-  .slash-row small {
     overflow: hidden;
+    color: var(--text-2);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .slash-row strong {
-    font-size: var(--font-md);
-    font-weight: 700;
+  .handler-form {
+    padding: 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--surface-1);
   }
 
-  .slash-row small {
-    color: var(--text-3);
+  .form-error {
+    margin: 0 0 9px;
+    color: var(--error);
     font-size: var(--font-sm);
+  }
+
+  .form-actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .form-send {
+    padding: 6px 13px;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+    color: var(--text-1);
+    font: inherit;
+    font-size: var(--font-md);
+    font-weight: 680;
+    cursor: pointer;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .form-send:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--accent) 26%, var(--surface-2));
+    }
+  }
+
+  .form-send:disabled {
+    cursor: default;
+    opacity: var(--disabled-opacity);
+  }
+
+  .composer-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 7px;
+  }
+
+  .stop-agent {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+    padding: 4px 9px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-chip);
+    background: var(--surface-2);
+    color: var(--text-3);
+    font: inherit;
+    font-size: var(--font-sm);
+    cursor: pointer;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .stop-agent:hover:not(:disabled) {
+      border-color: color-mix(in srgb, var(--error) 45%, var(--border));
+      background: color-mix(in srgb, var(--error) 10%, var(--surface-2));
+      color: color-mix(in srgb, var(--error) 88%, var(--text-1));
+    }
+  }
+
+  .stop-agent:disabled {
+    cursor: default;
+    opacity: var(--disabled-opacity);
   }
 
   .composer {
@@ -2496,13 +2334,6 @@
   .composer.closed {
     border-color: color-mix(in srgb, var(--success) 24%, var(--border));
     background: color-mix(in srgb, var(--surface-1) 80%, var(--surface-0));
-  }
-
-  @media (max-width: 760px) {
-    .slash-models {
-      grid-template-columns: minmax(0, 1fr);
-    }
-
   }
 
   @media (max-width: 980px) {

@@ -33,7 +33,7 @@ function run({ tools = 0, reasoning = false } = {}) {
       : []),
     ...toolFrames,
     frame("model_interaction_ended", { model: "gpt" }),
-    frame("reply", { output: { text: "done" } })
+    frame("message_handler_end", { output: { text: "done" } })
   ]);
 }
 

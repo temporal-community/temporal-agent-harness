@@ -149,9 +149,9 @@ marks which are waiting on an `ask_user` (⏳). From it you can:
   submitted; the client then shows the agent's continued reply.
 - **`--session <id>`** opens a session directly, surfacing any already-pending question.
 
-Inside a session, client-local navigation is keyed off `:` (not `/`, which is reserved for the
-harness's own slash commands): `:questions` re-checks for open questions, `:sessions` returns to the
-picker, and `:quit` exits.
+Inside a session, client-local navigation is keyed off `:` so it never collides with message
+text: `:questions` re-checks for open questions, `:sessions` returns to the picker, and `:quit`
+exits.
 
 Without `just`, the equivalent commands (from the repo root):
 

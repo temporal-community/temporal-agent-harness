@@ -15,15 +15,24 @@
 # delegate to ``runner.start_subagent`` / ``run_subagent_turn`` / ``stop_subagent`` — so all
 # subagent state lives on the runner, with no holder object or ``has_self`` plumbing.
 #
-# GUARDRAIL: generated toolsets omit operator-only channels. A parent model gets no
-# approve-a-tool capability (``tool_approval``) and no slash-command runtime controls
-# (``slash``), so a child's gated tools still escalate to a human and approval policy stays
-# operator-owned.
+# GUARDRAIL: what a parent model may drive is decided HERE, at toolset construction — not by
+# a naming convention on the child, and not by what the child's ``agent_interface`` query
+# admits to. A child handler's ``model_callable`` flag is only the author's HINT; the
+# ``tools=`` :class:`SubagentToolPolicy` is authoritative and may honor it (the default),
+# narrow it further, or ignore it entirely. Since a parent model can only ever act through
+# the tools it was given, this is the real boundary, and it is the only one.
+#
+# Independently of any policy: the harness-owned updates are never generated as tools. A
+# parent gets no approve-a-tool capability (``tool_approval``) and cannot fabricate a
+# callback result (``provide_callback_result``), because neither is an ``@agent.accepts``
+# handler — so a child's gated tools still escalate to a human, and its approval policy
+# stays operator-owned even under ``dangerously_allow_all()``.
 
 from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel
@@ -31,11 +40,65 @@ from temporalio import workflow
 
 from temporal_agent_harness.harness.agent_workflow import (
     _AcceptedHandler,
-    _SLASH_MESSAGE_TYPE,
     _current_runner,
     agent_handlers,
     tool_defn,
 )
+
+
+@dataclass(frozen=True)
+class SubagentToolPolicy:
+    """The PARENT's decision about which of a child's handlers become model-callable tools.
+
+    Mirrors the two-layer shape the harness already uses for tool approvals: the child
+    declares a static hint (``@agent.accepts(model_callable=...)``, the analogue of a tool's
+    ``inherently_safe``), and this policy — supplied by the parent as
+    ``subagent_toolset(..., tools=...)`` — is authoritative. A hint is never an access
+    decision; this is.
+
+    Construct one with a named preset rather than by field:
+
+      * :meth:`allow_model_callable` (the default) — honor the child's hints.
+      * :meth:`allow_only` — a specific allow-list, ignoring the hints. Use it to hand a
+        parent a deliberately narrow slice of a child that declares more.
+      * :meth:`dangerously_allow_all` — every handler, hints ignored. Named as a yellow flag:
+        it hands the parent's model whatever the child happens to expose, including handlers
+        the child's author explicitly marked as not model-callable.
+
+    No preset can reach ``tool_approval`` or ``provide_callback_result`` — those are not
+    handlers, so the human-in-the-loop guardrail holds regardless of what is chosen here.
+    """
+
+    # None = "honor each handler's model_callable hint". A frozenset = that exact allow-list,
+    # hints ignored. Empty frozenset is meaningful (allow nothing) and distinct from None.
+    allowed_names: frozenset[str] | None = None
+    # Include handlers whose hint says they are not model-callable.
+    include_non_model_callable: bool = False
+
+    @classmethod
+    def allow_model_callable(cls) -> "SubagentToolPolicy":
+        """Honor the child's hints: generate a tool for each ``model_callable=True`` handler."""
+        return cls()
+
+    @classmethod
+    def allow_only(cls, *names: str) -> "SubagentToolPolicy":
+        """Generate tools for exactly ``names``, whatever the child's hints say.
+
+        Narrower OR wider than the hints — an explicitly named handler is included even if
+        its author marked it ``model_callable=False``, because naming it here IS the parent
+        overriding that hint on purpose."""
+        return cls(allowed_names=frozenset(names), include_non_model_callable=True)
+
+    @classmethod
+    def dangerously_allow_all(cls) -> "SubagentToolPolicy":
+        """Generate a tool for EVERY handler, ignoring the hints. See the class docstring."""
+        return cls(include_non_model_callable=True)
+
+    def selects(self, handler: _AcceptedHandler) -> bool:
+        """Whether this policy admits ``handler`` as a generated tool."""
+        if self.allowed_names is not None and handler.name not in self.allowed_names:
+            return False
+        return handler.model_callable or self.include_non_model_callable
 
 
 def _resolve_workflow_type(agent_cls: type) -> str:
@@ -163,6 +226,7 @@ def subagent_toolset(
     key: str,
     task_queue: str,
     workflow_type: str | None = None,
+    tools: SubagentToolPolicy | None = None,
 ) -> list[Callable[..., Awaitable[Any]]]:
     """Convert a harness agent into a toolset a parent agent can use to drive it as a subagent.
 
@@ -180,17 +244,23 @@ def subagent_toolset(
         task_queue: the task queue the child agent's worker polls (where instances are started).
         workflow_type: the child's registered workflow type name; defaults to its ``@workflow.defn``
             name.
+        tools: the parent's authoritative :class:`SubagentToolPolicy` — which of the child's
+            handlers become tools. Defaults to honoring the child's ``model_callable`` hints.
     """
     resolved_type = workflow_type or _resolve_workflow_type(agent_cls)
+    policy = tools if tools is not None else SubagentToolPolicy.allow_model_callable()
+    declared = agent_handlers(agent_cls)
     handlers = {
-        name: handler
-        for name, handler in agent_handlers(agent_cls).items()
-        if name != _SLASH_MESSAGE_TYPE
+        name: handler for name, handler in declared.items() if policy.selects(handler)
     }
     if not handlers:
         raise TypeError(
-            f"{agent_cls.__name__} declares no @agent.accepts handlers that are "
-            f"model-callable, so it has no callable surface to wire as a subagent toolset."
+            f"{agent_cls.__name__} exposes no handlers under the given SubagentToolPolicy, "
+            f"so it has no callable surface to wire as a subagent toolset. It declares "
+            f"{sorted(declared)}; of those, model-callable: "
+            f"{sorted(n for n, h in declared.items() if h.model_callable)}. Widen the "
+            f"policy (e.g. SubagentToolPolicy.allow_only(...)) or mark a handler "
+            f"model_callable=True."
         )
 
     tools: list[Callable[..., Awaitable[Any]]] = [

@@ -1,85 +1,69 @@
 // ABOUTME: Asserts the three surfaces that show an operator their own message back — chat bubble,
 // replay log, session list — all show the same thing, and that the thing is the message rather than
-// its envelope. renderUserMessage() existed in three copies; two checked top-level `script` but not
-// `payload.script`, so a MontyDynamicAgent line wrapped as {type:"run_script", payload:{script}} and
-// echoed back verbatim by agent_workflow.py's _render_message fell through to the raw value. The
-// chat bubble and the replay log rendered
-// {"type":"run_script","payload":{"script":"book_flight(\"SFO\", \"LHR\")"}} — escaped quotes and
-// all — where the session list rendered book_flight("SFO", "LHR"). Slash commands rendered
-// identically on all three, which is why it hid, so slash is the control here rather than the
-// subject. Goes through the real builders, never through a copy of their logic, and ends by
-// pinning that the private copies have not grown back.
+// its envelope. renderUserMessage() once existed in three copies that had drifted apart, so this
+// goes through the real builders, never through a copy of their logic, and ends by pinning that the
+// private copies have not grown back. The message arrives structurally now — `message_accepted`
+// carries `handler` + `payload` — so there is no JSON to unwrap, but the rule for what to SHOW is
+// still one rule shared by every surface: a lone string field renders bare (whatever it is named),
+// and anything else is labelled by handler name. No handler or field name is special-cased.
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "vitest";
 
-import { renderUserMessage } from "./inboundMessageText.ts";
+import { displayTextForMessage, renderUserMessage } from "./inboundMessageText.ts";
 import { buildReplayLog } from "./replayLog.ts";
 import { buildTranscript } from "./transcript.ts";
 
-/* Built the way the server builds it, not typed out as a literal: AgentMessage is
-   {type, payload, expected_turn} and _render_message emits model_dump_json(include={type,payload}),
-   so this is the whole of what can arrive on user_message. Writing it as JSON.stringify of that
-   envelope is also what keeps the escaped-quote case honest — the script below contains the very
-   quotes that made the leaked JSON unreadable. */
-const wire = (type, payload) => JSON.stringify({ type, payload });
-
-const turnStarted = (userMessage) => ({
-  event: "turn_started",
+const messageAccepted = (handler, payload, disposition = "opened") => ({
+  event: "message_accepted",
   data: {
-    type: "turn_started",
+    type: "message_accepted",
     agent_id: "root",
     turn_id: "turn-1",
     turn_number: 1,
+    message_id: `msg-${disposition}`,
     timestamp: 1,
-    resume_offset: "1",
+    resume_offset: 1,
     event_offset: 1,
-    user_message: userMessage
-  }
-});
-
-const messageQueued = (userMessage) => ({
-  event: "message_queued",
-  data: {
-    type: "message_queued",
-    agent_id: "root",
-    turn_id: "turn-2",
-    turn_number: 2,
-    timestamp: 2,
-    resume_offset: "2",
-    event_offset: 2,
-    user_message: userMessage
+    handler,
+    payload,
+    disposition
   }
 });
 
 /* One helper per surface, each landing on the value its own component reads:
    AgentChatPanel reads TranscriptItem.text, the replay log reads ReplayLogRow.body, and the
    session list reads the string agentRun.svelte.ts stores as initial_user_message — which it
-   produces by calling renderUserMessage on the same frame field. */
-function chatBubble(userMessage) {
-  const item = buildTranscript([turnStarted(userMessage)]).find((i) => i.kind === "user");
-  assert.ok(item, "buildTranscript produced no user item for a turn_started frame");
+   produces by calling renderUserMessage on the same frame fields. */
+function chatBubble(handler, payload) {
+  const item = buildTranscript([messageAccepted(handler, payload)]).find((i) => i.kind === "user");
+  assert.ok(item, "buildTranscript produced no user item for a message_accepted frame");
   return item.text;
 }
 
-function replayLogBody(userMessage, frame = turnStarted) {
-  const entry = { workflowId: "wf", role: "parent", label: "Agent", frame: frame(userMessage) };
-  const row = buildReplayLog([entry]).rows.find((r) => r.event === entry.frame.data.type);
-  assert.ok(row, `buildReplayLog produced no row for a ${entry.frame.data.type} frame`);
+function replayLogBody(handler, payload, disposition = "opened") {
+  const entry = {
+    workflowId: "wf",
+    role: "parent",
+    label: "Agent",
+    frame: messageAccepted(handler, payload, disposition)
+  };
+  const row = buildReplayLog([entry]).rows.find((r) => r.event === "message_accepted");
+  assert.ok(row, "buildReplayLog produced no row for a message_accepted frame");
   return row.body;
 }
 
 const sessionList = renderUserMessage;
 
-const onEverySurface = (userMessage) => ({
-  chat: chatBubble(userMessage),
-  log: replayLogBody(userMessage),
-  list: sessionList(userMessage)
+const onEverySurface = (handler, payload) => ({
+  chat: chatBubble(handler, payload),
+  log: replayLogBody(handler, payload),
+  list: sessionList(handler, payload)
 });
 
-function assertAllShow(userMessage, expected, what) {
-  const seen = onEverySurface(userMessage);
+function assertAllShow(handler, payload, expected, what) {
+  const seen = onEverySurface(handler, payload);
   for (const [surface, text] of Object.entries(seen)) {
     assert.equal(
       text,
@@ -90,82 +74,74 @@ function assertAllShow(userMessage, expected, what) {
 }
 
 const SCRIPT = 'book_flight("SFO", "LHR")';
-const RUN_SCRIPT = wire("run_script", { script: SCRIPT });
 
 describe("the message an operator gets shown back", () => {
-  it("unwraps a run_script envelope on every surface", () => {
-    assertAllShow(RUN_SCRIPT, SCRIPT, "a run_script turn");
+  it("shows a lone string field bare, whatever it is called", () => {
+    assertAllShow("run_script", { script: SCRIPT }, SCRIPT, "a run_script message");
+    assertAllShow("ask", { text: "hello there" }, "hello there", "a chat message");
+    assertAllShow("prompt", { prompt: "plan a trip" }, "plan a trip", "a prompt field");
 
-    /* Named separately from the equality above, because the failure a reader reported is not
-       "the wrong string" in the abstract — it is JSON, with backslashes in it, sitting in a chat
-       bubble. This is the assertion whose message says what went wrong. */
-    for (const [surface, text] of Object.entries(onEverySurface(RUN_SCRIPT))) {
-      assert.ok(
-        !text.startsWith("{"),
-        `the ${surface} surface leaked the raw envelope instead of unwrapping payload.script`
-      );
-      assert.ok(
-        !text.includes("\\"),
-        `the ${surface} surface showed escaped quotes from JSON encoding`
-      );
+    /* The failure this guards is not "the wrong string" in the abstract — it is an envelope,
+       with quotes escaped, sitting in a chat bubble. */
+    for (const [surface, text] of Object.entries(onEverySurface("run_script", { script: SCRIPT }))) {
+      assert.ok(!text.startsWith("{"), `the ${surface} surface leaked the envelope`);
+      assert.ok(!text.includes("\\"), `the ${surface} surface showed escaped quotes`);
     }
 
-    /* message_queued is replayLog.ts's second call site and renders the same field. A fix applied to
-       only one of its two branches would pass everything above. */
+    /* A queued message is replayLog.ts's other branch and renders the same fields. */
     assert.equal(
-      replayLogBody(RUN_SCRIPT, messageQueued),
+      replayLogBody("run_script", { script: SCRIPT }, "queued"),
       SCRIPT,
-      "a queued run_script message unwraps too, not just the one that started a turn"
+      "a queued run_script message renders the same as one that opened a turn"
     );
   });
 
-  it("still renders what already worked: the control", () => {
+  it("labels anything else by its handler, with the fields spelled out", () => {
     assertAllShow(
-      wire("slash", { name: "set-model", arg: "gemini-3.5-flash" }),
-      "/model gemini-3.5-flash",
-      "the set-model slash command"
+      "set_model",
+      { model: "gemini-3.5-flash" },
+      "gemini-3.5-flash",
+      "an enum-constrained single field is still one string"
     );
-    assertAllShow(wire("slash", { name: "stop" }), "/stop", "an argument-less slash command");
-    assertAllShow(wire("slash_command", { name: "stop" }), "/stop", "the slash_command spelling");
-
-    /* Plain prose is the common case and never JSON. It must survive untouched, including the leading
-       brace that would send it down the parse path. */
     assertAllShow(
-      "When should I use a local activity?",
-      "When should I use a local activity?",
-      "prose"
+      "start_batch",
+      { label: "nightly", size: 10 },
+      'start_batch(label="nightly", size=10)',
+      "a multi-field payload"
     );
-    assertAllShow("{not json", "{not json", "text that only looks like an envelope");
-    assertAllShow(wire("chat", { text: "hello there" }), "hello there", "a wrapped chat message");
-
-    /* An envelope nothing knows how to unwrap still shows verbatim rather than blank or "undefined":
-       the raw JSON is ugly but it is the whole message, and a reader can at least see it. */
-    const OPAQUE = wire("some_future_type", { unrecognised: 1 });
-    assertAllShow(OPAQUE, OPAQUE, "an unrecognised envelope");
-
-    /* The one branch the narrow copies DID have. Widening them must not have cost it. Unreachable from
-       the wire — AgentMessage has no top-level `script` field — which is exactly why it could be
-       dropped silently, and why it is asserted here rather than trusted. */
-    assertAllShow(JSON.stringify({ type: "x", script: SCRIPT }), SCRIPT, "a top-level script field");
-
-    /* payload.text wins over payload.script, in that order, because web/app.py's
-       _display_user_message resolves them in that order and the two must not disagree about a message
-       carrying both. */
+    assertAllShow("stop", {}, "stop", "an empty payload is just the handler name");
     assertAllShow(
-      wire("run_script", { text: "the human sentence", script: SCRIPT }),
-      "the human sentence",
-      "payload.text taking precedence over payload.script"
+      "configure",
+      { retries: 3 },
+      "configure(retries=3)",
+      "a lone NON-string field is labelled, since a bare number says nothing"
     );
   });
 
-  /* This is the assertion that would have caught the bug at the time it was introduced: every
-     behavioural assertion above passes on three separate implementations right up until one of them
-     is edited. The divergence was the defect, not the missing branch. */
-  it("comes from one copy, not three", () => {
-    for (const path of ["./transcript.ts", "./replayLog.ts"]) {
+  it("shows the outbound message the same way the echoed one will render", () => {
+    /* The composer's optimistic label and the frame that comes back must agree, or the
+       session list flickers between two spellings of one message. */
+    assert.equal(
+      displayTextForMessage({ type: "ask", payload: { text: "hello there" } }),
+      renderUserMessage("ask", { text: "hello there" })
+    );
+    assert.equal(
+      displayTextForMessage({ type: "start_batch", payload: { label: "nightly", size: 10 } }),
+      renderUserMessage("start_batch", { label: "nightly", size: 10 })
+    );
+    assert.equal(displayTextForMessage("  plain prose  "), "plain prose");
+  });
+
+  /* This is the assertion that would have caught the original bug at the time it was
+     introduced: every behavioural assertion above passes on three separate implementations
+     right up until one of them is edited. The divergence was the defect. */
+  it("comes from one copy, not four", () => {
+    for (const path of ["./transcript.ts", "./replayLog.ts", "./flowProjection.ts", "./stepTimeline.ts"]) {
       const source = readFileSync(new URL(path, import.meta.url), "utf8");
       assert.ok(
-        source.includes('import { renderUserMessage } from "$lib/state/inboundMessageText"'),
+        /import \{[^}]*\brenderUserMessage\b[^}]*\} from "\$lib\/state\/inboundMessageText"/.test(
+          source
+        ),
         `${path} should import the shared renderUserMessage`
       );
       assert.ok(
