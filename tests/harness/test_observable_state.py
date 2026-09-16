@@ -464,7 +464,16 @@ async def test_the_draft_class_cache_does_not_grow_per_workflow_instance(sandbox
 
     Measured as a plateau rather than an absolute count, because the sandbox does hold
     onto one module copy of its own; the claim under test is that traffic adds nothing
-    on top of it. Two equal batches, and the second must add zero.
+    on top of it. Two equal batches, and the second must add nothing.
+
+    Asserted as `<= 0` and not `== 0`. A DECREASE is not a failure — it means classes
+    the first batch still had alive when `warm` was sampled were reclaimed later, so
+    `warm` was simply an over-count. Whether a given `C`/`Draft[C]` cycle is reclaimed
+    on the third `gc.collect()` or a little after it depends on when the last frame
+    referencing it goes away, and 3.13/3.14 answer that differently from 3.11/3.12 —
+    `== 0` failed intermittently there with growth of -3 for exactly that reason. The
+    leak this guards against is unbounded GROWTH: a retained class per run shows up as
+    roughly +`runs`, which this still catches.
     """
     client, task_queue = sandboxed_queue
 
@@ -477,7 +486,7 @@ async def test_the_draft_class_cache_does_not_grow_per_workflow_instance(sandbox
         await _run_sandboxed(client, task_queue, "again")
 
     growth = _live_draft_classes() - warm
-    assert growth == 0, (
+    assert growth <= 0, (
         f"{runs} more workflow instances left {growth} more Draft[...] classes alive "
         f"({growth / runs:.1f} per instance): generated classes are accumulating with "
         f"traffic rather than with the number of declared state classes"
