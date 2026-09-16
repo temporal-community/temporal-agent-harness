@@ -102,12 +102,7 @@ class HarnessBackend:
 
     async def run_turn(self, turn: AgentTurn) -> None:
         harness_id = await self._ensure_session(turn.session_id)
-        expected_turn = await self._current_turn(harness_id) + 1
-        body = {
-            "session_id": harness_id,
-            "message": turn.prompt_text,
-            "expected_turn": expected_turn,
-        }
+        body = {"session_id": harness_id, "message": turn.prompt_text}
 
         handles: dict[str, ToolHandle] = {}
         tasks: list[asyncio.Task[Any]] = []
@@ -345,11 +340,6 @@ class HarnessBackend:
         workflow_id = resp.json()["workflow_id"]
         self._sessions[opencode_session_id] = workflow_id
         return workflow_id
-
-    async def _current_turn(self, harness_id: str) -> int:
-        resp = await self._http.get(f"/api/status/{harness_id}")
-        resp.raise_for_status()
-        return int(resp.json().get("current_turn", 0))
 
     async def _post_approve(
         self, harness_id: str, tool_id: str, *, approved: bool, remember: bool

@@ -616,10 +616,10 @@ ever does, document that `attach` replays from the live base, not absolute 0. Ou
    turn number**, which the activity threads through the `ApplicationError` details and the parent
    reads via `_accepted_turn_from_error` — the *same* number the opening `subagent_message_sent`
    carried — so the close-gate key `(workflow_id, subagent_turn)` matches the open marker by
-   construction (not by re-deriving `expected`).
-2. **Pre-acceptance failure (`StaleTurn`/`MidTurnRejected`).** No child turn exists; no `turn_end` will
-   ever come. We must **not** publish `reply_received` here (it would gate forever on a nonexistent
-   `turn_end`). This matches the counter logic that advances nothing on a pre-acceptance rejection.
+   construction (the parent keeps no turn counter of its own to re-derive it from).
+2. **Pre-acceptance failure (`MidTurnRejected`/`UnknownFunction`/`MalformedMessage`).** No child turn
+   exists; no `turn_end` will ever come. We must **not** publish `reply_received` here (it would gate
+   forever on a nonexistent `turn_end`).
 3. **`stop_subagent` mid-session / parent `TERMINATE`.** A normal stop happens at a quiescent point,
    so no bracket is open — the merge unmounts that child on its `subagent_stopped` (closing the
    cursor, freeing its poll slot — see [Mounting/unmounting](#emitting-a-head-updates-the-gate-enabling-sets)).
@@ -648,10 +648,11 @@ ever does, document that `attach` replays from the live base, not absolute 0. Ou
 
 The public surface gets *smaller* while the semantics get *stronger*:
 
-- `AgentClient.send_message(msg_type, payload, expected_turn, *, on_item, timeout,
-  subagent_stall_grace_seconds)` — **`from_offset` removed.** The client reads `accepted_offset` from
-  the submit reply internally and drives the merge from there; callers track no offsets. Phase 1
-  (`_submit_message`) still runs eagerly so `StaleTurnError`/`MidTurnRejectedError` raise *before* any
+- `AgentClient.send_message(msg_type, payload, *, on_item, timeout,
+  subagent_stall_grace_seconds)` — **`from_offset` removed** (and, later, `expected_turn`). The
+  client reads `accepted_offset` from the submit reply internally and drives the merge from there;
+  callers track no offsets and no turn token. Phase 1
+  (`_submit_message`) still runs eagerly so `MidTurnRejectedError` raises *before* any
   streaming — and, critically, before the merge is even constructed, so there is no failure path after
   the agent has accepted. `subagent_stall_grace_seconds` (default 5s) tunes the liveness backstop (see
   [Graceful degradation](#graceful-degradation)).

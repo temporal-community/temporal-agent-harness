@@ -60,6 +60,19 @@ class DriveSubagent(BaseModel):
     )
 
 
+class DriveExistingSubagent(BaseModel):
+    """Run more scripts on a subagent this parent already started (and left alive).
+
+    A second parent turn against the same child, so a test can interleave someone ELSE's turn
+    on the child (a human at its front door) between two of the parent's own."""
+
+    subagent_id: str = Field(
+        description="The parent's handle for the live subagent — the ``subagent_id`` it "
+        "advertised on ``subagent_started``."
+    )
+    scripts: list[str] = Field(description="Scripts to run in order, one turn each.")
+
+
 @workflow.defn(name="SubagentE2EParent")
 @agent.defn
 class SubagentE2EParentWorkflow:
@@ -96,6 +109,12 @@ class SubagentE2EParentWorkflow:
         finally:
             if msg.stop:
                 await self._runner.stop_subagent(handle)
+        return TextReply(text="\n---\n".join(outputs))
+
+    @agent.accepts
+    async def drive_existing(self, msg: DriveExistingSubagent) -> TextReply:
+        """Run the given scripts on a subagent started by an earlier ``drive`` turn."""
+        outputs = [await self._run_one(msg.subagent_id, s) for s in msg.scripts]
         return TextReply(text="\n---\n".join(outputs))
 
     async def _run_one(self, handle: str, script: str) -> str:

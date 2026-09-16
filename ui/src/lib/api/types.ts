@@ -164,7 +164,6 @@ export interface HandlerMessage extends AgentMessageObject {
 export interface ChatRequest {
   session_id: WorkflowId;
   message: AgentInboundMessage;
-  expected_turn: number;
 }
 
 export interface SubmitMessageResponse {
@@ -213,7 +212,6 @@ export interface SubagentInfo {
   subagent_id: string;
   agent_key: string;
   workflow_id: string;
-  next_expected_turn: number;
 }
 
 export interface AgentStatusResponse {

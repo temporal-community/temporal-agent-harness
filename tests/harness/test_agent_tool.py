@@ -151,7 +151,7 @@ async def test_activity_and_workflow_tools_publish_lifecycle(client_and_queue):
     )
     await handle.execute_update(
         SEND_AGENT_MESSAGE_UPDATE,
-        AgentMessage(type="probe", payload={"text": "ping"}, expected_turn=1),
+        AgentMessage(type="probe", payload={"text": "ping"}),
         result_type=AgentMessageReply,
     )
 

@@ -49,7 +49,6 @@ from temporalio.exceptions import ApplicationError
 from temporal_agent_harness.harness.agent_client import (
     MidTurnRejectedError,
     AgentClient,
-    StaleTurnError,
 )
 from temporal_agent_harness.harness.agent_protocol import (
     DEFAULT_SUBAGENT_HEARTBEAT_TIMEOUT,
@@ -117,7 +116,7 @@ class SubagentActivities:
         Failure modes surface as non-retryable :class:`ApplicationError` so the calling tool
         can render them as an ``is_error`` result to the parent model:
 
-        * the child rejected the send (``StaleTurn`` / ``MidTurnRejected`` / ``UnknownFunction`` /
+        * the child rejected the send (``MidTurnRejected`` / ``UnknownFunction`` /
           ``MalformedMessage``) — the child's error ``type`` is preserved;
         * the turn ended in an error (``SubagentTurnError``);
         * the turn ended with no reply (``SubagentNoReply``).
@@ -125,10 +124,12 @@ class SubagentActivities:
         client = AgentClient(self._client, req.child_workflow_id)
 
         # "Already sent?" memo: a retry that landed after the send resumes consuming from the
-        # heartbeated offset instead of re-submitting the turn. (Best-effort, NOT fully
-        # idempotent — a crash between the update returning and the first heartbeat being
-        # durably recorded could still re-send; closing that residual window needs an
-        # idempotent submit and is left as a future hardening pass.)
+        # heartbeated offset instead of re-submitting the turn. The send itself is also
+        # idempotent (``_submit`` keys the update on this activity's identity, stable across
+        # attempts), so a crash between the update returning and the first heartbeat being
+        # durably recorded re-issues the update and gets the same accepted reply back rather
+        # than dispatching the message twice. What that window can still duplicate is the
+        # ``subagent_message_sent`` marker below, which only the memo dedupes.
         progress = self._resume_progress()
         if progress is None:
             progress = await self._submit(client, req)
@@ -272,17 +273,22 @@ class SubagentActivities:
 
         Delegates the envelope build + update to :meth:`AgentClient._submit_message`, then
         translates a rejection into a non-retryable :class:`ApplicationError` that preserves
-        the child's error ``type`` (``StaleTurn`` / ``MidTurnRejected`` / ``UnknownFunction`` /
+        the child's error ``type`` (``MidTurnRejected`` / ``UnknownFunction`` /
         ``MalformedMessage``), so the calling tool can surface it verbatim. The memo seeds its
         ``consumed_offset`` from the caller-supplied ``req.from_offset`` (the perf hint — see
         :class:`RunSubagentTurnInput`); the stream then advances it from there.
+
+        The update is keyed on THIS activity's identity — the parent run + activity id, which
+        every retry attempt shares — so a re-issued send after a lost reply is deduplicated by
+        Temporal and returns the original acceptance instead of dispatching the child a second
+        message.
         """
+        info = activity.info()
+        update_id = f"subagent-turn:{info.workflow_run_id}:{info.activity_id}"
         try:
             result = await client._submit_message(
-                req.type, req.payload, req.expected_turn
+                req.type, req.payload, update_id=update_id
             )
-        except StaleTurnError as e:
-            raise ApplicationError(str(e), type="StaleTurn", non_retryable=True) from e
         except MidTurnRejectedError as e:
             raise ApplicationError(
                 str(e), type="MidTurnRejected", non_retryable=True

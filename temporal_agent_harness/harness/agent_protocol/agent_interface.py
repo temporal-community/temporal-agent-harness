@@ -118,9 +118,7 @@ class ToolApprovalPolicy(BaseModel):
         Backs the "approve, and stop asking me about this tool" flow (a ``tool_approval``
         decision with ``remember=True``) and any agent-driven runtime allow-listing.
         """
-        return self.model_copy(
-            update={"auto_approve_tools": self.auto_approve_tools | {tool_name}}
-        )
+        return self.model_copy(update={"auto_approve_tools": self.auto_approve_tools | {tool_name}})
 
     # -- Named presets (ergonomic constructors; all serialize to this one model) -----
 
@@ -225,33 +223,20 @@ class AgentMessage(BaseModel):
     rejecting a bad shape) before dispatching::
 
         AgentMessage(type="set_model",
-                     payload={"model": "gemini-3.1-flash-lite"},
-                     expected_turn=1)
+                     payload={"model": "gemini-3.1-flash-lite"})
 
     Routing is **by name**, not by a discriminator on the payload type — so two handlers
     may accept the *same* input model.
 
-    ``expected_turn`` is a STALENESS TOKEN: the caller asserting how far it has observed,
-    expressed as the next turn number the agent should hand out
-    (``current_turn + len(pending_turns) + 1``). The update validator rejects the message if
-    the workflow is not at exactly that point.
+    The envelope carries nothing about what the sender has observed. Admission is FIFO and
+    every admitted message is visible on the stream (``message_accepted``), so a message that
+    arrives after work the sender has not seen simply runs after it — the same outcome as
+    sending a moment later. A sender learns what became of its message from the reply
+    (``turn_number`` / ``disposition``); one that wants to act only on an idle agent reads
+    ``agent_status`` first, which is a UX choice rather than part of the protocol.
 
-    It is deliberately not a slot reservation, and **a caller must not simply increment it
-    once per message sent.** A message whose handler declares :attr:`MidTurn.ACCEPT` JOINS a
-    turn already in flight instead of getting one of its own, so the agent's turn counter
-    does not advance and the *next* message must claim the same number again. Counting sends
-    rather than turns over-counts on the first join and then rejects every later message as
-    stale.
-
-    The reliable source is :attr:`AgentMessageReply.turn_number`, returned on every accepted
-    message: set the next ``expected_turn`` to ``reply.turn_number + 1``, which is correct
-    whether the message joined a turn (its number) or reserved one (the new slot). A caller
-    that has lost track can always re-derive it from ``agent_status``.
-
-    The check is turn-granular and therefore coarse — it will not catch a caller acting during a turn
-    it has not finished observing. That is accepted deliberately: asserting a stream offset
-    instead would fail on nearly every busy-agent interaction (the offset advances on every
-    streamed delta), and a check people learn to retry past protects nothing.
+    Two submits of an identical envelope are two messages. A client could make their sends
+    idempotent with a Temporal update id.
 
     It is carried on the envelope itself — the ``send_agent_message`` update takes a bare
     :class:`AgentMessage`, with no separate wrapper.
@@ -259,7 +244,6 @@ class AgentMessage(BaseModel):
 
     type: str
     payload: dict[str, Any] = Field(default_factory=dict)
-    expected_turn: int
 
 
 # ---------------------------------------------------------------------------
@@ -400,9 +384,7 @@ class AgentMessageReply:
 
     ``turn_number`` is the turn this message actually belongs to — a NEW turn for a queued or
     idle message, or the ALREADY-OPEN turn it joined when its handler declares
-    :attr:`MidTurn.ACCEPT`. It is the authoritative input to the caller's next
-    ``expected_turn`` (``turn_number + 1``); see :attr:`AgentMessage.expected_turn` for why
-    counting sends instead is wrong.
+    :attr:`MidTurn.ACCEPT`.
 
     ``disposition`` says what the message did to that turn — opened it, joined it, or queued
     behind it (see :class:`MessageDisposition`). It is what a caller needs to decide how to
@@ -561,15 +543,14 @@ class SubagentInfo:
     ``subagent_id`` is the short id the agent references it by (the same id the subagent stamps as
     its own ``agent_id``, and the value on the parent's ``subagent_started`` / ``subagent_message_sent``
     / ``subagent_reply_received`` events); ``workflow_id`` is the real child workflow (for an
-    operator/UI to drill into). ``next_expected_turn`` reflects how many turns it has run (its next
-    is ``next_expected_turn``). The caller-side FIFO gate's internals (its ticket counters) are
-    deliberately NOT surfaced — they are an implementation detail of turn ordering, not agent status.
+    operator/UI to drill into, and to query its own ``agent_status``). The caller-side FIFO
+    gate's internals (its ticket counters) are deliberately NOT surfaced — they are an
+    implementation detail of turn ordering, not agent status.
     """
 
     subagent_id: str
     agent_key: str
     workflow_id: str
-    next_expected_turn: int
 
 
 @dataclass
@@ -577,8 +558,8 @@ class AgentStatus:
     """Queryable status of the agent workflow.
 
     The workflow exposes this via the ``agent_status`` query. It is the
-    single source of truth for ``attach()``'s termination decision and
-    for the client to compute ``expected_turn`` before sending.
+    single source of truth for ``attach()``'s termination decision, and what a client reads
+    when it wants to know whether the agent is idle before sending.
 
     ``agent_id`` is this agent's own short id — the value it stamps on every event it publishes
     (:attr:`AgentEvent.agent_id`). A consumer reads it to map a session's events to the agent, and

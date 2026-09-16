@@ -233,7 +233,6 @@ export class AgentRunController {
   agents = $state<AgentDescriptor[]>([]);
   sessions = $state<Session[]>([]);
   session = $state<Session | null>(null);
-  expectedTurn = $state(1);
   lastResumeOffset = $state(0);
   #streamVersion = 0;
   #connectionVersion = 0;
@@ -1394,8 +1393,6 @@ export class AgentRunController {
     }
 
     this.pause();
-    const expectedTurn = this.expectedTurn;
-    this.expectedTurn += 1;
     ++this.#sendVersion;
     this.sending = true;
     this.connectionError = null;
@@ -1405,8 +1402,7 @@ export class AgentRunController {
       if (this.session?.workflow_id !== session.workflow_id) return;
       return await this.#api.submitMessage({
         session_id: session.workflow_id,
-        message,
-        expected_turn: expectedTurn
+        message
       });
     });
     // Keep the queue a bare Promise<void>: it only serializes submits, and must not carry
@@ -1419,18 +1415,10 @@ export class AgentRunController {
     try {
       const reply = await submitted;
       if (this.session?.workflow_id !== session.workflow_id) return;
-      // RECONCILE FROM THE REPLY — the optimistic `+= 1` above is only a provisional guess,
-      // and it is WRONG whenever the message joined an already-open turn: a `mid_turn:
-      // "accept"` handler shares that turn rather than taking a slot, so the agent's turn
-      // counter does not advance and the next message must still claim the same number.
-      // Blindly incrementing per *send* over-counts and wedges every later send with
-      // StaleTurn, which the stream reconciliation cannot repair (a join publishes under the
-      // joined turn's lower number, so the `>=` check in #ingestFrame never fires).
-      //
-      // `reply.turn_number` is authoritative in all three cases: the joined turn for a join,
-      // and the reserved slot for a queued or idle send.
+      // The reply's `message_id` is the only bookkeeping a send needs: it pairs the message
+      // with its own terminal on the stream (see #ingestFrame), whether the message opened a
+      // turn, queued behind one, or joined one.
       if (reply) {
-        this.expectedTurn = reply.turn_number + 1;
         if (typeof reply.message_id === "string") {
           this.#awaitingMessages.add(reply.message_id);
         } else {
@@ -1448,7 +1436,6 @@ export class AgentRunController {
       if (isAbortError(error) || this.session?.workflow_id !== session.workflow_id) {
         return;
       }
-      this.expectedTurn = Math.max(1, expectedTurn);
       this.connectionError =
         error instanceof Error ? error.message : "Failed to send message.";
       // The send failed, so no message_id was ever handed back and nothing is outstanding
@@ -1461,9 +1448,6 @@ export class AgentRunController {
   /**
    * Send to a live subagent at its own workflow_id, then re-attach that child's stream so
    * its resulting turn events actually surface (the parent attach does not carry them).
-   *
-   * `expected_turn` is read from the CHILD's status rather than tracked optimistically: the
-   * parent has usually already driven turns on it, so the UI has no local count to trust.
    */
   async #sendToSubagent(
     workflowId: string,
@@ -1471,12 +1455,7 @@ export class AgentRunController {
   ): Promise<void> {
     this.connectionError = null;
     try {
-      const status = await this.#api.agentStatus(workflowId);
-      await this.#api.submitMessage({
-        session_id: workflowId,
-        message,
-        expected_turn: status.current_turn + status.pending_turns.length + 1
-      });
+      await this.#api.submitMessage({ session_id: workflowId, message });
     } catch (error) {
       this.connectionError =
         error instanceof Error ? error.message : "Failed to send message to subagent.";
@@ -1701,7 +1680,6 @@ export class AgentRunController {
     this.#workflowResumeOffsets = new Map<string, number>();
     this.viewIndex = 0;
     this.following = true;
-    this.expectedTurn = 1;
     this.lastResumeOffset = 0;
   }
 
@@ -1753,13 +1731,6 @@ export class AgentRunController {
           frame.data.resume_offset
         );
       }
-    }
-    if (
-      isRootFrame &&
-      "type" in frame.data &&
-      frame.data.turn_number >= this.expectedTurn
-    ) {
-      this.expectedTurn = frame.data.turn_number + 1;
     }
     // Our own message's terminal is what clears `sending` — not the stream going idle. With a
     // shared turn those are different moments, and only this one is about the message we sent.

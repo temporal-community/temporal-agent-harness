@@ -194,12 +194,17 @@ export class MockAgentApi implements AgentApi {
     }
   }
 
-  async submitMessage(request: ChatRequest): Promise<SubmitMessageResponse> {
+  #submitted = 0;
+
+  async submitMessage(_request: ChatRequest): Promise<SubmitMessageResponse> {
     await sleep(80);
+    // Every submit gets a fresh turn; the UI correlates its outstanding messages by
+    // `message_id` alone, so that is all the mock needs to keep distinct.
+    const turn = ++this.#submitted;
     return {
-      turn_number: request.expected_turn,
-      turn_id: `mock-turn-${request.expected_turn}`,
-      message_id: `mock-msg-${request.expected_turn}`,
+      turn_number: turn,
+      turn_id: `mock-turn-${turn}`,
+      message_id: `mock-msg-${turn}`,
       accepted_offset: 0,
       disposition: "opened"
     };

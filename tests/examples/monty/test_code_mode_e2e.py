@@ -64,7 +64,7 @@ async def _run(
     )
     await handle.execute_update(
         SEND_AGENT_MESSAGE_UPDATE,
-        AgentMessage(type="run_code", payload={"script": script}, expected_turn=1),
+        AgentMessage(type="run_code", payload={"script": script}),
         result_type=AgentMessageReply,
     )
 

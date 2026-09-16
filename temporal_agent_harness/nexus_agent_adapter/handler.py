@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass
 
@@ -20,7 +19,6 @@ from temporalio.service import RPCError
 from temporal_agent_harness.harness.agent_client import (
     AgentClient,
     CallbackResultError,
-    StaleTurnError,
     ToolApprovalError,
 )
 from temporal_agent_harness.harness.agent_protocol import (
@@ -64,7 +62,6 @@ from .generated import AgentService as AgentServiceDefinition
 # WorkflowStream's private poll-update name (not part of its public API), hardcoded since
 # pollMessages must attach to it for any agent without importing that agent's workflow code.
 _WORKFLOW_STREAM_POLL_UPDATE = "__temporal_workflow_stream_poll"
-_MAX_SEND_RETRIES = 5
 
 
 def _is_workflow_already_completed(exc: Exception) -> bool:
@@ -93,7 +90,11 @@ def _nexus_subagent_info(info: SubagentInfo) -> NexusSubagentInfo:
         subagent_id=info.subagent_id,
         agent_key=info.agent_key,
         workflow_id=info.workflow_id,
-        next_expected_turn=info.next_expected_turn,
+        # The IDL requires this field but the harness tracks no per-subagent turn counter
+        # (turn state is the child's own; query its agent_status). 0 is the explicit "not
+        # tracked" value until the contract is regenerated with the rest of the Nexus
+        # surface; no consumer reads it.
+        next_expected_turn=0,
     )
 
 
@@ -134,7 +135,7 @@ class AgentServiceHandler:
         return AgentClient(self._client, self._workflow_id(session_id))
 
     # -----------------------------------------------------------------------
-    # sendAgentMessage — AgentClient.start_and_submit_message()'s guess-and-retry caller
+    # sendAgentMessage — AgentClient.start_and_submit_message()'s caller
     # -----------------------------------------------------------------------
 
     @sync_operation
@@ -151,38 +152,25 @@ class AgentServiceHandler:
         start_config = AgentConfig()
         client = self._agent_client(input.session_id)
 
-        # Nexus callers don't know expected_turn; guess 1, then re-derive from status on retry.
-        expected_turn = 1
-        for attempt in range(_MAX_SEND_RETRIES):
-            if attempt > 0:
-                status = await client.get_status()
-                expected_turn = status.current_turn + len(status.pending_turns) + 1
-
-            try:
-                reply = await client.start_and_submit_message(
-                    input.msg_type,
-                    payload,
-                    expected_turn,
-                    workflow_name=self._config.workflow_name,
-                    task_queue=self._config.agent_task_queue,
-                    start_config=start_config,
-                    update_id=f"send-{ctx.request_id}-{attempt}",
-                )
-            except StaleTurnError:
-                await asyncio.sleep((attempt + 1) * 0.05)
-                continue
-            return SendMessageOutput(
-                turn_number=reply.turn_number,
-                turn_id=reply.turn_id,
-                stream_head_offset=reply.accepted_offset,
-                # The IDL still models acceptance as a bool; the harness now reports the
-                # richer MessageDisposition (opened / joined / queued), of which "queued" is
-                # exactly what this field meant. The contract regeneration that removes the
-                # operator operations is where this becomes the disposition itself.
-                pending=reply.disposition is MessageDisposition.QUEUED,
-            )
-        raise HandlerError(
-            "send_agent_message: exhausted retries", type=HandlerErrorType.INTERNAL
+        # The Nexus request id is the idempotency key: a retried operation re-issues the same
+        # update and gets the original acceptance back rather than a second dispatch.
+        reply = await client.start_and_submit_message(
+            input.msg_type,
+            payload,
+            workflow_name=self._config.workflow_name,
+            task_queue=self._config.agent_task_queue,
+            start_config=start_config,
+            update_id=f"send-{ctx.request_id}",
+        )
+        return SendMessageOutput(
+            turn_number=reply.turn_number,
+            turn_id=reply.turn_id,
+            stream_head_offset=reply.accepted_offset,
+            # The IDL still models acceptance as a bool; the harness now reports the
+            # richer MessageDisposition (opened / joined / queued), of which "queued" is
+            # exactly what this field meant. The contract regeneration that removes the
+            # operator operations is where this becomes the disposition itself.
+            pending=reply.disposition is MessageDisposition.QUEUED,
         )
 
     # -----------------------------------------------------------------------

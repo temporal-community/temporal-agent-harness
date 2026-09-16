@@ -8,6 +8,15 @@ This doc is the source of truth for the design and the per-workstream progress t
 mechanism is shipped code, the design is best read directly from `harness/subagent_toolset.py`,
 `harness/subagent_activities.py`, `harness/agent_protocol/subagent_interface.py`, the subagent
 section of `harness/agent_workflow.py`, and the tests in `harness/test_subagents.py`.
+
+> **Update (2026-09-16): `expected_turn` is gone from the protocol.** The child's front door
+> no longer takes or checks a turn token (see `docs/design/unified-message-dispatch.md`,
+> decision 3), so the parent keeps **no** `next_expected_turn` per subagent and there is no
+> `StaleTurn` rejection. Where this doc's dated workstream notes below mention either, read
+> them as the record of what shipped at the time. Workstream B (idempotency hardening) is
+> **closed** by a different mechanism than it planned: the `run_subagent_turn` activity keys
+> its send on its own activity identity as the Temporal update id, so a retry after a lost
+> reply gets the original acceptance back instead of dispatching a second message.
 **Scope (delivered):** `harness/` (the `subagent_toolset` generator + the `run_subagent_turn`
 activity + the runner-side registry/gate/start-stop-turn methods + handler-dispatch message
 handling + structured rejection details), `harness/agent_client.py` (split into the private
@@ -108,21 +117,19 @@ adapter that lets one harness agent drive another through that same standardized
    before the body runs, so a concurrent call that then blocks on the gate still correctly
    shows as "started"; (b) acquires the gate (**FIFO admission preserves the model's call
    order** — the synchronous prefix of each gathered coroutine runs in order); (c) *after*
-   acquiring, reads the now-exact `next_expected_turn` + `last_consumed_offset`, runs the
-   single `run_subagent_turn` activity, then on completion advances `next_expected_turn` and
-   stores `consumed_offset`, and releases.
+   acquiring, reads `last_consumed_offset`, runs the single `run_subagent_turn` activity,
+   then on completion stores `consumed_offset` and releases.
 
-   **Why this beats eager turn-number prediction.** A subagent processes turns sequentially
-   regardless, so caller-side gating loses no throughput; and it dissolves two problems that
-   prediction has: (i) no update **arrival-order race** (only one activity per subagent is
-   ever in flight — nothing to race at the child's `expected_turn` check), and (ii) **no
-   counter skew** (the turn number is read *after* the wait, always exact — no prediction, no
-   reconciliation; this is why the old "reconcile on rejection" question is now moot). Turn
-   counter advances on completion: on success `next_expected_turn = result.turn_number + 1` +
-   `last_consumed_offset = result.consumed_offset`; on a turn that was *accepted but errored*
-   (`SubagentTurnError`/`SubagentNoReply`) still advance the turn counter by one (the child
-   consumed that turn) and surface `is_error`; on a pre-acceptance rejection (abnormal under
-   the gate — e.g. an external driver) advance nothing and surface `is_error`.
+   **Why a caller-side gate.** A subagent processes turns sequentially regardless, so gating
+   loses no throughput, and it keeps the parent's sends to one child in the model's call order
+   with only one activity per subagent ever in flight. (An earlier revision also leaned on it
+   to keep a parent-side turn counter exact; that counter is gone with `expected_turn` — the
+   child admits messages from anyone, so any parent-side count would drift the first time a
+   human addressed the child directly.) On success `last_consumed_offset =
+   result.consumed_offset`; on a turn that was *accepted but errored*
+   (`SubagentTurnError`/`SubagentNoReply`) the parent closes the bracket on the accepted turn
+   number the activity threads through the error and surfaces `is_error`; on a pre-acceptance
+   rejection there is no bracket to close, and it surfaces `is_error`.
 
    **Consequence (explicit):** this **serializes parent-driven turns caller-side**, so the child's
    own mid-turn behavior never comes into play for them — a `MidTurn.REJECT` handler is not
@@ -141,7 +148,7 @@ adapter that lets one harness agent drive another through that same standardized
    via the `_CURRENT_RUNNER` contextvar.** NOT a holder object, NOT `Injected[...]`, and
    **no `has_self`** (the `has_self` de-risk is therefore moot — we never take that path).
    The subagent registry is **keyed by a short (~6 hex char) `handle`** (per entry: `handle` +
-   the real child `workflow_id` + `agent_key` + `next_expected_turn` + `last_consumed_offset` +
+   the real child `workflow_id` + `agent_key` + `last_consumed_offset` +
    a **per-subagent FIFO gate** — see Decision #2), nested **inside `_WorkflowStatus`**. The
    **model only ever sees the short `handle`** — never the long `workflow_id` (cheaper for it to
    reproduce and harder to get wrong); the workflow-side resolves `handle` → `workflow_id`
@@ -282,7 +289,7 @@ class QaAgentWorkflow:
   *during* the turn is unaffected). The harness validates it against the declared output
   type and publishes it.
 - **Wire = a name-routed tool-call envelope.** The `user_input` update is renamed
-  **`send_agent_message`** and takes an `AgentMessage{type, payload}` (+ `expected_turn`).
+  **`send_agent_message`** and takes an `AgentMessage{type, payload}`.
   `type` names the target handler (its function name); `payload` is that handler's input
   model JSON. The validator resolves the handler by `type` and `model_validate`s `payload`
   into its input model (coerce or reject). **Routing is by name** — so two handlers may
@@ -301,7 +308,7 @@ class QaAgentWorkflow:
   handler, input model, and output model all have **docstrings**; **function names unique**
   (the routing key + tool name). Build the `name → handler` map.
 - `AgentMessage{type: str, payload: dict}` wire envelope + the renamed **`send_agent_message`**
-  update (carrying the envelope + `expected_turn`). Validator: unknown `type` →
+  update (carrying the envelope). Validator: unknown `type` →
   `ApplicationError(type="UnknownFunction", details={name, known})`; bad `payload` shape →
   `MalformedMessage` (details). Dispatch coerces `payload` via the named handler's input model.
 - `runner.run(self)` — the internal loop replacing `turns()`/`Turn`/`AgentRunContext`:
@@ -323,18 +330,21 @@ class QaAgentWorkflow:
   `send_agent_message(type="on_text", payload={"text": ...})`.
 - `MessageHandlerEnd.output: dict[str, Any]` = the handler's return model dumped to JSON; harness
   publishes it. Consumers re-validate against the known output type (boundary validation —
-  see Workstream C's consume side). `expected_turn` is carried **on the `AgentMessage`
-  envelope** (no `UserInput` wrapper); the dedupe hash (Workstream B) must cover only
-  `{type, payload}`, which `_render_message` already projects.
+  see Workstream C's consume side). The envelope is the bare `AgentMessage` (no `UserInput`
+  wrapper).
 - Migrate the example agents to handlers: `QaAgent` (text + `SlashCommand` payloads),
   `MontyDynamicAgent` (`RunScript` payload). Migrate plain-text callers (`server/app.py`,
   `mcp/cli.py`) to send the `send_agent_message` envelope (`{type:"on_text", payload:{text}}`).
 
-## Workstream B — Idempotent message submission (⏸ DEFERRED — do AFTER D verifies end-to-end)
-**Status:** ⏸ deferred · **Sequence:** intentionally **last** — only after C+D have a real
-parent→subagent relationship **working end-to-end** (see the dependency graph). This is a
-**production-reliability** hardening pass (de-dupe on activity retry), not a
-correctness-of-the-feature requirement, so it must not gate the working demo.
+## Workstream B — Idempotent message submission (✅ CLOSED 2026-09-16, by update ids)
+**Status:** ✅ closed, by a simpler mechanism than the one designed below. The content-hash
+dedupe was designed around the `expected_turn` validator branch, which no longer exists.
+Instead, the `run_subagent_turn` activity keys its send (via the private
+`AgentClient._submit_message`) on
+`subagent-turn:{parent run id}:{activity id}` — stable across retry attempts — so Temporal
+itself returns the original acceptance to a re-issued send. The Nexus handler keys on the
+operation's request id the same way. Everything below is kept as the record of the
+alternative that was considered.
 
 > **Already shipped in A (not part of this deferred work):** the *structured rejection
 > `details`* on every `send_agent_message` rejection —

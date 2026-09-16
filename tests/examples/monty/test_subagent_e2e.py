@@ -92,7 +92,6 @@ async def _drive(
                 "scripts": scripts,
                 "concurrent": concurrent,
             },
-            expected_turn=1,
         ),
         result_type=AgentMessageReply,
     )
@@ -218,7 +217,6 @@ async def _merged_send(
     stream = await agent_client.send_message(
         "drive",
         {"task_queue": task_queue, "scripts": scripts, "stop": stop},
-        expected_turn=1,
         on_item=lambda item, _seq: item,
         timeout=None,
     )
@@ -319,9 +317,12 @@ async def test_human_can_message_a_live_subagent_directly(client_and_queue):
     resulting turn events must land on the CHILD's stream stamped with the child's own
     ``agent_id`` (the handle its parent knows it by), so a UI merging both streams can
     attribute them correctly.
+
+    And the parent is unaffected by it: turn state is the child's own, so after the human's
+    turn the parent's next send to the same child runs as the turn after that.
     """
     client, task_queue = client_and_queue
-    _parent_id, merged = await _merged_send(
+    parent_id, merged = await _merged_send(
         client, task_queue, [_const_script(42)], stop=False
     )
     started = [
@@ -333,12 +334,8 @@ async def test_human_can_message_a_live_subagent_directly(client_and_queue):
 
     # The parent already drove turn 1 through the subagent-turn activity, so ours is turn 2.
     child_client = AgentClient(client, child_workflow_id)
-    status = await child_client.get_status()
-    reply = await child_client.submit_message(
-        "run_script",
-        {"script": _const_script(7)},
-        status.current_turn + len(status.pending_turns) + 1,
-    )
+    reply = await child_client.submit_message("run_script", {"script": _const_script(7)})
+    assert reply.turn_number == 2
 
     stream = WorkflowStreamClient.create(client, child_workflow_id)
     own_turn: list[AgentEvent] = []
@@ -383,6 +380,33 @@ async def test_human_can_message_a_live_subagent_directly(client_and_queue):
     replies = [e.event for e in own_turn if e.event.type == AgentEventType.MESSAGE_HANDLER_END]
     assert len(replies) == 1
     assert "7" in json.dumps(replies[0].output)
+
+    # Now the PARENT addresses the same child again. Its send lands as the child's turn 3,
+    # after the human's — and the parent gets the reply, not a rejection.
+    parent_client = AgentClient(client, parent_id)
+    parent_events: list[AgentEvent] = []
+    stream = await parent_client.send_message(
+        "drive_existing",
+        {"subagent_id": child_agent_id, "scripts": [_const_script(9)]},
+        on_item=lambda item, _seq: item,
+        timeout=None,
+    )
+    async for item in stream:
+        if isinstance(item, AgentEvent):
+            parent_events.append(item)
+    parent_replies = [
+        e.event
+        for e in parent_events
+        if e.event.type == AgentEventType.MESSAGE_HANDLER_END
+        and e.agent_id != child_agent_id
+    ]
+    assert len(parent_replies) == 1
+    assert "9" in json.dumps(parent_replies[0].output)
+    sent = [
+        e.event for e in parent_events if e.event.type == AgentEventType.SUBAGENT_MESSAGE_SENT
+    ]
+    assert [s.subagent_turn for s in sent] == [3]
+    assert (await child_client.get_status()).current_turn == 3
 
 
 async def test_attach_after_stopped_subagent_degrades_gracefully(client_and_queue):
@@ -457,7 +481,6 @@ async def test_gated_concurrent_dispatches_get_distinct_turn_numbers(client_and_
                 "task_queue": task_queue,
                 "scripts": [_const_script(7), _const_script(13)],
             },
-            expected_turn=1,
         ),
         result_type=AgentMessageReply,
     )

@@ -324,8 +324,7 @@ Neither was a prerequisite for the vocabulary in **Settled**; both landed with i
   well beyond this note's budget. Accepted for now because the client contract under
   **Resolved** removes the frequent trigger, leaving the loss only on genuine disconnects. The
   read/emit/stop split rejected above becomes worth revisiting once the vector exists.
-- **`expected_turn` interacts with this.** A join does not advance the turn counter, so a
-  client sets its next `expected_turn` from `AgentMessageReply.turn_number + 1` rather than
-  counting sends. The reply is now the documented source of truth for all three of
-  `message_id`, `turn_number` and `disposition` — one place a caller reads to know what became
-  of what it sent.
+- **The reply is the source of truth for what a send did.** `message_id`, `turn_number`,
+  `turn_id` and `disposition` are all on `AgentMessageReply` — one place a caller reads to
+  know what became of what it sent. There is nothing for the caller to feed back: the
+  envelope carries no `expected_turn` (see `unified-message-dispatch.md`, decision 3).

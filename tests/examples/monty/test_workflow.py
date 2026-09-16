@@ -103,7 +103,7 @@ async def test_script_calls_host_functions(client_and_queue):
     )
     await handle.execute_update(
         SEND_AGENT_MESSAGE_UPDATE,
-        AgentMessage(type="run_script", payload={"script": script}, expected_turn=1),
+        AgentMessage(type="run_script", payload={"script": script}),
         result_type=AgentMessageReply,
     )
 
@@ -125,7 +125,7 @@ async def test_script_syntax_error_is_reported(client_and_queue):
     )
     await handle.execute_update(
         SEND_AGENT_MESSAGE_UPDATE,
-        AgentMessage(type="run_script", payload={"script": "def ("}, expected_turn=1),
+        AgentMessage(type="run_script", payload={"script": "def ("}),
         result_type=AgentMessageReply,
     )
 

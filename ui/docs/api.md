@@ -217,7 +217,6 @@ Submits a message and streams events through completion of the submitted turn.
 type ChatRequest = {
   session_id: string
   message: string | AgentMessageObject
-  expected_turn: number
 }
 
 type AgentMessageObject = {
@@ -255,12 +254,10 @@ produces carries it on the envelope, so a client correlates its own reply, delta
 calls without scanning for them. `disposition` says what the message did to the turn — opened
 a new one, joined the one already running (`mid_turn: "accept"`), or queued behind it.
 
-**Tracking `expected_turn`.** Set the next value from the reply's `turn_number + 1`, not
-from a count of messages sent. A message whose handler declares `mid_turn: "accept"` joins
-the turn already in flight, so the agent's counter does not advance and the next message must
-claim the same number again — a per-send increment over-counts on the first join and then
-fails every later send with a 409 `stale_turn`. `GET /api/status/{session_id}` re-derives the
-correct value (`current_turn + pending_turns.length + 1`) if a client loses track.
+A send carries nothing about what the client has observed. A message queues behind whatever
+is already admitted, and the `message_id` on the reply is all a client needs to follow its
+own outcome on the stream. A client that wants to act only on an idle agent reads
+`GET /api/status/{session_id}` first; that is a UX choice, not a protocol requirement.
 
 The shared UI uses this endpoint for queued sends, then keeps one
 `GET /api/attach` stream open from its last `resume_offset`. This avoids
@@ -312,7 +309,7 @@ type ApiErrorResponse = {
 
 Known status codes:
 
-- `409` from `POST /api/chat`: `error` is `stale_turn`, `mid_turn_rejected`, or
+- `409` from `POST /api/chat`: `error` is `mid_turn_rejected` or
   `joined_turn`. The last is not a rejection — the message was accepted and is running inside
   the turn it joined, and the body carries the accepted reply under `reply`; only the per-turn
   stream is unavailable, because a joined message has no turn of its own to stream. Use

@@ -53,10 +53,6 @@ class RunSubagentTurnInput(BaseModel):
         description="The send_agent_message envelope 'payload': the JSON of the target "
         "handler's input model.",
     )
-    expected_turn: int = Field(
-        description="The parent's locally tracked next turn number for this subagent; the "
-        "child rejects the send as stale if it doesn't match its own next turn."
-    )
     from_offset: int = Field(
         default=0,
         description="Where to begin consuming the child's stream — the caller's last-known "

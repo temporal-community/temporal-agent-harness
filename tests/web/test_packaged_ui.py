@@ -108,7 +108,6 @@ def test_chat_request_rejects_client_supplied_from_offset() -> None:
         json={
             "session_id": "agent-session-test",
             "message": "hello",
-            "expected_turn": 1,
             "from_offset": 42,
         },
     )
@@ -127,7 +126,6 @@ def test_submit_message_request_rejects_client_supplied_from_offset() -> None:
         json={
             "session_id": "agent-session-test",
             "message": "hello",
-            "expected_turn": 1,
             "from_offset": 42,
         },
     )
@@ -235,7 +233,6 @@ async def test_session_execution_state_includes_initial_user_message() -> None:
         AgentMessage(
             type="ask",
             payload={"text": "Seven Nation Army"},
-            expected_turn=1,
         )
     )
     handle = _FakeWorkflowHandle(

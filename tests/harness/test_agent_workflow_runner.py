@@ -227,21 +227,17 @@ async def _start(client: Client, task_queue: str, wf: Any) -> WorkflowHandle:
     )
 
 
-async def _next_expected_turn(handle: WorkflowHandle) -> int:
-    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
-    return status.current_turn + len(status.pending_turns) + 1
-
-
 async def _send(
-    handle: WorkflowHandle, type: str, payload: dict[str, Any]
+    handle: WorkflowHandle,
+    type: str,
+    payload: dict[str, Any],
+    *,
+    update_id: str | None = None,
 ) -> AgentMessageReply:
     return await handle.execute_update(
         SEND_AGENT_MESSAGE_UPDATE,
-        AgentMessage(
-            type=type,
-            payload=payload,
-            expected_turn=await _next_expected_turn(handle),
-        ),
+        AgentMessage(type=type, payload=payload),
+        id=update_id,
         result_type=AgentMessageReply,
     )
 
@@ -607,16 +603,15 @@ def test_protocol_types_use_concrete_annotations():
 def test_errored_subagent_turn_closes_bracket_on_actual_accepted_turn(offline_build):
     """On an accepted-but-errored child turn, the parent closes the
     [subagent_message_sent … subagent_reply_received] bracket on the child's ACTUAL accepted turn
-    number — which the activity threads through the error details — not a re-derived ``expected``.
-
-    Keeps the close-gate key (``workflow_id``, ``subagent_turn``) matching the open marker by
-    construction, independent of the validator+enqueue invariant that makes them equal in practice.
+    number, which the activity threads through the error details. The parent keeps no turn
+    counter of its own, so this is the only source, and it keeps the close-gate key
+    (``workflow_id``, ``subagent_turn``) matching the open marker by construction.
     """
     runner = offline_build(AgentConfig())
     # Make a turn active so publish() has a stream context to publish against.
     runner._status.enqueue_message(
         _Admission(
-            message=AgentMessage(type="x", payload={}, expected_turn=1),
+            message=AgentMessage(type="x", payload={}),
             turn_id="turn-1",
             turn_number=1,
             message_id="msg-1",
@@ -625,16 +620,14 @@ def test_errored_subagent_turn_closes_bracket_on_actual_accepted_turn(offline_bu
     runner._status.open_next_turn()
     inst = runner._status.register_subagent("aaaaaa-bbbbbb", "child-wf-1", "k")
 
-    # The activity raises with the child's ACTUAL accepted turn number (7) in the details —
-    # deliberately different from the ``expected``/default we pass (2), so the assertion proves we
-    # use the threaded value and not ``expected``.
+    # The activity raises with the child's ACTUAL accepted turn number (7) in the details.
     err = ApplicationError(
         "subagent turn failed",
         {"subagent_turn": 7},
         type="SubagentTurnError",
         non_retryable=True,
     )
-    accepted = runner._accepted_turn_from_error(err, default=2)
+    accepted = runner._accepted_turn_from_error(err)
     assert accepted == 7
     runner._publish_subagent_reply_received(
         inst, "run_script", accepted, outcome="error"
@@ -644,19 +637,20 @@ def test_errored_subagent_turn_closes_bracket_on_actual_accepted_turn(offline_bu
     replies = [e for e in published if isinstance(e.event, SubagentReplyReceived)]
     assert len(replies) == 1
     rr = replies[0].event
-    assert rr.subagent_turn == 7  # the actual accepted turn, NOT the (wrong) expected=2
+    assert rr.subagent_turn == 7
     assert rr.outcome == "error"
     assert rr.workflow_id == "child-wf-1"
     assert rr.subagent_id == "aaaaaa-bbbbbb"
-    # The local turn counter advances off the same accepted turn.
-    assert accepted + 1 == 8
 
 
-def test_accepted_turn_from_error_falls_back_when_detail_absent():
-    """If an error carries no ``subagent_turn`` detail (older activity build / unexpected shape),
-    the parent falls back to the supplied ``default`` (``expected``) rather than failing."""
+def test_accepted_turn_from_error_raises_when_detail_absent():
+    """An accepted-but-errored turn with no ``subagent_turn`` detail is a broken activity
+    contract. The parent raises loudly rather than closing the bracket on an invented number
+    that the client merge's close gate would never match."""
     err = ApplicationError("no reply", type="SubagentNoReply", non_retryable=True)
-    assert AgentWorkflowRunner._accepted_turn_from_error(err, default=3) == 3
+    with pytest.raises(ApplicationError) as excinfo:
+        AgentWorkflowRunner._accepted_turn_from_error(err)
+    assert excinfo.value.type == "SubagentProtocolError"
 
 
 # ---------------------------------------------------------------------------
@@ -780,14 +774,13 @@ async def test_accept_handler_joins_the_open_turn(client_and_queue):
     assert status.turn_active is True
     assert status.pending_turns == []
 
-    # A JOIN CONSUMES NO TURN SLOT. This is the invariant every client's expected_turn
-    # bookkeeping rests on: after joining, the agent still hands out the SAME next turn
-    # number, so a caller that increments once per message *sent* over-counts here and gets
-    # StaleTurn on everything after. reply.turn_number + 1 is the reliable source.
-    assert await _next_expected_turn(handle) == steer.turn_number + 1
+    # A JOIN CONSUMES NO TURN SLOT: however many messages join, the agent is still on the
+    # same turn with nothing queued behind it.
     again = await _send(handle, "steer", {"text": "and again"})
     assert again.turn_id == work.turn_id
-    assert await _next_expected_turn(handle) == steer.turn_number + 1
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.current_turn == work.turn_number
+    assert status.pending_turns == []
 
     await handle.signal(MidTurnProbeAgent.release, "work")
     events = await _collect_until_turn_end(client, handle.id)
@@ -991,7 +984,6 @@ async def test_send_message_fast_fails_on_a_join_instead_of_hanging(client_and_q
         await agent_client.send_message(
             "steer",
             {"text": "ride along"},
-            await _next_expected_turn(handle),
             on_item=lambda item, _offset: item,
         )
 
@@ -1099,19 +1091,21 @@ async def test_agent_interface_reports_mid_turn_and_model_callable(client_and_qu
     assert set(by_name["steer"].parameters["properties"]) == {"text"}
 
 
-async def test_stale_expected_turn_is_rejected(client_and_queue):
-    """``expected_turn`` is a staleness token, and the workflow enforces it."""
+async def test_resend_under_the_same_update_id_is_one_message(client_and_queue):
+    """Two submits under one Temporal update id are one admission: the same reply comes
+    back and the handler runs once. This is what the subagent-turn activity relies on to
+    make a retried send safe."""
     client, task_queue = client_and_queue
     handle = await _start(client, task_queue, TypedProbeAgent)
 
-    with pytest.raises(WorkflowUpdateFailedError) as excinfo:
-        await handle.execute_update(
-            SEND_AGENT_MESSAGE_UPDATE,
-            AgentMessage(type="greet", payload={"name": "Ada"}, expected_turn=99),
-            result_type=AgentMessageReply,
-        )
-    cause = excinfo.value.cause
-    assert getattr(cause, "type", None) == "StaleTurn"
+    first = await _send(handle, "greet", {"name": "Ada"}, update_id="send-1")
+    retried = await _send(handle, "greet", {"name": "Ada"}, update_id="send-1")
+    assert retried == first
 
+    # A different id IS a different message, even with an identical payload.
+    second = await _send(handle, "greet", {"name": "Ada"}, update_id="send-2")
+    assert second.message_id != first.message_id
+
+    assert await _wait_for_seen(handle, 2) == ["greet:Ada", "greet:Ada"]
     status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
-    assert status.current_turn == 0 and status.pending_turns == []
+    assert status.current_turn == 2 and status.pending_turns == []

@@ -63,22 +63,13 @@ class AgentTurnError(Exception):
     """Workflow published a terminal error event for the turn."""
 
 
-class StaleTurnError(Exception):
-    """Client's expected turn doesn't match the workflow's state.
-
-    The client is behind — it should reattach to catch up before
-    retrying.
-    """
-
-
 class MidTurnRejectedError(Exception):
     """The target handler declares ``mid_turn=MidTurn.REJECT`` and a turn is already open.
 
-    Not a staleness problem, so retrying with a fresh ``expected_turn`` will not help — the
-    handler's author declared that this message must not pile up behind in-flight work. The
-    caller should wait for the agent to go idle (``turn_end``, or ``agent_status`` reporting
-    ``turn_active == False``) and send again, or send a different message whose handler
-    declares ``ENQUEUE`` or ``ACCEPT``.
+    Retrying immediately will not help — the handler's author declared that this message
+    must not pile up behind in-flight work. The caller should wait for the agent to go idle
+    (``turn_end``, or ``agent_status`` reporting ``turn_active == False``) and send again, or
+    send a different message whose handler declares ``ENQUEUE`` or ``ACCEPT``.
     """
 
 
@@ -301,15 +292,14 @@ class AgentClient:
         as a subagent tool, so the contract can evolve without client-side changes.
         """
         handle = self._temporal.get_workflow_handle(self._workflow_id)
-        return await handle.query(
-            AGENT_INTERFACE_QUERY, result_type=list[AcceptedFunction]
-        )
+        return await handle.query(AGENT_INTERFACE_QUERY, result_type=list[AcceptedFunction])
 
     async def _submit_message(
         self,
         msg_type: str,
         payload: dict[str, Any],
-        expected_turn: int,
+        *,
+        update_id: str | None = None,
     ) -> AgentMessageReply:
         """Submit one message to the agent's front door, WITHOUT streaming the turn.
 
@@ -317,30 +307,30 @@ class AgentClient:
         (the send-and-stream convenience); this and :meth:`_stream_turn` are the composable
         halves it is built from, reused in-package (e.g. by the subagent-turn activity, which
         sends then streams with its own dedup/heartbeat in between). Names the target
-        ``@agent.accepts`` handler (``msg_type``), carries its input-model JSON (``payload``)
-        and the ``expected_turn`` the caller believes this message is, builds the
-        ``AgentMessage`` envelope internally, and forwards it as the ``send_agent_message``
-        update. Returns the accepted :class:`AgentMessageReply` (``message_id`` / ``turn_id`` /
-        ``turn_number`` / ``disposition``).
+        ``@agent.accepts`` handler (``msg_type``) and carries its input-model JSON
+        (``payload``), builds the ``AgentMessage`` envelope internally, and forwards it as the
+        ``send_agent_message`` update. Returns the accepted :class:`AgentMessageReply`
+        (``message_id`` / ``turn_id`` / ``turn_number`` / ``disposition``).
+
+        ``update_id`` is for retrying callers (e.g. the harness's own ``run_subagent_turn``
+        activity), which key it on an identity stable across their retries so a re-issued send
+        after a lost reply gets the original acceptance back rather than dispatching a second
+        message. Left ``None``, Temporal mints one.
 
         Raises:
-            StaleTurnError: The client is behind the workflow.
             MidTurnRejectedError: The handler refuses mid-turn arrival and a turn is open.
         """
         handle = self._temporal.get_workflow_handle(self._workflow_id)
         try:
             return await handle.execute_update(
                 SEND_AGENT_MESSAGE_UPDATE,
-                AgentMessage(
-                    type=msg_type, payload=payload, expected_turn=expected_turn
-                ),
+                AgentMessage(type=msg_type, payload=payload),
+                id=update_id,
                 result_type=AgentMessageReply,
             )
         except WorkflowUpdateFailedError as e:
             cause = e.cause
             error_type = getattr(cause, "type", None) if cause else None
-            if error_type == "StaleTurn":
-                raise StaleTurnError(str(cause)) from e
             if error_type == "MidTurnRejected":
                 raise MidTurnRejectedError(str(cause)) from e
             raise
@@ -349,7 +339,6 @@ class AgentClient:
         self,
         msg_type: str,
         payload: dict[str, Any],
-        expected_turn: int,
     ) -> AgentMessageReply:
         """Submit one message to the agent without streaming the accepted turn.
 
@@ -360,17 +349,16 @@ class AgentClient:
         queued message and cannot observe a joined one at all.
 
         The returned :class:`AgentMessageReply` carries the message's ``message_id`` (which
-        every event of its dispatch is stamped with), the ``turn_number`` to compute the next
-        ``expected_turn`` from, and the ``disposition`` saying whether it opened, joined or
-        queued behind a turn.
+        every event of its dispatch is stamped with), the ``turn_number`` / ``turn_id`` it
+        belongs to, and the ``disposition`` saying whether it opened, joined or queued behind
+        a turn.
         """
-        return await self._submit_message(msg_type, payload, expected_turn)
+        return await self._submit_message(msg_type, payload)
 
     async def start_and_submit_message(
         self,
         msg_type: str,
         payload: dict[str, Any],
-        expected_turn: int,
         *,
         workflow_name: str,
         task_queue: str,
@@ -386,7 +374,6 @@ class AgentClient:
         ``update_id`` — see :meth:`approve_tool`'s note.
 
         Raises:
-            StaleTurnError: The client is behind the workflow.
             MidTurnRejectedError: The handler refuses mid-turn arrival and a turn is open.
         """
         start_op = WithStartWorkflowOperation(
@@ -399,7 +386,7 @@ class AgentClient:
         try:
             return await self._temporal.execute_update_with_start_workflow(
                 SEND_AGENT_MESSAGE_UPDATE,
-                AgentMessage(type=msg_type, payload=payload, expected_turn=expected_turn),
+                AgentMessage(type=msg_type, payload=payload),
                 start_workflow_operation=start_op,
                 id=update_id,
                 result_type=AgentMessageReply,
@@ -407,8 +394,6 @@ class AgentClient:
         except WorkflowUpdateFailedError as e:
             cause = e.cause
             error_type = getattr(cause, "type", None) if cause else None
-            if error_type == "StaleTurn":
-                raise StaleTurnError(str(cause)) from e
             if error_type == "MidTurnRejected":
                 raise MidTurnRejectedError(str(cause)) from e
             raise
@@ -417,7 +402,6 @@ class AgentClient:
         self,
         msg_type: str,
         payload: dict[str, Any],
-        expected_turn: int,
         *,
         on_item: OnItemCallback[T],
         timeout: float | None = DEFAULT_TURN_TIMEOUT,
@@ -436,8 +420,8 @@ class AgentClient:
         ONE :meth:`attach` stream open instead — see ``stream_merge/README.md``, "The client
         contract".
 
-        Phase 1, :meth:`_submit_message`, runs eagerly here so ``StaleTurnError`` /
-        ``MidTurnRejected`` are raised *before* any streaming begins (and before the merge is
+        Phase 1, :meth:`_submit_message`, runs eagerly here so ``MidTurnRejectedError``
+        is raised *before* any streaming begins (and before the merge is
         even constructed — there is no failure path after the agent has accepted). The update returns an
         ``accepted_offset``; phase 2 then drives the client-side stream-merge from there: it skips
         to this turn's ``turn_started`` (a quiescent start) and yields every event of the turn,
@@ -448,7 +432,6 @@ class AgentClient:
         Args:
             msg_type: Name of the target ``@agent.accepts`` handler.
             payload: JSON of that handler's input model.
-            expected_turn: The turn number the client expects this message to be.
             on_item: Callback ``(AgentStreamOutput, resume_offset) -> T`` applied to each output.
                 ``resume_offset`` is the merge's ROOT-stream resume cursor as of this item (see
                 :meth:`attach`); the per-turn path doesn't resume on it (the chat path reattaches via
@@ -468,12 +451,11 @@ class AgentClient:
             An async iterator of ``T``.
 
         Raises:
-            StaleTurnError: The client is behind the workflow.
             MidTurnRejectedError: The handler refuses mid-turn arrival and a turn is open.
             JoinedTurnError: The message was accepted, but it joined an open turn — it is
                 running, and there is no per-turn stream for it (see the precondition above).
         """
-        reply = await self._submit_message(msg_type, payload, expected_turn)
+        reply = await self._submit_message(msg_type, payload)
         if reply.disposition is MessageDisposition.JOINED:
             raise JoinedTurnError(
                 f"message {reply.message_id} joined open turn {reply.turn_number} and is "
@@ -549,9 +531,7 @@ class AgentClient:
                         yield on_item(ev, resume_offset)
         except TimeoutError:
             yield on_item(
-                AgentTurnTimeout(
-                    f"turn {reply.turn_number} did not complete within {timeout}s"
-                ),
+                AgentTurnTimeout(f"turn {reply.turn_number} did not complete within {timeout}s"),
                 -1,
             )
 

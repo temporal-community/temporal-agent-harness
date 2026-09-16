@@ -129,7 +129,6 @@ def test_register_keys_by_handle_and_stores_workflow_id():
     assert inst.handle == "a3f9c2"
     assert inst.workflow_id == "sample-subagent-<uuid>"  # the real child id, hidden from the model
     assert inst.agent_key == "sample"
-    assert inst.next_expected_turn == 1
     assert inst.last_consumed_offset == 0
     assert st.subagent("a3f9c2") is inst
     assert st.has_subagent("a3f9c2") and not st.has_subagent("nope")
@@ -159,7 +158,6 @@ def test_remove_subagent_is_idempotent_and_then_unknown():
 def test_agent_status_lists_subagents_without_gate_internals():
     st = _status()
     inst = st.register_subagent("a3f9c2", "sample-subagent-wf", "sample")
-    inst.next_expected_turn = 4
     # Hand out a couple of gate tickets so the internal counters are non-default.
     inst.take_ticket()
     inst.take_ticket()
@@ -167,18 +165,17 @@ def test_agent_status_lists_subagents_without_gate_internals():
     status = st.to_agent_status()
     assert len(status.subagents) == 1
     info = status.subagents[0]
-    assert (info.subagent_id, info.agent_key, info.workflow_id, info.next_expected_turn) == (
+    assert (info.subagent_id, info.agent_key, info.workflow_id) == (
         "a3f9c2",
         "sample",
         "sample-subagent-wf",
-        4,
     )
     # The caller-side gate's ticket counters are an implementation detail and must NOT leak
     # into the status projection.
     fields = set(vars(info))
     assert "_next_ticket" not in fields
     assert "_serving" not in fields
-    assert fields == {"subagent_id", "agent_key", "workflow_id", "next_expected_turn"}
+    assert fields == {"subagent_id", "agent_key", "workflow_id"}
 
 
 def test_subagent_lifecycle_events_carry_workflow_id_and_round_trip():
@@ -435,7 +432,6 @@ def _consume(items: list[_FakeItem], monkeypatch):
         child_workflow_id="child-wf",
         type="ask",
         payload={},
-        expected_turn=4,
         handle="aaaaaa-bbbbbb",
         agent_key="sample",
         parent_stream_context=TurnStreamContext(

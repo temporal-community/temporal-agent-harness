@@ -102,6 +102,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     TurnStarted,
     AgentMessageReply,
 )
+
 # TurnStreamContext (the activity-side stream-publishing carrier this runner builds + consumes)
 # lives in its own leaf module so the sandbox-safe activity contracts in agent_protocol can embed
 # it without a circular import back through this module.
@@ -227,8 +228,8 @@ def _injected_param_names(fn: Callable[..., Any]) -> tuple[str, ...]:
 
 # The active runner for the in-flight tool call — read to resolve the live turn stream
 # context (``AgentToolContext.for_current_tool_id`` / workflow-tool publishing).
-_CURRENT_RUNNER: contextvars.ContextVar[AgentWorkflowRunner | None] = (
-    contextvars.ContextVar("agent_workflow_runner", default=None)
+_CURRENT_RUNNER: contextvars.ContextVar[AgentWorkflowRunner | None] = contextvars.ContextVar(
+    "agent_workflow_runner", default=None
 )
 
 # The id of the tool call currently being executed. Per-invocation (so the same tool
@@ -271,8 +272,8 @@ _AMBIENT = _Ambient()
 # (the ``activity_tool_defn`` dispatcher for activity tools, or the ``tool_defn`` path
 # for inline tools) to fill parameters the caller injects rather than the model — see
 # ``_current_tool_injections`` and ``Injected[...]``.
-_CURRENT_TOOL_INJECTIONS: contextvars.ContextVar[Mapping[str, Any] | None] = (
-    contextvars.ContextVar("agent_tool_injections", default=None)
+_CURRENT_TOOL_INJECTIONS: contextvars.ContextVar[Mapping[str, Any] | None] = contextvars.ContextVar(
+    "agent_tool_injections", default=None
 )
 
 
@@ -314,8 +315,7 @@ def _current_runner() -> AgentWorkflowRunner:
     runner = _CURRENT_RUNNER.get()
     if runner is None:
         raise RuntimeError(
-            "no current runner — _current_runner() must be called within a "
-            "run_tool(...) invocation"
+            "no current runner — _current_runner() must be called within a run_tool(...) invocation"
         )
     return runner
 
@@ -378,9 +378,7 @@ async def _apply_approval_policy(
     runner._pub(
         ctx.turn_id,
         ctx.turn_number,
-        ToolApprovalRequested(
-            tool_id=tool_id, tool_name=tool_name, tool_input=tool_input
-        ),
+        ToolApprovalRequested(tool_id=tool_id, tool_name=tool_name, tool_input=tool_input),
     )
 
     await workflow.wait_condition(
@@ -408,8 +406,7 @@ async def _apply_approval_policy(
 def _render_message(message: AgentMessage) -> str:
     """Render an inbound message envelope to a display string for ``PendingTurn.message``.
 
-    Compacts just the ``{type, payload}`` envelope content to JSON (the turn-protocol
-    ``expected_turn`` is omitted — it's not part of the message) so that ``str``-typed status
+    Compacts the ``{type, payload}`` envelope content to JSON so that ``str``-typed status
     field stays a clean representation of the message. Consumers that want structure can parse
     it back — or read the ``message_accepted`` event, which carries ``function`` + ``payload``
     structurally and needs no rendering at all.
@@ -436,9 +433,7 @@ def _validate_agent_arg_types(workflow_name: str, arg_types: list[type] | None) 
     """
     types = list(arg_types or [])
     if types != [AgentConfig]:
-        got = (
-            ", ".join(getattr(t, "__name__", repr(t)) for t in types) or "no arguments"
-        )
+        got = ", ".join(getattr(t, "__name__", repr(t)) for t in types) or "no arguments"
         raise TypeError(
             f"Agent workflow {workflow_name!r} violates the harness contract: its "
             f"run/__init__ must accept exactly one {AgentConfig.__name__} argument, but "
@@ -940,10 +935,9 @@ class _SubagentInstance:
     ``handle`` → ``workflow_id`` and passes the real ``workflow_id`` to the ``run_subagent_turn``
     activity.
 
-    Holds the per-subagent turn bookkeeping the ``send_<function>`` tool threads to the
-    ``run_subagent_turn`` activity: ``next_expected_turn`` (the child's next turn number, sent
-    as ``expected_turn`` and advanced as turns complete) and ``last_consumed_offset`` (the
-    child stream position to resume the next turn from — a perf hint).
+    Holds the per-subagent bookkeeping the ``send_<function>`` tool threads to the
+    ``run_subagent_turn`` activity: ``last_consumed_offset`` (the child stream position to
+    resume the next turn from — a perf hint).
 
     It also owns a **FIFO gate** that serializes this subagent's turns ON THE CALLER SIDE: when
     a parent issues several ``send_<function>`` calls to the same subagent at once (e.g.
@@ -957,7 +951,6 @@ class _SubagentInstance:
     handle: str
     workflow_id: str
     agent_key: str
-    next_expected_turn: int = 1
     last_consumed_offset: int = 0
     # FIFO gate: tickets handed out in call order; the holder whose ticket == _serving runs.
     _next_ticket: int = 0
@@ -1091,10 +1084,6 @@ class _WorkflowStatus:
         no turn is currently open (turns never overlap; joins share the open one)."""
         return len(self._pending_turns) > 0 and not self.turn_active
 
-    @property
-    def next_turn_number(self) -> int:
-        return self.reserve_turn_number()
-
     def reserve_turn_number(self) -> int:
         """The turn number the next enqueued message will get — its reserved slot.
 
@@ -1221,9 +1210,7 @@ class _WorkflowStatus:
         Used by a runtime policy update to re-evaluate each still-waiting call against the
         new policy — distinct from :meth:`pending_approvals`, which projects the trimmed,
         client-facing :class:`PendingApproval` view."""
-        return [
-            e for e in self._approvals.values() if e.status is _ApprovalStatus.PENDING
-        ]
+        return [e for e in self._approvals.values() if e.status is _ApprovalStatus.PENDING]
 
     @property
     def approval_policy(self) -> ToolApprovalPolicy:
@@ -1304,9 +1291,7 @@ class _WorkflowStatus:
             entry.status = _CallbackStatus.RESOLVED
             entry.outcome = "timeout"
             entry.error = reason
-        return _CallbackOutcome(
-            outcome=entry.outcome, result=entry.result, error=entry.error
-        )
+        return _CallbackOutcome(outcome=entry.outcome, result=entry.result, error=entry.error)
 
     def pending_callbacks(self) -> list[PendingCallback]:
         """All callback tool calls still awaiting a client result (for the status query)."""
@@ -1328,13 +1313,9 @@ class _WorkflowStatus:
         """Whether ``handle`` is already in use — used to keep generated handles unique."""
         return handle in self._subagents
 
-    def register_subagent(
-        self, handle: str, workflow_id: str, agent_key: str
-    ) -> _SubagentInstance:
+    def register_subagent(self, handle: str, workflow_id: str, agent_key: str) -> _SubagentInstance:
         """Record a freshly-started subagent under its short ``handle`` and return its entry."""
-        inst = _SubagentInstance(
-            handle=handle, workflow_id=workflow_id, agent_key=agent_key
-        )
+        inst = _SubagentInstance(handle=handle, workflow_id=workflow_id, agent_key=agent_key)
         self._subagents[handle] = inst
         return inst
 
@@ -1346,8 +1327,7 @@ class _WorkflowStatus:
         inst = self._subagents.get(handle)
         if inst is None:
             raise ApplicationError(
-                f"Unknown subagent {handle!r}. Known subagents: "
-                f"{sorted(self._subagents)}.",
+                f"Unknown subagent {handle!r}. Known subagents: {sorted(self._subagents)}.",
                 {"handle": handle, "known": sorted(self._subagents)},
                 type="UnknownSubagent",
                 non_retryable=True,
@@ -1361,14 +1341,13 @@ class _WorkflowStatus:
     def active_subagents(self) -> list[SubagentInfo]:
         """The active subagents projected for the ``agent_status`` query.
 
-        Surfaces the subagent_id / agent_key / real ``workflow_id`` / next turn — deliberately NOT
-        the gate's ticket counters (an internal turn-ordering detail, not status)."""
+        Surfaces the subagent_id / agent_key / real ``workflow_id`` — deliberately NOT the
+        gate's ticket counters (an internal turn-ordering detail, not status)."""
         return [
             SubagentInfo(
                 subagent_id=inst.handle,
                 agent_key=inst.agent_key,
                 workflow_id=inst.workflow_id,
-                next_expected_turn=inst.next_expected_turn,
             )
             for inst in self._subagents.values()
         ]
@@ -1450,9 +1429,7 @@ class AgentWorkflowRunner:
         # @agent.defn at import). Outside a workflow (offline unit tests) there is no
         # enclosing agent class, so there are simply no handlers.
         cls = _enclosing_workflow_class()
-        self._handlers: dict[str, _AcceptedHandler] = (
-            agent_handlers(cls) if cls is not None else {}
-        )
+        self._handlers: dict[str, _AcceptedHandler] = agent_handlers(cls) if cls is not None else {}
         # Resolve each knob: the caller's config value wins when given; otherwise fall back
         # to the agent's default. The caller can never be overridden — the agent only fills
         # gaps.
@@ -1626,23 +1603,13 @@ class AgentWorkflowRunner:
         )
 
     def _validate_send_agent_message(self, message: AgentMessage) -> None:
-        next_turn = self._status.next_turn_number
-        if message.expected_turn != next_turn:
-            raise ApplicationError(
-                f"Stale: expected turn {message.expected_turn} "
-                f"but next turn is {next_turn}",
-                {"expected_turn": message.expected_turn, "next_turn": next_turn},
-                type="StaleTurn",
-                non_retryable=True,
-            )
         # Route by the envelope ``type`` (the handler's function name); reject an unknown
         # function, then validate the ``payload`` against that handler's input model. So the
         # dispatch loop only ever sees a known handler + an already-coerced input.
         handler = self._handlers.get(message.type)
         if handler is None:
             raise ApplicationError(
-                f"Unknown function {message.type!r}. "
-                f"Known functions: {sorted(self._handlers)}.",
+                f"Unknown function {message.type!r}. Known functions: {sorted(self._handlers)}.",
                 {"name": message.type, "known": sorted(self._handlers)},
                 type="UnknownFunction",
                 non_retryable=True,
@@ -1691,15 +1658,12 @@ class AgentWorkflowRunner:
             )
         if entry.status is not _ApprovalStatus.PENDING:
             raise ApplicationError(
-                f"tool approval for tool_id={decision.tool_id!r} is already "
-                f"{entry.status.value}",
+                f"tool approval for tool_id={decision.tool_id!r} is already {entry.status.value}",
                 type="ToolApprovalAlreadyResolved",
                 non_retryable=True,
             )
 
-    async def _handle_tool_approval(
-        self, decision: ToolApprovalDecision
-    ) -> ToolApprovalResult:
+    async def _handle_tool_approval(self, decision: ToolApprovalDecision) -> ToolApprovalResult:
         """Record a human approval decision; the gate's wait condition observes it on
         the next workflow task and unblocks (approved → dispatch, denied → error).
 
@@ -1768,9 +1732,7 @@ class AgentWorkflowRunner:
 
         The serializable :class:`ToolApprovalPolicy` layers are checked first; only if
         none approve is the custom fallback consulted (it is the last layer, by design)."""
-        if self._status.approval_policy.auto_approves(
-            tool_name, inherently_safe=inherently_safe
-        ):
+        if self._status.approval_policy.auto_approves(tool_name, inherently_safe=inherently_safe):
             return True
         if self._custom_approval_fallback is not None:
             return self._custom_approval_fallback(
@@ -1820,9 +1782,7 @@ class AgentWorkflowRunner:
         decisions are made — preserving causal order across calls that resolve one another
         (see :meth:`_apply_policy_update`). The close-while-pending auto-deny is the only
         resolution NOT routed through here; the gate publishes that one itself."""
-        self._status.resolve_approval(
-            tool_id, approved=approved, reason=reason, remember=remember
-        )
+        self._status.resolve_approval(tool_id, approved=approved, reason=reason, remember=remember)
         self._publish_approval_resolved(tool_id)
 
     def _publish_approval_resolved(self, tool_id: str) -> None:
@@ -1867,8 +1827,7 @@ class AgentWorkflowRunner:
             )
         if entry.status is not _CallbackStatus.PENDING:
             raise ApplicationError(
-                f"callback for tool_id={result.tool_id!r} is already "
-                f"{entry.status.value}",
+                f"callback for tool_id={result.tool_id!r} is already {entry.status.value}",
                 type="CallbackAlreadyResolved",
                 non_retryable=True,
             )
@@ -1886,9 +1845,7 @@ class AgentWorkflowRunner:
                     non_retryable=True,
                 )
 
-    async def _handle_provide_callback_result(
-        self, result: CallbackResult
-    ) -> CallbackResultAck:
+    async def _handle_provide_callback_result(self, result: CallbackResult) -> CallbackResultAck:
         """Record an external client's result for a pending callback tool call; the tool's
         in-workflow wait observes it on the next workflow task and unblocks (result → return
         the validated value, error → raise to the model).
@@ -2195,9 +2152,7 @@ class AgentWorkflowRunner:
         # and "it is safe to complete" cannot disagree.
         await workflow.wait_condition(lambda: not self._status.turn_active)
 
-    def _spawn_participant(
-        self, agent: object, admitted: _Admission, *, joined: bool
-    ) -> None:
+    def _spawn_participant(self, agent: object, admitted: _Admission, *, joined: bool) -> None:
         """Run one admitted message inside its turn, as its own asyncio task.
 
         Spawned rather than awaited so several participants can share an open turn, and so
@@ -2209,15 +2164,11 @@ class AgentWorkflowRunner:
         what lets :data:`_CURRENT_MESSAGE_ID` attribute concurrent participants of one shared
         turn without either of them threading an id anywhere.
         """
-        task = asyncio.ensure_future(
-            self._run_participant(agent, admitted, joined=joined)
-        )
+        task = asyncio.ensure_future(self._run_participant(agent, admitted, joined=joined))
         self._participant_tasks.add(task)
         task.add_done_callback(self._participant_tasks.discard)
 
-    async def _run_participant(
-        self, agent: object, admitted: _Admission, *, joined: bool
-    ) -> None:
+    async def _run_participant(self, agent: object, admitted: _Admission, *, joined: bool) -> None:
         """Dispatch one participant and close its half of the turn bracket.
 
         Brackets the handler with ``message_handler_start`` and exactly one of
@@ -2292,7 +2243,7 @@ class AgentWorkflowRunner:
                 f"expected {handler.output_type.__name__}",
                 type="BadHandlerReturn",
                 non_retryable=True,
-        )
+            )
         return result
 
     # -- Subagents ----------------------------------------------------------
@@ -2381,9 +2332,7 @@ class AgentWorkflowRunner:
         # ``workflow_id`` lets a consumer dynamically mount the subagent's own stream for a
         # consolidated view — subagent streams are never mirrored onto this one.
         self.publish(
-            SubagentStarted(
-                subagent_id=handle, agent_key=agent_key, workflow_id=workflow_id
-            )
+            SubagentStarted(subagent_id=handle, agent_key=agent_key, workflow_id=workflow_id)
         )
         return handle
 
@@ -2414,18 +2363,15 @@ class AgentWorkflowRunner:
         to the child instance, serializes turns to it through that subagent's FIFO gate (so
         concurrent ``gather``-ed sends run in the model's call order, one at a time), then
         dispatches the single ``run_subagent_turn`` activity against the real child
-        ``workflow_id`` with the now-exact ``expected_turn`` + resume ``from_offset``, and
-        advances the local bookkeeping on completion.
+        ``workflow_id`` with the resume ``from_offset``, and advances the local bookkeeping
+        on completion.
 
         A ticket is taken **synchronously** (before the first ``await``) so gathered callers are
         ordered by call order, not await scheduling. Errors propagate as :class:`ApplicationError`
-        (the tool layer renders them as an ``is_error`` result); the turn counter still advances
-        for a turn the child accepted-but-errored, so the next send isn't spuriously stale."""
+        (the tool layer renders them as an ``is_error`` result)."""
         inst = self._status.subagent(handle)  # raises UnknownSubagent
         ticket = inst.take_ticket()  # synchronous → FIFO admission in call order
-        await workflow.wait_condition(
-            lambda: inst.is_serving(ticket) or self._closed
-        )
+        await workflow.wait_condition(lambda: inst.is_serving(ticket) or self._closed)
         if not inst.is_serving(ticket):
             # Woke on agent close while still queued behind an earlier turn.
             raise ApplicationError(
@@ -2434,7 +2380,6 @@ class AgentWorkflowRunner:
                 non_retryable=True,
             )
         try:
-            expected = inst.next_expected_turn
             # The dispatch marker (SubagentMessageSent) is published by the activity itself,
             # WHEN it actually sends the message to the child — not here at execute_activity
             # dispatch time (there's a real gap before the activity runs). Mirrors how tool
@@ -2456,7 +2401,6 @@ class AgentWorkflowRunner:
                         child_workflow_id=inst.workflow_id,
                         type=msg_type,
                         payload=payload,
-                        expected_turn=expected,
                         from_offset=inst.last_consumed_offset,
                         handle=inst.handle,
                         agent_key=inst.agent_key,
@@ -2467,20 +2411,17 @@ class AgentWorkflowRunner:
                     result_type=SubagentTurnResult,
                 )
             except ApplicationError as e:
-                # A turn the child ACCEPTED but that then errored (or produced no reply) still
-                # advanced the child's turn counter, so keep ours in lockstep — otherwise the
-                # next send would be a spurious StaleTurn. A pre-acceptance rejection (abnormal
-                # under the gate) advanced nothing, so leave the counter untouched.
+                # A turn the child ACCEPTED but that then errored (or produced no reply) opened
+                # a bracket on our stream that must be closed. A pre-acceptance rejection ran
+                # no child turn, so there is nothing to close.
                 if e.type in ("SubagentTurnError", "SubagentNoReply"):
-                    # Close the bracket on the child's ACTUAL accepted turn number — which the
-                    # activity threads through the error details — NOT a re-derived ``expected``.
-                    # The opening ``subagent_message_sent`` was published with that real number
+                    # Close the bracket on the child's ACTUAL accepted turn number, which the
+                    # activity threads through the error details. The opening
+                    # ``subagent_message_sent`` was published with that same number
                     # (``progress.turn_number``), and the close gate keys on
-                    # ``(workflow_id, subagent_turn)``; using the same source on both sides makes
-                    # the key match by construction rather than by an implicit
-                    # validator+enqueue invariant. (They are equal today, but this can't drift.)
-                    accepted_turn = self._accepted_turn_from_error(e, default=expected)
-                    inst.next_expected_turn = accepted_turn + 1
+                    # ``(workflow_id, subagent_turn)``; using one source on both sides makes
+                    # the key match by construction.
+                    accepted_turn = self._accepted_turn_from_error(e)
                     # The child ran (and errored on) that turn — it still emitted its own
                     # turn_end — so we MUST close the [message_sent … reply_received] bracket on
                     # OUR stream, or a client merge would wedge waiting on a reply that never
@@ -2490,34 +2431,35 @@ class AgentWorkflowRunner:
                         inst, msg_type, accepted_turn, outcome="error"
                     )
                 raise
-            inst.next_expected_turn = result.turn_number + 1
             inst.last_consumed_offset = result.consumed_offset
             # Close the bracket on OUR stream now that the agent (this workflow) actually holds
             # the reply — BEFORE ``release_gate()`` in the finally, so this turn's reply_received
             # is published ahead of the next gathered turn's message_sent (the merge relies on
             # per-subagent brackets never overlapping; see run_subagent_turn's FIFO gate).
-            self._publish_subagent_reply_received(
-                inst, msg_type, result.turn_number, outcome="ok"
-            )
+            self._publish_subagent_reply_received(inst, msg_type, result.turn_number, outcome="ok")
             return result.output
         finally:
             inst.release_gate()
 
     @staticmethod
-    def _accepted_turn_from_error(e: ApplicationError, *, default: int) -> int:
+    def _accepted_turn_from_error(e: ApplicationError) -> int:
         """The child's ACTUAL accepted turn number, threaded through the activity's error details.
 
         On an accepted-but-errored child turn the ``run_subagent_turn`` activity raises an
         ``ApplicationError`` carrying ``{"subagent_turn": <the child's real accepted turn>}`` — the
         SAME number the activity stamped on the opening ``subagent_message_sent``. We close the
         bracket on that exact key so the client merge's close gate (keyed on
-        ``(workflow_id, subagent_turn)``) always matches, independent of the validator+enqueue
-        invariant that makes it equal to ``default`` (``expected``) today. Falls back to ``default``
-        if the detail is absent (older activity build / unexpected shape)."""
+        ``(workflow_id, subagent_turn)``) always matches. The activity is the only source of
+        that number on the parent side, so its absence is a contract violation, raised loudly
+        rather than guessed around."""
         for detail in e.details or ():
             if isinstance(detail, dict) and "subagent_turn" in detail:
                 return int(detail["subagent_turn"])
-        return default
+        raise ApplicationError(
+            f"{e.type} error from run_subagent_turn carried no 'subagent_turn' detail",
+            type="SubagentProtocolError",
+            non_retryable=True,
+        ) from e
 
     def _publish_subagent_reply_received(
         self,
@@ -2694,9 +2636,7 @@ class AgentWorkflowRunner:
                 turn_id=turn_id,
                 turn_number=turn_number,
                 message_id=(
-                    _CURRENT_MESSAGE_ID.get()
-                    if isinstance(message_id, _Ambient)
-                    else message_id
+                    _CURRENT_MESSAGE_ID.get() if isinstance(message_id, _Ambient) else message_id
                 ),
                 timestamp=workflow.time(),
             )
@@ -2781,13 +2721,9 @@ def _tool_signatures(user_fn: Callable[..., Any]) -> _ToolSig:
     inject_names = _injected_param_names(user_fn)
     has_self = bool(user_params) and user_params[0].name == "self"
     hidden = set(inject_names) | ({"self"} if has_self else set())
-    model_sig = user_sig.replace(
-        parameters=[p for p in user_params if p.name not in hidden]
-    )
+    model_sig = user_sig.replace(parameters=[p for p in user_params if p.name not in hidden])
     model_annotations = {
-        k: v
-        for k, v in getattr(user_fn, "__annotations__", {}).items()
-        if k not in hidden
+        k: v for k, v in getattr(user_fn, "__annotations__", {}).items() if k not in hidden
     }
     # Resolve the declared return type so an activity tool's dispatcher can ask
     # ``execute_activity`` to reconstruct the typed result. Dispatching by activity NAME
@@ -2809,8 +2745,9 @@ def _tool_signatures(user_fn: Callable[..., Any]) -> _ToolSig:
     )
 
 
-def _apply_model_facing_views(wrapper: Any, user_fn: Callable[..., Any], sig: _ToolSig,
-                              tool_name: str) -> None:
+def _apply_model_facing_views(
+    wrapper: Any, user_fn: Callable[..., Any], sig: _ToolSig, tool_name: str
+) -> None:
     """Stamp the wrapper with the MODEL-facing name/doc/signature/annotations.
 
     Deliberately does NOT set ``__wrapped__``: the schema builder (the plugin's
@@ -2874,13 +2811,9 @@ def activity_tool_defn(
                 )
             full_input = _tool_input(sig.user_sig, tuple(user_args), kwargs)
             tool_input = {
-                k: v
-                for k, v in full_input.items()
-                if k not in sig.inject_names and k != "self"
+                k: v for k, v in full_input.items() if k not in sig.inject_names and k != "self"
             }
-            async with AgentWorkflowRunner.publisher_from_activity(
-                tool_ctx.stream_context
-            ) as pub:
+            async with AgentWorkflowRunner.publisher_from_activity(tool_ctx.stream_context) as pub:
                 pub.publish(
                     ToolStartEvent(
                         tool_id=tool_ctx.tool_id,
@@ -2932,9 +2865,7 @@ def activity_tool_defn(
             bound = sig.model_sig.bind(*args, **kwargs)
             bound.apply_defaults()
             model_input = dict(bound.arguments)
-            await _apply_approval_policy(
-                tool_name, model_input, inherently_safe=inherently_safe
-            )
+            await _apply_approval_policy(tool_name, model_input, inherently_safe=inherently_safe)
 
             injections = _current_tool_injections() if sig.inject_names else {}
             activity_args: list[Any] = []
@@ -3023,9 +2954,7 @@ def tool_defn(
 
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             if not workflow.in_workflow():
-                raise RuntimeError(
-                    f"workflow tool {tool_name!r} was invoked outside a workflow"
-                )
+                raise RuntimeError(f"workflow tool {tool_name!r} was invoked outside a workflow")
             runner = _CURRENT_RUNNER.get()
             ctx = runner.current_stream_context if runner is not None else None
             tool_id = _CURRENT_TOOL_ID.get()
@@ -3044,16 +2973,12 @@ def tool_defn(
                 ) from None
 
             model_input = _tool_input(sig.model_sig, args, kwargs)
-            await _apply_approval_policy(
-                tool_name, model_input, inherently_safe=inherently_safe
-            )
+            await _apply_approval_policy(tool_name, model_input, inherently_safe=inherently_safe)
 
             runner._pub(
                 ctx.turn_id,
                 ctx.turn_number,
-                ToolStartEvent(
-                    tool_id=tool_id, tool_name=tool_name, tool_input=model_input
-                ),
+                ToolStartEvent(tool_id=tool_id, tool_name=tool_name, tool_input=model_input),
             )
             try:
                 result = await user_fn(*args, **inject_kwargs, **kwargs)
@@ -3061,17 +2986,13 @@ def tool_defn(
                 runner._pub(
                     ctx.turn_id,
                     ctx.turn_number,
-                    ToolErrorEvent(
-                        tool_id=tool_id, tool_name=tool_name, message=str(e)
-                    ),
+                    ToolErrorEvent(tool_id=tool_id, tool_name=tool_name, message=str(e)),
                 )
                 raise
             runner._pub(
                 ctx.turn_id,
                 ctx.turn_number,
-                ToolEndEvent(
-                    tool_id=tool_id, tool_name=tool_name, tool_output=str(result)
-                ),
+                ToolEndEvent(tool_id=tool_id, tool_name=tool_name, tool_output=str(result)),
             )
             return result
 
@@ -3192,9 +3113,7 @@ def callback_tool_defn(
             # ones — the same tool_input the surrounding tool_start carries.
             full_input = _tool_input(sig.user_sig, args, kwargs)
             tool_input = {
-                k: v
-                for k, v in full_input.items()
-                if k not in sig.inject_names and k != "self"
+                k: v for k, v in full_input.items() if k not in sig.inject_names and k != "self"
             }
             return await _current_runner().await_callback_result(
                 tool_id=_current_tool_id(),

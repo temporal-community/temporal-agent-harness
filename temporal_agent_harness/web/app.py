@@ -32,7 +32,6 @@ from temporal_agent_harness.harness.agent_client import (
     AgentTurnError,
     AgentTurnTimeout,
     CallbackResultError,
-    StaleTurnError,
     ToolApprovalError,
 )
 from temporal_agent_harness.harness.agent_protocol import (
@@ -71,7 +70,6 @@ class ChatRequestBody(BaseModel):
 
     session_id: str
     message: str | dict[str, Any]
-    expected_turn: int
 
 
 class ToolApprovalRequestBody(BaseModel):
@@ -289,7 +287,7 @@ def create_agent_harness_app(
         else:
             msg_type, payload = req.message["type"], req.message.get("payload") or {}
 
-        result = await client.submit_message(msg_type, payload, req.expected_turn)
+        result = await client.submit_message(msg_type, payload)
         return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
 
     @app.post("/api/chat")
@@ -318,26 +316,14 @@ def create_agent_harness_app(
             msg_type, payload = req.message["type"], req.message.get("payload") or {}
 
         return StreamingResponse(
-            await client.send_message(
-                msg_type,
-                payload,
-                req.expected_turn,
-                on_item=on_item,
-            ),
+            await client.send_message(msg_type, payload, on_item=on_item),
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
 
-    @app.exception_handler(StaleTurnError)
-    async def stale_turn_handler(request, exc):
-        return JSONResponse(
-            status_code=409,
-            content={"error": "stale_turn", "message": str(exc)},
-        )
-
     @app.exception_handler(JoinedTurnError)
     async def joined_turn_handler(request, exc):
-        # 409 like the other two, but it is NOT a rejection: the message was accepted and is
+        # 409 like mid_turn_rejected, but it is NOT a rejection: the message was accepted and is
         # running inside the turn it joined. Only the per-turn STREAM is unavailable, so the
         # body carries the accepted reply — a caller that wants to watch the work attaches and
         # follows ``message_id``.
@@ -353,8 +339,8 @@ def create_agent_harness_app(
     @app.exception_handler(MidTurnRejectedError)
     async def mid_turn_rejected_handler(request, exc):
         # 409, not 429: the handler declared it must not run mid-turn, so this is a
-        # conflict with current state rather than a rate limit — and unlike a stale turn,
-        # resending with a fresh expected_turn will not help until the agent goes idle.
+        # conflict with current state rather than a rate limit — resending will not help
+        # until the agent goes idle.
         return JSONResponse(
             status_code=409,
             content={"error": "mid_turn_rejected", "message": str(exc)},

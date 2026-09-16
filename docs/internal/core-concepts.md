@@ -44,17 +44,19 @@ delivered on the `send_agent_message` update:
 
 ```
 AgentMessage(
-  type          = <@agent.accepts handler name>,   # selects the handler to run
-  payload       = <that handler's input model, as JSON>,
-  expected_turn = <n>,                              # optimistic concurrency
+  type    = <@agent.accepts handler name>,   # selects the handler to run
+  payload = <that handler's input model, as JSON>,
 )
 ```
 
 - **`type` = handler name is the universal routing contract.** The runner's validator
   (`_validate_send_agent_message`) enforces it *before* any state changes: an unknown `type` →
   `UnknownFunction`, a `payload` that fails the handler's pydantic input model → `MalformedMessage`,
-  a stale `expected_turn` → `StaleTurn`. So the dispatch loop only ever sees a known handler + an
-  already-coerced input. The handler's **return value becomes that message's `message_handler_end`
+  a `mid_turn=REJECT` handler while busy → `MidTurnRejected`. So the dispatch loop only ever sees
+  a known handler + an already-coerced input. A message queues behind whatever is already
+  admitted, and two submits are two messages; the harness's own retrying paths (the
+  subagent-turn activity) dedupe internally with a Temporal update id, which is not part of
+  the client contract. The handler's **return value becomes that message's `message_handler_end`
   event** (see below).
 - **Discovery, not hardcoding.** A client learns an agent's callable surface at runtime from the
   `agent_interface` query — **every** handler's name, docstring, input/output JSON schemas, plus its

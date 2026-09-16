@@ -224,8 +224,7 @@ async def _answer_open_questions(http: httpx.AsyncClient, session_id: str) -> bo
 
 
 async def _chat_turn(http: httpx.AsyncClient, session_id: str, message: str) -> None:
-    expected_turn = int((await _status(http, session_id)).get("current_turn", 0)) + 1
-    body = {"session_id": session_id, "message": message, "expected_turn": expected_turn}
+    body = {"session_id": session_id, "message": message}
     async with http.stream("POST", "/api/chat", json=body) as resp:
         if resp.status_code != 200:
             print(f"[server error {resp.status_code}] {(await resp.aread()).decode()}")

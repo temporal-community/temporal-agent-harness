@@ -382,7 +382,7 @@ sequenceDiagram
 
     rect rgb(238, 243, 255)
         Note over U,Q: ONE workflow task, no await — atomic
-        U->>U: validate expected_turn / type / payload / mid_turn
+        U->>U: validate type / payload / mid_turn
         U->>U: accepted_offset = stream.head()
         U->>U: resolve turn_id — new turn, or the open one to join
         U->>Q: admit — enqueue, or join and bump participants
@@ -440,26 +440,18 @@ handler's next tool call hits a hard raise — either `_apply_approval_policy:33
 the turn id at refcount zero, not on first completion. Loud rather than silent, so it's
 cheap to get wrong on the first pass.
 
-**`expected_turn` silently changes meaning, and it breaks naive clients.** It was a slot
-reservation — `current_turn + len(pending) + 1`, "I claim to be turn N." Under
-join-semantics a message may not get its own turn at all, so it becomes a staleness token:
-"the next number the agent should hand out." Same type, different meaning — the kind of
-change that would normally demand a version bump, since every client computing
-`last_seen + 1` keeps working until it doesn't.
+**`expected_turn` silently changes meaning, and that is what finally removed it.** It was a
+slot reservation — `current_turn + len(pending) + 1`, "I claim to be turn N." Under
+join-semantics a message may not get its own turn at all, so the only coherent reading left
+was a staleness token: "the next number the agent should hand out." Same type, different
+meaning, and a client computing `last_seen + 1` keeps working until the first `accept`
+message joins an open turn — that join advances no counter, so the client is permanently one
+ahead and every later send fails `StaleTurn`. Even the corrected rule (`reply.turn_number +
+1`) is wrong after a join whenever a queued turn exists, because a join's reply carries the
+*open* turn's number, which lags the counter by the queue length.
 
-**It does not stay theoretical.** A client that increments once per message *sent* is
-correct until the first `accept` message joins an open turn: that join advances no counter,
-so the client is permanently one ahead and every later send fails `StaleTurn`. The stream
-cannot repair it either — a join publishes under the joined turn's *lower* number, so a
-`turn_number >= expected` reconciliation never fires. The bug is invisible until someone
-uses `accept` on a busy agent, which is exactly when they will.
-
-So the contract must be stated positively, not left implicit: **a client sets its next
-`expected_turn` from `AgentMessageReply.turn_number + 1`** — the joined turn for a join, the
-reserved slot otherwise — and never from a local send count. `agent_status` re-derives it for
-a client that has lost track. This is documented on both `AgentMessage.expected_turn` and
-`AgentMessageReply.turn_number`, and pinned by a test asserting that a join leaves the next
-expected turn unchanged.
+Rather than state an ever-subtler contract, the token is gone — see decision 3 for the
+reasoning. A send carries `{type, payload}` and nothing about what the caller has observed.
 
 No versioning here. The repository is early-stage with test users only, so the semantics
 change outright and the packaged Svelte UI is updated in the same change to keep the stack
@@ -545,22 +537,44 @@ keep it for `ToolApprovalDecision.remember`, which is an explicit human decision
 named tool, and require an explicit release for blanket policy swaps. Deliberately not
 doing that now.
 
-### 3. `expected_turn` stays; no `expected_offset`
+### 3. No staleness token at all: `expected_turn` is removed, and no `expected_offset` replaces it
 
-`expected_turn` is turn-granular, so it does not catch a stale client acting during a turn
-it hasn't finished observing — agent mid-turn 5 with a dangerous call parked, queue empty,
-`next_turn_number` is 6, and a client that saw only turn 5 *start* passes the check.
+An earlier revision of this note kept `expected_turn` as a coarse staleness token. It is
+removed instead, on three observations.
 
-The precise alternative — asserting a stream offset — **is rejected**, because it's a race
-you lose almost every time. The offset advances on every event, including each streamed
-model delta, so by the time a client composes and sends a message its offset is already
-behind and the update fails. A CAS that spuriously rejects on nearly every busy-agent
-interaction would push clients straight into retry loops, and a check people learn to retry
-past protects nothing.
+**It could only catch the harmless case.** Being turn-granular, the check saw exactly one
+thing: that *some other caller had reserved a queue slot since you last looked*. It could not
+see a join (a join moves nothing), and it could not see the case that would matter — agent
+mid-turn 5 with a dangerous call parked, queue empty, and a client that saw only turn 5
+*start* passes the check. What it did catch has no harm to prevent: the queue is FIFO, so the
+late message runs after the unseen one, and every admitted message is observable on the
+stream. That is the same outcome as sending one second later.
 
-So `expected_turn` remains the only staleness token, with the semantics change noted under
-*Consequences*: it stops meaning "the queue position I claim" and starts meaning "the turn
-I have observed through." Coarse, but stable enough to be worth sending honestly.
+**Every consumer had learned to retry past it.** The Nexus handler caught `StaleTurn` and
+looped with a small sleep; the packaged UI re-derived the value from `agent_status` before
+every subagent send and patched its counter from stream frames; the Python client documented
+"re-derive from status" as the recovery; the parent-to-child path kept a private counter and
+wedged permanently the first time a human addressed the child directly. Nobody treated the
+rejection as information. A check people retry past protects nothing — the same argument
+this note already made against an offset-based CAS — and this one additionally wedged callers
+whose private counter drifted.
+
+**The one thing it did by accident is handled where it actually arises.** A retried update
+after a lost reply used to be rejected as stale, which acted as a crude dedupe (though never
+for a join). The only harness paths that retry a send are the `run_subagent_turn` activity
+and the Nexus handler, and each keys its update on an identity stable across its own retries
+(the activity id; the Nexus request id) so a re-issued send gets the original acceptance back
+instead of dispatching a second message. That is internal to the harness: the client contract
+stays "a submit is a message", with no id for callers to mint or get wrong.
+
+The precise alternative — asserting a stream offset — remains **rejected** for the reason
+given before: the offset advances on every streamed delta, so the check fails on nearly every
+busy-agent interaction and pushes clients into retry loops.
+
+So the envelope is `{type, payload}`. A message's outcome is fully described by the reply
+(`message_id`, `turn_number`, `turn_id`, `disposition`) and by `message_accepted` on the
+stream. A client that wants to act only on an idle agent reads `agent_status` first, as a UX
+choice rather than a protocol gate.
 
 ## The client's generic message surface
 
