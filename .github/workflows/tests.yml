@@ -1,0 +1,50 @@
+name: Tests
+
+# Runs the Python suite on every pull request and every push to main.
+#
+# The matrix is the other half. `requires-python` is ">=3.11", so a suite that only ever runs
+# on one interpreter is not testing what the package claims to support.
+
+on:
+  pull_request:
+  # Also on main, so a direct push or a squash-merge that skipped PR checks cannot leave main
+  # broken until the next release discovers it.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      # WHICH interpreters fail is the entire signal a matrix exists to give. Cancelling 3.13
+      # because 3.11 went red would throw that away and leave "is this version-specific?"
+      # needing a second run to answer.
+      fail-fast: false
+      matrix:
+        # Every version the package claims: requires-python is ">=3.11" and the classifiers
+        # list 3.11 through 3.14. All four run the identical 514 tests. Keep this list and
+        # those classifiers in lockstep.
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          # The suite pulls a large dependency set (temporalio, openai-agents, pydantic-ai,
+          # moto, pydantic-monty) once per interpreter. Caching keeps the matrix cheap enough that
+          # nobody is tempted to trim it back to one interpreter.
+          enable-cache: true
+          cache-suffix: py${{ matrix.python-version }}
+
+      - name: Run the test suite
+        run: uv run pytest -q

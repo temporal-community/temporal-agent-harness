@@ -9,7 +9,7 @@ name = "temporal-nexus-mcp"
 version = "0.1.0"
 description = "Bridge MCP tools with Temporal's reliable workflow execution via Nexus RPC"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "anyio>=4.0.0",
     "mcp>=2.1.1,<3",

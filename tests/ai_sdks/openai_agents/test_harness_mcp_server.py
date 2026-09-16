@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from importlib.util import find_spec
 from typing import Any, cast
 
 import pytest
@@ -31,6 +32,18 @@ from temporal_agent_harness.harness.agent_workflow import (
 )
 
 CALL_ID = "call_abc123"
+
+# The two factory-sweep tests below reach `nexus_native_mcp_server`, and that one factory
+# imports `nexus_mcp` — an unpublished distribution resolved from nexus/mcp, so an
+# environment built outside a checkout of this repo does not have it and the factory raises
+# rather than building. Scoped to those two tests and NOT to the module, because everything
+# else here (the approval gate, the tool_start/tool_end bracket, the call-id correlation)
+# needs nothing from nexus and has to keep running: a module-wide skip would take the other
+# eleven tests down with it. Same line tests/ai_sdks/openai_agents/conftest.py draws.
+requires_nexus_mcp = pytest.mark.skipif(
+    find_spec("nexus_mcp") is None,
+    reason="temporal-nexus-mcp is not installed (unpublished; resolves from nexus/mcp)",
+)
 
 
 class _FakeRunner:
@@ -341,6 +354,7 @@ async def test_wrapping_twice_is_a_no_op(gate_calls: list[dict[str, Any]], runne
     assert [type(e).__name__ for e in runner.published] == ["ToolStartEvent", "ToolEndEvent"]
 
 
+@requires_nexus_mcp
 def test_every_mcp_server_factory_returns_a_governed_server() -> None:
     # Governance is applied at construction, so an agent author passes the result
     # straight to Agent(mcp_servers=[...]).
@@ -364,6 +378,7 @@ def test_every_mcp_server_factory_returns_a_governed_server() -> None:
     }
 
 
+@requires_nexus_mcp
 def test_every_factory_passes_runner_and_inherently_safe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

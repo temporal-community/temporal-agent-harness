@@ -230,7 +230,7 @@ never the state it lives in.
   `examples/monty/conversational_workflow.py`
 - Tests: `tests/state/` (the layer, incl. a hypothesis property test),
   `tests/harness/test_observable_state.py` (end-to-end through a real workflow),
-  `tests/examples/monty/test_trip_board.py` (the example, end-to-end: a script drives the board
+  `tests/examples/monty/test_observable_trip_board.py` (the example, end-to-end: a script drives the board
   and the ops replay into what the agent holds) and
   `ui/src/lib/state/{agentState,jsonPatch}.test.mjs` (the fold, replayed over the console's own
   mock session)

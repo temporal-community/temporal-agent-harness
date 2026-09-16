@@ -131,20 +131,39 @@ class TemporalOpenAIRunner(AgentRunner):
 
         if starting_agent.mcp_servers:
             with workflow.unsafe.imports_passed_through():
-                from nexus_mcp.integrations.openai_agents import (
-                    WorkflowNexusMCPServer,
-                )
-
                 from temporal_agent_harness.ai_sdks.openai_agents._mcp import (
                     _StatefulMCPServerReference,
                     _StatelessMCPServerReference,
                 )
-                from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
-                    _NexusGatewayMCPServer,
-                )
                 from temporal_agent_harness.ai_sdks.openai_agents_harness import (
                     is_harness_mcp_server,
                 )
+
+                # The Nexus-brokered server types are OPTIONAL here. temporal-nexus-mcp
+                # is not published to PyPI -- it resolves from nexus/mcp through a
+                # workspace-local [tool.uv.sources] path -- and the `openai-agents` extra
+                # does not pull it, so ANY install from outside a checkout of this repo
+                # lacks it, on every Python version. It is imported only to be named in
+                # the isinstance() arm below, so its absence has to narrow what counts as
+                # durable; it must never fail the turn.
+                #
+                # `_nexus_mcp` restates a missing install as a RuntimeError carrying its
+                # own install message, which is why both exception arms are caught.
+                try:
+                    from nexus_mcp.integrations.openai_agents import (
+                        WorkflowNexusMCPServer,
+                    )
+
+                    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
+                        _NexusGatewayMCPServer,
+                    )
+
+                    nexus_server_types: tuple[type, ...] = (
+                        WorkflowNexusMCPServer,
+                        _NexusGatewayMCPServer,
+                    )
+                except (ModuleNotFoundError, RuntimeError):
+                    nexus_server_types = ()
 
             for s in starting_agent.mcp_servers:
                 if not isinstance(
@@ -152,8 +171,7 @@ class TemporalOpenAIRunner(AgentRunner):
                     (
                         _StatelessMCPServerReference,
                         _StatefulMCPServerReference,
-                        WorkflowNexusMCPServer,
-                        _NexusGatewayMCPServer,
+                        *nexus_server_types,
                     ),
                 ):
                     raise ValueError(

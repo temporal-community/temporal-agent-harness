@@ -9,7 +9,7 @@
 # would only prove it agrees with itself; a third-party RFC 6902 implementation is what makes
 # "any consumer can do this" a claim and not an assumption.
 #
-# Run with: uv run pytest tests/examples/monty/test_trip_board.py -v
+# Run with: uv run pytest tests/examples/monty/test_observable_trip_board.py -v
 
 from __future__ import annotations
 

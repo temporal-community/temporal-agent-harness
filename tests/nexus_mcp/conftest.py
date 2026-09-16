@@ -1,9 +1,9 @@
 # ABOUTME: Skips this directory when temporal-nexus-mcp isn't importable.
 #
-# The dependency is declared `temporal-nexus-mcp; python_version >= '3.13'` — that package's own
-# floor — so on 3.11/3.12 the `nexus_mcp` module is simply absent and every test module here
-# fails at import. The package supports 3.11+, so `uv run pytest` has to be green on 3.11 and
-# 3.12 too; skipping collection is what makes the marker's consequence explicit instead of a
+# temporal-nexus-mcp is not published to PyPI — it resolves from nexus/mcp through a
+# workspace-local [tool.uv.sources] path — so an environment built outside a checkout of this
+# repo, or synced without the dev group, simply has no `nexus_mcp` module and every test module
+# here fails at import. Skipping collection turns that into one explicit absence instead of a
 # wall of ImportErrors.
 
 from __future__ import annotations
