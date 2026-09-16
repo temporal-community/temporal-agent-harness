@@ -97,6 +97,8 @@ __all__ = [
     "as_harness_mcp_server",
     "as_harness_mcp_servers",
     "is_harness_mcp_server",
+    "mark_durable_mcp_server",
+    "is_durable_mcp_server",
 ]
 
 _INSTALL_MESSAGE = (
@@ -537,6 +539,26 @@ def _stringify_tool_result(result: Any) -> str:
 
 _MCP_TOOL_CALL_ID_META_KEY = "temporal.harness/tool_call_id"
 _MCP_WRAPPED_ATTR = "__harness_mcp_governed__"
+_MCP_DURABLE_ATTR = "__harness_mcp_durable__"
+
+
+def mark_durable_mcp_server(server: "MCPServer") -> "MCPServer":
+    """Declare that ``server`` replays durably, and return it.
+
+    The runner rejects an ``Agent(mcp_servers=[...])`` entry without this mark. A plain
+    SDK server (stdio, HTTP) re-runs its tool calls on replay. Mark only a server whose
+    calls go through an activity or a Nexus operation.
+
+    The mark is an instance attribute, not a type, so the runner validates a server
+    without importing the package that defines it.
+    """
+    setattr(server, _MCP_DURABLE_ATTR, True)
+    return server
+
+
+def is_durable_mcp_server(server: "MCPServer") -> bool:
+    """Whether ``server`` was marked by :func:`mark_durable_mcp_server`."""
+    return bool(getattr(server, _MCP_DURABLE_ATTR, False))
 
 
 def as_harness_mcp_server(

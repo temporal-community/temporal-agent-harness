@@ -33,13 +33,13 @@ from temporal_agent_harness.harness.agent_workflow import (
 
 CALL_ID = "call_abc123"
 
-# The two factory-sweep tests below reach `nexus_native_mcp_server`, and that one factory
-# imports `nexus_mcp` — an unpublished distribution resolved from nexus/mcp, so an
-# environment built outside a checkout of this repo does not have it and the factory raises
-# rather than building. Scoped to those two tests and NOT to the module, because everything
-# else here (the approval gate, the tool_start/tool_end bracket, the call-id correlation)
-# needs nothing from nexus and has to keep running: a module-wide skip would take the other
-# eleven tests down with it. Same line tests/ai_sdks/openai_agents/conftest.py draws.
+# `nexus_native_mcp_server` and `NexusGateway` import `nexus_mcp` — an unpublished
+# distribution resolved from nexus/mcp, so an environment built outside a checkout of this
+# repo does not have it and those factories raise rather than build. Scoped to the tests
+# that call them, NOT to the module: everything else here (the approval gate, the
+# tool_start/tool_end bracket, the call-id correlation, the runner's durability check)
+# needs nothing from nexus and has to keep running. Same line
+# tests/ai_sdks/openai_agents/conftest.py draws.
 requires_nexus_mcp = pytest.mark.skipif(
     find_spec("nexus_mcp") is None,
     reason="temporal-nexus-mcp is not installed (unpublished; resolves from nexus/mcp)",
@@ -354,42 +354,53 @@ async def test_wrapping_twice_is_a_no_op(gate_calls: list[dict[str, Any]], runne
     assert [type(e).__name__ for e in runner.published] == ["ToolStartEvent", "ToolEndEvent"]
 
 
-@requires_nexus_mcp
-def test_every_mcp_server_factory_returns_a_governed_server() -> None:
-    # Governance is applied at construction, so an agent author passes the result
-    # straight to Agent(mcp_servers=[...]).
-    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import NexusGateway
-    from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
-        nexus_native_mcp_server,
-        stateful_mcp_server,
-        stateless_mcp_server,
-    )
-
-    runner = cast("AgentWorkflowRunner", _FakeRunner())
-    built = {
-        "stateless": stateless_mcp_server("probe", runner=runner),
-        "stateful": stateful_mcp_server("probe", runner=runner),
-        "nexus_native": nexus_native_mcp_server("demo-nexus", "endpoint", runner=runner),
-        "gateway": NexusGateway("agent-1").mcp_servers("demo", runner=runner),
-    }
-
+def _assert_governed_and_durable(built: dict[str, Any]) -> None:
+    """Every factory result carries both marks the runner checks."""
     assert {name: h.is_harness_mcp_server(s) for name, s in built.items()} == {
+        name: True for name in built
+    }
+    # The runner checks this mark. A factory that omits it builds a server the runner
+    # rejects.
+    assert {name: h.is_durable_mcp_server(s) for name, s in built.items()} == {
         name: True for name in built
     }
 
 
-@requires_nexus_mcp
-def test_every_factory_passes_runner_and_inherently_safe(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import NexusGateway
+def test_every_mcp_server_factory_returns_a_governed_server() -> None:
+    # Governance is applied at construction, so an agent author passes the result
+    # straight to Agent(mcp_servers=[...]).
     from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
-        nexus_native_mcp_server,
         stateful_mcp_server,
         stateless_mcp_server,
     )
 
     runner = cast("AgentWorkflowRunner", _FakeRunner())
+    _assert_governed_and_durable(
+        {
+            "stateless": stateless_mcp_server("probe", runner=runner),
+            "stateful": stateful_mcp_server("probe", runner=runner),
+        }
+    )
+
+
+@requires_nexus_mcp
+def test_every_nexus_mcp_server_factory_returns_a_governed_server() -> None:
+    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import NexusGateway
+    from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+        nexus_native_mcp_server,
+    )
+
+    runner = cast("AgentWorkflowRunner", _FakeRunner())
+    _assert_governed_and_durable(
+        {
+            "nexus_native": nexus_native_mcp_server("demo-nexus", "endpoint", runner=runner),
+            "gateway": NexusGateway("agent-1").mcp_servers("demo", runner=runner),
+        }
+    )
+
+
+def _spy_on_governance(monkeypatch: pytest.MonkeyPatch, runner: Any) -> list[tuple[bool, bool]]:
+    """Record (runner matched, inherently_safe) for each as_harness_mcp_server call."""
     seen: list[tuple[bool, bool]] = []
     real = h.as_harness_mcp_server
 
@@ -399,10 +410,114 @@ def test_every_factory_passes_runner_and_inherently_safe(
 
     # The factories import this by name at call time, so patching the module works.
     monkeypatch.setattr(h, "as_harness_mcp_server", spy)
+    return seen
+
+
+def test_every_factory_passes_runner_and_inherently_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+        stateful_mcp_server,
+        stateless_mcp_server,
+    )
+
+    runner = cast("AgentWorkflowRunner", _FakeRunner())
+    seen = _spy_on_governance(monkeypatch, runner)
 
     stateless_mcp_server("probe", runner=runner, inherently_safe=True)
     stateful_mcp_server("probe", runner=runner, inherently_safe=True)
+
+    assert seen == [(True, True)] * 2
+
+
+@requires_nexus_mcp
+def test_every_nexus_factory_passes_runner_and_inherently_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import NexusGateway
+    from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+        nexus_native_mcp_server,
+    )
+
+    runner = cast("AgentWorkflowRunner", _FakeRunner())
+    seen = _spy_on_governance(monkeypatch, runner)
+
     nexus_native_mcp_server("demo-nexus", "endpoint", runner=runner, inherently_safe=True)
     NexusGateway("agent-1").mcp_servers("demo", runner=runner, inherently_safe=True)
 
-    assert seen == [(True, True)] * 4
+    assert seen == [(True, True)] * 2
+
+
+def _prepare_with(server: MCPServer) -> None:
+    """Run the runner's pre-flight validation over one mcp_server."""
+    from agents import Agent
+
+    from temporal_agent_harness.ai_sdks.openai_agents._model_parameters import (
+        ModelActivityParameters,
+    )
+    from temporal_agent_harness.ai_sdks.openai_agents._openai_runner import (
+        TemporalOpenAIRunner,
+    )
+
+    TemporalOpenAIRunner(ModelActivityParameters())._prepare_workflow_run(
+        Agent(name="probe", mcp_servers=[server]), {}
+    )
+
+
+def test_runner_rejects_an_unmarked_mcp_server() -> None:
+    # A plain SDK server (stdio, HTTP) re-runs its tool calls on replay.
+    with pytest.raises(ValueError, match="may not work durably"):
+        _prepare_with(_FakeMCPServer(_text_result("sunny")))
+
+
+def test_runner_rejects_a_marked_but_ungoverned_mcp_server() -> None:
+    server = h.mark_durable_mcp_server(_FakeMCPServer(_text_result("sunny")))
+    with pytest.raises(ValueError, match="not built by a harness mcp_server factory"):
+        _prepare_with(server)
+
+
+def test_runner_accepts_a_marked_and_governed_mcp_server(runner: _FakeRunner) -> None:
+    server = _govern(h.mark_durable_mcp_server(_FakeMCPServer(_text_result("sunny"))), runner)
+    _prepare_with(server)
+
+
+def test_runner_validation_does_not_import_nexus_mcp() -> None:
+    """Only the nexus factories may import nexus_mcp.
+
+    Validation of a non-Nexus MCP server must not import it. Otherwise the harness
+    cannot be released without temporal-nexus-mcp.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(
+        """
+        import sys
+        from agents import Agent
+        from temporal_agent_harness.ai_sdks.openai_agents._model_parameters import (
+            ModelActivityParameters,
+        )
+        from temporal_agent_harness.ai_sdks.openai_agents._openai_runner import (
+            TemporalOpenAIRunner,
+        )
+        from temporal_agent_harness.ai_sdks.openai_agents.workflow import (
+            stateless_mcp_server,
+        )
+
+        server = stateless_mcp_server("probe", runner=None)
+        TemporalOpenAIRunner(ModelActivityParameters())._prepare_workflow_run(
+            Agent(name="probe", mcp_servers=[server]), {}
+        )
+        assert "nexus_mcp" not in sys.modules, sorted(
+            m for m in sys.modules if "nexus" in m
+        )
+        print("clean")
+        """
+    )
+    # A subprocess: another test in this session may already have imported nexus_mcp.
+    out = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=False
+    )
+    assert out.returncode == 0, out.stderr
+    assert "clean" in out.stdout

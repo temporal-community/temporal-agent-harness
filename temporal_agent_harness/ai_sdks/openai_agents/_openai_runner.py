@@ -131,51 +131,19 @@ class TemporalOpenAIRunner(AgentRunner):
 
         if starting_agent.mcp_servers:
             with workflow.unsafe.imports_passed_through():
-                from temporal_agent_harness.ai_sdks.openai_agents._mcp import (
-                    _StatefulMCPServerReference,
-                    _StatelessMCPServerReference,
-                )
                 from temporal_agent_harness.ai_sdks.openai_agents_harness import (
+                    is_durable_mcp_server,
                     is_harness_mcp_server,
                 )
 
-                # The Nexus-brokered server types are OPTIONAL here. temporal-nexus-mcp
-                # is not published to PyPI -- it resolves from nexus/mcp through a
-                # workspace-local [tool.uv.sources] path -- and the `openai-agents` extra
-                # does not pull it, so ANY install from outside a checkout of this repo
-                # lacks it, on every Python version. It is imported only to be named in
-                # the isinstance() arm below, so its absence has to narrow what counts as
-                # durable; it must never fail the turn.
-                #
-                # `_nexus_mcp` restates a missing install as a RuntimeError carrying its
-                # own install message, which is why both exception arms are caught.
-                try:
-                    from nexus_mcp.integrations.openai_agents import (
-                        WorkflowNexusMCPServer,
-                    )
-
-                    from temporal_agent_harness.ai_sdks.openai_agents._nexus_mcp import (
-                        _NexusGatewayMCPServer,
-                    )
-
-                    nexus_server_types: tuple[type, ...] = (
-                        WorkflowNexusMCPServer,
-                        _NexusGatewayMCPServer,
-                    )
-                except (ModuleNotFoundError, RuntimeError):
-                    nexus_server_types = ()
-
             for s in starting_agent.mcp_servers:
-                if not isinstance(
-                    s,
-                    (
-                        _StatelessMCPServerReference,
-                        _StatefulMCPServerReference,
-                        *nexus_server_types,
-                    ),
-                ):
+                # Checked by mark, not by isinstance. An isinstance tuple must name every
+                # durable server type, so it must import every package that defines one,
+                # including the optional nexus_mcp. The factory sets the mark.
+                if not is_durable_mcp_server(s):
                     raise ValueError(
-                        f"Unknown mcp_server type {type(s)} may not work durably."
+                        f"Unknown mcp_server type {type(s)} may not work durably. "
+                        f"Build it with a harness mcp_server factory."
                     )
 
                 # Statically assert that MCP servers here are wrapped with

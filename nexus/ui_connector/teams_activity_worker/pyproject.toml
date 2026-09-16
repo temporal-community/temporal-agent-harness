@@ -3,7 +3,7 @@ name = "teams-activity-worker"
 version = "0.1.0"
 description = "Temporal activity worker for Microsoft Teams outbound messaging"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "microsoft-teams-apps>=2.0.14,<3",
     "temporalio>=1.15.0,<2",
@@ -31,12 +31,12 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py313"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
 
 [tool.pyright]
-pythonVersion = "3.13"
+pythonVersion = "3.11"
 typeCheckingMode = "standard"
 include = ["src", "tests"]

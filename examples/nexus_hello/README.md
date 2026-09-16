@@ -190,7 +190,6 @@ identifiers do not have to match.
 
 ### Requirements
 
-- Use Python 3.13 or later for the `nexus-mcp` extra.
 - Install the Temporal CLI **1.9.1 or later** and add it to `PATH`. `just temporal` recipe sets
   some dynamic configs that are only available on Temporal server versions that 1.9.1+ CLI starts.
 - From the repository root, copy `.env.example` to `.env.local`.

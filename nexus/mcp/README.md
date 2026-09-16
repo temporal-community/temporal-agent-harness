@@ -9,7 +9,7 @@ For component design, execution paths, and protocol behavior, see
 
 ## Install the package
 
-The package requires Python 3.13 or later. The distribution name is
+The package requires Python 3.11 or later. The distribution name is
 `temporal-nexus-mcp`. The Python import name is `nexus_mcp`.
 
 An unrelated project owns the `nexus-mcp` name on PyPI. Do not run
