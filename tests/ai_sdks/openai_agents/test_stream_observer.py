@@ -224,6 +224,17 @@ async def test_tool_requested_falls_back_to_buffer_when_done_args_empty(
 
 
 @pytest.mark.asyncio
+async def test_done_without_opening_event_omits_tool_requested(
+    fake_publisher: _FakePublisher,
+):
+    ctx = TurnStreamContext(turn_id="t-10", turn_number=1, agent_id="agent-abc")
+
+    await _drive([_args_done("fc_item_missing", '{"q": "cats"}')], ctx)
+
+    assert not any(isinstance(e, ToolRequested) for e in fake_publisher.events)
+
+
+@pytest.mark.asyncio
 async def test_started_emitted_at_dispatch_before_any_event(fake_publisher: _FakePublisher):
     # The started bracket must be published at __aenter__ — before any event is fed — so
     # the started→ended span measures the true model-call latency (time-to-first-token

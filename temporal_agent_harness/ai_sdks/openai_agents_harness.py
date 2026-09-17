@@ -251,12 +251,16 @@ class OpenAIStreamObserver:
         Prefers the done event's authoritative ``arguments`` string, falling back
         to the buffered delta fragments. ``tool_id`` is the SDK ``call_id`` (shared
         with the execution lifecycle in ``run_tool``); if the opening
-        ``output_item.added`` was somehow missed, we degrade both values to the item id
-        rather than dropping the request. The done event contains arguments but no name.
+        ``output_item.added`` was missed, there is no truthful tool name to publish, so the
+        request event is omitted. The workflow-owned execution lifecycle still publishes
+        ``tool_start`` with the tool name.
         """
         item_id = event.item_id
         buffered = self._arg_buffers.pop(item_id, "")
-        call_id, name = self._fn_calls.pop(item_id, (item_id, item_id))
+        call = self._fn_calls.pop(item_id, None)
+        if call is None:
+            return
+        call_id, name = call
         raw = event.arguments or buffered
         pub.publish(
             ToolRequested(
