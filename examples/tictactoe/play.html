@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Tic-Tac-Toe Ledger</title>
+<!--
+  A single-file client for the TicTacToeAgent (examples/tictactoe). Double-click to open.
+
+  It talks to the harness dev server (`just server`, http://localhost:8000 by default) and renders
+  the board ONLY from the agent's observable-state events: one `state_snapshot` when it attaches,
+  then one `state_patch` (RFC 6902 ops) per committed mutate() on the workflow's Board. Nothing
+  here knows how a move is applied — it folds patches into a document and draws the document.
+
+  Streams: `/api/attach` replays the session's history and closes once the agent is idle;
+  `/api/chat` streams the one turn a sent message opens. Both use the same SSE framing.
+-->
+<style>
+  :root {
+    --bg: #eef1f4;
+    --surface: #ffffff;
+    --surface-2: #f5f7f9;
+    --line: #d6dde4;
+    --ink: #1b2430;
+    --muted: #66717d;
+    --faint: #aab4be;
+    --x: #c8402e;
+    --o: #1f6fb2;
+    --heat: 31, 111, 178;      /* the O accent as rgb, for the probability wash */
+    --good: #2e8b57;
+    --warn: #b7791f;
+    --bad: #b3261e;
+    --focus: #1f6fb2;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14181d; --surface: #1c2229; --surface-2: #232b34; --line: #333d48;
+      --ink: #e6eaee; --muted: #8a96a3; --faint: #55616d;
+      --x: #e8604c; --o: #5aa3e8; --heat: 90, 163, 232;
+      --good: #4cbf7a; --warn: #d9a441; --bad: #e46962; --focus: #5aa3e8;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14181d; --surface: #1c2229; --surface-2: #232b34; --line: #333d48;
+    --ink: #e6eaee; --muted: #8a96a3; --faint: #55616d;
+    --x: #e8604c; --o: #5aa3e8; --heat: 90, 163, 232;
+    --good: #4cbf7a; --warn: #d9a441; --bad: #e46962; --focus: #5aa3e8;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.45 var(--sans); padding-block: 0;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  .app { max-width: 1080px; margin: 0 auto; padding: 20px 16px 32px; display: grid; gap: 18px; }
+
+  /* ---- top bar: where we are connected ---- */
+  .bar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+    padding-bottom: 14px; border-bottom: 1px solid var(--line);
+  }
+  .bar h1 { font-size: 17px; font-weight: 650; margin: 0 auto 0 0; letter-spacing: -0.01em; }
+  .bar h1 small { font-weight: 500; color: var(--muted); margin-left: 8px; }
+  .field { display: flex; align-items: center; gap: 6px; }
+  .field label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .field input, .field select {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+    padding: 5px 8px; min-width: 0; max-width: 100%;
+  }
+  #server { width: 200px; }
+  #session { width: 210px; }
+  .btn {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 11px; font-weight: 550;
+  }
+  .btn:hover { background: var(--surface-2); }
+  .btn:disabled { opacity: 0.5; cursor: default; }
+  .btn.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .btn.primary:hover { opacity: 0.92; background: var(--ink); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); display: inline-block; }
+  .dot[data-state="live"] { background: var(--good); }
+  .dot[data-state="busy"] { background: var(--warn); }
+  .dot[data-state="error"] { background: var(--bad); }
+  .conn { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+
+  /* ---- main: board left, ledger right ---- */
+  .main { display: grid; grid-template-columns: minmax(280px, 440px) minmax(280px, 1fr); gap: 24px; align-items: start; }
+  @media (max-width: 760px) { .main { grid-template-columns: 1fr; } }
+
+  .status {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+    margin-bottom: 10px; min-height: 24px;
+  }
+  .status .who { font-size: 18px; font-weight: 650; text-wrap: balance; }
+  .status .who .mark { font-family: var(--mono); }
+  .status .meta { font-family: var(--mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .board {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+    aspect-ratio: 1; max-width: 100%; background: var(--line); padding: 6px; border-radius: 10px;
+  }
+  .cell {
+    position: relative; border: 0; border-radius: 6px; background: var(--surface);
+    font-family: var(--mono); font-size: clamp(36px, 10vw, 64px); font-weight: 700; line-height: 1;
+    color: var(--faint); transition: background 160ms ease, color 160ms ease;
+  }
+  .cell[data-mark="X"] { color: var(--x); }
+  .cell[data-mark="O"] { color: var(--o); }
+  .cell:not([data-mark]) { font-size: 18px; font-weight: 500; }
+  .cell.playable:hover { background: var(--surface-2); color: var(--ink); }
+  .cell:disabled { cursor: default; }
+  .cell.win { box-shadow: inset 0 0 0 3px currentColor; }
+  .cell.changed { animation: flash 700ms ease-out; }
+  @keyframes flash { from { background: var(--surface-2); box-shadow: inset 0 0 0 3px var(--muted); } to { box-shadow: inset 0 0 0 0 transparent; } }
+  /* Choice probabilities from the last judgment, washed onto the cells the model weighed. */
+  .cell .p {
+    position: absolute; right: 7px; bottom: 5px; font-size: 11px; font-weight: 600;
+    font-family: var(--mono); color: rgb(var(--heat)); font-variant-numeric: tabular-nums;
+  }
+  .cell.heat { background: rgba(var(--heat), calc(var(--w) * 0.55)); }
+  .cell.picked { box-shadow: inset 0 0 0 3px rgb(var(--heat)); }
+  @media (prefers-reduced-motion: reduce) { .cell { transition: none; } .cell.changed { animation: none; } }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .hint code { font-family: var(--mono); }
+
+  .judgment {
+    margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: var(--surface);
+    border: 1px solid var(--line); display: grid; gap: 4px; font-size: 13px;
+  }
+  .judgment .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .judgment .row { display: flex; justify-content: space-between; gap: 10px; font-variant-numeric: tabular-nums; }
+  .judgment .row b { font-family: var(--mono); font-weight: 600; }
+
+  /* ---- ledger ---- */
+  .ledger h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 8px; display: flex; justify-content: space-between; }
+  .ledger h2 button { background: none; border: 0; color: var(--muted); text-decoration: underline; padding: 0; font: inherit; letter-spacing: 0; text-transform: none; }
+  .log {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    max-height: 70vh; overflow: auto; font-family: var(--mono); font-size: 12px;
+    display: flex; flex-direction: column;
+  }
+  .entry { display: grid; grid-template-columns: 56px 92px 1fr; gap: 10px; padding: 7px 10px; border-bottom: 1px solid var(--line); align-items: start; }
+  .entry:last-child { border-bottom: 0; }
+  .entry .t { color: var(--faint); font-variant-numeric: tabular-nums; }
+  .entry .kind { color: var(--muted); }
+  .entry[data-kind="patch"] .kind { color: var(--o); }
+  .entry[data-kind="reply"] { background: var(--surface-2); }
+  .entry[data-kind="reply"] .body { font-family: var(--sans); white-space: pre-wrap; }
+  .entry[data-kind="error"] .kind, .entry[data-kind="error"] .body { color: var(--bad); }
+  .entry .body { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .entry .body .op { display: block; }
+  .entry .body .op .path { color: var(--ink); }
+  .entry .body .op .val { color: var(--muted); }
+  .empty { padding: 18px 12px; color: var(--muted); font-family: var(--sans); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <h1>Tic-Tac-Toe Ledger <small>a board drawn from JSON Patch</small></h1>
+    <div class="field"><label for="server">server</label><input id="server" value="http://localhost:8000" spellcheck="false"></div>
+    <div class="field"><label for="session">session</label><select id="session"><option value="">— pick or create —</option></select></div>
+    <button class="btn" id="new-session">New session</button>
+    <span class="conn"><span class="dot" id="dot"></span><span id="conn-text">not connected</span></span>
+  </header>
+
+  <div class="main">
+    <section>
+      <div class="status">
+        <div class="who" id="who">No session</div>
+        <div class="meta" id="meta"></div>
+      </div>
+      <div class="board" id="board" role="grid" aria-label="tic-tac-toe board"></div>
+      <div class="controls">
+        <button class="btn primary" id="new-you" disabled>New game — you open</button>
+        <button class="btn" id="new-agent" disabled>New game — agent opens</button>
+      </div>
+      <div class="judgment" id="judgment" hidden></div>
+      <p class="hint">Click an empty cell to play. The board never moves on its own here: every change you see is a <code>state_patch</code> from the agent's stream, folded into a document and redrawn.</p>
+    </section>
+
+    <section class="ledger">
+      <h2><span>Ledger</span><button id="clear-log" type="button">clear</button></h2>
+      <div class="log" id="log"><div class="empty">Pick a session to replay its history, or create one.</div></div>
+    </section>
+  </div>
+</div>
+
+<script>
+(() => {
+  const AGENT_TYPE = "TicTacToeAgent";
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    server: $("server"), session: $("session"), newSession: $("new-session"), dot: $("dot"),
+    connText: $("conn-text"), who: $("who"), meta: $("meta"), board: $("board"),
+    newYou: $("new-you"), newAgent: $("new-agent"), judgment: $("judgment"), log: $("log"),
+    clearLog: $("clear-log"),
+  };
+
+  // ---------------------------------------------------------------- state
+  let doc = null;             // the Board document: {cells, to_move, agent_mark, status, moves}
+  let version = -1;           // the version `doc` reflects (from snapshot/patch)
+  let resumeOffset = 0;       // root-stream offset to re-attach from
+  let sessionId = null;
+  let busy = false;           // a turn is in flight (we are streaming it)
+  let lastJudgment = null;    // parsed output of the last typesafe_system_one tool_end
+  let changedCells = new Set();
+
+  // ---------------------------------------------------------------- RFC 6902 fold
+  // Only what the harness state layer emits: add / replace / remove, with "-" for append.
+  function splitPointer(path) {
+    return path.split("/").slice(1).map((s) => s.replace(/~1/g, "/").replace(/~0/g, "~"));
+  }
+  function applyOp(root, op) {
+    const parts = splitPointer(op.path);
+    const key = parts.pop();
+    let parent = root;
+    for (const p of parts) parent = Array.isArray(parent) ? parent[Number(p)] : parent[p];
+    if (Array.isArray(parent)) {
+      const idx = key === "-" ? parent.length : Number(key);
+      if (op.op === "add") parent.splice(idx, 0, op.value);
+      else if (op.op === "replace") parent[idx] = op.value;
+      else if (op.op === "remove") parent.splice(idx, 1);
+    } else {
+      if (op.op === "remove") delete parent[key];
+      else parent[key] = op.value;
+    }
+  }
+  function applyPatch(ops) {
+    for (const op of ops) {
+      applyOp(doc, op);
+      const m = /^\/cells\/(\d+)$/.exec(op.path);
+      if (m) changedCells.add(Number(m[1]));
+      if (op.path === "/cells") for (let i = 0; i < 9; i++) changedCells.add(i);
+    }
+  }
+
+  // ---------------------------------------------------------------- rendering
+  const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  function winningLine(cells) {
+    return LINES.find(([a,b,c]) => cells[a] && cells[a] === cells[b] && cells[b] === cells[c]) || null;
+  }
+  function yourMark() { return doc && (doc.agent_mark === "X" ? "O" : "X"); }
+  function yourTurn() { return !!doc && doc.status === "playing" && doc.to_move === yourMark() && !busy && !!sessionId; }
+
+  function renderBoard() {
+    const cells = doc ? doc.cells : Array(9).fill(null);
+    const win = doc ? winningLine(cells) : null;
+    const probs = lastJudgment && lastJudgment.choices && lastJudgment.choices.move
+      ? lastJudgment.choices.move.probabilities : null;
+    const picked = probs ? lastJudgment.choices.move.choice : null;
+    els.board.replaceChildren(...cells.map((mark, i) => {
+      const b = document.createElement("button");
+      b.className = "cell"; b.type = "button"; b.setAttribute("role", "gridcell");
+      b.dataset.cell = String(i + 1);
+      if (mark) { b.dataset.mark = mark; b.textContent = mark; b.disabled = true; }
+      else { b.textContent = String(i + 1); b.disabled = !yourTurn(); if (yourTurn()) b.classList.add("playable"); }
+      b.setAttribute("aria-label", `cell ${i + 1}${mark ? ", " + mark : ", empty"}`);
+      if (win && win.includes(i)) b.classList.add("win");
+      if (changedCells.has(i)) b.classList.add("changed");
+      // Wash the last judgment onto the board: only for cells it weighed and that are still as
+      // the model saw them (a cell filled since is no longer a candidate).
+      if (probs) {
+        const p = probs[`cell_${i + 1}`];
+        if (p != null && (!mark || `cell_${i + 1}` === picked)) {
+          b.style.setProperty("--w", String(p));
+          if (!mark) b.classList.add("heat");
+          if (`cell_${i + 1}` === picked) b.classList.add("picked");
+          const tag = document.createElement("span"); tag.className = "p"; tag.textContent = `${Math.round(p * 100)}%`;
+          b.appendChild(tag);
+        }
+      }
+      b.addEventListener("click", () => play(i + 1));
+      return b;
+    }));
+    changedCells = new Set();
+
+    if (!doc) { els.who.textContent = sessionId ? "Waiting for the board…" : "No session"; els.meta.textContent = ""; }
+    else if (doc.status === "draw") els.who.textContent = "Draw.";
+    else if (doc.status !== "playing") {
+      const w = doc.status[0];
+      els.who.innerHTML = `<span class="mark">${w}</span> wins — ${w === doc.agent_mark ? "the agent" : "you"}.`;
+    } else if (busy) els.who.textContent = "Agent is judging…";
+    else els.who.innerHTML = doc.to_move === yourMark()
+      ? `Your move <span class="mark">(${yourMark()})</span>`
+      : `Agent to move <span class="mark">(${doc.agent_mark})</span>`;
+    if (doc) els.meta.textContent = `v${version} · ${doc.moves.length} move${doc.moves.length === 1 ? "" : "s"}`;
+
+    const canStart = !!sessionId && !busy;
+    els.newYou.disabled = !canStart; els.newAgent.disabled = !canStart;
+  }
+
+  function renderJudgment() {
+    const j = lastJudgment;
+    if (!j) { els.judgment.hidden = true; return; }
+    const move = j.choices && j.choices.move, threat = j.nouls && j.nouls.threat, outlook = j.scores && j.scores.outlook;
+    const pct = (v) => `${Math.round(v * 100)}%`;
+    const rows = [];
+    if (move) rows.push(`<div class="row"><span>move · Choice</span><b>${move.choice.replace("cell_", "cell ")} @ ${pct(move.confidence)}</b></div>`);
+    if (threat != null) rows.push(`<div class="row"><span>threat · Noul</span><b>${pct(threat)}</b></div>`);
+    if (outlook) {
+      const label = ["losing", "even", "winning"][Math.round(Math.min(2, Math.max(0, outlook.score)))];
+      rows.push(`<div class="row"><span>outlook · Score</span><b>${outlook.score.toFixed(2)} ${label}</b></div>`);
+    }
+    rows.push(`<div class="row"><span>${j.model}</span><b>${j.input_tokens ?? "?"} in · ${j.output_tokens ?? "?"} out</b></div>`);
+    els.judgment.innerHTML = `<div class="k">last judgment</div>${rows.join("")}`;
+    els.judgment.hidden = false;
+  }
+
+  function setConn(state, text) { els.dot.dataset.state = state; els.connText.textContent = text; }
+
+  // ---------------------------------------------------------------- ledger
+  function stamp(ts) {
+    const d = ts ? new Date(ts * 1000) : new Date();
+    return d.toTimeString().slice(0, 8);
+  }
+  function fmtVal(v) { return JSON.stringify(v); }
+  function logEntry(kind, label, body, ts) {
+    if (els.log.firstElementChild && els.log.firstElementChild.classList.contains("empty")) els.log.replaceChildren();
+    const e = document.createElement("div"); e.className = "entry"; e.dataset.kind = kind;
+    const t = document.createElement("span"); t.className = "t"; t.textContent = stamp(ts);
+    const k = document.createElement("span"); k.className = "kind"; k.textContent = label;
+    const b = document.createElement("div"); b.className = "body";
+    if (typeof body === "string") b.textContent = body; else b.append(...body);
+    e.append(t, k, b); els.log.appendChild(e);
+    els.log.scrollTop = els.log.scrollHeight;
+  }
+  function opsNodes(ops) {
+    return ops.map((op) => {
+      const s = document.createElement("span"); s.className = "op";
+      const p = document.createElement("span"); p.className = "path"; p.textContent = `${op.op} ${op.path}`;
+      s.appendChild(p);
+      if ("value" in op) { const v = document.createElement("span"); v.className = "val"; v.textContent = " " + fmtVal(op.value); s.appendChild(v); }
+      return s;
+    });
+  }
+
+  // ---------------------------------------------------------------- events
+  function onEvent(name, data) {
+    if (typeof data.resume_offset === "number") resumeOffset = data.resume_offset;
+    switch (name) {
+      case "state_snapshot":
+        if (data.state_id !== "board") return;
+        doc = data.value; version = data.version;
+        logEntry("patch", `snapshot v${version}`, fmtVal(doc), data.timestamp);
+        renderBoard(); return;
+      case "state_patch":
+        if (data.state_id !== "board" || !doc) return;
+        if (data.version <= version) return;      // already folded (a re-attach overlap)
+        applyPatch(data.ops); version = data.version;
+        logEntry("patch", `patch v${version}`, opsNodes(data.ops), data.timestamp);
+        renderBoard(); return;
+      case "turn_started": busy = true; renderBoard(); return;
+      case "turn_end": busy = false; renderBoard(); return;
+      case "tool_start":
+        if (data.tool_name === "typesafe_system_one") {
+          const q = data.tool_input && data.tool_input.request && data.tool_input.request.questions;
+          const n = q && q.move && q.move.criteria ? Object.keys(q.move.criteria).length : "?";
+          logEntry("tool", "typesafe →", `asking ${q ? Object.keys(q).join(", ") : "?"} over ${n} candidate cells (${data.tool_input.request.model})`, data.timestamp);
+        } else logEntry("tool", `${data.tool_name} →`, fmtVal(data.tool_input), data.timestamp);
+        return;
+      case "tool_end":
+        if (data.tool_name === "typesafe_system_one") {
+          try { lastJudgment = JSON.parse(data.tool_output); } catch { lastJudgment = null; }
+          const m = lastJudgment && lastJudgment.choices && lastJudgment.choices.move;
+          const top = m ? Object.entries(m.probabilities).sort((a, b) => b[1] - a[1]).slice(0, 3)
+            .map(([k, v]) => `${k.replace("cell_", "")}:${Math.round(v * 100)}%`).join(" ") : "";
+          logEntry("tool", "typesafe ←", m ? `${m.choice} (${Math.round(m.confidence * 100)}% conf) · ${top}` : data.tool_output, data.timestamp);
+          renderJudgment(); renderBoard();
+        } else logEntry("tool", `${data.tool_name} ←`, data.tool_output.split("\n")[0], data.timestamp);
+        return;
+      case "tool_error": logEntry("error", `${data.tool_name} ✕`, data.message, data.timestamp); return;
+      case "message_handler_end": {
+        const text = data.output && data.output.text;
+        if (text) logEntry("reply", "agent", text.replace(/```[\s\S]*?```\n?/g, "").trim(), data.timestamp);
+        return;
+      }
+      case "message_handler_error": logEntry("error", "handler", data.message, data.timestamp); return;
+      case "stream_error": logEntry("error", data.kind || "stream", data.message, data.timestamp); return;
+      case "tool_approval_requested":
+        logEntry("error", "approval", `${data.tool_name} is waiting for approval — approve it in the main console (this page has no approve button).`, data.timestamp);
+        return;
+      default: return; // message_accepted, handler_start, tool_requested… not needed for the board
+    }
+  }
+
+  // One SSE reader for both endpoints (`fetch`, since /api/chat is a POST).
+  async function readSse(response) {
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${await response.text()}`);
+    const reader = response.body.getReader(); const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buf.indexOf("\n\n")) >= 0) {
+        const frame = buf.slice(0, sep); buf = buf.slice(sep + 2);
+        let name = "message", data = "";
+        for (const line of frame.split("\n")) {
+          if (line.startsWith("event:")) name = line.slice(6).trim();
+          else if (line.startsWith("data:")) data += line.slice(5).trim();
+        }
+        if (!data) continue;
+        try { onEvent(name, JSON.parse(data)); } catch (e) { console.error("bad frame", name, data, e); }
+      }
+    }
+  }
+
+  const base = () => els.server.value.trim().replace(/\/+$/, "");
+
+  async function attach(fromOffset) {
+    setConn("busy", "replaying…");
+    try {
+      await readSse(await fetch(`${base()}/api/attach?session_id=${encodeURIComponent(sessionId)}&from_offset=${fromOffset}`));
+      busy = false; setConn("live", "in sync"); renderBoard();
+    } catch (e) { setConn("error", "attach failed"); logEntry("error", "attach", String(e.message || e)); busy = false; renderBoard(); }
+  }
+
+  async function send(type, payload) {
+    if (!sessionId || busy) return;
+    busy = true; renderBoard(); setConn("busy", "turn in flight");
+    try {
+      await readSse(await fetch(`${base()}/api/chat`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, message: { type, payload } }),
+      }));
+      setConn("live", "in sync");
+    } catch (e) {
+      logEntry("error", "send", String(e.message || e)); setConn("error", "send failed");
+      // A 409 means the message joined or queued behind a turn this page didn't see: catch up.
+      if (/^409/.test(String(e.message))) await attach(resumeOffset);
+    } finally { busy = false; renderBoard(); }
+  }
+
+  function play(cell) { if (yourTurn()) send("play", { cell }); }
+
+  // ---------------------------------------------------------------- sessions
+  async function loadSessions(selectId) {
+    let sessions = [];
+    try {
+      const r = await fetch(`${base()}/api/sessions`);
+      sessions = (await r.json()).filter((s) => s.agent_workflow_type === AGENT_TYPE && !s.closed);
+      setConn(sessions.length ? "live" : "idle", `${sessions.length} open session${sessions.length === 1 ? "" : "s"}`);
+    } catch (e) { setConn("error", "server unreachable"); logEntry("error", "server", `Cannot reach ${base()} — is \`just server\` running? (${e.message})`); }
+    sessions.sort((a, b) => b.created_at - a.created_at);
+    els.session.replaceChildren(new Option("— pick or create —", ""), ...sessions.map((s) =>
+      new Option(`${new Date(s.created_at * 1000).toLocaleString()} · ${s.workflow_id.slice(0, 18)}`, s.workflow_id)));
+    if (selectId && sessions.some((s) => s.workflow_id === selectId)) { els.session.value = selectId; await selectSession(selectId); }
+  }
+
+  async function selectSession(id) {
+    sessionId = id || null; doc = null; version = -1; resumeOffset = 0; lastJudgment = null; busy = false;
+    els.log.replaceChildren(); renderJudgment(); renderBoard();
+    try { localStorage.setItem("ttt.session", sessionId || ""); } catch {}
+    if (!sessionId) { setConn("idle", "no session"); return; }
+    await attach(0);
+    if (!doc) logEntry("reply", "note", "No board yet — this session has not published state. Start a game.");
+  }
+
+  async function newSession() {
+    els.newSession.disabled = true;
+    try {
+      const r = await fetch(`${base()}/api/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agent_workflow_type: AGENT_TYPE }) });
+      if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+      const s = await r.json();
+      await loadSessions(s.workflow_id);
+    } catch (e) { logEntry("error", "session", String(e.message || e)); }
+    finally { els.newSession.disabled = false; }
+  }
+
+  // ---------------------------------------------------------------- wiring
+  els.session.addEventListener("change", () => selectSession(els.session.value));
+  els.newSession.addEventListener("click", newSession);
+  els.newYou.addEventListener("click", () => send("new_game", { agent_goes_first: false }));
+  els.newAgent.addEventListener("click", () => send("new_game", { agent_goes_first: true }));
+  els.clearLog.addEventListener("click", () => els.log.replaceChildren());
+  els.server.addEventListener("change", () => { try { localStorage.setItem("ttt.server", base()); } catch {} loadSessions(); });
+  document.addEventListener("keydown", (e) => {
+    if (/^[1-9]$/.test(e.key) && document.activeElement.tagName !== "INPUT") play(Number(e.key));
+  });
+
+  let remembered = null;
+  try { const s = localStorage.getItem("ttt.server"); if (s) els.server.value = s; remembered = localStorage.getItem("ttt.session"); } catch {}
+  renderBoard();
+  loadSessions(remembered || null);
+})();
+</script>
+</body>
+</html>

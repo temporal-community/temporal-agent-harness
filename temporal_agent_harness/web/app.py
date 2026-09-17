@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -148,6 +149,15 @@ def create_agent_harness_app(
         yield
 
     app = FastAPI(lifespan=lifespan)
+    # Open CORS: this is a local dev server whose API is meant to be driven by any client,
+    # including a standalone HTML page opened from disk (origin ``null``).
+    # Nothing here is credentialed, so the wildcard is safe.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     if static_path is not None:
         _mount_static_ui(
@@ -204,9 +214,7 @@ def create_agent_harness_app(
         discovered = await _discover_untracked_sessions(
             app.state.temporal, registry_result, known_workflow_ids
         )
-        return await _sessions_with_execution_state(
-            app.state.temporal, sessions + discovered
-        )
+        return await _sessions_with_execution_state(app.state.temporal, sessions + discovered)
 
     @app.post("/api/sessions")
     async def create_session(req: CreateSessionRequestBody):
@@ -506,9 +514,7 @@ async def _session_user_message_from_history_event(
     if not event.HasField("workflow_execution_update_accepted_event_attributes"):
         return None
 
-    request = (
-        event.workflow_execution_update_accepted_event_attributes.accepted_request
-    )
+    request = event.workflow_execution_update_accepted_event_attributes.accepted_request
     if request.input.name != SEND_AGENT_MESSAGE_UPDATE:
         return None
     if not request.input.args.payloads:
@@ -590,10 +596,7 @@ async def _ensure_session_manager_workflow(
         )
     except WorkflowAlreadyStartedError:
         handle = temporal.get_workflow_handle(manager_workflow_id)
-        print(
-            "Connected to session manager started concurrently: "
-            f"{manager_workflow_id}"
-        )
+        print(f"Connected to session manager started concurrently: {manager_workflow_id}")
     else:
         print(f"Ensured session manager is running: {manager_workflow_id}")
     return handle

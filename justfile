@@ -191,6 +191,7 @@ server:
         examples/pydantic_ai_hello/agents.toml \
         examples/react_agent/agents.toml \
         examples/monty/agents.toml \
+        examples/tictactoe/agents.toml \
         examples/callback_tools/wiki_agent/agents.toml \
         examples/callback_tools/coding_agent/agents.toml \
         --host 0.0.0.0 --port 8000
@@ -215,13 +216,16 @@ worker-react:
 worker-monty:
     cd "{{monty}}" && just worker
 
+worker-tictactoe:
+    cd "{{justfile_directory()}}/examples/tictactoe" && just worker
+
 worker-wiki:
     cd "{{justfile_directory()}}/examples/callback_tools/wiki_agent" && just worker
 
 worker-coding:
     cd "{{justfile_directory()}}/examples/callback_tools/coding_agent" && just worker
 
-# Co-launch all six agent workers in one terminal (Ctrl-C stops them all; logs interleave).
+# Co-launch all seven agent workers in one terminal (Ctrl-C stops them all; logs interleave).
 # Requires every agent's prerequisites at once (both API keys, the F1 MCP server, etc.).
 workers:
     #!/usr/bin/env bash
@@ -235,6 +239,7 @@ workers:
     just worker-pydantic &
     just worker-react &
     just worker-monty &
+    just worker-tictactoe &
     just worker-wiki &
     just worker-coding &
     wait
