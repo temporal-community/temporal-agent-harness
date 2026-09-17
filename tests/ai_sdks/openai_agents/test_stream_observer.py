@@ -115,11 +115,10 @@ def _args_delta(item_id: str, delta: str) -> ResponseFunctionCallArgumentsDeltaE
     )
 
 
-def _args_done(item_id: str, name: str, arguments: str) -> ResponseFunctionCallArgumentsDoneEvent:
+def _args_done(item_id: str, arguments: str) -> ResponseFunctionCallArgumentsDoneEvent:
     return ResponseFunctionCallArgumentsDoneEvent.model_construct(
         type="response.function_call_arguments.done",
         item_id=item_id,
-        name=name,
         arguments=arguments,
     )
 
@@ -157,7 +156,7 @@ async def test_full_turn_translates_to_harness_vocabulary(fake_publisher: _FakeP
         _fn_call_added("fc_item_1", "call_XYZ", "lookup"),
         _args_delta("fc_item_1", '{"q":'),
         _args_delta("fc_item_1", ' "cats"}'),
-        _args_done("fc_item_1", "lookup", '{"q": "cats"}'),
+        _args_done("fc_item_1", '{"q": "cats"}'),
         _completed(),
     ]
 
@@ -213,7 +212,7 @@ async def test_tool_requested_falls_back_to_buffer_when_done_args_empty(
         _fn_call_added("fc_item_9", "call_BUF", "search"),
         _args_delta("fc_item_9", '{"n": '),
         _args_delta("fc_item_9", "42}"),
-        _args_done("fc_item_9", "search", ""),  # done event carries no arguments
+        _args_done("fc_item_9", ""),  # done event carries no arguments
         _completed(),
     ]
     await _drive(events, ctx)
