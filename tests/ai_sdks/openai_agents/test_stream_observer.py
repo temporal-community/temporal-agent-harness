@@ -115,11 +115,18 @@ def _args_delta(item_id: str, delta: str) -> ResponseFunctionCallArgumentsDeltaE
     )
 
 
-def _args_done(item_id: str, arguments: str) -> ResponseFunctionCallArgumentsDoneEvent:
+def _args_done(
+    item_id: str, arguments: str, *, name: str | None = None
+) -> ResponseFunctionCallArgumentsDoneEvent:
+    values = {
+        "type": "response.function_call_arguments.done",
+        "item_id": item_id,
+        "arguments": arguments,
+    }
+    if name is not None:
+        values["name"] = name
     return ResponseFunctionCallArgumentsDoneEvent.model_construct(
-        type="response.function_call_arguments.done",
-        item_id=item_id,
-        arguments=arguments,
+        **values,
     )
 
 
@@ -232,6 +239,22 @@ async def test_done_without_opening_event_omits_tool_requested(
     await _drive([_args_done("fc_item_missing", '{"q": "cats"}')], ctx)
 
     assert not any(isinstance(e, ToolRequested) for e in fake_publisher.events)
+
+
+@pytest.mark.asyncio
+async def test_done_without_opening_event_uses_name_when_sdk_provides_it(
+    fake_publisher: _FakePublisher,
+):
+    ctx = TurnStreamContext(turn_id="t-11", turn_number=1, agent_id="agent-abc")
+
+    await _drive(
+        [_args_done("fc_item_old", '{"q": "cats"}', name="lookup")], ctx
+    )
+
+    requested = [e for e in fake_publisher.events if isinstance(e, ToolRequested)]
+    assert len(requested) == 1
+    assert requested[0].tool_id == "fc_item_old"
+    assert requested[0].tool_name == "lookup"
 
 
 @pytest.mark.asyncio
