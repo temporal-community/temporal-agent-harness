@@ -35,3 +35,4 @@ pyrightconfig.json
 
 # Local LLM configs
 .claude/
+.codex-runs/

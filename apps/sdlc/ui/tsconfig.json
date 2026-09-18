@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "ESNext", "moduleResolution": "bundler",
+    "allowJs": true, "checkJs": true, "isolatedModules": true, "strict": true,
+    "resolveJsonModule": true, "esModuleInterop": true, "skipLibCheck": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"], "types": ["svelte", "vite/client"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
+}

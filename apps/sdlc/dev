@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+app_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$app_dir"
+local_harness=false
+if [ "${1:-}" = "--local-harness" ]; then
+  local_harness=true
+  shift
+fi
+pnpm --dir ui install --frozen-lockfile
+pnpm --dir ui build
+uv sync --locked
+if [ "$local_harness" = true ]; then
+  uv pip install --python .venv/bin/python --no-deps --editable ../..
+fi
+exec .venv/bin/sdlc --data-dir "$app_dir/.local" "$@"

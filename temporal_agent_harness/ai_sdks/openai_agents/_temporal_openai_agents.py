@@ -112,6 +112,21 @@ class _OpenAIJSONPlainPayloadConverter(PydanticJSONPlainPayloadConverter):
     side does not, so fall back to lenient construction when validation fails.
     """
 
+    def to_payload(self, value: typing.Any) -> temporalio.api.common.v1.Payload:
+        """Preserve OpenAI wire aliases across the activity boundary.
+
+        For example, structured Responses have a ``schema_`` Python field whose
+        wire name is ``schema``. Encoding field names makes strict event-union
+        decoding fail and the lenient fallback can select a different event
+        class. Keep decoding unchanged for existing workflow histories.
+        """
+        return temporalio.api.common.v1.Payload(
+            metadata={"encoding": self.encoding.encode()},
+            data=self._schema_serializer.to_json(
+                value, by_alias=True, exclude_unset=True
+            ),
+        )
+
     def from_payload(
         self,
         payload: temporalio.api.common.v1.Payload,

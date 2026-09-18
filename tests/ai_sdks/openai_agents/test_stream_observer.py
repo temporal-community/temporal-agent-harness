@@ -205,6 +205,48 @@ async def test_full_turn_translates_to_harness_vocabulary(fake_publisher: _FakeP
 
 
 @pytest.mark.asyncio
+async def test_tool_requested_uses_opening_item_when_done_event_has_no_name(
+    fake_publisher: _FakePublisher,
+):
+    ctx = TurnStreamContext(turn_id="t-no-name", turn_number=1, agent_id="agent-abc")
+    done = ResponseFunctionCallArgumentsDoneEvent.model_construct(
+        type="response.function_call_arguments.done",
+        item_id="fc_item_1",
+        arguments='{"q": "cats"}',
+    )
+    assert not hasattr(done, "name")
+    await _drive([_fn_call_added("fc_item_1", "call_XYZ", "lookup"), done], ctx)
+
+    requested = [e for e in fake_publisher.events if isinstance(e, ToolRequested)]
+    assert len(requested) == 1
+    assert requested[0].tool_id == "call_XYZ"
+    assert requested[0].tool_name == "lookup"
+    assert requested[0].tool_input == {"q": "cats"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["lookup", None])
+async def test_tool_requested_without_opening_item(
+    fake_publisher: _FakePublisher,
+    name: str | None,
+):
+    ctx = TurnStreamContext(turn_id="t-no-opening", turn_number=1, agent_id="agent-abc")
+    done = ResponseFunctionCallArgumentsDoneEvent.model_construct(
+        type="response.function_call_arguments.done",
+        item_id="fc_orphan",
+        arguments='{"q": "cats"}',
+        **({"name": name} if name is not None else {}),
+    )
+    await _drive([done], ctx)
+
+    requested = [e for e in fake_publisher.events if isinstance(e, ToolRequested)]
+    assert len(requested) == 1
+    assert requested[0].tool_id == "fc_orphan"
+    assert requested[0].tool_name == (name or "unknown_tool")
+    assert requested[0].tool_input == {"q": "cats"}
+
+
+@pytest.mark.asyncio
 async def test_tool_requested_falls_back_to_buffer_when_done_args_empty(
     fake_publisher: _FakePublisher,
 ):

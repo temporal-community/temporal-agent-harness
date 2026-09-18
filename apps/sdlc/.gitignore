@@ -1,0 +1,11 @@
+.venv/
+node_modules/
+ui/node_modules/
+ui/dist/
+src/sdlc_builder/static/
+.local/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
