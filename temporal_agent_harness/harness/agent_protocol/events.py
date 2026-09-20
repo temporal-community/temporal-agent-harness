@@ -26,6 +26,7 @@ from typing import Annotated, Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from temporal_agent_harness.harness.agent_protocol.agent_interface import (
+    AutoApprovalVerdict,
     MessageDisposition,
 )
 
@@ -137,6 +138,73 @@ class AgentEventType(StrEnum):
     a UI renders an approve/deny affordance off this event. Outstanding requests are
     also discoverable via the ``agent_status`` query (``pending_approvals``) so a client
     that attaches late can still act on them. See :class:`ToolApprovalRequested`."""
+
+    AUTO_APPROVAL_EVALUATION_STARTED = "auto_approval_evaluation_started"
+    """An automatic approval evaluator has BEGUN judging a gated call — opening a bracket.
+
+    Published when the runner consults the agent's ``auto_approval_evaluator`` for a call
+    the :class:`ToolApprovalPolicy` did not auto-approve, BEFORE the evaluator runs. It
+    names the evaluator (and an ``evaluation_id`` pairing it with its terminal event) and
+    nothing else — at this instant the evaluator has not been called, so there is nothing
+    it could have said yet.
+
+    A BRACKET rather than a single terminal event because an evaluator does real,
+    arbitrarily slow work — an AI approver spends a model round-trip per gated call. Only a
+    bracket makes that work visible WHILE it happens (a consumer can distinguish "an
+    approver is deliberating" from "this is waiting for a person", which the pending gate
+    alone cannot), gives its duration exactly from the two envelope timestamps rather than
+    by inference, and surfaces a hung or timing-out evaluator as an open bracket instead of
+    silence. It also splits the approval span a UI already draws from
+    TOOL_APPROVAL_REQUESTED → TOOL_APPROVAL_RESOLVED, which otherwise conflates model
+    latency with human latency in one bar.
+
+    Exactly one of AUTO_APPROVAL_EVALUATION_ENDED, AUTO_APPROVAL_EVALUATION_SUPERSEDED or
+    AUTO_APPROVAL_EVALUATION_ERROR closes it.
+    Several may nest under one ``tool_id`` if an agent chains evaluators; pair them by
+    ``evaluation_id``, never by ``tool_id`` alone. See :class:`AutoApprovalEvaluationStarted`."""
+
+    AUTO_APPROVAL_EVALUATION_ENDED = "auto_approval_evaluation_ended"
+    """An automatic approval evaluator returned a verdict, closing its bracket.
+
+    Published for EVERY verdict, including ``escalate`` — which is the whole point. An
+    escalate resolves nothing, so without this event the only trace of an evaluator that
+    ran, cost a round-trip, and declined to decide would be the human decision that
+    eventually follows it, attributed to the human. ``details`` carries the evaluator's own
+    structured reasoning (for the builtin Jev evaluator: the model id, the verdict's
+    confidence and full distribution, the irreversibility judgment, token usage, and the
+    thresholds that were applied) so an automatic decision is auditable, filterable, and
+    replayable against different thresholds without re-running inference.
+
+    A verdict published here was ACTED ON. An evaluator whose answer arrived too late to
+    matter does not end here — it ends at AUTO_APPROVAL_EVALUATION_SUPERSEDED. See
+    :class:`AutoApprovalEvaluationEnded`."""
+
+    AUTO_APPROVAL_EVALUATION_SUPERSEDED = "auto_approval_evaluation_superseded"
+    """An automatic approval evaluator was CANCELLED because the gate it was judging had
+    already been settled by someone else, closing its bracket.
+
+    A human answering while an approver is still thinking is the whole reason the gate is
+    published before the evaluator is consulted — but the evaluator should then stop, not
+    keep burning a model call on a question nobody is waiting for. The harness cancels the
+    evaluator's coroutine (which is why an evaluator MUST be async) and publishes this.
+
+    Also covers the agent closing mid-evaluation, which settles the gate by auto-denial.
+
+    ``verdict`` is almost always ``None`` — the evaluator was cut off before answering. It
+    is set only in the narrow race where the answer landed in the same workflow activation
+    as the decision that beat it, and is kept because a verdict that disagrees with what a
+    human just did is exactly what an audit is looking for. See
+    :class:`AutoApprovalEvaluationSuperseded`."""
+
+    AUTO_APPROVAL_EVALUATION_ERROR = "auto_approval_evaluation_error"
+    """An automatic approval evaluator raised instead of returning a verdict, closing its
+    bracket.
+
+    The harness substitutes ``escalate`` — the guardrail fails SAFE, never open, and never
+    wedges a turn a person could still unblock — so a TOOL_APPROVAL_RESOLVED from a human
+    normally follows. This event is how "the approver was broken and everything silently
+    went to humans for three hours" is visible at all. Terminal for the bracket, mirroring
+    TOOL_ERROR against TOOL_END. See :class:`AutoApprovalEvaluationError`."""
 
     TOOL_APPROVAL_RESOLVED = "tool_approval_resolved"
     """A pending tool approval was resolved — approved or denied.
@@ -524,6 +592,106 @@ class ToolApprovalRequested(ToolEvent[Literal[AgentEventType.TOOL_APPROVAL_REQUE
     )
 
 
+class AutoApprovalEvaluationEvent(ToolEvent[EventTypeT], Generic[EventTypeT]):
+    """Base for the three events of ONE automatic approval evaluation.
+
+    Sits inside a tool's approval gate: every one of these also carries the gated call's
+    ``tool_id`` / ``tool_name`` from :class:`ToolEvent`, so an evaluation is always
+    attributable to the call it is about.
+    """
+
+    evaluation_id: str = Field(
+        description="Correlates this evaluation's started event with its ended/error event. "
+        "``tool_id`` is NOT enough: an agent may chain several evaluators over one gated call "
+        "(a cheap check, then an expensive one), and two evaluations of the same call would be "
+        "indistinguishable without this."
+    )
+    evaluator: str = Field(
+        description="What is doing the judging — ``jev_evaluator`` for the builtin AI "
+        "approver, otherwise the fallback callable's qualified name. Read off the CALLABLE "
+        "(its ``__approval_evaluator__`` attribute) rather than off a returned decision, so "
+        "the started event and the error event can both name it — neither has a decision to "
+        "read it from."
+    )
+
+
+class AutoApprovalEvaluationStarted(
+    AutoApprovalEvaluationEvent[Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED]]
+):
+    """An automatic approval evaluator has begun judging a gated call.
+
+    Deliberately carries no judgment: it is published before the evaluator is invoked, so
+    there is nothing for it to carry. Its value is the opening of the bracket — see
+    :data:`AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED`.
+    """
+
+    type: Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED] = (
+        AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED
+    )
+
+
+class AutoApprovalEvaluationEnded(
+    AutoApprovalEvaluationEvent[Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED]]
+):
+    """An automatic approval evaluator returned a verdict, closing its bracket."""
+
+    type: Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED] = (
+        AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED
+    )
+    verdict: AutoApprovalVerdict = Field(
+        description="What the evaluator SAID — approve, deny, or escalate to a human. This is "
+        "the evaluator's answer, not necessarily the call's outcome: see ``applied``."
+    )
+    reason: str | None = Field(
+        default=None,
+        description="The evaluator's one-line summary. On an approve or deny this is also the "
+        "reason published on the resulting ToolApprovalResolved (and, on a deny, the error the "
+        "model receives); on an escalate this event is the ONLY place it appears, because an "
+        "escalate resolves nothing.",
+    )
+    details: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The evaluator's own structured reasoning, free-form by design so an "
+        "evaluator can record whatever makes its decision reviewable. The builtin Jev approver "
+        "records the model id and request id, the verdict's confidence and full probability "
+        "distribution, the irreversibility judgment, token usage, and the thresholds applied — "
+        "the thresholds being what lets a stored decision be replayed against different ones "
+        "without re-running inference. Empty when the evaluator recorded none.",
+    )
+
+
+class AutoApprovalEvaluationSuperseded(
+    AutoApprovalEvaluationEvent[
+        Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_SUPERSEDED]
+    ]
+):
+    """An automatic approval evaluator was cancelled because its gate was settled first."""
+
+    type: Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_SUPERSEDED] = (
+        AgentEventType.AUTO_APPROVAL_EVALUATION_SUPERSEDED
+    )
+    verdict: AutoApprovalVerdict | None = Field(
+        default=None,
+        description="What the evaluator had concluded before it was cut off, in the narrow "
+        "race where its answer arrived in the same workflow activation as the decision that "
+        "beat it. Normally None: a cancelled evaluator never reaches a verdict.",
+    )
+
+
+class AutoApprovalEvaluationError(
+    AutoApprovalEvaluationEvent[Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR]]
+):
+    """An automatic approval evaluator raised instead of returning a verdict."""
+
+    type: Literal[AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR] = (
+        AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR
+    )
+    message: str = Field(
+        description="The failure, as text. The harness substitutes an escalate, so the call "
+        "falls through to the human gate rather than being approved or failing the turn."
+    )
+
+
 class ToolApprovalResolved(ToolEvent[Literal[AgentEventType.TOOL_APPROVAL_RESOLVED]]):
     """A pending tool approval was resolved — approved or denied."""
 
@@ -908,6 +1076,10 @@ AgentStreamItem = Annotated[
     | ModelInteractionEnded
     | ToolRequested
     | ToolApprovalRequested
+    | AutoApprovalEvaluationStarted
+    | AutoApprovalEvaluationEnded
+    | AutoApprovalEvaluationSuperseded
+    | AutoApprovalEvaluationError
     | ToolApprovalResolved
     | ToolStartEvent
     | ToolEndEvent

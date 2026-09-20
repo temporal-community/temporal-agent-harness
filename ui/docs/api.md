@@ -114,7 +114,7 @@ type AgentStatusResponse = {
   turn_participants: number
   pending_approvals: PendingApproval[]
   approval_policy: ToolApprovalPolicy
-  has_custom_approval_fallback: boolean
+  has_auto_approval_evaluator: boolean
 }
 
 type PendingTurn = {
@@ -208,6 +208,18 @@ type ToolApprovalResponse = {
 When `approved` and `remember` are both true, the workflow allow-lists the tool
 for the rest of the session. The stream later emits `tool_approval_resolved`,
 and on approval normally continues with `tool_start` and `tool_end`.
+
+If the agent wires an auto approval evaluator, an `auto_approval_evaluation_started` →
+`..._ended` / `..._superseded` / `..._error` bracket sits between
+`tool_approval_requested` and the resolution, recording what the evaluator decided and
+why. A verdict of `escalate` resolves nothing — the human gate stays open — so for that
+case the `..._ended` event is the *only* record that an evaluator ran at all, and the
+`tool_approval_resolved` that eventually follows is the human's decision, not the
+evaluator's.
+
+Submitting a `tool_approval` decision while an evaluation is still open **cancels** it:
+the gate has its answer, and the bracket closes on `..._superseded` instead of
+`..._ended`. A verdict published as `..._ended` is always one that was acted on.
 
 ### `POST /api/chat`
 
@@ -404,6 +416,54 @@ tool_approval_requested: {
   tool_id: string
   tool_name: string
   tool_input: Record<string, unknown>
+}
+
+// One run of the agent's AUTO APPROVAL EVALUATOR over a gated call, which for an AI
+// evaluator is a model round-trip on the critical path. A BRACKET, not a single terminal
+// event: it shows the evaluator working WHILE it works (so "an evaluator is deciding" is
+// distinguishable from "a person has to act", which the pending gate alone cannot
+// express), gives its duration off the two envelope timestamps, and leaves a hung
+// evaluator visible as an unclosed span.
+// Exactly one of _ended / _superseded / _error closes a _started.
+// Pair by `evaluation_id`, never `tool_id` alone — an agent may chain several evaluators
+// over one gated call.
+auto_approval_evaluation_started: {
+  tool_id: string
+  tool_name: string
+  evaluation_id: string
+  evaluator: string        // "jev_evaluator", else the fallback's qualified name
+}
+
+auto_approval_evaluation_ended: {
+  tool_id: string
+  tool_name: string
+  evaluation_id: string
+  evaluator: string
+  verdict: "approve" | "deny" | "escalate"
+  reason: string | null
+  details: Record<string, unknown>   // the evaluator's structured reasoning
+}
+
+// The evaluator was CANCELLED because its gate had already been settled — a human
+// answered while it was thinking, a policy cascade released the call, or the agent
+// closed. The harness cancels the coroutine rather than let it keep paying for a model
+// call on a settled question, which is why an evaluator must be async.
+auto_approval_evaluation_superseded: {
+  tool_id: string
+  tool_name: string
+  evaluation_id: string
+  evaluator: string
+  // What it had reached before being cut off, in the narrow race where its answer landed
+  // in the same activation as the decision that beat it. Normally null.
+  verdict: "approve" | "deny" | "escalate" | null
+}
+
+auto_approval_evaluation_error: {
+  tool_id: string
+  tool_name: string
+  evaluation_id: string
+  evaluator: string
+  message: string          // the harness substitutes an escalate; a human still decides
 }
 
 tool_approval_resolved: {

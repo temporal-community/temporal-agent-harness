@@ -141,6 +141,9 @@ class MontyChatAgentWorkflow:
             approval_policy_default=ToolApprovalPolicy.allow_tools(
                 trip_board.BOARD_TOOL_NAMES
             ),
+            auto_approval_evaluator=agent.jev_evaluator(
+                policy="Approve read-only data accesses and raise to a human approver for any writes to external state.",
+            )
         )
         self._model: str = DEFAULT_MODEL
         # Server-side conversation chaining id (Interactions API); updated each turn. Safe to

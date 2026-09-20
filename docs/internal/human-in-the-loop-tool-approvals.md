@@ -1,7 +1,8 @@
 # Human-in-the-Loop Tool Approvals
 
 **Status:** ✅ Implemented (see `harness/test_tool_approvals.py`, `harness/test_runner_builder.py`).
-**Scope:** `harness/` (decorators, runner, builder, protocol), `google_genai_plugin/` (schema adapter), and the agent tool definitions + worker wiring.
+**Scope:** `harness/` (decorators, runner, builder, protocol, `jev_approvals/`), `google_genai_plugin/` (schema adapter), and the agent tool definitions + worker wiring.
+**Also see:** `harness/test_jev_approvals.py` for the builtin AI approval gate.
 
 > ## ⚠️ Read first — approvals are SAFE-BY-DEFAULT and POLICY-DRIVEN
 >
@@ -29,10 +30,9 @@
 >   `allow_tools([...], also_inherently_safe=False)`, `dangerously_skip_all()`.
 > - **The builder REQUIRES a default policy.** `AgentWorkflowRunner.builder(config=...)`
 >   `.set_approval_policy_default(policy)` is mandatory (`build()` raises without it — no
->   harness baseline; the author must choose deliberately). `.set_custom_approval_fallback(fn)`
->   is optional: `fn: Callable[[ToolApprovalContext], bool]` (named fields `tool_name`,
->   `tool_input`, `inherently_safe`) returning True to auto-approve — the FINAL layer,
->   consulted only when the serializable policy did not approve.
+>   harness baseline; the author must choose deliberately). `.set_auto_approval_evaluator(fn)`
+>   is optional — the layer between the policy and the human gate, consulted only when the
+>   serializable policy did not approve. See **Custom fallbacks** below.
 > - **A caller can override the default per session.** `AgentConfig.approval_policy:
 >   ToolApprovalPolicy | None` — caller value wins over the agent default (so an operator
 >   can start a session that gates *everything*). The custom fallback is **not** part of
@@ -41,20 +41,151 @@
 >   (re-evaluating pending approvals — see below). A `tool_approval` decision with
 >   `remember=True` ("approve, and stop asking me about this tool") allow-lists the tool,
 >   which cascades to any *other* pending call of that tool. The live policy is surfaced on
->   `AgentStatus.approval_policy` (plus `has_custom_approval_fallback: bool`) so a client
+>   `AgentStatus.approval_policy` (plus `has_auto_approval_evaluator: bool`) so a client
 >   can read and persist it and replay it via `AgentConfig.approval_policy` next session.
 > - **Relaxing a policy releases pending calls.** `_apply_policy_update` re-evaluates every
 >   still-PENDING approval against the new policy; any now auto-approved is resolved
 >   (`reason="auto-approved by updated policy"`). It does NOT publish — each parked gate's
 >   own `wait_condition` wakes on the status flip and publishes its own
 >   `ToolApprovalResolved`, exactly as on the manual approve path.
-> - **The gate helper is `_apply_approval_policy(tool_name, tool_input, *, inherently_safe)`**
->   (renamed from `_await_tool_approval`). It first calls `runner._auto_approves(...)`; if
->   approved it returns immediately (dispatch, no gate); otherwise it registers PENDING and
->   runs the same unbounded `wait_condition` gate as before.
-> - **Public API:** `from harness.agent import ToolApprovalPolicy, ToolApprovalContext,
->   CustomApprovalFallback` (re-exported alongside the decorators). `client.approve_tool(...,
->   remember=False)`.
+> - **The gate helper is `_apply_approval_policy(tool_name, tool_input, *, inherently_safe,
+>   tool_description=None)`** (renamed from `_await_tool_approval`). Three layers, in order:
+>   (1) `runner._policy_auto_approves(...)` — if the serializable policy approves it returns
+>   immediately, dispatching with **no gate and no events** (an allow-listed call is not an
+>   approval, it is simply not gated); (2) otherwise it registers PENDING, publishes
+>   `ToolApprovalRequested`, and *then* awaits `runner._run_auto_approval_evaluator(...)`;
+>   (3) whatever is still unresolved runs the same unbounded `wait_condition` gate as before.
+> - **Public API:** `from harness.agent import ToolApprovalPolicy, AutoApprovalContext,
+>   AutoApprovalEvaluator, AutoApprovalVerdict, AutoApprovalDecision, jev_evaluator`
+>   (re-exported alongside the decorators). `client.approve_tool(..., remember=False)`.
+>
+> ### Auto approval evaluators — async, three-valued
+>
+> `auto_approval_evaluator: Callable[[AutoApprovalContext], Awaitable[AutoApprovalDecision]]`.
+> `AutoApprovalContext` carries `tool_name`, `tool_input`, `inherently_safe`, and
+> `tool_description` (the tool's docstring — the same prose the model saw when it chose the
+> call).
+>
+> - **`AutoApprovalDecision(verdict, reason, details)`** is the ONE accepted shape. A bare
+>   `bool` is deliberately rejected: `False` would have to mean "escalate", not "deny", and a
+>   falsy value that means neither no nor yes is exactly the ambiguity the three-valued
+>   verdict removes. `AutoApprovalVerdict` is `APPROVE` / `DENY` (the call never runs;
+>   `ToolApprovalDenied` carries `reason` to the model) / `ESCALATE` (abstain — wait for a
+>   human, exactly as with no evaluator). `ESCALATE`, not `DENY`, is the right answer to "I
+>   don't know": denying on uncertainty trains operators to switch the guardrail off.
+> - **It MUST be async**, enforced at runner construction by
+>   `_assert_async_auto_approval_evaluator` so the error lands next to the developer's own
+>   wiring. Two reasons, the second load-bearing: asking a model is an activity call no
+>   synchronous predicate can make; and **only a coroutine can be cancelled**, which the gate
+>   does when a human beats it (see below). A callable object with an `async def __call__`
+>   counts.
+>
+> Three behaviours are load-bearing and were chosen deliberately:
+>
+> 1. **The call is registered PENDING and `ToolApprovalRequested` published BEFORE the
+>    evaluator is consulted** (a policy auto-approval still publishes nothing). So an
+>    in-flight evaluation is visible on `agent_status`, a human can decide while it
+>    deliberates, and the verdict + `reason` land as a normal `tool_approval_resolved` — an
+>    approval nobody consented to has to be auditable. **First decision wins.**
+> 2. **A decision that beats the evaluator CANCELS it.** The evaluator runs as its own
+>    asyncio task, raced against the gate being settled by anyone (a `tool_approval`, a policy
+>    cascade, agent close). If the gate settles first the task is cancelled and awaited out,
+>    and the bracket closes on `..._superseded`. An evaluator left running would keep paying
+>    for a model call — and holding an activity worker slot — to answer a question nobody is
+>    waiting for.
+> 3. **A raising evaluator — or one returning a non-`AutoApprovalDecision`, the same class of
+>    bug — ESCALATES.** The guardrail must not fail open, and must not wedge a turn a person
+>    could unblock. Logged and published as `..._error`, never swallowed.
+> 4. **The policy-update cascade does not consult the evaluator** — only the policy. Every
+>    pending entry already escalated once; re-asking cannot change the answer, would cost an
+>    extra model call per pending call per policy change, and is impossible anyway from a sync
+>    update handler.
+>
+> ### The evaluation bracket — `auto_approval_evaluation_started` / `_ended` / `_superseded` / `_error`
+>
+> The harness publishes a **bracket** around EVERY auto approval evaluator, whatever it decided.
+> Published by the runner, so a developer gets it by wiring a fallback at all, never by
+> remembering to instrument one:
+>
+> ```
+> tool_approval_requested
+>   auto_approval_evaluation_started      evaluator named; nothing decided yet
+>      … arbitrarily slow work …
+>   auto_approval_evaluation_ended        verdict + reason + details
+>   auto_approval_evaluation_superseded   …or: cancelled, the gate was decided first
+>   auto_approval_evaluation_error        …or: it raised; escalate substituted
+> tool_approval_resolved                  only if a verdict settled the gate
+> ```
+>
+> **Why a bracket and not one terminal event.** An evaluator does real, arbitrarily slow
+> work — the Jev approver spends a model round-trip per gated call. Only a bracket makes
+> that work visible *while it happens* (a consumer can tell "an approver is deliberating"
+> from "this is waiting for a person"; the pending gate alone cannot express the
+> difference), times it exactly from the two envelope timestamps rather than by inferring a
+> delta from a neighbouring event of a different kind, and surfaces a hung or timing-out
+> evaluator as an open bracket instead of silence. It also splits the approval span the UI
+> already draws from `requested → resolved`, which otherwise fuses model latency and human
+> latency into one bar (`stepTimeline.ts` gained a fourth `SpanKind`, `"evaluation"`, that
+> outranks `"approval"` in the exclusive rollup precisely so the leftover *is* the human's
+> wait).
+>
+> **Why it must cover `ESCALATE`.** An escalate resolves nothing, so without its own event
+> the only trace of an evaluator that ran, cost a round-trip and declined to decide would be
+> the human decision that eventually follows — attributed entirely to the human. "Why is
+> this in my approval queue?" was unanswerable.
+>
+> - **`evaluation_id`** pairs start with terminal. `tool_id` is NOT enough: an agent may
+>   chain several evaluators over one gated call. (`ModelInteractionStarted`/`Ended` carry no
+>   such id and are genuinely ambiguous under concurrency — deliberately not copied.)
+> - **`evaluator`** is read off the CALLABLE (`__approval_evaluator__`, else its qualname),
+>   not off a returned decision — two of the three events have no decision to read it from.
+> - **`details`** is the evaluator's free-form structured reasoning, from
+>   `AutoApprovalDecision.details`. Empty for a plain bool fallback.
+> - **`..._superseded`** is the cancellation terminal, and carries the verdict the evaluator
+>   had reached if the race was tight enough that it reached one — an evaluator that would
+>   have denied a call a human waved through is exactly what an audit is looking for. A
+>   verdict on `..._ended` is therefore always one that was ACTED ON, which is why there is
+>   no `applied` flag.
+> - **`..._error`** is a separate terminal, mirroring `tool_error` against `tool_end`. A
+>   TypeSafe outage is a *failed* evaluation, not an abstention, and flattening the two would
+>   hide "the approver was broken and everything silently went to humans for three hours".
+>   Its `message` renders the exception's `__cause__` chain, because a bare
+>   `str(ActivityError)` is the useless "Activity task failed".
+> - **The policy layer gets no bracket.** Brackets exist to expose work that takes time; the
+>   policy layer is a frozen-model dict lookup on the hottest path.
+>
+> ### `jev_evaluator` — the builtin AI auto approval evaluator
+>
+> `harness/jev_approvals/`, exported as `agent.jev_evaluator(policy=..., min_confidence=0.8,
+> escalate_if_irreversible_above=0.5, model="jev-latest", extra_state=None,
+> activity_config=None)`. Returns a `AutoApprovalEvaluator`. Optional `jev` extra
+> (`typesafe-sdk`), **worker-side only**.
+>
+> - **Two questions, one request.** `verdict`: a Choice over exactly `approve`/`deny`/
+>   `escalate`, so the three-way outcome is guaranteed by construction rather than parsed;
+>   `irreversible`: a Noul. Both over the same state (the operator's `policy`, the tool's name
+>   + docstring + `inherently_safe` hint, the exact `call_arguments`, and any `extra_state`).
+> - **Raw judgments reach the stream.** `decide` puts the model id + request id, the
+>   verdict's confidence and full distribution, the irreversibility judgment, token usage,
+>   AND the thresholds applied into `AutoApprovalDecision.details`, which the harness
+>   publishes on `auto_approval_evaluation_ended`. Carrying the thresholds is what lets a
+>   stored decision be re-read under different ones without asking the model again. It does
+>   NOT carry the request state — the decision is what is being audited, not the prompt.
+> - **A TypeSafe failure is not caught** by the approver. It propagates to the runner, which
+>   publishes `auto_approval_evaluation_error` and substitutes an escalate — so a failure
+>   stays typed as a failure on the stream instead of being flattened into a verdict.
+> - **Model judges, code decides.** `build_request` and `decide` are pure and public.
+>   `decide` checks confidence *first* (an unsure deny is still an unsure decision), then the
+>   label, then downgrades an APPROVE whose effect looks irreversible. Every non-confident
+>   path ends at ESCALATE.
+> - **Not reachable by the agent.** Dispatched as a bare `workflow.execute_activity` by name,
+>   never through `run_tool` — so it is not a tool, the model cannot call it or influence what
+>   is asked about its own call, and the gate does not recurse into itself.
+> - **Registered unconditionally by `AgentHarnessPlugin`**, like the Code Mode activities, with
+>   the extra checked per call: an unregistered activity name is a *retryable* Temporal error,
+>   which would hang every gated call mid-approval instead of failing once.
+> - Splits along the workflow boundary: `approver.py`/`models.py` are workflow-safe (plain
+>   dicts, dispatch by name); only `activity.py` touches TypeSafe.
 
 ### Implementation notes (deviations from the plan as written)
 
@@ -580,15 +711,17 @@ _run_one_tool except → function_result{call_id=X, is_error:true, result:"<reas
 
 ## 11. Future (explicitly out of scope now)
 
-- **Conditional approval — DONE (in part).** The custom fallback predicate
-  (`set_custom_approval_fallback`, `Callable[[ToolApprovalContext], bool]`) now evaluates a
-  call against the developer's own ruleset (it receives `tool_input`, so "only gate
-  `delete` of protected ids" is expressible) as the final layer. Still future: predicates
+- **Conditional approval — DONE.** The custom fallback evaluates a call against the
+  developer's own ruleset (it receives `tool_input`, so "only gate `delete` of protected
+  ids" is expressible), may be async, and answers approve / deny / escalate.
+  `agent.jev_evaluator` is the builtin AI implementation of it. Still future: predicates
   attached per-tool, and serializable conditional rules.
 - **Deny-list / `remember` on denial.** `remember=True` only allow-lists on *approval*
   today; a "never allow this tool" deny-list is not built.
 - **Approval metadata:** richer `ToolApprovalRequested` (risk level, human-readable summary)
-  and approver identity on `ToolApprovalDecision`.
+  and approver identity on `ToolApprovalDecision`. Partly covered by the fallback's `reason`
+  on `ToolApprovalResolved` (which is where a Jev verdict and its numbers land), but there is
+  still no structured *who/what-risk* on the request itself.
 - **Timeout-to-deny / escalation policy** for approvals that sit too long.
 
 ---

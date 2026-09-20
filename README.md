@@ -97,6 +97,7 @@ dependencies = [
     #   ui              the browser UI and the `temporal-agent-harness` CLI
     #   code-mode       the sandbox a worker runs Code Mode scripts in
     #   genai           the Google Gemini integration
+    #   jev             Jev-backed auto mode for tool approvals (worker only)
     #   openai-agents   the OpenAI Agents SDK integration
     #   pydantic-ai     the Pydantic AI integration
     #   s3              S3-backed offload for large payloads
@@ -172,6 +173,7 @@ opt-in:
 | `ui` | want the browser UI and the `temporal-agent-harness` CLI (pulls in `fastapi[standard]`, including Uvicorn). The built Svelte assets are always in the wheel; only the server runtime is gated here, so agent-worker installs stay small. |
 | `code-mode` | run a worker that hosts **Code Mode** agents; pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in. The workflow-side `agent.code_mode_tool` factory needs nothing extra. |
 | `genai` | use the **Google Gemini** integration (`ai_sdks.google_genai_plugin`). |
+| `jev` | run a worker whose agents use **`agent.jev_evaluator`**, the builtin AI auto approval evaluator; pulls in [`typesafe-sdk`](https://pypi.org/project/typesafe-sdk/). Worker-side only — the workflow-side factory needs nothing extra. |
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
@@ -225,8 +227,9 @@ Tool approvals are built in and **safe-by-default**: any tool call can require h
 a gated call **pauses inside the workflow and resumes durably** whenever a decision arrives (no
 matter how long that takes) — there's no approval queue, state machine, or callback plumbing for
 you to build. The policy engine is sophisticated out of the box: layered rules, inherently-safe
-auto-approval, per-tool allow-lists, "approve and stop asking," per-session overrides, runtime
-policy updates, and custom predicates.
+auto-approval, per-tool allow-lists, "approve and stop asking," per-session overrides, and runtime
+policy updates. When there are more calls than a person can sign off on, you can put **your own
+code — or a model — in the gate**: see [Custom approval hooks](#custom-approval-hooks-and-optional-jev-auto-approval).
 
 ### 🔌 Bring your own AI SDK
 Write turn logic with the SDK you already know. The harness's integrations turn each SDK call into
@@ -284,6 +287,37 @@ durable, approval-gated, observable activity, and the script is statically type-
 your tools' signatures **before it runs**. And since a subagent toolset is just a list of tools,
 Code Mode composes over subagents for free.
 
+
+## Custom approval hooks, and optional Jev auto-approval
+
+Between the `ToolApprovalPolicy` and the human gate sits one optional hook: an **auto approval
+evaluator**. An `async` function that sees only the calls the policy declined to auto-approve — and answers `APPROVE`, `DENY`, or `ESCALATE` (wait for a person, exactly as if it weren't wired).
+
+```python
+async def my_evaluator(ctx: AutoApprovalContext) -> AutoApprovalDecision: ...
+
+AgentWorkflowRunner(..., auto_approval_evaluator=my_evaluator)
+```
+
+**`agent.jev_evaluator` puts a model in that seat.** You write the rules once, in prose; every
+gated call is judged against them by [Jev](https://docs.typesafe.ai) — one fast typed judgment,
+not a prompt to parse:
+
+```python
+auto_approval_evaluator=agent.jev_evaluator(
+    policy="Approve read-only lookups. Deny anything that deletes another customer's "
+           "data or spends money. Anything touching production goes to a human.",
+)
+```
+
+It can't fail open: low confidence, an irreversible effect, a raise, or a TypeSafe outage all land
+at the human gate rather than approving. Needs the `jev` extra **on the worker only**.
+
+Every evaluator — yours or Jev's — is bracketed on the event stream
+(`auto_approval_evaluation_started` → `_ended` / `_superseded` / `_error`), so its verdict,
+reasoning and latency stay auditable even when it *escalates* and resolves nothing. A human who
+answers first **cancels** it, and the console gives the evaluation its own card and its own share
+of the approval wait.
 
 ## A taste
 

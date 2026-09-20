@@ -2,7 +2,11 @@ import type { AgentSseFrame } from "$lib/api/types";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
 import { findHistoryGaps } from "$lib/state/historyGap";
 
-export type SpanKind = "model" | "tool" | "approval";
+/* "approval" is the whole gate — requested until resolved. "evaluation" is the automatic
+ * approval check nested inside it. They are separate kinds on purpose: the gate bar
+ * otherwise fuses model latency and human latency into one number, and "is our approval
+ * p99 the approver or the people?" is the question this view exists to answer. */
+export type SpanKind = "model" | "tool" | "approval" | "evaluation";
 export type SpanTone = "model" | "tool" | "approval" | "error" | "done";
 
 export interface TimelineSpan {
@@ -103,6 +107,7 @@ interface LastSeenFrame {
 function spanLabel(kind: SpanKind, name: string): string {
   if (kind === "model") return name;
   if (kind === "approval") return `approval · ${name}`;
+  if (kind === "evaluation") return `approval check · ${name}`;
   return name;
 }
 
@@ -115,6 +120,9 @@ export function buildStepTimeline(input: Array<AgentSseFrame | StepTimelineFrame
   const openModel = new Map<string, OpenSpan>();
   const openTool = new Map<string, OpenSpan>();
   const openApproval = new Map<string, OpenSpan>();
+  /* Keyed by evaluation_id, NOT tool_id: an agent may chain several evaluators over one
+     gated call, and pairing those by tool_id would fuse them into one span. */
+  const openEvaluation = new Map<string, OpenSpan>();
   const lastSeenByScope = new Map<string, LastSeenFrame>();
   const previewByScope = new Map<string, string>();
 
@@ -272,6 +280,11 @@ export function buildStepTimeline(input: Array<AgentSseFrame | StepTimelineFrame
         closeOpenSpan(openApproval, toolId, endTs, endIndex, tone, detail);
       }
     }
+    for (const [evaluationId, open] of openEvaluation) {
+      if (open.scope.key === scope.key) {
+        closeOpenSpan(openEvaluation, evaluationId, endTs, endIndex, tone, detail);
+      }
+    }
   }
 
   const gapPositions = findHistoryGaps(input);
@@ -371,6 +384,54 @@ export function buildStepTimeline(input: Array<AgentSseFrame | StepTimelineFrame
           startIndex: index
         });
         break;
+      case "auto_approval_evaluation_started":
+        openEvaluation.set(keyedTool(scope, frame.data.evaluation_id), {
+          scope,
+          turnNumber,
+          kind: "evaluation",
+          label: spanLabel("evaluation", frame.data.evaluator),
+          startTs: timestamp,
+          startIndex: index
+        });
+        break;
+      case "auto_approval_evaluation_ended": {
+        /* An escalate did not fail — it correctly declined to decide — so it stays
+           "approval" toned, the same as the still-open gate it hands back to. */
+        const verdict = frame.data.verdict;
+        closeOpenSpan(
+          openEvaluation,
+          keyedTool(scope, frame.data.evaluation_id),
+          timestamp,
+          index,
+          verdict === "approve" ? "done" : verdict === "deny" ? "error" : "approval",
+          frame.data.reason ?? undefined
+        );
+        break;
+      }
+      case "auto_approval_evaluation_superseded": {
+        /* Cancelled, not failed — the gate was answered elsewhere. Neutral-toned so a
+           waterfall full of them does not read as a run full of errors. */
+        closeOpenSpan(
+          openEvaluation,
+          keyedTool(scope, frame.data.evaluation_id),
+          timestamp,
+          index,
+          "approval",
+          "cancelled — the gate was decided first"
+        );
+        break;
+      }
+      case "auto_approval_evaluation_error": {
+        closeOpenSpan(
+          openEvaluation,
+          keyedTool(scope, frame.data.evaluation_id),
+          timestamp,
+          index,
+          "error",
+          frame.data.message
+        );
+        break;
+      }
       case "tool_approval_resolved": {
         closeOpenSpan(
           openApproval,
@@ -444,7 +505,7 @@ function spanOrder(a: TimelineSpan, b: TimelineSpan): number {
 }
 
 /** Top to bottom in every track, so a turn is compared to a turn lane by lane. */
-const LANE_ORDER: SpanKind[] = ["model", "tool", "approval"];
+const LANE_ORDER: SpanKind[] = ["model", "tool", "approval", "evaluation"];
 
 /**
  * Named swimlanes, one block per kind, packed greedily *within* the kind.
@@ -577,7 +638,10 @@ export function aggregateSpans(timeline: StepTimeline): SpanAggregate[] {
       addTurnAggregate(totals, subagentTurn.spans);
     }
   }
-  const order: SpanKind[] = ["model", "tool", "approval"];
+  /* Display order, and also a WHITELIST: a kind missing from this list is dropped from the
+     rollup entirely, with no type error to say so. Every SpanKind belongs here.
+     "evaluation" follows "approval" because it is the check nested inside that gate. */
+  const order: SpanKind[] = ["model", "tool", "approval", "evaluation"];
   return order
     .map((kind) => totals.get(kind))
     .filter((agg): agg is SpanAggregate => agg != null);
@@ -627,10 +691,18 @@ function exclusiveTurnSegments(spans: TimelineSpan[]): { kind: SpanKind; seconds
 }
 
 function spanPriority(a: TimelineSpan, b: TimelineSpan): number {
+  /* Which kind claims a stretch of time both cover, for the EXCLUSIVE rollup.
+   *
+   * "evaluation" outranks "approval" because it is nested inside it: an automatic check
+   * runs while the gate it belongs to is open, and charging that window to "approval"
+   * would put it back in the same bucket as the human wait — exactly the conflation the
+   * separate kind exists to undo. Ranked this way, a gate's rollup reads as "approval
+   * check 0.4s, approval 12s", and the second number is the time a person took. */
   const order: Record<SpanKind, number> = {
-    approval: 0,
-    tool: 1,
-    model: 2
+    evaluation: 0,
+    approval: 1,
+    tool: 2,
+    model: 3
   };
   return order[a.kind] - order[b.kind] || spanOrder(a, b);
 }

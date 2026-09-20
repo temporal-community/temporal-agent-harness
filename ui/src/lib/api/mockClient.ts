@@ -166,7 +166,7 @@ export class MockAgentApi implements AgentApi {
         auto_approve_inherently_safe: true,
         auto_approve_tools: []
       },
-      has_custom_approval_fallback: false
+      has_auto_approval_evaluator: false
     };
   }
 

@@ -323,6 +323,78 @@ function rowFromFrame(
     };
   }
 
+  if (frame.event === "auto_approval_evaluation_started") {
+    return {
+      ...base,
+      actor: "approval",
+      tone: "approval",
+      label: "Approval check started",
+      body: `${frame.data.evaluator} · ${frame.data.tool_name}`,
+      toolId: frame.data.tool_id,
+      toolName: frame.data.tool_name,
+      status: "awaiting",
+      marker: "approval",
+      markerLabel: "approval check"
+    };
+  }
+
+  if (frame.event === "auto_approval_evaluation_ended") {
+    const verdict = frame.data.verdict;
+    /* An escalate is not a failure — it is the evaluator correctly declining to decide —
+       so it reads as "approval" (still pending a human), not as an error. */
+    const tone: ReplayTone =
+      verdict === "approve" ? "done" : verdict === "deny" ? "error" : "approval";
+    const details = frame.data.details;
+    return {
+      ...base,
+      actor: "approval",
+      tone,
+      label: `Approval check: ${verdict}`,
+      body: frame.data.reason ?? undefined,
+      /* The evaluator's structured reasoning, rendered as JSON — this is the whole audit
+         record of an automatic decision, and for an escalate it is the only one. */
+      detail:
+        details && Object.keys(details).length > 0
+          ? JSON.stringify(details, null, 2)
+          : undefined,
+      toolId: frame.data.tool_id,
+      toolName: frame.data.tool_name,
+      status: verdict === "approve" ? "approved" : verdict === "deny" ? "denied" : "awaiting"
+    };
+  }
+
+  if (frame.event === "auto_approval_evaluation_superseded") {
+    return {
+      ...base,
+      actor: "approval",
+      /* Neutral, not an error: nothing went wrong — the answer simply arrived from
+         somewhere else first, and the evaluator was stopped rather than left running. */
+      tone: "neutral",
+      label: "Approval check cancelled",
+      body: frame.data.verdict
+        ? `the gate was decided first; it had reached "${frame.data.verdict}"`
+        : "the gate was decided first",
+      toolId: frame.data.tool_id,
+      toolName: frame.data.tool_name,
+      status: "superseded"
+    };
+  }
+
+  if (frame.event === "auto_approval_evaluation_error") {
+    return {
+      ...base,
+      actor: "approval",
+      tone: "error",
+      label: "Approval check failed",
+      body: frame.data.message,
+      toolId: frame.data.tool_id,
+      toolName: frame.data.tool_name,
+      status: "awaiting",
+      marker: "error",
+      markerLabel: "approval check failed"
+    };
+  }
+
   if (frame.event === "tool_approval_resolved") {
     const approved = frame.data.approved;
     return {

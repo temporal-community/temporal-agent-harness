@@ -223,7 +223,7 @@ export interface AgentStatusResponse {
   pending_approvals: PendingApproval[];
   subagents: SubagentInfo[];
   approval_policy: ToolApprovalPolicy;
-  has_custom_approval_fallback: boolean;
+  has_auto_approval_evaluator: boolean;
 }
 
 export interface ApiErrorResponse {
@@ -250,6 +250,10 @@ export type AgentEventType =
   | "model_interaction_ended"
   | "tool_requested"
   | "tool_approval_requested"
+  | "auto_approval_evaluation_started"
+  | "auto_approval_evaluation_ended"
+  | "auto_approval_evaluation_superseded"
+  | "auto_approval_evaluation_error"
   | "tool_approval_resolved"
   | "tool_start"
   | "tool_progress_delta"
@@ -364,6 +368,55 @@ export interface ToolRequestedEvent
 export interface ToolApprovalRequestedEvent
   extends ToolEventDataBase<"tool_approval_requested"> {
   tool_input: JsonRecord;
+}
+
+/* The events of ONE automatic approval evaluation — the agent's
+ * `auto_approval_evaluator` judging a gated call, which for an AI approver means a model
+ * round-trip on the critical path. A BRACKET, not one terminal event: only a bracket shows
+ * the work while it is still happening (so a client can tell "an approver is deliberating"
+ * from "this is waiting for a person"), times it off the two envelope timestamps, and
+ * surfaces a hung evaluator as an unclosed span.
+ *
+ * Pair them by `evaluation_id`, never by `tool_id` alone — an agent may chain several
+ * evaluators over one gated call. */
+interface AutoApprovalEvaluationBase<TType extends AgentEventType>
+  extends ToolEventDataBase<TType> {
+  evaluation_id: string;
+  /** "jev_evaluator" for the builtin AI approver, else the fallback's qualified name. */
+  evaluator: string;
+}
+
+export type AutoApprovalEvaluationStartedEvent =
+  AutoApprovalEvaluationBase<"auto_approval_evaluation_started">;
+
+export interface AutoApprovalEvaluationEndedEvent
+  extends AutoApprovalEvaluationBase<"auto_approval_evaluation_ended"> {
+  /* What the evaluator SAID. Not necessarily what happened to the call — see `applied`.
+   * "escalate" resolves nothing, so for that verdict THIS event is the only record that an
+   * evaluator ran at all; the `tool_approval_resolved` that follows is the human's. */
+  verdict: "approve" | "deny" | "escalate";
+  reason: string | null;
+  /* The evaluator's own structured reasoning, free-form by design. The Jev approver records
+   * the model, the verdict's confidence and distribution, the irreversibility judgment,
+   * token usage, and the thresholds applied. Empty for a fallback that returned a bool. */
+  details: JsonRecord;
+}
+
+/* The evaluator was CANCELLED because its gate had already been settled — a human answered
+ * while it was thinking, a policy cascade released the call, or the agent closed. The
+ * harness cancels the coroutine rather than letting it keep burning a model call on a
+ * settled question, which is why an evaluator is required to be async. */
+export interface AutoApprovalEvaluationSupersededEvent
+  extends AutoApprovalEvaluationBase<"auto_approval_evaluation_superseded"> {
+  /* What it had concluded before being cut off, in the narrow race where its answer landed
+   * in the same activation as the decision that beat it. Normally null. */
+  verdict: "approve" | "deny" | "escalate" | null;
+}
+
+export interface AutoApprovalEvaluationErrorEvent
+  extends AutoApprovalEvaluationBase<"auto_approval_evaluation_error"> {
+  /** The failure. The harness substitutes an escalate, so a human still resolves the gate. */
+  message: string;
 }
 
 export interface ToolApprovalResolvedEvent
@@ -556,6 +609,10 @@ export interface AgentSseEventMap {
   model_interaction_ended: ModelInteractionEndedEvent;
   tool_requested: ToolRequestedEvent;
   tool_approval_requested: ToolApprovalRequestedEvent;
+  auto_approval_evaluation_started: AutoApprovalEvaluationStartedEvent;
+  auto_approval_evaluation_ended: AutoApprovalEvaluationEndedEvent;
+  auto_approval_evaluation_superseded: AutoApprovalEvaluationSupersededEvent;
+  auto_approval_evaluation_error: AutoApprovalEvaluationErrorEvent;
   tool_approval_resolved: ToolApprovalResolvedEvent;
   tool_start: ToolStartEvent;
   tool_progress_delta: ToolProgressDeltaEvent;

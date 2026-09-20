@@ -65,7 +65,7 @@ adapter that lets one harness agent drive another through that same standardized
   **deletes this module entirely** (along with `Generic[M]`, `add_accepted_message`, and the
   sentinel-key construction guard): with `M`-accumulation gone, the builder was pure
   ceremony. The runner is now constructed directly —
-  `AgentWorkflowRunner(config, stream=..., approval_policy_default=..., enable_message_queuing_default=False, custom_approval_fallback=None)` — with the config-vs-default resolution folded into `__init__`
+  `AgentWorkflowRunner(config, stream=..., approval_policy_default=..., enable_message_queuing_default=False, auto_approval_evaluator=None)` — with the config-vs-default resolution folded into `__init__`
   (`stream` + `approval_policy_default` are required kwargs). Accepted messages are
   discovered from `@agent.accepts` handler signatures.
 - `harness/agent_client.py` — `send_message()` (the one PUBLIC turn driver) does update **+**
@@ -220,7 +220,7 @@ Each is intended to be separable and potentially worked in its own session. Stat
 > `Turn`/`AgentRunContext`/`turns()`/`start()`/`add_accepted_message`/the `M` type param —
 > **and the whole builder**: `_runner_builder.py`, `Generic[M]`, and the sentinel-key guard
 > are deleted; the runner is constructed directly,
-> `AgentWorkflowRunner(config, stream=..., approval_policy_default=..., enable_message_queuing_default=False, custom_approval_fallback=None)`,
+> `AgentWorkflowRunner(config, stream=..., approval_policy_default=..., enable_message_queuing_default=False, auto_approval_evaluator=None)`,
 > with config-vs-default resolution in `__init__` (`stream` + `approval_policy_default`
 > required). Protocol: `AgentMessage{type, payload, expected_turn}` envelope (the
 > `expected_turn` is folded onto it; `UserInput` deleted), `AcceptedFunction`, `TextMessage`/

@@ -41,6 +41,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentEventType,
     AgentMessage,
     AgentStatus,
+    AutoApprovalVerdict,
+    AutoApprovalDecision,
     MessageContext,
     MessageDisposition,
     MessageHandlerEnd,
@@ -48,6 +50,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     SubagentReplyReceived,
     TextMessage,
     TextReply,
+    AutoApprovalContext,
     ToolApprovalPolicy,
     AgentMessageReply,
 )
@@ -55,10 +58,37 @@ from temporalio.exceptions import ApplicationError
 
 from temporal_agent_harness.harness.agent_client import AgentClient, JoinedTurnError
 from temporal_agent_harness.harness.agent_workflow import (
+    AUTO_APPROVAL_EVALUATOR_ATTR,
     Injected,
     _Admission,
     _discover_handlers,
+    _evaluator_label,
 )
+from temporal_agent_harness.harness.stream_context import TurnStreamContext
+
+
+def _ctx(tool_name: str, **kwargs) -> AutoApprovalContext:
+    """A minimal gated-call context for exercising a custom approval fallback offline."""
+    return AutoApprovalContext(
+        tool_name=tool_name,
+        tool_input=kwargs.pop("tool_input", {}),
+        inherently_safe=kwargs.pop("inherently_safe", False),
+        **kwargs,
+    )
+
+
+async def _run_evaluator(runner, tool_name: str, **kwargs):
+    """Run the runner's auto approval evaluator offline.
+
+    Only the "no evaluator wired" short-circuit is reachable here: once there IS one it runs
+    as a cancellable task raced against the gate on the workflow event loop, which does not
+    exist offline. Everything past that point is asserted end-to-end in
+    test_tool_approvals.py, against a real workflow and a real stream."""
+    return await runner._run_auto_approval_evaluator(
+        _ctx(tool_name, **kwargs),
+        tool_id=f"call-{tool_name}",
+        stream=TurnStreamContext(turn_id="turn-1", turn_number=1, agent_id="a1b2c3"),
+    )
 
 # ---------------------------------------------------------------------------
 # Message models + probe workflows
@@ -549,29 +579,94 @@ def test_set_approval_policy_resolves_matching_pending(offline_build_policy):
     assert runner._status.is_approval_resolved("t2") is False
 
 
-def test_custom_fallback_is_consulted_only_as_last_layer(offline_build_policy):
-    calls: list[str] = []
+def test_an_auto_approval_evaluator_must_be_async(offline_build_policy):
+    """Rejected at CONSTRUCTION — inside the agent's @workflow.init — so the error lands
+    next to the developer's own wiring instead of inside the first gated tool call, which
+    in a real agent might not happen until production.
 
-    def fallback(ctx) -> bool:
-        calls.append(ctx.tool_name)
-        return ctx.tool_name == "blessed"
+    Not a style rule: the gate races the evaluator against a human decision and cancels
+    whichever loses, and only a coroutine can be cancelled."""
 
-    runner = offline_build_policy(
-        AgentConfig(),
-        default=ToolApprovalPolicy.dangerously_skip_all(),
-        custom_fallback=fallback,
-    )
-    assert runner._auto_approves("anything", {}, inherently_safe=False) is True
-    assert calls == []
+    def sync_evaluator(ctx):
+        return AutoApprovalDecision(AutoApprovalVerdict.APPROVE)
+
+    with pytest.raises(TypeError) as excinfo:
+        offline_build_policy(
+            AgentConfig(),
+            default=ToolApprovalPolicy.always_require_approvals(),
+            auto_approval_evaluator=sync_evaluator,
+        )
+    assert "must be an async function" in str(excinfo.value)
+    assert "sync_evaluator" in str(excinfo.value)
+
+
+def test_a_callable_object_with_an_async_call_is_a_valid_evaluator(offline_build_policy):
+    """An evaluator that carries state is a normal thing to want, and rejecting it would
+    only push authors back to a bare function plus a global."""
+
+    class Evaluator:
+        async def __call__(self, ctx):
+            return AutoApprovalDecision(AutoApprovalVerdict.APPROVE)
 
     runner = offline_build_policy(
         AgentConfig(),
         default=ToolApprovalPolicy.always_require_approvals(),
-        custom_fallback=fallback,
+        auto_approval_evaluator=Evaluator(),
     )
-    assert runner._auto_approves("blessed", {}, inherently_safe=False) is True
-    assert runner._auto_approves("cursed", {}, inherently_safe=False) is False
-    assert calls == ["blessed", "cursed"]
+    assert runner.current_status.has_auto_approval_evaluator is True
+
+
+async def test_no_evaluator_wired_means_no_decision(offline_build_policy):
+    runner = offline_build_policy(
+        AgentConfig(), default=ToolApprovalPolicy.always_require_approvals()
+    )
+    assert await _run_evaluator(runner, "x") is None
+
+
+def test_the_evaluator_label_prefers_the_stamped_name(offline_build_policy):
+    """Published as `evaluator` on all three of an evaluation's events. Read off the
+    CALLABLE, because the started and error events have no decision to read it from."""
+
+    async def plain(ctx):  # pragma: no cover - never invoked
+        return AutoApprovalDecision(AutoApprovalVerdict.APPROVE)
+
+    async def stamped(ctx):  # pragma: no cover - never invoked
+        return AutoApprovalDecision(AutoApprovalVerdict.APPROVE)
+
+    setattr(stamped, AUTO_APPROVAL_EVALUATOR_ATTR, "jev_evaluator")
+
+    assert _evaluator_label(stamped) == "jev_evaluator"
+    assert _evaluator_label(plain).endswith("plain")
+
+
+def test_policy_update_cascade_does_not_consult_the_evaluator(offline_build_policy):
+    """A relaxing policy update re-evaluates the POLICY against pending calls, never the
+    evaluator: each pending entry already escalated once, and for an AI evaluator re-asking
+    would mean paying for another model call per pending call on every policy change."""
+    calls: list[str] = []
+
+    async def evaluator(ctx) -> AutoApprovalDecision:
+        calls.append(ctx.tool_name)
+        return AutoApprovalDecision(AutoApprovalVerdict.APPROVE)
+
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.always_require_approvals(),
+        auto_approval_evaluator=evaluator,
+    )
+    runner._status.register_pending_approval(
+        "t1", "trusted_tool", {}, 1, "turn-1", "msg-1", inherently_safe=False
+    )
+    runner._status.register_pending_approval(
+        "t2", "other_tool", {}, 1, "turn-1", "msg-1", inherently_safe=False
+    )
+
+    runner.set_approval_policy(ToolApprovalPolicy.allow_tools(["trusted_tool"]))
+
+    assert calls == []
+    # Only the call the NEW POLICY covers was released; the other still needs a decision.
+    assert runner._status.is_approval_resolved("t1") is True
+    assert runner._status.is_approval_resolved("t2") is False
 
 
 def test_protocol_types_use_concrete_annotations():
@@ -692,14 +787,16 @@ def offline_build_policy(monkeypatch):
     # no workflow loop, so stub it with a plain uuid.
     monkeypatch.setattr(aw.workflow, "uuid4", lambda: uuid.uuid4())
 
-    def build(config: AgentConfig, *, default: ToolApprovalPolicy, custom_fallback=None):
+    def build(
+        config: AgentConfig, *, default: ToolApprovalPolicy, auto_approval_evaluator=None
+    ):
         stream = MagicMock()
         stream.topic.return_value = MagicMock()
         return AgentWorkflowRunner(
             config,
             stream=stream,
             approval_policy_default=default,
-            custom_approval_fallback=custom_fallback,
+            auto_approval_evaluator=auto_approval_evaluator,
         )
 
     return build

@@ -48,15 +48,17 @@
 #     async def read_page(store: Injected[str], page_url: str) -> str: ...
 
 from temporal_agent_harness.harness.agent_protocol import (
+    AutoApprovalVerdict,
+    AutoApprovalDecision,
     MessageContext,
     MidTurn,
-    ToolApprovalContext,
+    AutoApprovalContext,
     ToolApprovalPolicy,
 )
 from temporal_agent_harness.harness.agent_workflow import (
     AgentToolContext,
     CallbackToolError,
-    CustomApprovalFallback,
+    AutoApprovalEvaluator,
     Injected,
     ToolApprovalDenied,
     accepts,
@@ -67,6 +69,7 @@ from temporal_agent_harness.harness.agent_workflow import (
     tool_defn,
 )
 from temporal_agent_harness.harness.code_mode import code_mode_tool
+from temporal_agent_harness.harness.jev_approvals import jev_evaluator
 from temporal_agent_harness.harness.subagent_toolset import (
     SubagentToolPolicy,
     subagent_toolset,
@@ -74,12 +77,14 @@ from temporal_agent_harness.harness.subagent_toolset import (
 
 __all__ = [
     "AgentToolContext",
+    "AutoApprovalVerdict",
+    "AutoApprovalDecision",
     "CallbackToolError",
-    "CustomApprovalFallback",
+    "AutoApprovalEvaluator",
     "Injected",
     "MessageContext",
     "MidTurn",
-    "ToolApprovalContext",
+    "AutoApprovalContext",
     "ToolApprovalDenied",
     "ToolApprovalPolicy",
     "accepts",
@@ -87,6 +92,7 @@ __all__ = [
     "callback_tool_defn",
     "code_mode_tool",
     "defn",
+    "jev_evaluator",
     "SubagentToolPolicy",
     "subagent_toolset",
     "tool_activity",

@@ -108,6 +108,30 @@ interface ToolRuntime {
   retryCount?: number;
 }
 
+/** One run of an auto approval evaluator over one gated tool call. */
+interface EvaluationRuntime {
+  id: string;
+  toolId: ToolId;
+  toolName: string;
+  evaluator: string;
+  /* The card's status word. Past tense on purpose: AgentStateNode's kindFromState picks a
+     chip by matching substrings like "approved" / "denied", so the raw verdicts "approve"
+     and "deny" would both miss every rule and fall through to the neutral idle chip — a
+     refused call rendering as if nothing had happened. */
+  status: "evaluating" | "approved" | "denied" | "escalated" | "cancelled" | "failed";
+  /* The verdict as the PROTOCOL spells it, kept apart from the display word above. The
+     inspector is an audit surface and must show what the evaluator actually returned; the
+     card's status word is chosen for the chip. Absent until it reaches one, and on a
+     cancellation it usually never does. */
+  verdict?: "approve" | "deny" | "escalate";
+  tone: AgentNodeTone;
+  statusTone?: AgentNodeTone;
+  /** The evaluator's one-line reason, or the failure message. */
+  detail?: string;
+  /** Its structured reasoning, as JSON — the audit record the inspector renders. */
+  reasoning?: string;
+}
+
 interface AgentGraphOptions {
   inputPlacement?: "external" | "runtime";
   showSubagentDispatch?: boolean;
@@ -139,9 +163,17 @@ type RuntimeNodeId =
   | "tool-container"
   | "subagent"
   | "output"
-  | ToolRuntimeNodeId;
+  | ToolRuntimeNodeId
+  | ApprovalEvaluationNodeId;
 
 type ToolRuntimeNodeId = `tool:${ToolId}`;
+
+/* An automatic approval evaluator judging one gated call. A node of its OWN, not a state
+   of the tool's node: the evaluator is separate work, running somewhere else, and folding
+   it into the tool card meant clicking it showed the tool's input and output — the one
+   thing it is not about. Keyed by evaluation_id, so a chain of evaluators over a single
+   gated call draws as a chain. */
+type ApprovalEvaluationNodeId = `approval:${string}`;
 
 type LocalNodeId = RuntimeNodeId;
 
@@ -214,6 +246,13 @@ const codeModePadding = 18;
 const codeModeHeadHeight = 100;
 const codeModeScriptHeight = 132;
 const codeModeHeaderHeight = codeModeHeadHeight + codeModeScriptHeight;
+/* Gap between the card that owns a gated call and the approval satellites hanging under
+   it: directly below, so the single edge between them reads as a drop rather than as
+   another step in the left-to-right runtime flow. */
+const approvalEvaluationGapY = 48;
+/* Side by side when one card has several gated calls in flight — a Code Mode host can. */
+const approvalEvaluationGapX = 32;
+
 const codeModeColumns = 2;
 const codeModeColumnGap = 32;
 const codeModeRowGap = 26;
@@ -336,6 +375,14 @@ function scopedId(workflowId: string, localId: string): string {
 
 function toolRuntimeNodeId(toolId: ToolId): ToolRuntimeNodeId {
   return `tool:${toolId}`;
+}
+
+function approvalEvaluationNodeId(evaluationId: string): ApprovalEvaluationNodeId {
+  return `approval:${evaluationId}`;
+}
+
+function isApprovalEvaluationNodeId(id: string): id is ApprovalEvaluationNodeId {
+  return id.startsWith("approval:");
 }
 
 function isToolRuntimeNodeId(id: string): id is ToolRuntimeNodeId {
@@ -860,6 +907,16 @@ export function buildAgentGraph(
   let subagentDetail = "";
   const tools = new Map<ToolId, ToolRuntime>();
   const codeModeChildren = new Map<ToolId, ToolId[]>();
+  /* Keyed by evaluation_id, not tool_id: an agent may chain evaluators over one call. */
+  const evaluations = new Map<string, EvaluationRuntime>();
+  /* Gates that have been decided. An evaluation card is about a gate; once the gate is
+     resolved the card has no subject left, and leaving it up next to a now-running tool
+     reads as though approval were still outstanding. */
+  const resolvedApprovalToolIds = new Set<ToolId>();
+  /* Decided by REFUSAL specifically — the calls whose gate also ended the call. Tracked
+     apart from the set above because the linger rule below may only ever apply to these;
+     see the note there. */
+  const deniedApprovalToolIds = new Set<ToolId>();
   /* Children are not in `runtimeNodeOrder` and so are not reached by the fold that
      drops settled tools. They get their own set, filled from the same call sites, so
      both halves of the graph answer "has this finished" the same way. */
@@ -989,6 +1046,9 @@ export function buildAgentGraph(
 
   function resetTurnTools(): void {
     tools.clear();
+    evaluations.clear();
+    resolvedApprovalToolIds.clear();
+    deniedApprovalToolIds.clear();
     codeModeChildren.clear();
     settledChildToolIds.clear();
     activeCodeModeToolIds.splice(0, activeCodeModeToolIds.length);
@@ -1180,6 +1240,60 @@ export function buildAgentGraph(
       }
       tools.set(frame.data.tool_id, runtime);
     } else if (
+      frame.event === "auto_approval_evaluation_started" ||
+      frame.event === "auto_approval_evaluation_ended" ||
+      frame.event === "auto_approval_evaluation_superseded" ||
+      frame.event === "auto_approval_evaluation_error"
+    ) {
+      /* Kept OUT of the tool's runtime on purpose. The evaluator is separate work running
+         somewhere else; it gets its own node, wired to the gated call by one edge. */
+      const evaluation: EvaluationRuntime = evaluations.get(frame.data.evaluation_id) ?? {
+        id: frame.data.evaluation_id,
+        toolId: frame.data.tool_id,
+        toolName: frame.data.tool_name,
+        evaluator: frame.data.evaluator,
+        status: "evaluating",
+        tone: "approval"
+      };
+      if (frame.event === "auto_approval_evaluation_ended") {
+        const verdict = frame.data.verdict;
+        evaluation.verdict = verdict;
+        evaluation.status =
+          verdict === "approve" ? "approved" : verdict === "deny" ? "denied" : "escalated";
+        /* An escalate is not a failure — the evaluator correctly declined to decide — so
+           it stays approval-toned, like the gate it hands back to. */
+        evaluation.tone =
+          verdict === "approve" ? "done" : verdict === "deny" ? "error" : "approval";
+        evaluation.statusTone = evaluation.tone;
+        evaluation.detail = frame.data.reason ?? undefined;
+        evaluation.reasoning =
+          Object.keys(frame.data.details).length > 0
+            ? JSON.stringify(frame.data.details, null, 2)
+            : undefined;
+      } else if (frame.event === "auto_approval_evaluation_superseded") {
+        /* Cancelled, because a human (or a policy cascade) settled the gate first. Drawn
+           as a distinct outcome rather than as a failure: nothing went wrong, the answer
+           simply arrived from elsewhere. */
+        evaluation.status = "cancelled";
+        evaluation.verdict = frame.data.verdict ?? undefined;
+        evaluation.tone = "neutral";
+        evaluation.statusTone = "neutral";
+        evaluation.detail = frame.data.verdict
+          ? `cancelled — had reached "${frame.data.verdict}"`
+          : "cancelled — the gate was decided first";
+      } else if (frame.event === "auto_approval_evaluation_error") {
+        evaluation.status = "failed";
+        evaluation.tone = "error";
+        evaluation.statusTone = "error";
+        evaluation.detail = frame.data.message;
+      }
+      evaluations.set(frame.data.evaluation_id, evaluation);
+      /* Not markRuntimeNode: a satellite is positioned off its tool rather than taking a
+         slot in the runtime grid. It is still the latest node, and still remembers the
+         frame that put it there. */
+      latestNodeId = approvalEvaluationNodeId(frame.data.evaluation_id);
+      remember(latestNodeId);
+    } else if (
       frame.event === "tool_approval_requested" ||
       frame.event === "tool_approval_resolved"
     ) {
@@ -1216,7 +1330,11 @@ export function buildAgentGraph(
         runtime.statusTone = frame.data.approved ? "done" : "error";
         runtime.subtitle = frame.data.approved ? "approval granted" : "approval denied";
         runtime.detail = frame.data.reason ?? runtime.detail;
-        if (!frame.data.approved) markToolSettled(frame.data.tool_id, parentToolId);
+        resolvedApprovalToolIds.add(frame.data.tool_id);
+        if (!frame.data.approved) {
+          deniedApprovalToolIds.add(frame.data.tool_id);
+          markToolSettled(frame.data.tool_id, parentToolId);
+        }
       }
       tools.set(frame.data.tool_id, runtime);
     } else if (
@@ -1340,6 +1458,20 @@ export function buildAgentGraph(
         maybeJsonSection("Tool input", runtime?.input),
         maybeJsonSection("Tool output", runtime?.output)
       );
+    } else if (isApprovalEvaluationNodeId(id)) {
+      /* The EVALUATION's own content. Before this node existed the events were folded into
+         the tool card, so opening the approval showed the tool's input and output — the
+         one thing it is not about. */
+      const evaluation = evaluations.get(id.slice("approval:".length));
+      sections.push(
+        textSection("Evaluator", evaluation?.evaluator),
+        textSection("Verdict", evaluation?.verdict ?? evaluation?.status),
+        textSection("Reason", evaluation?.detail),
+        evaluation?.reasoning
+          ? { label: "Evaluator reasoning", text: evaluation.reasoning, kind: "json" }
+          : null,
+        textSection("Gated call", evaluation?.toolName)
+      );
     } else if (id === "tool-container") {
       sections.push(
         valueSection(
@@ -1448,6 +1580,22 @@ export function buildAgentGraph(
         toolId: runtime?.id,
         codeMode: runtime?.isCodeMode,
         flowGroup: runtime?.flowGroup
+      };
+    }
+    if (isApprovalEvaluationNodeId(id)) {
+      const evaluation = evaluations.get(id.slice("approval:".length));
+      return {
+        tone: evaluation?.tone ?? "approval",
+        dotTone: "approval",
+        /* The evaluator, not the tool: this card is about who judged, and the tool it
+           judged is one edge away. */
+        title: evaluation?.evaluator ?? "approval evaluator",
+        state: evaluation?.status ?? "evaluating",
+        statusTone: evaluation?.statusTone,
+        subtitle: evaluation ? `auto approval · ${evaluation.toolName}` : "auto approval",
+        detail: evaluation?.detail ?? "",
+        nodeHeight: stateNodeHeight,
+        active: latestNodeId === id
       };
     }
     if (id === "tool-container") {
@@ -1561,6 +1709,12 @@ export function buildAgentGraph(
       )
     )
   );
+  /* Which tool cards actually made it onto the canvas this frame. An approval satellite
+     is drawn from its call, so a satellite whose call was folded away (focus view, retry
+     stacking) would leave an edge pointing at nothing. */
+  const drawnToolNodeIds = new Set<string>(
+    runtimeNodeOrder.filter((id) => isToolRuntimeNodeId(id))
+  );
   for (const parentToolId of codeModeChildren.keys()) {
     const parentNodeId = toolRuntimeNodeId(parentToolId);
     const parentPosition = runtimeLayout.positions.get(parentNodeId);
@@ -1581,6 +1735,7 @@ export function buildAgentGraph(
         ),
         zIndex: 14
       });
+      drawnToolNodeIds.add(childNodeId);
     }
   }
   if (outputSeen && outputPlacement === "external") {
@@ -1588,6 +1743,91 @@ export function buildAgentGraph(
   }
 
   const edges: Edge[] = [];
+  /**
+   * Where a gated call's approval satellites hang: under the card that OWNS the call.
+   *
+   * For an ordinary tool that is its own card. For a Code Mode host call it is the HOST's
+   * container, not the child cell inside it — children are packed in a grid, so a
+   * satellite dropped below a child would land on the next child. Hanging it under the
+   * container puts it in empty space, and the edge still runs from the child, so which
+   * host call is being approved stays legible.
+   */
+  function approvalAnchorOwner(toolId: ToolId): ToolRuntimeNodeId {
+    const parentToolId = tools.get(toolId)?.parentToolId;
+    return toolRuntimeNodeId(parentToolId ?? toolId);
+  }
+
+  /* One column per owner, so several gated calls under one Code Mode host do not stack. */
+  const satellitesPerOwner = new Map<ToolRuntimeNodeId, number>();
+
+  /* Each auto approval evaluation as its own card, hung off the gated call by a single
+     edge — the evaluator runs outside the tool, and the graph says so. */
+  for (const evaluation of evaluations.values()) {
+    /* Dismissed once the gate is decided. The card exists to say what is happening to an
+       OPEN approval; after the decision the tool just runs, and a leftover "escalated"
+       card beside it claims the call is still waiting on someone. The transcript, the
+       replay log and the waterfall keep the record.
+
+       TWO EXCEPTIONS, both about not deleting a card before it has been read:
+
+       - A CANCELLED evaluation is kept. It is the one terminal the resolution CAUSES
+         rather than merely follows, so dismissing it on that same resolution would mean
+         an evaluator pre-empted by a human could never be seen to have been pre-empted —
+         and being able to see exactly that is why the cancellation is published at all.
+         It leaves with its tool, at the end of the turn or when focus view drops the call.
+       - A call the decision SETTLED — a DENIAL — lingers a beat so it is seen to finish.
+         Its evaluation lingers with it rather than vanishing out from under the card it
+         is attached to.
+
+       That second exception is gated on the call having been DENIED, not merely on it
+       being in `lingeringTools`. The linger set is "anything that settled in the last
+       beat", which includes a `tool_end` — so keying off it alone meant an approved call
+       put its own tool id back in the set when it FINISHED, and the evaluation card that
+       had been dismissed at the approval reappeared minutes later as the tool wrapped up.
+       Only a refusal can resurrect a card, and only for the beat its own call is held. */
+    const gateDecided = resolvedApprovalToolIds.has(evaluation.toolId);
+    const heldWithRefusedCall =
+      deniedApprovalToolIds.has(evaluation.toolId) &&
+      lingeringTools.has(evaluation.toolId);
+    if (gateDecided && evaluation.status !== "cancelled" && !heldWithRefusedCall) {
+      continue;
+    }
+    const toolNodeId = toolRuntimeNodeId(evaluation.toolId);
+    // The call's card can be gone (focus view drops settled ones); its satellite goes too,
+    // or the edge below would point at a node that is not drawn.
+    if (!drawnToolNodeIds.has(toolNodeId)) continue;
+    const ownerNodeId = approvalAnchorOwner(evaluation.toolId);
+    const ownerPosition = runtimeLayout.positions.get(ownerNodeId);
+    if (!ownerPosition) continue;
+    /* Read off the owner's own card rather than assumed: a Code Mode host is a container
+       sized to its children, so the drop has to clear whatever it actually grew to. */
+    const ownerHeight = numericData(
+      runtimeDataById.get(ownerNodeId) ?? nodeDataFor(ownerNodeId),
+      "nodeHeight",
+      resultNodeHeight
+    );
+    const column = satellitesPerOwner.get(ownerNodeId) ?? 0;
+    satellitesPerOwner.set(ownerNodeId, column + 1);
+    const nodeId = approvalEvaluationNodeId(evaluation.id);
+    nodes.push({
+      ...node(
+        nodeId,
+        {
+          x: ownerPosition.x + column * (stateNodeWidth + approvalEvaluationGapX),
+          y: ownerPosition.y + ownerHeight + approvalEvaluationGapY
+        },
+        nodeDataFor(nodeId)
+      ),
+      zIndex: 14
+    });
+    edges.push(
+      edge(nodeId, toolNodeId, nodeId, latestNodeId === nodeId, undefined, {
+        sourceHandle: "source-bottom",
+        targetHandle: "target-top",
+        kind: "approval"
+      })
+    );
+  }
   const toolPosition = runtimeLayout.positions.get("tool-container");
   if (toolPosition && embeddedToolLayout) {
     for (const placement of embeddedToolLayout.placements) {

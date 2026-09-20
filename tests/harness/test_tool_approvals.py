@@ -10,7 +10,13 @@
 #   * a caller's AgentConfig.approval_policy overrides the agent's built-in default;
 #   * "approve, and don't ask again" (remember=True) allow-lists the tool, cascading to a
 #     concurrently-pending call of the same tool, and is reflected on the status query;
-#   * a developer custom fallback approves a call the serializable policy did not;
+#   * an auto approval evaluator approves a call the serializable policy did not, and the
+#     harness brackets EVERY evaluator with auto_approval_evaluation_started -> _ended /
+#     _superseded / _error, so an automatic decision is auditable whatever it decided —
+#     including an ESCALATE, which resolves nothing and would otherwise leave no trace;
+#   * an evaluator can DENY outright or escalate to the human gate, must be async, fails
+#     SAFE when it raises or returns nonsense, and is CANCELLED (and published as
+#     superseded) when a human decides while it is still thinking;
 #   * pending approvals are discoverable via agent_status; the update is idempotent;
 #   * an unresolved approval auto-denies on close (no hang); inline tool_defn gates too.
 #
@@ -32,7 +38,12 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from temporal_agent_harness.harness import AgentWorkflowRunner, agent
-from temporal_agent_harness.harness.agent import ToolApprovalContext, ToolApprovalPolicy
+from temporal_agent_harness.harness.agent import (
+    AutoApprovalVerdict,
+    AutoApprovalDecision,
+    AutoApprovalContext,
+    ToolApprovalPolicy,
+)
 from temporal_agent_harness.harness.agent_client import AgentClient, ToolApprovalError
 from temporal_agent_harness.harness.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
@@ -72,9 +83,43 @@ async def gated_workflow_tool(text: str) -> str:
     return f"wf:{text}"
 
 
-def _approve_gated_activity_tool(ctx: ToolApprovalContext) -> bool:
-    """A developer custom fallback: auto-approve only ``gated_activity_tool``."""
-    return ctx.tool_name == "gated_activity_tool"
+async def _approve_gated_activity_tool(ctx: AutoApprovalContext) -> AutoApprovalDecision:
+    """A minimal auto approval evaluator: approve only ``gated_activity_tool``."""
+    return AutoApprovalDecision(
+        AutoApprovalVerdict.APPROVE
+        if ctx.tool_name == "gated_activity_tool"
+        else AutoApprovalVerdict.ESCALATE,
+        reason="auto-approved by the evaluator",
+    )
+
+
+async def _verdict_evaluator(ctx: AutoApprovalContext) -> AutoApprovalDecision:
+    """An evaluator standing in for an AI one.
+
+    It awaits before answering (as a real one must — asking a model is an activity call),
+    and exercises all three verdicts off the call's own arguments: ``deny`` refuses the
+    call outright, ``escalate`` abstains to the human gate, anything else is approved.
+    ``tool_description`` is asserted through, since the tool's docstring is the main thing
+    an AI evaluator has to reason about."""
+    await asyncio.sleep(0)
+    assert ctx.tool_description == "A non-safe activity tool: gated unless the policy allows it."
+    text = ctx.tool_input.get("text")
+    if text == "deny":
+        return AutoApprovalDecision(AutoApprovalVerdict.DENY, reason="policy forbids 'deny'")
+    if text == "escalate":
+        return AutoApprovalDecision(AutoApprovalVerdict.ESCALATE, reason="not sure")
+    return AutoApprovalDecision(AutoApprovalVerdict.APPROVE, reason="looks fine")
+
+
+async def _exploding_evaluator(ctx: AutoApprovalContext) -> AutoApprovalDecision:
+    """A broken evaluator. The gate must escalate to a human, never fail open."""
+    raise RuntimeError("approver is broken")
+
+
+async def _nonsense_evaluator(ctx: AutoApprovalContext):
+    """Returns something that is not an AutoApprovalDecision — a developer bug, which must
+    fail the same safe way a raised exception does rather than approving or crashing."""
+    return "yes please"
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +148,10 @@ class _BaseProbe:
 
         if text == "safe":
             call_id, tool, arg = "s1", safe_activity_tool, "S"
+        elif text.startswith("arg:"):
+            # One gated call whose ARGUMENT the message chooses, so a custom fallback can
+            # reach a different verdict per call the way a real one does.
+            call_id, tool, arg = "g1", gated_activity_tool, text.removeprefix("arg:")
         elif text == "workflow-tool":
             call_id, tool, arg = "wf-1", gated_workflow_tool, "Z"
         else:
@@ -145,7 +194,7 @@ class ApprovalProbeAgent(_BaseProbe):
 
 @workflow.defn
 @agent.defn
-class CustomFallbackProbeAgent(_BaseProbe):
+class EvaluatorProbeAgent(_BaseProbe):
     """Gates everything by default, but wires a custom fallback that auto-approves
     ``gated_activity_tool`` — the FINAL approval layer."""
 
@@ -155,7 +204,129 @@ class CustomFallbackProbeAgent(_BaseProbe):
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-            custom_approval_fallback=_approve_gated_activity_tool,
+            auto_approval_evaluator=_approve_gated_activity_tool,
+        )
+        self._last_reply: str | None = None
+
+    @workflow.query
+    def last_reply(self) -> str | None:
+        return self._last_reply
+
+    @workflow.run
+    async def run(self, config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+
+@workflow.defn
+@agent.defn
+class VerdictEvaluatorProbeAgent(_BaseProbe):
+    """Gates everything by default, with an ASYNC three-valued fallback wired — the shape
+    a Jev auto-approver takes."""
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            auto_approval_evaluator=_verdict_evaluator,
+        )
+        self._last_reply: str | None = None
+
+    @workflow.query
+    def last_reply(self) -> str | None:
+        return self._last_reply
+
+    @workflow.run
+    async def run(self, config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+
+@workflow.defn
+@agent.defn
+class SlowEvaluatorProbeAgent(_BaseProbe):
+    """A fallback that does not answer until the test says so, then DENIES.
+
+    Stands in for the real timing of an AI approver — which spends an activity round-trip
+    thinking while the gate is already open — but under the test's control, so the "a human
+    decided first" ordering is asserted rather than raced for."""
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._released = False
+        self._evaluator_cancelled = False
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            auto_approval_evaluator=self._deny_once_released,
+        )
+        self._last_reply: str | None = None
+
+    async def _deny_once_released(self, ctx: AutoApprovalContext) -> AutoApprovalDecision:
+        try:
+            await workflow.wait_condition(lambda: self._released)
+        except asyncio.CancelledError:
+            # Recorded so a test can prove the CORO ITSELF was cancelled, not merely that
+            # its verdict was ignored — the difference between stopping the work and
+            # paying for it anyway.
+            self._evaluator_cancelled = True
+            raise
+        return AutoApprovalDecision(AutoApprovalVerdict.DENY, reason="approver says no")
+
+    @workflow.query
+    def evaluator_cancelled(self) -> bool:
+        return self._evaluator_cancelled
+
+    @workflow.signal
+    def release_approver(self) -> None:
+        self._released = True
+
+    @workflow.query
+    def last_reply(self) -> str | None:
+        return self._last_reply
+
+    @workflow.run
+    async def run(self, config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+
+@workflow.defn
+@agent.defn
+class NonsenseEvaluatorProbeAgent(_BaseProbe):
+    """An evaluator that returns the wrong type — a developer bug, not an exception."""
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            auto_approval_evaluator=_nonsense_evaluator,
+        )
+        self._last_reply: str | None = None
+
+    @workflow.query
+    def last_reply(self) -> str | None:
+        return self._last_reply
+
+    @workflow.run
+    async def run(self, config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+
+@workflow.defn
+@agent.defn
+class BrokenEvaluatorProbeAgent(_BaseProbe):
+    """Gates everything, with a fallback that raises — the guardrail must fail SAFE."""
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            auto_approval_evaluator=_exploding_evaluator,
         )
         self._last_reply: str | None = None
 
@@ -182,7 +353,14 @@ async def env_and_client():
     async with Worker(
         env.client,
         task_queue=task_queue,
-        workflows=[ApprovalProbeAgent, CustomFallbackProbeAgent],
+        workflows=[
+            ApprovalProbeAgent,
+            EvaluatorProbeAgent,
+            VerdictEvaluatorProbeAgent,
+            SlowEvaluatorProbeAgent,
+            BrokenEvaluatorProbeAgent,
+            NonsenseEvaluatorProbeAgent,
+        ],
         activities=[
             agent.tool_activity(gated_activity_tool),
             agent.tool_activity(safe_activity_tool),
@@ -243,6 +421,36 @@ def _types_for(events: list[AgentEvent], tool_id: str) -> list[str]:
     return [
         e.event.type for e in events if getattr(e.event, "tool_id", None) == tool_id
     ]
+
+
+def _event(events: list[AgentEvent], event_type: str):
+    """The one event of ``event_type``, asserting there is exactly one."""
+    matches = [e.event for e in events if e.event.type == event_type]
+    assert len(matches) == 1, f"expected exactly one {event_type}, got {len(matches)}"
+    return matches[0]
+
+
+def _assert_bracket_pairs(events: list[AgentEvent], *, evaluator: str) -> None:
+    """The evaluation bracket is well formed: one start, one terminal, same evaluation_id.
+
+    ``evaluation_id`` — not ``tool_id`` — is what pairs them, so this is the guard that the
+    pairing key is actually carried and actually matches.
+    """
+    started = _event(events, AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED)
+    terminals = [
+        e.event
+        for e in events
+        if e.event.type
+        in (
+            AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED,
+            AgentEventType.AUTO_APPROVAL_EVALUATION_SUPERSEDED,
+            AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR,
+        )
+    ]
+    assert len(terminals) == 1
+    assert started.evaluator == evaluator == terminals[0].evaluator
+    assert started.evaluation_id == terminals[0].evaluation_id
+    assert started.evaluation_id
 
 
 def _reply_text(events: list[AgentEvent]) -> str:
@@ -478,7 +686,7 @@ async def test_config_policy_overrides_agent_default(env_and_client):
     agent_client = AgentClient(client, handle.id)
     status = await agent_client.get_status()
     assert status.approval_policy == ToolApprovalPolicy.dangerously_skip_all()
-    assert status.has_custom_approval_fallback is False
+    assert status.has_auto_approval_evaluator is False
 
     await _send(handle, "single")
     events = await _drain_to_turn_end(client, handle.id)
@@ -487,22 +695,281 @@ async def test_config_policy_overrides_agent_default(env_and_client):
 
 
 async def test_custom_fallback_approves_what_policy_did_not(env_and_client):
-    """The custom fallback (final layer) auto-approves gated_activity_tool though the
-    policy (always_require) did not — so it runs ungated; status reports the fallback."""
+    """The custom fallback auto-approves gated_activity_tool though the policy
+    (always_require) did not — so it runs without a human ever being asked.
+
+    Its verdict is PUBLISHED, unlike a policy allow-list's: an approval nobody consented
+    to has to be answerable after the fact, so the call is registered and announced first
+    and the fallback's decision lands as a normal resolution with a reason. (A call the
+    POLICY approves stays silent — see test_dangerously_skip_all_runs_ungated.)"""
     client, task_queue = env_and_client
     handle = await _start(
-        client, task_queue, workflow_cls=CustomFallbackProbeAgent
+        client, task_queue, workflow_cls=EvaluatorProbeAgent
     )
     agent_client = AgentClient(client, handle.id)
-    assert (await agent_client.get_status()).has_custom_approval_fallback is True
+    assert (await agent_client.get_status()).has_auto_approval_evaluator is True
 
     await _send(handle, "single")
     events = await _drain_to_turn_end(client, handle.id)
     assert _types_for(events, "g1") == [
+        AgentEventType.TOOL_APPROVAL_REQUESTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED,
+        AgentEventType.TOOL_APPROVAL_RESOLVED,
         AgentEventType.TOOL_START,
         AgentEventType.TOOL_END,
     ]
+    # Even a plain bool predicate gets the bracket — the harness publishes it, so a
+    # developer gets the audit trail by wiring a fallback at all, not by instrumenting one.
+    _assert_bracket_pairs(events, evaluator="_approve_gated_activity_tool")
+    ended = _event(events, AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED)
+    assert ended.verdict is AutoApprovalVerdict.APPROVE
+    assert ended.details == {}  # this evaluator records no structured reasoning
+    resolved = _event(events, AgentEventType.TOOL_APPROVAL_RESOLVED)
+    assert resolved.approved is True
+    assert resolved.reason == "auto-approved by the evaluator"
     assert _reply_text(events) == "act:S"
+
+
+# ---------------------------------------------------------------------------
+# Async, three-valued fallbacks — the shape an AI auto-approver takes
+# ---------------------------------------------------------------------------
+
+
+async def test_async_fallback_approves_with_its_reason(env_and_client):
+    """An ASYNC fallback returning APPROVE dispatches the call, and its reason is the
+    audit trail on the resolution."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue, workflow_cls=VerdictEvaluatorProbeAgent)
+
+    await _send(handle, "arg:ok")
+    events = await _drain_to_turn_end(client, handle.id)
+    assert _types_for(events, "g1") == [
+        AgentEventType.TOOL_APPROVAL_REQUESTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED,
+        AgentEventType.TOOL_APPROVAL_RESOLVED,
+        AgentEventType.TOOL_START,
+        AgentEventType.TOOL_END,
+    ]
+    _assert_bracket_pairs(events, evaluator="_verdict_evaluator")
+    ended = _event(events, AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED)
+    assert (ended.verdict, ended.reason) == (AutoApprovalVerdict.APPROVE, "looks fine")
+    resolved = _event(events, AgentEventType.TOOL_APPROVAL_RESOLVED)
+    assert (resolved.approved, resolved.reason) == (True, "looks fine")
+    assert _reply_text(events) == "act:ok"
+
+    # The bracket is what makes the evaluator's own latency measurable: its duration is the
+    # gap between the two envelope timestamps, not something inferred from a neighbouring
+    # event of a different kind.
+    start_ts = next(
+        e.timestamp
+        for e in events
+        if e.event.type == AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED
+    )
+    end_ts = next(
+        e.timestamp
+        for e in events
+        if e.event.type == AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED
+    )
+    assert end_ts >= start_ts
+
+
+async def test_async_fallback_denies_outright(env_and_client):
+    """DENY is a real verdict, not just "don't approve": the tool NEVER executes, the
+    resolution is published as a denial, and the reason reaches the model as the error —
+    so the turn continues and the agent can try something allowed instead."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue, workflow_cls=VerdictEvaluatorProbeAgent)
+
+    await _send(handle, "arg:deny")
+    events = await _drain_to_turn_end(client, handle.id)
+    # Ends at the resolution — no tool_start, so the activity was never dispatched.
+    assert _types_for(events, "g1") == [
+        AgentEventType.TOOL_APPROVAL_REQUESTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED,
+        AgentEventType.TOOL_APPROVAL_RESOLVED,
+    ]
+    ended = _event(events, AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED)
+    assert ended.verdict is AutoApprovalVerdict.DENY
+    resolved = _event(events, AgentEventType.TOOL_APPROVAL_RESOLVED)
+    assert (resolved.approved, resolved.reason) == (False, "policy forbids 'deny'")
+    assert _reply_text(events) == "denied:policy forbids 'deny'"
+
+
+async def test_async_fallback_escalates_to_the_human_gate(env_and_client):
+    """ESCALATE abstains: the call stays PENDING and waits for a person, exactly as if no
+    fallback were wired — and a human approval then releases it."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue, workflow_cls=VerdictEvaluatorProbeAgent)
+    agent_client = AgentClient(client, handle.id)
+    await _send(handle, "arg:escalate")
+
+    events: list[AgentEvent] = []
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            ev = item.data
+            events.append(ev)
+            if (
+                ev.event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and ev.event.tool_id == "g1"
+            ):
+                # Still pending after the fallback abstained — the gate is the human's.
+                pending = (await agent_client.get_status()).pending_approvals
+                assert [p.tool_id for p in pending] == ["g1"]
+                await agent_client.approve_tool("g1", approved=True, reason="I'll allow it")
+            if ev.event.type == AgentEventType.TURN_END:
+                break
+
+    assert _types_for(events, "g1") == [
+        AgentEventType.TOOL_APPROVAL_REQUESTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED,
+        AgentEventType.TOOL_APPROVAL_RESOLVED,
+        AgentEventType.TOOL_START,
+        AgentEventType.TOOL_END,
+    ]
+    resolved = _event(events, AgentEventType.TOOL_APPROVAL_RESOLVED)
+    # The HUMAN's reason, not the fallback's "not sure" — the fallback never resolved it.
+    assert (resolved.approved, resolved.reason) == (True, "I'll allow it")
+
+    # THE POINT OF THE BRACKET. An escalate resolves nothing, so without its own event the
+    # only record of an evaluator that ran, cost a round-trip and declined to decide would
+    # be the human resolution above — attributed entirely to the human. Here the abstention
+    # and its reason are on the stream in their own right.
+    _assert_bracket_pairs(events, evaluator="_verdict_evaluator")
+    ended = _event(events, AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED)
+    assert (ended.verdict, ended.reason) == (AutoApprovalVerdict.ESCALATE, "not sure")
+    assert _reply_text(events) == "act:escalate"
+
+
+async def test_a_human_who_decides_first_cancels_the_evaluator(env_and_client):
+    """Whoever resolves the entry first wins — and the loser is STOPPED, not just ignored.
+
+    The gate is published before the evaluator runs precisely so a person can answer while
+    it thinks. When they do, an evaluator left running would keep burning a model call (and
+    an activity's worker slot) on a question nobody is waiting for. The harness cancels its
+    coroutine and closes the bracket on ``superseded``, never on ``ended`` — a verdict
+    published as ended is one that was acted on.
+
+    The probe's evaluator records its own CancelledError, so this asserts the coroutine
+    really was cancelled rather than merely overruled."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue, workflow_cls=SlowEvaluatorProbeAgent)
+    agent_client = AgentClient(client, handle.id)
+    await _send(handle, "single")
+
+    events: list[AgentEvent] = []
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            ev = item.data
+            events.append(ev)
+            if (
+                ev.event.type == AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED
+                and ev.event.tool_id == "g1"
+            ):
+                # The evaluator is definitely mid-flight: it is parked on a condition only
+                # release_approver can satisfy, and this test never sends it.
+                await agent_client.approve_tool(
+                    "g1", approved=True, reason="human got there first"
+                )
+            if ev.event.type == AgentEventType.TURN_END:
+                break
+
+    assert _types_for(events, "g1") == [
+        AgentEventType.TOOL_APPROVAL_REQUESTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED,
+        AgentEventType.TOOL_APPROVAL_RESOLVED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_SUPERSEDED,
+        AgentEventType.TOOL_START,
+        AgentEventType.TOOL_END,
+    ]
+    _assert_bracket_pairs(
+        events, evaluator="SlowEvaluatorProbeAgent._deny_once_released"
+    )
+    superseded = _event(events, AgentEventType.AUTO_APPROVAL_EVALUATION_SUPERSEDED)
+    # Cut off before it could answer, which is the normal shape of a cancellation.
+    assert superseded.verdict is None
+    # The coroutine itself saw the cancellation — the work stopped, it was not merely
+    # ignored while it ran on.
+    assert await handle.query(SlowEvaluatorProbeAgent.evaluator_cancelled) is True
+
+    resolved = _event(events, AgentEventType.TOOL_APPROVAL_RESOLVED)
+    assert (resolved.approved, resolved.reason) == (True, "human got there first")
+    assert _reply_text(events) == "act:S"
+
+
+async def test_an_evaluator_returning_the_wrong_type_also_fails_safe(env_and_client):
+    """A wrong return type is the same class of problem as a raised exception — the
+    evaluator did not produce a decision — so it takes the same path: an ERROR terminal on
+    the bracket, an escalate to the human gate, and never an approval. It must not
+    propagate out of the gate either, which would fail the tool call with something that
+    is not an approval decision at all."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue, workflow_cls=NonsenseEvaluatorProbeAgent)
+    agent_client = AgentClient(client, handle.id)
+    await _send(handle, "single")
+
+    events: list[AgentEvent] = []
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            ev = item.data
+            events.append(ev)
+            if (
+                ev.event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and ev.event.tool_id == "g1"
+            ):
+                await agent_client.approve_tool("g1", approved=False, reason="nope")
+            if ev.event.type == AgentEventType.TURN_END:
+                break
+
+    assert _types_for(events, "g1") == [
+        AgentEventType.TOOL_APPROVAL_REQUESTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR,
+        AgentEventType.TOOL_APPROVAL_RESOLVED,
+    ]
+    failed = _event(events, AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR)
+    assert "must return an AutoApprovalDecision" in failed.message
+    assert _reply_text(events) == "denied:nope"
+
+
+async def test_a_broken_evaluator_escalates_instead_of_failing_open(env_and_client):
+    """An evaluator that RAISES must not approve, and must not wedge the turn either: the
+    call falls through to the human gate, where a person denies it."""
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue, workflow_cls=BrokenEvaluatorProbeAgent)
+    agent_client = AgentClient(client, handle.id)
+    await _send(handle, "single")
+
+    events: list[AgentEvent] = []
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            ev = item.data
+            events.append(ev)
+            if (
+                ev.event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
+                and ev.event.tool_id == "g1"
+            ):
+                await agent_client.approve_tool("g1", approved=False, reason="no")
+            if ev.event.type == AgentEventType.TURN_END:
+                break
+
+    # Never dispatched: the broken approver did not wave it through.
+    assert _types_for(events, "g1") == [
+        AgentEventType.TOOL_APPROVAL_REQUESTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_STARTED,
+        AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR,
+        AgentEventType.TOOL_APPROVAL_RESOLVED,
+    ]
+    # The bracket closes on the ERROR terminal, not on an "ended" carrying a fake verdict:
+    # a broken approver is a failed evaluation, not an abstention, and "everything silently
+    # went to humans for three hours" should be visible as exactly that.
+    _assert_bracket_pairs(events, evaluator="_exploding_evaluator")
+    failed = _event(events, AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR)
+    assert "approver is broken" in failed.message
+    assert _reply_text(events) == "denied:no"
 
 
 # ---------------------------------------------------------------------------

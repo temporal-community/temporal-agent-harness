@@ -47,24 +47,84 @@ AgentId = Annotated[
 # ---------------------------------------------------------------------------
 
 
+class AutoApprovalVerdict(StrEnum):
+    """What a custom approval fallback decided about one gated tool call.
+
+    Three-valued on purpose. A fallback is not merely an "extra yes": it is a
+    *decision-maker*, and the interesting case — an AI auto-approver judging a call it has
+    never seen before — needs to be able to say "no" as loudly as it says "yes", and to
+    abstain when it is not sure enough to say either.
+
+      * ``APPROVE`` — dispatch the call now, with no human gate.
+      * ``DENY`` — the call ends here. It never executes; the tool raises
+        :class:`~temporal_agent_harness.harness.agent_workflow.ToolApprovalDenied`, which
+        the agent loop surfaces to the model as an error result, so the turn continues.
+      * ``ESCALATE`` — abstain. The call stays PENDING and waits for a human decision on
+        the ``tool_approval`` update, exactly as if no fallback were wired at all.
+
+    ``ESCALATE`` — not ``DENY`` — is the safe answer to "I don't know": denying on
+    uncertainty trains operators to disable the guardrail, while escalating puts the call
+    in front of the person who can actually judge it.
+    """
+
+    APPROVE = "approve"
+    DENY = "deny"
+    ESCALATE = "escalate"
+
+
 @dataclass
-class ToolApprovalContext:
+class AutoApprovalDecision:
+    """A custom approval fallback's verdict on one gated call, plus why.
+
+    The one shape an auto approval evaluator returns. A bare ``bool`` is deliberately NOT
+    accepted: ``False`` would have to mean "escalate", not "deny", and a two-shaped
+    contract whose falsy value means neither no nor yes is exactly the ambiguity the
+    three-valued verdict exists to remove.
+
+    ``reason`` is the one-line summary. It is published on this evaluation's
+    :class:`~temporal_agent_harness.harness.agent_protocol.events.AutoApprovalEvaluationEnded`
+    and, when the verdict settles the gate, on the resulting
+    :class:`~temporal_agent_harness.harness.agent_protocol.events.ToolApprovalResolved` —
+    so it is the audit trail for a decision no human made. Supply one, especially on
+    ``DENY``, where it is also the error text the model sees and therefore the model's only
+    chance to understand what it did wrong and try something allowed instead.
+
+    ``details`` is the structured form of the same thing, free-form by design so an
+    evaluator can record whatever makes its decision reviewable later. It is published on
+    ``AutoApprovalEvaluationEnded`` for EVERY verdict, including ``ESCALATE`` — which
+    resolves nothing and therefore has no other trace at all. Record the raw judgments AND
+    the thresholds applied to them, not just the conclusion: that is what lets a stored
+    decision be re-read against different thresholds without re-running inference. It lands
+    in workflow history on every gated call, so keep it to what an audit would actually
+    read.
+    """
+
+    verdict: AutoApprovalVerdict
+    reason: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AutoApprovalContext:
     """The facts about a single tool call that a custom approval-policy fallback
     evaluates.
 
     Passed to the developer-supplied predicate given as the runner's
-    ``custom_approval_fallback=`` constructor arg — the FINAL approval layer, consulted
+    ``auto_approval_evaluator=`` constructor arg — the FINAL approval layer, consulted
     only when the serializable :class:`ToolApprovalPolicy` layers did not already
     auto-approve the call.
 
     ``tool_name`` is the tool's registered name; ``tool_input`` is the model-facing
     arguments (injected parameters excluded); ``inherently_safe`` is the tool's static
-    self-assertion (the decorator's ``inherently_safe=``).
+    self-assertion (the decorator's ``inherently_safe=``); ``tool_description`` is the
+    tool's docstring — the same prose the model was shown when it chose to make this call,
+    and the main thing an AI approver has to reason about what the call actually does.
     """
 
     tool_name: str
     tool_input: dict[str, Any]
     inherently_safe: bool
+    tool_description: str | None = None
 
 
 class ToolApprovalPolicy(BaseModel):
@@ -81,8 +141,9 @@ class ToolApprovalPolicy(BaseModel):
       2. ``auto_approve_tools`` — approve these specific tools by name (additive on top
          of the layers above).
 
-    A call not approved by any layer here falls through to the runner's custom fallback
-    (if one is set), and otherwise is gated. Whether a tool calls itself ``inherently_safe``
+    A call not approved by any layer here falls through to the runner's custom fallback (if
+    one is set), which may approve it, DENY it outright, or escalate; with no fallback, or
+    on an escalate, the call is gated for a human. Whether a tool calls itself ``inherently_safe``
     is only ever a *hint*: this policy — not the tool — decides enforcement, so an operator
     can still gate everything regardless of what a tool claims.
 
@@ -590,13 +651,15 @@ class AgentStatus:
     subagents: list[SubagentInfo] = field(default_factory=list)
     # The tool-approval policy the agent is currently running under. A client can read
     # this (e.g. after a runtime update) and persist it to replay into a later session
-    # via ``AgentConfig.approval_policy``. ``has_custom_approval_fallback`` reports only
-    # *whether* a developer fallback predicate is wired (the predicate itself is
-    # non-serializable, so it is not — and cannot be — surfaced here).
+    # via ``AgentConfig.approval_policy``. ``has_auto_approval_evaluator`` reports only
+    # *whether* a developer fallback is wired — code, possibly an AI approver, that can
+    # approve or DENY a call this policy gated. It is non-serializable, so neither it nor
+    # its rules are — or can be — surfaced here; an operator reading the policy alone is
+    # therefore not seeing everything that decides. That bit is the flag that says so.
     approval_policy: ToolApprovalPolicy = field(
         default_factory=ToolApprovalPolicy.always_require_approvals
     )
-    has_custom_approval_fallback: bool = False
+    has_auto_approval_evaluator: bool = False
 
 
 class AcceptedFunction(BaseModel):

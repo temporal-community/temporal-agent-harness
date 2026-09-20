@@ -84,6 +84,12 @@ code-mode = [
     # Port monty_stepper.py to it, then unpin.
     "pydantic-monty==0.0.18",
 ]
+# Jev-backed auto mode for tool approvals: temporal_agent_harness.harness.jev_approvals.
+# Needed on the WORKER only — the workflow-side approver builds plain dicts and dispatches
+# the model call as an activity by name, so an agent using it stays importable without this.
+jev = [
+    "typesafe-sdk>=0.6.0",
+]
 # Nexus-brokered MCP servers: temporal_agent_harness.ai_sdks.openai_agents.workflow.
 # nexus_brokered_mcp_server. Lets an Agent reach an MCP tool over a Temporal Nexus endpoint,
 # one server per Nexus service, passed directly via Agent(mcp_servers=[...]). Needs the

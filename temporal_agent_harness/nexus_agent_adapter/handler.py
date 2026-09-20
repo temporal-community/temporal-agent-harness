@@ -288,7 +288,11 @@ class AgentServiceHandler:
             ],
             subagents=[_nexus_subagent_info(s) for s in status.subagents],
             approval_policy=_nexus_approval_policy(status.approval_policy),
-            has_custom_approval_fallback=status.has_custom_approval_fallback,
+            # The Nexus contract (agent.nexusrpc.yaml) is a CROSS-LANGUAGE wire contract
+            # mirrored from remote and spoken by non-Python services, so its field keeps
+            # its original name; the rename to "auto approval evaluator" is internal to
+            # this package. Renaming it here would silently break every other consumer.
+            has_custom_approval_fallback=status.has_auto_approval_evaluator,
         )
 
     # -----------------------------------------------------------------------
