@@ -200,6 +200,12 @@ export interface PendingApproval {
   tool_name: string;
   tool_input: JsonRecord;
   turn_number: number;
+  /**
+   * Short session-unique alias for `tool_id`, for surfaces that must round-trip the identity
+   * through a length-capped field (chat-platform button payloads). Unused by this UI, which
+   * carries the full `tool_id`.
+   */
+  short_id: string;
 }
 
 export interface ToolApprovalPolicy {

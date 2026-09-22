@@ -53,6 +53,17 @@ class CreateSessionRequest:
     agent_workflow_type: str
     config: AgentConfig
     task_queue: str | None = None
+    # Caller-chosen workflow id for the session, instead of a minted
+    # ``agent-session-{uuid4}``. For an integration whose conversation identity is minted
+    # elsewhere — a Slack thread, a Discord channel, a ticket — where the session id must be
+    # *derivable* from that identity rather than looked up: without this the caller would have
+    # to keep its own external-id -> session-id table, because a minted uuid cannot be
+    # rediscovered on the next inbound event.
+    #
+    # Creation is idempotent when this is set: a request naming a session that already exists
+    # returns that session rather than failing, so a caller handling a redelivered webhook
+    # does not have to check first (and could not do so without racing itself).
+    session_id: str | None = None
 
 
 @dataclass
@@ -84,6 +95,13 @@ class SessionManagerWorkflow:
 
     @workflow.update
     async def create_session(self, request: CreateSessionRequest) -> Session:
+        """Launch one child agent workflow and track it.
+
+        Idempotent when ``request.session_id`` names a session this manager already started:
+        that session is returned untouched, so a caller that cannot know whether it has been
+        here before (a chat integration handling a possibly-redelivered webhook) can simply
+        ask every time.
+        """
         descriptor = self._registry.by_workflow_type(request.agent_workflow_type)
         if descriptor is None:
             known = [agent.workflow_type for agent in self._registry.agents]
@@ -95,7 +113,16 @@ class SessionManagerWorkflow:
             )
 
         task_queue = request.task_queue or descriptor.task_queue
-        session_id = f"agent-session-{workflow.uuid4()}"
+
+        if request.session_id:
+            existing = next(
+                (known for known in self._sessions if known.workflow_id == request.session_id),
+                None,
+            )
+            if existing is not None:
+                return existing
+
+        session_id = request.session_id or f"agent-session-{workflow.uuid4()}"
         await workflow.start_child_workflow(
             request.agent_workflow_type,
             request.config,

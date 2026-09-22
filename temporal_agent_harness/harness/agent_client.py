@@ -339,6 +339,8 @@ class AgentClient:
         self,
         msg_type: str,
         payload: dict[str, Any],
+        *,
+        update_id: str | None = None,
     ) -> AgentMessageReply:
         """Submit one message to the agent without streaming the accepted turn.
 
@@ -352,8 +354,14 @@ class AgentClient:
         every event of its dispatch is stamped with), the ``turn_number`` / ``turn_id`` it
         belongs to, and the ``disposition`` saying whether it opened, joined or queued behind
         a turn.
+
+        ``update_id`` is an idempotency key for a caller whose delivery can be repeated — a
+        chat-platform webhook is redelivered routinely — keyed on an identity stable across
+        those repeats (the platform's own event id). A re-issued send then gets the original
+        acceptance back instead of dispatching the message a second time. Left ``None``,
+        Temporal mints one and every delivery is a fresh dispatch.
         """
-        return await self._submit_message(msg_type, payload)
+        return await self._submit_message(msg_type, payload, update_id=update_id)
 
     async def start_and_submit_message(
         self,
@@ -406,6 +414,7 @@ class AgentClient:
         on_item: OnItemCallback[T],
         timeout: float | None = DEFAULT_TURN_TIMEOUT,
         subagent_stall_grace_seconds: float = DEFAULT_STALL_GRACE_SECONDS,
+        update_id: str | None = None,
     ) -> AsyncIterator[T]:
         """Send a message and stream the resulting turn — including any subagents — as ONE stream.
 
@@ -446,6 +455,10 @@ class AgentClient:
                 workers (a healthy-but-laggy subagent is given up only if it exceeds this); lower it
                 for snappier degradation. A genuinely idle/slow subagent that ISN'T blocking the
                 parent's reply is never affected.
+            update_id: Idempotency key for the send, for a caller whose delivery can be
+                repeated (a redelivered chat-platform webhook). A repeat gets the original
+                acceptance back — and therefore streams the ORIGINAL turn — rather than
+                dispatching the message twice. See :meth:`submit_message`.
 
         Returns:
             An async iterator of ``T``.
@@ -455,7 +468,7 @@ class AgentClient:
             JoinedTurnError: The message was accepted, but it joined an open turn — it is
                 running, and there is no per-turn stream for it (see the precondition above).
         """
-        reply = await self._submit_message(msg_type, payload)
+        reply = await self._submit_message(msg_type, payload, update_id=update_id)
         if reply.disposition is MessageDisposition.JOINED:
             raise JoinedTurnError(
                 f"message {reply.message_id} joined open turn {reply.turn_number} and is "
