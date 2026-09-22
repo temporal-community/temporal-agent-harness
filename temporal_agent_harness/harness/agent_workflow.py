@@ -51,6 +51,7 @@ from temporal_agent_harness.harness.state import HarnessState, StateRef
 from temporal_agent_harness.harness.state.events import StateEvent, StateSnapshot
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_ID_LENGTH,
+    APPROVAL_SHORT_ID_LENGTH,
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
     PROVIDE_CALLBACK_RESULT_UPDATE,
@@ -846,6 +847,9 @@ class _ApprovalEntry:
     tool_name: str
     tool_input: dict[str, Any]
     turn_number: int
+    # Short, session-unique alias for ``tool_id`` — see :attr:`PendingApproval.short_id` for what
+    # it is for. Minted here, at registration, so it is stable for the life of the entry.
+    short_id: str
     # The turn this call belongs to — retained so the resolution can be published against
     # the owning turn even from an update handler that isn't itself "in" that turn.
     turn_id: str
@@ -1150,10 +1154,24 @@ class _WorkflowStatus:
             tool_name=tool_name,
             tool_input=tool_input,
             turn_number=turn_number,
+            short_id=self._fresh_approval_short_id(),
             turn_id=turn_id,
             message_id=message_id,
             inherently_safe=inherently_safe,
         )
+
+    def _fresh_approval_short_id(self) -> str:
+        """Mint an approval ``short_id`` unused by ANY entry of this session.
+
+        Mirrors ``AgentWorkflowRunner._fresh_subagent_handle``: reroll until unique. The reroll
+        is checked against every entry, not just the PENDING ones, because resolved entries are
+        retained — reusing a resolved call's alias would let a stale approve/deny card posted for
+        that call resolve a *different* one. ``workflow.uuid4`` is deterministic in-workflow."""
+        used = {e.short_id for e in self._approvals.values()}
+        while True:
+            candidate = workflow.uuid4().hex[:APPROVAL_SHORT_ID_LENGTH]
+            if candidate not in used:
+                return candidate
 
     def approval_entry(self, tool_id: str) -> _ApprovalEntry | None:
         """The approval record for ``tool_id`` (any status), or ``None`` if unknown."""
@@ -1199,6 +1217,7 @@ class _WorkflowStatus:
                 tool_name=e.tool_name,
                 tool_input=e.tool_input,
                 turn_number=e.turn_number,
+                short_id=e.short_id,
             )
             for e in self._approvals.values()
             if e.status is _ApprovalStatus.PENDING

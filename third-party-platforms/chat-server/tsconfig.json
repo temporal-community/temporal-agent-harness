@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+
+    // Cards and modals are authored as JSX against Chat SDK's own runtime (`chat/jsx-runtime`).
+    "jsx": "react-jsx",
+    "jsxImportSource": "chat",
+
+    // Source imports carry `.ts` extensions and are rewritten to `.js` on emit, so the same
+    // files typecheck in place and run from `dist/` under plain Node ESM. This Node build has
+    // no TypeScript stripping, so tests compile first rather than running from source.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "outDir": "dist",
+    "rootDir": "."
+  },
+  "include": ["src", "test"]
+}

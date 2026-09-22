@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from datetime import timedelta
 
@@ -35,6 +36,7 @@ from temporal_agent_harness.harness import AgentWorkflowRunner, agent
 from temporal_agent_harness.harness.agent import ToolApprovalContext, ToolApprovalPolicy
 from temporal_agent_harness.harness.agent_client import AgentClient, ToolApprovalError
 from temporal_agent_harness.harness.agent_protocol import (
+    APPROVAL_SHORT_ID_LENGTH,
     SEND_AGENT_MESSAGE_UPDATE,
     TURN_EVENTS_TOPIC,
     AgentConfig,
@@ -622,6 +624,44 @@ async def test_pending_approval_visible_in_status(env_and_client):
     assert pending[0].tool_input == {"text": "S"}
 
     await agent_client.approve_tool("g1", approved=True)
+    await _drain_to_turn_end(client, handle.id)
+    assert await agent_client.get_pending_approvals() == []
+
+
+async def test_pending_approvals_carry_a_short_id(env_and_client):
+    """Every pending approval carries a ``short_id``: fixed-width lowercase hex, and distinct
+    across concurrently-gated calls.
+
+    This is the identity a chat-platform integration puts on an approve/deny button, where the
+    provider-minted ``tool_id`` would not fit the platform's length-capped callback field.
+    """
+    client, task_queue = env_and_client
+    handle = await _start(client, task_queue)
+    await _send(handle, "concurrent")
+    agent_client = AgentClient(client, handle.id)
+
+    requested: set[str] = set()
+    async with asyncio.timeout(30):
+        async for item in _subscribe(client, handle.id):
+            if item.data.event.type == AgentEventType.TOOL_APPROVAL_REQUESTED:
+                requested.add(item.data.event.tool_id)
+                if {"act-A", "act-B"} <= requested:
+                    break
+
+    pending = await agent_client.get_pending_approvals()
+    assert {p.tool_id for p in pending} == {"act-A", "act-B"}
+
+    short_ids = [p.short_id for p in pending]
+    assert all(
+        re.fullmatch(rf"[0-9a-f]{{{APPROVAL_SHORT_ID_LENGTH}}}", sid) for sid in short_ids
+    ), short_ids
+    assert len(set(short_ids)) == len(short_ids), short_ids
+
+    # It is an ALIAS, not a replacement: resolving still goes through the real tool_id, and the
+    # short id is what a caller maps back from.
+    by_short = {p.short_id: p.tool_id for p in pending}
+    for sid in short_ids:
+        await agent_client.approve_tool(by_short[sid], approved=True)
     await _drain_to_turn_end(client, handle.id)
     assert await agent_client.get_pending_approvals() == []
 

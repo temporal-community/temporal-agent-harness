@@ -8,6 +8,7 @@
 
 from temporal_agent_harness.harness.agent_protocol.agent_interface import (
     AGENT_ID_LENGTH,
+    APPROVAL_SHORT_ID_LENGTH,
     AGENT_INTERFACE_QUERY,
     AGENT_STATUS_QUERY,
     PROVIDE_CALLBACK_RESULT_UPDATE,
@@ -84,6 +85,7 @@ from temporal_agent_harness.harness.agent_protocol.subagent_interface import (
 __all__ = [
     # Signal/update/query interface
     "AGENT_ID_LENGTH",
+    "APPROVAL_SHORT_ID_LENGTH",
     "AGENT_INTERFACE_QUERY",
     "AGENT_STATUS_QUERY",
     "PROVIDE_CALLBACK_RESULT_UPDATE",

@@ -41,6 +41,11 @@ AgentId = Annotated[
     str, StringConstraints(pattern=rf"^{_AGENT_ID_SEGMENT}(-{_AGENT_ID_SEGMENT})*$")
 ]
 
+# Width (hex chars) of a pending approval's ``short_id`` — the same 6 as ``AGENT_ID_LENGTH``,
+# for the same reason: an id a human or a constrained wire field can carry, standing in for the
+# provider-minted ``tool_id`` that is too long to embed. See :attr:`PendingApproval.short_id`.
+APPROVAL_SHORT_ID_LENGTH = 6
+
 
 # ---------------------------------------------------------------------------
 # Tool-approval policy
@@ -502,6 +507,21 @@ class PendingApproval:
     tool_name: str
     tool_input: dict[str, Any]
     turn_number: int
+    # A short, session-unique alias for ``tool_id``, ``APPROVAL_SHORT_ID_LENGTH`` hex chars.
+    #
+    # ``tool_id`` is minted by the model provider, not by the harness, so its length is not ours
+    # to bound: it ranges from a ~29-char provider call id to ``openai_agents:{tool_name}:{uuid4}``
+    # (51 chars plus the tool name). Chat platforms round-trip an approve/deny decision through a
+    # single fixed-width field — Discord's ``custom_id`` caps at 100 characters, Telegram's
+    # ``callback_data`` at 64 BYTES — and overflow there is a hard error at post time, so a card
+    # built from a long ``tool_id`` fails to post at all and the gate is left waiting with no way
+    # for anyone to answer it. An integration puts THIS on the button instead and resolves it back
+    # to ``tool_id`` against this list on click.
+    #
+    # Unique across every approval of the session, resolved AND pending — not merely across the
+    # pending ones — so that a stale card for a long-since-resolved call can never be matched to a
+    # different call that happened to reuse the alias.
+    short_id: str
 
 
 @dataclass

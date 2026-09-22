@@ -64,6 +64,12 @@ _SESSION_PREVIEW_HISTORY_RPC_TIMEOUT = timedelta(seconds=1)
 
 class CreateSessionRequestBody(BaseModel):
     agent_workflow_type: str
+    # Optional caller-chosen workflow id; see ``CreateSessionRequest.session_id``. The UI does
+    # not set it — a minted id is right when the session has no identity outside the harness.
+    # An integration whose conversation identity comes from elsewhere sets it so the session id
+    # is derivable from that identity instead of needing a mapping table. Creation is
+    # idempotent when it is set.
+    session_id: str | None = None
 
 
 class ChatRequestBody(BaseModel):
@@ -71,6 +77,12 @@ class ChatRequestBody(BaseModel):
 
     session_id: str
     message: str | dict[str, Any]
+    # Optional idempotency key, forwarded as the update id. For a caller whose delivery can be
+    # repeated — a chat-platform webhook is redelivered routinely — set this to the platform's
+    # own event id and a redelivery re-issues the SAME update, getting the original acceptance
+    # back rather than dispatching the message twice. The UI leaves it unset: a click is one
+    # delivery, so every send should be its own dispatch.
+    request_id: str | None = None
 
 
 class ToolApprovalRequestBody(BaseModel):
@@ -223,6 +235,7 @@ def create_agent_harness_app(
             ManagerCreateSessionRequest(
                 agent_workflow_type=req.agent_workflow_type,
                 config=AgentConfig(),
+                session_id=req.session_id,
             ),
             result_type=Session,
         )
@@ -295,7 +308,7 @@ def create_agent_harness_app(
         else:
             msg_type, payload = req.message["type"], req.message.get("payload") or {}
 
-        result = await client.submit_message(msg_type, payload)
+        result = await client.submit_message(msg_type, payload, update_id=_update_id(req))
         return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
 
     @app.post("/api/chat")
@@ -324,7 +337,9 @@ def create_agent_harness_app(
             msg_type, payload = req.message["type"], req.message.get("payload") or {}
 
         return StreamingResponse(
-            await client.send_message(msg_type, payload, on_item=on_item),
+            await client.send_message(
+                msg_type, payload, on_item=on_item, update_id=_update_id(req)
+            ),
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
@@ -640,6 +655,15 @@ def _mount_static_ui(
 # NOT an ``AgentEventType``: nothing published it on the agent's stream, and the frame carries no
 # turn/message metadata, so a consumer must be able to tell it apart from a real agent event.
 STREAM_ERROR_SSE_EVENT = "stream_error"
+
+
+def _update_id(req: ChatRequestBody) -> str | None:
+    """The update idempotency key for a message send, or ``None`` to let Temporal mint one.
+
+    Namespaced so a caller's ``request_id`` can never collide with an update id the harness
+    mints for its own purposes (``send-``/``approve-`` in the Nexus adapter, for instance).
+    """
+    return f"msg-{req.request_id}" if req.request_id else None
 
 
 def _sse(event: str, data: dict, resume_offset: int | None = None) -> bytes:
