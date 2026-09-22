@@ -21,10 +21,16 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import ValidationError
 import pytest_asyncio
 from pydantic import BaseModel
 from temporalio import workflow
-from temporalio.client import Client, WorkflowHandle, WorkflowUpdateFailedError
+from temporalio.client import (
+    Client,
+    WorkflowExecutionStatus,
+    WorkflowHandle,
+    WorkflowUpdateFailedError,
+)
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.testing import WorkflowEnvironment
@@ -42,6 +48,8 @@ from temporal_agent_harness.harness.agent_protocol import (
     AgentMessage,
     AgentStatus,
     AutoApprovalVerdict,
+    AutoApprovalCriteria,
+    AutoApprovalCriteriaSet,
     AutoApprovalDecision,
     MessageContext,
     MessageDisposition,
@@ -58,7 +66,7 @@ from temporalio.exceptions import ApplicationError
 
 from temporal_agent_harness.harness.agent_client import AgentClient, JoinedTurnError
 from temporal_agent_harness.harness.agent_workflow import (
-    AUTO_APPROVAL_EVALUATOR_ATTR,
+    AUTO_MODE_EVALUATOR_ATTR,
     Injected,
     _Admission,
     _discover_handlers,
@@ -68,23 +76,31 @@ from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
 
 def _ctx(tool_name: str, **kwargs) -> AutoApprovalContext:
-    """A minimal gated-call context for exercising a custom approval fallback offline."""
+    """A minimal gated-call context for exercising an auto mode evaluator offline.
+
+    Carries a governing criteria set because every context does: the gate resolves one
+    before it will call an evaluator, so a context without one is not a state the harness
+    can produce (see ``test_an_ungoverned_call_never_reaches_an_evaluator``)."""
     return AutoApprovalContext(
         tool_name=tool_name,
         tool_input=kwargs.pop("tool_input", {}),
         inherently_safe=kwargs.pop("inherently_safe", False),
+        criteria_set=kwargs.pop(
+            "criteria_set", AutoApprovalCriteriaSet(effect="Does something.")
+        ),
+        criteria_set_name=kwargs.pop("criteria_set_name", "default"),
         **kwargs,
     )
 
 
 async def _run_evaluator(runner, tool_name: str, **kwargs):
-    """Run the runner's auto approval evaluator offline.
+    """Run the runner's auto mode evaluator offline.
 
     Only the "no evaluator wired" short-circuit is reachable here: once there IS one it runs
     as a cancellable task raced against the gate on the workflow event loop, which does not
     exist offline. Everything past that point is asserted end-to-end in
     test_tool_approvals.py, against a real workflow and a real stream."""
-    return await runner._run_auto_approval_evaluator(
+    return await runner._run_auto_mode_evaluator(
         _ctx(tool_name, **kwargs),
         tool_id=f"call-{tool_name}",
         stream=TurnStreamContext(turn_id="turn-1", turn_number=1, agent_id="a1b2c3"),
@@ -156,6 +172,42 @@ class TypedProbeAgent:
         """Always raises — to prove an errored turn publishes message_handler_error + turn_end and
         the loop survives for the next message."""
         raise RuntimeError(f"boom: {message.text}")
+
+    @workflow.query
+    def seen(self) -> list[str]:
+        return self._seen
+
+
+@workflow.defn
+@agent.defn
+class NoEvaluatorProbeAgent:
+    """No ``auto_mode_evaluator`` wired, and a handler that tries to switch auto mode on
+    anyway — to prove the rejection fails that ONE message, not the session."""
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.allow_tools(["get_order"]),
+        )
+        self._seen: list[str] = []
+
+    @workflow.run
+    async def run(self, _config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE, model_callable=False)
+    async def enable_auto_mode(self, message: TextMessage) -> TextReply:
+        """Try to hand gated calls to an evaluator this agent does not have."""
+        self._runner.set_approval_policy(self._runner.approval_policy.with_auto_mode(True))
+        return TextReply(text="unreachable")
+
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
+    async def greet(self, message: Greeting) -> Greeted:
+        """Greet a person by name."""
+        self._seen.append(f"greet:{message.name}")
+        return Greeted(message=f"hi {message.name}")
 
     @workflow.query
     def seen(self) -> list[str]:
@@ -240,7 +292,7 @@ async def client_and_queue():
     async with Worker(
         env.client,
         task_queue=task_queue,
-        workflows=[TypedProbeAgent, MidTurnProbeAgent],
+        workflows=[TypedProbeAgent, MidTurnProbeAgent, NoEvaluatorProbeAgent],
         # Unsandboxed so the test module's imports (pydantic, harness, pytest) don't
         # trip the workflow sandbox; the runner logic under test is unaffected.
         workflow_runner=UnsandboxedWorkflowRunner(),
@@ -425,6 +477,32 @@ async def test_handler_error_publishes_message_handler_error_and_loop_survives(
     assert "greet:Bob" in seen
 
 
+async def test_a_rejected_auto_mode_policy_fails_the_message_not_the_workflow(
+    client_and_queue,
+):
+    """The rejection is a non-retryable ApplicationError, but that flag only governs retries.
+    Raised inside a message handler it is caught like any handler failure: that message gets
+    ``message_handler_error``, the live policy is untouched, and the agent keeps serving."""
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue, NoEvaluatorProbeAgent)
+
+    await _send(handle, "enable_auto_mode", {"text": "please"})
+    events = await _collect_until_turn_end(client, handle.id)
+    errors = [e for e in events if e.event.type == AgentEventType.MESSAGE_HANDLER_ERROR]
+    assert len(errors) == 1
+    assert "auto_mode_enabled=True" in errors[0].event.message
+
+    # Rejected BEFORE anything changed: status still reports the original posture.
+    status = await handle.query(AGENT_STATUS_QUERY, result_type=AgentStatus)
+    assert status.approval_policy == ToolApprovalPolicy.allow_tools(["get_order"])
+    assert status.approval_policy.auto_mode_enabled is False
+
+    # And the session is alive: still running, and the next message is handled normally.
+    assert (await handle.describe()).status == WorkflowExecutionStatus.RUNNING
+    await _send(handle, "greet", {"name": "Bob"})
+    assert "greet:Bob" in await _wait_for_seen(handle, 1)
+
+
 # ---------------------------------------------------------------------------
 # Handler discovery + validation (pure unit tests)
 # ---------------------------------------------------------------------------
@@ -561,7 +639,7 @@ def test_set_approval_policy_resolves_matching_pending(offline_build_policy):
     from temporal_agent_harness.harness.agent_workflow import _ApprovalStatus
 
     runner = offline_build_policy(
-        AgentConfig(), default=ToolApprovalPolicy.always_require_approvals()
+        AgentConfig(), default=ToolApprovalPolicy.always_require_human_approval()
     )
     runner._status.register_pending_approval(
         "t1", "trusted_tool", {"x": 1}, 1, "turn-1", "msg-1", inherently_safe=False
@@ -579,7 +657,7 @@ def test_set_approval_policy_resolves_matching_pending(offline_build_policy):
     assert runner._status.is_approval_resolved("t2") is False
 
 
-def test_an_auto_approval_evaluator_must_be_async(offline_build_policy):
+def test_an_auto_mode_evaluator_must_be_async(offline_build_policy):
     """Rejected at CONSTRUCTION — inside the agent's @workflow.init — so the error lands
     next to the developer's own wiring instead of inside the first gated tool call, which
     in a real agent might not happen until production.
@@ -593,8 +671,8 @@ def test_an_auto_approval_evaluator_must_be_async(offline_build_policy):
     with pytest.raises(TypeError) as excinfo:
         offline_build_policy(
             AgentConfig(),
-            default=ToolApprovalPolicy.always_require_approvals(),
-            auto_approval_evaluator=sync_evaluator,
+            default=ToolApprovalPolicy.always_require_human_approval(),
+            auto_mode_evaluator=sync_evaluator,
         )
     assert "must be an async function" in str(excinfo.value)
     assert "sync_evaluator" in str(excinfo.value)
@@ -610,17 +688,432 @@ def test_a_callable_object_with_an_async_call_is_a_valid_evaluator(offline_build
 
     runner = offline_build_policy(
         AgentConfig(),
-        default=ToolApprovalPolicy.always_require_approvals(),
-        auto_approval_evaluator=Evaluator(),
+        default=ToolApprovalPolicy.always_require_human_approval(),
+        auto_mode_evaluator=Evaluator(),
     )
     assert runner.current_status.has_auto_approval_evaluator is True
 
 
 async def test_no_evaluator_wired_means_no_decision(offline_build_policy):
     runner = offline_build_policy(
-        AgentConfig(), default=ToolApprovalPolicy.always_require_approvals()
+        AgentConfig(), default=ToolApprovalPolicy.always_require_human_approval()
     )
     assert await _run_evaluator(runner, "x") is None
+
+
+# ---------------------------------------------------------------------------
+# Auto mode is a POLICY MODE, not a fallback that activates because an evaluator exists
+# ---------------------------------------------------------------------------
+
+
+async def _evaluator(ctx):  # pragma: no cover - reached only where noted
+    return AutoApprovalDecision(AutoApprovalVerdict.APPROVE)
+
+
+def test_auto_mode_is_off_by_default_even_with_an_evaluator_wired(offline_build_policy):
+    """The posture an operator asked for: explicit static approvals, and a human on
+    everything else. Wiring an evaluator must not quietly opt them into a machine
+    deciding."""
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.always_require_human_approval(),
+        auto_mode_evaluator=_evaluator,
+    )
+    assert runner._policy_consults_auto_mode("anything", inherently_safe=False) is False
+    # Still reported as wired — a client needs to know the agent HAS one to offer the toggle.
+    assert runner.current_status.has_auto_approval_evaluator is True
+
+
+def test_auto_mode_on_consults_the_evaluator_for_a_gated_call(offline_build_policy):
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.auto_mode(),
+        auto_mode_evaluator=_evaluator,
+    )
+    assert runner._policy_consults_auto_mode("run_sql", inherently_safe=False) is True
+
+
+def test_auto_mode_on_with_no_evaluator_wired_is_rejected(offline_build_policy):
+    """A switch with nothing behind it is refused, on every route a policy is installed by.
+
+    Tolerating it would misrepresent the posture: status would report auto mode ON while
+    no call was ever judged. And it is not only the author's to get wrong — a caller's
+    ``AgentConfig`` or a handler's runtime ``set_approval_policy`` can ask for it too."""
+    # The agent's own default.
+    with pytest.raises(ApplicationError) as err:
+        offline_build_policy(AgentConfig(), default=ToolApprovalPolicy.auto_mode())
+    assert err.value.type == "AutoModeWithoutEvaluator"
+    assert err.value.non_retryable
+
+    # A caller's per-session override, against an agent that wired no evaluator.
+    with pytest.raises(ApplicationError):
+        offline_build_policy(
+            AgentConfig(approval_policy=ToolApprovalPolicy.auto_mode()),
+            default=ToolApprovalPolicy.always_require_human_approval(),
+        )
+
+    # A runtime update — rejected before anything changes, so the live policy is intact.
+    runner = offline_build_policy(
+        AgentConfig(), default=ToolApprovalPolicy.allow_tools(["get_order"])
+    )
+    with pytest.raises(ApplicationError):
+        runner.set_approval_policy(runner.approval_policy.with_auto_mode(True))
+    assert runner.approval_policy == ToolApprovalPolicy.allow_tools(["get_order"])
+
+    # The opposite combination stays legal: an evaluator wired, switched on later.
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.always_require_human_approval(),
+        auto_mode_evaluator=_evaluator,
+    )
+    runner.set_approval_policy(runner.approval_policy.with_auto_mode(True))
+    assert runner.approval_policy.auto_mode_enabled is True
+
+
+def test_a_call_the_allow_list_approves_never_reaches_the_evaluator(offline_build_policy):
+    """Auto mode sits BELOW the allow-list layers, so it cannot widen them and never costs
+    a model call for something already approved. This is also what makes an explicit
+    "approve & remember" permanently outrank the machine."""
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.auto_mode(pre_approved_tools=["get_order"]),
+        auto_mode_evaluator=_evaluator,
+    )
+    assert runner._policy_consults_auto_mode("get_order", inherently_safe=False) is False
+    assert runner._policy_consults_auto_mode("run_sql", inherently_safe=False) is True
+
+
+def test_remembering_a_tool_takes_it_out_of_auto_modes_hands(offline_build_policy):
+    """A human saying "always allow this" is a stronger statement than any verdict a model
+    could reach, so the allow-list layer swallows the call from then on."""
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.auto_mode(),
+        auto_mode_evaluator=_evaluator,
+    )
+    assert runner._policy_consults_auto_mode("run_sql", inherently_safe=False) is True
+    runner.set_approval_policy(runner.approval_policy.with_tool_allowed("run_sql"))
+    assert runner._policy_consults_auto_mode("run_sql", inherently_safe=False) is False
+
+
+def test_auto_mode_toggles_at_runtime_without_losing_the_allow_list(offline_build_policy):
+    """The runtime path a message handler takes. Turning the machine off must not discard
+    the explicit approvals a user has built up, which is why the toggle is a modification
+    of the live policy rather than a fresh one."""
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.auto_mode(pre_approved_tools=["get_order"]),
+        auto_mode_evaluator=_evaluator,
+    )
+    runner.set_approval_policy(runner.approval_policy.with_auto_mode(False))
+
+    assert runner._policy_consults_auto_mode("run_sql", inherently_safe=False) is False
+    assert runner.approval_policy.auto_approve_tools == frozenset({"get_order"})
+    assert runner.current_status.approval_policy.auto_mode_enabled is False
+
+    runner.set_approval_policy(runner.approval_policy.with_auto_mode(True))
+    assert runner._policy_consults_auto_mode("run_sql", inherently_safe=False) is True
+
+
+def test_auto_mode_over_dangerously_skip_all_is_unrepresentable():
+    """Layer 0 approves everything, so there is nothing left for a machine to decide — and the
+    POLICY refuses to hold that combination rather than leaving each caller to notice.
+
+    A policy claiming auto mode while nothing is gated is worse than an error: it reads as a
+    guardrail that is not there. Closed on every route, including ``model_validate`` (the wire
+    path a caller's ``AgentConfig.approval_policy`` arrives by) and the value-like helpers,
+    which reconstruct rather than ``model_copy`` precisely because pydantic skips validators on
+    a copy."""
+    with pytest.raises(ValidationError):
+        ToolApprovalPolicy(dangerously_skip_all_approvals=True, auto_mode_enabled=True)
+    with pytest.raises(ValidationError):
+        ToolApprovalPolicy.dangerously_skip_all().with_auto_mode(True)
+    with pytest.raises(ValidationError):
+        ToolApprovalPolicy.model_validate(
+            {"dangerously_skip_all_approvals": True, "auto_mode_enabled": True}
+        )
+
+    # Either alone is fine, and the helpers still compose.
+    assert ToolApprovalPolicy.dangerously_skip_all().auto_mode_enabled is False
+    assert ToolApprovalPolicy.auto_mode().with_tool_allowed("x").auto_mode_enabled is True
+    assert (
+        ToolApprovalPolicy.auto_mode().with_auto_mode(False).with_auto_mode(True).auto_mode_enabled
+        is True
+    )
+
+
+def test_with_changes_reaches_every_field_and_re_validates():
+    """The public, validated way to derive a policy — so nobody has to reach for
+    ``model_copy``, which skips the cross-field validator.
+
+    Covering EVERY field matters: a partial set of single-field helpers is what sends
+    someone to ``model_copy`` for the one field that was left out, with no warning that it
+    punches through the invariant. ``None`` means leave-as-is, because a policy is edited
+    against a live value whose ``auto_approve_tools`` grows every time a human answers a
+    gate with "approve and stop asking"."""
+    policy = ToolApprovalPolicy.auto_mode(pre_approved_tools=["a"])
+
+    # Each field is reachable, and an unnamed field is left alone.
+    assert policy.with_changes(auto_approve_inherently_safe=True) == ToolApprovalPolicy(
+        auto_approve_tools=frozenset({"a"}),
+        auto_approve_inherently_safe=True,
+        auto_mode_enabled=True,
+    )
+    assert policy.with_changes(auto_approve_tools=["b", "c"]).auto_approve_tools == frozenset(
+        {"b", "c"}
+    )
+    assert policy.with_changes(auto_approve_tools=()).auto_approve_tools == frozenset()
+    assert policy.with_changes(auto_mode_enabled=False).auto_approve_tools == frozenset({"a"})
+    assert policy.with_changes().with_changes() == policy
+
+    # And it re-validates, which is the whole reason it exists.
+    with pytest.raises(ValidationError):
+        policy.with_changes(dangerously_skip_all_approvals=True)
+    assert (
+        ToolApprovalPolicy.dangerously_skip_all()
+        .with_changes(dangerously_skip_all_approvals=False, auto_mode_enabled=True)
+        .auto_mode_enabled
+        is True
+    )
+
+
+def test_a_call_layer_zero_approves_never_reaches_auto_mode(offline_build_policy):
+    """The layer-0 bypass still holds for the reachable case: ``dangerously_skip_all`` with auto
+    mode off approves outright, so no evaluation is even considered."""
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.dangerously_skip_all(),
+        auto_mode_evaluator=_evaluator,
+    )
+    assert runner._policy_consults_auto_mode("run_sql", inherently_safe=False) is False
+
+
+# ---------------------------------------------------------------------------
+# The HARNESS guarantees an evaluator is only ever called for a governed call
+# ---------------------------------------------------------------------------
+
+
+def _auto_ctx(runner, tool_name="run_sql", declared=None):
+    return runner._auto_mode_context(
+        tool_name,
+        {"sql": "DELETE FROM orders"},
+        inherently_safe=False,
+        tool_description="Run a SQL statement.",
+        declared_criteria_set=declared,
+    )
+
+
+_GOVERNED = AutoApprovalCriteria(
+    sets={"destructive": AutoApprovalCriteriaSet(effect="Destroys data.")},
+    default="destructive",
+)
+
+
+def test_a_governed_call_gets_a_context_carrying_its_resolved_rules(offline_build_policy):
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.auto_mode(),
+        auto_approval_criteria=_GOVERNED,
+        auto_mode_evaluator=_evaluator,
+    )
+    ctx = _auto_ctx(runner)
+
+    assert ctx is not None
+    # Non-optional on the context, which is the whole point: an evaluator cannot be handed
+    # a call with no rules, so it needs no defensive branch and cannot forget one.
+    assert ctx.criteria_set.effect == "Destroys data."
+    assert ctx.criteria_set_name == "destructive"
+    assert ctx.criteria_version == 0
+
+
+@pytest.mark.parametrize(
+    "criteria",
+    [
+        pytest.param(AutoApprovalCriteria(), id="nothing configured at all"),
+        pytest.param(
+            AutoApprovalCriteria(tools={"run_sql": "typo"}, default="cautious"),
+            id="assigned set is not registered",
+        ),
+        pytest.param(
+            AutoApprovalCriteria(
+                sets={"empty": AutoApprovalCriteriaSet(min_confidence=0.99)},
+                default="empty",
+            ),
+            id="set holds only a threshold, so no rule to judge against",
+        ),
+    ],
+)
+def test_an_ungoverned_call_never_reaches_an_evaluator(offline_build_policy, criteria):
+    """THE GUARANTEE. Auto mode is on and an evaluator is wired, but no criteria set governs
+    this tool — so the harness refuses to build a context at all and the call falls through
+    to the human gate.
+
+    Enforced here rather than in each evaluator on purpose. "Nobody wrote rules for this
+    tool" is not a judgment call, and leaving it to an implementation would make a safety
+    property of auto mode depend on every evaluator author remembering it — while handing a
+    model an empty rulebook, which is the input most likely to come back a confident
+    approve."""
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.auto_mode(),
+        auto_approval_criteria=criteria,
+        auto_mode_evaluator=_evaluator,
+    )
+    assert _auto_ctx(runner) is None
+
+
+def test_a_tools_declared_set_can_be_what_governs_it(offline_build_policy):
+    """The decorator's name is a real resolution source, not decoration: with nothing else
+    configured it is what makes the call governed at all."""
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.auto_mode(),
+        auto_approval_criteria=AutoApprovalCriteria(
+            sets={"financial": AutoApprovalCriteriaSet(effect="Moves money.")}
+        ),
+        auto_mode_evaluator=_evaluator,
+    )
+    assert _auto_ctx(runner, declared=None) is None
+    ctx = _auto_ctx(runner, declared="financial")
+    assert ctx is not None and ctx.criteria_set_name == "financial"
+
+
+def test_auto_mode_off_builds_no_context_however_good_the_criteria(offline_build_policy):
+    """The switch is checked before the rules, so a well-configured rulebook cannot smuggle
+    a model into a posture that asked for a human."""
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.always_require_human_approval(),
+        auto_approval_criteria=_GOVERNED,
+        auto_mode_evaluator=_evaluator,
+    )
+    assert _auto_ctx(runner) is None
+
+
+def test_the_criteria_requirement_applies_to_a_CUSTOM_evaluator_too(offline_build_policy):
+    """Not a Jev-specific courtesy. Criteria are the schema EVERY evaluator reads, so a
+    hand-rolled one is equally never handed an ungoverned call — even one that would have
+    decided on tool name alone and never looked at the rules.
+
+    The guarantee is about what an evaluator may be ASKED, not about what it must use: an
+    implementation is free to ignore the rules it is given, but it can never be invoked for a
+    tool the operator never brought under auto mode."""
+    seen: list[str] = []
+
+    async def decides_on_name_alone(ctx):  # pragma: no cover - must never be reached
+        seen.append(ctx.tool_name)
+        return AutoApprovalDecision(AutoApprovalVerdict.APPROVE)
+
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.auto_mode(),
+        auto_mode_evaluator=decides_on_name_alone,
+    )
+    assert _auto_ctx(runner) is None
+    assert seen == []
+
+
+def test_a_runtime_criteria_swap_can_bring_a_tool_under_auto_mode(offline_build_policy):
+    """The end-user path: a call that had no rules, and so went to a person, starts being
+    decided once the user configures rules for it — without a redeploy."""
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.auto_mode(),
+        auto_mode_evaluator=_evaluator,
+    )
+    assert _auto_ctx(runner) is None
+
+    runner.set_auto_approval_criteria(_GOVERNED)
+    ctx = _auto_ctx(runner)
+    assert ctx is not None
+    # And the verdict it produces will name the generation of rules that governed it.
+    assert ctx.criteria_version == 1
+
+
+# ---------------------------------------------------------------------------
+# Criteria: resolution, the config override, and runtime updates
+# ---------------------------------------------------------------------------
+
+
+def test_the_callers_criteria_override_the_agents_default(offline_build_policy):
+    """Same resolution as ``approval_policy``, and for the same reason: the posture usually
+    belongs to the end user of the product, who must be able to start a session under their
+    own rules — including redefining a set the agent's own tools point at."""
+    agents_own = AutoApprovalCriteria(
+        sets={"financial": AutoApprovalCriteriaSet(effect="the agent's own wording")}
+    )
+    callers = AutoApprovalCriteria(
+        sets={"financial": AutoApprovalCriteriaSet(effect="the caller's wording")}
+    )
+    runner = offline_build_policy(
+        AgentConfig(auto_approval_criteria=callers),
+        default=ToolApprovalPolicy.auto_mode(),
+        auto_mode_evaluator=_evaluator,
+        auto_approval_criteria=agents_own,
+    )
+    assert runner.auto_approval_criteria.sets["financial"].effect == "the caller's wording"
+
+
+def test_criteria_default_to_empty_which_means_ask_a_person(offline_build_policy):
+    runner = offline_build_policy(
+        AgentConfig(), default=ToolApprovalPolicy.auto_mode(), auto_mode_evaluator=_evaluator
+    )
+    assert runner.auto_approval_criteria == AutoApprovalCriteria()
+    assert runner.auto_approval_criteria.for_tool("anything") is None
+
+
+def test_swapping_criteria_at_runtime_bumps_the_version(offline_build_policy):
+    """The version is what lets a stored verdict name the generation of rules that produced
+    it, now that the rules can change under an agent mid-session."""
+    runner = offline_build_policy(
+        AgentConfig(), default=ToolApprovalPolicy.auto_mode(), auto_mode_evaluator=_evaluator
+    )
+    assert runner._status.auto_approval_criteria_version == 0
+
+    runner.set_auto_approval_criteria(
+        AutoApprovalCriteria(sets={"read_only": AutoApprovalCriteriaSet(effect="Reads.")})
+    )
+    assert runner._status.auto_approval_criteria_version == 1
+    assert runner.auto_approval_criteria.sets["read_only"].effect == "Reads."
+
+
+def test_assign_tool_criteria_retargets_one_tool_without_touching_the_bodies(
+    offline_build_policy,
+):
+    """The call a message handler usually wants, and it works for tools the agent author
+    never wrote, since assignment is by name."""
+    runner = offline_build_policy(
+        AgentConfig(),
+        default=ToolApprovalPolicy.auto_mode(),
+        auto_mode_evaluator=_evaluator,
+        auto_approval_criteria=AutoApprovalCriteria(
+            sets={
+                "cautious": AutoApprovalCriteriaSet(effect="Unknown."),
+                "read_only": AutoApprovalCriteriaSet(effect="Reads."),
+            },
+            default="cautious",
+        ),
+    )
+    runner.assign_tool_criteria("some_mcp_tool", "read_only")
+
+    criteria = runner.auto_approval_criteria
+    assert criteria.for_tool("some_mcp_tool").effect == "Reads."
+    # Untouched bodies, and every other tool still on the catch-all.
+    assert criteria.for_tool("anything_else").effect == "Unknown."
+    assert set(criteria.sets) == {"cautious", "read_only"}
+
+
+def test_the_live_criteria_are_not_surfaced_on_status(offline_build_policy):
+    """Deliberate: a tool's DECLARED set lives in a decorator and the runner holds no tool
+    registry, so any per-tool map published here would be silently incomplete for exactly
+    the tools whose author already picked one. What a client needs — whether the machine is
+    deciding at all — rides on the policy instead."""
+    runner = offline_build_policy(
+        AgentConfig(), default=ToolApprovalPolicy.auto_mode(), auto_mode_evaluator=_evaluator
+    )
+    status = runner.current_status
+    assert not hasattr(status, "auto_approval_criteria")
+    assert status.approval_policy.auto_mode_enabled is True
 
 
 def test_the_evaluator_label_prefers_the_stamped_name(offline_build_policy):
@@ -633,7 +1126,7 @@ def test_the_evaluator_label_prefers_the_stamped_name(offline_build_policy):
     async def stamped(ctx):  # pragma: no cover - never invoked
         return AutoApprovalDecision(AutoApprovalVerdict.APPROVE)
 
-    setattr(stamped, AUTO_APPROVAL_EVALUATOR_ATTR, "jev_evaluator")
+    setattr(stamped, AUTO_MODE_EVALUATOR_ATTR, "jev_evaluator")
 
     assert _evaluator_label(stamped) == "jev_evaluator"
     assert _evaluator_label(plain).endswith("plain")
@@ -651,8 +1144,8 @@ def test_policy_update_cascade_does_not_consult_the_evaluator(offline_build_poli
 
     runner = offline_build_policy(
         AgentConfig(),
-        default=ToolApprovalPolicy.always_require_approvals(),
-        auto_approval_evaluator=evaluator,
+        default=ToolApprovalPolicy.always_require_human_approval(),
+        auto_mode_evaluator=evaluator,
     )
     runner._status.register_pending_approval(
         "t1", "trusted_tool", {}, 1, "turn-1", "msg-1", inherently_safe=False
@@ -788,7 +1281,11 @@ def offline_build_policy(monkeypatch):
     monkeypatch.setattr(aw.workflow, "uuid4", lambda: uuid.uuid4())
 
     def build(
-        config: AgentConfig, *, default: ToolApprovalPolicy, auto_approval_evaluator=None
+        config: AgentConfig,
+        *,
+        default: ToolApprovalPolicy,
+        auto_mode_evaluator=None,
+        auto_approval_criteria=None,
     ):
         stream = MagicMock()
         stream.topic.return_value = MagicMock()
@@ -796,7 +1293,8 @@ def offline_build_policy(monkeypatch):
             config,
             stream=stream,
             approval_policy_default=default,
-            auto_approval_evaluator=auto_approval_evaluator,
+            auto_approval_criteria_default=auto_approval_criteria,
+            auto_mode_evaluator=auto_mode_evaluator,
         )
 
     return build

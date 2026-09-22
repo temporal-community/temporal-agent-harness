@@ -33,6 +33,10 @@ from .replay import apply_ops, replay
 # --------------------------------------------------------------------------- #
 
 text = st.text(max_size=8)
+# Dict KEYS only (values stay plain `text`). "-" is excluded because our jsonpatch oracle
+# cannot replay a `replace` at that token even against an object, though the op is valid and
+# the harness emits it correctly — see test_a_dict_key_named_dash_emits_an_ordinary_replace.
+dict_keys = text.filter(lambda k: k != "-")
 ints = st.integers(min_value=-1000, max_value=1000)
 floats = st.floats(allow_nan=False, allow_infinity=False, width=32)
 tags = st.lists(text, max_size=3)
@@ -52,7 +56,7 @@ def groups(draw) -> Group:
     return Group(
         name=draw(text),
         todos=[todos(draw) for _ in range(draw(st.integers(0, 3)))],
-        meta=draw(st.dictionaries(text, text, max_size=3)),
+        meta=draw(st.dictionaries(dict_keys, text, max_size=3)),
     )
 
 
@@ -65,7 +69,7 @@ def agent_states(draw) -> AgentState:
         kind=draw(st.sampled_from(["a", "b"])),
         groups=[groups(draw) for _ in range(draw(st.integers(0, 3)))],
         index=draw(
-            st.dictionaries(text, st.lists(st.builds(Todo, id=text), max_size=2), max_size=2)
+            st.dictionaries(dict_keys, st.lists(st.builds(Todo, id=text), max_size=2), max_size=2)
         ),
         scores=draw(st.dictionaries(ints, ints, max_size=3)),
         tags=draw(tags),
@@ -198,13 +202,13 @@ def _apply_one(draw, d: AgentState) -> None:
         case "group_name":
             a_group().name = draw(text)
         case "group_meta_set":
-            a_group().meta[draw(text)] = draw(text)
+            a_group().meta[draw(dict_keys)] = draw(text)
         case "group_meta_update":
-            a_group().meta.update(draw(st.dictionaries(text, text, max_size=2)))
+            a_group().meta.update(draw(st.dictionaries(dict_keys, text, max_size=2)))
         case "group_meta_setdefault":
-            a_group().meta.setdefault(draw(text), draw(text))
+            a_group().meta.setdefault(draw(dict_keys), draw(text))
         case "group_meta_pop":
-            a_group().meta.pop(draw(text), None)
+            a_group().meta.pop(draw(dict_keys), None)
         case "group_meta_clear":
             a_group().meta.clear()
         case "todo_append":
@@ -245,7 +249,9 @@ def _apply_one(draw, d: AgentState) -> None:
                 todos(draw) for _ in range(draw(st.integers(0, 2)))
             ]
         case "index_set":
-            d.index[draw(text)] = [Todo(id=draw(text)) for _ in range(draw(st.integers(0, 2)))]
+            d.index[draw(dict_keys)] = [
+                Todo(id=draw(text)) for _ in range(draw(st.integers(0, 2)))
+            ]
         case "index_clear":
             d.index.clear()
         case "index_append":
@@ -316,6 +322,31 @@ def test_set_also_replays(data):
         ref.set(data.draw(agent_states()))
         document = apply_ops(document, events[-1].ops)
         assert document == ref.current.model_dump(mode="json")
+
+
+def test_a_dict_key_named_dash_emits_an_ordinary_replace():
+    """KNOWN GOTCHA, pinned here: a mapping key that is literally ``-``.
+
+    RFC 6901 gives ``-`` its "one past the last array element" meaning ONLY when the value
+    it indexes is an array; against an object it is an ordinary member name, and there is
+    no escape for it (only ``~`` and ``/`` have one). The harness gets this right — the op
+    below is exactly what it should emit, and `ui/src/lib/state/jsonPatch.ts` replays it
+    correctly because it checks `Array.isArray(parent)` before treating ``-`` specially.
+
+    What cannot replay it is our test ORACLE: jsonpatch 1.33's ``ReplaceOperation.apply``
+    raises on a final ``-`` token before checking whether the parent is a sequence (its own
+    ``AddOperation`` checks first, so ``add`` and ``remove`` on such a key are fine). That
+    is why ``dict_keys`` below excludes ``-`` — the exclusion is an oracle limitation, NOT
+    a gap in the state layer, and this test is what keeps those two apart. Nothing here
+    calls ``replay()``; there is no workaround in ``replay.py`` and deliberately so."""
+    events: list = []
+    initial = AgentState(groups=[Group(name="g", meta={"-": "before"})])
+    ref = StateHost(events.append).state("a", initial)
+    with ref.mutate() as d:
+        d.groups[0].meta["-"] = "after"
+
+    assert events[-1].ops == [{"op": "replace", "path": "/groups/0/meta/-", "value": "after"}]
+    assert ref.current.model_dump(mode="json")["groups"][0]["meta"] == {"-": "after"}
 
 
 # --------------------------------------------------------------------------- #

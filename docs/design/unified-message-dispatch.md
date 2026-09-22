@@ -231,7 +231,7 @@ for tool approvals, rather than by a second hardcoded rule.
 A tool declares `inherently_safe: bool = False` (`agent_workflow.py:2495`) — a static claim
 about its nature, explicitly *not* a decision. `ToolApprovalPolicy` is authoritative and
 may honor that claim (`allow_inherently_safe()`), ignore it
-(`always_require_approvals()`), or override everything (`dangerously_skip_all()`).
+(`always_require_human_approval()`), or override everything (`dangerously_skip_all()`).
 
 Handlers get the same treatment. The child declares a hint; the **parent** building the
 toolset makes the call:

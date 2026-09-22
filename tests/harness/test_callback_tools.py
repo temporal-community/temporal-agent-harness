@@ -5,7 +5,7 @@
 #   * a callback tool publishes tool_start -> callback_requested, parks until the client
 #     provides a result, then callback_resolved(ok) -> tool_end, returning the validated value;
 #   * a callback tool gets EXACTLY the same approval policy as any other tool — under
-#     always_require_approvals it is gated FIRST (approval_requested -> resolved), and only then
+#     always_require_human_approval it is gated FIRST (approval_requested -> resolved), and only then
 #     does the callback_requested gate open;
 #   * the client result is validated against the tool's declared output type: a bad payload is
 #     rejected at the update boundary WITHOUT consuming the pending gate (resubmit works);
@@ -284,14 +284,14 @@ async def test_scalar_output_callback(env_and_client):
 
 
 async def test_callback_tool_is_gated_like_any_tool(env_and_client):
-    """Under always_require_approvals a callback tool is APPROVAL-gated first; only after the
+    """Under always_require_human_approval a callback tool is APPROVAL-gated first; only after the
     human approves does the callback_requested gate open. Proves the callback tool goes through
     the identical policy path as every other tool (approval BEFORE the callback body)."""
     client, task_queue = env_and_client
     handle = await _start(
         client,
         task_queue,
-        config=AgentConfig(approval_policy=ToolApprovalPolicy.always_require_approvals()),
+        config=AgentConfig(approval_policy=ToolApprovalPolicy.always_require_human_approval()),
     )
     agent_client = AgentClient(client, handle.id)
     await _send(handle, "echo")
@@ -335,7 +335,7 @@ async def test_denied_callback_never_requests_fulfillment(env_and_client):
     handle = await _start(
         client,
         task_queue,
-        config=AgentConfig(approval_policy=ToolApprovalPolicy.always_require_approvals()),
+        config=AgentConfig(approval_policy=ToolApprovalPolicy.always_require_human_approval()),
     )
     agent_client = AgentClient(client, handle.id)
     await _send(handle, "echo")

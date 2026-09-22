@@ -22,7 +22,7 @@ Why this exists: it's the first real end-to-end exercise of the subagent toolset
 subagent (the per-subagent FIFO gate + turn counter + stream-offset resume), and the
 ``run_subagent_turn`` activity against a live child workflow.
 
-Approval stance: this agent runs under ``always_require_approvals`` (like
+Approval stance: this agent runs under ``always_require_human_approval`` (like
 :class:`MontyChatAgentWorkflow`), so it **gates the subagent tools** — every ``start_monty`` /
 ``monty_run_script`` / ``stop_monty`` call escalates to a human. The script's host calls
 (search/book flights & hotels) run *inside the child*, which keeps its own
@@ -125,7 +125,7 @@ class MontyChatSubagentWorkflow:
             # Gate the subagent tools: every start_monty / monty_run_script / stop_monty call
             # escalates to a human (same stance as the inline MontyChatAgent). The script's
             # host calls run inside the child, which has its own dangerously_skip_all policy.
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            approval_policy_default=ToolApprovalPolicy.always_require_human_approval(),
         )
         self._model: str = DEFAULT_MODEL
         # Server-side conversation chaining id (Interactions API); updated each turn. Safe to

@@ -65,7 +65,7 @@ adapter that lets one harness agent drive another through that same standardized
   **deletes this module entirely** (along with `Generic[M]`, `add_accepted_message`, and the
   sentinel-key construction guard): with `M`-accumulation gone, the builder was pure
   ceremony. The runner is now constructed directly —
-  `AgentWorkflowRunner(config, stream=..., approval_policy_default=..., enable_message_queuing_default=False, auto_approval_evaluator=None)` — with the config-vs-default resolution folded into `__init__`
+  `AgentWorkflowRunner(config, stream=..., approval_policy_default=..., enable_message_queuing_default=False, auto_mode_evaluator=None)` — with the config-vs-default resolution folded into `__init__`
   (`stream` + `approval_policy_default` are required kwargs). Accepted messages are
   discovered from `@agent.accepts` handler signatures.
 - `harness/agent_client.py` — `send_message()` (the one PUBLIC turn driver) does update **+**
@@ -220,7 +220,7 @@ Each is intended to be separable and potentially worked in its own session. Stat
 > `Turn`/`AgentRunContext`/`turns()`/`start()`/`add_accepted_message`/the `M` type param —
 > **and the whole builder**: `_runner_builder.py`, `Generic[M]`, and the sentinel-key guard
 > are deleted; the runner is constructed directly,
-> `AgentWorkflowRunner(config, stream=..., approval_policy_default=..., enable_message_queuing_default=False, auto_approval_evaluator=None)`,
+> `AgentWorkflowRunner(config, stream=..., approval_policy_default=..., enable_message_queuing_default=False, auto_mode_evaluator=None)`,
 > with config-vs-default resolution in `__init__` (`stream` + `approval_policy_default`
 > required). Protocol: `AgentMessage{type, payload, expected_turn}` envelope (the
 > `expected_turn` is folded onto it; `UserInput` deleted), `AcceptedFunction`, `TextMessage`/
@@ -588,7 +588,7 @@ and `stop_monty()`s it — a drop-in replacement for the inline tool. This exerc
 the handle indirection, multiple turns per subagent (gate + turn counter + offset resume), and the
 `run_subagent_turn` activity against a real child.
 
-- **Approval stance (LOCKED 2026-06-17):** the parent runs under `always_require_approvals` (as
+- **Approval stance (LOCKED 2026-06-17):** the parent runs under `always_require_human_approval` (as
   `MontyChatAgent` does), so it **gates the subagent tools** — every `start_monty` /
   `monty_run_script` / `stop_monty` call escalates to a human. The child keeps its own
   `dangerously_skip_all`, so the script's host calls run unguarded *inside the child* (a known

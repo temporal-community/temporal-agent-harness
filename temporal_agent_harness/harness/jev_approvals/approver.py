@@ -1,21 +1,43 @@
-"""``jev_evaluator`` — the harness's builtin AI approval gate, backed by Jev.
+"""``jev_evaluator`` — the harness's builtin auto mode evaluator, backed by Jev.
 
-Auto mode for tool approvals. You write the rules once, in prose; every gated tool call is
-put to Jev against those rules and comes back ``approve`` / ``deny`` / ``escalate``::
+The MECHANISM half of auto mode. The RULEBOOK is
+:class:`~temporal_agent_harness.harness.agent_protocol.AutoApprovalCriteria`, which reaches
+this evaluator on the context rather than being closed over here — so the operator's rules
+outlive a change of evaluator, and this one holds no configuration of its own beyond which
+model to ask::
 
     self._runner = AgentWorkflowRunner(
         config,
         stream=WorkflowStream(),
-        approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-        auto_approval_evaluator=jev_evaluator(
-            policy=(
-                "Approve read-only lookups, and writes scoped to the requesting user's "
-                "own workspace. Deny anything that deletes another customer's data or "
-                "spends money. Anything touching production infrastructure goes to a "
-                "human, however routine it looks."
-            ),
+        # THE SWITCH: auto mode is a policy mode, not something an evaluator turns on.
+        approval_policy_default=ToolApprovalPolicy.auto_mode(
+            pre_approved_tools=["get_order"],   # approved above auto mode; never asked
         ),
+        # THE RULES: named sets, and which set judges which tool.
+        auto_approval_criteria_default=AutoApprovalCriteria(
+            sets={
+                "read_only": AutoApprovalCriteriaSet(
+                    effect="Reads and returns records. Changes nothing.",
+                    approve_when=("the record is inside the requesting user's workspace",),
+                    min_confidence=0.7,
+                ),
+                "financial": AutoApprovalCriteriaSet(
+                    effect="Moves money. Cannot be taken back once the processor accepts.",
+                    deny_when=("the destination is not the account that paid",),
+                    min_confidence=0.95,
+                ),
+            },
+            tools={"list_orders": "read_only"},   # covers tools with no decorator, e.g. MCP
+            default="read_only",                  # the catch-all
+        ),
+        # THE EVALUATOR.
+        auto_mode_evaluator=jev_evaluator(),
     )
+
+and each tool names its own default set, which the two above outrank::
+
+    @agent.activity_tool_defn(auto_approval_criteria="financial")
+    async def issue_refund(order_id: str, amount_cents: int) -> Receipt: ...
 
 WHY JEV AND NOT A GENERATIVE MODEL: an approval gate is a *classification* with
 consequences, and what it needs back is a decision plus a calibrated number saying how
@@ -25,29 +47,41 @@ is a first-class, thresholdable answer rather than something to infer from hedgi
 It is also one fast call, on the critical path of every gated tool call.
 
 WHAT THE MODEL DECIDES AND WHAT CODE DECIDES: the model answers two narrow questions —
-which verdict the operator's rules imply, and whether the call is irreversible. It never
+which verdict the operator's criteria imply, and whether the call is irreversible. It never
 decides *policy*. Turning those raw judgments into an action is :func:`decide`, plain code
-with explicit thresholds, so the thresholds can be tuned, reviewed, and re-applied to a
-past answer without re-running inference.
+with explicit thresholds read off the criteria, so an operator can retune them — or an
+auditor can re-apply them to a stored answer — without re-running inference.
 
-SAFE BY CONSTRUCTION, in three ways:
+SAFE BY CONSTRUCTION, in four ways:
 
 1. **Escalating is the default answer**, not approving. Every path that is not a confident
    approve or a confident deny — low confidence, an unrecognized label, an irreversible
    call, a TypeSafe outage, a worker missing the ``jev`` extra — ends at the human gate.
    The approver never fails open.
-2. **It can only decide calls the policy already gates.** It is the layer BELOW
-   :class:`ToolApprovalPolicy`, so it is consulted only for calls the operator's
-   serializable policy declined to auto-approve. It cannot widen that policy.
-3. **It is not reachable by the agent.** The Jev call is dispatched straight as an
+2. **It is only reached when the operator switched auto mode on.** The gate consults it
+   only for calls whose live :class:`ToolApprovalPolicy` has ``auto_mode_enabled``; it
+   is a mode the operator owns, not a fallback that activates because an evaluator exists.
+3. **It can only decide calls the policy already gated.** It sits BELOW the policy's
+   allow-list layers, so it never sees a call they approved and cannot widen them. An
+   explicit human "always allow this tool" (``remember=True``) outranks it permanently.
+4. **It is not reachable by the agent.** The Jev call is dispatched straight as an
    activity, never through ``runner.run_tool`` — so it is not a tool, the model cannot
    call it, cannot see it in its tool list, and cannot influence the question asked about
    its own tool call. (Routing it through ``run_tool`` would also recurse: the approval
    gate would gate the approval.)
 
+AND IT NEVER RUNS WHEN THERE IS NOTHING TO JUDGE. If no criteria set resolves for the tool —
+nobody assigned one, the assigned name is not registered, or the set is empty — the HARNESS
+escalates the call to the human gate and never calls this evaluator at all. That is enforced
+in the gate, not here (see ``AgentWorkflowRunner._auto_mode_context``): it is a safety
+property of auto mode, so it must not depend on an evaluator implementation remembering to
+check. Hence ``ctx.criteria_set`` is non-optional, and an unconfigured auto mode costs zero
+and changes nothing about which calls reach a person.
+
 Every decision is auditable from workflow history alone: the activity's input is the exact
-state and questions Jev was asked, its output the raw answers, and the resulting verdict
-plus its numbers are published as the ``tool_approval_resolved`` reason.
+state and questions Jev was asked (criteria included, resolved), its output the raw answers,
+and the resulting verdict plus its numbers, the set that governed it, and the criteria
+generation are published as the ``tool_approval_resolved`` reason and details.
 
 This module is WORKFLOW-SAFE. It imports no TypeSafe SDK — it builds plain dicts and
 dispatches the activity by name — so the optional ``jev`` extra is needed only on the
@@ -65,11 +99,12 @@ from temporalio.common import RetryPolicy
 from temporalio.workflow import ActivityConfig
 
 from temporal_agent_harness.harness.agent_protocol import (
-    AutoApprovalVerdict,
-    AutoApprovalDecision,
     AutoApprovalContext,
+    AutoApprovalCriteriaSet,
+    AutoApprovalDecision,
+    AutoApprovalVerdict,
 )
-from temporal_agent_harness.harness.agent_workflow import AUTO_APPROVAL_EVALUATOR_ATTR
+from temporal_agent_harness.harness.agent_workflow import AUTO_MODE_EVALUATOR_ATTR
 
 from .models import (
     DEFAULT_JEV_MODEL,
@@ -96,62 +131,50 @@ DEFAULT_ACTIVITY_CONFIG = ActivityConfig(
     summary="jev_approval",
 )
 
-# Below this the verdict's probability mass is too spread out to act on, so the call goes
-# to a person. 0.8 is a starting point, not a law: the right threshold depends on the tool
-# set and on what a wrong call costs, and the docs are explicit that it should be measured
-# on real traffic rather than assumed.
-DEFAULT_MIN_CONFIDENCE = 0.8
-
-# An approve is downgraded to an escalate when Jev puts the chance that the call cannot be
-# undone above this. A reversible mistake is worth automating; an irreversible one is worth
-# a person's two seconds. Pass ``None`` to let confident approvals stand on their own.
-DEFAULT_IRREVERSIBLE_CEILING = 0.5
-
 
 ExtraState = Mapping[str, Any] | Callable[[AutoApprovalContext], Mapping[str, Any]]
 
 
 def jev_evaluator(
     *,
-    policy: str,
-    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
-    escalate_if_irreversible_above: float | None = DEFAULT_IRREVERSIBLE_CEILING,
     model: str | None = DEFAULT_JEV_MODEL,
     extra_state: ExtraState | None = None,
     activity_config: ActivityConfig | None = None,
 ) -> Callable[[AutoApprovalContext], Any]:
-    """Build a Jev-backed auto-approver to pass as ``auto_approval_evaluator=``.
+    """Build a Jev-backed auto mode evaluator to pass as ``auto_mode_evaluator=``.
+
+    Takes no rules and no thresholds ON PURPOSE. Those are the operator's, they change over
+    a session's life, and they are configuration rather than code — so they live in
+    :class:`AutoApprovalCriteria` and arrive on every
+    :class:`AutoApprovalContext`. What is left here is the genuinely
+    mechanism-specific: which model to ask, what extra live state to show it, and how long
+    to wait.
 
     Args:
-        policy: The operator's auto-mode rules, in plain language — what may run
-            unattended, what must never run, and what a person has to see. This is the
-            ONLY authority the model is given; it is told in as many words not to
-            substitute its own sense of risk. Write it as rules about *kinds of calls*
-            ("anything that deletes customer data"), not about individual tools — naming
-            specific tools is what :class:`ToolApprovalPolicy`'s allow-list already does,
-            more cheaply and without a model in the loop.
-        min_confidence: Below this, the verdict goes to a human instead. Applies to deny
-            as well as approve: an unsure refusal is still an unsure decision.
-        escalate_if_irreversible_above: Downgrade an otherwise-confident APPROVE to an
-            escalate when Jev puts the probability that the call is irreversible above
-            this. ``None`` disables the check.
         model: TypeSafe model id; ``None`` takes the client's own default.
-        extra_state: Additional JSON state to show Jev alongside the call — the acting
-            user, the environment, whatever the policy actually turns on. Either a mapping
-            or a callable taking the :class:`AutoApprovalContext`. A callable runs
-            IN-WORKFLOW on every gated call, so it must be deterministic and must not do
-            I/O; read from the agent's own state, not from the outside world.
+        extra_state: Additional JSON state to show Jev alongside the call, on top of the
+            criteria's own serializable ``context``. Either a mapping or a callable taking
+            the :class:`AutoApprovalContext`. Use the callable form for facts that must be
+            read from LIVE agent state per call — it runs IN-WORKFLOW on every gated call,
+            so it must be deterministic and must not do I/O; read from the agent's own
+            state, never from the outside world.
         activity_config: Timeout/retry overrides for the Jev call. Defaults to
             :data:`DEFAULT_ACTIVITY_CONFIG`.
 
     Returns:
-        An async callable of the :data:`AutoApprovalEvaluator` shape.
+        An async callable of the :data:`AutoModeEvaluator` shape.
     """
     config: ActivityConfig = {**(activity_config or DEFAULT_ACTIVITY_CONFIG)}
 
     async def approve(ctx: AutoApprovalContext) -> AutoApprovalDecision:
+        # No "are there any rules?" check, deliberately. The harness guarantees there are —
+        # it resolves the governing set before deciding to call an evaluator at all, and
+        # escalates the call itself when none does (see
+        # ``AgentWorkflowRunner._auto_mode_context``). That guarantee is why
+        # ``ctx.criteria_set`` is non-optional, and why this function has no way to spend a
+        # model call on an empty rulebook.
         request = build_request(
-            ctx, policy=policy, model=model, extra_state=_resolve_extra_state(extra_state, ctx)
+            ctx, model=model, extra_state=_resolve_extra_state(extra_state, ctx)
         )
         # Deliberately NOT wrapped in try/except. A TypeSafe outage is an evaluation that
         # FAILED, not one that abstained, and the harness already draws that distinction on
@@ -164,16 +187,19 @@ def jev_evaluator(
             result_type=JevApprovalAnswer,
             **config,
         )
+        min_confidence, irreversible_ceiling = ctx.thresholds
         return decide(
             answer,
             min_confidence=min_confidence,
-            escalate_if_irreversible_above=escalate_if_irreversible_above,
+            escalate_if_irreversible_above=irreversible_ceiling,
+            criteria_set_name=ctx.criteria_set_name,
+            criteria_version=ctx.criteria_version,
         )
 
     # Names this evaluator on all three of its evaluation events. Stamped on the CALLABLE
     # because two of the three — the started event and the error event — are published
     # without a decision to read a label from.
-    setattr(approve, AUTO_APPROVAL_EVALUATOR_ATTR, "jev_evaluator")
+    setattr(approve, AUTO_MODE_EVALUATOR_ATTR, "jev_evaluator")
     return approve
 
 
@@ -187,10 +213,31 @@ def _resolve_extra_state(
     return extra_state
 
 
+def _rules(criteria_set: AutoApprovalCriteriaSet, ctx: AutoApprovalContext) -> dict[str, Any]:
+    """The operator's rules as JSON, flattened to exactly what the model must weigh.
+
+    Empty rule lists are omitted rather than sent as ``[]``: an absent key reads as "the
+    operator said nothing about this", which is the truth and is what should push a call
+    toward ``escalate``, whereas an empty list invites a model to read it as "nothing is
+    forbidden".
+    """
+    out: dict[str, Any] = {}
+    if criteria_set.effect:
+        out["what_calls_to_this_tool_do"] = criteria_set.effect
+    if criteria_set.approve_when:
+        out["approve_when"] = list(criteria_set.approve_when)
+    if criteria_set.deny_when:
+        out["deny_when"] = list(criteria_set.deny_when)
+    if criteria_set.escalate_when:
+        out["escalate_when"] = list(criteria_set.escalate_when)
+    if ctx.criteria.context:
+        out["operating_context"] = dict(ctx.criteria.context)
+    return out
+
+
 def build_request(
     ctx: AutoApprovalContext,
     *,
-    policy: str,
     model: str | None = DEFAULT_JEV_MODEL,
     extra_state: Mapping[str, Any] | None = None,
 ) -> JevApprovalRequest:
@@ -210,7 +257,7 @@ def build_request(
             "whether the call may run unattended, must be refused, or has to be shown to "
             "a person first. The agent chose this tool and these arguments itself."
         ),
-        "approval_policy": policy,
+        "approval_criteria": _rules(ctx.criteria_set, ctx),
         "tool": {
             "name": ctx.tool_name,
             "description": ctx.tool_description,
@@ -219,7 +266,7 @@ def build_request(
         "call_arguments": ctx.tool_input,
     }
     if extra_state:
-        state["context"] = dict(extra_state)
+        state["agent_state"] = dict(extra_state)
 
     return JevApprovalRequest(
         state=state,
@@ -229,21 +276,27 @@ def build_request(
                 "type": "choice",
                 "instructions": {
                     "question": (
-                        "Under the operator's rules in `approval_policy`, and those rules "
-                        "only, what should happen to the call described by `tool` and "
-                        "`call_arguments`?"
+                        "Under the operator's rules in `approval_criteria`, and those "
+                        "rules only, what should happen to the call described by `tool` "
+                        "and `call_arguments`?"
                     ),
                     "priorities": [
                         "Judge the call as it would actually run: `tool.description` says "
                         "what the tool does, and `call_arguments` are the exact arguments "
                         "it would run with.",
-                        "`approval_policy` is the operator's decision and the only "
+                        "`approval_criteria` is the operator's decision and the only "
                         "authority here. Do not substitute your own sense of what is "
                         "risky for what it says — neither to approve something it "
                         "forbids nor to refuse something it allows.",
+                        "`approval_criteria.deny_when` and `.escalate_when` are binding. "
+                        "`.approve_when` describes what a routine call looks like; it "
+                        "permits nothing that a deny or escalate rule also matches, so "
+                        "when rules conflict the stricter one wins.",
+                        "An absent key in `approval_criteria` means the operator said "
+                        "nothing about it. Silence is never permission.",
                         "`tool.declared_inherently_safe` is the tool author's own claim "
                         "that the tool is never unsafe under any input. Treat it as a "
-                        "hint; it never overrides `approval_policy`.",
+                        "hint; it never overrides `approval_criteria`.",
                         "If the rules do not settle this call, choose `escalate`. A person "
                         "is available and asking costs almost nothing; guessing does not.",
                     ],
@@ -252,11 +305,11 @@ def build_request(
                     "approve": {
                         "what": "Run the call now, unattended, with no human review.",
                         "when": (
-                            "`approval_policy` permits calls of this kind, and nothing in "
-                            "`call_arguments` crosses a line the policy draws."
+                            "`approval_criteria` permits calls of this kind, and nothing "
+                            "in `call_arguments` crosses a line the criteria draw."
                         ),
                         "not_for": (
-                            "A call the policy simply does not address — silence is not "
+                            "A call the criteria simply do not address — silence is not "
                             "permission; that is `escalate`."
                         ),
                     },
@@ -266,13 +319,13 @@ def build_request(
                             "refused so it can try a different approach."
                         ),
                         "when": (
-                            "`approval_policy` rules out calls of this kind, or "
+                            "`approval_criteria` rule out calls of this kind, or "
                             "`call_arguments` show this particular call doing something "
-                            "the policy forbids."
+                            "the criteria forbid."
                         ),
                         "not_for": (
-                            "A call that merely looks consequential but that the policy "
-                            "does not forbid; that is `escalate`."
+                            "A call that merely looks consequential but that the criteria "
+                            "do not forbid; that is `escalate`."
                         ),
                     },
                     "escalate": {
@@ -281,14 +334,14 @@ def build_request(
                             "or denies it themselves."
                         ),
                         "when": (
-                            "`approval_policy` does not settle this call: it is silent on "
-                            "this kind of call, it is ambiguous, or `call_arguments` are "
-                            "not specific enough to tell which side of the policy the "
-                            "call falls on."
+                            "`approval_criteria` do not settle this call: they are silent "
+                            "on this kind of call, they are ambiguous, or "
+                            "`call_arguments` are not specific enough to tell which side "
+                            "of the criteria the call falls on."
                         ),
                         "not_for": (
-                            "A call the policy plainly permits or plainly forbids — "
-                            "deciding those is the point of having the policy."
+                            "A call the criteria plainly permit or plainly forbid — "
+                            "deciding those is the point of having them."
                         ),
                     },
                 },
@@ -319,14 +372,18 @@ def build_request(
 def decide(
     answer: JevApprovalAnswer,
     *,
-    min_confidence: float = DEFAULT_MIN_CONFIDENCE,
-    escalate_if_irreversible_above: float | None = DEFAULT_IRREVERSIBLE_CEILING,
+    min_confidence: float,
+    escalate_if_irreversible_above: float | None,
+    criteria_set_name: str = "",
+    criteria_version: int = 0,
 ) -> AutoApprovalDecision:
     """Compose Jev's raw judgments into an action.
 
-    Pure: no Temporal, no network, no clock. This is where policy lives, deliberately
-    apart from inference, so the thresholds are reviewable and can be replayed against a
-    stored answer.
+    Pure: no Temporal, no network, no clock. This is where the operator's numbers are
+    APPLIED, deliberately apart from inference, so a stored answer can be replayed against
+    different thresholds without asking the model again. The thresholds are passed in
+    rather than defaulted here because they belong to the criteria set that governed the
+    call — a refund and a lookup do not share one confidence bar.
 
     The order of the checks is the safety argument:
 
@@ -349,12 +406,15 @@ def decide(
     )
     # Published on ``auto_approval_evaluation_ended`` for every verdict — including an
     # escalate, which resolves nothing and so has no other trace. It carries the raw
-    # judgments AND the thresholds applied to them, which is what makes a past decision
-    # re-readable against different thresholds without asking the model again.
+    # judgments AND the thresholds applied to them AND which generation of which criteria
+    # set produced them, which is what makes a past decision re-readable once the rules
+    # behind it have moved on.
     details = _details(
         answer,
         min_confidence=min_confidence,
         escalate_if_irreversible_above=escalate_if_irreversible_above,
+        criteria_set_name=criteria_set_name,
+        criteria_version=criteria_version,
     )
 
     def escalate(why: str) -> AutoApprovalDecision:
@@ -370,11 +430,11 @@ def decide(
     if verdict is None:
         return escalate("unrecognized verdict; escalated to a human.")
     if verdict is AutoApprovalVerdict.ESCALATE:
-        return escalate("the approval policy does not settle this call.")
+        return escalate("the approval criteria do not settle this call.")
     if verdict is AutoApprovalVerdict.DENY:
         return AutoApprovalDecision(
             verdict=AutoApprovalVerdict.DENY,
-            reason=f"{stats} — the approval policy forbids this call.",
+            reason=f"{stats} — the approval criteria forbid this call.",
             details=details,
         )
     if (
@@ -382,7 +442,7 @@ def decide(
         and answer.irreversible > escalate_if_irreversible_above
     ):
         return escalate(
-            f"approved on policy, but the effect looks irreversible (over the "
+            f"approved on the criteria, but the effect looks irreversible (over the "
             f"{escalate_if_irreversible_above:.0%} ceiling); escalated to a human."
         )
     return AutoApprovalDecision(
@@ -397,15 +457,18 @@ def _details(
     *,
     min_confidence: float,
     escalate_if_irreversible_above: float | None,
+    criteria_set_name: str,
+    criteria_version: int,
 ) -> dict[str, Any]:
-    """The reviewable record of one Jev evaluation: what the model said, and the policy
-    that was applied to it.
+    """The reviewable record of one Jev evaluation: what the model said, the numbers
+    applied to it, and which rules those came from.
 
-    Both halves are needed. The judgments alone cannot explain an outcome (a 0.7 confidence
-    escalates under one threshold and approves under another), and the thresholds alone say
-    nothing about the call. Together they are enough to re-derive the verdict — which is
-    exactly what :func:`decide` does, and what a reviewer can re-do by hand from a stored
-    event.
+    All three are needed. The judgments alone cannot explain an outcome (a 0.7 confidence
+    escalates under one threshold and approves under another); the thresholds alone say
+    nothing about the call; and neither says anything once the criteria have been edited,
+    which they now can be mid-session — hence the set name and generation. Together they
+    are enough to re-derive the verdict, which is exactly what :func:`decide` does and what
+    a reviewer can re-do by hand from a stored event.
     """
     return {
         "model": answer.model,
@@ -422,4 +485,6 @@ def _details(
             "min_confidence": min_confidence,
             "escalate_if_irreversible_above": escalate_if_irreversible_above,
         },
+        "criteria_set": criteria_set_name,
+        "criteria_version": criteria_version,
     }

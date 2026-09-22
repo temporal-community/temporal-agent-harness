@@ -145,12 +145,20 @@ def gate_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     id, which is what proves the call went through ``run_tool``."""
     recorded: list[dict[str, Any]] = []
 
-    async def _gate(tool_name: str, tool_input: dict[str, Any], *, inherently_safe: bool) -> None:
+    async def _gate(
+        tool_name: str,
+        tool_input: dict[str, Any],
+        *,
+        inherently_safe: bool,
+        tool_description: str | None = None,
+        auto_approval_criteria: str | None = None,
+    ) -> None:
         recorded.append(
             {
                 "tool_name": tool_name,
                 "tool_input": tool_input,
                 "inherently_safe": inherently_safe,
+                "auto_approval_criteria": auto_approval_criteria,
                 "ambient_tool_id": _CURRENT_TOOL_ID.get(),
             }
         )
@@ -269,7 +277,14 @@ async def test_raising_server_publishes_tool_error_and_reraises(
 async def test_denied_call_never_runs_and_returns_an_error_result(
     monkeypatch: pytest.MonkeyPatch, runner: _FakeRunner
 ) -> None:
-    async def _deny(tool_name: str, tool_input: dict[str, Any], *, inherently_safe: bool) -> None:
+    async def _deny(
+        tool_name: str,
+        tool_input: dict[str, Any],
+        *,
+        inherently_safe: bool,
+        tool_description: str | None = None,
+        auto_approval_criteria: str | None = None,
+    ) -> None:
         raise ToolApprovalDenied(tool_name, "nope")
 
     monkeypatch.setattr(h, "_apply_approval_policy", _deny)
@@ -292,6 +307,31 @@ async def test_inherently_safe_is_passed_to_the_gate(gate_calls: list[dict[str, 
     await _call_through(server, runner)
 
     assert gate_calls[0]["inherently_safe"] is True
+
+
+async def test_the_servers_criteria_set_reaches_the_gate(
+    gate_calls: list[dict[str, Any]], runner: _FakeRunner
+) -> None:
+    """An MCP server's tools arrive already defined, with no decorator to declare a criteria
+    set on, so the wrapper carries one name for the whole server. Per-tool precision is still
+    reachable without code, via ``AutoApprovalCriteria.tools``, which assigns by tool name."""
+    server = _govern(
+        _FakeMCPServer(_text_result("sunny")), runner, auto_approval_criteria="read_only"
+    )
+
+    await _call_through(server, runner)
+
+    assert gate_calls[0]["auto_approval_criteria"] == "read_only"
+
+
+async def test_no_criteria_set_declared_leaves_the_tool_on_the_catch_all(
+    gate_calls: list[dict[str, Any]], runner: _FakeRunner
+) -> None:
+    server = _govern(_FakeMCPServer(_text_result("sunny")), runner)
+
+    await _call_through(server, runner)
+
+    assert gate_calls[0]["auto_approval_criteria"] is None
 
 
 async def test_as_harness_mcp_servers_wraps_each(gate_calls: list[dict[str, Any]], runner: _FakeRunner) -> None:

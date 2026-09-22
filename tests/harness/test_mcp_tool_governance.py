@@ -116,7 +116,7 @@ class GatedMCPProbeAgent(_BaseMCPProbe):
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            approval_policy_default=ToolApprovalPolicy.always_require_human_approval(),
         )
         self._server_calls: list[Any] = []
 

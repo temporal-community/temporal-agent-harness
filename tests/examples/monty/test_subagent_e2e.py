@@ -463,7 +463,7 @@ async def test_attach_after_stopped_subagent_degrades_gracefully(client_and_queu
 
 async def test_gated_concurrent_dispatches_get_distinct_turn_numbers(client_and_queue):
     # Reproduction of the real conversational agent's path: two sends dispatched concurrently
-    # through the GENERATED tool under always_require_approvals, each gated on a real approval
+    # through the GENERATED tool under always_require_human_approval, each gated on a real approval
     # BEFORE its body runs take_ticket. Even so, the two SubagentMessageSent events must carry
     # DISTINCT child turn numbers (1, then 2) — the bug report was both showing turn 1.
     client, task_queue = client_and_queue

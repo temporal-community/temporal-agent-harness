@@ -128,7 +128,7 @@ class SubagentE2EParentWorkflow:
 @agent.defn
 class ApprovalGatedSubagentParentWorkflow:
     """Like :class:`SubagentE2EParentWorkflow`, but drives the subagent through the GENERATED
-    toolset via ``run_tool`` under ``always_require_approvals`` — so each send is gated on a
+    toolset via ``run_tool`` under ``always_require_human_approval`` — so each send is gated on a
     real human approval BEFORE its tool body (and thus the FIFO ``take_ticket``) runs. This
     reproduces the real conversational agent's timing, where the approval await precedes the
     ticket and gated calls unblock in approval order, not call order — the path a plain
@@ -139,7 +139,7 @@ class ApprovalGatedSubagentParentWorkflow:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            approval_policy_default=ToolApprovalPolicy.always_require_human_approval(),
         )
 
     @workflow.run

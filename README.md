@@ -68,7 +68,7 @@ just worker            # 4. this example's agent worker
 
 Open <http://localhost:8000> and start a session. There's no install step — `uv` fetches
 dependencies on demand. Every example follows the same four recipes; see
-[Run the examples](#run-the-examples) for the rest of them, including running all seven behind
+[Run the examples](#run-the-examples) for the rest of them, including running all eight behind
 one UI.
 
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
@@ -173,7 +173,7 @@ opt-in:
 | `ui` | want the browser UI and the `temporal-agent-harness` CLI (pulls in `fastapi[standard]`, including Uvicorn). The built Svelte assets are always in the wheel; only the server runtime is gated here, so agent-worker installs stay small. |
 | `code-mode` | run a worker that hosts **Code Mode** agents; pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in. The workflow-side `agent.code_mode_tool` factory needs nothing extra. |
 | `genai` | use the **Google Gemini** integration (`ai_sdks.google_genai_plugin`). |
-| `jev` | run a worker whose agents use **`agent.jev_evaluator`**, the builtin AI auto approval evaluator; pulls in [`typesafe-sdk`](https://pypi.org/project/typesafe-sdk/). Worker-side only — the workflow-side factory needs nothing extra. |
+| `jev` | run a worker whose agents use **`agent.jev_evaluator`**, the builtin AI auto mode evaluator; pulls in [`typesafe-sdk`](https://pypi.org/project/typesafe-sdk/). Worker-side only — the workflow-side factory needs nothing extra. |
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
@@ -228,8 +228,9 @@ a gated call **pauses inside the workflow and resumes durably** whenever a decis
 matter how long that takes) — there's no approval queue, state machine, or callback plumbing for
 you to build. The policy engine is sophisticated out of the box: layered rules, inherently-safe
 auto-approval, per-tool allow-lists, "approve and stop asking," per-session overrides, and runtime
-policy updates. When there are more calls than a person can sign off on, you can put **your own
-code — or a model — in the gate**: see [Custom approval hooks](#custom-approval-hooks-and-optional-jev-auto-approval).
+policy updates. When there are more calls than a person can sign off on, **auto mode** puts your
+own code — or a model — in the gate, judging each call against reusable criteria an end user can
+edit mid-session: see [Auto mode](#auto-mode--letting-code-or-a-model-decide).
 
 ### 🔌 Bring your own AI SDK
 Write turn logic with the SDK you already know. The harness's integrations turn each SDK call into
@@ -288,36 +289,101 @@ your tools' signatures **before it runs**. And since a subagent toolset is just 
 Code Mode composes over subagents for free.
 
 
-## Custom approval hooks, and optional Jev auto-approval
+## Auto mode — letting code, or a model, decide
 
-Between the `ToolApprovalPolicy` and the human gate sits one optional hook: an **auto approval
-evaluator**. An `async` function that sees only the calls the policy declined to auto-approve — and answers `APPROVE`, `DENY`, or `ESCALATE` (wait for a person, exactly as if it weren't wired).
+A tool call is either **allow-listed** by `ToolApprovalPolicy`, or it goes to a human. That's the
+whole branch. **Auto mode** is the third way to allow-list — the dynamic one, which judges a call's
+arguments rather than just its name — alongside the static "inherently safe" and by-name lists.
+
+A call auto mode declines to approve — `ESCALATE`, a low-confidence verdict, an evaluator failure,
+a tool you wrote no criteria for — is just a call that wasn't allow-listed, so it goes to a human
+exactly as if auto mode were off. Turning it on reduces how many calls a person sees; it never
+takes the final say on an unclear call away from them.
+
+`ToolApprovalPolicy.always_require_human_approval()` is the absence of all three allow-lists, so
+it never consults an evaluator even when one is wired.
+
+It is still a layer **you switch on**, not a hook that activates because you wired an evaluator.
+Leave it off and you get your explicit allow-list plus your own eyes on everything else — and an
+explicit "approve and stop asking" always outranks the machine.
+
+Auto mode has three separable parts, so the person who owns the *rules* need not be the one who
+wrote the *agent*:
 
 ```python
-async def my_evaluator(ctx: AutoApprovalContext) -> AutoApprovalDecision: ...
-
-AgentWorkflowRunner(..., auto_approval_evaluator=my_evaluator)
-```
-
-**`agent.jev_evaluator` puts a model in that seat.** You write the rules once, in prose; every
-gated call is judged against them by [Jev](https://docs.typesafe.ai) — one fast typed judgment,
-not a prompt to parse:
-
-```python
-auto_approval_evaluator=agent.jev_evaluator(
-    policy="Approve read-only lookups. Deny anything that deletes another customer's "
-           "data or spends money. Anything touching production goes to a human.",
+AgentWorkflowRunner(
+    config,
+    # THE SWITCH — a policy layer, off unless you say otherwise. `pre_approved_tools` are
+    # approved ABOVE auto mode, so they never reach the evaluator and never cost a call.
+    approval_policy_default=ToolApprovalPolicy.auto_mode(pre_approved_tools=["get_order"]),
+    # THE RULES — named, reusable criteria sets, and which set judges which tool.
+    auto_approval_criteria_default=AutoApprovalCriteria(
+        sets={
+            "read_only": AutoApprovalCriteriaSet(
+                effect="Reads and returns records. Changes nothing.",
+                approve_when=("the record is inside the requesting user's own workspace",),
+                min_confidence=0.7,
+            ),
+            "financial": AutoApprovalCriteriaSet(
+                effect="Moves money. Cannot be taken back once the processor accepts it.",
+                escalate_when=("the amount exceeds an order total discussed in this chat",),
+                deny_when=("the destination is not the account that placed the order",),
+                min_confidence=0.95,
+            ),
+        },
+        tools={"some_mcp_tool": "read_only"},   # by NAME, so it covers tools you didn't write
+        default="read_only",                     # the catch-all
+    ),
+    # THE MECHANISM — `agent.jev_evaluator` puts a model in the seat, via one fast typed
+    # judgment from Jev (https://docs.typesafe.ai) rather than a prompt to parse.
+    auto_mode_evaluator=agent.jev_evaluator(),
 )
 ```
 
-It can't fail open: low confidence, an irreversible effect, a raise, or a TypeSafe outage all land
-at the human gate rather than approving. Needs the `jev` extra **on the worker only**.
+A tool names the set it should be judged against — a label, never the rules themselves:
+
+```python
+@agent.activity_tool_defn(auto_approval_criteria="financial")
+async def issue_refund(order_id: str, amount_cents: int) -> Receipt:
+    """Refund a customer's order to the card that paid for it."""
+```
+
+That indirection is the point. A tool author is well placed to say *what kind of thing this tool
+is* and badly placed to guess your risk appetite — so the rules behind the name are configuration.
+An operator overrides them per session via `AgentConfig.auto_approval_criteria`, or at runtime from
+a message handler, letting an end user set their own security posture mid-session:
+
+```python
+# model_callable=False is not boilerplate here: a handler that can move the guardrail
+# must never become a tool a driving model can call to move it.
+@agent.accepts(mid_turn=MidTurn.ACCEPT, model_callable=False)
+async def set_posture(self, msg: Posture) -> Ack:
+    self._runner.set_approval_policy(
+        self._runner.approval_policy.with_auto_mode(msg.auto_mode)  # the switch
+    )
+    self._runner.set_auto_approval_criteria(msg.criteria)               # redefine the rules
+    self._runner.assign_tool_criteria("run_sql", "cautious")            # retarget one tool
+    return Ack()
+```
+
+It can't fail open: low confidence, an irreversible effect, a raise, or a TypeSafe outage all
+land at the human gate rather than approving.
+
+And the harness won't even *ask* unless the call is governed. A tool with no criteria set
+assigned, or one assigned to a name nobody registered, is escalated by the harness itself — no
+evaluator is invoked and no model call is spent, so an unconfigured auto mode costs nothing.
+That's enforced in the gate rather than left to each evaluator, which is why an evaluator
+receives its governing rules as a required, non-optional field and needs no defensive check of
+its own. Needs the `jev` extra **on the worker only**.
 
 Every evaluator — yours or Jev's — is bracketed on the event stream
 (`auto_approval_evaluation_started` → `_ended` / `_superseded` / `_error`), so its verdict,
 reasoning and latency stay auditable even when it *escalates* and resolves nothing. A human who
 answers first **cancels** it, and the console gives the evaluation its own card and its own share
 of the approval wait.
+
+[`examples/auto_mode`](examples/auto_mode) runs all of this end to end: the Monty travel agent,
+with lookups auto-approved and bookings still coming to you.
 
 ## A taste
 
@@ -645,7 +711,7 @@ each in its own terminal:
 just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
 just session-manager   # shared session-manager worker
 just server            # serves the MERGED registry (all agents) on http://localhost:8000
-just workers           # co-launch all seven agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
+just workers           # co-launch all eight agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
 ```
 
 Then create a session for any agent in the UI. A few need extra setup or a client:
@@ -654,6 +720,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 |---|---|
 | OpenAI Hello · Pydantic AI Hello | `OPENAI_API_KEY`; chat directly in the UI |
 | Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
+| Travel agent (Jev Auto mode) | `GEMINI_API_KEY` **and** `TYPESAFE_API_KEY`; Monty with [auto mode](#auto-mode--letting-code-or-a-model-decide) judging its gated calls ([readme](examples/auto_mode/README.md)); chat directly in the UI |
 | Tic-Tac-Toe (TypeSafe) | `TYPESAFE_API_KEY`; no LLM — every move is a [TypeSafe](https://docs.typesafe.ai) System One judgment ([readme](examples/tictactoe/README.md)); send `new_game` then `play` in the UI |
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
 | Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client --wiki-dir ./wiki`** — required, or its tool calls hang |

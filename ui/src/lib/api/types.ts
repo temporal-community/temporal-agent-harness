@@ -206,6 +206,13 @@ export interface ToolApprovalPolicy {
   dangerously_skip_all_approvals: boolean;
   auto_approve_inherently_safe: boolean;
   auto_approve_tools: string[];
+  /**
+   * Auto mode: the third way a call can be allow-listed, and the dynamic one — an
+   * evaluator judges each call's arguments rather than only its name. Whatever it
+   * declines to approve still goes to a human, so this only ever reduces how many
+   * approvals a person sees. Not rendered yet; carried so a client can.
+   */
+  auto_mode_enabled: boolean;
 }
 
 export interface SubagentInfo {

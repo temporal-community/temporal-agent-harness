@@ -6,11 +6,11 @@
 #     tool_start -> tool_end); a denied one never executes (ToolApprovalDenied);
 #   * the agent's ToolApprovalPolicy decides gating, NOT the tool: an inherently_safe tool
 #     runs without a gate under allow_inherently_safe, yet is still gated under
-#     always_require_approvals; an allow-listed / dangerously-skipped tool runs ungated;
+#     always_require_human_approval; an allow-listed / dangerously-skipped tool runs ungated;
 #   * a caller's AgentConfig.approval_policy overrides the agent's built-in default;
 #   * "approve, and don't ask again" (remember=True) allow-lists the tool, cascading to a
 #     concurrently-pending call of the same tool, and is reflected on the status query;
-#   * an auto approval evaluator approves a call the serializable policy did not, and the
+#   * an auto mode evaluator approves a call the serializable policy did not, and the
 #     harness brackets EVERY evaluator with auto_approval_evaluation_started -> _ended /
 #     _superseded / _error, so an automatic decision is auditable whatever it decided —
 #     including an ESCALATE, which resolves nothing and would otherwise leave no trace;
@@ -39,6 +39,8 @@ from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from temporal_agent_harness.harness import AgentWorkflowRunner, agent
 from temporal_agent_harness.harness.agent import (
+    AutoApprovalCriteria,
+    AutoApprovalCriteriaSet,
     AutoApprovalVerdict,
     AutoApprovalDecision,
     AutoApprovalContext,
@@ -84,7 +86,7 @@ async def gated_workflow_tool(text: str) -> str:
 
 
 async def _approve_gated_activity_tool(ctx: AutoApprovalContext) -> AutoApprovalDecision:
-    """A minimal auto approval evaluator: approve only ``gated_activity_tool``."""
+    """A minimal auto mode evaluator: approve only ``gated_activity_tool``."""
     return AutoApprovalDecision(
         AutoApprovalVerdict.APPROVE
         if ctx.tool_name == "gated_activity_tool"
@@ -125,7 +127,7 @@ async def _nonsense_evaluator(ctx: AutoApprovalContext):
 # ---------------------------------------------------------------------------
 # Probe workflows — each turn's text selects a scenario. Tool call ids are fixed
 # so a test can address approvals deterministically. The default policy gates
-# everything (always_require_approvals); tests relax it via AgentConfig.
+# everything (always_require_human_approval); tests relax it via AgentConfig.
 # ---------------------------------------------------------------------------
 
 
@@ -176,7 +178,7 @@ class ApprovalProbeAgent(_BaseProbe):
             stream=WorkflowStream(),
             # Safe-by-default baseline: gate everything. Tests relax it per session via
             # AgentConfig.approval_policy.
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            approval_policy_default=ToolApprovalPolicy.always_require_human_approval(),
         )
         # Last reply text, exposed via a query so a test can assert the outcome even after
         # the workflow has COMPLETED (the live event stream is gone by then — relevant for
@@ -192,6 +194,23 @@ class ApprovalProbeAgent(_BaseProbe):
         await self._runner.run(self)
 
 
+# Auto mode only reaches an evaluator for a call a criteria set GOVERNS — a custom evaluator
+# is no exception, because criteria are the schema every implementation reads rather than a
+# convenience for the Jev one. A catch-all is the least a probe can configure and still be
+# asked. The evaluators below ignore the rules' content and decide on tool name alone, which
+# is legal: what the harness guarantees is that an evaluator is never handed an UNGOVERNED
+# call, not that it must use what it is handed.
+_EVALUATED = AutoApprovalCriteria(
+    sets={
+        "evaluated": AutoApprovalCriteriaSet(
+            effect="Whatever the probe's tool does.",
+            escalate_when=("the evaluator under test says so",),
+        )
+    },
+    default="evaluated",
+)
+
+
 @workflow.defn
 @agent.defn
 class EvaluatorProbeAgent(_BaseProbe):
@@ -203,8 +222,9 @@ class EvaluatorProbeAgent(_BaseProbe):
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-            auto_approval_evaluator=_approve_gated_activity_tool,
+            approval_policy_default=ToolApprovalPolicy.auto_mode(),
+            auto_approval_criteria_default=_EVALUATED,
+            auto_mode_evaluator=_approve_gated_activity_tool,
         )
         self._last_reply: str | None = None
 
@@ -228,8 +248,9 @@ class VerdictEvaluatorProbeAgent(_BaseProbe):
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-            auto_approval_evaluator=_verdict_evaluator,
+            approval_policy_default=ToolApprovalPolicy.auto_mode(),
+            auto_approval_criteria_default=_EVALUATED,
+            auto_mode_evaluator=_verdict_evaluator,
         )
         self._last_reply: str | None = None
 
@@ -258,8 +279,9 @@ class SlowEvaluatorProbeAgent(_BaseProbe):
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-            auto_approval_evaluator=self._deny_once_released,
+            approval_policy_default=ToolApprovalPolicy.auto_mode(),
+            auto_approval_criteria_default=_EVALUATED,
+            auto_mode_evaluator=self._deny_once_released,
         )
         self._last_reply: str | None = None
 
@@ -301,8 +323,9 @@ class NonsenseEvaluatorProbeAgent(_BaseProbe):
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-            auto_approval_evaluator=_nonsense_evaluator,
+            approval_policy_default=ToolApprovalPolicy.auto_mode(),
+            auto_approval_criteria_default=_EVALUATED,
+            auto_mode_evaluator=_nonsense_evaluator,
         )
         self._last_reply: str | None = None
 
@@ -325,8 +348,9 @@ class BrokenEvaluatorProbeAgent(_BaseProbe):
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
-            auto_approval_evaluator=_exploding_evaluator,
+            approval_policy_default=ToolApprovalPolicy.auto_mode(),
+            auto_approval_criteria_default=_EVALUATED,
+            auto_mode_evaluator=_exploding_evaluator,
         )
         self._last_reply: str | None = None
 
@@ -610,7 +634,7 @@ async def test_inherently_safe_tool_auto_approves_under_allow_safe(env_and_clien
 async def test_always_require_gates_even_inherently_safe(env_and_client):
     """The safe-by-default baseline gates even an inherently-safe tool (step-through)."""
     client, task_queue = env_and_client
-    handle = await _start(client, task_queue)  # default = always_require_approvals
+    handle = await _start(client, task_queue)  # default = always_require_human_approval
     await _send(handle, "safe")
     agent_client = AgentClient(client, handle.id)
 

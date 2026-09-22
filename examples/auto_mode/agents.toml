@@ -1,0 +1,14 @@
+# Registry of agents the auto-mode example UI can launch.
+#
+# The packaged server (`just server`) reads this file and passes the parsed registry into the
+# packaged SessionManagerWorkflow, which serves it back over the `available_agents` query.
+
+[[agents]]
+key = "auto-mode-travel"
+workflow_type = "AutoModeTravelAgent"
+task_queue = "auto-mode-agent"
+label = "Travel agent (Jev Auto mode)"
+description = """
+The Monty conversational travel agent under AUTO MODE: each gated tool call is first judged
+by Jev against named criteria sets — lookups are approved, bookings are escalated to you, and
+anything Jev isn't sure about comes to you exactly as it would without auto mode."""

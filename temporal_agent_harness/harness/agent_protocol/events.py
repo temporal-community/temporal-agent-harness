@@ -142,7 +142,7 @@ class AgentEventType(StrEnum):
     AUTO_APPROVAL_EVALUATION_STARTED = "auto_approval_evaluation_started"
     """An automatic approval evaluator has BEGUN judging a gated call — opening a bracket.
 
-    Published when the runner consults the agent's ``auto_approval_evaluator`` for a call
+    Published when the runner consults the agent's ``auto_mode_evaluator`` for a call
     the :class:`ToolApprovalPolicy` did not auto-approve, BEFORE the evaluator runs. It
     names the evaluator (and an ``evaluation_id`` pairing it with its terminal event) and
     nothing else — at this instant the evaluator has not been called, so there is nothing
@@ -608,8 +608,8 @@ class AutoApprovalEvaluationEvent(ToolEvent[EventTypeT], Generic[EventTypeT]):
     )
     evaluator: str = Field(
         description="What is doing the judging — ``jev_evaluator`` for the builtin AI "
-        "approver, otherwise the fallback callable's qualified name. Read off the CALLABLE "
-        "(its ``__approval_evaluator__`` attribute) rather than off a returned decision, so "
+        "approver, otherwise the evaluator callable's qualified name. Read off the CALLABLE "
+        "(its ``__auto_mode_evaluator__`` attribute) rather than off a returned decision, so "
         "the started event and the error event can both name it — neither has a decision to "
         "read it from."
     )
