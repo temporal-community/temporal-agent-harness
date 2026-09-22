@@ -28,6 +28,7 @@
     resolveReplayAction,
     type ReplaySurface
   } from "$lib/state/replayHotkeys";
+  import { setFaviconTone } from "$lib/state/favicon";
 
   const savedPrefs = readOperatorPrefs();
 
@@ -95,6 +96,12 @@
 
   $effect(() => {
     void run.initialize();
+  });
+
+  /* The tab is a tiny second playhead. It takes the current event's semantic
+     tone, so live following and replay scrubbing agree. */
+  $effect(() => {
+    setFaviconTone(run.currentLogRow?.tone ?? null);
   });
 
   /* Sessions this UI did not start still belong in the list, and coming back to a
