@@ -1,0 +1,10 @@
+# Registry of the OpenAI automatic-model-selection example.
+
+[[agents]]
+key = "openai-auto-router"
+workflow_type = "OpenAIAutoRouterAgent"
+task_queue = "openai-auto-router"
+label = "OpenAI Auto Router"
+description = """
+An OpenAI Agents SDK agent using model=\"auto\". A routing activity selects Luna,
+Terra, Sol, or Astra; the recorded choice is reused for every model call in that run."""

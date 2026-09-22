@@ -3073,6 +3073,9 @@ genai = [
     { name = "google-auth" },
     { name = "google-genai" },
 ]
+model-routing = [
+    { name = "typesafe-sdk" },
+]
 nexus-mcp = [
     { name = "mcp" },
     { name = "openai-agents" },
@@ -3113,6 +3116,7 @@ dev = [
     { name = "setuptools" },
     { name = "temporal-nexus-mcp" },
     { name = "temporalio", extra = ["aioboto3", "opentelemetry"] },
+    { name = "typesafe-sdk" },
 ]
 examples = [
     { name = "fastapi", extra = ["standard"] },
@@ -3122,6 +3126,7 @@ examples = [
     { name = "openai-agents" },
     { name = "pydantic-ai-slim", extra = ["temporal"] },
     { name = "pydantic-monty" },
+    { name = "typesafe-sdk" },
 ]
 
 [package.metadata]
@@ -3141,8 +3146,9 @@ requires-dist = [
     { name = "temporalio", extras = ["aioboto3"], marker = "extra == 's3'", specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'nexus-mcp'", specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'openai-agents'", specifier = ">=1.31.0" },
+    { name = "typesafe-sdk", marker = "extra == 'model-routing'" },
 ]
-provides-extras = ["genai", "s3", "openai-agents", "pydantic-ai", "ui", "code-mode", "nexus-mcp"]
+provides-extras = ["genai", "s3", "openai-agents", "model-routing", "pydantic-ai", "ui", "code-mode", "nexus-mcp"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3164,6 +3170,7 @@ dev = [
     { name = "temporal-nexus-mcp", editable = "nexus/mcp" },
     { name = "temporalio", extras = ["aioboto3"], specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], specifier = ">=1.31.0" },
+    { name = "typesafe-sdk" },
 ]
 examples = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
@@ -3173,6 +3180,7 @@ examples = [
     { name = "openai-agents", specifier = ">=0.22.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
     { name = "pydantic-monty", specifier = "==0.0.18" },
+    { name = "typesafe-sdk" },
 ]
 
 [[package]]
@@ -3343,6 +3351,22 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/fe/64/42689150509eb3e6e82b33ee3d89045de1592488842ddf23c56957786d05/types_s3transfer-0.16.0.tar.gz", hash = "sha256:b4636472024c5e2b62278c5b759661efeb52a81851cde5f092f24100b1ecb443", size = 13557, upload-time = "2025-12-08T08:13:09.928Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/98/27/e88220fe6274eccd3bdf95d9382918716d312f6f6cef6a46332d1ee2feff/types_s3transfer-0.16.0-py3-none-any.whl", hash = "sha256:1c0cd111ecf6e21437cb410f5cddb631bfb2263b77ad973e79b9c6d0cb24e0ef", size = 19247, upload-time = "2025-12-08T08:13:08.426Z" },
+]
+
+[[package]]
+name = "typesafe-sdk"
+version = "0.7.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx2" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+    { name = "tenacity" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dc/d4/14d9a00c759c126c814f7cfc0b2a760768214cda0708a9af49577b321ee3/typesafe_sdk-0.7.1.tar.gz", hash = "sha256:495ce9d81733b4f95edcb156e95042a7ec4bfd59972a1150ffa8ce1e11f85a54", size = 23062, upload-time = "2026-09-21T15:57:53.579Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/75/72/7e57648d27e45260b04762dd2393a81604b516a282fc5efe94cdf90ab971/typesafe_sdk-0.7.1-py3-none-any.whl", hash = "sha256:9d04eee13b5f64bbbe6f8e96cf40e3f39ca4efc934a1f4f39490cb9a43e9d2ad", size = 36366, upload-time = "2026-09-21T15:57:52.314Z" },
 ]
 
 [[package]]

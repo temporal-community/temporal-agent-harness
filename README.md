@@ -98,6 +98,7 @@ dependencies = [
     #   code-mode       the sandbox a worker runs Code Mode scripts in
     #   genai           the Google Gemini integration
     #   openai-agents   the OpenAI Agents SDK integration
+    #   model-routing   OpenAI Agents model="auto" selection
     #   pydantic-ai     the Pydantic AI integration
     #   s3              S3-backed offload for large payloads
     #
@@ -173,10 +174,11 @@ opt-in:
 | `code-mode` | run a worker that hosts **Code Mode** agents; pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in. The workflow-side `agent.code_mode_tool` factory needs nothing extra. |
 | `genai` | use the **Google Gemini** integration (`ai_sdks.google_genai_plugin`). |
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
+| `model-routing` | use `model="auto"` selection with the OpenAI Agents SDK. |
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 
-Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.4.0'`.
+Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,openai-agents,model-routing]==0.4.0'`.
 
 ## Versioning and stability
 
@@ -526,8 +528,9 @@ cp .env.example .env.local
 ```
 
 Set the creds for whichever agents you'll run: `OPENAI_API_KEY` (react_agent, openai_hello,
-pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding). The default committed
-`temporal.local.toml` profile points at a local Temporal dev server.
+openai_auto_router, pydantic_ai_hello), `TYPESAFE_API_KEY` (openai_auto_router), and/or
+`GEMINI_API_KEY` (monty, wiki, coding). The default committed `temporal.local.toml` profile
+points at a local Temporal dev server.
 
 ### One example, standalone
 
@@ -556,7 +559,7 @@ each in its own terminal:
 just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
 just session-manager   # shared session-manager worker
 just server            # serves the MERGED registry (all agents) on http://localhost:8000
-just workers           # co-launch all six agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
+just workers           # co-launch all seven agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
 ```
 
 Then create a session for any agent in the UI. A few need extra setup or a client:
@@ -564,6 +567,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | Agent | Needs |
 |---|---|
 | OpenAI Hello · Pydantic AI Hello | `OPENAI_API_KEY`; chat directly in the UI |
+| OpenAI Auto Router | `OPENAI_API_KEY` and `TYPESAFE_API_KEY`; chat directly in the UI |
 | Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
 | Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client --wiki-dir ./wiki`** — required, or its tool calls hang |
