@@ -34,6 +34,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from temporal_agent_harness.harness import AgentWorkflowRunner, agent
+from temporal_agent_harness.harness.agent_workflow import Injected
 from temporal_agent_harness.harness.agent_client import AgentClient
 from temporal_agent_harness.harness.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
@@ -492,6 +493,24 @@ async def refund_customer(amount: int) -> str:
     return f"refunded:{amount}"
 
 
+# The canary. An ``Injected[...]`` parameter is supplied by the WORKFLOW per call and hidden
+# from the model's tool schema — it is where a caller puts an API token, a tenant secret, a
+# signed URL. It must never be shown to ANY model, and the auto mode evaluator is a model.
+INJECTED_SECRET = "s3cr3t-injected-credential-must-never-reach-a-model"
+
+
+@agent.tool_defn(auto_approval_criteria="financial")
+async def refund_inline_with_credential(amount: int, api_token: Injected[str]) -> str:
+    """Refund a customer inline using the caller's payment credential. Moves real money."""
+    return f"refunded:{amount}"
+
+
+@agent.activity_tool_defn(auto_approval_criteria="financial")
+async def refund_with_credential(amount: int, api_token: Injected[str]) -> str:
+    """Refund a customer using the caller's payment credential. Moves real money."""
+    return f"refunded:{amount}"
+
+
 # The rules the tool's declared set name resolves to. Configuration, so the same tool can be
 # judged differently per deployment without touching its code.
 _PROBE_CRITERIA = AutoApprovalCriteria(
@@ -540,6 +559,35 @@ class JevApprovalProbeAgent:
             result = f"denied:{e.reason}"
         return TextReply(text=result)
 
+    @agent.accepts
+    async def act_with_credential(self, message: TextMessage) -> TextReply:
+        """Try one refund through the tool that takes an injected credential."""
+        try:
+            result = await self._runner.run_tool(
+                "r1",
+                refund_with_credential,
+                int(message.text),
+                injections={"api_token": INJECTED_SECRET},
+            )
+        except agent.ToolApprovalDenied as e:
+            result = f"denied:{e.reason}"
+        return TextReply(text=result)
+
+    @agent.accepts
+    async def act_inline_with_credential(self, message: TextMessage) -> TextReply:
+        """Same, through an INLINE tool — the path Code Mode host calls and subagent
+        toolsets also take."""
+        try:
+            result = await self._runner.run_tool(
+                "r1",
+                refund_inline_with_credential,
+                int(message.text),
+                injections={"api_token": INJECTED_SECRET},
+            )
+        except agent.ToolApprovalDenied as e:
+            result = f"denied:{e.reason}"
+        return TextReply(text=result)
+
     @workflow.run
     async def run(self, config: AgentConfig) -> None:
         await self._runner.run(self)
@@ -580,7 +628,11 @@ async def _jev_env(fake_activity):
         env.client,
         task_queue=task_queue,
         workflows=[JevApprovalProbeAgent],
-        activities=[agent.tool_activity(refund_customer), fake_activity],
+        activities=[
+            agent.tool_activity(refund_customer),
+            agent.tool_activity(refund_with_credential),
+            fake_activity,
+        ],
         workflow_runner=UnsandboxedWorkflowRunner(),
     ):
         try:
@@ -590,7 +642,12 @@ async def _jev_env(fake_activity):
 
 
 async def _run_once(
-    client, task_queue: str, amount: str, *, config: AgentConfig | None = None
+    client,
+    task_queue: str,
+    amount: str,
+    *,
+    config: AgentConfig | None = None,
+    message_type: str = "act",
 ) -> list[AgentEvent]:
     handle = await client.start_workflow(
         JevApprovalProbeAgent.run,
@@ -600,7 +657,7 @@ async def _run_once(
     )
     await handle.execute_update(
         SEND_AGENT_MESSAGE_UPDATE,
-        AgentMessage(type="act", payload={"text": amount}),
+        AgentMessage(type=message_type, payload={"text": amount}),
         result_type=AgentMessageReply,
     )
     events: list[AgentEvent] = []
@@ -946,3 +1003,63 @@ async def test_end_to_end_no_criteria_never_reaches_the_evaluator():
     # Requested, then waiting on a person. Nothing was evaluated, so unlike an ESCALATE
     # verdict there is no started/ended pair to explain — exactly as when auto mode is off.
     assert _tool_event_types(events) == [AgentEventType.TOOL_APPROVAL_REQUESTED]
+
+
+async def test_an_injected_parameter_never_reaches_the_evaluator():
+    """SECURITY. An ``Injected[...]`` parameter must not appear anywhere in the state put to
+    the auto mode evaluator.
+
+    Injected parameters exist precisely because their values must not be model-visible: the
+    WORKFLOW supplies them per call, they are stripped from the tool schema the driving model
+    sees, and they are the natural home for an API token or a tenant secret. An auto mode
+    evaluator is another model, reached over another network call to another vendor — so
+    "hidden from the model" has to mean hidden from it too, not merely from the one choosing
+    the call.
+
+    Asserted against the ACTIVITY'S INPUT rather than against the context object, because the
+    activity input is the payload that actually leaves the worker: whatever is in it is what a
+    third party receives and what lands in workflow history forever. Scanned as serialized
+    JSON so the check cannot be fooled by the secret sitting somewhere unexpected in the state
+    (nested under the criteria, the tool description, the operating context) instead of the
+    argument it came in as."""
+    fake, seen = _fake_jev("approve", confidence=0.95, irreversible=0.1)
+    async with _jev_env(fake) as (client, task_queue):
+        events = await _run_once(
+            client, task_queue, "20", message_type="act_with_credential"
+        )
+
+    assert len(seen) == 1
+    request = seen[0]
+
+    # The model-facing argument is there; the injected one is not, by name or by value.
+    assert request.state["call_arguments"] == {"amount": 20}
+    assert "api_token" not in request.state["call_arguments"]
+
+    # Nothing anywhere in the request carries it — state, questions, model id and all.
+    serialized = request.model_dump_json()
+    assert INJECTED_SECRET not in serialized
+    assert "api_token" not in serialized
+
+    # And the call really did run with the credential, so this is not passing by accident of
+    # the injection never having been supplied.
+    assert _reply(events) == "refunded:20"
+
+
+async def test_an_injected_parameter_never_reaches_the_evaluator_from_an_inline_tool():
+    """The same guarantee on the INLINE dispatch path.
+
+    Worth asserting separately: ``tool_defn`` binds its own arguments, and it is the path that
+    Code Mode host calls, callback tools and subagent toolsets all funnel through — so a leak
+    here would be a leak in most of the harness at once, not just in one decorator."""
+    fake, seen = _fake_jev("approve", confidence=0.95, irreversible=0.1)
+    async with _jev_env(fake) as (client, task_queue):
+        events = await _run_once(
+            client, task_queue, "20", message_type="act_inline_with_credential"
+        )
+
+    assert len(seen) == 1
+    assert seen[0].state["call_arguments"] == {"amount": 20}
+    serialized = seen[0].model_dump_json()
+    assert INJECTED_SECRET not in serialized
+    assert "api_token" not in serialized
+    assert _reply(events) == "refunded:20"
