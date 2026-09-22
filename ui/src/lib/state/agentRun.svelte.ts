@@ -38,6 +38,7 @@ import {
 } from "./hydration";
 import { displayTextForMessage, renderUserMessage } from "./inboundMessageText";
 import { buildAgentStateDocs } from "./agentState";
+import { buildApprovalDecisions } from "./approvalDecisionTree";
 import { buildReplayLog, buildReplayMarkers } from "./replayLog";
 import { buildReplayTimeline } from "./replayTimeline";
 import { buildStepBoundaries, buildStepTimeline } from "./stepTimeline";
@@ -444,6 +445,8 @@ export class AgentRunController {
    * keeps two agents' `plan` from folding into one document.
    */
   agentStates = $derived(buildAgentStateDocs(this.visibleReplayTimeline));
+  /** Completed automatic approval judgments, as of the replay cursor. */
+  approvalDecisions = $derived(buildApprovalDecisions(this.visibleReplayTimeline));
   usage = $derived(summarizeCost(this.visibleReplayFrames));
   usageTimeline = $derived(buildUsageTimeline(this.allReplayFrames));
   stepTimeline = $derived(buildStepTimeline(this.replayTimeline));

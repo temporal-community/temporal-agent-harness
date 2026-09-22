@@ -31,17 +31,17 @@
       {#each rows as row (row.model)}
         <li data-tip={`${formatTokens(row.tokens.input)} in · ${formatTokens(row.tokens.output)} out`}>
           <span class="name">{row.model}</span>
-          <!-- A lone model spent every token in the run, so its bar is always
-               full and its figure is the total already printed beside this card.
-               Naming it is the whole reading; the rest is repetition. -->
-          {#if rows.length > 1}
-            <div class="row-meta">
+          <!-- The figure stays even for one model. An approval evaluator can be
+               the only metered model in a short run, and this list promises a
+               number by model rather than only a model name. -->
+          <div class="row-meta">
+            {#if rows.length > 1}
               <span class="bar-track" aria-hidden="true">
                 <span class="bar" style={`width: ${(row.tokens.total / maxTokens) * 100}%`}></span>
               </span>
-              <span class="value">{formatTokens(row.tokens.total)}</span>
-            </div>
-          {/if}
+            {/if}
+            <span class="value">{formatTokens(row.tokens.total)}</span>
+          </div>
         </li>
       {/each}
     </ul>
