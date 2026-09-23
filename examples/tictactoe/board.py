@@ -72,8 +72,7 @@ class Move(HarnessState):
     """One move that has been played, in order."""
 
     mark: Mark
-    cell: int
-    """1-9, left-to-right, top-to-bottom."""
+    cell: int = Field(description="1-9, left-to-right, top-to-bottom.")
 
 
 class Board(HarnessState):
@@ -165,8 +164,10 @@ class PlaceMarkResponse(BaseModel):
     mark: Mark
     cell: int
     status: Status
-    board: str
-    """The board after the move, rendered — so the tool_end shows the result of its own write."""
+    board: str = Field(
+        description="The board after the move, rendered — so the tool_end shows the result "
+        "of its own write."
+    )
 
 
 @agent.tool_defn(inherently_safe=True)

@@ -18,6 +18,9 @@ A normal dev setup runs both subcommands:
 more ``agents.toml`` registries. ``session-manager`` runs the agent-agnostic worker that hosts
 the packaged ``SessionManagerWorkflow``; without it the server comes up but ``/api/agents`` and
 session creation have nothing to answer them, since both are workflow queries.
+
+``schema`` needs no Temporal connection: it imports one agent class and prints its handlers and
+declared state as JSON Schema (``harness.agent_schema``), the input to client codegen.
 """
 
 from __future__ import annotations
@@ -78,6 +81,20 @@ def _session_manager(args: argparse.Namespace) -> None:
     run_session_manager_worker(task_queue=args.task_queue, identity=args.identity)
 
 
+def _schema(args: argparse.Namespace) -> None:
+    from temporal_agent_harness.harness.agent_schema import dump_agent_schema, load_agent_class
+
+    try:
+        text = dump_agent_schema(load_agent_class(args.agent))
+    except ValueError as e:
+        raise SystemExit(f"temporal-agent-harness schema: {e}") from None
+    if args.output is None:
+        sys.stdout.write(text)
+    else:
+        with open(args.output, "w", encoding="utf-8") as f:
+            f.write(text)
+
+
 def main(argv: list[str] | None = None) -> None:
     # --temporal-address is shared rather than duplicated, so the two subcommands can never
     # drift on the one setting that has to agree between them.
@@ -94,7 +111,8 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="temporal-agent-harness",
         description="Run the packaged Temporal agent harness: the web UI over your "
-        "agents.toml registries, and the session-manager worker they need.",
+        "agents.toml registries, and the session-manager worker they need. Or print an "
+        "agent's schema for client codegen.",
         epilog=TEMPORAL_CONNECTION_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -150,6 +168,24 @@ def main(argv: list[str] | None = None) -> None:
     )
     session_manager.set_defaults(handler=_session_manager)
 
+    schema = subparsers.add_parser(
+        "schema",
+        help="Print an agent's handlers and declared state as JSON Schema.",
+        description="Import one agent class and print its @agent.accepts handlers (input "
+        "and output models) and its agent.state(...) declarations as a single JSON Schema "
+        "document with shared $defs — the input to client codegen. Starts no workflow and "
+        "needs no Temporal connection.",
+    )
+    schema.add_argument(
+        "agent",
+        metavar="module.path:ClassName",
+        help="The agent class, e.g. examples.tictactoe.workflow:TicTacToeAgentWorkflow.",
+    )
+    schema.add_argument(
+        "-o", "--output", default=None, help="Write to this file instead of stdout."
+    )
+    schema.set_defaults(handler=_schema)
+
     # A bare `temporal-agent-harness` is how someone finds out what this command does, so answer
     # with the full help (subcommands and connection rules included) rather than argparse's terse
     # "the following arguments are required" one-liner. Still exits non-zero: the invocation
@@ -166,7 +202,8 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         raise SystemExit(2)
 
-    ensure_temporal_address(args.temporal_address)
+    if hasattr(args, "temporal_address"):
+        ensure_temporal_address(args.temporal_address)
     handler(args)
 
 

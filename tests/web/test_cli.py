@@ -278,3 +278,28 @@ def test_serve_checks_temporal_before_binding_the_port(
     main(["serve", str(registry)])
 
     assert calls == ["verify", "uvicorn"]
+
+
+def test_schema_prints_the_agent_schema_without_touching_temporal_config(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from temporal_agent_harness.harness.agent_schema import dump_agent_schema, load_agent_class
+
+    target = "examples.tictactoe.workflow:TicTacToeAgentWorkflow"
+    main(["schema", target])
+
+    assert capsys.readouterr().out == dump_agent_schema(load_agent_class(target))
+    assert "TEMPORAL_ADDRESS" not in os.environ
+
+
+def test_schema_writes_to_a_file(tmp_path, capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "tictactoe.schema.json"
+    main(["schema", "examples.tictactoe.workflow:TicTacToeAgentWorkflow", "-o", str(out)])
+
+    assert capsys.readouterr().out == ""
+    assert '"agent": "TicTacToeAgent"' in out.read_text()
+
+
+def test_schema_reports_a_bad_target_as_a_usage_error() -> None:
+    with pytest.raises(SystemExit, match="is not a @workflow.defn agent class"):
+        main(["schema", "examples.tictactoe.board:Board"])

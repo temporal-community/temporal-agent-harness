@@ -20,8 +20,10 @@ from pydantic import BaseModel, Field
 class NewGame(BaseModel):
     """Start a fresh game."""
 
-    agent_goes_first: bool = False
-    """If true the agent plays X and opens; otherwise you are X and open."""
+    agent_goes_first: bool = Field(
+        default=False,
+        description="If true the agent plays X and opens; otherwise you are X and open.",
+    )
 
 
 class PlayMove(BaseModel):
@@ -36,12 +38,18 @@ class PlayMove(BaseModel):
 
 
 class SystemOneRequest(BaseModel):
-    state: dict[str, Any]
-    """The JSON state the model judges — the board, whose turn, the candidate cells."""
-    questions: dict[str, dict[str, Any]]
-    """Raw TypeSafe question dicts keyed by question id (``type`` is ``noul``/``choice``/``score``)."""
-    model: str | None = None
-    """Model override; ``None`` takes the client default (``TYPESAFE_DEFAULT_MODEL`` / ``jev-latest``)."""
+    state: dict[str, Any] = Field(
+        description="The JSON state the model judges — the board, whose turn, the candidate cells."
+    )
+    questions: dict[str, dict[str, Any]] = Field(
+        description="Raw TypeSafe question dicts keyed by question id (`type` is "
+        "`noul`/`choice`/`score`)."
+    )
+    model: str | None = Field(
+        default=None,
+        description="Model override; None takes the client default "
+        "(`TYPESAFE_DEFAULT_MODEL` / `jev-latest`).",
+    )
 
 
 class ChoiceResult(BaseModel):
@@ -58,13 +66,13 @@ class ScoreResult(BaseModel):
 
 
 class SystemOneResult(BaseModel):
-    model: str
-    """The model that actually answered (the API's resolved id)."""
+    model: str = Field(description="The model that actually answered (the API's resolved id).")
     request_id: str
     input_tokens: int | None = None
     output_tokens: int | None = None
-    nouls: dict[str, float] = {}
-    """Question id → probability of yes."""
+    nouls: dict[str, float] = Field(
+        default_factory=dict, description="Question id → probability of yes."
+    )
     choices: dict[str, ChoiceResult] = {}
     scores: dict[str, ScoreResult] = {}
 

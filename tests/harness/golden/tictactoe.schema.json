@@ -1,0 +1,183 @@
+{
+  "agent": "TicTacToeAgent",
+  "source": "examples.tictactoe.workflow:TicTacToeAgentWorkflow",
+  "handlers": {
+    "new_game": {
+      "description": "Reset the board and start a new game. You are X and open unless\n`agent_goes_first` is set, in which case the agent plays X and opens.",
+      "mid_turn": "enqueue",
+      "input": {
+        "$ref": "#/$defs/NewGame"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    },
+    "play": {
+      "description": "Play your mark on an empty cell (1-9, left-to-right, top-to-bottom). The agent\nthen judges the position with TypeSafe and answers with its own move.",
+      "mid_turn": "enqueue",
+      "input": {
+        "$ref": "#/$defs/PlayMove"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {
+    "board": {
+      "$ref": "#/$defs/Board"
+    }
+  },
+  "$defs": {
+    "Board": {
+      "additionalProperties": false,
+      "description": "The whole game: nine cells, whose turn it is, who the agent is, and the outcome.",
+      "properties": {
+        "cells": {
+          "default": [
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "enum": [
+                  "X",
+                  "O"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": "Cells",
+          "type": "array"
+        },
+        "to_move": {
+          "default": "X",
+          "enum": [
+            "X",
+            "O"
+          ],
+          "title": "To Move",
+          "type": "string"
+        },
+        "agent_mark": {
+          "default": "O",
+          "enum": [
+            "X",
+            "O"
+          ],
+          "title": "Agent Mark",
+          "type": "string"
+        },
+        "status": {
+          "default": "playing",
+          "enum": [
+            "playing",
+            "X_wins",
+            "O_wins",
+            "draw"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "moves": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Move"
+          },
+          "title": "Moves",
+          "type": "array"
+        }
+      },
+      "required": [
+        "cells",
+        "to_move",
+        "agent_mark",
+        "status",
+        "moves"
+      ],
+      "title": "Board",
+      "type": "object"
+    },
+    "Move": {
+      "additionalProperties": false,
+      "description": "One move that has been played, in order.",
+      "properties": {
+        "mark": {
+          "enum": [
+            "X",
+            "O"
+          ],
+          "title": "Mark",
+          "type": "string"
+        },
+        "cell": {
+          "description": "1-9, left-to-right, top-to-bottom.",
+          "title": "Cell",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mark",
+        "cell"
+      ],
+      "title": "Move",
+      "type": "object"
+    },
+    "NewGame": {
+      "description": "Start a fresh game.",
+      "properties": {
+        "agent_goes_first": {
+          "default": false,
+          "description": "If true the agent plays X and opens; otherwise you are X and open.",
+          "title": "Agent Goes First",
+          "type": "boolean"
+        }
+      },
+      "title": "NewGame",
+      "type": "object"
+    },
+    "PlayMove": {
+      "description": "Your move: the number of an empty cell.",
+      "properties": {
+        "cell": {
+          "description": "1-9, reading left-to-right, top-to-bottom.",
+          "maximum": 9,
+          "minimum": 1,
+          "title": "Cell",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cell"
+      ],
+      "title": "PlayMove",
+      "type": "object"
+    },
+    "TextReply": {
+      "description": "A free-form natural-language reply (the output of a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextReply",
+      "type": "object"
+    }
+  }
+}
