@@ -8,6 +8,7 @@ import { createSubscriber } from "svelte/reactivity";
 import {
   AgentSessionCore,
   rootView,
+  waitingCalls,
   type AgentSchema,
   type AgentSessionOptions as CoreOptions,
   type AgentSseFrame,
@@ -18,8 +19,8 @@ import {
   type HarnessMessage,
   type SubmitMessageResponse,
   type ToolApprovalDecision,
-  type ToolPart,
-  type UntypedAgent
+  type UntypedAgent,
+  type WaitingToolCall
 } from "@temporal-agent-harness/client";
 
 import { SvelteSessionState } from "./state.svelte.js";
@@ -29,13 +30,6 @@ export interface AgentSessionOptions<A extends AgentSchema>
   /** The session to follow. Pass a getter (`get sessionId() { return id; }`) to switch
    *  sessions when `id` changes. */
   readonly sessionId: string;
-}
-
-/** A tool call somewhere in the session's tree that is waiting on this client. */
-export interface WaitingToolCall {
-  agentId: string;
-  messageId: string;
-  part: ToolPart;
 }
 
 /** One session's core and state, shared by every AgentSession that follows it. */
@@ -226,26 +220,4 @@ export class AgentSession<A extends AgentSchema = UntypedAgent> {
     const { sessionId, ...rest } = this.#options;
     return this.#store.entry<A>({ ...rest, sessionId });
   }
-}
-
-function waitingCalls(
-  agents: Readonly<Record<string, AgentView>>,
-  handled: (toolName: string) => boolean
-): {
-  approvals: WaitingToolCall[];
-  callbacks: WaitingToolCall[];
-} {
-  const approvals: WaitingToolCall[] = [];
-  const callbacks: WaitingToolCall[] = [];
-  for (const agent of Object.values(agents)) {
-    for (const message of agent.messages) {
-      for (const part of message.parts) {
-        if (part.type !== "tool") continue;
-        const call = { agentId: agent.agentId, messageId: message.id, part };
-        if (part.state === "awaiting_approval" || part.state === "evaluating") approvals.push(call);
-        else if (part.state === "awaiting_callback" && !handled(part.toolName)) callbacks.push(call);
-      }
-    }
-  }
-  return { approvals, callbacks };
 }

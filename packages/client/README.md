@@ -3,7 +3,8 @@
 A framework-independent client for temporal-agent-harness agents. `AgentSessionCore` follows one
 session's merged event stream — the root agent and every subagent it drives — and projects it
 into messages and observable state for each agent, through a `SessionState` a framework binding
-supplies (`@temporal-agent-harness/svelte`, or `PlainSessionState` for none).
+supplies (`@temporal-agent-harness/svelte`, `@temporal-agent-harness/react`, or
+`PlainSessionState` for none).
 
 ```ts
 import { AgentSessionCore, HttpTransport, PlainSessionState } from "@temporal-agent-harness/client";

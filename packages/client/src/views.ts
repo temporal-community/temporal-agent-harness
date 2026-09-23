@@ -2,7 +2,7 @@
 // it. Shared by every SessionState implementation, so a binding only chooses where to keep the
 // result.
 
-import type { HarnessMessage } from "./messages.ts";
+import type { HarnessMessage, ToolPart } from "./messages.ts";
 import type { AgentInfo } from "./projection.ts";
 import type { AgentSchema, UntypedAgent } from "./schema.ts";
 
@@ -81,3 +81,34 @@ const EMPTY_ROOT: AgentView = Object.freeze({
   messages: Object.freeze([]) as readonly HarnessMessage[],
   states: Object.freeze({})
 }) as AgentView;
+
+/** A tool call somewhere in the session's tree that is waiting on this client. */
+export interface WaitingToolCall {
+  agentId: string;
+  messageId: string;
+  part: ToolPart;
+}
+
+/**
+ * Every tool call in the tree waiting on a person: gated calls awaiting approval (including
+ * ones an evaluator is still deciding, which a person can answer first), and callback calls
+ * other than those `handled` names, which the session fulfils itself.
+ */
+export function waitingCalls(
+  agents: Readonly<Record<string, AgentView>>,
+  handled: (toolName: string) => boolean
+): { approvals: WaitingToolCall[]; callbacks: WaitingToolCall[] } {
+  const approvals: WaitingToolCall[] = [];
+  const callbacks: WaitingToolCall[] = [];
+  for (const agent of Object.values(agents)) {
+    for (const message of agent.messages) {
+      for (const part of message.parts) {
+        if (part.type !== "tool") continue;
+        const call = { agentId: agent.agentId, messageId: message.id, part };
+        if (part.state === "awaiting_approval" || part.state === "evaluating") approvals.push(call);
+        else if (part.state === "awaiting_callback" && !handled(part.toolName)) callbacks.push(call);
+      }
+    }
+  }
+  return { approvals, callbacks };
+}
