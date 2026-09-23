@@ -104,6 +104,32 @@ jobs:
       - working-directory: examples/tictactoe/ui
         run: npm ci && npm run check && npm run build
 
+  react:
+    name: packages/react tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            packages/client/package-lock.json
+            packages/react/package-lock.json
+      # The binding links ../client, which it resolves through that package's build.
+      - name: Build packages/client
+        working-directory: packages/client
+        run: npm ci && npm run build
+      - working-directory: packages/react
+        run: npm ci
+      # Also type-checks test/TicTacToeBoard.tsx against the example's committed generated types.
+      - working-directory: packages/react
+        run: npm run check
+      - working-directory: packages/react
+        run: npm test
+      - working-directory: packages/react
+        run: npm run build
+
   committed-types:
     name: Committed client types match the agents
     runs-on: ubuntu-latest

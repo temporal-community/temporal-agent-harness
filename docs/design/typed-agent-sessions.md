@@ -50,7 +50,7 @@ app built this way (`just play`).
 
 ## Where it lives
 
-Three standalone npm packages under `packages/`, each with its own lockfile (like `ui/` and
+Four standalone npm packages under `packages/`, each with its own lockfile (like `ui/` and
 `third-party-platforms/chat-server/`), so a consumer depends on the client without depending on
 the console, and each can be published on its own later:
 
@@ -59,6 +59,7 @@ the console, and each can be published on its own later:
 | `packages/codegen` — `@temporal-agent-harness/codegen` | `harness-codegen`: schema document → TypeScript | TypeScript 7, `node --test` |
 | `packages/client` — `@temporal-agent-harness/client` | the framework-independent core, transport, projection, and the generated protocol types | TypeScript 7, `node --test` |
 | `packages/svelte` — `@temporal-agent-harness/svelte` | the Svelte 5 binding | `svelte-package`, vitest in happy-dom, TypeScript 6 |
+| `packages/react` — `@temporal-agent-harness/react` | the React binding (18.2+) | `tsc`, vitest with React Testing Library in happy-dom, TypeScript 7 |
 
 There is no root workspace. Local packages depend on each other through `file:` links with
 `install-links=false` (in each package's `.npmrc`), so they are symlinks that build against the
@@ -337,6 +338,29 @@ One `HarnessMessage` per inbound message, narrowed on `handler` to that handler'
 Its tests run under Svelte's client runtime in happy-dom: in Vitest's Node environment modules are
 transformed as SSR, where effects never run.
 
+### The React binding
+
+`packages/react`:
+
+- **`ReactSessionState`** — an immutable snapshot of the session's fields, replaced on every write,
+  with `subscribe` and `getSnapshot` for `useSyncExternalStore`. The snapshot's identity changes
+  exactly when a field does, which is what that hook requires; the fields inside are the core's own
+  objects, never copied.
+- **`useAgentSession<A>(options)`** returns the same fields and actions as the Svelte
+  `AgentSession`, as of this render. `pendingApprovals` and `pendingCallbacks` are computed only
+  when a render reads them. Both bindings get them from the core's `waitingCalls`.
+- **The connection follows mounting**: an effect acquires the session and its cleanup releases it.
+  A release takes effect a microtask later, and an acquire before then cancels it, so StrictMode's
+  mount → unmount → remount in development keeps the one connection instead of reconnecting. A
+  changed `sessionId` is a different session, so the effect moves the hold to it.
+- **`<HarnessProvider>`** is `createHarnessContext()`'s counterpart: a `SessionStore` in context,
+  shared by every `useAgentSession` below it. Without one, each component has a store of its own.
+- **Server rendering** returns the empty snapshot, and effects never run on the server, so nothing
+  connects until the client hydrates.
+
+Its tests use React Testing Library in happy-dom, including StrictMode and `renderToString`, and a
+`TicTacToeBoard.tsx` that `tsc` type-checks against the example's generated types.
+
 ### The tic-tac-toe app
 
 `examples/tictactoe/ui` replaces the old `play.html`. It is a Vite + Svelte app written only against
@@ -357,6 +381,7 @@ generated types, so a model change that breaks it fails there.
 | 4 | protocol types generated from `events.py`; the UI's event types derived from them | `53c14ff` |
 | 5 | `packages/client` (core, projection, per-agent views, transport) | `8078b7e` |
 | 5 | `packages/svelte` (the binding) | `c1bf85c` |
+| 5 | `packages/react` (the React binding) | `f443bf2` |
 | — | `examples/tictactoe/ui` on the binding, replacing `play.html` | `c26da1e` |
 | 6 | the console on the client | not started |
 
@@ -389,7 +414,7 @@ headless browser.
   (`@temporal-agent-harness/*` needs that org; Temporal publishes under `@temporalio`), `files` /
   `exports` fields, and whether `harness-codegen` stays its own package or becomes a bin of the
   client package.
-- **A root workspace.** With three packages plus `ui/` and the chat-server, a root npm or pnpm
+- **A root workspace.** With four packages plus `ui/` and the chat-server, a root npm or pnpm
   workspace may now pay for itself; it would replace the per-package lockfiles and `file:` links.
 - **`event_offset` and `replay` on the SSE envelope.** The client and the UI type them as optional,
   but the current server never sends them.
