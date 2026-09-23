@@ -11,6 +11,7 @@
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import { Keyboard } from "@lucide/svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
+  import ApprovalDecisionPanel from "$lib/components/agent/ApprovalDecisionPanel.svelte";
   import AgentStatePanel from "$lib/components/agent/AgentStatePanel.svelte";
   import PaneRail, { type PaneDescription } from "$lib/panes/PaneRail.svelte";
   import PaneMinimap from "$lib/panes/PaneMinimap.svelte";
@@ -28,6 +29,7 @@
     resolveReplayAction,
     type ReplaySurface
   } from "$lib/state/replayHotkeys";
+  import { setFaviconTone } from "$lib/state/favicon";
 
   const savedPrefs = readOperatorPrefs();
 
@@ -95,6 +97,12 @@
 
   $effect(() => {
     void run.initialize();
+  });
+
+  /* The tab is a tiny second playhead. It takes the current event's semantic
+     tone, so live following and replay scrubbing agree. */
+  $effect(() => {
+    setFaviconTone(run.currentLogRow?.tone ?? null);
   });
 
   /* Sessions this UI did not start still belong in the list, and coming back to a
@@ -221,6 +229,24 @@
           statusTone: statusTone(run.graph.status),
           statusLabel: run.graph.status
         };
+      case "decisions": {
+        const latest = run.approvalDecisions.at(-1);
+        return {
+          title: PANE_META.decisions.kindLabel,
+          statusLabel:
+            run.approvalDecisions.length > 0
+              ? `${run.approvalDecisions.length} complete`
+              : null,
+          statusTone:
+            latest?.verdict === "approve"
+              ? "--success"
+              : latest?.verdict === "deny"
+                ? "--error"
+                : latest?.verdict === "escalate"
+                  ? "--live"
+                  : null
+        };
+      }
       case "logs":
         return { title: "Replay log" };
       case "latency":
@@ -620,16 +646,15 @@
           sessions={run.sessions}
           agentLabel={run.runInfo.agentLabel}
           sessionId={run.runInfo.sessionId}
-          operatorTargets={run.operatorTargets}
+          messageTargets={run.messageTargets}
           currentAgentWorkflowType={run.session?.agent_workflow_type ?? null}
           connecting={run.connecting}
           sending={run.sending}
           creatingSession={run.creatingSession}
           closed={run.sessionClosed}
           error={run.connectionError}
-          onSend={(message) => run.sendMessage(message)}
-          onOperatorCommand={(name, arg, workflowId) =>
-            run.executeOperatorCommand(name, arg, workflowId)}
+          onSend={(message, workflowId) => run.sendMessage(message, workflowId)}
+          onStopAgent={(workflowId) => run.stopAgent(workflowId)}
           onApproveTool={(workflowId, toolId, approved, remember) =>
             run.approveTool(workflowId, toolId, approved, remember)}
         />
@@ -654,6 +679,10 @@
              playhead is a projection like every other reading in the console, so
              scrubbing moves it and nothing here subscribes to anything. -->
         <AgentStatePanel states={run.agentStates} />
+      {:else if pane.kind === "decisions"}
+        <!-- The projection is already clipped to the playhead, so this pane
+             rewinds with the graph and logs instead of leaking future verdicts. -->
+        <ApprovalDecisionPanel decisions={run.approvalDecisions} />
       {:else if pane.kind === "logs"}
         <TranscriptPanel
           groups={run.replayLog.groups}

@@ -240,7 +240,11 @@
   const kindLabel: Record<SpanKind, string> = {
     model: "model",
     tool: "tool",
-    approval: "approval"
+    approval: "approval",
+    /* The automatic check nested inside an approval gate. Labelled apart from "approval"
+       because the two answer different questions: how long the gate was open, versus how
+       much of that was the approver rather than the person. */
+    evaluation: "approval check"
   };
 
   /** Turns the reader opened by hand. Ephemeral — see the note on `turnExpanded`. */

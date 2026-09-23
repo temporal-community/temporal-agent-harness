@@ -53,7 +53,7 @@ const fixtures = {
     frame("subagent_started", { subagent_id: "s1", workflow_id: "wf-1", agent_key: "researcher" }),
     frame("model_interaction_ended", { model: "gpt-5.1" }),
     frame("reply_delta", { text: "Here's a plan" }),
-    frame("reply", { output: { text: "Here's a plan" } })
+    frame("message_handler_end", { output: { text: "Here's a plan" } })
   ]),
 
   /* The state the screenshot was taken in: a model interaction still RUNNING,
@@ -100,7 +100,7 @@ const fixtures = {
   "agent error": buildAgentGraph([
     frame("turn_started", { user_message: "go", turn_number: 1 }),
     frame("model_interaction_started", { model: "gpt-5.1" }),
-    frame("error", { message: "upstream refused the request" })
+    frame("message_handler_error", { message: "upstream refused the request" })
   ]),
 
   /* A parent with a child, which is the only thing that builds a tool container. */
@@ -112,7 +112,7 @@ const fixtures = {
       frames: [
         frame("turn_started", { user_message: "delegate this", turn_number: 1 }),
         frame("model_interaction_started", { model: "gpt-5.1" }),
-        frame("reply", { output: { text: "delegated" } })
+        frame("message_handler_end", { output: { text: "delegated" } })
       ]
     },
     {
@@ -125,7 +125,7 @@ const fixtures = {
       frames: [
         frame("turn_started", { user_message: "research this", turn_number: 1 }),
         ...toolFrames("c1", "fetch"),
-        frame("reply", { output: { text: "done" } })
+        frame("message_handler_end", { output: { text: "done" } })
       ]
     }
   ])

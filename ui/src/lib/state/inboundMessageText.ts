@@ -3,60 +3,64 @@
  *
  * Two directions, which is why both live here. displayTextForMessage() takes
  * the structured message about to be submitted; renderUserMessage() takes the
- * `user_message` string a `turn_started` frame carries back, which may be the
- * JSON of that same structured message and must be unwrapped again. They agree
- * on the slash spelling by sharing slashCommandDisplayText() rather than by
- * both getting it right.
+ * `handler` + `payload` a `message_accepted` frame carries back. They agree by
+ * sharing one rule rather than by both getting it right, and that rule is
+ * deliberately generic: handler names and payload shapes are agent-specific, so
+ * a lone string field is the common prompt shape (whatever it is named —
+ * `text`, `script`, `prompt`, …) and anything else is labelled by handler name.
+ * No handler is special-cased and no field name is assumed. The server agrees —
+ * web/app.py's `_display_user_message` applies the same rule to the message
+ * that started a session, so the session list, the chat bubble and the replay
+ * log show one string.
  *
- * renderUserMessage() is the only copy. transcript.ts and replayLog.ts each
- * carried their own, byte-identical to each other and narrower than this one:
- * they checked top-level `script` but not `payload.script`. A MontyDynamicAgent
- * session wraps a typed line as `{type:"run_script", payload:{script}}` (see
- * #messageForSession) and the workflow echoes that envelope back verbatim as
- * `turn_started.user_message` (agent_workflow.py `_render_message`), so the type
- * is "run_script" rather than a slash and those two fell through to returning
- * the raw value: the chat bubble and the replay log showed
- * `{"type":"run_script","payload":{"script":"book_flight(\"SFO\", \"LHR\")"}}`
- * where the session list showed `book_flight("SFO", "LHR")`. Escaped quotes and
- * all, so it did not even read as the script it is. Slash commands rendered
- * identically on all three, which is why it hid.
- *
- * They import this now rather than each growing the missing branch, because the
- * divergence was the bug: three copies, one of which had been fixed. The server
- * agrees with this one — web/app.py's `_display_user_message` checks
- * `payload.text` then `payload.script` then the slash spelling, same order.
- *
- * Its one remaining difference from the server is unreachable: the server tries
- * the slash branch before top-level `script` and this tries them the other way
- * round, which can only be told apart by a message carrying BOTH a top-level
- * `script` and a slash payload. `AgentMessage` is `{type, payload, expected_turn}`
- * and `_render_message` emits `include={type, payload}`, so no top-level `script`
- * can ever reach either function from the wire. inboundMessageText.test.mjs
- * pins that.
+ * renderUserMessage() is the only copy. transcript.ts, replayLog.ts,
+ * flowProjection.ts and stepTimeline.ts import it rather than each carrying a
+ * narrower one; inboundMessageText.test.mjs pins that the private copies have
+ * not grown back, because the divergence between three copies was once a bug.
  */
-import type { AgentInboundMessage, AgentMessageObject } from "$lib/api/types";
+import type {
+  AgentInboundMessage,
+  AgentMessageObject,
+  AgentSseFrame,
+  JsonRecord,
+  MessageId,
+  TurnId
+} from "$lib/api/types";
 
-export function renderUserMessage(value: string): string {
-  if (!value.startsWith("{")) return value;
-  try {
-    const message = JSON.parse(value) as {
-      type?: string;
-      payload?: { name?: string; arg?: string; text?: string; script?: string };
-      script?: string;
-    };
-    if (typeof message.payload?.text === "string") return message.payload.text;
-    if (typeof message.payload?.script === "string") return message.payload.script;
-    if (typeof message.script === "string") return message.script;
-    if (
-      (message.type !== "slash" && message.type !== "slash_command") ||
-      !message.payload?.name
-    ) {
-      return value;
-    }
-    return slashCommandDisplayText(message.payload.name, message.payload.arg);
-  } catch {
-    return value;
+function renderEnvelope(handler: string, payload: unknown): string {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return handler;
   }
+  const entries = Object.entries(payload as Record<string, unknown>);
+  if (entries.length === 0) return handler;
+  if (entries.length === 1 && typeof entries[0][1] === "string") {
+    return entries[0][1] as string;
+  }
+  const rendered = entries
+    .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+    .sort()
+    .join(", ");
+  return `${handler}(${rendered})`;
+}
+
+/**
+ * Render an inbound message — a handler name plus its payload — as a one-line label.
+ */
+export function renderUserMessage(handler: string, payload: JsonRecord): string {
+  return renderEnvelope(handler, payload);
+}
+
+/**
+ * The key to group a frame's events under: its `message_id` when it has one.
+ *
+ * Everything a message's dispatch produces — its deltas, its tool calls, its reply — carries
+ * that id, and a refcounted turn can hold SEVERAL messages, so `turn_id` is no longer a safe
+ * grouping key: two participants would collapse into one bubble. The turn brackets themselves
+ * are the only frames with no `message_id`, and they fall back to the turn they close.
+ */
+export function messageKey(frame: AgentSseFrame): MessageId | TurnId {
+  if (!("type" in frame.data)) return "";
+  return frame.data.message_id ?? frame.data.turn_id;
 }
 
 export function isAgentMessageObject(
@@ -65,34 +69,11 @@ export function isAgentMessageObject(
   return typeof message === "object" && message !== null;
 }
 
-function slashCommandDisplayText(name: string, arg?: string): string {
-  const command = name === "set-model" ? "model" : name;
-  return `/${command}${arg ? ` ${arg}` : ""}`;
-}
-
 export function displayTextForMessage(message: AgentInboundMessage): string {
   if (typeof message === "string") return message.trim();
-  if (
-    message.type === "slash" &&
-    typeof message.payload === "object" &&
-    message.payload != null &&
-    "name" in message.payload &&
-    typeof message.payload.name === "string"
-  ) {
-    const arg =
-      "arg" in message.payload && typeof message.payload.arg === "string"
-        ? message.payload.arg
-        : undefined;
-    return slashCommandDisplayText(message.payload.name, arg);
+  const payload = message.payload;
+  if (payload && typeof payload === "object") {
+    return renderEnvelope(message.type, payload).trim();
   }
-  if (
-    message.type === "run_script" &&
-    typeof message.payload === "object" &&
-    message.payload != null &&
-    "script" in message.payload &&
-    typeof message.payload.script === "string"
-  ) {
-    return message.payload.script.trim();
-  }
-  return JSON.stringify(message);
+  return message.type ? message.type : JSON.stringify(message);
 }

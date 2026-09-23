@@ -175,7 +175,7 @@ const subagentStreamUnavailable = (subagentId, workflowId) => ({
  * in `web/app.py`; the `code` is the part a caller can branch on.
  */
 const attachErrorFrame = (code, message) => ({
-  event: "error",
+  event: "stream_error",
   data: { kind: "unavailable", code, message }
 });
 
@@ -529,11 +529,13 @@ describe("frame arrival", () => {
     streams["wf-later"].end();
   });
 
-  // `/stop` completes the child workflow, and a completed workflow's stream
+  // Stopping a subagent (the harness `close` signal, from the composer's stop
+  // control) completes the child workflow, and a completed workflow's stream
   // cannot be mounted, so the merge gives up and the parent's stream carries only
-  // the unavailable marker. Neither event that says "closed" arrives: the parent
-  // never stopped this child, and the operator_command_completed that did is on
-  // the stream that no longer exists. The marker is the only thing left to ask on.
+  // the unavailable marker. The one event that says "closed" never arrives: the
+  // parent never stopped this child, and nothing on the child's own stream can
+  // say so once that stream no longer exists. The marker is the only thing left
+  // to ask on.
   //
   // Deliberately a cold load rather than a reload: replaying the frame cache
   // re-runs this same ingest, so a tab that watched the stop live recovers either
@@ -556,7 +558,7 @@ describe("frame arrival", () => {
     await waitFor("the marker to reach the view", () => controller.frames.length === 2);
     await waitFor(
       "the child's status to be resolved",
-      () => controller.operatorTargetForWorkflow("wf-stopped-child").closed
+      () => controller.messageTargets.find((t) => t.workflowId === "wf-stopped-child")?.closed
     );
     assert.ok(
       statusCalls.includes("wf-stopped-child"),
@@ -606,12 +608,12 @@ describe("frame arrival", () => {
     await sleep(100); // let any wrong answer land before asserting it did not
 
     assert.equal(
-      controller.operatorTargetForWorkflow("wf-running-child").closed,
+      controller.messageTargets.find((t) => t.workflowId === "wf-running-child")?.closed,
       false,
       "a child Temporal reports as RUNNING must stay open, unreadable stream or not"
     );
     assert.equal(
-      controller.operatorTargetForWorkflow("wf-unanswerable-child").closed,
+      controller.messageTargets.find((t) => t.workflowId === "wf-unanswerable-child")?.closed,
       false,
       "a status query that fails must not close the child it could not answer for"
     );

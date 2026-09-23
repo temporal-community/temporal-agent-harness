@@ -301,4 +301,4 @@ async def test_mcp_tool_call_brackets_under_the_sandbox(client_and_queue):
     assert end.tool_output == TOOL_OUTPUT
     start = next(e.event for e in events if e.event.type == AgentEventType.TOOL_START)
     assert start.tool_input == {"text": "hi"}
-    assert not [e for e in events if e.event.type == AgentEventType.ERROR]
+    assert not [e for e in events if e.event.type == AgentEventType.MESSAGE_HANDLER_ERROR]

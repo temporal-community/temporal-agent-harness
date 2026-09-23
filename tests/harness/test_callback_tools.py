@@ -5,7 +5,7 @@
 #   * a callback tool publishes tool_start -> callback_requested, parks until the client
 #     provides a result, then callback_resolved(ok) -> tool_end, returning the validated value;
 #   * a callback tool gets EXACTLY the same approval policy as any other tool — under
-#     always_require_approvals it is gated FIRST (approval_requested -> resolved), and only then
+#     always_require_human_approval it is gated FIRST (approval_requested -> resolved), and only then
 #     does the callback_requested gate open;
 #   * the client result is validated against the tool's declared output type: a bad payload is
 #     rejected at the update boundary WITHOUT consuming the pending gate (resubmit works);
@@ -165,10 +165,10 @@ async def _start(
     )
 
 
-async def _send(handle, text: str, expected_turn: int) -> None:
+async def _send(handle, text: str) -> None:
     await handle.execute_update(
         SEND_AGENT_MESSAGE_UPDATE,
-        AgentMessage(type="act", payload={"text": text}, expected_turn=expected_turn),
+        AgentMessage(type="act", payload={"text": text}),
         result_type=AgentMessageReply,
     )
 
@@ -200,7 +200,7 @@ def _types_for(events: list[AgentEvent], tool_id: str) -> list[str]:
 
 
 def _reply_text(events: list[AgentEvent]) -> str:
-    reply = next(e.event for e in events if e.event.type == AgentEventType.REPLY)
+    reply = next(e.event for e in events if e.event.type == AgentEventType.MESSAGE_HANDLER_END)
     return reply.output["text"]
 
 
@@ -229,7 +229,7 @@ async def test_callback_tool_returns_client_result(env_and_client):
     """The client fulfills the call; the validated result becomes the tool's value."""
     client, task_queue = env_and_client
     handle = await _start(client, task_queue)
-    await _send(handle, "echo", expected_turn=1)
+    await _send(handle, "echo")
     agent_client = AgentClient(client, handle.id)
 
     events: list[AgentEvent] = []
@@ -268,7 +268,7 @@ async def test_scalar_output_callback(env_and_client):
     """A callback tool with a scalar (str) output validates + returns a plain value."""
     client, task_queue = env_and_client
     handle = await _start(client, task_queue)
-    await _send(handle, "note", expected_turn=1)
+    await _send(handle, "note")
     agent_client = AgentClient(client, handle.id)
 
     collected: list[AgentEvent] = []
@@ -284,17 +284,17 @@ async def test_scalar_output_callback(env_and_client):
 
 
 async def test_callback_tool_is_gated_like_any_tool(env_and_client):
-    """Under always_require_approvals a callback tool is APPROVAL-gated first; only after the
+    """Under always_require_human_approval a callback tool is APPROVAL-gated first; only after the
     human approves does the callback_requested gate open. Proves the callback tool goes through
     the identical policy path as every other tool (approval BEFORE the callback body)."""
     client, task_queue = env_and_client
     handle = await _start(
         client,
         task_queue,
-        config=AgentConfig(approval_policy=ToolApprovalPolicy.always_require_approvals()),
+        config=AgentConfig(approval_policy=ToolApprovalPolicy.always_require_human_approval()),
     )
     agent_client = AgentClient(client, handle.id)
-    await _send(handle, "echo", expected_turn=1)
+    await _send(handle, "echo")
 
     events: list[AgentEvent] = []
     async with asyncio.timeout(30):
@@ -335,10 +335,10 @@ async def test_denied_callback_never_requests_fulfillment(env_and_client):
     handle = await _start(
         client,
         task_queue,
-        config=AgentConfig(approval_policy=ToolApprovalPolicy.always_require_approvals()),
+        config=AgentConfig(approval_policy=ToolApprovalPolicy.always_require_human_approval()),
     )
     agent_client = AgentClient(client, handle.id)
-    await _send(handle, "echo", expected_turn=1)
+    await _send(handle, "echo")
 
     events: list[AgentEvent] = []
     async with asyncio.timeout(30):
@@ -373,7 +373,7 @@ async def test_result_validated_against_output_type(env_and_client):
     consuming the gate; a corrected resubmission then resolves it."""
     client, task_queue = env_and_client
     handle = await _start(client, task_queue)
-    await _send(handle, "echo", expected_turn=1)
+    await _send(handle, "echo")
     agent_client = AgentClient(client, handle.id)
 
     collected: list[AgentEvent] = []
@@ -395,7 +395,7 @@ async def test_client_reported_error_surfaces_to_model(env_and_client):
     result (tool_error), and the turn continues rather than crashing."""
     client, task_queue = env_and_client
     handle = await _start(client, task_queue)
-    await _send(handle, "echo", expected_turn=1)
+    await _send(handle, "echo")
     agent_client = AgentClient(client, handle.id)
 
     collected: list[AgentEvent] = []
@@ -420,7 +420,7 @@ async def test_unfulfilled_callback_times_out(env_and_client):
     (the time-skipping server advances to the timer)."""
     client, task_queue = env_and_client
     handle = await _start(client, task_queue)
-    await _send(handle, "timeout", expected_turn=1)
+    await _send(handle, "timeout")
 
     events = await _drain_to_turn_end(client, handle.id)
     types = _types_for(events, "cb-timeout")
@@ -445,7 +445,7 @@ async def test_unfulfilled_callback_times_out(env_and_client):
 async def test_pending_callback_visible_in_status(env_and_client):
     client, task_queue = env_and_client
     handle = await _start(client, task_queue)
-    await _send(handle, "echo", expected_turn=1)
+    await _send(handle, "echo")
     agent_client = AgentClient(client, handle.id)
 
     await _await_callback_requested(client, handle.id, "cb-echo", [])
@@ -464,7 +464,7 @@ async def test_pending_callback_visible_in_status(env_and_client):
 async def test_provide_result_is_idempotent(env_and_client):
     client, task_queue = env_and_client
     handle = await _start(client, task_queue)
-    await _send(handle, "echo", expected_turn=1)
+    await _send(handle, "echo")
     agent_client = AgentClient(client, handle.id)
 
     await _await_callback_requested(client, handle.id, "cb-echo", [])
@@ -486,7 +486,7 @@ async def test_provide_result_is_idempotent(env_and_client):
 async def test_close_while_pending_fails_the_callback(env_and_client):
     client, task_queue = env_and_client
     handle = await _start(client, task_queue)
-    await _send(handle, "echo", expected_turn=1)
+    await _send(handle, "echo")
 
     pre_close: list[AgentEvent] = []
     async with asyncio.timeout(30):

@@ -50,7 +50,7 @@ function turn(shape, { usage } = {}) {
         )
       : []),
     frame("model_interaction_ended", { model: "gpt-5.1", usage }),
-    frame("reply", { output: { text: "here you go" } }),
+    frame("message_handler_end", { output: { text: "here you go" } }),
     frame("turn_end", {})
   ];
 }

@@ -308,18 +308,20 @@ def stateless_mcp_server(
         inherently_safe: Declares every tool on this server safe under any input. The
                agent's ToolApprovalPolicy decides whether that skips the approval gate.
     """
-    # Passed through: a sandbox re-import would give the runner's isinstance check a
-    # different class object.
+    # Passed through: harness internals, known workflow-safe.
     with temporal_workflow.unsafe.imports_passed_through():
         from temporal_agent_harness.ai_sdks.openai_agents._mcp import (
             _StatelessMCPServerReference,
         )
         from temporal_agent_harness.ai_sdks.openai_agents_harness import (
             as_harness_mcp_server,
+            mark_durable_mcp_server,
         )
 
     return as_harness_mcp_server(
-        _StatelessMCPServerReference(name, config, cache_tools_list, factory_argument),
+        mark_durable_mcp_server(
+            _StatelessMCPServerReference(name, config, cache_tools_list, factory_argument)
+        ),
         runner,
         inherently_safe=inherently_safe,
     )
@@ -364,6 +366,7 @@ def stateful_mcp_server(
         )
         from temporal_agent_harness.ai_sdks.openai_agents_harness import (
             as_harness_mcp_server,
+            mark_durable_mcp_server,
         )
 
     # Governance mutates the reference and returns it, so this is still the async
@@ -371,8 +374,10 @@ def stateful_mcp_server(
     return typing.cast(
         AbstractAsyncContextManager["MCPServer"],
         as_harness_mcp_server(
-            _StatefulMCPServerReference(
-                name, config, server_session_config, factory_argument
+            mark_durable_mcp_server(
+                _StatefulMCPServerReference(
+                    name, config, server_session_config, factory_argument
+                )
             ),
             runner,
             inherently_safe=inherently_safe,
@@ -415,10 +420,15 @@ def nexus_native_mcp_server(
 
         from temporal_agent_harness.ai_sdks.openai_agents_harness import (
             as_harness_mcp_server,
+            mark_durable_mcp_server,
         )
 
+    # Marked here, not in nexus_mcp. nexus_mcp is released separately and holds no
+    # harness imports.
     return as_harness_mcp_server(
-        WorkflowNexusMCPServer.for_service(name, endpoint, **kwargs),
+        mark_durable_mcp_server(
+            WorkflowNexusMCPServer.for_service(name, endpoint, **kwargs)
+        ),
         runner,
         inherently_safe=inherently_safe,
     )

@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from dataclasses import dataclass
 
@@ -20,13 +19,12 @@ from temporalio.service import RPCError
 from temporal_agent_harness.harness.agent_client import (
     AgentClient,
     CallbackResultError,
-    StaleTurnError,
     ToolApprovalError,
 )
 from temporal_agent_harness.harness.agent_protocol import (
     TURN_EVENTS_TOPIC,
     AgentConfig,
-    OperatorCommand,
+    MessageDisposition,
     PendingCallback,
     PendingTurn,
     SubagentInfo,
@@ -64,34 +62,11 @@ from .generated import AgentService as AgentServiceDefinition
 # WorkflowStream's private poll-update name (not part of its public API), hardcoded since
 # pollMessages must attach to it for any agent without importing that agent's workflow code.
 _WORKFLOW_STREAM_POLL_UPDATE = "__temporal_workflow_stream_poll"
-_MAX_SEND_RETRIES = 5
 
 
 def _is_workflow_already_completed(exc: Exception) -> bool:
     """True when the target agent workflow has already finished (see poll_messages)."""
     return "already completed" in str(exc).lower()
-
-
-def _nexus_operator_command(cmd: OperatorCommand) -> NexusOperatorCommand:
-    # nex-gen models reject an optional field set to None — omit the kwarg instead.
-    argument_kwargs: dict[str, object] = {}
-    if cmd.argument is not None:
-        arg_kwargs: dict[str, object] = dict(
-            kind=cmd.argument.kind,
-            required=cmd.argument.required,
-            choices=list(cmd.argument.choices),
-            allow_multiple=cmd.argument.allow_multiple,
-        )
-        if cmd.argument.placeholder is not None:
-            arg_kwargs["placeholder"] = cmd.argument.placeholder
-        argument_kwargs["argument"] = NexusOperatorCommandArgument(**arg_kwargs)
-    return NexusOperatorCommand(
-        name=cmd.name,
-        label=cmd.label,
-        description=cmd.description,
-        source=cmd.source,
-        **argument_kwargs,
-    )
 
 
 def _nexus_pending_callback(pc: PendingCallback) -> NexusPendingCallback:
@@ -115,7 +90,11 @@ def _nexus_subagent_info(info: SubagentInfo) -> NexusSubagentInfo:
         subagent_id=info.subagent_id,
         agent_key=info.agent_key,
         workflow_id=info.workflow_id,
-        next_expected_turn=info.next_expected_turn,
+        # The IDL requires this field but the harness tracks no per-subagent turn counter
+        # (turn state is the child's own; query its agent_status). 0 is the explicit "not
+        # tracked" value until the contract is regenerated with the rest of the Nexus
+        # surface; no consumer reads it.
+        next_expected_turn=0,
     )
 
 
@@ -134,7 +113,6 @@ class Config:
     agent_task_queue: str
     workflow_name: str
     workflow_id_prefix: str
-    is_message_queuing_enabled: bool
 
 
 @service_handler(service=AgentServiceDefinition)
@@ -157,7 +135,7 @@ class AgentServiceHandler:
         return AgentClient(self._client, self._workflow_id(session_id))
 
     # -----------------------------------------------------------------------
-    # sendAgentMessage — AgentClient.start_and_submit_message()'s guess-and-retry caller
+    # sendAgentMessage — AgentClient.start_and_submit_message()'s caller
     # -----------------------------------------------------------------------
 
     @sync_operation
@@ -171,53 +149,50 @@ class AgentServiceHandler:
                 f"invalid payload JSON: {e}", type=HandlerErrorType.BAD_REQUEST
             ) from e
 
-        start_config = AgentConfig(
-            is_message_queuing_enabled=self._config.is_message_queuing_enabled
-        )
+        start_config = AgentConfig()
         client = self._agent_client(input.session_id)
 
-        # Nexus callers don't know expected_turn; guess 1, then re-derive from status on retry.
-        expected_turn = 1
-        for attempt in range(_MAX_SEND_RETRIES):
-            if attempt > 0:
-                status = await client.get_status()
-                expected_turn = status.current_turn + len(status.pending_turns) + 1
-
-            try:
-                reply = await client.start_and_submit_message(
-                    input.msg_type,
-                    payload,
-                    expected_turn,
-                    workflow_name=self._config.workflow_name,
-                    task_queue=self._config.agent_task_queue,
-                    start_config=start_config,
-                    update_id=f"send-{ctx.request_id}-{attempt}",
-                )
-            except StaleTurnError:
-                await asyncio.sleep((attempt + 1) * 0.05)
-                continue
-            return SendMessageOutput(
-                turn_number=reply.turn_number,
-                turn_id=reply.turn_id,
-                stream_head_offset=reply.accepted_offset,
-                pending=reply.pending,
-            )
-        raise HandlerError(
-            "send_agent_message: exhausted retries", type=HandlerErrorType.INTERNAL
+        # The Nexus request id is the idempotency key: a retried operation re-issues the same
+        # update and gets the original acceptance back rather than a second dispatch.
+        reply = await client.start_and_submit_message(
+            input.msg_type,
+            payload,
+            workflow_name=self._config.workflow_name,
+            task_queue=self._config.agent_task_queue,
+            start_config=start_config,
+            update_id=f"send-{ctx.request_id}",
+        )
+        return SendMessageOutput(
+            turn_number=reply.turn_number,
+            turn_id=reply.turn_id,
+            stream_head_offset=reply.accepted_offset,
+            # The IDL still models acceptance as a bool; the harness now reports the
+            # richer MessageDisposition (opened / joined / queued), of which "queued" is
+            # exactly what this field meant. The contract regeneration that removes the
+            # operator operations is where this becomes the disposition itself.
+            pending=reply.disposition is MessageDisposition.QUEUED,
         )
 
     # -----------------------------------------------------------------------
-    # executeOperatorCommand — harness-level operator commands (no turn)
+    # executeOperatorCommand — REMOVED from the harness; see the body
     # -----------------------------------------------------------------------
 
     @sync_operation
     async def execute_operator_command(
         self, ctx: StartOperationContext, input: ExecuteOperatorCommandInput
     ) -> ExecuteOperatorCommandOutput:
-        result = await self._agent_client(input.session_id).execute_operator_command(
-            input.name, arg=input.arg, update_id=f"op-{ctx.request_id}"
+        # NOT IMPLEMENTED — operator commands are no longer a harness concept. Every
+        # control is an ordinary @agent.accepts handler reachable through
+        # sendAgentMessage, and queryAgentInterface returns them all (with each
+        # handler's midTurn + modelCallable). These two operations remain declared only
+        # because the IDL still lists them and nexusrpc requires a complete service
+        # handler; they are removed when the contract is regenerated.
+        raise HandlerError(
+            "operator commands have been removed from the harness — send the message to "
+            "the target @agent.accepts handler via sendAgentMessage instead, and use "
+            "queryAgentInterface to discover the available handlers.",
+            type=HandlerErrorType.NOT_IMPLEMENTED,
         )
-        return ExecuteOperatorCommandOutput(reply=result.text)
 
     # -----------------------------------------------------------------------
     # approveToolCall — resolve a pending tool-approval gate
@@ -240,16 +215,24 @@ class AgentServiceHandler:
         return ApproveToolCallOutput(tool_id=result.tool_id, accepted=result.accepted)
 
     # -----------------------------------------------------------------------
-    # queryOperatorInterface — discover available slash commands
+    # queryOperatorInterface — REMOVED from the harness; see the body
     # -----------------------------------------------------------------------
 
     @sync_operation
     async def query_operator_interface(
         self, ctx: StartOperationContext, input: QuerySessionInput
     ) -> QueryOperatorInterfaceOutput:
-        commands = await self._agent_client(input.session_id).get_operator_interface()
-        return QueryOperatorInterfaceOutput(
-            commands=[_nexus_operator_command(cmd) for cmd in commands]
+        # NOT IMPLEMENTED — operator commands are no longer a harness concept. Every
+        # control is an ordinary @agent.accepts handler reachable through
+        # sendAgentMessage, and queryAgentInterface returns them all (with each
+        # handler's midTurn + modelCallable). These two operations remain declared only
+        # because the IDL still lists them and nexusrpc requires a complete service
+        # handler; they are removed when the contract is regenerated.
+        raise HandlerError(
+            "operator commands have been removed from the harness — send the message to "
+            "the target @agent.accepts handler via sendAgentMessage instead, and use "
+            "queryAgentInterface to discover the available handlers.",
+            type=HandlerErrorType.NOT_IMPLEMENTED,
         )
 
     # -----------------------------------------------------------------------
@@ -286,7 +269,10 @@ class AgentServiceHandler:
             agent_id=status.agent_id,
             current_turn=status.current_turn,
             turn_active=status.turn_active,
-            is_message_queuing_enabled=status.is_message_queuing_enabled,
+            # The harness no longer has an agent-level queuing switch — mid-turn behavior
+            # is declared per handler. The generated wire shape still requires this field,
+            # so report False until the contract is regenerated without it.
+            is_message_queuing_enabled=False,
             pending_turns=[_nexus_pending_turn(pt) for pt in status.pending_turns],
             pending_approvals=[
                 NexusPendingApproval(
@@ -302,7 +288,11 @@ class AgentServiceHandler:
             ],
             subagents=[_nexus_subagent_info(s) for s in status.subagents],
             approval_policy=_nexus_approval_policy(status.approval_policy),
-            has_custom_approval_fallback=status.has_custom_approval_fallback,
+            # The Nexus contract (agent.nexusrpc.yaml) is a CROSS-LANGUAGE wire contract
+            # mirrored from remote and spoken by non-Python services, so its field keeps
+            # its original name; the rename to "auto mode evaluator" is internal to
+            # this package. Renaming it here would silently break every other consumer.
+            has_custom_approval_fallback=status.has_auto_approval_evaluator,
         )
 
     # -----------------------------------------------------------------------

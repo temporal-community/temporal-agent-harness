@@ -67,7 +67,7 @@ openai-agents = [
 ]
 # Optional support for OpenAI Agents SDK ``model='auto'`` selection.
 model-routing = [
-    "typesafe-sdk",
+    "typesafe-sdk>=0.6.0",
 ]
 # The Pydantic AI integration: temporal_agent_harness.ai_sdks.pydantic_ai_harness. Unlike the
 # openai-agents/genai integrations, the upstream plugin (pydantic_ai.durable_exec.temporal, shipped
@@ -87,6 +87,12 @@ code-mode = [
     # TODO: 0.0.19 swapped Monty's script-compiler API for a process pool (checkout/session).
     # Port monty_stepper.py to it, then unpin.
     "pydantic-monty==0.0.18",
+]
+# Jev-backed auto mode for tool approvals: temporal_agent_harness.harness.jev_approvals.
+# Needed on the WORKER only — the workflow-side approver builds plain dicts and dispatches
+# the model call as an activity by name, so an agent using it stays importable without this.
+jev = [
+    "typesafe-sdk>=0.6.0",
 ]
 # Nexus-brokered MCP servers: temporal_agent_harness.ai_sdks.openai_agents.workflow.
 # nexus_brokered_mcp_server. Lets an Agent reach an MCP tool over a Temporal Nexus endpoint,
@@ -116,7 +122,7 @@ examples = [
     "pydantic-monty==0.0.18",  # Monty sandbox; pinned per the code-mode extra's TODO
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
     "openai-agents>=0.22.0",  # the OpenAI Agents SDK example (examples/openai_hello, examples/react_agent)
-    "typesafe-sdk",  # model='auto' example
+    "typesafe-sdk>=0.6.0",  # TypeSafe examples and model='auto' selection
     "pydantic-ai-slim[temporal]>=2.13",  # the Pydantic AI example (examples/pydantic_ai_hello)
     "httpx>=0.27",  # the react_agent example's tools call real weather / geo / IP APIs
 ]

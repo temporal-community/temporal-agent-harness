@@ -36,7 +36,7 @@ function run(replyChars) {
     }),
     frame("model_interaction_ended", { model: "gpt-5.1" }),
     ...(replyChars > 0 ? [frame("reply_delta", { text })] : []),
-    frame("reply", { output: { text } })
+    frame("message_handler_end", { output: { text } })
   ];
 }
 

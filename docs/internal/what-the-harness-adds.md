@@ -30,12 +30,14 @@ bespoke-per-agent:
    live + replayable — the *same* for every agent regardless of SDK. → one UI, one analytics
    pipeline. See [The AgentEvent history is a durable, replayable stream](#the-agentevent-history-is-a-durable-replayable-stream).
 3. **Control** — one approval-policy model + `tool_approval` surface, plus a standardized
-   **operator-command (slash-command) surface** — `/approvals`, `/allow-tools`, `/status`, `/stop`
-   out of the box (plus agent-added ones like `/model`), discoverable via `operator_interface` — all
-   identical across agents. Operator commands run on their own channel (separate from the agent's `send_agent_message`
-   handlers) and are audited as distinct control-plane events (`operator_command_*`, stamped
-   `turn_number=0` so they never fold into agent turns). → one HITL **and operator** model for the
-   whole fleet.
+   **control plane** — approve or deny a gated call (`tool_approval`, whose `remember` flag also
+   relaxes the live policy and releases already-parked gates), read state (`agent_status`), and stop
+   an agent (`close`) — identical across every agent, and none of them a *message*. That separation
+   is the guardrail: they are not `@agent.accepts` handlers, so they never appear in
+   `agent_interface` and a generated subagent toolset cannot reach them however permissive its
+   policy. A parent agent therefore cannot rubber-stamp its child's approvals or fabricate a
+   callback result. → one HITL **and operator** model for the whole fleet, with the human as the
+   escalation target rather than another thing the model can drive.
 
 ### The AgentEvent history is a durable, replayable stream
 

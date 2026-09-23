@@ -116,7 +116,7 @@ class GatedMCPProbeAgent(_BaseMCPProbe):
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
-            approval_policy_default=ToolApprovalPolicy.always_require_approvals(),
+            approval_policy_default=ToolApprovalPolicy.always_require_human_approval(),
         )
         self._server_calls: list[Any] = []
 
@@ -203,7 +203,7 @@ def _types_for(events: list[AgentEvent], tool_id: str) -> list[str]:
 
 
 def _reply_text(events: list[AgentEvent]) -> str:
-    reply = next(e.event for e in events if e.event.type == AgentEventType.REPLY)
+    reply = next(e.event for e in events if e.event.type == AgentEventType.MESSAGE_HANDLER_END)
     return reply.output["text"]
 
 

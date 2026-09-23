@@ -9,11 +9,10 @@ and posts the result back so the agent can continue.
 It talks only to the packaged harness HTTP server (``app.py``); it needs no Temporal client of its
 own. Per user message it:
 
-  1. reads the agent's current turn (``GET /api/status``) to compute ``expected_turn``;
-  2. sends the message and streams that turn (``POST /api/chat``, Server-Sent Events);
-  3. on each ``callback_requested`` event, runs the tool locally and posts the result
+  1. sends the message and streams that turn (``POST /api/chat``, Server-Sent Events);
+  2. on each ``callback_requested`` event, runs the tool locally and posts the result
      (``POST /api/callback-result``) — the new route this example adds;
-  4. prints the assistant's streamed reply.
+  3. prints the assistant's streamed reply.
 
 There is deliberately no "advertising" of which tools this client implements: if the agent calls
 a tool this client doesn't know, the call simply sits unresolved (visible under
@@ -169,12 +168,6 @@ async def _create_session(http: httpx.AsyncClient) -> str:
     return resp.json()["workflow_id"]
 
 
-async def _current_turn(http: httpx.AsyncClient, session_id: str) -> int:
-    resp = await http.get(f"/api/status/{session_id}")
-    resp.raise_for_status()
-    return int(resp.json().get("current_turn", 0))
-
-
 async def _post_callback_result(
     http: httpx.AsyncClient,
     session_id: str,
@@ -211,12 +204,7 @@ async def _iter_sse(resp: httpx.Response):
 async def _run_turn(
     http: httpx.AsyncClient, session_id: str, wiki_root: Path, message: str
 ) -> None:
-    expected_turn = await _current_turn(http, session_id) + 1
-    body = {
-        "session_id": session_id,
-        "message": message,
-        "expected_turn": expected_turn,
-    }
+    body = {"session_id": session_id, "message": message}
     printed_reply_prefix = False
     async with http.stream("POST", "/api/chat", json=body) as resp:
         if resp.status_code != 200:
@@ -239,7 +227,10 @@ async def _run_turn(
                     print("\nwiki> ", end="", flush=True)
                     printed_reply_prefix = True
                 print(data.get("text", ""), end="", flush=True)
-            elif event_type == "error":
+            elif event_type in ("stream_error", "message_handler_error"):
+                # ``stream_error`` is the server's own frame — a turn timeout, or this
+                # message's failure surfaced as the caller's — and
+                # ``message_handler_error`` is the agent's, published on its stream.
                 print(f"\n[error] {data.get('message', 'unknown error')}")
     if printed_reply_prefix:
         print()  # end the streamed reply line

@@ -97,6 +97,8 @@ __all__ = [
     "as_harness_mcp_server",
     "as_harness_mcp_servers",
     "is_harness_mcp_server",
+    "mark_durable_mcp_server",
+    "is_durable_mcp_server",
 ]
 
 _INSTALL_MESSAGE = (
@@ -537,6 +539,26 @@ def _stringify_tool_result(result: Any) -> str:
 
 _MCP_TOOL_CALL_ID_META_KEY = "temporal.harness/tool_call_id"
 _MCP_WRAPPED_ATTR = "__harness_mcp_governed__"
+_MCP_DURABLE_ATTR = "__harness_mcp_durable__"
+
+
+def mark_durable_mcp_server(server: "MCPServer") -> "MCPServer":
+    """Declare that ``server`` replays durably, and return it.
+
+    The runner rejects an ``Agent(mcp_servers=[...])`` entry without this mark. A plain
+    SDK server (stdio, HTTP) re-runs its tool calls on replay. Mark only a server whose
+    calls go through an activity or a Nexus operation.
+
+    The mark is an instance attribute, not a type, so the runner validates a server
+    without importing the package that defines it.
+    """
+    setattr(server, _MCP_DURABLE_ATTR, True)
+    return server
+
+
+def is_durable_mcp_server(server: "MCPServer") -> bool:
+    """Whether ``server`` was marked by :func:`mark_durable_mcp_server`."""
+    return bool(getattr(server, _MCP_DURABLE_ATTR, False))
 
 
 def as_harness_mcp_server(
@@ -544,6 +566,7 @@ def as_harness_mcp_server(
     runner: AgentWorkflowRunner,
     *,
     inherently_safe: bool = False,
+    auto_approval_criteria: str | None = None,
 ) -> "MCPServer":
     """Put an OpenAI Agents SDK MCP server under harness tool governance.
 
@@ -559,6 +582,12 @@ def as_harness_mcp_server(
 
     ``inherently_safe`` is the same static safety hint as present in ``@agent.tool_defn(...)``
     decorator, so that it can be forwarded to ``_apply_approval_policy(...)``
+
+    ``auto_approval_criteria`` is the default criteria-set name AUTO MODE judges this server's
+    tools against — one name for the whole server, since its tools arrive already defined and
+    have no decorator to carry their own. Per-tool precision is still available without touching
+    code: ``AutoApprovalCriteria.tools`` assigns by tool NAME, which is exactly the case
+    addressing-by-name exists to serve.
 
     A denied call returns an ``is_error`` result to the model instead of raising, so the
     agent loop can continue.
@@ -601,7 +630,10 @@ def as_harness_mcp_server(
         async def invoke() -> "CallToolResult":
             try:
                 await _apply_approval_policy(
-                    tool_name, tool_input, inherently_safe=inherently_safe
+                    tool_name,
+                    tool_input,
+                    inherently_safe=inherently_safe,
+                    auto_approval_criteria=auto_approval_criteria,
                 )
             except ToolApprovalDenied as denied:
                 # The gate already published tool_approval_resolved(approved=False); the
@@ -661,11 +693,17 @@ def as_harness_mcp_servers(
     runner: AgentWorkflowRunner,
     *,
     inherently_safe: bool = False,
+    auto_approval_criteria: str | None = None,
 ) -> "list[MCPServer]":
     """Put several MCP servers under harness tool governance. See
     :func:`as_harness_mcp_server`."""
     return [
-        as_harness_mcp_server(server, runner, inherently_safe=inherently_safe)
+        as_harness_mcp_server(
+            server,
+            runner,
+            inherently_safe=inherently_safe,
+            auto_approval_criteria=auto_approval_criteria,
+        )
         for server in servers
     ]
 

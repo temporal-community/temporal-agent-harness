@@ -1,4 +1,11 @@
-export type PaneKind = "chat" | "graph" | "logs" | "latency" | "usage" | "state";
+export type PaneKind =
+  | "chat"
+  | "graph"
+  | "decisions"
+  | "logs"
+  | "latency"
+  | "usage"
+  | "state";
 
 export interface PaneMeta {
   /** Uppercase eyebrow shown in the pane header and on the collapsed spine. */
@@ -52,6 +59,16 @@ export const PANE_META: Record<PaneKind, PaneMeta> = {
     /* "Session flow" under STATE FLOW. Focused on a layer it is titled after
        that layer instead — and the crumb bar in the canvas is already standing
        there naming it, which is the better place for it. */
+    titleNames: "kind"
+  },
+  decisions: {
+    kindLabel: "Approval decisions",
+    accent: "--accent",
+    /* The policy tree keeps its branch labels legible beside the evaluation
+       index, but still collapses into a stacked reading in a narrow column. */
+    defaultSize: 660,
+    minSize: 360,
+    content: "viewport",
     titleNames: "kind"
   },
   logs: {
@@ -116,7 +133,13 @@ export const SPINE_SIZE = 42;
  * can be opened unscoped ("logs") or scoped to a workflow ("logs:wf-123"), and
  * both may be on screen at the same time.
  */
-const SINGLETON_KINDS = new Set<PaneKind>(["chat", "graph", "usage", "state"]);
+const SINGLETON_KINDS = new Set<PaneKind>([
+  "chat",
+  "graph",
+  "decisions",
+  "usage",
+  "state"
+]);
 
 export function isSingletonKind(kind: PaneKind): boolean {
   return SINGLETON_KINDS.has(kind);

@@ -15,10 +15,10 @@ if TYPE_CHECKING:
 
 _INSTALL_MESSAGE = (
     "Nexus-brokered MCP support requires the root project's optional `nexus-mcp` "
-    "extra and Python >=3.13. The extra installs the local `temporal-nexus-mcp` "
-    "distribution from nexus/mcp. Install it from an editable checkout of this "
-    "repository with `uv sync --extra nexus-mcp`. Do not run `pip install nexus-mcp`; "
-    "that name belongs to an unrelated PyPI project."
+    "extra. The extra installs the local `temporal-nexus-mcp` distribution from "
+    "nexus/mcp. Install it from an editable checkout of this repository with "
+    "`uv sync --extra nexus-mcp`. Do not run `pip install nexus-mcp`; that name "
+    "belongs to an unrelated PyPI project."
 )
 
 try:
@@ -108,16 +108,19 @@ class NexusGateway:
         """
         from temporal_agent_harness.ai_sdks.openai_agents_harness import (
             as_harness_mcp_server,
+            mark_durable_mcp_server,
         )
 
         display_name = f"{self._agent_id}-{self._gateway_name}-{self._gateway_endpoint}"
         return as_harness_mcp_server(
-            _NexusGatewayMCPServer(
-                self._agent_id,
-                frozenset(aliases),
-                self._gateway_name,
-                self._gateway_endpoint,
-                display_name,
+            mark_durable_mcp_server(
+                _NexusGatewayMCPServer(
+                    self._agent_id,
+                    frozenset(aliases),
+                    self._gateway_name,
+                    self._gateway_endpoint,
+                    display_name,
+                )
             ),
             runner,
             inherently_safe=inherently_safe,

@@ -4,7 +4,7 @@
 // subagent's first turn is also turn 1: a child's `turn_started` credited to the root puts a second
 // "turn 1" chapter on the replay bar — which throws Svelte's each_key_duplicate on every reactive
 // flush, since the lane keys chapters by turn number — plus a second "Turn 1" row in the chat, and
-// merges the child's reply text into the root's turn-1 bubble. The condition is a stream that
+// a second turn-1 reply bubble beside the root's. The condition is a stream that
 // opened past the parent's `subagent_started`, so the children are unannounced: real frames off
 // /api/attach?from_offset=8 look exactly like the fixtures below.
 
@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "vitest";
 
 import { realisticQaScenario } from "../mock/scenarios.ts";
+import { turnMarkersOf } from "./agentRun.svelte.ts";
 import { buildReplayTimeline } from "./replayTimeline.ts";
 import { buildTranscript } from "./transcript.ts";
 
@@ -19,8 +20,7 @@ const session = {
   workflow_id: "wf-root",
   created_at: 0,
   label: "Root",
-  agent_workflow_type: "test",
-  is_message_queuing_enabled: false
+  agent_workflow_type: "test"
 };
 
 function replayTimeline(frames) {
@@ -38,31 +38,11 @@ function replayTimelineByObservation(frames, announced = []) {
   }));
 }
 
-// Mirrors `turnMarkers`.
-function turnMarkersOf(timeline) {
-  return timeline
-    .map((entry, index) =>
-      entry.role === "parent" &&
-      entry.frame.event === "turn_started" &&
-      "type" in entry.frame.data
-        ? { index, turnNumber: entry.frame.data.turn_number }
-        : null
-    )
-    .filter((item) => item != null);
-}
 
-// Mirrors `chatTranscript`, including the operator-frame escape hatch: a command the operator
-// ran against a SUBAGENT is still their own message and belongs in their chat.
-const isOperatorCommandFrame = (frame) =>
-  frame.event === "operator_command_started" ||
-  frame.event === "operator_command_completed" ||
-  frame.event === "operator_command_failed";
-
+// Mirrors `chatTranscript`.
 function chatTranscriptOf(timeline) {
   return buildTranscript(
-    timeline
-      .filter((entry) => entry.role === "parent" || isOperatorCommandFrame(entry.frame))
-      .map((entry) => entry.frame)
+    timeline.filter((entry) => entry.role === "parent").map((entry) => entry.frame)
   );
 }
 
@@ -70,11 +50,31 @@ const keysOf = (markers) => markers.map((marker) => marker.turnNumber);
 const unique = (keys) => keys.length === new Set(keys).size;
 const turnRowsOf = (transcript) =>
   transcript.filter((item) => item.kind === "user").map((item) => item.turnNumber);
-const replyTextOf = (transcript, turnNumber) =>
-  transcript.find((item) => item.kind === "agent" && item.turnNumber === turnNumber)?.text ?? "";
+const replyTextsOf = (transcript, turnNumber) =>
+  transcript
+    .filter((item) => item.kind === "agent" && item.turnNumber === turnNumber)
+    .map((item) => item.text);
 
 let seq = 0;
-function turnStarted(agentId, turnNumber, userMessage = "go") {
+/* The message's admission — the frame that carries what was sent, and the one the chat opens
+   a user row on. Its `turn_started` is a separate, pure bracket. */
+function accepted(agentId, turnNumber, text = "go") {
+  return {
+    event: "message_accepted",
+    data: {
+      type: "message_accepted",
+      agent_id: agentId,
+      turn_number: turnNumber,
+      turn_id: `${agentId}-t${turnNumber}`,
+      message_id: `${agentId}-m${turnNumber}`,
+      handler: "ask",
+      payload: { text },
+      disposition: "opened",
+      timestamp: ++seq
+    }
+  };
+}
+function turnStarted(agentId, turnNumber) {
   return {
     event: "turn_started",
     data: {
@@ -82,7 +82,7 @@ function turnStarted(agentId, turnNumber, userMessage = "go") {
       agent_id: agentId,
       turn_number: turnNumber,
       turn_id: `${agentId}-t${turnNumber}`,
-      user_message: userMessage,
+      message_id: null,
       timestamp: ++seq
     }
   };
@@ -95,6 +95,7 @@ function replyDelta(agentId, turnNumber, text) {
       agent_id: agentId,
       turn_number: turnNumber,
       turn_id: `${agentId}-t${turnNumber}`,
+      message_id: `${agentId}-m${turnNumber}`,
       text,
       timestamp: ++seq
     }
@@ -105,11 +106,14 @@ function replyDelta(agentId, turnNumber, text) {
 // `subagent_started` frames: nothing announced the children, and both are on their own turn 1
 // alongside the root's turn 1.
 const unannouncedChildren = [
-  turnStarted("de539b", 1, "Research the thing"),
+  accepted("de539b", 1, "Research the thing"),
+  turnStarted("de539b", 1),
   replyDelta("de539b", 1, "Dispatching researchers."),
-  turnStarted("de539b-093b70", 1, "Research subtopic A"),
+  accepted("de539b-093b70", 1, "Research subtopic A"),
+  turnStarted("de539b-093b70", 1),
   replyDelta("de539b-093b70", 1, "Subtopic A findings."),
-  turnStarted("de539b-80e175", 1, "Research subtopic B"),
+  accepted("de539b-80e175", 1, "Research subtopic B"),
+  turnStarted("de539b-80e175", 1),
   replyDelta("de539b-80e175", 1, "Subtopic B findings.")
 ];
 
@@ -126,24 +130,24 @@ describe("root-only attribution", () => {
   });
 
   // --- the chat transcript ---------------------------------------------------
-  // Same defect, different symptom: `buildTranscript` opens a turn row per `turn_started` and
-  // groups replies by turn number ALONE, so a child credited to the root both adds a bogus
-  // "Turn 1" row and appends its reply into the root's turn-1 bubble.
+  // Same defect, different symptom: `buildTranscript` opens a user row per `message_accepted`
+  // and labels every reply with its turn number, so a child credited to the root both adds a
+  // bogus "Turn 1" row and puts its reply beside the root's as a second turn-1 bubble.
   it("gives the chat one turn row, holding only what the root said", () => {
     const wasBroken = chatTranscriptOf(replayTimelineByObservation(unannouncedChildren));
     assert.deepEqual(turnRowsOf(wasBroken), [1, 1, 1], "the old rule showed three Turn 1 rows");
-    assert.equal(
-      replyTextOf(wasBroken, 1),
-      "Dispatching researchers.Subtopic A findings.Subtopic B findings.",
-      "and merged both children's replies into the root's turn-1 bubble"
+    assert.deepEqual(
+      replyTextsOf(wasBroken, 1),
+      ["Dispatching researchers.", "Subtopic A findings.", "Subtopic B findings."],
+      "and showed both children's replies as turn-1 bubbles of the root"
     );
 
     const transcript = chatTranscriptOf(replayTimeline(unannouncedChildren));
     assert.deepEqual(turnRowsOf(transcript), [1], "one turn row for the root's one turn");
     assert.ok(unique(turnRowsOf(transcript)), "a turn is shown once");
-    assert.equal(
-      replyTextOf(transcript, 1),
-      "Dispatching researchers.",
+    assert.deepEqual(
+      replyTextsOf(transcript, 1),
+      ["Dispatching researchers."],
       "and the root's bubble is only what the root said"
     );
   });
@@ -153,11 +157,17 @@ describe("root-only attribution", () => {
   // one, because nothing on screen says the turns went missing.
   it("keeps every one of the root's own turns", () => {
     const frames = [
+      accepted("de539b", 1),
       turnStarted("de539b", 1),
+      accepted("de539b-093b70", 1),
       turnStarted("de539b-093b70", 1),
+      accepted("de539b-80e175", 1),
       turnStarted("de539b-80e175", 1),
+      accepted("de539b", 2),
       turnStarted("de539b", 2),
+      accepted("de539b-093b70", 2),
       turnStarted("de539b-093b70", 2),
+      accepted("de539b", 3),
       turnStarted("de539b", 3)
     ];
     const markers = turnMarkersOf(replayTimeline(frames));
@@ -165,8 +175,8 @@ describe("root-only attribution", () => {
     assert.deepEqual(keysOf(markers), [1, 2, 3], "every root turn keeps its chapter");
     assert.deepEqual(
       markers.map((marker) => marker.index),
-      [0, 3, 5],
-      "and each chapter starts at its own event in the timeline"
+      [0, 6, 10],
+      "and each chapter starts at the message that opened it"
     );
     assert.deepEqual(
       turnRowsOf(chatTranscriptOf(replayTimeline(frames))),
@@ -193,34 +203,6 @@ describe("root-only attribution", () => {
       turnMarkersOf(replayTimelineByObservation(frames, announced)),
       "the two rules agree once every child is announced"
     );
-  });
-
-  // --- an operator command against a subagent still reaches the chat ---------
-  // The `|| isOperatorCommandFrame` in `chatTranscript` is why `role` could not simply gate the
-  // whole transcript: this frame is published on the subagent's log but it is the operator's own
-  // message, and dropping it would lose the reply to something they typed.
-  it("still lets an operator command against a subagent reach the chat", () => {
-    const frames = [
-      turnStarted("de539b", 1),
-      {
-        event: "operator_command_completed",
-        data: {
-          type: "operator_command_completed",
-          agent_id: "de539b-093b70",
-          turn_number: 1,
-          turn_id: "de539b-093b70-t1",
-          operator_command_id: "op-1",
-          command_name: "stop",
-          command_label: "/stop",
-          text: "Researcher stopped.",
-          timestamp: ++seq
-        }
-      }
-    ];
-    const transcript = chatTranscriptOf(replayTimeline(frames));
-    const operatorItems = transcript.filter((item) => item.kind === "operator");
-    assert.equal(operatorItems.length, 1, "the operator's command survives the root-only filter");
-    assert.equal(operatorItems[0].text, "Researcher stopped.", "with its reply");
   });
 
   // --- the fixture every other check reads -----------------------------------

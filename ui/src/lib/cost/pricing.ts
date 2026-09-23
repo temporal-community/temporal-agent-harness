@@ -97,23 +97,79 @@ function timestampOf(frame: AgentSseFrame): number | null {
   return frame.data.timestamp;
 }
 
+interface MeteredUsage {
+  model: string;
+  usage: TokenUsage;
+}
+
+function tokenCount(value: unknown): number | null {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= 0
+    ? value
+    : null;
+}
+
+/**
+ * Every event that closes a model-metered operation.
+ *
+ * Jev runs outside the agent's ordinary model span, so its usage only exists in
+ * the structured audit record on `auto_approval_evaluation_ended`. Reading that
+ * record here keeps the headline, chart, and per-model rows on the same ledger.
+ */
+function meteredUsage(frame: AgentSseFrame): MeteredUsage | null {
+  if (
+    frame.event === "model_interaction_ended" &&
+    "type" in frame.data &&
+    frame.data.usage
+  ) {
+    return { model: frame.data.model ?? "unknown", usage: frame.data.usage };
+  }
+
+  if (frame.event !== "auto_approval_evaluation_ended") return null;
+  const details = frame.data.details;
+  const rawUsage = details.usage;
+  if (typeof rawUsage !== "object" || rawUsage === null || Array.isArray(rawUsage)) {
+    return null;
+  }
+
+  const values = rawUsage as Record<string, unknown>;
+  const usage: TokenUsage = {};
+  let measured = false;
+  for (const key of [
+    "input_tokens",
+    "output_tokens",
+    "thought_tokens",
+    "cached_tokens",
+    "tool_use_tokens",
+    "total_tokens"
+  ] as const) {
+    const count = tokenCount(values[key]);
+    if (count === null) continue;
+    usage[key] = count;
+    measured = true;
+  }
+  if (!measured) return null;
+
+  const model =
+    typeof details.model === "string" && details.model.trim().length > 0
+      ? details.model
+      : "unknown";
+  return { model, usage };
+}
+
 export function summarizeCost(frames: AgentSseFrame[]): CostSummary {
   const byModel = new Map<string, UsageTotals>();
   const aggregate = emptyTotals();
 
   for (const frame of frames) {
-    if (
-      frame.event !== "model_interaction_ended" ||
-      !("type" in frame.data) ||
-      !frame.data.usage
-    ) {
-      continue;
-    }
-    const model = frame.data.model ?? "unknown";
-    const totals = byModel.get(model) ?? emptyTotals();
-    addUsage(totals, frame.data.usage);
-    addUsage(aggregate, frame.data.usage);
-    byModel.set(model, totals);
+    const metered = meteredUsage(frame);
+    if (!metered) continue;
+    const totals = byModel.get(metered.model) ?? emptyTotals();
+    addUsage(totals, metered.usage);
+    addUsage(aggregate, metered.usage);
+    byModel.set(metered.model, totals);
   }
 
   const modelBreakdown = [...byModel.entries()].map(([model, tokens]) => ({
@@ -154,15 +210,12 @@ export function buildUsageTimeline(frames: AgentSseFrame[]): UsageTimelinePoint[
   ];
 
   frames.forEach((frame, index) => {
-    if (
-      frame.event === "model_interaction_ended" &&
-      "type" in frame.data &&
-      frame.data.usage
-    ) {
+    const metered = meteredUsage(frame);
+    if (metered) {
       const tokens = emptyTotals();
-      addUsage(tokens, frame.data.usage);
-      addUsage(cumulative, frame.data.usage);
-      const estimatedCostUsd = estimate(frame.data.model ?? "unknown", tokens);
+      addUsage(tokens, metered.usage);
+      addUsage(cumulative, metered.usage);
+      const estimatedCostUsd = estimate(metered.model, tokens);
       if (estimatedCostUsd == null) {
         /* The latch is deliberate and stays: this series is CUMULATIVE, so once a
            term is missing every later sum is a lower bound rather than a value,

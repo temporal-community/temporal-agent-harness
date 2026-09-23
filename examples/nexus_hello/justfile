@@ -29,8 +29,8 @@
 # Open the UI and start chatting. All three tools are available.
 #
 # Requires the `temporal` CLI >= 1.9.1 (older builds reject the Nexus dynamic config below).
-# Requires the `nexus-mcp` extra (Python >=3.13): `uv sync --extra nexus-mcp` (or a plain
-# `uv sync` picks it up too, since the repo's `dev` group includes it on 3.13+).
+# Requires the `nexus-mcp` extra: `uv sync --extra nexus-mcp` (or a plain `uv sync` picks it
+# up too, since the repo's `dev` group includes it).
 # First-time setup: `cp .env.example .env.local` from the repo root and fill in OPENAI_API_KEY.
 
 # Shows a notice when running from an untagged commit (silent on a release archive).

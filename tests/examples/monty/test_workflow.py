@@ -65,7 +65,7 @@ async def _reply_text(client: Client, workflow_id: str) -> str:
         result_type=AgentEvent,
     ):
         envelope: AgentEvent = item.data
-        if envelope.event.type == AgentEventType.REPLY:
+        if envelope.event.type == AgentEventType.MESSAGE_HANDLER_END:
             # run_script returns a TextReply; read its text off the output dict.
             reply = envelope.event.output.get("text")
         if envelope.event.type == AgentEventType.TURN_END:
@@ -103,7 +103,7 @@ async def test_script_calls_host_functions(client_and_queue):
     )
     await handle.execute_update(
         SEND_AGENT_MESSAGE_UPDATE,
-        AgentMessage(type="run_script", payload={"script": script}, expected_turn=1),
+        AgentMessage(type="run_script", payload={"script": script}),
         result_type=AgentMessageReply,
     )
 
@@ -125,7 +125,7 @@ async def test_script_syntax_error_is_reported(client_and_queue):
     )
     await handle.execute_update(
         SEND_AGENT_MESSAGE_UPDATE,
-        AgentMessage(type="run_script", payload={"script": "def ("}, expected_turn=1),
+        AgentMessage(type="run_script", payload={"script": "def ("}),
         result_type=AgentMessageReply,
     )
 

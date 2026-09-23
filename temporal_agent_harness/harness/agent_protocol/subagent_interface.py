@@ -53,10 +53,6 @@ class RunSubagentTurnInput(BaseModel):
         description="The send_agent_message envelope 'payload': the JSON of the target "
         "handler's input model.",
     )
-    expected_turn: int = Field(
-        description="The parent's locally tracked next turn number for this subagent; the "
-        "child rejects the send as stale if it doesn't match its own next turn."
-    )
     from_offset: int = Field(
         default=0,
         description="Where to begin consuming the child's stream — the caller's last-known "
@@ -89,8 +85,10 @@ class SubagentTurnResult(BaseModel):
     output: dict[str, Any] = Field(
         default_factory=dict,
         description="The child handler's reply, as the raw JSON dict carried on the child's "
-        "AgentReply. The calling send_<function> tool re-validates it against the handler's "
-        "statically known output model (boundary validation).",
+        "``message_handler_end`` for THIS message (selected by ``message_id``, not by turn — a "
+        "child turn can carry several participants). The calling send_<function> tool "
+        "re-validates it against the handler's statically known output model (boundary "
+        "validation).",
     )
     turn_id: str = Field(description="The id of the turn the child actually ran.")
     turn_number: int = Field(

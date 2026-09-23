@@ -121,6 +121,7 @@ def code_mode_tool(
     *,
     name: str,
     inherently_safe: bool = True,
+    auto_approval_criteria: str | None = None,
     injections: Mapping[str, Any] | None = None,
     step_timeout: timedelta = DEFAULT_STEP_TIMEOUT,
 ) -> Callable[..., Awaitable[str]]:
@@ -153,6 +154,11 @@ def code_mode_tool(
             host-call layer. Set ``False`` to make the run-code tool a single human review
             checkpoint on the whole script before any host call runs. (Under a policy that gates
             everything, the run-code tool gates regardless.)
+        auto_approval_criteria: the default criteria-set name auto mode judges THIS run-code
+            tool against, if it is ever gated and auto mode is on. Like ``inherently_safe`` it
+            applies to the run-code tool only, NOT to the host calls the script makes — each of
+            those re-enters the gate under its own tool's declared set. Leave unset to fall back
+            to whatever the operator configured as the catch-all.
         step_timeout: the ``start_to_close_timeout`` for one sandbox step (compile-to-first-batch
             or resume-to-next-batch). Host calls run as their own activities with their own
             timeouts; this bounds only the sandbox stepping.
@@ -194,4 +200,6 @@ def code_mode_tool(
         return_annotation=str,
     )
     _run_code.__annotations__ = {"script": str, "return": str}
-    return tool_defn(inherently_safe=inherently_safe)(_run_code)
+    return tool_defn(
+        inherently_safe=inherently_safe, auto_approval_criteria=auto_approval_criteria
+    )(_run_code)

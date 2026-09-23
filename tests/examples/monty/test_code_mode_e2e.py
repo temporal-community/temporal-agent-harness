@@ -64,7 +64,7 @@ async def _run(
     )
     await handle.execute_update(
         SEND_AGENT_MESSAGE_UPDATE,
-        AgentMessage(type="run_code", payload={"script": script}, expected_turn=1),
+        AgentMessage(type="run_code", payload={"script": script}),
         result_type=AgentMessageReply,
     )
 
@@ -76,7 +76,7 @@ async def _run(
     ):
         envelope: AgentEvent = item.data
         events.append(envelope)
-        if envelope.event.type == AgentEventType.REPLY:
+        if envelope.event.type == AgentEventType.MESSAGE_HANDLER_END:
             reply = envelope.event.output.get("text")
         if envelope.event.type == AgentEventType.TURN_END:
             break

@@ -268,7 +268,7 @@ describe("frames outside the root's offset space must not manufacture one", () =
     // `event_offset` (and every mock fixture) carries no such field.
     const offsetless = [
       delta(20),
-      { event: "error", data: { kind: "timeout", message: "gave up", resume_offset: 21 } },
+      { event: "stream_error", data: { kind: "timeout", message: "gave up", resume_offset: 21 } },
       { event: "reply_delta", data: { type: "reply_delta", agent_id: ROOT, turn_number: 1, turn_id: "t", timestamp: 1, resume_offset: 22, text: "x" } },
       delta(21)
     ];
@@ -280,24 +280,19 @@ describe("frames outside the root's offset space must not manufacture one", () =
   });
 
   it("keeps turn-0 frames in the comparison", () => {
-    // The trap worth its own case: the session-level frames at `turn: 0` LOOK like they might sit
-    // outside the sequence, and they do not — a live session published turns 0, 5, 6 and 7 into one
-    // dense run. Skipping them the way the display projections do would invent a gap at each.
+    // The trap worth its own case: a frame at `turn: 0` LOOKS like it might sit outside the
+    // sequence, and it does not — it shares the root's offset space with everything else.
+    // Skipping such frames the way the display projections do would invent a gap at each.
     const withTurnZero = [
       delta(30),
-      frame("operator_command_started", 31, {
-        operator_command_id: "op-1",
-        command_name: "status",
-        command_label: "/status",
-        arg: null
+      frame("tool_approval_resolved", 31, {
+        tool_id: "call-1",
+        tool_name: "status",
+        approved: true,
+        reason: null,
+        remember: false
       }, ROOT, 0),
-      frame("operator_command_completed", 32, {
-        operator_command_id: "op-1",
-        command_name: "status",
-        command_label: "/status",
-        arg: null,
-        text: "idle"
-      }, ROOT, 0),
+      frame("callback_resolved", 32, { tool_id: "call-2", tool_name: "status" }, ROOT, 0),
       delta(33)
     ];
     assert.deepEqual(

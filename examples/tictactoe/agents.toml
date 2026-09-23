@@ -1,0 +1,18 @@
+# Registry of agents the tic-tac-toe example UI can launch.
+#
+# `temporal-agent-harness serve` reads this file and passes the parsed registry into the
+# packaged SessionManagerWorkflow, which serves it back over the `available_agents` query so
+# the UI can list it. To expose a new agent: register its @workflow.defn on a worker, then add
+# a [[agents]] entry here.
+
+[[agents]]
+key = "tictactoe"
+workflow_type = "TicTacToeAgent"
+task_queue = "tictactoe-agent"
+label = "Tic-Tac-Toe (TypeSafe)"
+description = """
+Play tic-tac-toe against an agent with NO LLM in the loop. Each of its turns is one
+TypeSafe System One call (jev) answering three typed questions over the board — a Choice
+over the empty cells, a Noul on whether you threaten to win, a Score on the outlook — and
+it acts on the Choice through a workflow tool that mutates the observable board state.
+Send `new_game` to start, then `play` with a cell number 1-9."""

@@ -109,7 +109,7 @@ describe("frameKey", () => {
 
     // A client-side stream error carries no envelope at all and must still key.
     const streamError = {
-      event: "error",
+      event: "stream_error",
       data: { kind: "timeout", message: "nope", resume_offset: 3 },
     };
     assert.equal(typeof frameKey(streamError), "string");

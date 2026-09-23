@@ -169,15 +169,17 @@ async def _observe(
                 print()
                 printed_prefix = False
             await _handle_callback_requested(http, session_id, data)
-        elif event_type == "reply":
-            # Non-streaming mode (Runner.run) emits no reply_delta — the answer arrives only in this
-            # terminal event (AgentReply.output). Render it when nothing streamed; in streaming mode
-            # the deltas already showed it, so skip.
+        elif event_type == "message_handler_end":
+            # Non-streaming mode (Runner.run) emits no reply_delta — the answer arrives only in
+            # this terminal event (MessageHandlerEnd.output). Render it when nothing streamed; in
+            # streaming mode the deltas already showed it, so skip.
             if not streamed_any:
                 out = data.get("output")
                 text = out.get("text") if isinstance(out, dict) else out
                 print(f"\nreact> {text}")
-        elif event_type == "error":
+        elif event_type in ("message_handler_error", "stream_error"):
+            # The agent's own failure for a message, and the transport-level one /api/chat
+            # synthesizes (a turn timeout, or this turn's error surfaced as the caller's).
             print(f"\n[error] {data.get('message', 'unknown error')}")
         elif event_type == "turn_end":
             break
@@ -222,8 +224,7 @@ async def _answer_open_questions(http: httpx.AsyncClient, session_id: str) -> bo
 
 
 async def _chat_turn(http: httpx.AsyncClient, session_id: str, message: str) -> None:
-    expected_turn = int((await _status(http, session_id)).get("current_turn", 0)) + 1
-    body = {"session_id": session_id, "message": message, "expected_turn": expected_turn}
+    body = {"session_id": session_id, "message": message}
     async with http.stream("POST", "/api/chat", json=body) as resp:
         if resp.status_code != 200:
             print(f"[server error {resp.status_code}] {(await resp.aread()).decode()}")

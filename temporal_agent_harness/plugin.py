@@ -64,6 +64,7 @@ from temporalio.plugin import SimplePlugin
 from temporalio.worker import WorkerConfig
 
 from temporal_agent_harness.harness.code_mode.activities import CODE_MODE_ACTIVITIES
+from temporal_agent_harness.harness.jev_approvals.activity import JEV_APPROVAL_ACTIVITIES
 from temporal_agent_harness.utils.large_payload import DEFAULT_PAYLOAD_STORAGE
 
 
@@ -136,6 +137,13 @@ class AgentHarnessPlugin(SimplePlugin):
       actionable non-retryable error rather than leaving the activity names unregistered —
       which Temporal answers with a *retryable* error, hanging the turn (see
       :func:`temporal_agent_harness.harness.code_mode.activities._require_code_mode_extra`).
+    * **Jev approval activity** — the model call behind
+      :func:`~temporal_agent_harness.harness.jev_approvals.jev_evaluator`, registered
+      unconditionally for the same reason as the Code Mode activities: the workflow
+      dispatches it by name, so leaving the name unregistered on a worker without the
+      optional ``jev`` extra would make Temporal retry forever and stall every gated tool
+      call mid-approval. The extra is checked per call instead, and a worker without it
+      fails the check once and escalates the call to a human.
     * **Tool activities** — the durable body of each ``@agent.activity_tool_defn`` tool in
       ``tools``.
 
@@ -168,6 +176,7 @@ class AgentHarnessPlugin(SimplePlugin):
         self._worker_activities: list[Callable[..., Any]] = [
             *_tool_activities(tools),
             *CODE_MODE_ACTIVITIES,
+            *JEV_APPROVAL_ACTIVITIES,
         ]
 
         def data_converter(converter: DataConverter | None) -> DataConverter:

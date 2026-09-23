@@ -36,7 +36,7 @@ Same `agent.*` namespace, but helpers/factories/types (not decorators):
 - `agent.subagent_toolset(...)` — factory: generates `start_/send_/stop_` tools from another agent's
   interface (agents-as-subagents).
 - `agent.code_mode_tool(...)` — factory: the Code Mode tool (model-authored scripts over your tools).
-- `ToolApprovalPolicy`, `AgentToolContext`, `ToolApprovalContext`, `CustomApprovalFallback`
+- `ToolApprovalPolicy`, `AgentToolContext`, `AutoApprovalContext`, `AutoModeEvaluator`
   (type alias), and exceptions `ToolApprovalDenied` / `CallbackToolError` — supporting types.
 
 ## Notes
