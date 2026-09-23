@@ -1,49 +1,70 @@
-# Typed agent sessions: a Svelte client over the event stream, typed from the agent class
+# Typed agent sessions: a client over the event stream, typed from the agent class
 
-> Status: **design; not built.** Builds on [`per-message-events.md`](per-message-events.md) (the
-> `message_id` envelope the client keys on) and [`observable-agent-state.md`](observable-agent-state.md)
+> Status: **built through phase 5**, plus a typed tic-tac-toe app on top of it. Phase 6 (moving
+> the console onto the client) is not started. Builds on [`per-message-events.md`](per-message-events.md)
+> (the `message_id` envelope the client keys on) and [`observable-agent-state.md`](observable-agent-state.md)
 > (the snapshot + patch stream the client folds). Related to
 > [`rendering-agent-state.md`](rendering-agent-state.md), which puts a runtime `value_schema` on
 > `AgentStateSnapshot` — see **Open decisions**.
 
 ## The problem
 
-Every consumer of the event stream rebuilds the same client from scratch. The packaged console
-does it in `ui/src/lib/state/agentRun.svelte.ts` (2,100 lines, roughly half of it connection
-handling and frame buffering), the chat-server does it in `third-party-platforms/chat-server/src/harness.ts`,
-and `examples/tictactoe/play.html` does it again by hand. Each one re-learns the same lessons:
-one attach per session, resume from `resume_offset`, back off and wake early on a send, poll
-`agent_status` while idle instead of re-attaching (Temporal caps in-flight updates at 10 per
-workflow, and a parked poll can't be reclaimed), de-duplicate frames, key replies by
-`message_id` rather than `turn_id`.
+Every consumer of the event stream rebuilt the same client from scratch. The packaged console does
+it in `ui/src/lib/state/agentRun.svelte.ts` (2,100 lines, roughly half of it connection handling
+and frame buffering), the chat-server does it in `third-party-platforms/chat-server/src/harness.ts`,
+and the tic-tac-toe example did it again by hand in a single-file `play.html`. Each one re-learned
+the same lessons: one attach per session, resume from `resume_offset`, back off and wake early on
+a send, don't re-attach an idle session on a timer (Temporal caps in-flight updates at 10 per
+workflow, and a parked poll can't be reclaimed), de-duplicate frames, key replies by `message_id`
+rather than `turn_id`.
 
-None of them is typed against the agent it talks to. `ui/src/lib/api/types.ts` is a hand-written
-copy of `events.py` that drifts, and a UI that renders an agent's observable state — the thing
-people actually want to build a UI around — reads it as untyped JSON.
+None of them was typed against the agent it talks to. `ui/src/lib/api/types.ts` was a hand-written
+copy of `events.py` that had drifted, and a UI rendering an agent's observable state — the thing
+people actually want to build a UI around — read it as untyped JSON.
 
-## The goal
+## The result
 
 ```svelte
 <script lang="ts">
-  import { AgentSession } from "$lib/harness/svelte";
-  import type { TicTacToe } from "./TicTacToe";      // generated
+  import { AgentSession } from "@temporal-agent-harness/svelte";
+  import type { TicTacToeAgent } from "../../client_sdk/TicTacToeAgent";   // generated
 
   let { sessionId } = $props();
-  const agent = new AgentSession<TicTacToe>({ get sessionId() { return sessionId; } });
-  const board = $derived(agent.state.board);         // Board | undefined until the snapshot arrives
+  const agent = new AgentSession<TicTacToeAgent>({ get sessionId() { return sessionId; } });
+  const board = $derived(agent.states.board);   // Board | undefined until the snapshot arrives
 </script>
 
 {#if board}
-  {#each board.cells as cell, i}
+  {#each board.cells as cell, i (i)}
     <button disabled={cell !== null || board.status !== "playing"}
             onclick={() => agent.sendMessage("play", { cell: i + 1 })}>{cell ?? ""}</button>
   {/each}
 {/if}
 ```
 
-A UI developer gets a reactive message list, agent and per-message status, pending approvals and
-callbacks, the agent's observable state typed from its Python models, and a `sendMessage` checked
-against each handler's input model. Connection handling is written once, in the core.
+A UI developer gets a reactive message list for every agent in the session's tree, agent and
+per-message status, pending approvals and callbacks from anywhere in the tree, the agent's
+observable state typed from its Python models, and a `sendMessage` checked against each handler's
+input model. Connection handling is written once, in the core. `examples/tictactoe/ui` is a whole
+app built this way (`just play`).
+
+## Where it lives
+
+Three standalone npm packages under `packages/`, each with its own lockfile (like `ui/` and
+`third-party-platforms/chat-server/`), so a consumer depends on the client without depending on
+the console, and each can be published on its own later:
+
+| package | what it is | toolchain |
+| --- | --- | --- |
+| `packages/codegen` — `@temporal-agent-harness/codegen` | `harness-codegen`: schema document → TypeScript | TypeScript 7, `node --test` |
+| `packages/client` — `@temporal-agent-harness/client` | the framework-independent core, transport, projection, and the generated protocol types | TypeScript 7, `node --test` |
+| `packages/svelte` — `@temporal-agent-harness/svelte` | the Svelte 5 binding | `svelte-package`, vitest in happy-dom, TypeScript 6 |
+
+There is no root workspace. Local packages depend on each other through `file:` links with
+`install-links=false` (in each package's `.npmrc`), so they are symlinks that build against the
+working tree; a copy would leave out the linked package's gitignored `dist/`. The binding needs
+TypeScript 6 because `svelte-check` and `svelte-package` drive the compiler through its
+JavaScript API, which TypeScript 7 does not ship.
 
 ## Inspiration: `@ai-sdk/svelte`
 
@@ -53,103 +74,33 @@ workflow owns the conversation; the stream is a durable, offset-addressed log), 
 would be lossy exactly where the harness is richer: queued/joined dispositions, auto-approval
 evaluations, observable state, subagents.
 
-What is worth taking is the shape of `@ai-sdk/svelte@5`:
+What we took from the shape of `@ai-sdk/svelte@5`:
 
-- **The binding is almost empty.** `chat.svelte.ts` is ~50 lines. All behaviour lives in a
-  framework-independent `AbstractChat` in the `ai` package; a framework plugs in only by
-  implementing a `ChatState` interface (reactive fields plus `pushMessage` / `replaceMessage` /
-  `snapshot`). React and Vue implement the same interface.
-- **A class, not a hook.** `new Chat({...})`, read through getters backed by `$state`.
-- **One reactive write per chunk.** Chunks mutate a private working message; `write()` then calls
-  `replaceMessage(index, message)` once.
-- **A serial job queue** orders stream chunks against user actions (`addToolOutput`, approvals).
-- **`KeyedStore`** — a `SvelteMap` keyed by id, set up through context, so components that
-  construct the same id share one state.
+- **The binding is small.** All behaviour lives in a framework-independent core
+  (`AbstractChat` there, `AgentSessionCore` here); a framework plugs in by implementing a state
+  interface (`ChatState` there, `SessionState` here) whose fields it makes reactive.
+- **A class, not a hook.** `new AgentSession({...})`, read through getters backed by Svelte state.
+- **Batched reactive writes.** Frames update private working state; the core writes to the
+  reactive state once per flush.
+- **A keyed store through context**, so components that construct the same session share one
+  state.
 
 Where we deliberately differ:
 
 - **Updates land on any message, not only the last.** A refcounted turn can stream two messages at
   once, a queued message sits earlier in the list, and an approval can resolve on an older message.
-  `AbstractChat` assumes the active response is the last message; our core keeps a
-  `message_id → index` map and replaces by index.
+  The projection finds every message by id and replaces it by index.
 - **The connection is long-lived.** An AI SDK chat has nothing open between requests; we hold an
   `attach`. Sharing one attach per session is a correctness concern (the update cap), not polish.
 - **The raw frame log is exposed alongside messages**, because the console is an inspector
   (replay, graph, cost, audit panels), not only a chat.
-- **Left out:** a single `status` enum (we need agent-level `idle | busy` plus per-message
-  `queued | running | done | error`), a writable `messages` setter, `regenerate`, `stop` as
-  "abort the fetch" (detaching doesn't stop an agent), and `sendAutomaticallyWhen` (the workflow
-  continues its own loop after an approval or callback).
+- **One message per inbound message**, not a user message plus an assistant message.
+- **Left out:** a single `status` enum (we have a connection status, agent-level `idle | busy`, and
+  per-message status), a writable `messages` setter, `regenerate`, `stop` as "abort the fetch"
+  (detaching doesn't stop an agent; `closeSession()` does), and `sendAutomaticallyWhen` (the
+  workflow continues its own loop after an approval or callback).
 
-## Settled
-
-### Core and binding
-
-`AgentSessionCore<A extends AgentSchema = UntypedAgent>` owns:
-
-- the transport: `attach`, `submitMessage`, `approve`, `callbackResult`, `close`, `status`;
-- the connection lifecycle moved out of `AgentRunController`: one attach per session, backoff,
-  waking early on a send, polling `agent_status` while idle, frame de-duplication, `resume_offset`,
-  catch-up chunking, optimistic user messages reconciled to `message_id`;
-- a serial queue for every mutation;
-- an **incremental** reducer, `applyFrame(working, frame) → touched message ids`, replacing
-  today's full `buildTranscript(frames)` rebuild on every commit (the comment on `total` in
-  `agentRun.svelte.ts` records the O(n²) hydration this already caused).
-
-Reactivity comes in through a `SessionState` interface, as `ChatState` does for `AbstractChat`:
-
-```ts
-interface SessionState<A extends AgentSchema> {
-  connection: "idle" | "connecting" | "live" | "backoff" | "error";
-  agentStatus: "idle" | "busy";
-  error: HarnessError | undefined;
-  messages: HarnessMessage<A>[];
-  frames: AgentSseFrame[];
-  replaceMessage(index: number, m: HarnessMessage<A>): void;
-  pushMessage(m: HarnessMessage<A>): void;
-  appendFrames(batch: AgentSseFrame[]): void;
-  setAgentState(stateId: string, doc: unknown): void;
-  snapshot<T>(x: T): T;
-}
-```
-
-After each batch (cut per animation frame), the core calls `replaceMessage` once per touched
-message.
-
-The Svelte binding:
-
-- **`$state.raw`, not deep `$state`.** The core always replaces whole messages, so deep proxies buy
-  nothing and make replaying thousands of frames expensive. `snapshot` becomes the identity.
-- **One core per session.** A reference-counted keyed store, created by `createHarnessContext()`,
-  so `TranscriptPanel`, `AgentStatePanel` and an approval button deep in the tree share one attach.
-- **The connection follows observation**, via `createSubscriber` from `svelte/reactivity`
-  (Svelte ≥ 5.7): the attach opens when an effect first reads the session and closes when nothing
-  reads it. Unmounting the last reader releases its update slot with no teardown code.
-- **Getter options** (`get sessionId()`), so switching sessions re-attaches.
-
-### The message model
-
-- `message_accepted` → a user message, `id = message_id`, metadata `{handler, payload, disposition}`.
-- The assistant message shares that `message_id`. Parts: `step` per `model_interaction_started`
-  (usage from `model_interaction_ended` into metadata), `reasoning` from `thought_summary`,
-  `text` from `reply_delta`, `source` from `text_annotation`, and a typed `output` from
-  `message_handler_end`, typed by the handler's output model.
-- Tool parts keyed by `tool_id`, state machine
-  `requested → [approval-requested → evaluating* → approved | denied] → running → [awaiting-client] → done | failed`.
-  `evaluating` (an auto-approval bracket is open) is distinct from `approval-requested` (a person
-  must act). Evaluations stay on the part for audit UIs.
-- `state_snapshot` / `state_patch` → not messages; a `state[state_id]` map folded with the
-  existing `ui/src/lib/state/jsonPatch.ts`.
-- `subagent_*` → a `subagent` part on the parent message; child messages grouped by `agent_id`.
-
-### Tool inputs and outputs stay opaque JSON
-
-Tool parts are `{ toolName: string; input: unknown; output: unknown }`. Clients rarely need tool
-I/O typed, and the one case that matters — callback tools — already requires the client author
-to implement the contract, so they validate it where they implement it (zod or similar). This
-keeps `run_tool` unchanged, needs no tool declarations anywhere, and leaves runtime-configured
-tools (a user adding or removing an MCP server through a handler) entirely unconstrained by the
-harness. See **Rejected** for the tool-typing design this replaces.
+## As built
 
 ### State is declared on the class
 
@@ -170,26 +121,29 @@ class TicTacToeAgentWorkflow:
             ...
 ```
 
-- `agent.state(...)` returns a `StateDecl[T]` descriptor. `__set_name__` takes the state id from
-  the attribute name, so the id can't drift from the attribute. An overloaded `__get__` returns the
-  declaration when read from the class (what codegen reads) and the instance's `StateRef[T]` when
-  read from an instance.
+- `agent.state(...)` (`harness/state/decl.py`) returns a `StateDecl[T]` descriptor. `__set_name__`
+  takes the state id from the attribute name, so the id can't drift from the attribute. An
+  overloaded `__get__` returns the declaration when read from the class (what codegen reads) and
+  the instance's `StateRef[T]` when read from an instance; pyright types both.
 - Refs are stored **on the instance, never on the descriptor.** A class attribute is shared by every
   workflow instance on a worker; holding the ref on the descriptor would leak one workflow's board
-  into another.
-- `@agent.defn` records the declarations next to `_discover_handlers`, and rejects duplicate ids
-  and non-`HarnessState` types at import time — the same place it already validates handlers and
-  the `run` signature.
-- The `AgentWorkflowRunner` constructor gets the instance (not only its class) from the stack walk
-  it already does (`_enclosing_workflow_class`), registers every declared state and publishes its
-  snapshot — at the same point `runner.state()` does today. Its signature doesn't change.
-- `runner.state()` stops being public (becomes `_register_state`). Without that, the generated
-  schema could not claim to list every state an agent publishes. `StateHost().state(...)` stays as
-  the unit-test primitive; it publishes to no agent stream.
+  into another. `__set__` raises, so `self.board = Board()` cannot shadow the declared state.
+- Bad declarations fail when the class body runs: a non-`HarnessState` type, a type with required
+  fields and no `initial=`, one declaration under two names. `@agent.defn` records nothing extra —
+  the descriptor validates itself, and a recorded copy would be inherited by subclasses and go
+  stale. `declared_states(cls)` reflects over the MRO in declaration order.
+- The `AgentWorkflowRunner` constructor gets the instance from the stack walk it already did
+  (`_enclosing_workflow_instance`) and publishes every declared state's snapshot at the end of
+  construction, in declaration order. Its signature didn't change.
+- A ref read or mutated in `__init__` before the runner exists is created lazily; whatever it
+  committed then was published to no one, so it folds into the first snapshot at version 0
+  (`StateRef._attach`).
+- `runner.state()` is gone. Without that, the generated schema could not claim to list every
+  state an agent publishes. The tests' `StateHost().state(...)` stays as the unit-test primitive;
+  it publishes to no agent stream.
 
-**Where it must be written, and what happens otherwise.** Calling `agent.state(...)` anywhere is
-harmless, but it only does anything as a class attribute. The wrong placement does not half-work —
-it fails at the line that uses it, as a type error:
+**Where it must be written.** Calling `agent.state(...)` anywhere is harmless, but it only does
+anything as a class attribute. The wrong placement fails at the line that uses it, as a type error:
 
 ```python
 def __init__(self, config):
@@ -198,153 +152,243 @@ def __init__(self, config):
 with self.board.mutate() as d:             # pyright: "StateDecl[Board]" has no attribute "mutate"
 ```
 
-That is the same way `dataclasses.field()` and pydantic's `Field()` teach where they belong.
+**One hazard is plain Python.** A state and a handler method with the same name overwrite each
+other in the class namespace — whichever comes last wins — and nothing is left to detect it.
 
 `HarnessState` is already strict, which is what makes it generate cleanly: `extra="forbid"` becomes
 `additionalProperties: false`, and `StateSchemaError` rejects fields the harness can't own at
-class definition. Sets are no longer allowed (see
-[`../internal/observable-agent-state-status.md`](../internal/observable-agent-state-status.md) §5.1),
-so no set-to-array handling is needed.
+class definition.
 
-### Codegen
+### Tool inputs and outputs stay opaque JSON
 
-Two artifacts, one pipeline: Python writes JSON Schema, a TypeScript tool writes types.
+Tool parts carry `input: Record<string, unknown>` and `output: string | null`. Clients rarely need
+tool I/O typed, and the one case that matters — callback tools — already requires the client
+author to implement the contract, so they validate it where they implement it (zod or similar).
+This keeps `run_tool` unchanged, needs no tool declarations anywhere, and leaves runtime-configured
+tools (a user adding or removing an MCP server through a handler) entirely unconstrained by the
+harness. See **Rejected** for the tool-typing design this replaces.
 
-1. **Per agent.** `agent_schema(cls)`, next to `agent_handlers`, returns handlers and declared
-   states. `temporal-agent-harness schema module:Class` writes one document:
+### Schemas from Python
 
-   ```
-   { agent, handlers: { name: { input, output, mid_turn, description } }, states: { id: schema }, $defs }
-   ```
+`harness/agent_schema.py`:
 
-   - One `models_json_schema` call, so all models share one `$defs` and `Mark` is emitted once.
-   - Handler inputs use `mode="validation"` (a field with a default is optional going in); handler
-     outputs and states use `mode="serialization"` (what `model_dump(mode="json")` puts on the wire,
-     so every field is present). `code_mode/stubs.py` has shipped this exact bug once — defaulted
-     fields rendered as required — so it gets its own test.
+- **`agent_schema(cls)`** — handlers and declared states, printed by
+  `temporal-agent-harness schema module:Class`:
 
-2. **Protocol types.** `TypeAdapter(AgentEvent).json_schema(mode="serialization")` through the same
-   generator, replacing the hand-written event types in `ui/src/lib/api/types.ts`. The SSE frame
-   type is derived in TypeScript, not generated, matching the flattening in `web/app.py`:
+  ```
+  { agent, source, handlers: { name: { description, mid_turn, input, output } }, states: { id: ref }, $defs }
+  ```
 
-   ```ts
-   type SseFrame = AgentStreamItem extends infer E ? E & Omit<AgentEvent, "event"> & { resume_offset: number } : never;
-   ```
+  One `models_json_schema` call, so every model shares one `$defs`. Handler inputs use
+  `mode="validation"` (a field with a default may be omitted going in); handler outputs and states
+  use `mode="serialization"` with **every model field required**, via a small `GenerateJsonSchema`
+  subclass — pydantic's default marks defaulted fields optional even in serialization mode, which
+  would type a reply or state document as possibly missing fields it always carries. A model used
+  both ways whose schemas differ appears as `Name-Input` / `Name-Output`. Two distinct models that
+  share a class name raise, naming both — including the case where pydantic would silently call
+  them `Name-Input` / `Name-Output` because they were used in different modes.
+- **`protocol_schema()`** — the event stream's wire types, printed by
+  `temporal-agent-harness schema --protocol`: the `AgentEvent` envelope, the payloads in
+  `AgentStreamItem` order, and `$defs`, all in serialization mode.
 
-   `stream_error` frames stay hand-written: the server synthesizes them and no pydantic model exists.
+Both are pure reflection: no workflow is started and no Temporal connection is needed. Field
+descriptions must be `Field(description=...)`; attribute docstrings reach the schema only on a
+model that sets `use_attribute_docstrings=True`.
 
-The TypeScript side is a small CLI, `harness-codegen <schema.json> -o <Agent>.ts`:
-`json-schema-to-typescript` over `$defs` (docstrings → JSDoc, `Literal` → string unions,
-`ge`/`le` → JSDoc tags) plus a ~100-line template that writes the `{ handlers, states }` mapping
-type — the part no off-the-shelf tool produces. Generated files are checked in; `just codegen`
-regenerates them and a CI job fails on a diff, the same pattern as the committed `ui/dist`.
+### TypeScript from the schemas
 
-For TicTacToe the output is:
+`harness-codegen <schema.json | -> [-o file] [--name T] [--protocol]` runs `json-schema-to-typescript`
+over `$defs` and appends what no off-the-shelf tool produces:
+
+- **For an agent**, a mapping type named after its workflow type (`--name` overrides it):
+
+  ```ts
+  export interface TicTacToeAgent {
+    handlers: {
+      /** Reset the board and start a new game. ... */
+      new_game: { input: NewGame; output: TextReply };
+      /** Play your mark on an empty cell (1-9, left-to-right, top-to-bottom). ... */
+      play: { input: PlayMove; output: TextReply };
+    };
+    states: { board: Board };
+  }
+  ```
+
+- **For the protocol**, `AgentStreamItem` (the union of payloads) and
+  `AgentEventType = AgentStreamItem["type"]`.
+
+Before handing the schema over, the generator drops property-level `title`s and emits every `$ref`
+as the referenced type's name (via `tsType`, keeping its description); otherwise
+`json-schema-to-typescript` mints a named type per title and a duplicate type (`Foo1`) per `$ref`
+that carries a sibling description. Min/max-style constraints become JSDoc tags, Sphinx roles in
+docstrings become Markdown, and `Echo-Input` becomes `EchoInput`, rejecting two names that would
+generate one. `Literal` aliases are inlined by pydantic, so a field reads `"X" | "O"` rather than
+`Mark`.
+
+**Where generated files live, and what keeps them current.** Each example that ships a typed client
+owns a `codegen-client-sdk` recipe in its own justfile and commits the output
+(`examples/tictactoe/client_sdk/TicTacToeAgent.ts`); there is no top-level codegen recipe. The
+protocol types are committed as `packages/client/src/protocol.ts` (`npm run generate:protocol`
+there). The `client-sdk` CI workflow regenerates both — for every example whose justfile defines
+the recipe — and fails on any difference.
+
+### The client core
+
+`AgentSessionCore<A extends AgentSchema = UntypedAgent>` (`packages/client/src/session.ts`) owns one
+session:
+
+- **The connection.** Attach from offset 0. The server ends an attach once the agent is idle and
+  caught up; a stream that errors, or ends with a turn still open, is retried with backoff
+  (`[500, 1000, 2000, 4000, 8000, 8000, 8000]` ms, reset whenever it delivers) and resumes from the
+  last `resume_offset`. A clean end with the workflow closed is `closed`. A clean end with the agent
+  idle is `idle`: the core then **polls `agent_status`** (5 s by default) and re-attaches only when
+  it shows new work — how a message sent from another client gets noticed without holding a
+  parked poll open. A send wakes a sleeping retry or an idle wait at once. Frames a resume
+  redelivers are dropped by key. Submits go out one at a time, in order, and a stream is ensured
+  only after the submit returns, so it cannot end before the message is admitted.
+- **The projection.** Incremental: each frame updates only the message, part or state document it
+  is about, found by id, so a replay costs O(frames). A changed part is replaced, never edited, so
+  a published object never changes afterwards. However many frames arrive between flushes, the
+  state is written once per flush — a 1,500-frame catch-up in one flush is one write.
+- **Every agent in the tree.** The merged stream carries the root agent's events and, recursively,
+  every subagent's, each stamped with its tree-unique `agent_id`. Each agent gets its own
+  projection, and its own published view: messages, states, `agentStatus`, `parentId`, `agentKey`,
+  `workflowId`, `lifecycle` (`stopped` once its parent stops it), and `unavailable` (why its own
+  events could not be read). A parent's `subagent` part carries the `messageId` of the message the
+  child ran for that turn, so a view can render the child's work in place.
+- **Actions.** `sendMessage(handler, payload)` (typed from `A`), `respondToApproval`,
+  `provideToolOutput` / `provideToolError`, `closeSession`, `dismiss`, `clearError`. None of them
+  reject; failures set `error` (and `onError`). Approvals and callback results are sent to the
+  workflow of **the agent that made the call**, found by `tool_id` — a subagent's gates are its
+  own, not its parent's.
+- **Callbacks.** `onToolCall` is called once per callback tool call still waiting at a flush,
+  anywhere in the tree, including one that was waiting before this client attached; a callback
+  already resolved earlier in the same catch-up is not fulfilled again. `onFinish` fires only for
+  messages this client sent.
+
+Reactivity comes in through `SessionState`:
 
 ```ts
-// GENERATED from examples.tictactoe.workflow:TicTacToeAgentWorkflow — do not edit.
-export type Mark = "X" | "O";
-export type Status = "playing" | "X_wins" | "O_wins" | "draw";
-export interface Move { mark: Mark; cell: number }
-/** The whole game: nine cells, whose turn it is, who the agent is, and the outcome. */
-export interface Board {
-  cells: (Mark | null)[];
-  to_move: Mark;
-  agent_mark: Mark;
-  status: Status;
-  moves: Move[];
-}
-export interface NewGame { agent_goes_first?: boolean }
-export interface PlayMove { /** @minimum 1 @maximum 9 */ cell: number }
-export interface TextReply { text: string }
-
-export interface TicTacToe {
-  handlers: {
-    new_game: { input: NewGame;  output: TextReply };
-    play:     { input: PlayMove; output: TextReply };
-  };
-  states: { board: Board };
+interface SessionState<A extends AgentSchema> {
+  connection: "stopped" | "connecting" | "live" | "idle" | "reconnecting" | "closed" | "error";
+  error: Error | undefined;
+  rootAgentId: string | null;
+  agents: Readonly<Record<string, AgentView>>;     // rootView(state) reads the root, typed AgentView<A>
+  pending: readonly HarnessMessage<A>[];
+  frames: readonly AgentSseFrame[];
+  updateAgents(updates: ReadonlyArray<readonly [agentId: string, AgentUpdate]>): void;
+  appendFrames(frames: readonly AgentSseFrame[]): void;
 }
 ```
 
-The library's default type parameter is an untyped `AgentSchema`, so the console keeps rendering
-any agent it discovers at runtime through `agent-interface`. Codegen is opt-in.
+The core writes once per flush (the next animation frame by default). `applyAgentUpdate` applies an
+update, so a binding only chooses where to keep the result. `PlainSessionState` is the
+framework-free implementation, with a `subscribe` listener, for scripts and tests. `HttpTransport`
+implements `SessionTransport` over the harness web API.
+
+### The message model
+
+One `HarnessMessage` per inbound message, narrowed on `handler` to that handler's `input` and
+`output` types:
+
+- `id` is the `message_id`; `status` is `sending → accepted → running → done | error`, and
+  `disposition` says whether it opened a turn, joined the open one, or queued behind it.
+- `parts`, in stream order, are everything the agent did in answer: `step` per model call (with its
+  usage), `text` from `reply_delta`, `reasoning` from `thought_summary`, `source` per annotation,
+  `tool` per tool call, `subagent` per subagent turn. The reply is `output`, typed by the handler's
+  output model.
+- Tool parts are keyed by `tool_id` and move through
+  `requested → [awaiting-approval ⇄ evaluating → approved | denied] → running → [awaiting-client] → done | failed`.
+  `evaluating` (an automatic evaluator is deciding) is distinct from `awaiting-approval` (a person
+  must act); every evaluation stays on the part for audit views. A tool that starts without a
+  request (a built-in one) and a resolution published with no `message_id` (a policy cascade) are
+  both found by `tool_id`.
+- Messages this client sent that the server has not admitted yet are in `pending`, not `messages`:
+  the stream can admit a message before its submit returns, and a placeholder in `messages` would
+  then have to be deleted from the middle of the list. A failed send stays in `pending` with its
+  error until `dismiss`ed.
+- `state_snapshot` / `state_patch` are not messages; they fold into each agent's `states`. A patch
+  that arrives after a version gap, or with no snapshot (an attach from a later offset), stops that
+  document at its last good version instead of guessing.
+
+### The Svelte binding
+
+`packages/svelte`:
+
+- **`SvelteSessionState`** — `$state.raw` fields, each flush assigning new objects. The core always
+  hands over whole new objects, so deep proxies would buy nothing and make replaying a long
+  session expensive.
+- **`AgentSession<A>`** — `messages`, `states` and `agentStatus` (the root's); `agents` and
+  `agent<B>(id)` for every agent, typed with a child's own generated type when given one;
+  `pending`, `connection`, `error`, `frames`; `pendingApprovals` and `pendingCallbacks` collected
+  from the whole tree; and the core's actions.
+- **The connection follows observation**, via `createSubscriber`: the first effect or markup to
+  read any field opens the stream, and it closes (in a microtask) once nothing reads it, so
+  unmounting the last view releases its update slot with no teardown code.
+- **Getter options** — a `get sessionId()` moves the connection when its value changes.
+- **`createHarnessContext()`** puts a `SessionStore` in context: every `AgentSession` below it with
+  the same session id shares one core, one state and one connection, reference-counted across
+  readers. The first to open a session decides its options (`onToolCall`, transport, …).
+
+Its tests run under Svelte's client runtime in happy-dom: in Vitest's Node environment modules are
+transformed as SSR, where effects never run.
+
+### The tic-tac-toe app
+
+`examples/tictactoe/ui` replaces the old `play.html`. It is a Vite + Svelte app written only against
+the binding and the generated `TicTacToeAgent` type: the board is `agent.states.board`, moves are
+`agent.sendMessage("play", { cell })`, the last TypeSafe judgment is read off `agent.messages`, the
+ledger off `agent.frames`, and gated calls get approve / deny buttons from `agent.pendingApprovals`.
+The board and the ledger each construct their own `AgentSession`; the `createHarnessContext()`
+above them makes them share one connection. CI type-checks and builds it against the committed
+generated types, so a model change that breaks it fails there.
 
 ## Phases
 
-Phases 1 and 2 are Python only and useful on their own. Phases 3 and 4 share one generator.
-Phase 5 doesn't depend on 1–4: it can start in parallel against the untyped schema and pick up
-generated types when they land.
+| phase | what | commit |
+| --- | --- | --- |
+| 1 | `agent.state(...)` declared on the class; `runner.state()` removed | `7f01f3b` |
+| 2 | `agent_schema(cls)` and `temporal-agent-harness schema` | `94bb9b2` |
+| 3 | `packages/codegen` and the per-example `codegen-client-sdk` recipe | `74e868a` |
+| 4 | protocol types generated from `events.py`; the UI's event types derived from them | `53c14ff` |
+| 5 | `packages/client` (core, projection, per-agent views, transport) | `8078b7e` |
+| 5 | `packages/svelte` (the binding) | `c1bf85c` |
+| — | `examples/tictactoe/ui` on the binding, replacing `play.html` | `c26da1e` |
+| 6 | the console on the client | not started |
 
-### Phase 1 — declare state on the class
+Each phase's work was verified against a local stack (a Temporal dev server, the session manager,
+the web server and the example workers): the core drove tic-tac-toe sessions and a model-free
+parent driving a real Monty subagent end to end over HTTP, and the tic-tac-toe app was played in a
+headless browser.
 
-- **Build:** `agent.state` / `StateDecl`; declarations recorded by `@agent.defn`; the runner
-  registers them from the instance found by the stack walk; `runner.state()` made private.
-- **Migrate:** `examples/tictactoe/workflow.py`, `examples/monty/workflow.py`,
-  `examples/monty/conversational_workflow.py`, `examples/auto_mode/workflow.py`,
-  `tests/harness/test_observable_state.py`. Docs showing `runner.state(...)`: the
-  `AgentWorkflowRunner.state` docstring, the `board.py` and `trip_board.py` module docs, the
-  tictactoe and monty READMEs, `observable-agent-state.md`. Code Mode needs no change:
-  `injections={"board": self.board}` still runs in `__init__`, after the runner exists.
-- **Tests:** two workflows of one type on one worker never share state; class access gives the
-  declaration and instance access the ref; a duplicate id or non-`HarnessState` type fails at
-  import naming the attribute; declarations evaluate cleanly under the workflow sandbox; the
-  snapshot is published at runner construction (`test_observable_state` passes apart from the
-  declaration); tictactoe and monty pass end to end against the time-skipping server.
-- **Done when** no public way remains to publish state that isn't declared on the class.
+### Phase 6 — the console
 
-### Phase 2 — `agent_schema(cls)` and the schema CLI
-
-- **Build:** `agent_schema`; the `schema` subcommand in `web/cli.py`.
-- **Tests:** a golden schema for tictactoe; the validation/serialization split
-  (`NewGame.agent_goes_first` absent from `required`, every `Board` field present); stable,
-  readable `$defs` names.
-- **Done when** the CLI produces a deterministic, diffable schema for every example agent.
-
-### Phase 3 — TypeScript generator
-
-- **Build:** `harness-codegen`; `just codegen`; the CI drift check.
-- **Tests:** a golden `TicTacToe.ts`; `tsc --noEmit` on the output; vitest `expectTypeOf` type tests
-  (as `@ai-sdk/svelte` does in `completion.svelte.test-d.ts`) for `sendMessage` and `state`.
-- **Done when** changing a field on `Board` without regenerating fails CI.
-
-### Phase 4 — protocol types from `events.py`
-
-- **Build:** the event schema through the same generator; the derived `SseFrame`; `types.ts`
-  re-exports the generated event types.
-- **Tests:** `just app-check`; `ui/src/lib/mock/scenarios.ts` type-checks against generated frames.
-- **Done when** a field added to an event in `events.py` reaches the UI through `just codegen` alone.
-
-### Phase 5 — session core and Svelte binding
-
-- **Build:** `AgentSessionCore`, `SessionState`, the incremental reducer and transport under
-  `ui/src/lib/harness/core/`; `SvelteSessionState`, `AgentSession`, the keyed store and
-  `createSubscriber` lifecycle under `ui/src/lib/harness/svelte/`.
-- **Tests:** reducer tests over the mock scenarios — concurrent messages in one turn, a queued
-  message, an approval resolving on an older message, a replay from offset 0; core tests against a
-  fake transport — backoff, wake on send, the idle poll, de-duplication. UI tests here are SSR-only
-  and can't catch client-only crashes, so logic stays in the core where plain unit tests reach it,
-  and the binding is exercised once in the real app.
-- **Done when** the core runs a live session end to end against `just server`, and a 1,500-frame
-  replay hydrates without O(n²) rebuilds.
-
-### Phase 6 — dogfood
-
-- **Build:** `AgentChatPanel` and `TranscriptPanel` on an untyped `AgentSession`, with
-  `AgentRunController` keeping replay, graph and cost on `session.frames`; a typed TicTacToe view on
-  `AgentSession<TicTacToe>`.
-- **Done when** the console behaves as before and the TicTacToe view has no hand-written event parsing.
+- **Build:** `ui/` depends on `packages/client` and `packages/svelte` through `file:` links;
+  `AgentChatPanel` and `TranscriptPanel` move onto an untyped `AgentSession`, with
+  `AgentRunController` keeping replay, graph and cost on `session.frames`. `ui/src/lib/api/types.ts`
+  imports the SSE frame types from `packages/client/src/frames.ts` rather than keeping its own copy
+  of them.
+- **Needs:** a `pnpm install` on the machine that owns `ui/node_modules`.
+- **Done when** the console behaves as before on the client, and its own connection handling is
+  gone from `AgentRunController`.
 
 ## Open decisions
 
-- **Package home.** Suggested: prototype in `ui/src/lib/harness/`, extract to a workspace package
-  once a second consumer (chat-server, the TicTacToe view) needs it. The generator moves with it.
-- **State read before the runner exists.** Suggested: create the ref lazily on first access and
-  treat a mutation before the runner exists as changing the initial value, so the first snapshot
-  includes it. The alternative is an ordering rule, which is the kind of placement rule this design
-  avoids.
-- **Where the typed TicTacToe view lives.** Suggested: a small Svelte page in `examples/tictactoe/`.
-  `play.html` stays — being a single double-clickable file is its purpose.
+- **Sending to a subagent directly.** The client only sends to the root. A child turn started by
+  someone other than its parent is not part of the parent's merged stream (the merge only admits a
+  child's turns its parent asked for), so showing one would need a second session on the child's
+  own workflow id. The old console does this by attaching to the child's stream separately.
+- **Fine-grained reactivity per agent.** `agents` is replaced as a whole each flush, so a reader of
+  one agent re-runs when any agent changes (the arrays it reads are unchanged, so the DOM is not
+  touched). Worth revisiting if a large tree makes it measurable.
+- **Publishing.** The packages are `private`. Publishing needs a decision on the npm scope
+  (`@temporal-agent-harness/*` needs that org; Temporal publishes under `@temporalio`), `files` /
+  `exports` fields, and whether `harness-codegen` stays its own package or becomes a bin of the
+  client package.
+- **A root workspace.** With three packages plus `ui/` and the chat-server, a root npm or pnpm
+  workspace may now pay for itself; it would replace the per-package lockfiles and `file:` links.
+- **`event_offset` and `replay` on the SSE envelope.** The client and the UI type them as optional,
+  but the current server never sends them.
 - **Relation to `rendering-agent-state.md`.** That design puts a runtime `value_schema` (with
   `x-harness-display` hints) on `AgentStateSnapshot`. Both should come from the same
   `agent_schema` call; unknown `x-` keys pass through `json-schema-to-typescript`, so they don't
@@ -352,20 +396,21 @@ generated types when they land.
 
 ## Risks
 
-- **Getting the instance from the stack walk.** `_enclosing_workflow_class` already finds `self` in
-  the `@workflow.init` frame; returning the instance is small, but a runner built outside
-  `__init__` would then behave differently. Needs a test and an error that names the fix.
-- **`$defs` naming.** `models_json_schema` qualifies clashing names by module
-  (`examples__tictactoe__board__Board`). We need a rule that keeps plain names and fails loudly on a
-  real collision.
+- **The stack walk.** The runner finds its agent instance by walking to the `@workflow.init` frame's
+  `self`. A runner built somewhere that frame isn't on the stack would publish no declared state.
 - **Stale types across deploys.** A session started on an older build can replay snapshots with an
-  older shape. Accepted for now; a schema hash on `AgentStateSnapshot` would detect it later.
+  older shape. Accepted for now; a schema hash on `AgentStateSnapshot` would detect it.
+- **Platform-bound `node_modules`.** TypeScript 7's compiler and Vite 8's bundler are native
+  binaries, so a `node_modules` installed on one OS doesn't run on another. The Node recipes run
+  `npm ci` every time so a checkout shared between machines repairs itself.
 
 ## Rejected, with reasoning
 
 - **An AI SDK integration or `ChatTransport` adapter.** Lossy where the harness is richer (see
   **Inspiration**), and the approval flow doesn't fit: useChat expects to re-POST after an
   approval, while the workflow continues on its own.
+- **Prototyping the client inside `ui/`.** Consumers would have had to depend on the console to get
+  a client, and the codegen tool would have lived in an app it has nothing to do with.
 - **Registering state (and tools) through `@agent.defn(states=..., tools=...)`.** Splits an agent's
   configuration between the decorator and the runner constructor in `__init__`, which is surprising
   in the wrong way.
@@ -383,3 +428,9 @@ generated types when they land.
   observable state). It worked, but the client value was small next to the complexity, and it
   constrained runtime tool configuration. If typed tools come back, that is the design to start
   from.
+- **A user message plus an assistant message per inbound message**, as the AI SDK has. The harness
+  already pairs a request with everything it caused by `message_id`; splitting them would only make
+  every consumer join them back up.
+- **Re-attaching an idle session on a backoff until a budget runs out**, as the console's
+  controller does. It stops listening after about 30 s and misses work another client starts
+  later; polling the cheap `agent_status` query does neither.
