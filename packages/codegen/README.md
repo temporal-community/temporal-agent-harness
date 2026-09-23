@@ -1,7 +1,7 @@
 # @temporal-agent-harness/codegen
 
 Generates TypeScript types for one harness agent from the JSON Schema document the Python
-package prints for it, and ships the types of the event protocol all agents share:
+package prints for it:
 
 ```sh
 uv run temporal-agent-harness schema examples.tictactoe.workflow:TicTacToeAgentWorkflow \
@@ -32,13 +32,9 @@ type, which defaults to the agent's workflow type name.
 
 ## The event protocol
 
-`src/protocol.ts` holds the types of the event stream every agent publishes — the
-`AgentEvent` envelope, one interface per payload, and the `AgentStreamItem` and
-`AgentEventType` unions — generated from `events.py` with `--protocol`:
-
-```sh
-npm run generate:protocol   # uv run temporal-agent-harness schema --protocol | harness-codegen --protocol - ...
-```
+With `--protocol`, it reads `temporal-agent-harness schema --protocol` instead and writes the
+event stream's types. The client package (`packages/client`) commits that output as its
+`src/protocol.ts`; `npm run generate:protocol` there regenerates it.
 
 ## Development
 

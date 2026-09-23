@@ -1,0 +1,23 @@
+{
+  "name": "@temporal-agent-harness/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A framework-independent client for temporal-agent-harness agents: a session over an agent's event stream, projected into messages and observable state.",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test dist/test/*.test.js",
+    "generate:protocol": "npm --prefix ../codegen run build && uv run temporal-agent-harness schema --protocol | node ../codegen/dist/src/cli.js --protocol - -o src/protocol.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "^7.0.2"
+  }
+}

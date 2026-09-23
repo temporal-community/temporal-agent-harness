@@ -1,8 +1,8 @@
 name: Client SDK codegen
 
-# packages/codegen turns `temporal-agent-harness schema` documents into TypeScript types. Its
-# own src/protocol.ts is generated from the event protocol, and examples that ship typed
-# clients commit their agent's output (e.g. examples/tictactoe/client_sdk/). Nothing else
+# packages/codegen turns `temporal-agent-harness schema` documents into TypeScript types.
+# packages/client commits its output for the event protocol as src/protocol.ts, and examples
+# that ship typed clients commit their agent's output (e.g. examples/tictactoe/client_sdk/). Nothing else
 # notices when a Python model changes and the committed types don't, so these jobs
 # regenerate them and fail on any difference.
 #
@@ -23,11 +23,27 @@ concurrency:
 
 jobs:
   codegen:
-    name: packages/codegen tests and protocol types
+    name: packages/codegen tests
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: packages/codegen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/codegen/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  client:
+    name: packages/client tests and protocol types
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/client
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -37,8 +53,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: packages/codegen/package-lock.json
+          cache-dependency-path: |
+            packages/client/package-lock.json
+            packages/codegen/package-lock.json
       - run: npm ci
+      - run: npm ci
+        working-directory: packages/codegen
       - run: npm test
 
       - name: Regenerate the protocol types
@@ -48,8 +68,8 @@ jobs:
         run: |
           set -euo pipefail
           if ! git diff --exit-code -- src/protocol.ts; then
-            echo "::error::packages/codegen/src/protocol.ts is out of date with events.py."
-            echo "Regenerate it from packages/codegen and commit the result:"
+            echo "::error::packages/client/src/protocol.ts is out of date with events.py."
+            echo "Regenerate it from packages/client and commit the result:"
             echo "    npm run generate:protocol"
             exit 1
           fi
