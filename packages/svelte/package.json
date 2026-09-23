@@ -1,0 +1,39 @@
+{
+  "name": "@temporal-agent-harness/svelte",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Svelte 5 binding for @temporal-agent-harness/client: a reactive AgentSession over a temporal-agent-harness agent's event stream.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "svelte": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "svelte-package",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "svelte": "^5.7.0"
+  },
+  "dependencies": {
+    "@temporal-agent-harness/client": "file:../client"
+  },
+  "devDependencies": {
+    "@sveltejs/package": "^2.5.8",
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "@types/node": "^22.20.4",
+    "happy-dom": "^20.14.5",
+    "svelte": "^5.57.1",
+    "svelte-check": "^4.7.6",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
+  }
+}

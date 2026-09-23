@@ -74,6 +74,31 @@ jobs:
             exit 1
           fi
 
+  svelte:
+    name: packages/svelte tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            packages/client/package-lock.json
+            packages/svelte/package-lock.json
+      # The binding links ../client, which it resolves through that package's build.
+      - name: Build packages/client
+        working-directory: packages/client
+        run: npm ci && npm run build
+      - working-directory: packages/svelte
+        run: npm ci
+      - working-directory: packages/svelte
+        run: npm run check
+      - working-directory: packages/svelte
+        run: npm test
+      - working-directory: packages/svelte
+        run: npm run build
+
   committed-types:
     name: Committed client types match the agents
     runs-on: ubuntu-latest
