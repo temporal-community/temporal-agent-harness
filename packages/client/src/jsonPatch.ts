@@ -61,18 +61,28 @@ export function buildPointer(tokens: Array<string | number>): string {
   return tokens.map((token) => `/${escapeToken(String(token))}`).join("");
 }
 
+function isContainer(node: unknown): node is JsonValue[] | Record<string, JsonValue> {
+  return node !== null && typeof node === "object";
+}
+
+/**
+ * One step down a pointer, through the document's own keys only. A plain `node[token]`
+ * also finds inherited ones, and `/__proto__/x` or `/constructor/prototype/x` would then
+ * walk off the document into `Object.prototype`.
+ */
+function child(node: JsonValue[] | Record<string, JsonValue>, token: string): JsonValue | undefined {
+  if (Array.isArray(node)) return node[Number(token)];
+  return Object.hasOwn(node, token) ? node[token] : undefined;
+}
+
 /** The value at `pointer`, or undefined if nothing is there. */
 export function valueAt(doc: JsonValue, pointer: string): JsonValue | undefined {
   let node: JsonValue | undefined = doc;
   for (const token of parsePointer(pointer)) {
-    if (node === null || typeof node !== "object") return undefined;
-    node = Array.isArray(node) ? node[Number(token)] : node[token];
+    if (!isContainer(node)) return undefined;
+    node = child(node, token);
   }
   return node;
-}
-
-function isContainer(node: unknown): node is JsonValue[] | Record<string, JsonValue> {
-  return node !== null && typeof node === "object";
 }
 
 /**
@@ -129,7 +139,7 @@ export function applyOps(doc: JsonValue, ops: readonly JsonPatchOp[]): PatchResu
     let parent: JsonValue | undefined = next;
     for (const token of tokens) {
       if (!isContainer(parent)) break;
-      parent = Array.isArray(parent) ? parent[Number(token)] : parent[token];
+      parent = child(parent, token);
     }
     if (!isContainer(parent)) {
       return {
@@ -164,9 +174,13 @@ export function applyOps(doc: JsonValue, ops: readonly JsonPatchOp[]): PatchResu
         parent.splice(index, 1);
       }
     } else {
-      before = parent[last];
+      /* Assigning `__proto__` re-parents the object rather than setting a key on it. */
+      if (last === "__proto__") {
+        return { doc: next, applied, error: `${op.op} ${op.path} names __proto__` };
+      }
+      before = child(parent, last);
       if (op.op === "remove") {
-        if (!(last in parent)) {
+        if (!Object.hasOwn(parent, last)) {
           return { doc: next, applied, error: `remove ${op.path} — no such key` };
         }
         delete parent[last];
