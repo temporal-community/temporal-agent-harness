@@ -123,7 +123,7 @@ test("stopping aborts a held stream", async () => {
   assert.equal(state.agentStatus, "busy");
 });
 
-test("a waiting callback tool is handed to onToolCall once, and its result submitted", async (t) => {
+test("a waiting callback tool is handed to its callbackTools entry once, and its result submitted", async (t) => {
   const f = new Frames();
   const a = { message_id: "m0" };
   const call = { tool_id: "c1", tool_name: "read_local_file" };
@@ -143,9 +143,11 @@ test("a waiting callback tool is handed to onToolCall once, and its result submi
   const calls: string[] = [];
   const { core } = session(transport, {
     schedule: () => {},
-    onToolCall: (c) => {
-      calls.push(`${c.toolId}:${String(c.input.path)}`);
-      return "file contents";
+    callbackTools: {
+      read_local_file: (c) => {
+        calls.push(`${c.toolId}:${String(c.input.path)}`);
+        return "file contents";
+      }
     }
   });
   t.after(() => core.stop());
@@ -237,9 +239,11 @@ test("a subagent's approvals and callbacks are answered at the subagent's own wo
   ]);
   const calls: string[] = [];
   const { core, state } = session(transport, {
-    onToolCall: (call) => {
-      calls.push(`${call.toolId}@${call.agentId}`);
-      return "jpeg";
+    callbackTools: {
+      photo: (call) => {
+        calls.push(`${call.toolId}@${call.agentId}`);
+        return "jpeg";
+      }
     }
   });
   t.after(() => core.stop());
@@ -251,4 +255,34 @@ test("a subagent's approvals and callbacks are answered at the subagent's own wo
   assert.deepEqual(calls, ["cb@root.s1"]);
   assert.deepEqual(transport.routed, ["wf-s1:cb", "wf-s1:gate"]);
   assert.equal(state.agent("root.s1")!.workflowId, "wf-s1");
+});
+
+test("a callback tool with no callbackTools entry is left waiting for someone else", async (t) => {
+  const f = new Frames();
+  const a = { message_id: "m0" };
+  const hold = deferred();
+  const transport = new ScriptedTransport([
+    [
+      f.make("message_accepted", { handler: "ask", payload: {}, disposition: "opened" }, a),
+      f.make("turn_started"),
+      f.make("callback_requested", { tool_id: "c1", tool_name: "read_file", tool_input: {}, output_schema: {} }, a),
+      f.make("callback_requested", { tool_id: "c2", tool_name: "confirm_purchase", tool_input: {}, output_schema: {} }, a),
+      { hold: hold.promise }
+    ]
+  ]);
+  const { core } = session(transport, { callbackTools: { read_file: () => "contents" } });
+  t.after(() => core.stop());
+
+  core.start();
+  await until(() => transport.callbackResults.length === 1);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(transport.callbackResults, [{ toolId: "c1", outcome: { result: "contents" } }]);
+
+  assert.equal(core.handlesCallback("read_file"), true);
+  assert.equal(core.handlesCallback("confirm_purchase"), false);
+  /* Only the map's own keys: an inherited `constructor` is not a handler. */
+  assert.equal(core.handlesCallback("constructor"), false);
+
+  await core.provideToolOutput("c2", { confirmed: true });
+  assert.deepEqual(transport.callbackResults.at(-1), { toolId: "c2", outcome: { result: { confirmed: true } } });
 });

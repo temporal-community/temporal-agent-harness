@@ -67,10 +67,11 @@ export interface ToolCall {
 export interface AgentSessionOptions<A extends AgentSchema> {
   sessionId: string;
   transport?: SessionTransport;
-  /** Fulfil callback tools: return the result, or throw to report the call failed. Called once
-   *  per call still waiting when it is seen, including one that was waiting before this client
-   *  attached. */
-  onToolCall?: (call: ToolCall) => unknown;
+  /** Callback tools this client fulfils, by tool name: return the result, or throw to report the
+   *  call failed. Each is called once per call still waiting when it is seen, including one that
+   *  was waiting before this client attached. A tool with no entry is left for someone to answer
+   *  with `provideToolOutput` or `provideToolError`. */
+  callbackTools?: Readonly<Record<string, (call: ToolCall) => unknown>>;
   /** A message sent from this client finished: its handler returned or raised. */
   onFinish?: (message: HarnessMessage<A>) => void;
   onError?: (error: Error) => void;
@@ -399,13 +400,22 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
       this.#finished.add(message.id);
       this.#options.onFinish?.(message as HarnessMessage<A>);
     }
-    if (this.#options.onToolCall) {
-      for (const { part, agent } of this.#projection.awaitingClient()) this.#dispatchCall(part, agent);
-    }
+    for (const { part, agent } of this.#projection.awaitingClient()) this.#dispatchCall(part, agent);
+  }
+
+  /** Whether `callbackTools` answers this tool, so a view of waiting calls can leave it out. */
+  handlesCallback(toolName: string): boolean {
+    return this.#callbackTool(toolName) !== undefined;
+  }
+
+  #callbackTool(toolName: string): ((call: ToolCall) => unknown) | undefined {
+    const tools = this.#options.callbackTools;
+    return tools && Object.hasOwn(tools, toolName) ? tools[toolName] : undefined;
   }
 
   #dispatchCall(part: ToolPart, agent: AgentInfo): void {
-    if (this.#dispatchedCalls.has(part.toolId)) return;
+    const handler = this.#callbackTool(part.toolName);
+    if (!handler || this.#dispatchedCalls.has(part.toolId)) return;
     this.#dispatchedCalls.add(part.toolId);
     const call: ToolCall = {
       toolId: part.toolId,
@@ -416,7 +426,7 @@ export class AgentSessionCore<A extends AgentSchema = UntypedAgent> {
     };
     void (async () => {
       try {
-        const result = await this.#options.onToolCall!(call);
+        const result = await handler(call);
         await this.provideToolOutput(part.toolId, result);
       } catch (error) {
         await this.provideToolError(part.toolId, messageOf(error));

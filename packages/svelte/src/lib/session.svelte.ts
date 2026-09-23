@@ -62,7 +62,7 @@ class SessionEntry<A extends AgentSchema> {
  * state. Put one in context with `createHarnessContext()`; an AgentSession constructed outside
  * any such context gets its own.
  *
- * The first AgentSession to follow an id decides that session's options (`onToolCall`,
+ * The first AgentSession to follow an id decides that session's options (`callbackTools`,
  * transport and so on); later ones share what it set up.
  */
 export class SessionStore {
@@ -101,7 +101,9 @@ export class AgentSession<A extends AgentSchema = UntypedAgent> {
   readonly #entry: SessionEntry<A> = $derived.by(() => this.#resolve());
   readonly #subscribe: () => void;
 
-  readonly #waiting = $derived.by(() => waitingCalls(this.#state().agents));
+  readonly #waiting = $derived.by(() =>
+    waitingCalls(this.#state().agents, (toolName) => this.#entry.core.handlesCallback(toolName))
+  );
 
   constructor(options: AgentSessionOptions<A>, store?: SessionStore) {
     this.#options = options;
@@ -170,7 +172,8 @@ export class AgentSession<A extends AgentSchema = UntypedAgent> {
     return this.#waiting.approvals;
   }
 
-  /** Callback tool calls waiting on a client, anywhere in the tree. */
+  /** Callback tool calls waiting on a client, anywhere in the tree, other than the ones the
+   *  session's `callbackTools` answer. */
   get pendingCallbacks(): readonly WaitingToolCall[] {
     return this.#waiting.callbacks;
   }
@@ -225,7 +228,10 @@ export class AgentSession<A extends AgentSchema = UntypedAgent> {
   }
 }
 
-function waitingCalls(agents: Readonly<Record<string, AgentView>>): {
+function waitingCalls(
+  agents: Readonly<Record<string, AgentView>>,
+  handled: (toolName: string) => boolean
+): {
   approvals: WaitingToolCall[];
   callbacks: WaitingToolCall[];
 } {
@@ -237,7 +243,7 @@ function waitingCalls(agents: Readonly<Record<string, AgentView>>): {
         if (part.type !== "tool") continue;
         const call = { agentId: agent.agentId, messageId: message.id, part };
         if (part.state === "awaiting_approval" || part.state === "evaluating") approvals.push(call);
-        else if (part.state === "awaiting_callback") callbacks.push(call);
+        else if (part.state === "awaiting_callback" && !handled(part.toolName)) callbacks.push(call);
       }
     }
   }

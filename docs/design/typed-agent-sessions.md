@@ -261,9 +261,12 @@ session:
   reject; failures set `error` (and `onError`). Approvals and callback results are sent to the
   workflow of **the agent that made the call**, found by `tool_id` — a subagent's gates are its
   own, not its parent's.
-- **Callbacks.** `onToolCall` is called once per callback tool call still waiting at a flush,
-  anywhere in the tree, including one that was waiting before this client attached; a callback
-  already resolved earlier in the same catch-up is not fulfilled again. `onFinish` fires only for
+- **Callbacks.** `callbackTools` maps tool names to handlers. A handler is called once per call
+  to its tool still waiting at a flush, anywhere in the tree, including one that was waiting
+  before this client attached; a callback already resolved earlier in the same catch-up is not
+  fulfilled again. A tool with no entry is left alone for a person to answer, so one session can
+  fulfil some callback tools itself and show the rest in `pendingCallbacks`, which leaves out the
+  ones `callbackTools` answers. `onFinish` fires only for
   messages this client sent.
 
 Reactivity comes in through `SessionState`:
@@ -329,7 +332,7 @@ One `HarnessMessage` per inbound message, narrowed on `handler` to that handler'
 - **Getter options** — a `get sessionId()` moves the connection when its value changes.
 - **`createHarnessContext()`** puts a `SessionStore` in context: every `AgentSession` below it with
   the same session id shares one core, one state and one connection, reference-counted across
-  readers. The first to open a session decides its options (`onToolCall`, transport, …).
+  readers. The first to open a session decides its options (`callbackTools`, transport, …).
 
 Its tests run under Svelte's client runtime in happy-dom: in Vitest's Node environment modules are
 transformed as SSR, where effects never run.

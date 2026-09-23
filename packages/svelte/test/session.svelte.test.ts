@@ -199,6 +199,32 @@ describe("AgentSession", () => {
     stop();
   });
 
+  test("pendingCallbacks leaves out the tools callbackTools answers", async () => {
+    const transport = new FakeTransport();
+    const env = { message_id: "a" };
+    transport.scripts.set("s1", [
+      [
+        frame("message_accepted", { handler: "ask", payload: {}, disposition: "opened" }, env),
+        frame("callback_requested", { tool_id: "c1", tool_name: "read_file", tool_input: {}, output_schema: {} }, env),
+        frame("callback_requested", { tool_id: "c2", tool_name: "confirm_purchase", tool_input: {}, output_schema: {} }, env)
+      ]
+    ]);
+    /* The call to `read_file` stays waiting until the stream reports it resolved, which this
+       script never does, so it is left out for having a handler, not for being done. */
+    const session = new AgentSession({
+      sessionId: "s1",
+      transport,
+      callbackTools: { read_file: () => "contents" },
+      ...quick
+    });
+    const stop = watch(() => session.pendingCallbacks);
+    flushSync();
+    await until(() => session.messages[0]?.parts.length === 2);
+
+    expect(session.pendingCallbacks.map((w) => w.part.toolName)).toEqual(["confirm_purchase"]);
+    stop();
+  });
+
   test("an unread session opens no connection, even when sent to", async () => {
     const transport = new FakeTransport();
     const session = new AgentSession({ sessionId: "s1", transport, ...quick });
