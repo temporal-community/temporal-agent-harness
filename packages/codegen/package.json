@@ -1,0 +1,22 @@
+{
+  "name": "@temporal-agent-harness/codegen",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Generate TypeScript types for a temporal-agent-harness agent from its `temporal-agent-harness schema` document.",
+  "bin": {
+    "harness-codegen": "dist/src/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "json-schema-to-typescript": "^16.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "typescript": "^7.0.2"
+  }
+}

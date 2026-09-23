@@ -1,0 +1,80 @@
+name: Client SDK codegen
+
+# packages/codegen turns an agent's `temporal-agent-harness schema` document into TypeScript
+# types, and examples that ship typed clients commit that output (e.g.
+# examples/tictactoe/client_sdk/). Nothing else notices when a Python model changes and the
+# committed types don't, so this job regenerates them and fails on any difference.
+#
+# Every example whose justfile defines a `codegen-client-sdk` recipe is checked, so a new
+# example opts in by adding the recipe.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: client-sdk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codegen:
+    name: packages/codegen tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/codegen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/codegen/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  committed-types:
+    name: Committed client types match the agents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/codegen/package-lock.json
+      - uses: extractions/setup-just@v2
+
+      - name: Regenerate every example's client types
+        run: |
+          set -euo pipefail
+          for justfile in examples/*/justfile; do
+            if grep -q '^codegen-client-sdk:' "$justfile"; then
+              echo "::group::$justfile"
+              just --justfile "$justfile" codegen-client-sdk
+              echo "::endgroup::"
+            fi
+          done
+
+      - name: Verify the committed types are current
+        run: |
+          set -euo pipefail
+          changes="$(git status --porcelain -- examples)"
+          if [ -n "$changes" ]; then
+            echo "::error::Generated client types are out of date with the agents they describe."
+            echo
+            echo "Regenerate them from the example's directory and commit the result:"
+            echo "    just codegen-client-sdk"
+            echo
+            echo "$changes"
+            git diff -- examples
+            exit 1
+          fi
+          echo "Committed client types match the agents."

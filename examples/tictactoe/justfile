@@ -50,3 +50,10 @@ ui-dev:
 # Run the tic-tac-toe agent worker.
 worker:
     cd "{{root}}" && uv run --group examples python -m examples.tictactoe.worker
+
+# Regenerate the agent's TypeScript client types, client_sdk/TicTacToeAgent.ts, from its Python
+# handler and state models. Needs Node. CI fails when the committed file is out of date.
+codegen-client-sdk:
+    cd "{{root}}/packages/codegen" && ([ -d node_modules ] || npm ci --no-audit --no-fund) && npm run --silent build
+    cd "{{root}}" && uv run --group examples temporal-agent-harness schema examples.tictactoe.workflow:TicTacToeAgentWorkflow \
+        | node packages/codegen/dist/src/cli.js - -o "{{justfile_directory()}}/client_sdk/TicTacToeAgent.ts"
