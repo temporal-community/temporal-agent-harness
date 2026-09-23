@@ -453,6 +453,18 @@
     return key ? approvalErrors[key] ?? null : null;
   }
 
+  /* The card's body: what is being gated. One line, because this is a decision
+     about a call, not the inspector. */
+  function approvalDetail(row: ReplayLogRow): string {
+    const input = formatLogValue(scrubScriptValue(row.input));
+    if (!input) return "";
+    const compact = input.replace(/\s+/g, " ").trim();
+    /* A call that takes no arguments has nothing to say, but UNKNOWN_TOOL_INPUT is not
+       that case — it says the arguments were lost, which the approver still needs. */
+    if (compact === "{}" || compact === "[]") return "";
+    return compact.length > 160 ? `${compact.slice(0, 159)}…` : compact;
+  }
+
   function logsForTurn(turnNumber: number | undefined): ReplayLogRow[] {
     if (turnNumber == null) return [];
     return logsByTurn.get(turnNumber) ?? [];
@@ -1283,73 +1295,70 @@
     {/if}
 
     {#if pendingApprovalRows.length > 0}
+      <!-- Chip, then a card per gated call: identity, the details, the answer.
+           That is the thing that scales — a second approval is another card, not
+           another kind of layout — and it is what the rest of the harness already
+           does with a tool that needs a decision. -->
       <section class="pending-approvals" aria-label="Pending tool approvals">
-        <header class="pending-approvals-head">
-          <StatusChip
-            label={`${pendingApprovalRows.length} approval${
-              pendingApprovalRows.length === 1 ? "" : "s"
-            } needed`}
-            kind="approval"
-            detail="human gate"
-            active
-          />
-        </header>
+        <StatusChip
+          label={`${pendingApprovalRows.length} approval${
+            pendingApprovalRows.length === 1 ? "" : "s"
+          } needed`}
+          kind="approval"
+          active
+        />
 
-        <div class="pending-approval-list">
-          {#each pendingApprovalRows as approval}
-            <article class="pending-approval-card">
-              <div class="pending-approval-copy">
-                <strong>{approval.toolName ?? approval.body ?? "Tool approval"}</strong>
-                <span>Turn {approval.turnNumber} · {time(approval.timestamp)}</span>
-                <StatusChip label="Awaiting approval" kind="approval" compact active />
-              </div>
-              <div class="approval-actions compact">
-                <Chip
-                  tone="success"
-                  fill="quiet"
-                  toned
-                  disabled={!onApproveTool || isApprovalResolving(approval)}
-                  onclick={(event) => void resolveApproval(event, approval, true)}
-                  onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
-                >
-                  {#snippet lead()}
-                    <CheckCircle2 size={13} />
-                  {/snippet}
-                  Approve
-                </Chip>
-                <Chip
-                  tone="queue"
-                  fill="quiet"
-                  toned
-                  disabled={!onApproveTool || isApprovalResolving(approval)}
-                  onclick={(event) => void resolveApproval(event, approval, true, true)}
-                  onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
-                >
-                  {#snippet lead()}
-                    <ShieldCheck size={13} />
-                  {/snippet}
-                  Approve and remember
-                </Chip>
-                <Chip
-                  tone="error"
-                  fill="quiet"
-                  toned
-                  disabled={!onApproveTool || isApprovalResolving(approval)}
-                  onclick={(event) => void resolveApproval(event, approval, false)}
-                  onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
-                >
-                  {#snippet lead()}
-                    <XCircle size={13} />
-                  {/snippet}
-                  Reject
-                </Chip>
-                {#if approvalError(approval)}
-                  <span class="approval-error">{approvalError(approval)}</span>
-                {/if}
-              </div>
-            </article>
-          {/each}
-        </div>
+        {#each pendingApprovalRows as approval (approvalKey(approval) ?? approval.ordinal)}
+          <article class="pending-approval-card">
+            <header class="pending-approval-head">
+              <strong>{approval.toolName ?? approval.body ?? "Tool approval"}</strong>
+              <span>Turn {approval.turnNumber} · {time(approval.timestamp)}</span>
+            </header>
+            {#if approvalDetail(approval)}
+              <p class="pending-approval-detail">{approvalDetail(approval)}</p>
+            {/if}
+            <div class="approval-actions">
+              <Chip
+                fill="quiet"
+                disabled={!onApproveTool || isApprovalResolving(approval)}
+                onclick={(event) => void resolveApproval(event, approval, true)}
+                onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
+              >
+                {#snippet lead()}
+                  <CheckCircle2 size={13} />
+                {/snippet}
+                Approve
+              </Chip>
+              <Chip
+                fill="quiet"
+                disabled={!onApproveTool || isApprovalResolving(approval)}
+                onclick={(event) => void resolveApproval(event, approval, true, true)}
+                onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
+              >
+                {#snippet lead()}
+                  <ShieldCheck size={13} />
+                {/snippet}
+                Always allow
+              </Chip>
+              <Chip
+                tone="error"
+                fill="quiet"
+                toned
+                disabled={!onApproveTool || isApprovalResolving(approval)}
+                onclick={(event) => void resolveApproval(event, approval, false)}
+                onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
+              >
+                {#snippet lead()}
+                  <XCircle size={13} />
+                {/snippet}
+                Reject
+              </Chip>
+            </div>
+            {#if approvalError(approval)}
+              <p class="approval-error">{approvalError(approval)}</p>
+            {/if}
+          </article>
+        {/each}
       </section>
     {/if}
 
@@ -1915,74 +1924,70 @@
     flex-wrap: wrap;
     gap: 6px;
     align-items: center;
-    margin-left: 30px;
-    padding-top: 2px;
-  }
-
-  .approval-actions.compact {
-    margin-left: 0;
-    padding-top: 0;
   }
 
   .approval-error {
+    margin: 0;
     min-width: 0;
     color: var(--error);
     font-size: var(--font-sm);
   }
 
+  /* No outer frame. The chip names the gate; each card is one call. A tinted
+     section around that mixed two objects into one box, which is what made a
+     single approval look like chrome stacked on chrome. */
   .pending-approvals {
     display: grid;
-    gap: 8px;
+    gap: 10px;
     margin: 0 clamp(18px, 5vw, 72px) 10px;
-    padding: 10px;
-    border: 1px solid color-mix(in srgb, var(--queue) 42%, var(--border));
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--queue) 9%, var(--surface-1));
   }
 
   .agent-chat.embedded .pending-approvals {
     margin: 0 12px 10px;
   }
 
-  .pending-approvals-head {
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .pending-approval-list {
-    display: grid;
-    gap: 7px;
-  }
-
   .pending-approval-card {
     min-width: 0;
     display: grid;
-    gap: 8px;
-    padding: 8px;
-    border: 1px solid color-mix(in srgb, var(--queue) 26%, var(--border));
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--surface-0);
   }
 
-  .pending-approval-copy {
+  .pending-approval-head {
     min-width: 0;
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 8px 12px;
     align-items: baseline;
+    justify-content: space-between;
   }
 
-  .pending-approval-copy strong {
+  .pending-approval-head strong {
+    min-width: 0;
+    overflow: hidden;
     color: var(--text-1);
-    font-size: var(--font-md);
+    font-size: var(--font-lg);
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .pending-approval-copy span {
+  .pending-approval-head span {
     color: var(--text-3);
-    font-size: var(--font-sm);
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    line-height: 1.4;
+  }
+
+  .pending-approval-detail {
+    margin: 0;
+    color: var(--text-3);
+    font-size: var(--font-md);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
   }
 
   .thinking {
