@@ -150,6 +150,23 @@ class StateRef(Generic[T]):
 
     # -- events ------------------------------------------------------------- #
 
+    def _attach(self, publish: Publisher) -> StateSnapshot:
+        """Start publishing to ``publish``, returning the snapshot to publish first.
+
+        For a ref created before its owner could publish (declared state read in
+        ``__init__`` ahead of the runner). Nothing committed before this was published, so
+        it folds into the initial value: the version restarts at 0.
+        """
+        if self._publish is not _noop:
+            raise RuntimeError(f"state {self._state_id!r} is already publishing")
+        if self._open is not None:
+            raise ConcurrentMutationError(
+                f"state {self._state_id!r} has an open mutate() block"
+            )
+        self._publish = publish
+        self._version = 0
+        return self.snapshot()
+
     def _emit_patch(self, ops: list[dict[str, Any]]) -> None:
         self._publish(
             StatePatch(state_id=self._state_id, version=self._version, ops=ops)

@@ -1,7 +1,7 @@
 """The tic-tac-toe board, as OBSERVABLE agent state, plus the one tool that moves on it.
 
 The board is a :class:`~temporal_agent_harness.harness.state.HarnessState` the workflow
-registers once with ``runner.state("board", Board())``; from then on every committed
+declares once, as the class attribute ``board = agent.state(Board)``; from then on every committed
 ``mutate()`` block publishes RFC 6902 patch ops on the agent's ``turn_events`` stream, which
 is what the console's AGENT STATE pane renders — so a move lands as ``replace /cells/4 "O"``
 right next to the ``tool_end`` that made it.

@@ -641,8 +641,9 @@ class AgentClient:
             # non-idle, so there is no out-of-band action that completes without one.
             #
             # State registration is the one exception, because it publishes BEFORE any
-            # turn exists: `runner.state(...)` is called in `@workflow.init`, so its
-            # snapshot lands at the very front of the stream stamped `turn_number=0`,
+            # turn exists: declared state is registered when the runner is built in
+            # `@workflow.init`, so its snapshot lands at the very front of the stream stamped
+            # `turn_number=0`,
             # which is why it is matched on that rather than on being a snapshot. It is
             # the only event a replay can end on that no `turn_end` will ever follow, so
             # it has to be able to end one. Without this, attach delivered a brand-new

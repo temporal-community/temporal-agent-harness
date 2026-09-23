@@ -35,23 +35,24 @@ All of it:
 @workflow.defn(name="PlannerAgent")
 @agent.defn
 class PlannerAgent:
+    plan = agent.state(PlanState)   # the attribute name is the state id
+
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(config, stream=WorkflowStream(), ...)
-        self._plan = self._runner.state("plan", PlanState())   # <- the entire opt-in
 
     @agent.accepts
-    async def plan(self, message: TextMessage) -> TextReply:
-        with self._plan.mutate() as d:
+    async def make_plan(self, message: TextMessage) -> TextReply:
+        with self.plan.mutate() as d:
             d.goal = message.text
             d.steps.append(Step(name="research"))
             d.steps[0].done = True
-        return TextReply(text=f"{len(self._plan.current.steps)} steps")
+        return TextReply(text=f"{len(self.plan.current.steps)} steps")
 ```
 
 That is the complete contract. The author never picks a topic, builds an event, chooses a
-granularity, or decides when to publish. `AgentWorkflowRunner.state()` publishes an
-`AgentStateSnapshot` at registration and one `AgentStatePatch` after every `mutate()` block
+granularity, or decides when to publish. The runner publishes an `AgentStateSnapshot` of
+every declared state when it is constructed and one `AgentStatePatch` after every `mutate()` block
 that actually changed something. A block that touches nothing publishes nothing and burns no
 version.
 
@@ -150,8 +151,8 @@ it is, unconditionally, because the one type that could not honour that is not s
 
 - **`AgentStatus` is untouched.** The obvious next step is making some of it observable state
   so the UI stops polling it, but that edits the runner's core and the Svelte client.
-- **Subagents.** A subagent gets its own runner and its own stream, so `state()` works there
-  already. The console keys its documents per agent, so a subagent's state renders beside the
+- **Subagents.** A subagent gets its own runner and its own stream, so `agent.state(...)` works
+  there already. The console keys its documents per agent, so a subagent's state renders beside the
   root's — but nothing in the *canvas* draws it.
 
   One thing this did break, and it is fixed rather than outstanding: registering state in
@@ -160,7 +161,7 @@ it is, unconditionally, because the one type that could not honour that is not s
   open a bracket for turn 0, so that was not a delay but a strand — and a held event stays its
   cursor's head, so the child's whole stream queued behind it. Turn-0 child events are now
   exempt from the open gate, which is also what operator commands on a subagent needed.
-- **Root must be a `HarnessState`.** `runner.state("plan", [])` is not supported.
+- **Root must be a `HarnessState`.** `agent.state(list)` is rejected when the class body runs.
 - **No op coalescing.** `d.x = 1; d.x = 2` emits two ops.
 - **Commit-time validators must not mutate their own state.** `mutate()` unlocks the ref before
   it commits, so that a commit that raises cannot wedge it. The cost is that a `model_validator`
@@ -223,10 +224,11 @@ never the state it lives in.
   of state *means*, so a client can draw it as a checklist or a table rather than as JSON
 - Layer: `temporal_agent_harness/harness/state/`
 - Wire types: `AgentStateSnapshot` / `AgentStatePatch` in `agent_protocol/events.py`
-- Opt-in: `AgentWorkflowRunner.state()` in `agent_workflow.py`
+- Opt-in: `agent.state(...)` / `StateDecl` in `harness/state/decl.py`, registered by
+  `AgentWorkflowRunner._register_declared_states` in `agent_workflow.py`
 - Console: `ui/src/lib/state/agentState.ts` (the fold), `ui/src/lib/state/jsonPatch.ts` (the
   applier) and `ui/src/lib/components/agent/AgentStatePanel.svelte` (the pane)
-- Example: `examples/monty/trip_board.py`, registered in `examples/monty/workflow.py` and
+- Example: `examples/monty/trip_board.py`, declared in `examples/monty/workflow.py` and
   `examples/monty/conversational_workflow.py`
 - Tests: `tests/state/` (the layer, incl. a hypothesis property test),
   `tests/harness/test_observable_state.py` (end-to-end through a real workflow),

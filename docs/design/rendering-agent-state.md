@@ -159,8 +159,8 @@ writing down before someone reaches for it as a privacy mechanism, because it wi
 
 ## Defaults
 
-A `HarnessState` with nothing said about it renders as a **card**, at every depth. `runner.state()`
-can be called more than once, so a panel holds several documents, and each one needs its own
+A `HarnessState` with nothing said about it renders as a **card**, at every depth. An agent
+can declare more than one `agent.state(...)`, so a panel holds several documents, and each one needs its own
 delimiter titled with its `state_id` — and once a card is the right answer for a root and for a
 list item, making it the answer by default everywhere is one rule instead of three.
 

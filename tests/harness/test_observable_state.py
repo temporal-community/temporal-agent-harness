@@ -1,8 +1,8 @@
 # ABOUTME: Tests for observable agent state on the turn_events stream — that a workflow
-# author's single `runner.state(...)` call is the whole opt-in, that the runner publishes a
-# snapshot at registration and one patch per committing mutate() block without the author
-# asking, that the ops are stamped with the turn they happened in, and that replaying the
-# stream reproduces the agent's state exactly.
+# author's `agent.state(...)` class attribute is all it takes to publish state, that the
+# runner publishes a snapshot at construction and one patch per committing mutate() block
+# without the author asking, that the ops are stamped with the turn they happened in, and
+# that replaying the stream reproduces the agent's state exactly.
 #
 # Run end-to-end against the Temporal time-skipping test server, because the thing under
 # test is precisely that these events survive the workflow -> stream -> client round trip.
@@ -73,7 +73,9 @@ class PlanState(HarnessState):
 @workflow.defn(name="StateProbeAgent")
 @agent.defn
 class StateProbeAgent:
-    """An agent whose entire state-tracking opt-in is one line in __init__."""
+    """An agent with one declared piece of observable state."""
+
+    plan = agent.state(PlanState)
 
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
@@ -82,32 +84,59 @@ class StateProbeAgent:
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
-        # THE OPT-IN. Nothing below ever mentions events, topics or publishing.
-        self._plan: StateRef[PlanState] = self._runner.state("plan", PlanState())
 
     @workflow.run
     async def run(self, _config: AgentConfig) -> None:
         await self._runner.run(self)
 
     @agent.accepts
-    async def plan(self, message: TextMessage) -> TextReply:
+    async def make_plan(self, message: TextMessage) -> TextReply:
         """Build a plan out of the message, mutating tracked state as it goes."""
-        with self._plan.mutate() as d:
+        with self.plan.mutate() as d:
             d.goal = message.text
             d.steps.append(Step(name="research"))
             d.steps.append(Step(name="write"))
 
-        with self._plan.mutate() as d:
+        with self.plan.mutate() as d:
             d.steps[0].done = True
             d.scratch["note"] = "research finished"
 
-        with self._plan.mutate() as d:
+        with self.plan.mutate() as d:
             pass  # touches nothing: must publish nothing and burn no version
 
-        with self._plan.mutate() as d:
+        with self.plan.mutate() as d:
             del d.steps[0]
 
-        return TextReply(text=f"{len(self._plan.current.steps)} step(s) left")
+        return TextReply(text=f"{len(self.plan.current.steps)} step(s) left")
+
+
+@workflow.defn(name="EarlyStateProbeAgent")
+@agent.defn
+class EarlyStateProbeAgent:
+    """Reads and mutates its declared state in __init__ BEFORE building the runner."""
+
+    plan = agent.state(PlanState)
+
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        with self.plan.mutate() as d:
+            d.goal = "set before the runner existed"
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+        )
+
+    @workflow.run
+    async def run(self, _config: AgentConfig) -> None:
+        await self._runner.run(self)
+
+    @agent.accepts
+    async def plan_it(self, message: TextMessage) -> TextReply:
+        """Record the message as the goal."""
+        with self.plan.mutate() as d:
+            d.goal = message.text
+        return TextReply(text=self.plan.current.goal)
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +153,7 @@ async def client_and_queue():
     async with Worker(
         env.client,
         task_queue=task_queue,
-        workflows=[StateProbeAgent],
+        workflows=[StateProbeAgent, EarlyStateProbeAgent],
         workflow_runner=UnsandboxedWorkflowRunner(),
     ):
         try:
@@ -133,7 +162,9 @@ async def client_and_queue():
             await env.shutdown()
 
 
-async def _run_turn(client: Client, task_queue: str) -> WorkflowHandle:
+async def _run_turn(
+    client: Client, task_queue: str, goal: str = "ship the feature"
+) -> WorkflowHandle:
     handle = await client.start_workflow(
         StateProbeAgent.run,
         AgentConfig(),
@@ -143,8 +174,8 @@ async def _run_turn(client: Client, task_queue: str) -> WorkflowHandle:
     await handle.execute_update(
         SEND_AGENT_MESSAGE_UPDATE,
         AgentMessage(
-            type="plan",
-            payload={"text": "ship the feature"},
+            type="make_plan",
+            payload={"text": goal},
             expected_turn=1,
         ),
         result_type=AgentMessageReply,
@@ -247,20 +278,64 @@ async def test_replaying_the_stream_reproduces_the_agents_state(events):
     }
 
 
-async def test_duplicate_state_ids_are_rejected():
-    """A second registration under the same id is a programming error, not a merge."""
-    runner = AgentWorkflowRunner.__new__(AgentWorkflowRunner)
-    runner._states = {}
-    runner._agent_id = "a1"
-    published: list[Any] = []
-    runner._publish_state_event = published.append  # type: ignore[method-assign]
+def _replay(events: list[AgentEvent]) -> dict[str, Any]:
+    (snapshot,) = _state_events(events, AgentEventType.STATE_SNAPSHOT)
+    document = snapshot.value
+    for patch in _state_events(events, AgentEventType.STATE_PATCH):
+        document = jsonpatch.apply_patch(document, patch.ops)
+    return document
 
-    ref = AgentWorkflowRunner.state(runner, "plan", PlanState())
-    assert isinstance(ref, StateRef)
-    assert len(published) == 1
 
-    with pytest.raises(ValueError, match="already registered"):
-        AgentWorkflowRunner.state(runner, "plan", PlanState())
+async def test_two_workflows_of_one_type_on_one_worker_never_share_state(client_and_queue):
+    """The declaration is a class attribute, so every instance on the worker shares it.
+
+    The unsandboxed worker keeps ONE class object for both runs — exactly the setup in which
+    a ref held on the descriptor, rather than on the instance, would leak between them.
+    """
+    client, task_queue = client_and_queue
+    first, second = await asyncio.gather(
+        _run_turn(client, task_queue, "first goal"),
+        _run_turn(client, task_queue, "second goal"),
+    )
+    first_events, second_events = await asyncio.gather(
+        _collect(client, first.id), _collect(client, second.id)
+    )
+
+    assert _replay(first_events)["goal"] == "first goal"
+    assert _replay(second_events)["goal"] == "second goal"
+    for events in (first_events, second_events):
+        (snapshot,) = _state_events(events, AgentEventType.STATE_SNAPSHOT)
+        assert snapshot.value["goal"] == ""
+
+
+async def test_state_changed_before_the_runner_exists_is_the_initial_snapshot(
+    client_and_queue,
+):
+    """A mutation made in __init__ ahead of the runner was published to no one.
+
+    So it is folded into the snapshot the runner publishes at construction — at version 0,
+    with no patch for it — and the first real patch builds on that.
+    """
+    client, task_queue = client_and_queue
+    handle = await client.start_workflow(
+        EarlyStateProbeAgent.run,
+        AgentConfig(),
+        id=f"EarlyStateProbeAgent-{uuid.uuid4()}",
+        task_queue=task_queue,
+    )
+    await handle.execute_update(
+        SEND_AGENT_MESSAGE_UPDATE,
+        AgentMessage(type="plan_it", payload={"text": "later"}, expected_turn=1),
+        result_type=AgentMessageReply,
+    )
+    events = await _collect(client, handle.id)
+
+    (snapshot,) = _state_events(events, AgentEventType.STATE_SNAPSHOT)
+    assert snapshot.version == 0
+    assert snapshot.value["goal"] == "set before the runner existed"
+    patches = _state_events(events, AgentEventType.STATE_PATCH)
+    assert [p.version for p in patches] == [1]
+    assert _replay(events)["goal"] == "later"
 
 
 async def test_attach_to_a_brand_new_session_delivers_the_snapshot_and_stops(

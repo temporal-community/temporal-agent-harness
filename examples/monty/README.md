@@ -21,10 +21,12 @@ the whole stack runs from this directory.
 All three agents keep a **trip board** — a running TODO list of the trips they are collecting,
 each with a description, the flights and hotels booked so far, and what is still left to do.
 It lives in `trip_board.py` as [observable agent
-state](../../docs/design/observable-agent-state.md): the workflow registers it with one call,
+state](../../docs/design/observable-agent-state.md): the workflow declares it with one class
+attribute,
 
 ```python
-self._board = self._runner.state("trip_board", trip_board.TripBoard())
+class MontyChatAgentWorkflow:
+    trip_board = agent.state(trip_board.TripBoard)
 ```
 
 and from then on every change publishes RFC 6902 JSON Patch ops on the agent's `turn_events`

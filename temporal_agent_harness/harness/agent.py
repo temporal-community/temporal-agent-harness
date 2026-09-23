@@ -54,6 +54,10 @@
 # join it) and a ``model_callable`` hint (whether a PARENT agent's model may drive it; the
 # parent's ``SubagentToolPolicy`` decides for real). See ``MidTurn``.
 #
+# Declare observable state as a class attribute, ``plan = agent.state(PlanState)``: the
+# attribute name is its id, ``self.plan`` is the instance's ``StateRef``, and every committed
+# ``with self.plan.mutate() as d:`` is published to the event stream as JSON Patch ops.
+#
 # Annotate a parameter ``x: Injected[Foo]`` to have the WORKFLOW supply it per call
 # (via run_tool(injections=...)) instead of the model — hidden from the model's tool
 # schema. Use it for per-call context the model must not choose::
@@ -85,6 +89,7 @@ from temporal_agent_harness.harness.agent_workflow import (
     tool_defn,
 )
 from temporal_agent_harness.harness.code_mode import code_mode_tool
+from temporal_agent_harness.harness.state.decl import StateDecl, state
 from temporal_agent_harness.harness.jev_approvals import jev_evaluator
 from temporal_agent_harness.harness.subagent_toolset import (
     SubagentToolPolicy,
@@ -111,7 +116,9 @@ __all__ = [
     "code_mode_tool",
     "defn",
     "jev_evaluator",
+    "StateDecl",
     "SubagentToolPolicy",
+    "state",
     "subagent_toolset",
     "tool_activity",
     "tool_defn",

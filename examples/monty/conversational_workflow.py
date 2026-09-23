@@ -125,6 +125,8 @@ about your own notes — so there is never a reason to batch them up or skip the
 @workflow.defn(name="MontyChatAgent")
 @agent.defn
 class MontyChatAgentWorkflow:
+    trip_board = agent.state(trip_board.TripBoard)
+
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
@@ -149,10 +151,6 @@ class MontyChatAgentWorkflow:
         # The single model-facing tool: Code Mode over the travel tools. The model writes a
         # Python script that calls the travel operations as async host functions; each host call
         # runs as a durable, approval-gated activity via run_tool.
-        # THE OPT-IN, and the whole of it: one call, and from here every committed
-        # `mutate()` on this ref is published to the agent's turn_events stream as JSON
-        # Patch ops. Nothing below ever mentions an event, a topic, or publishing.
-        self._board = self._runner.state("trip_board", trip_board.TripBoard())
         self._code_tool = agent.code_mode_tool(
             # The travel tools plus the board tools, in one sandbox: a script can book a
             # flight and record it on the board without a round trip through the model, so
@@ -161,7 +159,7 @@ class MontyChatAgentWorkflow:
             name="run_travel_code",
             # Hidden from the model and from the generated stubs: the script names the
             # trip, never the state it lives in.
-            injections={"board": self._board},
+            injections={"board": self.trip_board},
         )
 
     @workflow.run

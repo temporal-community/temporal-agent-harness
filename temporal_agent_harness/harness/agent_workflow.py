@@ -47,7 +47,8 @@ from temporalio.contrib.workflow_streams import (
 from temporalio.exceptions import ApplicationError
 from temporalio.workflow import ActivityConfig
 
-from temporal_agent_harness.harness.state import HarnessState, StateRef
+from temporal_agent_harness.harness.state import StateRef
+from temporal_agent_harness.harness.state.decl import declared_states, state_ref
 from temporal_agent_harness.harness.state.events import StateEvent, StateSnapshot
 from temporal_agent_harness.harness.agent_protocol import (
     AGENT_ID_LENGTH,
@@ -664,20 +665,27 @@ def _validate_agent_arg_types(workflow_name: str, arg_types: list[type] | None) 
         )
 
 
-def _enclosing_workflow_class() -> type | None:
-    """Walk the call stack for the nearest ``self`` that is a ``@workflow.defn`` class.
+def _enclosing_workflow_instance() -> object | None:
+    """Walk the call stack for the nearest ``self`` that is a ``@workflow.defn`` instance.
 
     Runner construction happens inside the workflow's ``@workflow.init``, so the
-    workflow instance is an enclosing frame's ``self``; this recovers its class so the
-    construction signature can be validated. Returns ``None`` if none is found.
+    workflow instance is an enclosing frame's ``self``; the runner reads its class to
+    validate the construction signature and discover handlers, and the instance itself to
+    attach its declared state. Returns ``None`` if none is found.
     """
     frame: Any = inspect.currentframe()
     while frame is not None:
         candidate = frame.f_locals.get("self")
         if candidate is not None and workflow._Definition.from_class(type(candidate)):
-            return type(candidate)
+            return candidate
         frame = frame.f_back
     return None
+
+
+def _enclosing_workflow_class() -> type | None:
+    """The class of :func:`_enclosing_workflow_instance`, or ``None``."""
+    instance = _enclosing_workflow_instance()
+    return type(instance) if instance is not None else None
 
 
 def _assert_standardized_agent_signature() -> None:
@@ -1648,9 +1656,6 @@ class _WorkflowStatus:
 # ---------------------------------------------------------------------------
 
 
-StateT = TypeVar("StateT", bound=HarnessState)
-
-
 class AgentWorkflowRunner:
     """Workflow-side agent runtime: discovers ``@agent.accepts`` handlers and dispatches.
 
@@ -1709,7 +1714,8 @@ class AgentWorkflowRunner:
         # Discover the @agent.accepts handlers off the enclosing agent class (stamped by
         # @agent.defn at import). Outside a workflow (offline unit tests) there is no
         # enclosing agent class, so there are simply no handlers.
-        cls = _enclosing_workflow_class()
+        instance = _enclosing_workflow_instance()
+        cls = type(instance) if instance is not None else None
         self._handlers: dict[str, _AcceptedHandler] = agent_handlers(cls) if cls is not None else {}
         # Resolve each knob: the caller's config value wins when given; otherwise fall back
         # to the agent's default. The caller can never be overridden — the agent only fills
@@ -1764,9 +1770,8 @@ class AgentWorkflowRunner:
                 "a handler) if that is not what you intended."
             )
         self._closed = False
-        # Observable state the workflow author opted into with ``state()``, keyed by the
-        # id they registered it under. The runner holds the refs only to reject duplicate
-        # ids; the author holds the handle they actually use.
+        # Observable state declared on the agent class with ``agent.state(...)``, keyed by
+        # state id; registered at the end of construction, once publishing works.
         self._states: dict[str, StateRef[Any]] = {}
         # Messages admitted as JOINS of the currently-open turn, awaiting dispatch by the run
         # loop. The participant refcount was already incremented during admission, so an entry
@@ -1823,6 +1828,8 @@ class AgentWorkflowRunner:
         workflow.set_query_handler(AGENT_STATUS_QUERY, self._handle_agent_status)
         workflow.set_query_handler(AGENT_INTERFACE_QUERY, self._handle_agent_interface)
         workflow.set_signal_handler("close", self._handle_close)
+        if instance is not None:
+            self._register_declared_states(instance)
 
     # -- Protocol handlers --------------------------------------------------
 
@@ -2605,40 +2612,38 @@ class AgentWorkflowRunner:
             for h in self._handlers.values()
         ]
 
-    def state(self, state_id: str, initial: StateT) -> StateRef[StateT]:
-        """Register observable state and stream every change to it. The whole opt-in.
+    def _register_declared_states(self, agent: object) -> None:
+        """Publish every ``agent.state(...)`` declared on ``agent``'s class.
 
-        This one call is the entire contract a workflow author has with state tracking::
+        The declaration is the whole contract a workflow author has with state tracking::
 
-            @workflow.init
-            def __init__(self, config: AgentConfig) -> None:
-                self._runner = AgentWorkflowRunner(config, stream=WorkflowStream(), ...)
-                self._plan = self._runner.state("plan", PlanState())
+            class MyAgent:
+                plan = agent.state(PlanState)
 
-        From here the author only ever reads ``self._plan.current`` and writes inside
-        ``with self._plan.mutate() as d:``. They never choose a topic, build an event,
-        pick a granularity, or decide when to publish: the runner publishes an
-        :class:`AgentStateSnapshot` now and an :class:`AgentStatePatch` after every
-        ``mutate()`` block that actually changed something, onto the same
-        ``turn_events`` stream as the rest of the agent's events. So the patches are
-        durable, replayable and offset-addressed for free, and they arrive *ordered
-        against* ``tool_start`` / ``reply_delta`` — a consumer can see exactly where in
-        a turn the state moved.
+                @agent.accepts
+                async def handle(self, message: TextMessage) -> TextReply:
+                    with self.plan.mutate() as d:
+                        d.goal = message.text
 
-        Call it from ``@workflow.init`` (or any workflow-side code); ``state_id`` must be
-        unique within this agent. Mutating the returned ref is deterministic and
-        replay-safe: the ops a commit produces are a pure function of the mutations made,
-        and set-valued fields serialize in sorted order rather than hash order.
+        The author only ever reads ``self.plan.current`` and writes inside
+        ``with self.plan.mutate() as d:``. They never choose a topic, build an event, pick a
+        granularity, or decide when to publish: the runner publishes an
+        :class:`AgentStateSnapshot` here and an :class:`AgentStatePatch` after every
+        ``mutate()`` block that actually changed something, onto the same ``turn_events``
+        stream as the rest of the agent's events. So the patches are durable, replayable and
+        offset-addressed for free, and they arrive *ordered against* ``tool_start`` /
+        ``reply_delta`` — a consumer can see exactly where in a turn the state moved.
+
+        Declaring on the class, not registering at runtime, is what lets static tooling
+        (the generated client types) list every state an agent publishes. A ref the author
+        read in ``__init__`` before the runner existed is attached as it stands: whatever it
+        committed then was published to no one, so it is part of the initial snapshot.
+        Snapshots go out in declaration order, so replay publishes them identically.
         """
-        if state_id in self._states:
-            raise ValueError(
-                f"state id {state_id!r} is already registered on agent {self._agent_id!r}; "
-                "each piece of observable state needs its own id"
-            )
-        ref: StateRef[StateT] = StateRef(state_id, initial, self._publish_state_event)
-        self._states[state_id] = ref
-        self._publish_state_event(ref.snapshot())
-        return ref
+        for state_id, decl in declared_states(type(agent)).items():
+            ref = state_ref(agent, decl)
+            self._states[state_id] = ref
+            self._publish_state_event(ref._attach(self._publish_state_event))
 
     def _publish_state_event(self, event: StateEvent) -> None:
         """Translate a state-layer event into a stream payload and publish it.

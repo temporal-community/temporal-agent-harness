@@ -28,8 +28,8 @@ chooses among cells the code offers, so an illegal move is impossible by constru
   per-cell probabilities, confidence, token usage) — expand the `typesafe_system_one` activity
   row to read both. (The harness's model-interaction events carry only a model id and usage,
   which is why the call is modeled as a tool rather than a model span for now.)
-- **The board as observable state.** `board.py` registers a `Board` `HarnessState` with
-  `runner.state("board", ...)`; open the **AGENT STATE** pane and each move lands as
+- **The board as observable state.** The workflow declares `board.py`'s `Board` `HarnessState`
+  as `board = agent.state(game.Board)`; open the **AGENT STATE** pane and each move lands as
   `replace /cells/4 "O"` + `add /moves/-` in one commit, ordered against the `tool_end` that
   made it. Your move is a patch too (applied in the handler); the agent's arrives via the tool.
 - **The reply.** Shows the pick with its confidence and the top of the distribution, the

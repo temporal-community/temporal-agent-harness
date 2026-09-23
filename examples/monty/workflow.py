@@ -47,6 +47,10 @@ TASK_QUEUE = "monty-dynamic-agent"
 @workflow.defn(name="MontyDynamicAgent")
 @agent.defn
 class MontyDynamicAgentWorkflow:
+    # There is no model in this agent, so the script is what keeps the board current; see
+    # `trip_board.py`.
+    trip_board = agent.state(trip_board.TripBoard)
+
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
@@ -57,12 +61,6 @@ class MontyDynamicAgentWorkflow:
             # session via AgentConfig.approval_policy.
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
-        # Observable state: the agent's running board of trips. One call is the whole opt-in
-        # — from here, every committed `mutate()` the board tools make is published to this
-        # agent's turn_events stream as JSON Patch ops, which is what the console's AGENT
-        # STATE pane renders. There is no model in this agent, so the script is what keeps
-        # the board current; see `trip_board.py`.
-        self._board = self._runner.state("trip_board", trip_board.TripBoard())
         # Code Mode over the travel tools plus the board tools: one tool that runs a script
         # calling them all as host functions. The run_script handler dispatches the caller's
         # script straight through it.
@@ -71,7 +69,7 @@ class MontyDynamicAgentWorkflow:
             name="run_travel_code",
             # Supplied per host call and hidden from the script: a script names a trip, never
             # the state the board lives in.
-            injections={"board": self._board},
+            injections={"board": self.trip_board},
         )
 
     @workflow.run

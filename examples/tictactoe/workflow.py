@@ -55,6 +55,8 @@ OUTLOOK_LEVELS = ("losing", "even", "winning")
 @workflow.defn(name="TicTacToeAgent")
 @agent.defn
 class TicTacToeAgentWorkflow:
+    board = agent.state(game.Board)
+
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
@@ -65,9 +67,6 @@ class TicTacToeAgentWorkflow:
             # AgentConfig.approval_policy to approve each judgment and move by hand.
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
-        # THE OPT-IN: from here every committed mutate() on the board is published to this
-        # agent's turn_events stream as JSON Patch ops — the AGENT STATE pane renders them.
-        self._board = self._runner.state("board", game.Board())
 
     @workflow.run
     async def run(self, _config: AgentConfig) -> None:
@@ -80,7 +79,7 @@ class TicTacToeAgentWorkflow:
         """Reset the board and start a new game. You are X and open unless
         `agent_goes_first` is set, in which case the agent plays X and opens."""
         agent_mark: game.Mark = "X" if message.agent_goes_first else "O"
-        with self._board.mutate() as draft:
+        with self.board.mutate() as draft:
             draft.cells = [None] * 9
             draft.moves = []
             draft.status = "playing"
@@ -96,17 +95,17 @@ class TicTacToeAgentWorkflow:
     async def play(self, message: PlayMove) -> TextReply:
         """Play your mark on an empty cell (1-9, left-to-right, top-to-bottom). The agent
         then judges the position with TypeSafe and answers with its own move."""
-        current = self._board.current
+        current = self.board.current
         human = game.other(current.agent_mark)
         # An illegal move is normal input, not a failure: report it and leave the turn to the
         # user rather than raising out of the handler.
         try:
-            with self._board.mutate() as draft:
+            with self.board.mutate() as draft:
                 game.apply_move(draft, human, message.cell)
         except ValueError as e:
             return TextReply(text=f"Can't do that: {e}.\n\n{self._board_block()}")
 
-        after = self._board.current
+        after = self.board.current
         if after.status != "playing":
             return TextReply(text=self._game_over(f"You play **{message.cell}**."))
         return TextReply(text=await self._agent_turn(prefix=f"You play **{message.cell}**."))
@@ -115,7 +114,7 @@ class TicTacToeAgentWorkflow:
 
     async def _agent_turn(self, *, prefix: str) -> str:
         """Judge the position with TypeSafe, act on the judgment through the tool, reply."""
-        current = self._board.current
+        current = self.board.current
         candidates = game.empty_cells(list(current.cells))
         judgment = await self._judge(current, candidates)
 
@@ -128,7 +127,7 @@ class TicTacToeAgentWorkflow:
             str(workflow.uuid4()),
             game.place_mark,
             game.PlaceMarkRequest(cell=cell),
-            injections={"board": self._board},
+            injections={"board": self.board},
         )
 
         threat = judgment.nouls["threat"]
@@ -234,11 +233,11 @@ class TicTacToeAgentWorkflow:
     # ------------------------------------------------------------------ rendering
 
     def _board_block(self) -> str:
-        return f"```\n{game.render(list(self._board.current.cells))}\n```"
+        return f"```\n{game.render(list(self.board.current.cells))}\n```"
 
     def _game_over(self, prefix: str) -> str:
-        status = self._board.current.status
-        me = self._board.current.agent_mark
+        status = self.board.current.status
+        me = self.board.current.agent_mark
         if status == "draw":
             verdict = "It's a draw."
         elif status[0] == me:

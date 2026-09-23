@@ -7,8 +7,8 @@ booked so far, and what is still left to do.
 It is deliberately *not* an activity. The board is the agent's own notes, not an action
 on the outside world, so every tool here is an ``@agent.tool_defn`` that runs INLINE in
 the workflow and writes to a :class:`~temporal_agent_harness.harness.state.StateRef` the
-workflow owns. That is what makes it observable: the ref is registered once with
-``runner.state("trip_board", TripBoard())``, and from then on the harness publishes a
+workflow owns. That is what makes it observable: the workflow declares it once, as the class
+attribute ``trip_board = agent.state(TripBoard)``, and from then on the harness publishes a
 snapshot and then one RFC 6902 patch per committed ``mutate()`` block onto the agent's
 ``turn_events`` stream. The console's AGENT STATE pane folds those back into the document
 and marks exactly what each commit touched — so a booking landing on the board shows up as
