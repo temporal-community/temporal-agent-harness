@@ -895,7 +895,7 @@ def _discover_handlers(cls: type) -> dict[str, _AcceptedHandler]:
             name=name,
             input_type=input_type,
             output_type=output_type,
-            description=(fn.__doc__ or "").strip(),
+            description=inspect.cleandoc(fn.__doc__ or ""),
             method=fn,
             # Defaults mirror the decorator's, so a handler marked by a bare
             # ``@agent.accepts`` (or by an older stamp) still resolves.
