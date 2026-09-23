@@ -236,8 +236,8 @@ function waitingCalls(agents: Readonly<Record<string, AgentView>>): {
       for (const part of message.parts) {
         if (part.type !== "tool") continue;
         const call = { agentId: agent.agentId, messageId: message.id, part };
-        if (part.state === "awaiting-approval" || part.state === "evaluating") approvals.push(call);
-        else if (part.state === "awaiting-client") callbacks.push(call);
+        if (part.state === "awaiting_approval" || part.state === "evaluating") approvals.push(call);
+        else if (part.state === "awaiting_callback") callbacks.push(call);
       }
     }
   }

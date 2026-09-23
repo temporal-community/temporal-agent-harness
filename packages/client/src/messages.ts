@@ -46,47 +46,54 @@ export type HarnessMessage<A extends AgentSchema = UntypedAgent> = {
   };
 }[HandlerName<A>];
 
-export type MessagePart = StepPart | TextPart | ReasoningPart | SourcePart | ToolPart | SubagentPart;
+export type MessagePart =
+  | ModelInteractionPart
+  | ReplyDeltaPart
+  | ThoughtSummaryPart
+  | TextAnnotationPart
+  | ToolPart
+  | SubagentPart;
 
-/** One model call. The parts after it, up to the next step, came out of it. */
-export interface StepPart {
-  type: "step";
+/** One model call. The parts after it, up to the next model interaction, came out of it. */
+export interface ModelInteractionPart {
+  type: "model_interaction";
   model: string | null;
   status: "running" | "done";
   usage: TokenUsage | null;
 }
 
-export interface TextPart {
-  type: "text";
+/** The model's streamed reply text, from `reply_delta`: not the handler's `output`. */
+export interface ReplyDeltaPart {
+  type: "reply_delta";
   text: string;
 }
 
-export interface ReasoningPart {
-  type: "reasoning";
+export interface ThoughtSummaryPart {
+  type: "thought_summary";
   text: string;
 }
 
-export interface SourcePart {
-  type: "source";
+export interface TextAnnotationPart {
+  type: "text_annotation";
   annotation: TextAnnotation;
 }
 
 /**
  * - `requested`: the model asked for it; it has not started.
- * - `awaiting-approval`: gated, and waiting on a person.
+ * - `awaiting_approval`: gated, and waiting on a person.
  * - `evaluating`: gated, and an automatic evaluator is deciding. A person can still answer.
  * - `approved` / `denied`: the gate was settled; a denied call ends here.
- * - `running`, then `awaiting-client` while a callback tool waits on a client's result.
+ * - `running`, then `awaiting_callback` while a callback tool waits on a client's result.
  * - `done` / `failed`.
  */
 export type ToolState =
   | "requested"
-  | "awaiting-approval"
+  | "awaiting_approval"
   | "evaluating"
   | "approved"
   | "denied"
   | "running"
-  | "awaiting-client"
+  | "awaiting_callback"
   | "done"
   | "failed";
 

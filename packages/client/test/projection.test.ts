@@ -40,8 +40,8 @@ test("two messages streaming in one turn keep their own replies", () => {
   assert.deepEqual(
     p.root!.messages.map((m) => [m.id, m.handler, m.status, m.disposition, m.parts]),
     [
-      ["a", "ask", "done", "opened", [{ type: "text", text: "Hello" }]],
-      ["b", "note", "done", "joined", [{ type: "text", text: "Other" }]]
+      ["a", "ask", "done", "opened", [{ type: "reply_delta", text: "Hello" }]],
+      ["b", "note", "done", "joined", [{ type: "reply_delta", text: "Other" }]]
     ]
   );
   assert.deepEqual(p.root!.messages[0]!.output, { text: "Hello" });
@@ -76,7 +76,7 @@ test("an approval resolved with no message id lands on the older message's tool"
     f.make("message_accepted", { handler: "ask", payload: {}, disposition: "joined" }, b),
     f.make("reply_delta", { text: "meanwhile" }, b)
   ]);
-  assert.equal(tool(p.root!.messages[0]).state, "awaiting-approval");
+  assert.equal(tool(p.root!.messages[0]).state, "awaiting_approval");
 
   // A policy cascade resolves it from an update handler, bound to no message.
   p.apply(f.make("tool_approval_resolved", { ...call, approved: true, reason: "allowed", remember: true }));
@@ -85,7 +85,7 @@ test("an approval resolved with no message id lands on the older message's tool"
   const part = tool(p.root!.messages[0]);
   assert.equal(part.state, "running");
   assert.deepEqual(part.approval, { approved: true, reason: "allowed", remember: true });
-  assert.deepEqual(p.root!.messages[1]!.parts, [{ type: "text", text: "meanwhile" }]);
+  assert.deepEqual(p.root!.messages[1]!.parts, [{ type: "reply_delta", text: "meanwhile" }]);
 });
 
 test("an evaluator that escalates leaves the gate with a person", () => {
@@ -107,7 +107,7 @@ test("an evaluator that escalates leaves the gate with a person", () => {
     )
   );
   const part = tool(p.root!.messages[0]);
-  assert.equal(part.state, "awaiting-approval");
+  assert.equal(part.state, "awaiting_approval");
   assert.deepEqual(part.evaluations.map((e) => [e.status, e.verdict, e.reason]), [
     ["ended", "escalate", "large amount"]
   ]);
@@ -137,9 +137,9 @@ test("steps bracket model calls, and reasoning accumulates", () => {
     f.make("model_interaction_ended", { model: "m", usage: { input_tokens: 3 } }, a)
   ]);
   assert.deepEqual(p.root!.messages[0]!.parts, [
-    { type: "step", model: "m", status: "done", usage: { input_tokens: 3 } },
-    { type: "reasoning", text: "Let me think." },
-    { type: "text", text: "Hi" }
+    { type: "model_interaction", model: "m", status: "done", usage: { input_tokens: 3 } },
+    { type: "thought_summary", text: "Let me think." },
+    { type: "reply_delta", text: "Hi" }
   ]);
 });
 
@@ -195,7 +195,7 @@ test("every subagent in the merged stream gets its own view, linked from the par
     unavailable: null
   });
   assert.deepEqual(s1.messages.map((m) => [m.id, m.status, m.parts.map((part) => part.type)]), [
-    ["c1", "done", ["text", "subagent"]]
+    ["c1", "done", ["reply_delta", "subagent"]]
   ]);
   assert.equal(p.agents.get("root.s1.g1")!.info.parentId, "root.s1");
 
@@ -249,9 +249,9 @@ test("published messages never change afterwards", () => {
   p.apply(f.make("reply_delta", { text: " two" }, a));
   const [[, second]] = p.takeChanges().agents[0]![1].messages as [[number, HarnessMessage]];
 
-  assert.deepEqual(first.parts, [{ type: "text", text: "one" }]);
+  assert.deepEqual(first.parts, [{ type: "reply_delta", text: "one" }]);
   assert.equal(first.parts[0], firstPart);
-  assert.deepEqual(second.parts, [{ type: "text", text: "one two" }]);
+  assert.deepEqual(second.parts, [{ type: "reply_delta", text: "one two" }]);
   assert.notEqual(second, first);
 });
 

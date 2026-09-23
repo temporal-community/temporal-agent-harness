@@ -108,7 +108,7 @@ export class AgentProjection {
     const parts: ToolPart[] = [];
     for (const { messageId, index } of this.#tools.values()) {
       const part = this.#message(messageId)?.parts[index];
-      if (part?.type === "tool" && part.state === "awaiting-client") parts.push(part);
+      if (part?.type === "tool" && part.state === "awaiting_callback") parts.push(part);
     }
     return parts;
   }
@@ -212,26 +212,26 @@ export class AgentProjection {
         return this.#setStatus("idle");
       case "model_interaction_started":
         return this.#append(id, {
-          type: "step",
+          type: "model_interaction",
           model: frame.data.model,
           status: "running",
           usage: null
         });
       case "model_interaction_ended": {
         const d = frame.data;
-        return this.#replaceLast(id, "step", (p) =>
+        return this.#replaceLast(id, "model_interaction", (p) =>
           p.status === "running"
             ? { ...p, status: "done", usage: d.usage, model: d.model ?? p.model }
             : null
         );
       }
       case "reply_delta":
-        return this.#appendText(id, "text", frame.data.text);
+        return this.#appendText(id, "reply_delta", frame.data.text);
       case "thought_summary":
-        return this.#appendText(id, "reasoning", thoughtDeltaText(frame.data.delta));
+        return this.#appendText(id, "thought_summary", thoughtDeltaText(frame.data.delta));
       case "text_annotation":
         for (const annotation of frame.data.delta.annotations ?? []) {
-          this.#append(id, { type: "source", annotation });
+          this.#append(id, { type: "text_annotation", annotation });
         }
         return;
       case "tool_requested":
@@ -240,7 +240,7 @@ export class AgentProjection {
         return this.#tool(frame, (p) => ({
           ...p,
           input: frame.data.tool_input,
-          state: "awaiting-approval"
+          state: "awaiting_approval"
         }));
       case "auto_approval_evaluation_started": {
         const d = frame.data;
@@ -296,7 +296,7 @@ export class AgentProjection {
         const d = frame.data;
         return this.#tool(frame, (p) => ({
           ...p,
-          state: "awaiting-client",
+          state: "awaiting_callback",
           input: d.tool_input,
           callback: { outputSchema: d.output_schema, outcome: null }
         }));
@@ -403,7 +403,7 @@ export class AgentProjection {
     this.#touchedMessages.add(message.id);
   }
 
-  #appendText(id: string | null, type: "text" | "reasoning", text: string): void {
+  #appendText(id: string | null, type: "reply_delta" | "thought_summary", text: string): void {
     if (text === "") return;
     const message = this.#message(id);
     if (!message) return;
@@ -470,7 +470,7 @@ export class AgentProjection {
       const deciding = evaluations.some((e) => e.status === "running");
       // An evaluator that ends without settling the gate (an escalate, a failure) leaves it
       // with a person; one that settles it is followed by the resolution itself.
-      const state = p.state === "evaluating" && !deciding ? "awaiting-approval" : p.state;
+      const state = p.state === "evaluating" && !deciding ? "awaiting_approval" : p.state;
       return { ...p, evaluations, state };
     });
   }

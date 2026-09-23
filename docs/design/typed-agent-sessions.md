@@ -293,13 +293,14 @@ One `HarnessMessage` per inbound message, narrowed on `handler` to that handler'
 
 - `id` is the `message_id`; `status` is `sending → accepted → running → done | error`, and
   `disposition` says whether it opened a turn, joined the open one, or queued behind it.
-- `parts`, in stream order, are everything the agent did in answer: `step` per model call (with its
-  usage), `text` from `reply_delta`, `reasoning` from `thought_summary`, `source` per annotation,
-  `tool` per tool call, `subagent` per subagent turn. The reply is `output`, typed by the handler's
+- `parts`, in stream order, are everything the agent did in answer: `model_interaction` per model
+  call (with its usage), `reply_delta` for the streamed reply text, `thought_summary`, a
+  `text_annotation` per annotation, `tool` per tool call, `subagent` per subagent turn. Each part
+  is named for the protocol event it comes from. The reply is `output`, typed by the handler's
   output model.
 - Tool parts are keyed by `tool_id` and move through
-  `requested → [awaiting-approval ⇄ evaluating → approved | denied] → running → [awaiting-client] → done | failed`.
-  `evaluating` (an automatic evaluator is deciding) is distinct from `awaiting-approval` (a person
+  `requested → [awaiting_approval ⇄ evaluating → approved | denied] → running → [awaiting_callback] → done | failed`.
+  `evaluating` (an automatic evaluator is deciding) is distinct from `awaiting_approval` (a person
   must act); every evaluation stays on the part for audit views. A tool that starts without a
   request (a built-in one) and a resolution published with no `message_id` (a policy cascade) are
   both found by `tool_id`.

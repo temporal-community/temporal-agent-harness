@@ -61,7 +61,7 @@ test("a stream cut off mid-turn reconnects and does not repeat frames", async (t
   await until(() => state.connection === "idle");
   assert.deepEqual(transport.attaches, [0, 3]);
   assert.equal(state.frames.length, 6);
-  assert.deepEqual(state.messages[0]!.parts, [{ type: "text", text: "hi" }]);
+  assert.deepEqual(state.messages[0]!.parts, [{ type: "reply_delta", text: "hi" }]);
 });
 
 test("attach errors are retried until the budget runs out; a send tries again", async (t) => {
