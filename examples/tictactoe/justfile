@@ -6,6 +6,7 @@
 #   just session-manager   # 2. packaged session-manager worker
 #   just server            # 3. FastAPI API + UI on :8000
 #   just worker            # 4. this example's agent worker
+#   just play              # 5. optional: the Svelte board on http://localhost:5173
 #
 # uv installs the project's `examples` dependency group (incl. the TypeSafe SDK) on demand, so
 # there's no separate install step. First-time setup: `cp .env.example .env.local` from the
@@ -47,6 +48,13 @@ server:
 ui-dev:
     pnpm --dir "{{ui}}" run dev
 
+# Run the Svelte board (ui/) on http://localhost:5173, built on @temporal-agent-harness/svelte.
+# Needs Node, and `just server` + `just worker` running for it to talk to.
+play:
+    cd "{{root}}/packages/client" && npm ci --prefer-offline --no-audit --no-fund && npm run --silent build
+    cd "{{root}}/packages/svelte" && npm ci --prefer-offline --no-audit --no-fund && npm run --silent build
+    cd "{{justfile_directory()}}/ui" && npm ci --prefer-offline --no-audit --no-fund && npx vite
+
 # Run the tic-tac-toe agent worker.
 worker:
     cd "{{root}}" && uv run --group examples python -m examples.tictactoe.worker
@@ -54,6 +62,6 @@ worker:
 # Regenerate the agent's TypeScript client types, client_sdk/TicTacToeAgent.ts, from its Python
 # handler and state models. Needs Node. CI fails when the committed file is out of date.
 codegen-client-sdk:
-    cd "{{root}}/packages/codegen" && ([ -d node_modules ] || npm ci --no-audit --no-fund) && npm run --silent build
+    cd "{{root}}/packages/codegen" && npm ci --prefer-offline --no-audit --no-fund && npm run --silent build
     cd "{{root}}" && uv run --group examples temporal-agent-harness schema examples.tictactoe.workflow:TicTacToeAgentWorkflow \
         | node packages/codegen/dist/src/cli.js - -o "{{justfile_directory()}}/client_sdk/TicTacToeAgent.ts"
