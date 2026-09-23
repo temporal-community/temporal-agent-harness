@@ -39,8 +39,9 @@ import {
 import { displayTextForMessage, renderUserMessage } from "./inboundMessageText";
 import { buildAgentStateDocs } from "./agentState";
 import { buildApprovalDecisions } from "./approvalDecisionTree";
-import { buildReplayLog, buildReplayMarkers } from "./replayLog";
+import { buildReplayLog, buildReplayMarkers, rowCovers } from "./replayLog";
 import { buildReplayTimeline } from "./replayTimeline";
+import { buildReplyRuns, replyRunAt } from "./replyRuns";
 import { buildStepBoundaries, buildStepTimeline } from "./stepTimeline";
 import { buildTranscript } from "./transcript";
 
@@ -433,8 +434,16 @@ export class AgentRunController {
     )
   );
   currentLogRow = $derived(
-    this.fullReplayLog.rows.find((row) => row.index === this.viewIndex) ?? null
+    this.fullReplayLog.rows.find((row) => rowCovers(row, this.viewIndex)) ?? null
   );
+  /**
+   * The streamed replies in this run, each folded to the one event it reads as.
+   *
+   * Over every frame rather than the visible slice: this is what the step keys
+   * navigate by, and where the next stop is cannot depend on where the cursor
+   * currently is.
+   */
+  replyRuns = $derived(buildReplyRuns(this.replayTimeline));
   /**
    * Observable agent state as of the playhead — every state the agents in this
    * run registered, folded out of their snapshot and patch events.
@@ -2023,13 +2032,34 @@ export class AgentRunController {
     if (this.following) this.pause();
   }
 
+  /**
+   * A streamed reply is one event, so the step keys cross it in one press.
+   *
+   * A run of `reply_delta` frames has a single stop, at its last frame — the
+   * state after the whole reply, which is also where the collapsed log row is
+   * addressed. Landing anywhere earlier inside it would show a sentence half
+   * arrived and call it a step of the run. A lone chunk is its own stop and
+   * these leave it exactly where it is.
+   *
+   * Scrubbing the lane still reaches every frame: it is free-form by design, and
+   * rowCovers() keeps a cursor inside a run reading as that run's event.
+   */
+  #stopAtOrAfter(index: number): number {
+    return replyRunAt(this.replyRuns, index)?.endIndex ?? index;
+  }
+
+  #stopAtOrBefore(index: number): number {
+    const run = replyRunAt(this.replyRuns, index);
+    return run && index < run.endIndex ? run.startIndex - 1 : index;
+  }
+
   stepBack(): void {
     this.pause();
-    this.goTo(this.viewIndex - 1);
+    this.goTo(this.#stopAtOrBefore(this.viewIndex - 1));
   }
 
   stepForward(): void {
-    this.goTo(this.viewIndex + 1);
+    this.goTo(this.#stopAtOrAfter(this.viewIndex + 1));
   }
 
   previousTurn(): void {
@@ -2105,7 +2135,11 @@ export class AgentRunController {
         this.following = true;
         return;
       }
-      this.stepForward();
+      /* Frame by frame, NOT by stepForward's collapsed stops: playback is the one
+         place a reply should arrive the way it arrived live, a chunk at a time.
+         Collapsing is for a reader working the keys, who wants the next thing that
+         happened — not for a recording, where the typing is the point. */
+      this.goTo(this.viewIndex + 1);
     }, basePlaybackDelayMs / this.playbackSpeed);
   }
 

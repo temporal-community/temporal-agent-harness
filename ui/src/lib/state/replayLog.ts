@@ -9,6 +9,7 @@ import type {
 import { formatTokens, summarizeCost, type UsageTotals } from "$lib/cost/pricing";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
 import { HISTORY_GAP_NOTE, findHistoryGaps } from "$lib/state/historyGap";
+import { buildReplyRuns, type ReplyRun } from "$lib/state/replyRuns";
 import { thoughtDeltaText } from "$lib/state/thoughtSummary";
 
 export type ReplayActor =
@@ -38,6 +39,14 @@ export type ReplayMarkerTone = "approval" | "error" | "queue";
 export interface ReplayLogRow {
   id: string;
   index: number;
+  /**
+   * Set only on a row standing for a RUN of frames — a collapsed reply stream
+   * (see replyRuns.ts). It is where the run opens; `index` is its last frame, so
+   * the row is addressed at the state AFTER the whole run. `id` and `ordinal`
+   * stay at the opening frame, so a run still streaming keeps its identity while
+   * `index` and `body` grow with it.
+   */
+  runStartIndex?: number;
   ordinal: number;
   turnNumber: number;
   sourceTurnNumber: number;
@@ -650,15 +659,35 @@ function buildSummary(turnNumber: number, rows: ReplayLogRow[]): TurnLogSummary 
 
 export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): ReplayLog {
   const gapPositions = findHistoryGaps(input);
+  /* A run of reply chunks draws ONE row, carrying all of their text. A lone chunk
+     is left exactly as it was — it is already one event, and a row that announced
+     itself as a collapsed run of one would only be noise. */
+  const runStarts = new Map<number, ReplyRun>();
+  const withinRun = new Set<number>();
+  for (const run of buildReplyRuns(input)) {
+    if (run.frameCount < 2) continue;
+    runStarts.set(run.startIndex, run);
+    for (let index = run.startIndex + 1; index <= run.endIndex; index += 1) {
+      withinRun.add(index);
+    }
+  }
   /* Carried forward for the same reason the waterfall carries it: `rowFromFrame`
      answers null for an event kind this log does not render, and a seam attached to
-     a frame that draws no row would never be seen. */
+     a frame that draws no row would never be seen. A chunk folded into the row above
+     is the same case — the seam waits for the next row that can carry it. */
   let pendingGap = false;
   const rows: ReplayLogRow[] = [];
   input.forEach((item, index) => {
     if (gapPositions.has(index)) pendingGap = true;
+    if (withinRun.has(index + 1)) return;
     const row = rowFromFrame(normalizeReplayLogFrame(item), index);
     if (!row) return;
+    const run = runStarts.get(row.index);
+    if (run) {
+      row.runStartIndex = run.startIndex;
+      row.index = run.endIndex;
+      row.body = run.text;
+    }
     if (pendingGap) {
       row.gapBefore = HISTORY_GAP_NOTE;
       pendingGap = false;
@@ -683,6 +712,19 @@ export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): Re
     }));
 
   return { rows, groups };
+}
+
+/**
+ * Whether a row is the one standing for the frame at a 1-based index.
+ *
+ * Exact for an ordinary row. A collapsed run answers for every frame it folded,
+ * so a cursor parked anywhere inside a streamed reply — by scrubbing the lane,
+ * which is free-form where the step keys are not — still reads as that one event
+ * rather than as nothing at all.
+ */
+export function rowCovers(row: ReplayLogRow, index: number): boolean {
+  if (row.runStartIndex == null) return row.index === index;
+  return index >= row.runStartIndex && index <= row.index;
 }
 
 export function buildReplayMarkers(log: ReplayLog): ReplayMarker[] {
