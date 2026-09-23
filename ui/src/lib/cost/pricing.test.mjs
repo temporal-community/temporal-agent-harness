@@ -17,12 +17,23 @@ import {
   unpricedNote
 } from "./pricing.ts";
 
-/* Only model_interaction_ended frames carrying usage are counted, so that is the
-   only shape worth building. `type` has to be present or timestampOf() bails. */
+/* Model turns and completed automatic approval evaluations are the two metered
+   operations. `type` has to be present or timestampOf() bails. */
 let clock = 0;
 const ended = (model, usage) => ({
   event: "model_interaction_ended",
   data: { type: "model_interaction_ended", timestamp: (clock += 1), model, usage }
+});
+const approvalEnded = (model, usage) => ({
+  event: "auto_approval_evaluation_ended",
+  data: {
+    type: "auto_approval_evaluation_ended",
+    timestamp: (clock += 1),
+    evaluator: "jev_evaluator",
+    verdict: "approve",
+    reason: "Policy criteria passed",
+    details: { model, usage }
+  }
 });
 const other = () => ({
   event: "reply_delta",
@@ -136,6 +147,38 @@ describe("tokens.total", () => {
     );
   });
 
+  it("includes Jev evaluator usage in the total and the per-model breakdown", () => {
+    const summary = summarizeCost([
+      ended(PRICED, { input_tokens: 120, output_tokens: 30 }),
+      approvalEnded("jev-review-model", { input_tokens: 480, output_tokens: 70 })
+    ]);
+
+    assert.equal(summary.tokens.total, 700, "the run total includes Jev's input and output tokens");
+    assert.deepEqual(
+      summary.modelBreakdown.map(({ model, tokens }) => ({ model, tokens })),
+      [
+        {
+          model: PRICED,
+          tokens: { input: 120, output: 30, thought: 0, cached: 0, toolUse: 0, total: 150 }
+        },
+        {
+          model: "jev-review-model",
+          tokens: { input: 480, output: 70, thought: 0, cached: 0, toolUse: 0, total: 550 }
+        }
+      ],
+      "Tokens by model gets a real Jev row instead of silently dropping evaluator spend"
+    );
+  });
+
+  it("does not invent a Jev usage row when the evaluator reported no token counts", () => {
+    const summary = summarizeCost([
+      approvalEnded("jev-review-model", { input_tokens: null, output_tokens: null })
+    ]);
+
+    assert.equal(summary.tokens.total, 0);
+    assert.deepEqual(summary.modelBreakdown, []);
+  });
+
   /* The breakdown fields themselves are untouched by any of the above: they are what
      the popover lists under the total, and they stay per-class counts. */
   it("leaves the per-class breakdown untouched", () => {
@@ -170,6 +213,17 @@ describe("the cumulative cost series", () => {
       [null, null],
       "once a priced-unknown interaction has spent tokens, every later cumulative sum is unknown"
     );
+  });
+
+  it("advances at a completed Jev evaluation", () => {
+    const points = buildUsageTimeline([
+      ended(PRICED, { input_tokens: 100, output_tokens: 20 }),
+      approvalEnded(PRICED, { input_tokens: 300, output_tokens: 40 })
+    ]);
+
+    assert.equal(points[1].tokens.total, 120);
+    assert.equal(points[2].event, "auto_approval_evaluation_ended");
+    assert.equal(points[2].tokens.total, 460, "the cumulative chart includes Jev's 340 tokens");
   });
 
   /* The actual defect: an interaction that spent NOTHING cost nothing at any price,
