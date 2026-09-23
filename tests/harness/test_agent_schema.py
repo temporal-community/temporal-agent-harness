@@ -1,7 +1,7 @@
 # ABOUTME: Tests for agent_schema(cls) — an agent's handlers and declared state as one JSON
 # Schema document. A golden file pins the tic-tac-toe agent's schema; the rest checks the
 # validation/serialization split, $defs naming, and that every example agent produces a
-# deterministic schema whose refs all resolve.
+# deterministic schema whose refs all resolve; then the same for protocol_schema().
 #
 # Regenerate the golden after an intended change with:
 #   uv run temporal-agent-harness schema examples.tictactoe.workflow:TicTacToeAgentWorkflow \
@@ -19,10 +19,13 @@ from temporalio import workflow
 
 from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.agent_protocol import AgentConfig
+from temporal_agent_harness.harness.agent_protocol.events import AgentEventType
 from temporal_agent_harness.harness.agent_schema import (
     agent_schema,
     dump_agent_schema,
+    dump_protocol_schema,
     load_agent_class,
+    protocol_schema,
 )
 from temporal_agent_harness.harness.state import HarnessState
 
@@ -205,3 +208,32 @@ def test_load_agent_class_explains_a_bad_target():
     with pytest.raises(ValueError, match="is not a @workflow.defn agent class"):
         load_agent_class("examples.tictactoe.board:Board")
 
+
+# ---------------------------------------------------------------------------
+# The event protocol
+# ---------------------------------------------------------------------------
+
+
+def test_the_protocol_lists_one_payload_per_event_type():
+    doc = protocol_schema()
+    defs = doc["$defs"]
+    payloads = [ref["$ref"].removeprefix("#/$defs/") for ref in doc["stream_items"]]
+
+    types = [defs[name]["properties"]["type"]["const"] for name in payloads]
+    assert sorted(types) == sorted(t.value for t in AgentEventType)
+    assert doc["event"] == {"$ref": "#/$defs/AgentEvent"}
+
+
+def test_the_protocol_is_serialization_mode_throughout():
+    defs = protocol_schema()["$defs"]
+    # Defaulted on the model, but always on the wire.
+    assert defs["ToolRequested"]["required"] == ["type", "tool_id", "tool_name", "tool_input"]
+    assert "message_id" in defs["AgentEvent"]["required"]
+
+
+def test_the_protocol_schema_is_deterministic_and_self_contained():
+    text = dump_protocol_schema()
+    assert dump_protocol_schema() == text
+    doc = json.loads(text)
+    for ref in _refs(doc):
+        assert ref.removeprefix("#/$defs/") in doc["$defs"], ref

@@ -303,3 +303,20 @@ def test_schema_writes_to_a_file(tmp_path, capsys: pytest.CaptureFixture[str]) -
 def test_schema_reports_a_bad_target_as_a_usage_error() -> None:
     with pytest.raises(SystemExit, match="is not a @workflow.defn agent class"):
         main(["schema", "examples.tictactoe.board:Board"])
+
+
+def test_schema_protocol_prints_the_event_protocol(capsys: pytest.CaptureFixture[str]) -> None:
+    from temporal_agent_harness.harness.agent_schema import dump_protocol_schema
+
+    main(["schema", "--protocol"])
+
+    assert capsys.readouterr().out == dump_protocol_schema()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["schema"], ["schema", "--protocol", "examples.tictactoe.workflow:TicTacToeAgentWorkflow"]],
+)
+def test_schema_needs_exactly_one_of_an_agent_or_protocol(argv: list[str]) -> None:
+    with pytest.raises(SystemExit, match="give an agent class or --protocol"):
+        main(argv)

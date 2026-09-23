@@ -1,3 +1,5 @@
+import type * as Protocol from "../../../../packages/codegen/src/protocol";
+
 export type UnixEpochSeconds = number;
 export type ResumeOffset = number;
 export type StreamOffset = ResumeOffset;
@@ -119,7 +121,7 @@ export type MidTurn = "enqueue" | "reject" | "accept";
  * An idle agent gives every mode the same answer (`"opened"`), so what a handler declares
  * only decides the busy case: `"enqueue"` → `"queued"`, `"accept"` → `"joined"`.
  */
-export type MessageDisposition = "opened" | "joined" | "queued";
+export type MessageDisposition = Protocol.MessageDisposition;
 
 /**
  * One `@agent.accepts` handler, as returned by the `agent_interface` discovery query.
@@ -251,49 +253,17 @@ export interface FastApiValidationErrorResponse {
 // ---------------------------------------------------------------------------
 // SSE stream events
 // ---------------------------------------------------------------------------
+//
+// Every payload is the generated protocol type for its `type`, flattened together with the
+// envelope fields `web/app.py` adds to it. A field added to an event in `events.py` reaches
+// these types by regenerating `packages/codegen/src/protocol.ts`. The only hand-written
+// parts are what the wire leaves open: the envelope fields below, the few payload fields
+// narrowed in `Narrowed`, and `stream_error`, which no agent publishes.
 
-export type AgentEventType =
-  | "message_accepted"
-  | "message_handler_start"
-  | "message_handler_end"
-  | "message_handler_error"
-  | "turn_started"
-  | "turn_end"
-  | "model_interaction_started"
-  | "model_interaction_ended"
-  | "tool_requested"
-  | "tool_approval_requested"
-  | "auto_approval_evaluation_started"
-  | "auto_approval_evaluation_ended"
-  | "auto_approval_evaluation_superseded"
-  | "auto_approval_evaluation_error"
-  | "tool_approval_resolved"
-  | "tool_start"
-  | "tool_progress_delta"
-  | "tool_end"
-  | "tool_error"
-  | "subagent_started"
-  | "subagent_stopped"
-  | "subagent_message_sent"
-  | "subagent_reply_received"
-  | "subagent_stream_unavailable"
-  | "reply_delta"
-  | "thought_summary"
-  | "text_annotation"
-  | "state_snapshot"
-  | "state_patch";
+export type AgentEventType = Protocol.AgentEventType;
+export type TokenUsage = Protocol.TokenUsage;
 
-export interface AgentEventMetadata {
-  agent_id: string;
-  turn_id: TurnId;
-  turn_number: number;
-  /**
-   * The message whose dispatch produced this event, or `null` for the events that belong to
-   * no single message — the `turn_started` / `turn_end` brackets, and an approval or callback
-   * resolution driven by a policy cascade rather than by one message.
-   */
-  message_id: MessageId | null;
-  timestamp: UnixEpochSeconds;
+export interface AgentEventMetadata extends Omit<Protocol.AgentEvent, "event"> {
   resume_offset: ResumeOffset;
   event_offset?: EventOffset;
   /**
@@ -308,208 +278,19 @@ export interface AgentEventMetadata {
   replay?: true;
 }
 
-export interface AgentEventDataBase<TType extends AgentEventType>
-  extends AgentEventMetadata {
-  type: TType;
+type Payload<TType extends AgentEventType> = Extract<Protocol.AgentStreamItem, { type: TType }>;
+
+/** Payload fields the wire types as an open JSON object, given the shape they carry. */
+interface Narrowed {
+  text_annotation: { delta: TextAnnotationDelta };
+  state_patch: { ops: JsonPatchOp[] };
 }
 
-/**
- * One inbound message passed admission — the first event of its life, and the ONLY one
- * carrying what was sent. `turn_started` says nothing about the message any more, because a
- * message that joins an open turn starts no turn of its own.
- */
-export interface MessageAcceptedEvent
-  extends AgentEventDataBase<"message_accepted"> {
-  /** Which `@agent.accepts` handler it is addressed to. */
-  handler: string;
-  /** The payload as sent — the JSON of that handler's input model. */
-  payload: JsonRecord;
-  disposition: MessageDisposition;
-}
-
-/** The message's handler began running. The gap from `message_accepted` is queue latency. */
-export interface MessageHandlerStartEvent
-  extends AgentEventDataBase<"message_handler_start"> {}
-
-/** A pure lifecycle bracket: the agent went from idle to busy. `message_id` is always null. */
-export interface TurnStartedEvent extends AgentEventDataBase<"turn_started"> {}
-
-/** The agent went back to idle — its last participant left. `message_id` is always null. */
-export interface TurnEndEvent extends AgentEventDataBase<"turn_end"> {}
-
-export interface TokenUsage {
-  input_tokens?: number | null;
-  output_tokens?: number | null;
-  thought_tokens?: number | null;
-  cached_tokens?: number | null;
-  tool_use_tokens?: number | null;
-  /**
-   * The provider's own grand total, not necessarily the sum of the fields above
-   * — providers disagree about whether cached and tool-use tokens sit inside
-   * input and output. Absent from producers that report no total of their own.
-   */
-  total_tokens?: number | null;
-}
-
-export interface ModelInteractionStartedEvent
-  extends AgentEventDataBase<"model_interaction_started"> {
-  model: string | null;
-}
-
-export interface ModelInteractionEndedEvent
-  extends AgentEventDataBase<"model_interaction_ended"> {
-  model: string | null;
-  usage: TokenUsage | null;
-}
-
-export interface ToolEventDataBase<TType extends AgentEventType>
-  extends AgentEventDataBase<TType> {
-  tool_id: ToolId;
-  tool_name: string;
-}
-
-export interface ToolRequestedEvent
-  extends ToolEventDataBase<"tool_requested"> {
-  /** `null` means the model streamed arguments the backend could not parse — a stream cut
-   *  mid-JSON leaves a truncated buffer — as distinct from `{}`, which asserts the call
-   *  genuinely takes no arguments. Unknown is not empty, so the two must not render alike.
-   *  Only this event widened server-side; the approval and start events still promise a
-   *  record, and widening them here would claim something the backend does not say. */
-  tool_input: JsonRecord | null;
-}
-
-export interface ToolApprovalRequestedEvent
-  extends ToolEventDataBase<"tool_approval_requested"> {
-  tool_input: JsonRecord;
-}
-
-/* The events of ONE automatic approval evaluation — the agent's
- * `auto_approval_evaluator` judging a gated call, which for an AI approver means a model
- * round-trip on the critical path. A BRACKET, not one terminal event: only a bracket shows
- * the work while it is still happening (so a client can tell "an approver is deliberating"
- * from "this is waiting for a person"), times it off the two envelope timestamps, and
- * surfaces a hung evaluator as an unclosed span.
- *
- * Pair them by `evaluation_id`, never by `tool_id` alone — an agent may chain several
- * evaluators over one gated call. */
-interface AutoApprovalEvaluationBase<TType extends AgentEventType>
-  extends ToolEventDataBase<TType> {
-  evaluation_id: string;
-  /** "jev_evaluator" for the builtin AI approver, else the fallback's qualified name. */
-  evaluator: string;
-}
-
-export type AutoApprovalEvaluationStartedEvent =
-  AutoApprovalEvaluationBase<"auto_approval_evaluation_started">;
-
-export interface AutoApprovalEvaluationEndedEvent
-  extends AutoApprovalEvaluationBase<"auto_approval_evaluation_ended"> {
-  /* What the evaluator SAID. Not necessarily what happened to the call — see `applied`.
-   * "escalate" resolves nothing, so for that verdict THIS event is the only record that an
-   * evaluator ran at all; the `tool_approval_resolved` that follows is the human's. */
-  verdict: "approve" | "deny" | "escalate";
-  reason: string | null;
-  /* The evaluator's own structured reasoning, free-form by design. The Jev approver records
-   * the model, the verdict's confidence and distribution, the irreversibility judgment,
-   * token usage, and the thresholds applied. Empty for a fallback that returned a bool. */
-  details: JsonRecord;
-}
-
-/* The evaluator was CANCELLED because its gate had already been settled — a human answered
- * while it was thinking, a policy cascade released the call, or the agent closed. The
- * harness cancels the coroutine rather than letting it keep burning a model call on a
- * settled question, which is why an evaluator is required to be async. */
-export interface AutoApprovalEvaluationSupersededEvent
-  extends AutoApprovalEvaluationBase<"auto_approval_evaluation_superseded"> {
-  /* What it had concluded before being cut off, in the narrow race where its answer landed
-   * in the same activation as the decision that beat it. Normally null. */
-  verdict: "approve" | "deny" | "escalate" | null;
-}
-
-export interface AutoApprovalEvaluationErrorEvent
-  extends AutoApprovalEvaluationBase<"auto_approval_evaluation_error"> {
-  /** The failure. The harness substitutes an escalate, so a human still resolves the gate. */
-  message: string;
-}
-
-export interface ToolApprovalResolvedEvent
-  extends ToolEventDataBase<"tool_approval_resolved"> {
-  approved: boolean;
-  reason: string | null;
-  remember: boolean;
-}
-
-export interface ToolStartEvent extends ToolEventDataBase<"tool_start"> {
-  tool_input: JsonRecord;
-}
-
-export interface ToolProgressDeltaEvent
-  extends ToolEventDataBase<"tool_progress_delta"> {
-  progress_delta: string;
-}
-
-export interface ToolEndEvent extends ToolEventDataBase<"tool_end"> {
-  tool_output: string;
-}
-
-export interface ToolErrorEvent extends ToolEventDataBase<"tool_error"> {
-  message: string;
-}
-
-export interface SubagentStartedEvent
-  extends AgentEventDataBase<"subagent_started"> {
-  subagent_id: string;
-  agent_key: string;
-  workflow_id: string;
-}
-
-export interface SubagentStoppedEvent
-  extends AgentEventDataBase<"subagent_stopped"> {
-  subagent_id: string;
-  agent_key: string;
-  workflow_id: string;
-}
-
-export interface SubagentMessageSentEvent
-  extends AgentEventDataBase<"subagent_message_sent"> {
-  subagent_id: string;
-  agent_key: string;
-  workflow_id: string;
-  handler: string;
-  subagent_turn: number;
-  from_offset: number;
-}
-
-export interface SubagentReplyReceivedEvent
-  extends AgentEventDataBase<"subagent_reply_received"> {
-  subagent_id: string;
-  agent_key: string;
-  workflow_id: string;
-  handler: string;
-  subagent_turn: number;
-  outcome: "ok" | "error";
-}
-
-export interface SubagentStreamUnavailableEvent
-  extends AgentEventDataBase<"subagent_stream_unavailable"> {
-  subagent_id: string;
-  workflow_id: string;
-  reason: string;
-}
-
-export interface ReplyDeltaEvent extends AgentEventDataBase<"reply_delta"> {
-  text: string;
-}
-
-export interface ThoughtSummaryEvent
-  extends AgentEventDataBase<"thought_summary"> {
-  delta: JsonRecord;
-}
-
-export interface TextAnnotationEvent
-  extends AgentEventDataBase<"text_annotation"> {
-  delta: TextAnnotationDelta;
-}
+/** The flattened SSE `data` of one event type. */
+export type AgentEventData<TType extends AgentEventType> = (TType extends keyof Narrowed
+  ? Omit<Payload<TType>, keyof Narrowed[TType]> & Narrowed[TType]
+  : Payload<TType>) &
+  AgentEventMetadata;
 
 export interface TextAnnotationDelta {
   annotations?: TextAnnotation[];
@@ -542,23 +323,6 @@ export interface CitationMetadata {
 }
 
 /**
- * One message's handler returned. Terminal for the MESSAGE, not for the turn — with several
- * participants sharing a turn there is one of these per message under one `turn_id`, so pair
- * it with what asked for it by `message_id`.
- */
-export interface MessageHandlerEndEvent
-  extends AgentEventDataBase<"message_handler_end"> {
-  output?: JsonRecord | null;
-  text?: string | null;
-}
-
-/** One message's handler raised. Terminal for that message only; siblings keep running. */
-export interface MessageHandlerErrorEvent
-  extends AgentEventDataBase<"message_handler_error"> {
-  message: string;
-}
-
-/**
  * One RFC 6902 operation off an agent's observable state.
  *
  * The harness derives these — nothing in a workflow author's code builds one —
@@ -575,35 +339,6 @@ export interface JsonPatchOp {
   value?: JsonValue;
 }
 
-/**
- * The full value of one piece of observable agent state, published once when the
- * workflow author registered it with `runner.state(...)`.
- *
- * A consumer needs exactly one of these to start applying patches, and there is
- * exactly one per state for the life of the agent — it is published in
- * `@workflow.init`, at the very front of the log. A stream attached from a later
- * offset therefore never sees it, and no amount of waiting will produce another:
- * see `UNSYNCED_NOTE` in $lib/state/agentState, which is where that is handled.
- */
-export interface AgentStateSnapshotEvent
-  extends AgentEventDataBase<"state_snapshot"> {
-  state_id: string;
-  version: number;
-  value: JsonRecord;
-}
-
-/**
- * What one committed `mutate()` block changed. Ops apply in order, and a version
- * exists only because something was touched — a block that changed nothing
- * publishes no event at all, so versions are contiguous across the patches that
- * do arrive.
- */
-export interface AgentStatePatchEvent extends AgentEventDataBase<"state_patch"> {
-  state_id: string;
-  version: number;
-  ops: JsonPatchOp[];
-}
-
 // Emitted by POST /api/chat for a client-side timeout, or for this turn's own
 // message_handler_error surfaced as the caller's failure. Not an agent event: nothing
 // published it on the stream, so it carries no type or turn/message metadata.
@@ -613,38 +348,9 @@ export interface ClientSideStreamErrorEvent {
   resume_offset: ResumeOffset;
 }
 
-export interface AgentSseEventMap {
-  message_accepted: MessageAcceptedEvent;
-  message_handler_start: MessageHandlerStartEvent;
-  turn_started: TurnStartedEvent;
-  turn_end: TurnEndEvent;
-  model_interaction_started: ModelInteractionStartedEvent;
-  model_interaction_ended: ModelInteractionEndedEvent;
-  tool_requested: ToolRequestedEvent;
-  tool_approval_requested: ToolApprovalRequestedEvent;
-  auto_approval_evaluation_started: AutoApprovalEvaluationStartedEvent;
-  auto_approval_evaluation_ended: AutoApprovalEvaluationEndedEvent;
-  auto_approval_evaluation_superseded: AutoApprovalEvaluationSupersededEvent;
-  auto_approval_evaluation_error: AutoApprovalEvaluationErrorEvent;
-  tool_approval_resolved: ToolApprovalResolvedEvent;
-  tool_start: ToolStartEvent;
-  tool_progress_delta: ToolProgressDeltaEvent;
-  tool_end: ToolEndEvent;
-  tool_error: ToolErrorEvent;
-  subagent_started: SubagentStartedEvent;
-  subagent_stopped: SubagentStoppedEvent;
-  subagent_message_sent: SubagentMessageSentEvent;
-  subagent_reply_received: SubagentReplyReceivedEvent;
-  subagent_stream_unavailable: SubagentStreamUnavailableEvent;
-  reply_delta: ReplyDeltaEvent;
-  thought_summary: ThoughtSummaryEvent;
-  text_annotation: TextAnnotationEvent;
-  message_handler_end: MessageHandlerEndEvent;
-  message_handler_error: MessageHandlerErrorEvent;
+export type AgentSseEventMap = { [TType in AgentEventType]: AgentEventData<TType> } & {
   stream_error: ClientSideStreamErrorEvent;
-  state_snapshot: AgentStateSnapshotEvent;
-  state_patch: AgentStatePatchEvent;
-}
+};
 
 export type AgentStreamEventData =
   AgentSseEventMap[keyof AgentSseEventMap];

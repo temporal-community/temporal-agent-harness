@@ -119,7 +119,8 @@ function usage(
     output_tokens,
     thought_tokens,
     cached_tokens,
-    tool_use_tokens
+    tool_use_tokens,
+    total_tokens: null
   };
 }
 
@@ -298,8 +299,10 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(1, 18),
-    text:
-      "Model the UI around the event stream: `message_accepted` (with its disposition), the `turn_started`/`turn_end` brackets, `message_handler_start`/`_end`/`_error` per message, model spans, tool spans, approval gates, `reply_delta` and annotations. Group by `message_id`, not by turn — a turn can carry several messages. That gives you enough surface area to mock realistic sessions without needing the server running."
+    output: {
+      text:
+        "Model the UI around the event stream: `message_accepted` (with its disposition), the `turn_started`/`turn_end` brackets, `message_handler_start`/`_end`/`_error` per message, model spans, tool spans, approval gates, `reply_delta` and annotations. Group by `message_id`, not by turn — a turn can carry several messages. That gives you enough surface area to mock realistic sessions without needing the server running."
+    }
   }),
   frame("state_patch", {
     type: "state_patch",
@@ -327,7 +330,7 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(2, 29),
-    text: "Scope set to docs only."
+    output: { text: "Scope set to docs only." }
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -493,8 +496,10 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(3, 56),
-    text:
-      "Use signals for fire-and-forget user input, updates when the caller needs accepted/rejected semantics, and queries for read-only status. The UI should not care which primitive the worker uses. It should see stable REST actions plus an SSE event stream that can resume by offset."
+    output: {
+      text:
+        "Use signals for fire-and-forget user input, updates when the caller needs accepted/rejected semantics, and queries for read-only status. The UI should not care which primitive the worker uses. It should see stable REST actions plus an SSE event stream that can resume by offset."
+    }
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -508,7 +513,7 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(4, 60),
-    text: "No approvals are waiting. One queued message was promoted into this turn."
+    output: { text: "No approvals are waiting. One queued message was promoted into this turn." }
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -675,8 +680,10 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(5, 105),
-    text:
-      "Runbook: build against mock streams, shadow saved production-like sessions, verify resume-from-offset, then release to a small internal group. Watch replay gaps, stuck approvals, failed tool states, and worker rollback behavior. The community pattern is deploy capacity first, move traffic gradually, and keep old workers draining."
+    output: {
+      text:
+        "Runbook: build against mock streams, shadow saved production-like sessions, verify resume-from-offset, then release to a small internal group. Watch replay gaps, stuck approvals, failed tool states, and worker rollback behavior. The community pattern is deploy capacity first, move traffic gradually, and keep old workers draining."
+    }
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -697,7 +704,7 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(6, 119),
-    text: "Model set to **gemini-3.1-flash-lite** for faster iteration."
+    output: { text: "Model set to **gemini-3.1-flash-lite** for faster iteration." }
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -812,7 +819,7 @@ const frames: AgentSseFrame[] = [
     ...meta(1, 138.7),
     agent_id: searchSubagentId,
     turn_id: "search-turn-001",
-    text: "Saved budget-heavy sessions cluster between 58k and 68k tokens."
+    output: { text: "Saved budget-heavy sessions cluster between 58k and 68k tokens." }
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -863,8 +870,10 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(7, 144),
-    text:
-      "Use a 60k to 70k token budget for a comprehensive mock session. The useful visual pattern is not a smooth accumulation; it is spikes when model calls finish, especially after document and forum tools."
+    output: {
+      text:
+        "Use a 60k to 70k token budget for a comprehensive mock session. The useful visual pattern is not a smooth accumulation; it is spikes when model calls finish, especially after document and forum tools."
+    }
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -942,8 +951,10 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(8, 173),
-    text:
-      "I will keep this mock app independent of local filesystem reads. The component states should come from the documented stream contract and realistic event sequences."
+    output: {
+      text:
+        "I will keep this mock app independent of local filesystem reads. The component states should come from the documented stream contract and realistic event sequences."
+    }
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -1029,8 +1040,10 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(9, 201),
-    text:
-      "The failed file read should appear as a failed tool state, then the recovery tool should show a successful follow-up. That gives the component library examples for both error and recovery without relying on real files."
+    output: {
+      text:
+        "The failed file read should appear as a failed tool state, then the recovery tool should show a successful follow-up. That gives the component library examples for both error and recovery without relying on real files."
+    }
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -1099,8 +1112,10 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(10, 224),
-    text:
-      "Use seven stable nodes: ingress, queue, agent, model, tool, approval, and egress. Animate only the active edge, keep failed and denied states visually distinct, and let the transcript carry detailed tool output."
+    output: {
+      text:
+        "Use seven stable nodes: ingress, queue, agent, model, tool, approval, and egress. Animate only the active edge, keep failed and denied states visually distinct, and let the transcript carry detailed tool output."
+    }
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -1152,8 +1167,10 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(11, 250),
-    text:
-      "A transient model failure should show as an error event, followed by a new model span if the worker retries. The replay should preserve both so the UI can explain why a response took longer."
+    output: {
+      text:
+        "A transient model failure should show as an error event, followed by a new model span if the worker retries. The replay should preserve both so the UI can explain why a response took longer."
+    }
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -1239,8 +1256,10 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(12, 283),
-    text:
-      "I wrote a mock markdown artifact with sections for the API contract, replay controls, state diagram examples, and known UI states."
+    output: {
+      text:
+        "I wrote a mock markdown artifact with sections for the API contract, replay controls, state diagram examples, and known UI states."
+    }
   }),
   frame("turn_end", {
     type: "turn_end",
@@ -1284,8 +1303,10 @@ const frames: AgentSseFrame[] = [
   frame("message_handler_end", {
     type: "message_handler_end",
     ...meta(13, 306),
-    text:
-      "Next tasks: add component states for empty/loading/error/streaming, create fixture-driven examples for transcript, graph, and replay controls, and keep stress cases for queued turns, denied approvals, failed tools, model retries, and long sessions."
+    output: {
+      text:
+        "Next tasks: add component states for empty/loading/error/streaming, create fixture-driven examples for transcript, graph, and replay controls, and keep stress cases for queued turns, denied approvals, failed tools, model retries, and long sessions."
+    }
   }),
   frame("turn_end", {
     type: "turn_end",

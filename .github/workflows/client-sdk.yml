@@ -1,9 +1,10 @@
 name: Client SDK codegen
 
-# packages/codegen turns an agent's `temporal-agent-harness schema` document into TypeScript
-# types, and examples that ship typed clients commit that output (e.g.
-# examples/tictactoe/client_sdk/). Nothing else notices when a Python model changes and the
-# committed types don't, so this job regenerates them and fails on any difference.
+# packages/codegen turns `temporal-agent-harness schema` documents into TypeScript types. Its
+# own src/protocol.ts is generated from the event protocol, and examples that ship typed
+# clients commit their agent's output (e.g. examples/tictactoe/client_sdk/). Nothing else
+# notices when a Python model changes and the committed types don't, so these jobs
+# regenerate them and fail on any difference.
 #
 # Every example whose justfile defines a `codegen-client-sdk` recipe is checked, so a new
 # example opts in by adding the recipe.
@@ -22,13 +23,16 @@ concurrency:
 
 jobs:
   codegen:
-    name: packages/codegen tests
+    name: packages/codegen tests and protocol types
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: packages/codegen
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -36,6 +40,19 @@ jobs:
           cache-dependency-path: packages/codegen/package-lock.json
       - run: npm ci
       - run: npm test
+
+      - name: Regenerate the protocol types
+        run: npm run generate:protocol
+
+      - name: Verify the committed protocol types are current
+        run: |
+          set -euo pipefail
+          if ! git diff --exit-code -- src/protocol.ts; then
+            echo "::error::packages/codegen/src/protocol.ts is out of date with events.py."
+            echo "Regenerate it from packages/codegen and commit the result:"
+            echo "    npm run generate:protocol"
+            exit 1
+          fi
 
   committed-types:
     name: Committed client types match the agents

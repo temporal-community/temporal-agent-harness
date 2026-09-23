@@ -1,9 +1,10 @@
 # ABOUTME: agent_schema(cls) — one JSON document describing an agent's typed surface: every
 # @agent.accepts handler's input and output model and every agent.state(...) declaration,
 # with all their models in one shared $defs. Pure reflection over the class (no workflow is
-# started), so it is what client codegen reads.
+# started), so it is what client codegen reads. protocol_schema() is the same for the event
+# stream every agent publishes.
 
-"""An agent's handlers and declared state, as JSON Schema."""
+"""An agent's handlers and declared state, and the event protocol, as JSON Schema."""
 
 from __future__ import annotations
 
@@ -13,15 +14,22 @@ import os
 import sys
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 from pydantic.json_schema import GenerateJsonSchema, JsonSchemaMode, models_json_schema
 from pydantic_core import core_schema
 from temporalio import workflow
 
+from temporal_agent_harness.harness.agent_protocol.events import AgentEvent
 from temporal_agent_harness.harness.agent_workflow import agent_handlers
 from temporal_agent_harness.harness.state import declared_states
 
-__all__ = ["agent_schema", "dump_agent_schema", "load_agent_class"]
+__all__ = [
+    "agent_schema",
+    "dump_agent_schema",
+    "dump_protocol_schema",
+    "load_agent_class",
+    "protocol_schema",
+]
 
 _REF_TEMPLATE = "#/$defs/{model}"
 
@@ -103,6 +111,31 @@ def agent_schema(cls: type) -> dict[str, Any]:
     }
 
 
+def protocol_schema() -> dict[str, Any]:
+    """The event stream's wire types, as one JSON-serializable document::
+
+        {
+          "event": {"$ref": "#/$defs/AgentEvent"},        # the envelope
+          "stream_items": [{"$ref": "#/$defs/MessageAccepted"}, ...],
+          "$defs": {...},
+        }
+
+    ``stream_items`` lists the payloads ``AgentEvent.event`` can hold, in the order of the
+    ``AgentStreamItem`` union. Serialization mode throughout: this is what is read, never
+    written, by a client.
+    """
+    top = TypeAdapter(AgentEvent).json_schema(
+        mode="serialization", ref_template=_REF_TEMPLATE, schema_generator=_WireJsonSchema
+    )
+    defs: dict[str, Any] = top.pop("$defs")
+    defs[AgentEvent.__name__] = top
+    return {
+        "event": {"$ref": _REF_TEMPLATE.format(model=AgentEvent.__name__)},
+        "stream_items": top["properties"]["event"]["oneOf"],
+        "$defs": dict(sorted(defs.items())),
+    }
+
+
 def _reject_name_collisions(
     cls: type, models: list[type[BaseModel]], defs: dict[str, Any]
 ) -> None:
@@ -152,3 +185,8 @@ def load_agent_class(target: str) -> type:
 def dump_agent_schema(cls: type) -> str:
     """:func:`agent_schema` as stable, diffable JSON text."""
     return json.dumps(agent_schema(cls), indent=2, ensure_ascii=False) + "\n"
+
+
+def dump_protocol_schema() -> str:
+    """:func:`protocol_schema` as stable, diffable JSON text."""
+    return json.dumps(protocol_schema(), indent=2, ensure_ascii=False) + "\n"

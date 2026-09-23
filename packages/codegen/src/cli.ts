@@ -1,16 +1,24 @@
 #!/usr/bin/env node
-// harness-codegen <schema.json | -> -o <Agent.ts> [--name TypeName]
+// harness-codegen <schema.json | -> [-o <out.ts>] [--name TypeName] [--protocol]
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 
-import { generateAgentTypes, type AgentSchemaDocument } from "./generate.ts";
+import {
+  generateAgentTypes,
+  generateProtocolTypes,
+  type AgentSchemaDocument,
+  type ProtocolSchemaDocument
+} from "./generate.ts";
 
-const USAGE = `usage: harness-codegen <schema.json | -> [-o <out.ts>] [--name <TypeName>]
+const USAGE = `usage: harness-codegen <schema.json | -> [-o <out.ts>] [--name <TypeName>] [--protocol]
 
 Reads the document \`temporal-agent-harness schema module:Class\` prints (from a file, or
 stdin for -) and writes TypeScript types for the agent: one interface per model, and a
-mapping type naming each handler's input and output and each declared state.`;
+mapping type naming each handler's input and output and each declared state.
+
+With --protocol, reads \`temporal-agent-harness schema --protocol\` instead and writes the
+event stream's types.`;
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -18,6 +26,7 @@ async function main(): Promise<void> {
     options: {
       output: { type: "string", short: "o" },
       name: { type: "string" },
+      protocol: { type: "boolean" },
       help: { type: "boolean", short: "h" }
     }
   });
@@ -27,9 +36,10 @@ async function main(): Promise<void> {
   }
 
   const input = positionals[0] === "-" ? readFileSync(0, "utf8") : readFileSync(positionals[0]!, "utf8");
-  const source = await generateAgentTypes(JSON.parse(input) as AgentSchemaDocument, {
-    typeName: values.name
-  });
+  const doc: unknown = JSON.parse(input);
+  const source = values.protocol
+    ? await generateProtocolTypes(doc as ProtocolSchemaDocument)
+    : await generateAgentTypes(doc as AgentSchemaDocument, { typeName: values.name });
   if (values.output === undefined) process.stdout.write(source);
   else writeFileSync(values.output, source);
 }

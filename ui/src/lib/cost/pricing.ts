@@ -135,16 +135,16 @@ function meteredUsage(frame: AgentSseFrame): MeteredUsage | null {
   }
 
   const values = rawUsage as Record<string, unknown>;
-  const usage: TokenUsage = {};
+  const usage: TokenUsage = {
+    input_tokens: null,
+    output_tokens: null,
+    thought_tokens: null,
+    cached_tokens: null,
+    tool_use_tokens: null,
+    total_tokens: null
+  };
   let measured = false;
-  for (const key of [
-    "input_tokens",
-    "output_tokens",
-    "thought_tokens",
-    "cached_tokens",
-    "tool_use_tokens",
-    "total_tokens"
-  ] as const) {
+  for (const key of Object.keys(usage) as (keyof TokenUsage)[]) {
     const count = tokenCount(values[key]);
     if (count === null) continue;
     usage[key] = count;

@@ -8,7 +8,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { generateAgentTypes, type AgentSchemaDocument } from "../src/generate.ts";
+import {
+  generateAgentTypes,
+  generateProtocolTypes,
+  type AgentSchemaDocument
+} from "../src/generate.ts";
 
 // Compiled to dist/test/, so the package root is two levels up.
 const packageRoot = new URL("../../", import.meta.url);
@@ -86,4 +90,36 @@ test("the mapping type can be renamed, and may not reuse a model's name", async 
 test("two schema names that would generate one type name are rejected", async () => {
   const $defs = { ...doc().$defs, EchoInput: { type: "object" as const } };
   await assert.rejects(generateAgentTypes(doc({ $defs })), /would both be generated as EchoInput/);
+});
+
+test("the protocol's payloads form one union, and their types another", async () => {
+  const out = await generateProtocolTypes({
+    event: { $ref: "#/$defs/AgentEvent" },
+    stream_items: [{ $ref: "#/$defs/Ping" }, { $ref: "#/$defs/Pong" }],
+    $defs: {
+      AgentEvent: {
+        type: "object",
+        properties: {
+          agent_id: { type: "string" },
+          event: { oneOf: [{ $ref: "#/$defs/Ping" }, { $ref: "#/$defs/Pong" }] }
+        },
+        required: ["agent_id", "event"]
+      },
+      Ping: { type: "object", properties: { type: { const: "ping" } }, required: ["type"] },
+      Pong: {
+        type: "object",
+        properties: {
+          type: { const: "pong" },
+          reason: { $ref: "#/$defs/Reason", description: "Why, per ``Ping``." }
+        },
+        required: ["type", "reason"]
+      },
+      Reason: { type: "string", enum: ["late", "early"] }
+    }
+  });
+  assert.match(out, /export type AgentStreamItem =\n {2}\| Ping\n {2}\| Pong;/);
+  assert.match(out, /export type AgentEventType = AgentStreamItem\["type"\];/);
+  // A `$ref` with a description is the referenced type, documented, not a new named type.
+  assert.match(out, /\/\*\*\n {3}\* Why, per `Ping`\.\n {3}\*\/\n {2}reason: Reason;/);
+  assert.doesNotMatch(out, /Reason1/);
 });
