@@ -681,8 +681,14 @@
         <AgentStatePanel states={run.agentStates} />
       {:else if pane.kind === "decisions"}
         <!-- The projection is already clipped to the playhead, so this pane
-             rewinds with the graph and logs instead of leaking future verdicts. -->
-        <ApprovalDecisionPanel decisions={run.approvalDecisions} />
+             rewinds with the graph and logs instead of leaking future verdicts.
+             `ahead` is what keeps that from reading as "nothing happened" when the
+             cursor is simply behind the evaluations. -->
+        <ApprovalDecisionPanel
+          decisions={run.approvalDecisions}
+          ahead={run.approvalDecisionsAhead}
+          onJumpToLive={() => run.jumpToLive()}
+        />
       {:else if pane.kind === "logs"}
         <TranscriptPanel
           groups={run.replayLog.groups}

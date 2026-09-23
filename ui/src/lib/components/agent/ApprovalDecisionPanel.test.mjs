@@ -39,13 +39,35 @@ const baseDecision = {
   ]
 };
 
-const html = (decisions) => render(ApprovalDecisionPanel, { props: { decisions } }).body;
+const html = (decisions, props = {}) =>
+  render(ApprovalDecisionPanel, { props: { decisions, ...props } }).body;
 
 describe("the approval decision panel", () => {
   it("explains its cursor-aware empty state", () => {
     const body = html([]);
     assert.match(body, /No completed approval decisions/);
     assert.match(body, /auto_approval_evaluation_ended/);
+  });
+
+  /* The empty state a reader actually hits: the run HAS judged calls, the chat beside this
+     pane shows the finished conversation, and the cursor is parked behind the evaluations.
+     Saying "no completed approval decisions" there is true of the cursor and false of the
+     run, and nothing else on screen closes that gap. */
+  it("distinguishes an empty run from a cursor parked behind the decisions", () => {
+    const body = html([], { ahead: 5 });
+    assert.match(body, /5 approval decisions ahead of the replay cursor/);
+    assert.match(body, /Jump to latest step/);
+    assert.doesNotMatch(
+      body,
+      /No completed approval decisions/,
+      "the run is not empty, so it must not say so"
+    );
+  });
+
+  it("counts one decision in the singular", () => {
+    const body = html([], { ahead: 1 });
+    assert.match(body, /1 approval decision ahead/);
+    assert.doesNotMatch(body, /1 approval decisions/);
   });
 
   it("renders confidence, its threshold, and the final verdict without color alone", () => {

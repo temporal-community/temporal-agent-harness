@@ -456,6 +456,31 @@ export class AgentRunController {
   agentStates = $derived(buildAgentStateDocs(this.visibleReplayTimeline));
   /** Completed automatic approval judgments, as of the replay cursor. */
   approvalDecisions = $derived(buildApprovalDecisions(this.visibleReplayTimeline));
+  /**
+   * How many completed judgments the whole run holds, cursor or no cursor.
+   *
+   * Counted off the frames rather than projected a second time, so it only
+   * re-reads when frames arrive — moving the cursor must not cost a pass over
+   * the run. buildApprovalDecisions emits exactly one decision per
+   * `auto_approval_evaluation_ended` entry, which is what makes the count equal.
+   */
+  completedApprovalDecisionCount = $derived(
+    this.replayTimeline.reduce(
+      (count, entry) =>
+        entry.frame.event === "auto_approval_evaluation_ended" ? count + 1 : count,
+      0
+    )
+  );
+  /**
+   * Judgments this run has made that the cursor has not reached.
+   *
+   * The pane is cursor-scoped and the chat beside it is not, so "empty" there
+   * can mean either "nothing was judged" or "you are parked behind it". Only
+   * this tells them apart.
+   */
+  approvalDecisionsAhead = $derived(
+    this.completedApprovalDecisionCount - this.approvalDecisions.length
+  );
   usage = $derived(summarizeCost(this.visibleReplayFrames));
   usageTimeline = $derived(buildUsageTimeline(this.allReplayFrames));
   stepTimeline = $derived(buildStepTimeline(this.replayTimeline));

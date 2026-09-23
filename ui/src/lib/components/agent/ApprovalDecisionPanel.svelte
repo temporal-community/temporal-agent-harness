@@ -9,9 +9,19 @@
 
   interface Props {
     decisions: ApprovalDecision[];
+    /**
+     * Completed decisions further along the run than the replay cursor.
+     *
+     * This pane reads the run AT the cursor, while the chat beside it reads the
+     * whole transcript — so a reader parked behind the evaluations sees a
+     * finished conversation next to an empty panel, with nothing on screen
+     * connecting the two. That is what this counts, and the empty state says.
+     */
+    ahead?: number;
+    onJumpToLive?: () => void;
   }
 
-  let { decisions }: Props = $props();
+  let { decisions, ahead = 0, onJumpToLive }: Props = $props();
   let chosenKey = $state<string | null>(null);
 
   const newestFirst = $derived([...decisions].reverse());
@@ -67,11 +77,26 @@
   {#if !current}
     <div class="empty">
       <GitBranch size={22} aria-hidden="true" />
-      <h3>No completed approval decisions</h3>
-      <p>
-        Completed <code>auto_approval_evaluation_ended</code> events will appear here as
-        the replay cursor reaches them.
-      </p>
+      {#if ahead > 0}
+        <h3>
+          {ahead} approval {ahead === 1 ? "decision" : "decisions"} ahead of the replay cursor
+        </h3>
+        <p>
+          This run has judged {ahead === 1 ? "a gated call" : "gated calls"}, but the cursor
+          is parked before {ahead === 1 ? "it" : "them"} — so there is nothing to show
+          <em>yet</em>. The chat does not rewind with the cursor, which is why it can look
+          finished while this is empty.
+        </p>
+        <button type="button" class="jump" onclick={onJumpToLive}>
+          Jump to latest step
+        </button>
+      {:else}
+        <h3>No completed approval decisions</h3>
+        <p>
+          Completed <code>auto_approval_evaluation_ended</code> events will appear here as
+          the replay cursor reaches them.
+        </p>
+      {/if}
     </div>
   {:else}
     <div class="decision-layout">
@@ -805,6 +830,23 @@
     font-family: var(--font-mono);
     font-size: inherit;
     overflow-wrap: anywhere;
+  }
+
+  .jump {
+    padding: 6px 12px;
+    border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+    border-radius: var(--radius-chip);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--text-1);
+    font-size: var(--font-sm);
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .jump:hover {
+      background: color-mix(in srgb, var(--accent) 20%, transparent);
+    }
   }
 
   @media (hover: hover) and (pointer: fine) {
