@@ -12,6 +12,7 @@
   } from "$lib/panes/paneDrop";
   import PaneShell from "$lib/panes/PaneShell.svelte";
   import { PANE_KINDS, PANE_META, SPINE_SIZE } from "$lib/panes/registry";
+  import { keepScrollPositions } from "$lib/state/followScroll";
   import {
     activeIn,
     isSplit,
@@ -54,6 +55,18 @@
      play the open animation as if it had just been opened. The gate has to
      outlive the drop's own render, so it lifts a frame later. */
   let settling = $state(false);
+
+  /* Moving a column re-inserts its nodes, which resets every scroller inside it. */
+  let restoreScroll: (() => void) | null = null;
+  $effect.pre(() => {
+    void stack.groups;
+    if (railElement) restoreScroll = keepScrollPositions(railElement);
+  });
+  $effect(() => {
+    void stack.groups;
+    restoreScroll?.();
+    restoreScroll = null;
+  });
 
   function reducedMotion(): boolean {
     if (typeof window === "undefined") return false;

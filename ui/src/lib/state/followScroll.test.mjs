@@ -11,7 +11,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "vitest";
 
-import { scrollFollower } from "./followScroll.ts";
+import { keepScrollPositions, scrollFollower } from "./followScroll.ts";
 
 /* The scroller sits 100px down the page and shows 400px of a 4000px list, so a row's
    viewport rect and its place in the content are different numbers — which is the
@@ -268,5 +268,37 @@ describe.each(PANES)("%s", (path) => {
       /onscroll=\{follower\.handleScroll\}/,
       `${name} must hand its scroller's scroll events to the follower`
     );
+  });
+});
+
+/* A moved column's nodes are re-inserted, and the browser zeroes every scroller inside them:
+   chat, pinned to its latest reply, came back on Turn 1. */
+describe("keeping scroll positions across a column move", () => {
+  const box = (top, left = 0) => ({ scrollTop: top, scrollLeft: left, isConnected: true });
+
+  it("puts back every scrolled box, and leaves ones that were rebuilt", () => {
+    const chat = box(5411);
+    const logs = box(120, 30);
+    const idle = box(0);
+    const rebuilt = box(800);
+    const restore = keepScrollPositions({ querySelectorAll: () => [chat, logs, idle, rebuilt] });
+
+    for (const moved of [chat, logs, idle, rebuilt]) moved.scrollTop = moved.scrollLeft = 0;
+    rebuilt.isConnected = false;
+    restore();
+
+    assert.equal(chat.scrollTop, 5411, "chat is back on its latest reply");
+    assert.deepEqual([logs.scrollTop, logs.scrollLeft], [120, 30]);
+    assert.equal(idle.scrollTop, 0);
+    assert.equal(rebuilt.scrollTop, 0, "a box no longer in the document is not written");
+  });
+
+  it("is taken before the rail re-renders a move and restored after", async () => {
+    const rail = await readFile(new URL("../panes/PaneRail.svelte", import.meta.url), "utf8");
+    assert.match(
+      rail,
+      /\$effect\.pre\(\(\) => \{\s*void stack\.groups;\s*if \(railElement\) restoreScroll = keepScrollPositions\(railElement\);/
+    );
+    assert.match(rail, /\$effect\(\(\) => \{\s*void stack\.groups;\s*restoreScroll\?\.\(\);/);
   });
 });
