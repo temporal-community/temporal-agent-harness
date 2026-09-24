@@ -35,6 +35,7 @@ export type StoredDesk = StoredPane[][];
 export type OperatorPrefs = {
   transcriptFilter?: string;
   drawerHeight?: number;
+  sessionDrawerWidth?: number;
   followDefault?: boolean;
   /** Fold settled tool cards on the graph. Absent means yes; see agentRun. */
   graphFocus?: boolean;

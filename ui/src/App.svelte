@@ -8,6 +8,7 @@
   import StepController from "$lib/components/flow/StepController.svelte";
   import HotkeyHelp from "$lib/components/flow/HotkeyHelp.svelte";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
+  import DockedDrawer from "$lib/components/primitives/DockedDrawer.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import { Keyboard, PanelLeft } from "@lucide/svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
@@ -30,7 +31,6 @@
     type ReplaySurface
   } from "$lib/state/replayHotkeys";
   import { setFaviconTone } from "$lib/state/favicon";
-  import { dismissable } from "$lib/state/dismissable.svelte";
 
   const savedPrefs = readOperatorPrefs();
 
@@ -75,7 +75,6 @@
   let drawerHeight = $state(
     typeof savedPrefs.drawerHeight === "number" ? savedPrefs.drawerHeight : DRAWER_DEFAULT_H
   );
-  let resizingDrawer = $state(false);
   /* Which of the two rails the arrows, F and Escape act on: the last one touched,
      because both are on screen at once and neither is "the" rail any more. */
   let drawerActive = $state(false);
@@ -89,7 +88,16 @@
   );
   let hotkeyHelpOpen = $state(false);
   let sessionManagerTab = $state<"sessions" | "new">("sessions");
-  let sessionManagerOpen = $state(false);
+  const SESSION_DRAWER_DEFAULT_W = 420;
+  const SESSION_DRAWER_MIN_W = 240;
+  let sessionManagerHeld = $state(
+    new URLSearchParams(window.location.search).get("sm") === "1"
+  );
+  let sessionDrawerWidth = $state(
+    typeof savedPrefs.sessionDrawerWidth === "number"
+      ? savedPrefs.sessionDrawerWidth
+      : SESSION_DRAWER_DEFAULT_W
+  );
 
   if (savedPrefs.followDefault === false) {
     run.following = false;
@@ -145,6 +153,7 @@
     writeOperatorPrefs({
       transcriptFilter,
       drawerHeight,
+      sessionDrawerWidth,
       followDefault: run.following
     });
   });
@@ -357,22 +366,6 @@
     drawerActive = node.closest(".drawer") != null;
   }
 
-  /* Same pointer-capture shape as the rail's own column gutter, on the other axis.
-     The drawer is the last row, so its bottom is pinned to the floor of the window
-     and its height is the distance from the pointer down to it — the same arithmetic
-     as when it sat above the transport, for a different reason. */
-  function resizeDrawerFrom(event: PointerEvent): void {
-    const rect = drawerElement?.getBoundingClientRect();
-    if (!rect) return;
-    const height = Math.round(rect.bottom - event.clientY);
-    /* Snap shut rather than bottoming out on a strip of leftover chrome: a drawer too
-       short for a trace has nothing in it worth the header telling you so. Zero is
-       the whole signal — the row collapses out of the grid on its own. */
-    drawerHeight = height < DRAWER_MIN_H ? 0 : height;
-    /* From here the height is the reader's, and fitting stops second-guessing it. */
-    drawerSized = true;
-  }
-
   /**
    * The height the drawer takes when it is opened rather than dragged: tall enough
    * for the trace it holds, and no taller.
@@ -410,26 +403,6 @@
       )
     );
     return drawerHeight;
-  }
-
-  function startDrawerResize(event: PointerEvent): void {
-    if (event.button !== 0 && event.pointerType !== "touch") return;
-    event.preventDefault();
-    resizingDrawer = true;
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    resizeDrawerFrom(event);
-  }
-
-  function moveDrawerResize(event: PointerEvent): void {
-    if (resizingDrawer) resizeDrawerFrom(event);
-  }
-
-  function stopDrawerResize(event: PointerEvent): void {
-    resizingDrawer = false;
-    const handle = event.currentTarget as HTMLElement;
-    if (handle.hasPointerCapture(event.pointerId)) {
-      handle.releasePointerCapture(event.pointerId);
-    }
   }
 
   /**
@@ -539,9 +512,37 @@
     if (drawer.groups.length === 0) drawer.openPane({ kind: "latency" });
   }
 
+  const sessionDrawerOpen = $derived(sessionManagerHeld && sessionDrawerWidth > 0);
+
+  function persistSessionManager(open: boolean): void {
+    const url = new URL(window.location.href);
+    if (open) url.searchParams.set("sm", "1");
+    else url.searchParams.delete("sm");
+    history.replaceState(history.state, "", url);
+  }
+
   function toggleSessionManager(): void {
-    sessionManagerOpen = !sessionManagerOpen;
-    if (sessionManagerOpen) void run.ensureSessionsEnriched();
+    if (sessionDrawerOpen) {
+      sessionManagerHeld = false;
+      persistSessionManager(false);
+      return;
+    }
+    sessionManagerHeld = true;
+    if (sessionDrawerWidth === 0) sessionDrawerWidth = SESSION_DRAWER_DEFAULT_W;
+    persistSessionManager(true);
+  }
+
+  function resizeSessionDrawer(width: number): void {
+    sessionDrawerWidth = Math.min(window.innerWidth * 0.6, width);
+  }
+
+  $effect(() => {
+    if (sessionManagerHeld) void run.ensureSessionsEnriched();
+  });
+
+  function fitBottomDrawer(): void {
+    drawerSized = false;
+    if (fitDrawerToContent() == null) drawerHeight = DRAWER_DEFAULT_H;
   }
 </script>
 
@@ -556,9 +557,10 @@
   class:bleed={bleeding}
   class:bleed-drawer={drawer.bleedingPane != null}
   class:has-drawer={drawer.groups.length > 0}
+  class:has-session-drawer={sessionManagerHeld}
   class:drawer-shut={drawerHeight === 0}
   class:drawer-solo={drawer.groups.length === 1 && drawer.groups[0].length === 1}
-  style={`--drawer-h: ${drawerHeight}px`}
+  style={`--drawer-h: ${drawerHeight}px; --session-drawer-w: ${sessionDrawerWidth}px`}
 >
   <!-- Two strips, and each answers one question: this one what you are looking
        at, the transport under the rail where in the run you are looking from.
@@ -570,9 +572,9 @@
       {#snippet lead()}
         <IconButton
           class="rail-icon session-drawer-trigger"
-          label={sessionManagerOpen ? "Close Session Manager" : "Open Session Manager"}
-          pressed={sessionManagerOpen}
-          aria-expanded={sessionManagerOpen}
+          label={sessionDrawerOpen ? "Close Session Manager" : "Open Session Manager"}
+          pressed={sessionDrawerOpen}
+          aria-expanded={sessionDrawerOpen}
           aria-controls="session-manager-drawer"
           data-tip-below
           data-tip-align="start"
@@ -612,15 +614,17 @@
       />
     {/if}
 
-    {#if sessionManagerOpen}
-      <aside
-        class="session-drawer"
-        id="session-manager-drawer"
-        aria-label="Session Manager"
-        {@attach dismissable({
-          ondismiss: () => (sessionManagerOpen = false),
-          keep: ".session-drawer-trigger"
-        })}
+  </div>
+
+  {#if sessionManagerHeld}
+    <aside class="session-drawer" id="session-manager-drawer">
+      <DockedDrawer
+        edge="left"
+        label="Session Manager"
+        size={sessionDrawerWidth}
+        minSize={SESSION_DRAWER_MIN_W}
+        onResize={resizeSessionDrawer}
+        onFit={() => (sessionDrawerWidth = SESSION_DRAWER_DEFAULT_W)}
       >
         <SessionControls
           tab={sessionManagerTab}
@@ -646,9 +650,9 @@
           agentsError={run.agentsError}
           onTabChange={(tab) => (sessionManagerTab = tab)}
         />
-      </aside>
-    {/if}
-  </div>
+      </DockedDrawer>
+    </aside>
+  {/if}
 
   <PaneRail
     bind:this={rail}
@@ -768,30 +772,23 @@
        rail the moment the last drawer pane is closed. -->
   {#if drawer.groups.length > 0}
     <section class="drawer" bind:this={drawerElement} aria-label="Bottom drawer">
-      <button
-        type="button"
-        class="drawer-gutter"
-        aria-label="Resize the bottom drawer"
-        title="Drag to set the drawer height — double-click to fit it to the trace"
-        onpointerdown={startDrawerResize}
-        onpointermove={moveDrawerResize}
-        onpointerup={stopDrawerResize}
-        onpointercancel={stopDrawerResize}
-        ondblclick={() => {
-          /* The way back from a height you chose and no longer want, and the only way
-             to ask the question again once it has settled. */
-          drawerSized = false;
-          if (fitDrawerToContent() == null) drawerHeight = DRAWER_DEFAULT_H;
-        }}
-      ></button>
-
-      <PaneRail
-        bind:this={drawerRail}
-        stack={drawer}
-        describe={describePane}
-        bleedingId={drawer.bleedingPane?.id ?? null}
-        {paneContent}
-      />
+      <DockedDrawer
+        edge="bottom"
+        label="Bottom drawer"
+        size={drawerHeight}
+        minSize={DRAWER_MIN_H}
+        onResize={(height) => (drawerHeight = height)}
+        onResizeStart={() => (drawerSized = true)}
+        onFit={fitBottomDrawer}
+      >
+        <PaneRail
+          bind:this={drawerRail}
+          stack={drawer}
+          describe={describePane}
+          bleedingId={drawer.bleedingPane?.id ?? null}
+          {paneContent}
+        />
+      </DockedDrawer>
     </section>
   {/if}
 </main>
@@ -803,9 +800,29 @@
     height: 100vh;
     min-height: 0;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) auto;
     background: var(--surface-0);
     color: var(--text-1);
+  }
+
+  .app.has-session-drawer {
+    grid-template-columns: min(60vw, var(--session-drawer-w)) minmax(0, 1fr);
+  }
+
+  .app.has-session-drawer .chrome {
+    grid-column: 1 / -1;
+  }
+
+  .app.has-session-drawer .session-drawer {
+    grid-column: 1;
+    grid-row: 2 / -1;
+  }
+
+  .app.has-session-drawer > :global(.rail),
+  .app.has-session-drawer > :global(.step-controller),
+  .app.has-session-drawer > .drawer {
+    grid-column: 2;
   }
 
   /* The drawer opens under the transport and takes its height off the RAIL, which is
@@ -836,11 +853,11 @@
   }
 
   /* The drawer is the 1fr row now, not a strip pinned above the transport. */
-  .app.bleed-drawer .drawer {
+  .app.bleed-drawer .drawer :global(.docked-drawer) {
     border-top: 0;
   }
 
-  .app.bleed-drawer .drawer-gutter {
+  .app.bleed-drawer .drawer :global(.drawer-gutter) {
     display: none;
   }
 
@@ -854,7 +871,6 @@
     display: grid;
     grid-template-rows: minmax(0, 1fr);
     min-height: 0;
-    border-top: 1px solid var(--border);
   }
 
   /* A drawer is one wide box, not a rail that carries on off to the right, so the
@@ -966,46 +982,6 @@
     overflow: hidden;
   }
 
-  /* The handle is the only way back, and half its usual reach is now below the floor
-     of the window. Give it the pixels above the seam, where the drawer used to be.
-     It ties the transport on `z-index` and wins on tree order. */
-  .app.drawer-shut .drawer-gutter {
-    inset: -11px 0 auto 0;
-  }
-
-  /* Same handle as a column's width gutter, a quarter turn round: invisible until
-     pointed at, sitting astride the seam it moves. */
-  .drawer-gutter {
-    position: absolute;
-    inset: -6px 0 auto 0;
-    z-index: 5;
-    height: 12px;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    cursor: row-resize;
-    touch-action: none;
-    transition: background var(--duration-fast) var(--ease-out);
-  }
-
-  .drawer-gutter:focus-visible {
-    background: color-mix(in srgb, var(--accent) 30%, transparent);
-    outline: 2px solid var(--focus-ring);
-    outline-offset: -4px;
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .drawer-gutter:hover {
-      background: color-mix(in srgb, var(--accent) 30%, transparent);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .drawer-gutter {
-      transition: none;
-    }
-  }
-
   /* One canvas, edge to edge — but the transport stays.
 
      The strip that says WHAT you are looking at can go: full screen is the
@@ -1019,6 +995,14 @@
      its zoom, because it is the same element throughout. */
   .app.bleed {
     grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .app.bleed.has-session-drawer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app.bleed .session-drawer {
+    display: none;
   }
 
   .app.bleed .chrome {
@@ -1042,35 +1026,14 @@
     min-width: 0;
   }
 
-  /* A meta-control over the desk, not one of its columns. Anchoring it to the
-     chrome keeps it out of the app grid and leaves every pane at the same width
-     whether the drawer is mounted or not. */
+  /* A meta-control over the desk, docked beside it rather than participating in
+     either pane rail. Its grid track is the left-edge counterpart to the bottom
+     drawer's final row. */
   .session-drawer {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    z-index: 44;
-    width: min(420px, calc(100vw - 32px));
-    height: min(560px, calc(100vh - 104px));
+    position: relative;
+    display: grid;
     min-height: 0;
-    display: flex;
-    overflow: hidden;
-    border: 1px solid var(--border-strong);
-    border-left: 0;
-    background: var(--surface-1);
-    box-shadow: var(--shadow-popover);
-    opacity: 1;
-    transform: translateX(0);
-    transition:
-      opacity var(--duration-fast) var(--ease-out),
-      transform var(--duration-fast) var(--ease-out);
-  }
-
-  @starting-style {
-    .session-drawer {
-      opacity: 0;
-      transform: translateX(-12px);
-    }
+    min-width: 0;
   }
 
   /* PaneShell's own body is a flex column, so `flex: 1 1 0` is what gives this a
@@ -1132,16 +1095,4 @@
     flex: 1 1 120px;
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .session-drawer {
-      transition: none;
-    }
-
-    @starting-style {
-      .session-drawer {
-        opacity: 0;
-        transform: none;
-      }
-    }
-  }
 </style>
