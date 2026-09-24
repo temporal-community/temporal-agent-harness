@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { render } from "svelte/server";
 import { describe, it } from "vitest";
 
+import { stripComments } from "../../../../tests/support/controllerHarness.mjs";
 import AgentChatPanel from "./AgentChatPanel.svelte";
 import { UNKNOWN_TOOL_INPUT } from "$lib/state/logValue.ts";
 
@@ -64,5 +65,28 @@ describe("the pending-approval card", () => {
       "lost arguments must be reported, not suppressed as if the call took none"
     );
     assert.ok(UNKNOWN_TOOL_INPUT.startsWith("—"), "the unknown marker is a leading em dash");
+  });
+});
+
+/* The ID shown beside a copy button is the one it copies: both sit in one `.copyable`. */
+describe("chat copy controls", () => {
+  it("offers the pending approval's tool call ID, beside that ID", () => {
+    const body = stripComments(cardHtml(approvalRow("call_abc123", "issue_refund", { amount: 42 })));
+    assert.match(
+      body,
+      /class="copyable[^"]*">\s*<code[^>]*>call_abc123<\/code>\s*<button[^>]*aria-label="Copy tool call ID"/
+    );
+  });
+
+  it("offers the error message a failed session shows", () => {
+    const body = stripComments(
+      render(AgentChatPanel, {
+        props: { items: [], logs: [], agentLabel: "Planner", sessionId: "wf-root", error: "Worker lost: boom" }
+      }).body
+    );
+    assert.match(
+      body,
+      /class="copyable[^"]*">\s*<span[^>]*>Worker lost: boom<\/span>\s*<button[^>]*aria-label="Copy error"/
+    );
   });
 });

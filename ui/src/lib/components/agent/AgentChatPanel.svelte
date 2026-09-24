@@ -25,6 +25,7 @@
   import { approvalAlreadyResolved } from "$lib/api/httpClient";
   import { formatTokens } from "$lib/cost/pricing";
   import Chip, { type ChipTone } from "$lib/components/primitives/Chip.svelte";
+  import Copyable from "$lib/components/primitives/Copyable.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
   import { codeModeHostsByRow } from "$lib/state/codeModeNesting";
@@ -33,6 +34,7 @@
   import {
     formatElapsedDuration,
     formatTimestamp,
+    rowIdentifiers,
     type ReplayLogRow
   } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
@@ -1210,7 +1212,7 @@
         </div>
       {:else if error && liveMessages.length === 0}
         <div class="empty-chat error">
-          <span>{error}</span>
+          <Copyable value={error} label="Copy error"><span>{error}</span></Copyable>
         </div>
       {:else if runLogs.length === 0 && liveMessages.length === 0}
         <!-- Attached, served, and carrying nothing: the case the three branches
@@ -1277,7 +1279,7 @@
 
               {#if expanded}
                 <div class="activity-list">
-                  {#each activityLogs as log}
+                  {#each activityLogs as log (log.id)}
                     {#if log.actor === "reasoning" && thought}
                       {#if log.id === thought.firstRowId}
                         <details
@@ -1348,10 +1350,30 @@
                         </button>
 
                         {#if rowExpanded}
+                          {@const ids = rowIdentifiers(log)}
                           {#if scriptDetail}
                             <div class="script-detail-wrap"><pre class="activity-script-detail" data-language="python"><code>{scriptDetail}</code></pre></div>
                           {/if}
-                          <pre class="activity-detail">{fullDetail}</pre>
+                          {#if ids.length}
+                            <dl class="row-ids">
+                              {#each ids as id (id.label)}
+                                <div>
+                                  <dt>{id.label}</dt>
+                                  <dd>
+                                    <Copyable value={id.value} label={`Copy ${id.label} ID`}>
+                                      <code title={id.value}>{id.value}</code>
+                                    </Copyable>
+                                  </dd>
+                                </div>
+                              {/each}
+                            </dl>
+                          {/if}
+                          <section class="activity-full" aria-label="Full details">
+                            <Copyable value={fullDetail} label="Copy full details">
+                              <span class="activity-full-label">Full details</span>
+                            </Copyable>
+                            <pre class="activity-detail">{fullDetail}</pre>
+                          </section>
                         {/if}
                       </div>
                     {/if}
@@ -1376,7 +1398,9 @@
     </div>
 
     {#if !closed && error && liveMessages.length > 0}
-      <div class="error-banner">{error}</div>
+      <div class="error-banner">
+        <Copyable value={error} label="Copy error"><span>{error}</span></Copyable>
+      </div>
     {/if}
 
     {#if closed}
@@ -1406,6 +1430,18 @@
               <strong>{approval.toolName ?? approval.body ?? "Tool approval"}</strong>
               <span>Turn {approval.turnNumber} · {formatTimestamp(approval.timestamp)}</span>
             </header>
+            {#if approval.toolId}
+              <dl class="row-ids">
+                <div>
+                  <dt>tool call</dt>
+                  <dd>
+                    <Copyable value={approval.toolId} label="Copy tool call ID">
+                      <code title={approval.toolId}>{approval.toolId}</code>
+                    </Copyable>
+                  </dd>
+                </div>
+              </dl>
+            {/if}
             {#if approvalDetail(approval)}
               <p class="pending-approval-detail">{approvalDetail(approval)}</p>
             {/if}
@@ -2018,11 +2054,68 @@
     transform: rotate(180deg);
   }
 
+  .activity-full {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+    margin-left: 30px;
+  }
+
+  .activity-full-label {
+    color: var(--text-3);
+    font-size: var(--font-sm);
+    font-weight: 650;
+  }
+
+  /* Same look as the Logs pane's ID list: one label column as wide as its widest
+     label, so the values line up whichever IDs a row has. */
+  .row-ids {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 2px 6px;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .activity-row .row-ids {
+    margin-left: 30px;
+  }
+
+  .row-ids div {
+    min-width: 0;
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    align-items: center;
+  }
+
+  .row-ids dt {
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    text-transform: uppercase;
+  }
+
+  .row-ids dd {
+    min-width: 0;
+    margin: 0;
+  }
+
+  .row-ids code {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: var(--font-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .activity-detail {
     min-width: 0;
     max-height: 320px;
     overflow: auto;
-    margin: 0 0 0 30px;
+    margin: 0;
     padding: 8px 10px;
     border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
     border-radius: var(--radius-md);
