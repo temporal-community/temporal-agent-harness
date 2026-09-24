@@ -713,8 +713,8 @@
              listing sessions, so the panel is handed the one it is showing and
              nothing about the rest. -->
         <AgentChatPanel
-          items={run.chatTranscript}
-          logs={run.fullReplayLog.rows}
+          {...run.chatView}
+          onJumpToLive={() => run.jumpToLive()}
           sessions={run.sessions}
           agentLabel={run.runInfo.agentLabel}
           sessionId={run.runInfo.sessionId}

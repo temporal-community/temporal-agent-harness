@@ -12,10 +12,9 @@
     /**
      * Completed decisions further along the run than the replay cursor.
      *
-     * This pane reads the run AT the cursor, while the chat beside it reads the
-     * whole transcript — so a reader parked behind the evaluations sees a
-     * finished conversation next to an empty panel, with nothing on screen
-     * connecting the two. That is what this counts, and the empty state says.
+     * This pane reads the run AT the cursor, so a reader parked behind the
+     * evaluations sees an empty panel beside a run that has them. That is what
+     * this counts, and the empty state says.
      */
     ahead?: number;
     onJumpToLive?: () => void;
@@ -84,8 +83,7 @@
         <p>
           This run has judged {ahead === 1 ? "a gated call" : "gated calls"}, but the cursor
           is parked before {ahead === 1 ? "it" : "them"} — so there is nothing to show
-          <em>yet</em>. The chat does not rewind with the cursor, which is why it can look
-          finished while this is empty.
+          <em>yet</em>.
         </p>
         <button type="button" class="jump" onclick={onJumpToLive}>
           Jump to latest step

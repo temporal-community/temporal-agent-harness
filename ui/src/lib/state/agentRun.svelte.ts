@@ -40,7 +40,7 @@ import { displayTextForMessage, renderUserMessage } from "./inboundMessageText";
 import { buildAgentStateDocs } from "./agentState";
 import { buildApprovalDecisions } from "./approvalDecisionTree";
 import { buildReplayLog, buildReplayMarkers, rowCovers } from "./replayLog";
-import { buildReplayTimeline } from "./replayTimeline";
+import { buildReplayTimeline, type ReplayTimelineEntry } from "./replayTimeline";
 import { buildReplyRuns, replyRunAt } from "./replyRuns";
 import { buildStepBoundaries, buildStepTimeline } from "./stepTimeline";
 import { buildTranscript } from "./transcript";
@@ -426,13 +426,26 @@ export class AgentRunController {
       ? this.fullReplayLog
       : buildReplayLog(this.visibleReplayTimeline)
   );
-  chatTranscript = $derived(
-    buildTranscript(
-      this.replayTimeline
-        .filter((entry) => entry.role === "parent")
-        .map((entry) => entry.frame)
-    )
-  );
+  chatTranscript = $derived(buildTranscript(this.#parentFrames(this.replayTimeline)));
+  /**
+   * What the chat pane is handed: the conversation as of the cursor, plus the
+   * whole run for the parts of it that are live state rather than history — a
+   * pending approval still blocks the agent however far back the reader has
+   * scrubbed. At the live head both halves are the very same arrays, so the
+   * chat there is exactly what it was before it could rewind.
+   */
+  chatView = $derived.by(() => {
+    const live = this.viewIndex >= this.replayTimeline.length;
+    return {
+      items: live
+        ? this.chatTranscript
+        : buildTranscript(this.#parentFrames(this.visibleReplayTimeline)),
+      logs: this.replayLog.rows,
+      liveItems: this.chatTranscript,
+      liveLogs: this.fullReplayLog.rows,
+      live
+    };
+  });
   currentLogRow = $derived(
     this.fullReplayLog.rows.find((row) => rowCovers(row, this.viewIndex)) ?? null
   );
@@ -474,8 +487,7 @@ export class AgentRunController {
   /**
    * Judgments this run has made that the cursor has not reached.
    *
-   * The pane is cursor-scoped and the chat beside it is not, so "empty" there
-   * can mean either "nothing was judged" or "you are parked behind it". Only
+   * The pane is cursor-scoped, so "empty" there can mean either "nothing was judged" or "you are parked behind it". Only
    * this tells them apart.
    */
   approvalDecisionsAhead = $derived(
@@ -1638,6 +1650,11 @@ export class AgentRunController {
     } finally {
       this.refreshingAgents = false;
     }
+  }
+
+  /** The root agent's frames — the conversation the chat pane reads. */
+  #parentFrames(timeline: readonly ReplayTimelineEntry[]): AgentSseFrame[] {
+    return timeline.filter((entry) => entry.role === "parent").map((entry) => entry.frame);
   }
 
   #recordInitialUserMessage(message: string): void {

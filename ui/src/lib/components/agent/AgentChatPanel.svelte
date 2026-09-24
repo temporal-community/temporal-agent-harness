@@ -16,7 +16,6 @@
     Wrench
   } from "@lucide/svelte";
   import { tick } from "svelte";
-  import { fade } from "svelte/transition";
   import type {
     AgentInboundMessage,
     AgentInterfaceFunction,
@@ -65,8 +64,19 @@
     | { kind: "handler"; id: string; handler: AgentInterfaceFunction };
 
   interface Props {
+    /** The conversation as of the replay cursor. */
     items: TranscriptItem[];
     logs?: ReplayLogRow[];
+    /**
+     * The whole run, for what is live state rather than history: pending approvals, the
+     * composer's recall, and whether the session has anything in it at all. Default to the
+     * view, which is what they are at the live head.
+     */
+    liveItems?: TranscriptItem[];
+    liveLogs?: ReplayLogRow[];
+    /** The cursor is at the live head. */
+    live?: boolean;
+    onJumpToLive?: () => void;
     sessions?: Session[];
     agentLabel: string;
     sessionId: string;
@@ -115,6 +125,10 @@
   let {
     items,
     logs = [],
+    liveItems,
+    liveLogs,
+    live = true,
+    onJumpToLive,
     sessions = [],
     agentLabel,
     sessionId,
@@ -143,8 +157,6 @@
   /* By turn id rather than on the element: the list is unkeyed and re-renders as rows
      arrive or the cursor moves, and a reader's open thought has to outlive both. */
   let openThoughts = $state<string[]>([]);
-  let observedActivitySessionId = $state<string | null>(null);
-  let observedActivityOrdinals = $state<Record<number, number>>({});
   let resolvingApprovalIds = $state<string[]>([]);
   let approvalErrors = $state<Record<string, string>>({});
   let decidedApprovalIds = $state<string[]>([]);
@@ -161,15 +173,20 @@
 
   const transcriptMessages = $derived(seedMessages(items));
   const messages = $derived([...transcriptMessages, ...localMessages]);
+  const liveMessages = $derived(
+    liveItems ? [...seedMessages(liveItems), ...localMessages] : messages
+  );
+  const runLogs = $derived(liveLogs ?? logs);
+  const viewRowIds = $derived(new Set(logs.map((row) => row.id)));
   const sentUserMessages = $derived(
-    messages
+    liveMessages
       .filter((message) => message.role === "user")
       .map((message) => message.text)
   );
   const logsByTurn = $derived(groupLogsByTurn(logs));
   const codeModeHosts = $derived(codeModeHostsByRow(logs));
-  const resolvedApprovalKeys = $derived(resolvedApprovalIds(logs));
-  const pendingApprovalRows = $derived(logs.filter((row) => isApprovalPending(row)));
+  const resolvedApprovalKeys = $derived(resolvedApprovalIds(runLogs));
+  const pendingApprovalRows = $derived(runLogs.filter((row) => isApprovalPending(row)));
   const sources = $derived(uniqueCitations(messages.flatMap((message) => message.citations)));
   const activeSession = $derived(
     sessions.find((item) => item.workflow_id === sessionId) ?? null
@@ -302,21 +319,9 @@
       historyIndex = -1;
       historyStash = "";
       localMessages = [];
-      observedActivitySessionId = null;
-      observedActivityOrdinals = {};
       expandedActivityTurns = [];
       expandedLogRows = [];
     }
-  });
-
-  $effect(() => {
-    const nextOrdinals: Record<number, number> = {};
-    for (const [turnNumber, rows] of logsByTurn) {
-      const active = rows[rows.length - 1];
-      if (active) nextOrdinals[turnNumber] = active.ordinal;
-    }
-    observedActivitySessionId = sessionId;
-    observedActivityOrdinals = nextOrdinals;
   });
 
   $effect(() => {
@@ -528,16 +533,6 @@
     const element = messageListElement;
     if (!element) return;
     element.scrollTop = element.scrollHeight;
-  }
-
-  function activeLogFadeDuration(
-    turnNumber: number | undefined,
-    activeLog: ReplayLogRow | null
-  ): number {
-    if (turnNumber == null || activeLog == null) return 0;
-    if (observedActivitySessionId !== sessionId) return 0;
-    const observedOrdinal = observedActivityOrdinals[turnNumber];
-    return observedOrdinal != null && observedOrdinal !== activeLog.ordinal ? 150 : 0;
   }
 
   function activityExpanded(turnNumber: number | undefined): boolean {
@@ -1155,21 +1150,21 @@
 >
   <div class="chat-shell">
     <div class="message-list" bind:this={messageListElement}>
-      {#if connecting && messages.length === 0}
+      {#if connecting && liveMessages.length === 0}
         <div class="empty-chat">
           <Sparkles size={18} />
           <span>Connecting to {agentLabel}...</span>
         </div>
-      {:else if closed && messages.length === 0}
+      {:else if closed && liveMessages.length === 0}
         <div class="empty-chat closed-empty">
           <CheckCircle2 size={18} />
           <span>{agentLabel} is closed.</span>
         </div>
-      {:else if error && messages.length === 0}
+      {:else if error && liveMessages.length === 0}
         <div class="empty-chat error">
           <span>{error}</span>
         </div>
-      {:else if logs.length === 0 && messages.length === 0}
+      {:else if runLogs.length === 0 && liveMessages.length === 0}
         <!-- Attached, served, and carrying nothing: the case the three branches
              above left as a blank pane, which is what an operator returned to a
              session from a probe run sees. Said in the same place a missing
@@ -1205,35 +1200,32 @@
             {@const turnSummary = turnActivitySummary(message.turnNumber, activityLogs)}
             {@const thought = foldTurnThought(activityLogs)}
             <div class={`activity-feed ${expanded ? "expanded" : ""}`}>
-              {#key activeLog.ordinal}
-                <button
-                  type="button"
-                  class={`activity-summary ${expanded ? "expanded" : ""} activity-line turn-summary active`}
-                  aria-expanded={expanded}
-                  aria-label={expanded ? "Collapse activity logs" : "Expand activity logs"}
-                  onclick={() => toggleActivity(message.turnNumber)}
-                  in:fade={{ duration: activeLogFadeDuration(message.turnNumber, activeLog) }}
+              <button
+                type="button"
+                class={`activity-summary ${expanded ? "expanded" : ""} activity-line turn-summary active`}
+                aria-expanded={expanded}
+                aria-label={expanded ? "Collapse activity logs" : "Expand activity logs"}
+                onclick={() => toggleActivity(message.turnNumber)}
+              >
+                <span class="activity-icon" aria-hidden="true">
+                  <History size={14} />
+                </span>
+                <span class="activity-copy">
+                  <span class="activity-heading">
+                    <strong>{turnSummary.label}</strong>
+                    <span>{turnSummary.detail}</span>
+                  </span>
+                  <span class="activity-message">{turnMessagePreview(message.text)}</span>
+                </span>
+                <span
+                  class="activity-duration"
+                  aria-hidden={turnSummary.duration ? undefined : "true"}
                 >
-                  <span class="activity-icon" aria-hidden="true">
-                    <History size={14} />
-                  </span>
-                  <span class="activity-copy">
-                    <span class="activity-heading">
-                      <strong>{turnSummary.label}</strong>
-                      <span>{turnSummary.detail}</span>
-                    </span>
-                    <span class="activity-message">{turnMessagePreview(message.text)}</span>
-                  </span>
-                  <span
-                    class="activity-duration"
-                    aria-hidden={turnSummary.duration ? undefined : "true"}
-                  >
-                    {turnSummary.duration ?? ""}
-                  </span>
-                  <time>{formatTimestamp(turnSummary.endedAt)}</time>
-                  <ChevronDown class="activity-chevron" size={14} aria-hidden="true" />
-                </button>
-              {/key}
+                  {turnSummary.duration ?? ""}
+                </span>
+                <time>{formatTimestamp(turnSummary.endedAt)}</time>
+                <ChevronDown class="activity-chevron" size={14} aria-hidden="true" />
+              </button>
 
               {#if expanded}
                 <div class="activity-list">
@@ -1323,7 +1315,7 @@
         {/if}
       {/each}
 
-      {#if sending && !closed}
+      {#if sending && !closed && live}
         <article class="message assistant">
           <div class="assistant-avatar" aria-hidden="true">
             <Sparkles size={15} />
@@ -1335,7 +1327,7 @@
       {/if}
     </div>
 
-    {#if !closed && error && messages.length > 0}
+    {#if !closed && error && liveMessages.length > 0}
       <div class="error-banner">{error}</div>
     {/if}
 
@@ -1343,6 +1335,18 @@
       <div class="closed-banner">
         <CheckCircle2 size={14} aria-hidden="true" />
         <span>This agent is closed. Start a new session to continue.</span>
+      </div>
+    {/if}
+
+    {#if !live}
+      <!-- The Decisions pane's rule: a view parked behind the run says so, and offers the
+           way back, so a conversation cut short by the cursor does not read as finished. -->
+      <div class="cursor-banner">
+        <History size={14} aria-hidden="true" />
+        <span>Showing the conversation as of the replay cursor.</span>
+        {#if onJumpToLive}
+          <Chip fill="quiet" onclick={onJumpToLive}>Jump to latest step</Chip>
+        {/if}
       </div>
     {/if}
 
@@ -1368,6 +1372,11 @@
             </header>
             {#if approvalDetail(approval)}
               <p class="pending-approval-detail">{approvalDetail(approval)}</p>
+            {/if}
+            {#if !viewRowIds.has(approval.id)}
+              <!-- Live state, not history: the agent is blocked on this now, so it stays
+                   answerable however far back the cursor is. -->
+              <p class="approval-note">Requested ahead of the replay cursor · waiting on you now</p>
             {/if}
             <div class="approval-actions">
               <Chip
@@ -2031,6 +2040,23 @@
     min-width: 0;
     color: var(--error);
     font-size: var(--font-sm);
+  }
+
+  .cursor-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--gap-sm);
+    margin: 0 12px 10px;
+    padding: var(--gap-xs) var(--gap-sm);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--text-2);
+    font-size: var(--font-sm);
+  }
+
+  .cursor-banner span {
+    flex: 1;
+    min-width: 0;
   }
 
   .approval-note {
