@@ -408,6 +408,11 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    /* Whatever a pane stacks inside itself — tip layers, canvas panels — stays
+       under the sticky spines (z-index 4) sliding over it. Isolated here rather
+       than on the rail slot: the width gutters overhang the slot's edge by half
+       their width, and an isolated slot lets the next column cover that half. */
+    isolation: isolate;
     /* Panes size their own type: a 380px pane and an 800px pane are different
        rooms, and the viewport cannot tell them apart. */
     container: pane / inline-size;
