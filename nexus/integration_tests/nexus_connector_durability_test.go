@@ -335,7 +335,7 @@ func startConnectorWorker(t *testing.T, tc client.Client, connectorTaskQueue str
 }
 
 // connectorTurnItems pre-generates stream items for n complete turns.
-// Each turn i gets two events: a reply_delta at offset 2i and a reply at 2i+1.
+// Each turn i gets two events: a reply_delta at offset 2i and a turn_end at 2i+1.
 func connectorTurnItems(t *testing.T, n int) []harnessgen.StreamItem {
 	t.Helper()
 	items := make([]harnessgen.StreamItem, 0, n*2)
@@ -348,7 +348,7 @@ func connectorTurnItems(t *testing.T, n int) []harnessgen.StreamItem {
 			}, base, agentTurnEventsTopic),
 			makeAgentStreamItem(t, agentStreamItem{
 				TurnID: fmt.Sprintf("turn-%d", i+1), TurnNumber: 1, Timestamp: float64(i+1) + 0.5,
-				Event: agentTurnEvent{Type: "reply"},
+				Event: agentTurnEvent{Type: "turn_end"},
 			}, base+1, agentTurnEventsTopic),
 		)
 	}

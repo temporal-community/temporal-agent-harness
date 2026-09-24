@@ -19,10 +19,6 @@ var connectorFixtureSpecs = map[string]any{
 		"turn_id": "turn-abc-123", "turn_number": 1, "timestamp": 1700000000.0,
 		"event": map[string]any{"type": "reply_delta", "text": "hello world"},
 	},
-	"stream_item_reply": map[string]any{
-		"turn_id": "turn-abc-123", "turn_number": 1, "timestamp": 1700000001.0,
-		"event": map[string]any{"type": "reply", "text": "hello world, full response"},
-	},
 	"stream_item_tool_start": map[string]any{
 		"turn_id": "turn-abc-123", "turn_number": 1, "timestamp": 1700000000.5,
 		"event": map[string]any{"type": "tool_start", "tool_name": "search"},
@@ -30,10 +26,6 @@ var connectorFixtureSpecs = map[string]any{
 	"stream_item_tool_end": map[string]any{
 		"turn_id": "turn-abc-123", "turn_number": 1, "timestamp": 1700000000.6,
 		"event": map[string]any{"type": "tool_end", "tool_name": "search"},
-	},
-	"stream_item_error": map[string]any{
-		"turn_id": "turn-abc-123", "turn_number": 1, "timestamp": 1700000002.0,
-		"event": map[string]any{"type": "error", "message": "something went wrong"},
 	},
 }
 
@@ -117,25 +109,11 @@ func TestStreamItemContract_ReplyDelta(t *testing.T) {
 	assert.Equal(t, "hello world", si.Event.Text)
 }
 
-func TestStreamItemContract_Reply(t *testing.T) {
-	var si streamItem
-	require.NoError(t, json.Unmarshal(loadFixture(t, "stream_item_reply"), &si))
-	assert.Equal(t, "reply", si.Event.Type)
-	assert.NotEmpty(t, si.Event.Text)
-}
-
 func TestStreamItemContract_ToolStart(t *testing.T) {
 	var si streamItem
 	require.NoError(t, json.Unmarshal(loadFixture(t, "stream_item_tool_start"), &si))
 	assert.Equal(t, "tool_start", si.Event.Type)
 	assert.Equal(t, "search", si.Event.ToolName)
-}
-
-func TestStreamItemContract_Error(t *testing.T) {
-	var si streamItem
-	require.NoError(t, json.Unmarshal(loadFixture(t, "stream_item_error"), &si))
-	assert.Equal(t, "error", si.Event.Type)
-	assert.Equal(t, "something went wrong", si.Event.Message)
 }
 
 // TestStreamItemContract_TurnEventToDelta verifies the full decode pipeline:
@@ -148,9 +126,7 @@ func TestStreamItemContract_TurnEventToDelta(t *testing.T) {
 		wantText  bool
 	}{
 		{"stream_item_reply_delta", "reply_delta", false, true},
-		{"stream_item_reply", "reply", true, false}, // text already streamed via deltas
 		{"stream_item_tool_start", "tool_start", false, true},
-		{"stream_item_error", "error", true, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.fixture, func(t *testing.T) {
