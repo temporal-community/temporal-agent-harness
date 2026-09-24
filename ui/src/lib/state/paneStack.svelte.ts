@@ -464,9 +464,15 @@ export class PaneStack {
     return id;
   }
 
+  /** The one close rule: a pinned pane stays until it is unpinned. */
+  canClose(id: string): boolean {
+    const loc = this.locate(id);
+    return loc != null && !this.groups[loc.group][loc.index].pinned;
+  }
+
   closePane(id: string): void {
     const loc = this.locate(id);
-    if (!loc || this.groups[loc.group][loc.index].pinned) return;
+    if (!loc || !this.canClose(id)) return;
     const next = this.groups.map((group) => [...group]);
     next[loc.group] = next[loc.group].filter((pane) => pane.id !== id);
     const sibling = next[loc.group][Math.min(loc.index, next[loc.group].length - 1)];

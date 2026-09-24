@@ -607,7 +607,7 @@
        it is a note on the arrangement that row describes, and it is only on
        screen while the link that opened the desk asked for something missing. -->
   <div class="chrome">
-    <PaneMinimap {stack} describe={describePane}>
+    <PaneMinimap {stack} {drawer} describe={describePane}>
       {#snippet lead()}
         <IconButton
           class="rail-icon session-drawer-trigger"

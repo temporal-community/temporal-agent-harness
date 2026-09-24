@@ -428,7 +428,7 @@
                 statusTone={description.statusTone ?? null}
                 statusLabel={description.statusLabel ?? null}
                 focused={stack.focusedId === pane.id}
-                canClose={!pane.pinned}
+                canClose={stack.canClose(pane.id)}
                 canResize={!split && isFront && !pane.collapsed}
                 onFocus={() => stack.focusPane(pane.id)}
                 onToggleCollapse={() => stack.toggleCollapse(pane.id)}
