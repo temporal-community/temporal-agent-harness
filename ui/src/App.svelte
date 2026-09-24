@@ -336,7 +336,8 @@
     },
     /* The same box the transport's switch opens, so the key and the control cannot
        drift: both call this one function. */
-    toggleDrawer: () => toggleDrawer()
+    toggleDrawer: () => toggleDrawer(),
+    toggleSessionManager: () => toggleSessionManager()
   };
 
   /* Same reason: whether Escape has anything to do is asked of the desk, not of
@@ -589,6 +590,7 @@
         <IconButton
           class="rail-icon session-drawer-trigger"
           label={sessionDrawerOpen ? "Close Session Manager" : "Open Session Manager"}
+          tip={sessionDrawerOpen ? "Close Session Manager\nS" : "Open Session Manager\nS"}
           pressed={sessionDrawerOpen}
           aria-expanded={sessionDrawerOpen}
           aria-controls="session-manager-drawer"

@@ -97,6 +97,29 @@ describe("when a binding is allowed to fire", () => {
       null,
       "Cmd+D is a bookmark and never reaches the page"
     );
+    assert.equal(resolveReplayAction(press({ key: "s" })), "toggleSessionManager");
+    assert.equal(resolveReplayAction(press({ key: "S" })), "toggleSessionManager", "caps lock is not Shift");
+    assert.equal(resolveReplayAction(press({ key: "S", shiftKey: true })), null, "Shift+S is nobody's here");
+    assert.equal(resolveReplayAction(press({ key: "s", modKey: true })), null, "Cmd+S is the browser's save-page");
+  });
+
+  /* The sweep above sets `typing` by hand; this is the half that reads it off a real-shaped target,
+     so a field that stopped classifying as text entry would fail here rather than type nothing. */
+  it("a bare letter types into a field instead of acting", () => {
+    const targets = {
+      "the chat composer": { tagName: "TEXTAREA", isContentEditable: false },
+      "the Logs search field": { tagName: "INPUT", type: "search", isContentEditable: false },
+      "a contenteditable region": { tagName: "DIV", isContentEditable: true }
+    };
+    for (const [where, target] of Object.entries(targets)) {
+      for (const key of ["s", "d", "f"]) {
+        const context = describeReplayKeyEvent(
+          { key, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, target: { ...target, getAttribute: () => null } },
+          { helpOpen: false, bleeding: false }
+        );
+        assert.equal(resolveReplayAction(context), null, `${key} in ${where} must type, not toggle`);
+      }
+    }
   });
 
   /* The digits, which address a column by its place along the rail. Ctrl and not Cmd, and that
@@ -315,7 +338,7 @@ describe("when a binding is allowed to fire", () => {
      has to decline the same reach the platform already denies. `?` and Escape are the exceptions
      because they dismiss the layer rather than acting behind it. */
   it("a modal owns the keyboard while it is up", () => {
-    for (const key of ["d", "ArrowUp", "f", " ", "ArrowRight"]) {
+    for (const key of ["d", "s", "ArrowUp", "f", " ", "ArrowRight"]) {
       assert.equal(
         resolveReplayAction(press({ key, modalOpen: true })),
         null,
@@ -492,7 +515,24 @@ const drawer = {
 /* The overlay flag lives in App.svelte and is passed to the action the same way here: a surface
    the action writes through. That is what keeps `?`, `Esc` and the pane keys inside this
    comparison. */
-const surface = { run, helpOpen: false, rail, toggleDrawer: () => drawer.toggle() };
+/* The Session Manager on the left edge, stubbed the same way and for the same reason. */
+const sessionManager = {
+  open: false,
+  reset() {
+    sessionManager.open = false;
+  },
+  toggle() {
+    sessionManager.open = !sessionManager.open;
+  }
+};
+
+const surface = {
+  run,
+  helpOpen: false,
+  rail,
+  toggleDrawer: () => drawer.toggle(),
+  toggleSessionManager: () => sessionManager.toggle()
+};
 
 /* Positions a person can be standing at when they reach for a key, stated against the markers the
    scenario actually produces. Two bindings only have to differ somewhere, not everywhere — `Home`
@@ -554,6 +594,7 @@ const probes = positions
            rides from one probe into the next and the pairwise sweep is measured from whatever
            the previous 400-odd presses happened to leave behind. */
         drawer.reset();
+        sessionManager.reset();
       }
     ];
   });
@@ -566,7 +607,8 @@ const state = () => ({
   helpOpen: surface.helpOpen,
   /* The rail is part of the state a key can change, so it is part of what tells two keys apart. */
   rail: { columns: rail.columns, column: rail.column, tab: rail.tab, bleeding: rail.bleeding },
-  drawerOpen: drawer.open
+  drawerOpen: drawer.open,
+  sessionManagerOpen: sessionManager.open
 });
 
 /* One press of `action` from `probe`, measured. Playback is stopped straight after so the 700ms
@@ -587,7 +629,7 @@ describe("what the keys actually do", () => {
     const [, setUp] = probes[0];
     setUp();
     applyReplayAction("last", surface);
-    const { rail: railAfter, drawerOpen, ...transport } = state();
+    const { rail: railAfter, drawerOpen, sessionManagerOpen, ...transport } = state();
     assert.deepEqual(transport, {
       viewIndex: total,
       following: true,
@@ -597,6 +639,7 @@ describe("what the keys actually do", () => {
     });
     assert.equal(railAfter.bleeding, null, "a transport key must not touch the desk");
     assert.equal(drawerOpen, false, "nor the drawer");
+    assert.equal(sessionManagerOpen, false, "nor the Session Manager");
   });
 });
 
@@ -718,7 +761,7 @@ describe("which keys are allowed to move the playhead at all", () => {
     run.goTo(markerMid);
     assert.equal(seek(() => applyReplayAction("toggleHelp", surface)), 0, "? moves no playhead");
     assert.equal(seek(() => applyReplayAction("escape", surface)), 0, "Esc moves no playhead");
-    for (const action of ["railFocusNext", "railMoveNext", "railToggleBleed", "toggleDrawer"]) {
+    for (const action of ["railFocusNext", "railMoveNext", "railToggleBleed", "toggleDrawer", "toggleSessionManager"]) {
       assert.equal(seek(() => applyReplayAction(action, surface)), 0, `${action} moves no playhead`);
     }
     assert.equal(
