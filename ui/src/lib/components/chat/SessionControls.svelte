@@ -7,7 +7,10 @@
    * had already stated. They are one object now, because they are one question,
    * and because the row could not afford them.
    *
-   * It lives in the Session Manager drawer, above the panes it selects.
+   * Two displays, one component. The `launcher` is the strip in the app's
+   * top-left — the session name and its status, which open the Session Manager.
+   * The `pane` display is the manager itself, which lives in the left drawer,
+   * above the panes it selects. New sessions start from the drawer's own tab.
    */
   import { RefreshCw, Search } from "@lucide/svelte";
   import type { Attachment } from "svelte/attachments";
@@ -15,15 +18,22 @@
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
-  import StatusChip, { type StatusKind } from "$lib/components/primitives/StatusChip.svelte";
+  import StatusChip, {
+    STATUS_TONES,
+    type StatusKind
+  } from "$lib/components/primitives/StatusChip.svelte";
 
   type MenuTab = "sessions" | "new";
+  type Display = "launcher" | "pane";
 
   interface Props {
     sessions?: Session[];
     agents?: AgentDescriptor[];
     sessionId: string;
+    display?: Display;
     tab?: MenuTab;
+    /** Launcher only: whether the drawer this opens is on screen. */
+    paneOpen?: boolean;
     connecting?: boolean;
     sending?: boolean;
     creatingSession?: boolean;
@@ -53,7 +63,9 @@
     sessions = [],
     agents = [],
     sessionId,
+    display = "launcher",
     tab: menuTab = "sessions",
+    paneOpen = false,
     connecting = false,
     sending = false,
     creatingSession = false,
@@ -74,6 +86,24 @@
     onTabChange
   }: Props = $props();
 
+  /**
+   * The states that get words on the anchor as well as a hue.
+   *
+   * Everything else is the pip alone, and the reason is churn: connecting and
+   * thinking turn over several times a turn, and the pane minimap is laid out
+   * immediately after this control in the same flex row, so a label that grows
+   * and shrinks here would slide the tick a reader is aiming at. These states do
+   * not churn — they last until a person acts — so they are the ones worth a
+   * word beside the pip on the anchor.
+   */
+  const SPOKEN_KINDS = new Set<StatusKind>([
+    "approval",
+    "error",
+    "blocked",
+    "stuck",
+    "closed"
+  ]);
+
   let sessionSearch = $state("");
 
   const focusFirst: Attachment<HTMLElement> = (node) => {
@@ -90,10 +120,32 @@
       ? sessionItems.filter((session) => sessionMatchesSearch(session, sessionSearchTerm))
       : sessionItems
   );
-  const canCreateSession = $derived(
-    Boolean(onNewSession) && agents.length > 0 && !creatingSession
+  const activeSession = $derived(
+    sessionItems.find((session) => session.workflow_id === sessionId) ?? null
+  );
+  const activeAgent = $derived(
+    agents.find((agent) => agent.workflow_type === activeSession?.agent_workflow_type) ??
+      null
   );
   const statusKind = $derived(currentStatusKind());
+  const statusLabel = $derived(
+    closed
+      ? "Closed"
+      : creatingSession
+      ? "Starting"
+      : connecting
+        ? "Connecting"
+        : pendingApprovalCount > 0
+          ? `${pendingApprovalCount} approval${pendingApprovalCount === 1 ? "" : "s"} needed`
+          : sending
+            ? "Thinking"
+            : error
+              ? "Needs attention"
+              : "Available"
+  );
+  const agentTitle = $derived(
+    activeAgent?.label ?? activeSession?.agent_workflow_type ?? "No session"
+  );
   /* One control, two errands. The manager's header is shared by both views, so the refresh
      button belongs to whichever list is on screen — refreshing sessions while looking at
      the agent picker was the bug: it spun, and nothing the reader was looking at changed. */
@@ -106,6 +158,8 @@
   const refreshLabel = $derived(
     menuTab === "new" ? "Re-check for workers" : "Refresh sessions"
   );
+  const statusTone = $derived(STATUS_TONES[statusKind]);
+  const spokenStatus = $derived(SPOKEN_KINDS.has(statusKind) ? statusLabel : null);
 
   function sortedSessions(value: Session[]): Session[] {
     return [...value].sort((a, b) => b.created_at - a.created_at);
@@ -283,15 +337,12 @@
   }
 
   /**
-   * The New chip opens the manager directly on its new-session view.
-   *
-   * Every open re-lists the agents, with no age gate — unlike the sessions side. The rows
-   * now carry whether a worker is polling each agent's task queue, and that can change
-   * between two opens; a stale "Ready" is what sent people into a session that started and
-   * then hung on an unpolled queue.
+   * The drawer's New session tab. Every open re-lists the agents, with no age gate —
+   * unlike the sessions side. The rows now carry whether a worker is polling each
+   * agent's task queue, and that can change between two opens; a stale "Ready" is
+   * what sent people into a session that started and then hung on an unpolled queue.
    */
   function openNewSessionMenu(): void {
-    if (!canCreateSession) return;
     void onEnsureAgents?.();
     onTabChange?.("new");
   }
@@ -321,7 +372,32 @@
   }
 </script>
 
-<section class="session-manager" aria-label="Session Manager">
+{#if display === "launcher"}
+  <div class="session-controls">
+  <!-- The pip is the Chip's own, tinted by the status tone, so the mark that
+       says how the run is doing cannot drift from the spoken label beside it. -->
+  <Chip
+    class="session-anchor"
+    pip
+    tone={statusTone}
+    fill="quiet"
+    toned
+    active={paneOpen && menuTab === "sessions"}
+    aria-expanded={paneOpen && menuTab === "sessions"}
+    aria-label={`${agentTitle} — ${statusLabel}. Open Session Manager`}
+    data-tip={`${statusLabel} — open Session Manager`}
+    data-tip-align="start"
+    data-tip-below
+    onclick={openSessions}
+  >
+    <span class="session-name">{agentTitle}</span>
+    {#if spokenStatus}
+      <span class="session-state">{spokenStatus}</span>
+    {/if}
+  </Chip>
+  </div>
+{:else}
+    <section class="session-manager" aria-label="Session Manager">
       <header class="session-manager-head">
         <div class="session-tabs">
           <Chip
@@ -453,9 +529,48 @@
           </div>
         {/if}
       </div>
-</section>
+    </section>
+{/if}
 
 <style>
+  /* `0 1 auto`, not `none`: this sits in the minimap's lead zone, and the mark next
+     to it is centred in the window rather than between its neighbours, so a lead
+     that refuses to shrink does not get pushed — it grows over the mark. Shrinking
+     is what makes the anchor's `max-width: min(100%, 38vw)` bite, which is what
+     turns a long session name into an ellipsis instead of a collision. */
+  .session-controls {
+    position: relative;
+    flex: 0 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--gap-xs);
+  }
+
+  /* The anchor is a Chip, so its box, its tone and its press are the app's. Width
+     follows the session name; one existing ceiling so a pathological name cannot
+     push the map off the row. 38vw was already the viewport half of this cap. */
+  :global(.session-anchor) {
+    width: auto;
+    max-width: min(100%, 38vw);
+  }
+
+  .session-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Second in the same chip rather than a chip of its own: one object saying one
+     thing about one session. */
+  .session-state {
+    flex: none;
+    padding-left: 6px;
+    border-left: 1px solid var(--border);
+    color: var(--text-2);
+  }
+
   .session-manager {
     flex: 1;
     width: 100%;

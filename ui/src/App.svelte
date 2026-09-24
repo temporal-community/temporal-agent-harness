@@ -521,15 +521,27 @@
     history.replaceState(history.state, "", url);
   }
 
+  function holdSessionManager(open: boolean): void {
+    sessionManagerHeld = open;
+    /* Dragged shut and then asked for again: the width it opens at, like the
+       bottom drawer's own height. */
+    if (open && sessionDrawerWidth === 0) sessionDrawerWidth = SESSION_DRAWER_DEFAULT_W;
+    persistSessionManager(open);
+  }
+
   function toggleSessionManager(): void {
-    if (sessionDrawerOpen) {
-      sessionManagerHeld = false;
-      persistSessionManager(false);
+    holdSessionManager(!sessionDrawerOpen);
+  }
+
+  /* The name chip names the sessions view, so pressing it while that view is
+     already on screen shuts the drawer — the same press-to-close the icon has. */
+  function openSessionManager(tab: "sessions" | "new"): void {
+    if (sessionDrawerOpen && sessionManagerTab === tab) {
+      holdSessionManager(false);
       return;
     }
-    sessionManagerHeld = true;
-    if (sessionDrawerWidth === 0) sessionDrawerWidth = SESSION_DRAWER_DEFAULT_W;
-    persistSessionManager(true);
+    sessionManagerTab = tab;
+    holdSessionManager(true);
   }
 
   function resizeSessionDrawer(width: number): void {
@@ -582,6 +594,26 @@
         >
           <PanelLeft size={13} />
         </IconButton>
+
+        <!-- Which session you are in, beside the switch that changes it. The icon
+             opens the drawer on whichever view was last read; this names the session
+             and opens the sessions list. New sessions start from the drawer's tab. -->
+        <SessionControls
+          display="launcher"
+          tab={sessionManagerTab}
+          paneOpen={sessionDrawerOpen}
+          sessions={run.sessions}
+          agents={run.agents}
+          sessionId={run.runInfo.sessionId}
+          connecting={run.connecting}
+          sending={run.sending}
+          creatingSession={run.creatingSession}
+          closed={run.sessionClosed}
+          error={run.connectionError}
+          {pendingApprovalCount}
+          onEnsureSessions={() => run.ensureSessionsEnriched()}
+          onTabChange={openSessionManager}
+        />
       {/snippet}
 
       <!-- The shortcuts are only real if they can be found. The minimap is the
@@ -627,6 +659,7 @@
         onFit={() => (sessionDrawerWidth = SESSION_DRAWER_DEFAULT_W)}
       >
         <SessionControls
+          display="pane"
           tab={sessionManagerTab}
           sessions={run.sessions}
           agents={run.agents}

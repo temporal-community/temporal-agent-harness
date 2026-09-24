@@ -254,10 +254,14 @@
     background: var(--surface-head);
   }
 
+  /* The lead holds more than one object now — the drawer's switch and the session
+     anchor beside it — so the air between them belongs here rather than inside
+     whichever of them happens to be first. */
   .minimap-lead {
     min-width: 0;
     display: flex;
     align-items: center;
+    gap: var(--gap-xs);
     justify-self: start;
   }
 

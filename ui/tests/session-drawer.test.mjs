@@ -36,7 +36,11 @@ describe("Session Manager drawer", () => {
   });
 
   it("uses the shared docked drawer on the left without duplicating the manager", () => {
-    assert.equal(appSource.match(/<SessionControls\b/g)?.length, 1);
+    /* Two instances, one list: the launcher in the chrome names the session, and the
+       manager it opens is the only thing that lists them. `session-launcher.test.mjs`
+       holds the other half of this — that the launcher is still there at all. */
+    assert.equal(appSource.match(/<SessionControls\b/g)?.length, 2);
+    assert.equal(appSource.match(/display="pane"/g)?.length, 1);
     assert.equal(appSource.match(/<DockedDrawer\b/g)?.length, 2);
     assert.match(appSource, /<DockedDrawer\s+edge="left"/);
     assert.match(appSource, /<DockedDrawer\s+edge="bottom"/);
