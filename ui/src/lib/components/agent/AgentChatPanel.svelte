@@ -31,7 +31,11 @@
   import { codeModeHostsByRow } from "$lib/state/codeModeNesting";
   import { formatLogValue } from "$lib/state/logValue";
   import { NO_THOUGHT_SUMMARY, foldTurnThought, type TurnThought } from "$lib/state/thoughtSummary";
-  import { formatElapsedDuration, type ReplayLogRow } from "$lib/state/replayLog";
+  import {
+    formatElapsedDuration,
+    formatTimestamp,
+    type ReplayLogRow
+  } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
   import SchemaForm from "$lib/components/chat/SchemaForm.svelte";
@@ -788,14 +792,6 @@
     }
   }
 
-  function time(value: number): string {
-    return new Date(value * 1000).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
-  }
-
   function citationUrl(citation: FileCitationAnnotation): string {
     return citation.custom_metadata?.deep_url ?? citation.document_uri ?? "#";
   }
@@ -1234,7 +1230,7 @@
                   >
                     {turnSummary.duration ?? ""}
                   </span>
-                  <time>{time(turnSummary.endedAt)}</time>
+                  <time>{formatTimestamp(turnSummary.endedAt)}</time>
                   <ChevronDown class="activity-chevron" size={14} aria-hidden="true" />
                 </button>
               {/key}
@@ -1307,7 +1303,7 @@
                           >
                             {rowDuration ?? ""}
                           </span>
-                          <time>{time(log.timestamp)}</time>
+                          <time>{formatTimestamp(log.timestamp)}</time>
                           <ChevronDown class="activity-row-chevron" size={13} aria-hidden="true" />
                         </button>
 
@@ -1368,7 +1364,7 @@
           <article class="pending-approval-card">
             <header class="pending-approval-head">
               <strong>{approval.toolName ?? approval.body ?? "Tool approval"}</strong>
-              <span>Turn {approval.turnNumber} · {time(approval.timestamp)}</span>
+              <span>Turn {approval.turnNumber} · {formatTimestamp(approval.timestamp)}</span>
             </header>
             {#if approvalDetail(approval)}
               <p class="pending-approval-detail">{approvalDetail(approval)}</p>

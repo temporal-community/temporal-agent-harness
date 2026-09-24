@@ -766,6 +766,33 @@ export function statusNote(row: ReplayLogRow): string | null {
 
 /* Minutes have to roll over into hours: a session left open for three hours read as
    "200m 05s", which is arithmetically right and useless to a reader. */
+const CLOCK_TIME: Intl.DateTimeFormatOptions = {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit"
+};
+const timestampFormats = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * A frame timestamp (epoch seconds) as local wall-clock time.
+ *
+ * One formatter per option set, built once: `toLocaleTimeString` builds a new
+ * one on every call, and the chat and the log pane call it once per row.
+ */
+export function formatTimestamp(
+  seconds: number,
+  options: Intl.DateTimeFormatOptions = CLOCK_TIME
+): string {
+  if (!Number.isFinite(seconds)) return "";
+  const key = JSON.stringify(options);
+  let formatter = timestampFormats.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(undefined, options);
+    timestampFormats.set(key, formatter);
+  }
+  return formatter.format(seconds * 1000);
+}
+
 export function formatDuration(seconds: number): string {
   const rounded = Math.max(0, Math.round(seconds));
   if (rounded < 60) return `${rounded}s`;

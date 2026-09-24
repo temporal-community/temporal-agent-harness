@@ -64,7 +64,12 @@
   import Copyable from "$lib/components/primitives/Copyable.svelte";
   import { scrollFollower } from "$lib/state/followScroll";
   import { formatLogValue } from "$lib/state/logValue";
-  import { formatDuration, statusNote, type TurnLogGroup } from "$lib/state/replayLog";
+  import {
+    formatDuration,
+    formatTimestamp,
+    statusNote,
+    type TurnLogGroup
+  } from "$lib/state/replayLog";
   import { formatTokens } from "$lib/cost/pricing";
 
   export type TranscriptFilter = "all" | "model" | "tool" | "approval" | "error";
@@ -149,7 +154,7 @@
       row.toolName ? `tool: ${row.toolName}` : "",
       row.toolId ? `tool_id: ${row.toolId}` : "",
       row.model ? `model: ${row.model}` : "",
-      `timestamp: ${time(row.timestamp)}`
+      `timestamp: ${formatTimestamp(row.timestamp)}`
     ].filter(Boolean);
 
     if (output) sections.push(`output:\n${output}`);
@@ -219,14 +224,6 @@
     if (activeRowId == null) return;
     follower.to(`log-row-${activeRowId}`);
   });
-
-  function time(value: number): string {
-    return new Date(value * 1000).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
-  }
 
   function isRowExpanded(rowId: string): boolean {
     return expandedRows[rowId] ?? false;
@@ -326,7 +323,7 @@
                 <span class="turn-preview">{group.summary.preview}</span>
               </span>
               <span class="turn-meta">
-                <time>{time(group.startedAt)}</time>
+                <time>{formatTimestamp(group.startedAt)}</time>
               </span>
             </div>
 
@@ -431,7 +428,7 @@
                             subagent turn {row.sourceTurnNumber}
                           </span>
                         {/if}
-                        <time>{time(row.timestamp)}</time>
+                        <time>{formatTimestamp(row.timestamp)}</time>
                       </span>
                     </span>
                     <span class="row-toggle-icon" aria-hidden="true">
