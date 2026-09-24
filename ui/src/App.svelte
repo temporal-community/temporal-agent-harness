@@ -544,9 +544,11 @@
     holdSessionManager(true);
   }
 
-  function resizeSessionDrawer(width: number): void {
-    sessionDrawerWidth = Math.min(window.innerWidth * 0.6, width);
-  }
+  /* The ceilings the layout already applies — `min(60vw, …)` and `min(60vh, …)` on the
+     grid — so a drawer is never set larger than it can be drawn. */
+  const DRAWER_MAX_FRACTION = 0.6;
+  let windowWidth = $state(window.innerWidth);
+  let windowHeight = $state(window.innerHeight);
 
   $effect(() => {
     if (sessionManagerHeld) void run.ensureSessionsEnriched();
@@ -559,6 +561,8 @@
 </script>
 
 <svelte:window
+  bind:innerWidth={windowWidth}
+  bind:innerHeight={windowHeight}
   onkeydown={handleWindowKeydown}
   onfocusin={noteRail}
   onpointerdown={noteRail}
@@ -655,7 +659,8 @@
         label="Session Manager"
         size={sessionDrawerWidth}
         minSize={SESSION_DRAWER_MIN_W}
-        onResize={resizeSessionDrawer}
+        maxSize={windowWidth * DRAWER_MAX_FRACTION}
+        onResize={(width) => (sessionDrawerWidth = width)}
         onFit={() => (sessionDrawerWidth = SESSION_DRAWER_DEFAULT_W)}
       >
         <SessionControls
@@ -810,6 +815,7 @@
         label="Bottom drawer"
         size={drawerHeight}
         minSize={DRAWER_MIN_H}
+        maxSize={windowHeight * DRAWER_MAX_FRACTION}
         onResize={(height) => (drawerHeight = height)}
         onResizeStart={() => (drawerSized = true)}
         onFit={fitBottomDrawer}

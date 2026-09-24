@@ -1,13 +1,20 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-
-  type DrawerEdge = "bottom" | "left";
+  import {
+    clampDrawerSize,
+    drawerResizeKeys,
+    resizeKeyIntent,
+    stepDrawerSize,
+    type DrawerEdge
+  } from "./resizeKeys";
 
   interface Props {
     edge: DrawerEdge;
     label: string;
     size: number;
     minSize: number;
+    /** The largest the drawer may be set to; the layout will not show it any larger. */
+    maxSize: number;
     onResize: (size: number) => void;
     onResizeStart?: () => void;
     onFit: () => void;
@@ -19,6 +26,7 @@
     label,
     size,
     minSize,
+    maxSize,
     onResize,
     onResizeStart,
     onFit,
@@ -44,8 +52,7 @@
   }
 
   function resizeFrom(event: PointerEvent): void {
-    const next = sizeFrom(event);
-    onResize(next < minSize ? 0 : next);
+    onResize(clampDrawerSize(sizeFrom(event), minSize, maxSize));
   }
 
   function startResize(event: PointerEvent): void {
@@ -69,11 +76,24 @@
     }
   }
 
+  /* Home does what a double-click does: fit the bottom drawer, reset the left one. */
+  function handleResizeKeydown(event: KeyboardEvent): void {
+    const intent = resizeKeyIntent(event, drawerResizeKeys(edge));
+    if (intent == null) return;
+    event.preventDefault();
+    if (intent === "reset") {
+      onFit();
+      return;
+    }
+    onResizeStart?.();
+    onResize(stepDrawerSize(size, intent, minSize, maxSize));
+  }
+
   const resizeLabel = $derived(`Resize the ${edge} drawer`);
   const resizeTitle = $derived(
     edge === "bottom"
-      ? "Drag to set the drawer height — double-click to fit it to the trace"
-      : "Drag to set the drawer width — double-click to reset it"
+      ? "Drag or use ↑↓ to set the drawer height — double-click or Home to fit it to the trace"
+      : "Drag or use ←→ to set the drawer width — double-click or Home to reset it"
   );
 </script>
 
@@ -86,17 +106,27 @@
   bind:this={element}
   aria-label={label}
 >
-  <button
-    type="button"
+  <!-- A focusable separator is a widget in ARIA, which Svelte's a11y lint does not know.
+       Its orientation is the line's, not the drag's: the bottom drawer's seam runs across. -->
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+  <div
     class="drawer-gutter"
+    role="separator"
+    tabindex="0"
     aria-label={resizeLabel}
+    aria-orientation={edge === "bottom" ? "horizontal" : "vertical"}
+    aria-valuenow={Math.round(size)}
+    aria-valuemin={0}
+    aria-valuemax={Math.round(maxSize)}
+    aria-keyshortcuts={edge === "bottom" ? "ArrowUp ArrowDown Home" : "ArrowLeft ArrowRight Home"}
     title={resizeTitle}
     onpointerdown={startResize}
     onpointermove={moveResize}
     onpointerup={stopResize}
     onpointercancel={stopResize}
     ondblclick={onFit}
-  ></button>
+    onkeydown={handleResizeKeydown}
+  ></div>
 
   <div class="drawer-body">
     {@render children()}

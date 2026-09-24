@@ -54,7 +54,7 @@ describe("Session Manager drawer", () => {
   });
 
   it("mirrors one resize implementation across bottom and left edges", () => {
-    assert.match(drawerSource, /type DrawerEdge = "bottom" \| "left"/);
+    assert.match(drawerSource, /type DrawerEdge\n[^;]*from "\.\/resizeKeys"/);
     assert.match(drawerSource, /case "bottom":[\s\S]*?rect\.bottom - event\.clientY/);
     assert.match(drawerSource, /case "left":[\s\S]*?event\.clientX - rect\.left/);
     assert.match(drawerSource, /const _exhaustive: never = edge/);
