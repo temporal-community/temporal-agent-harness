@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { render } from "svelte/server";
 import { beforeAll, describe, it } from "vitest";
 
-import { installBrowserSurface } from "../../../../tests/support/controllerHarness.mjs";
+import { installBrowserSurface, stripComments } from "../../../../tests/support/controllerHarness.mjs";
 import { realisticQaScenario } from "$lib/mock/scenarios.ts";
 import { AgentRunController } from "$lib/state/agentRun.svelte.ts";
 import { codeModeHostsByRow } from "$lib/state/codeModeNesting.ts";
@@ -33,7 +33,7 @@ const common = {
   ]
 };
 const composerOf = (body) => body.match(/<input[^>]*aria-label="Message[^"]*"[^>]*>/)?.[0];
-const html = (props) => render(AgentChatPanel, { props: { ...common, ...props } }).body;
+const html = (props) => stripComments(render(AgentChatPanel, { props: { ...common, ...props } }).body);
 
 describe("the chat pane and the replay cursor", () => {
   let run;
@@ -55,11 +55,13 @@ describe("the chat pane and the replay cursor", () => {
     assert.deepEqual(view.items, run.chatTranscript);
     assert.deepEqual(view.logs, run.fullReplayLog.rows);
 
-    const before = html({ items: run.chatTranscript, logs: run.fullReplayLog.rows });
-    const after = html({ ...view, onJumpToLive: () => {} });
+    /* Raw, hydration markers and all: the block structure must not change either. */
+    const raw = (props) => render(AgentChatPanel, { props: { ...common, ...props } }).body;
+    const before = raw({ items: run.chatTranscript, logs: run.fullReplayLog.rows });
+    const after = raw({ ...view, onJumpToLive: () => {} });
     assert.equal(after, before);
     assert.match(after, /bubble thinking/, "the reply arriving still shows at the live head");
-    assert.doesNotMatch(after, /as of the replay cursor/);
+    assert.doesNotMatch(after, /replay-strip/);
   });
 
   it("shows the conversation as of the cursor when scrubbed back, and says so", () => {
@@ -76,8 +78,13 @@ describe("the chat pane and the replay cursor", () => {
       (body.match(/class="message /g) ?? []).length < liveCount,
       "messages after the cursor are not shown"
     );
-    assert.match(body, /Showing the conversation as of the replay cursor/);
-    assert.match(body, /Jump to latest step/);
+    const strip = body.match(/<div class="replay-strip[\s\S]*?<\/div>/)?.[0] ?? "";
+    assert.match(
+      strip,
+      new RegExp(`Replay\\s·\\sevent ${firstReply.startIndex} / ${run.total}`),
+      "the strip reads the cursor the way the transport counts it"
+    );
+    assert.match(strip, /aria-label="Jump to latest step"[^>]*>\s*Latest/);
     assert.doesNotMatch(body, /bubble thinking/, "no live 'thinking' dots under a past view");
     const composer = composerOf(body);
     assert.ok(composer, "the composer is still there");
@@ -174,5 +181,30 @@ describe("the turn card under a moving cursor", () => {
 
   it("never fades, live or replayed", () => {
     assert.doesNotMatch(feed, /\s(in|transition):/);
+  });
+});
+
+describe("the chat footer", () => {
+  const twoHandlers = [
+    ...common.agentInterface,
+    { name: "cancel", parameters: common.agentInterface[0].parameters, mid_turn: "accept" }
+  ];
+
+  it("is one toolbar of chips, then the input — and no search glyph on a message box", () => {
+    const body = html({ items: [], agentInterface: twoHandlers, onStopAgent: async () => {} });
+    const toolbar = body.match(/<div class="composer-toolbar[\s\S]*?<form/)?.[0] ?? "";
+    assert.match(toolbar, /class="chip sm quiet model toned interactive[^"]*"[^>]*>[\s\S]*?ask/);
+    assert.match(toolbar, /class="chip sm quiet neutral[^"]*">\s*<span class="chip-label[^"]*">queues/);
+    assert.match(toolbar, /class="chip sm quiet error toned interactive stop-chip[^"]*"/);
+    assert.match(toolbar, /aria-label="Stop Planner"[\s\S]*?Stop\s*<\/button>/);
+    assert.doesNotMatch(body, /lucide-search/);
+    assert.doesNotMatch(body, /class="composer-actions/, "Stop is no longer a row of its own");
+  });
+
+  it("keeps Stop in the toolbar when there is nothing to choose between", () => {
+    const body = html({ items: [], onStopAgent: async () => {} });
+    const toolbar = body.match(/<div class="composer-toolbar[\s\S]*?<form/)?.[0] ?? "";
+    assert.match(toolbar, /stop-chip/);
+    assert.doesNotMatch(toolbar, /queues/, "a single-handler agent still looks like a chat box");
   });
 });

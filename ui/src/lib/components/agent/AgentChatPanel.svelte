@@ -9,7 +9,6 @@
     Cpu,
     History,
     MessageCircle,
-    Search,
     ShieldCheck,
     Sparkles,
     XCircle,
@@ -20,11 +19,12 @@
     AgentInboundMessage,
     AgentInterfaceFunction,
     FileCitationAnnotation,
+    MidTurn,
     Session
   } from "$lib/api/types";
   import { approvalAlreadyResolved } from "$lib/api/httpClient";
   import { formatTokens } from "$lib/cost/pricing";
-  import Chip from "$lib/components/primitives/Chip.svelte";
+  import Chip, { type ChipTone } from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
   import { codeModeHostsByRow } from "$lib/state/codeModeNesting";
@@ -76,6 +76,9 @@
     liveLogs?: ReplayLogRow[];
     /** The cursor is at the live head. */
     live?: boolean;
+    /** The replay cursor and the run's length, as the transport counts them. */
+    viewIndex?: number;
+    total?: number;
     onJumpToLive?: () => void;
     sessions?: Session[];
     agentLabel: string;
@@ -128,6 +131,8 @@
     liveItems,
     liveLogs,
     live = true,
+    viewIndex,
+    total,
     onJumpToLive,
     sessions = [],
     agentLabel,
@@ -909,6 +914,21 @@
     return "needs idle";
   }
 
+  function midTurnTone(mode: MidTurn): ChipTone {
+    switch (mode) {
+      case "enqueue":
+        return "neutral";
+      case "accept":
+        return "success";
+      case "reject":
+        return "retry";
+      default: {
+        const unhandled: never = mode;
+        return unhandled;
+      }
+    }
+  }
+
   function midTurnHint(mode: AgentInterfaceFunction["mid_turn"]): string {
     if (mode === "enqueue") return "Sent while busy: waits its turn behind the current work.";
     if (mode === "accept") return "Sent while busy: joins the running turn and applies now.";
@@ -1133,6 +1153,13 @@
     resetHistoryRecall();
   }
 
+  /* Only with more than one handler or target, so a single-handler chat agent still looks
+     like a plain chat box. */
+  const showTarget = $derived(
+    selectedHandler != null && (handlers.length > 1 || targetsSubagent || showTargetPicker)
+  );
+  const showStop = $derived(onStopAgent != null && activeTarget != null && !activeTarget.closed);
+
   function handleSubmit(event: SubmitEvent): void {
     event.preventDefault();
     void sendMessage();
@@ -1149,6 +1176,27 @@
   aria-label={`${agentLabel} customer chat`}
 >
   <div class="chat-shell">
+    {#if !live}
+      <!-- The Decisions pane's rule: a view parked behind the run says so, and offers the
+           way back. Laid over the scroller rather than in the grid, so arriving and leaving
+           never resizes the message list under the reader. -->
+      <div class="replay-strip">
+        <span class="kicker">
+          Replay{#if viewIndex != null && total != null}&nbsp;· event {viewIndex} / {total}{/if}
+        </span>
+        {#if onJumpToLive}
+          <Chip
+            size="xs"
+            fill="quiet"
+            aria-label="Jump to latest step"
+            title="Jump to latest step"
+            onclick={onJumpToLive}
+          >
+            Latest
+          </Chip>
+        {/if}
+      </div>
+    {/if}
     <div class="message-list" bind:this={messageListElement}>
       {#if connecting && liveMessages.length === 0}
         <div class="empty-chat">
@@ -1338,18 +1386,6 @@
       </div>
     {/if}
 
-    {#if !live}
-      <!-- The Decisions pane's rule: a view parked behind the run says so, and offers the
-           way back, so a conversation cut short by the cursor does not read as finished. -->
-      <div class="cursor-banner">
-        <History size={14} aria-hidden="true" />
-        <span>Showing the conversation as of the replay cursor.</span>
-        {#if onJumpToLive}
-          <Chip fill="quiet" onclick={onJumpToLive}>Jump to latest step</Chip>
-        {/if}
-      </div>
-    {/if}
-
     {#if pendingApprovalRows.length > 0}
       <!-- Chip, then a card per gated call: identity, the details, the answer.
            That is the thing that scales — a second approval is another card, not
@@ -1471,30 +1507,55 @@
         </section>
       {/if}
 
-      <!-- Which handler is being addressed, and what sending mid-turn will do. Shown whenever
-           there is more than one handler or more than one target, so a single-handler chat
-           agent still looks like a plain chat box. -->
-      {#if selectedHandler && (handlers.length > 1 || targetsSubagent || showTargetPicker)}
-        <div class="composer-target">
-          <button
-            type="button"
-            class="target-chip"
-            disabled={composerDisabled}
-            title="Choose which message to send (or type / in the box)"
-            onclick={() => {
-              draft = "/";
-              composerInput?.focus();
-            }}
-          >
-            <strong>{selectedHandler.name}</strong>
-            {#if targetsSubagent || showTargetPicker}
-              <span class="target-of">&rarr; {activeTarget?.label ?? agentLabel}</span>
-            {/if}
-            <ChevronDown size={12} aria-hidden="true" />
-          </button>
-          <span class="mid-turn {selectedHandler.mid_turn}" title={midTurnHint(selectedHandler.mid_turn)}>
-            {midTurnLabel(selectedHandler.mid_turn)}
-          </span>
+      <!-- Which handler is being addressed and what sending mid-turn will do, beside the stop
+           control. -->
+      {#if showTarget || showStop}
+        <div class="composer-toolbar">
+          {#if showTarget && selectedHandler}
+            <Chip
+              tone="model"
+              fill="quiet"
+              toned
+              disabled={composerDisabled}
+              title="Choose which message to send (or type / in the box)"
+              onclick={() => {
+                draft = "/";
+                composerInput?.focus();
+              }}
+            >
+              <span class="target-name">
+                {selectedHandler.name}{#if targetsSubagent || showTargetPicker}&nbsp;&rarr;
+                  {activeTarget?.label ?? agentLabel}{/if}
+              </span>
+              <ChevronDown size={12} aria-hidden="true" />
+            </Chip>
+            <Chip
+              tone={midTurnTone(selectedHandler.mid_turn)}
+              fill="quiet"
+              toned={selectedHandler.mid_turn !== "enqueue"}
+              label={midTurnLabel(selectedHandler.mid_turn)}
+              title={midTurnHint(selectedHandler.mid_turn)}
+            />
+          {/if}
+          {#if showStop}
+            <!-- Stopping is a control-plane action (the harness close signal), not a message —
+                 so it works whatever the agent happens to accept. -->
+            <Chip
+              class="stop-chip"
+              tone="error"
+              fill="quiet"
+              toned
+              disabled={creatingSession}
+              aria-label={`Stop ${activeTarget?.label ?? agentLabel}`}
+              title={`Stop ${activeTarget?.label ?? agentLabel}`}
+              onclick={() => void onStopAgent?.(activeTarget?.workflowId ?? null)}
+            >
+              {#snippet lead()}
+                <XCircle size={13} />
+              {/snippet}
+              Stop
+            </Chip>
+          {/if}
         </div>
       {/if}
 
@@ -1525,7 +1586,6 @@
         </form>
       {:else}
         <form class="composer" class:closed={closed} onsubmit={handleSubmit}>
-          <Search size={17} />
           <input
             bind:this={composerInput}
             bind:value={draft}
@@ -1545,21 +1605,6 @@
         </form>
       {/if}
 
-      {#if onStopAgent && activeTarget && !activeTarget.closed}
-        <!-- Stopping is a control-plane action (the harness close signal), not a message — so
-             it works whatever the agent happens to accept. -->
-        <div class="composer-actions">
-          <button
-            type="button"
-            class="stop-agent"
-            disabled={creatingSession}
-            onclick={() => void onStopAgent?.(activeTarget?.workflowId ?? null)}
-          >
-            <XCircle size={13} aria-hidden="true" />
-            Stop {activeTarget.label}
-          </button>
-        </div>
-      {/if}
     </div>
   </div>
 
@@ -1580,6 +1625,7 @@
   }
 
   .chat-shell {
+    position: relative;
     min-width: 0;
     min-height: 0;
     display: grid;
@@ -2042,21 +2088,26 @@
     font-size: var(--font-sm);
   }
 
-  .cursor-banner {
+  .replay-strip {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    z-index: 2;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: var(--gap-sm);
-    margin: 0 12px 10px;
-    padding: var(--gap-xs) var(--gap-sm);
-    border: 1px solid var(--border);
-    background: var(--surface-2);
-    color: var(--text-2);
-    font-size: var(--font-sm);
+    padding: var(--gap-xs) 12px;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--surface-1) 92%, transparent);
   }
 
-  .cursor-banner span {
-    flex: 1;
+  .replay-strip .kicker {
     min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .approval-note {
@@ -2311,53 +2362,21 @@
     color: color-mix(in srgb, var(--warning) 82%, var(--text-1));
   }
 
-  .composer-target {
+  .composer-toolbar {
     display: flex;
-    gap: 7px;
+    gap: var(--gap-sm);
     align-items: center;
-    margin-bottom: 7px;
+    margin-bottom: var(--gap-sm);
   }
 
-  .target-chip {
-    min-width: 0;
-    display: inline-flex;
-    gap: 6px;
-    align-items: center;
-    padding: 5px 9px;
-    border: 1px solid color-mix(in srgb, var(--model) 36%, var(--border));
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--model) 13%, var(--surface-2));
-    color: var(--text-1);
-    font: inherit;
-    font-size: var(--font-sm);
-    cursor: pointer;
+  .composer-toolbar :global(.stop-chip) {
+    margin-left: auto;
   }
 
-  @media (hover: hover) and (pointer: fine) {
-    .target-chip:hover:not(:disabled) {
-      border-color: color-mix(in srgb, var(--model) 58%, var(--border));
-    }
-  }
-
-  .target-chip:disabled {
-    cursor: default;
-    opacity: var(--disabled-opacity);
-  }
-
-  .target-chip strong {
-    font-weight: 680;
-  }
-
-  .target-chip :global(svg) {
-    color: var(--text-3);
-  }
-
-  .target-of {
+  .target-name {
     min-width: 0;
     overflow: hidden;
-    color: var(--text-2);
     text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .handler-form {
@@ -2401,42 +2420,9 @@
     opacity: var(--disabled-opacity);
   }
 
-  .composer-actions {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 7px;
-  }
-
-  .stop-agent {
-    display: inline-flex;
-    gap: 5px;
-    align-items: center;
-    padding: 4px 9px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-chip);
-    background: var(--surface-2);
-    color: var(--text-3);
-    font: inherit;
-    font-size: var(--font-sm);
-    cursor: pointer;
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .stop-agent:hover:not(:disabled) {
-      border-color: color-mix(in srgb, var(--error) 45%, var(--border));
-      background: color-mix(in srgb, var(--error) 10%, var(--surface-2));
-      color: color-mix(in srgb, var(--error) 88%, var(--text-1));
-    }
-  }
-
-  .stop-agent:disabled {
-    cursor: default;
-    opacity: var(--disabled-opacity);
-  }
-
   .composer {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 10px;
     align-items: center;
     padding: 8px 8px 8px 12px;

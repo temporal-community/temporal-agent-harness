@@ -443,7 +443,9 @@ export class AgentRunController {
       logs: this.replayLog.rows,
       liveItems: this.chatTranscript,
       liveLogs: this.fullReplayLog.rows,
-      live
+      live,
+      viewIndex: this.viewIndex,
+      total: this.total
     };
   });
   currentLogRow = $derived(
