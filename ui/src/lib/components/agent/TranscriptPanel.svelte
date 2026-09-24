@@ -61,6 +61,7 @@
   import Badge from "$lib/components/primitives/Badge.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
+  import Copyable from "$lib/components/primitives/Copyable.svelte";
   import { scrollFollower } from "$lib/state/followScroll";
   import { formatLogValue } from "$lib/state/logValue";
   import { formatDuration, statusNote, type TurnLogGroup } from "$lib/state/replayLog";
@@ -470,7 +471,13 @@
                         </div>
                       {/if}
                       <section class="full-details" aria-label="Full details">
-                        <span class="payload-label">Full details</span>
+                        {#if row.workflowId}
+                          <Copyable value={row.workflowId} label="Copy workflow ID">
+                            <span class="payload-label">Full details</span>
+                          </Copyable>
+                        {:else}
+                          <span class="payload-label">Full details</span>
+                        {/if}
                         <pre>{fullDetail}</pre>
                       </section>
                     </div>
