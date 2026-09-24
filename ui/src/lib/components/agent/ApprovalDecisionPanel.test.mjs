@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { render } from "svelte/server";
 import { describe, it } from "vitest";
 
-import ApprovalDecisionPanel from "./ApprovalDecisionPanel.svelte";
+import { stripComments } from "../../../../tests/support/controllerHarness.mjs";
+import ApprovalDecisionPanel, { traceText } from "./ApprovalDecisionPanel.svelte";
 
 const baseDecision = {
   key: "wf-root:e1",
@@ -101,9 +102,39 @@ describe("the approval decision panel", () => {
     };
     const body = html([baseDecision, second]);
 
-    assert.equal((body.match(/<button/g) ?? []).length, 2);
+    assert.equal((body.match(/<button[^>]*class="evaluation\b/g) ?? []).length, 2);
     assert.match(body, /aria-pressed="true"/);
     assert.match(body, /aria-pressed="false"/);
     assert.match(body, /delete_record/);
+  });
+
+  /* Each copy control sits in the same `.copyable` wrapper as the ID it copies, so the ID
+     shown beside a button is the one it writes. */
+  it("offers a named copy for each audit ID, beside that ID", () => {
+    const body = stripComments(html([baseDecision]));
+    for (const [id, label] of [
+      ["tool-1", "Copy tool call ID"],
+      ["e1", "Copy evaluation ID"],
+      ["req-1", "Copy request ID"]
+    ]) {
+      assert.match(
+        body,
+        new RegExp(`class="copyable[^"]*">\\s*${id}\\s*<button[^>]*aria-label="${label}"`),
+        label
+      );
+    }
+    assert.match(body, /aria-label="Copy decision trace"/);
+  });
+
+  it("copies the decision trace as the evaluator, verdict and rationale", () => {
+    const text = traceText(baseDecision);
+    assert.match(text, /^tool: issue_refund$/m);
+    assert.match(text, /^tool_id: tool-1$/m);
+    assert.match(text, /^evaluator: jev_evaluator$/m);
+    assert.match(text, /^outcome: Auto-approved$/m);
+    assert.match(text, /^confidence: 95%$/m);
+    assert.match(text, /^reason: The call satisfies the financial criteria\.$/m);
+    assert.match(text, /^evaluation_id: e1$/m);
+    assert.match(text, /^request_id: req-1$/m);
   });
 });

@@ -17,6 +17,7 @@
   import type { AgentDescriptor, Session } from "$lib/api/types";
   import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
+  import Copyable from "$lib/components/primitives/Copyable.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import StatusChip, {
     STATUS_TONES,
@@ -375,26 +376,34 @@
 {#if display === "launcher"}
   <div class="session-controls">
   <!-- The pip is the Chip's own, tinted by the status tone, so the mark that
-       says how the run is doing cannot drift from the spoken label beside it. -->
-  <Chip
-    class="session-anchor"
-    pip
-    tone={statusTone}
-    fill="quiet"
-    toned
-    active={paneOpen && menuTab === "sessions"}
-    aria-expanded={paneOpen && menuTab === "sessions"}
-    aria-label={`${agentTitle} — ${statusLabel}. Open Session Manager`}
-    data-tip={`${statusLabel} — open Session Manager`}
-    data-tip-align="start"
-    data-tip-below
-    onclick={openSessions}
-  >
-    <span class="session-name">{agentTitle}</span>
-    {#if spokenStatus}
-      <span class="session-state">{spokenStatus}</span>
-    {/if}
-  </Chip>
+       says how the run is doing cannot drift from the spoken label beside it.
+       The copy control sits beside the chip, not in it: the chip is a button. -->
+  {#snippet anchor()}
+    <Chip
+      class="session-anchor"
+      pip
+      tone={statusTone}
+      fill="quiet"
+      toned
+      active={paneOpen && menuTab === "sessions"}
+      aria-expanded={paneOpen && menuTab === "sessions"}
+      aria-label={`${agentTitle} — ${statusLabel}. Open Session Manager`}
+      data-tip={`${statusLabel} — open Session Manager`}
+      data-tip-align="start"
+      data-tip-below
+      onclick={openSessions}
+    >
+      <span class="session-name">{agentTitle}</span>
+      {#if spokenStatus}
+        <span class="session-state">{spokenStatus}</span>
+      {/if}
+    </Chip>
+  {/snippet}
+  {#if sessionId}
+    <Copyable value={sessionId} label="Copy workflow ID" data-tip-below>{@render anchor()}</Copyable>
+  {:else}
+    {@render anchor()}
+  {/if}
   </div>
 {:else}
     <section class="session-manager" aria-label="Session Manager">
@@ -503,28 +512,34 @@
               <p class="session-empty">No matching sessions.</p>
             {/if}
             {#each filteredSessionItems as item (item.workflow_id)}
-              <button
-                type="button"
-                class={`session-row ${item.workflow_id === sessionId ? "active" : ""}`}
-                aria-current={item.workflow_id === sessionId ? "true" : undefined}
-                onclick={() => void openSession(item.workflow_id)}
-              >
-                <AgentGlyph
-                  label={sessionAgentLabel(item)}
-                  status={glyphStatusForSession(item)}
-                />
-                <span class="session-copy">
-                  <time>{sessionCreatedAt(item.created_at)}</time>
-                  <strong>{sessionInitialMessage(item)}</strong>
-                  <small>{sessionAgentLabel(item)}{item.is_discovered ? " · discovered" : ""}</small>
-                </span>
-                <StatusChip
-                  label={sessionStatusLabel(item)}
-                  kind={sessionStatusKind(item)}
-                  compact
-                  active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete" && statusKind !== "closed"}
-                />
-              </button>
+              <!-- The copy control overlays the row rather than sitting in it, because the
+                   row is a button; it lands in the empty corner under the status chip. -->
+              <div class="session-item">
+                <button
+                  type="button"
+                  class={`session-row ${item.workflow_id === sessionId ? "active" : ""}`}
+                  aria-current={item.workflow_id === sessionId ? "true" : undefined}
+                  onclick={() => void openSession(item.workflow_id)}
+                >
+                  <AgentGlyph
+                    label={sessionAgentLabel(item)}
+                    status={glyphStatusForSession(item)}
+                  />
+                  <span class="session-copy">
+                    <time>{sessionCreatedAt(item.created_at)}</time>
+                    <strong>{sessionInitialMessage(item)}</strong>
+                    <small>{sessionAgentLabel(item)}{item.is_discovered ? " · discovered" : ""}</small>
+                    <code class="session-id">{item.workflow_id}</code>
+                  </span>
+                  <StatusChip
+                    label={sessionStatusLabel(item)}
+                    kind={sessionStatusKind(item)}
+                    compact
+                    active={item.workflow_id === sessionId && statusKind !== "available" && statusKind !== "complete" && statusKind !== "closed"}
+                  />
+                </button>
+                <Copyable value={item.workflow_id} label="Copy workflow ID" data-tip-align="end" />
+              </div>
             {/each}
           </div>
         {/if}
@@ -805,14 +820,34 @@
     text-align: left;
     transition:
       border-color var(--duration-fast) var(--ease-ui),
-      background var(--duration-fast) var(--ease-ui),
-      transform var(--duration-fast) var(--ease-ui);
+      background var(--duration-fast) var(--ease-ui);
+  }
+
+  /* The lift is the item's, not the row's, so the overlaid copy control rises with it. */
+  .session-item {
+    position: relative;
+    min-width: 0;
+    display: grid;
+    transition: transform var(--duration-fast) var(--ease-ui);
+  }
+
+  .session-item > :global(.copyable) {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+  }
+
+  .session-item:hover :global(.copy) {
+    opacity: 1;
   }
 
   @media (hover: hover) and (pointer: fine) {
-    .session-row:hover {
+    .session-item:hover .session-row {
       border-color: color-mix(in srgb, var(--reasoning) 38%, var(--border-strong));
       background: color-mix(in srgb, var(--reasoning) 5%, var(--surface-2));
+    }
+
+    .session-item:hover {
       transform: translateY(-1px);
     }
   }
@@ -852,6 +887,16 @@
     white-space: nowrap;
   }
 
+  .session-copy code.session-id {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .session-empty {
     margin: 6px 0;
     color: var(--text-3);
@@ -866,12 +911,13 @@
     }
 
     .agent-row:hover,
-    .session-row:hover {
+    .session-item:hover {
       transform: none;
     }
 
     .agent-row,
-    .session-row {
+    .session-row,
+    .session-item {
       transition: none;
     }
   }

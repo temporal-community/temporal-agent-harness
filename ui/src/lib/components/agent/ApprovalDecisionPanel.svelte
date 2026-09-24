@@ -1,11 +1,54 @@
-<script lang="ts">
-  import { CheckCircle2, GitBranch, ShieldAlert, XCircle } from "@lucide/svelte";
-  import Chip, { type ChipTone } from "$lib/components/primitives/Chip.svelte";
+<script lang="ts" module>
   import type {
     ApprovalDecision,
     ApprovalProbabilities,
     ApprovalVerdict
   } from "$lib/state/approvalDecisionTree";
+
+  function percent(value: number): string {
+    const scaled = value * 100;
+    return `${Number.isInteger(scaled) ? scaled : scaled.toFixed(1)}%`;
+  }
+
+  function outcomeLabel(verdict: ApprovalVerdict): string {
+    if (verdict === "approve") return "Auto-approved";
+    if (verdict === "deny") return "Call denied";
+    return "Human review";
+  }
+
+  function criteriaLabel(decision: ApprovalDecision): string | null {
+    if (!decision.criteriaSet) return null;
+    return decision.criteriaVersion === null
+      ? decision.criteriaSet
+      : `${decision.criteriaSet} · v${decision.criteriaVersion}`;
+  }
+
+  /** The trace as plain text, for pasting into a bug report or a policy review. */
+  export function traceText(decision: ApprovalDecision): string {
+    return [
+      `tool: ${decision.toolName}`,
+      `tool_id: ${decision.toolId}`,
+      `evaluator: ${decision.evaluator}`,
+      `evaluator_verdict: ${decision.evaluatorVerdict}`,
+      `outcome: ${outcomeLabel(decision.verdict)}`,
+      decision.confidence === null ? "" : `confidence: ${percent(decision.confidence)}`,
+      decision.reason ? `reason: ${decision.reason}` : "",
+      criteriaLabel(decision) ? `criteria: ${criteriaLabel(decision)}` : "",
+      decision.model ? `model: ${decision.model}` : "",
+      `evaluation_id: ${decision.evaluationId}`,
+      decision.requestId ? `request_id: ${decision.requestId}` : "",
+      `workflow_id: ${decision.workflowId}`,
+      `turn: ${decision.turnNumber}`
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+</script>
+
+<script lang="ts">
+  import { CheckCircle2, GitBranch, ShieldAlert, XCircle } from "@lucide/svelte";
+  import Chip, { type ChipTone } from "$lib/components/primitives/Chip.svelte";
+  import Copyable from "$lib/components/primitives/Copyable.svelte";
 
   interface Props {
     decisions: ApprovalDecision[];
@@ -30,11 +73,6 @@
     decisions.find((decision) => decision.key === chosenKey) ?? decisions.at(-1) ?? null
   );
 
-  function percent(value: number): string {
-    const scaled = value * 100;
-    return `${Number.isInteger(scaled) ? scaled : scaled.toFixed(1)}%`;
-  }
-
   function verdictLabel(verdict: ApprovalVerdict): string {
     if (verdict === "approve") return "Approve";
     if (verdict === "deny") return "Deny";
@@ -47,12 +85,6 @@
     return "live";
   }
 
-  function outcomeLabel(verdict: ApprovalVerdict): string {
-    if (verdict === "approve") return "Auto-approved";
-    if (verdict === "deny") return "Call denied";
-    return "Human review";
-  }
-
   function probability(
     probabilities: ApprovalProbabilities,
     verdict: ApprovalVerdict
@@ -62,13 +94,6 @@
 
   function approveDestination(decision: ApprovalDecision): string {
     return decision.irreversibleThreshold === null ? "Approve" : "Risk check";
-  }
-
-  function criteriaLabel(decision: ApprovalDecision): string | null {
-    if (!decision.criteriaSet) return null;
-    return decision.criteriaVersion === null
-      ? decision.criteriaSet
-      : `${decision.criteriaSet} · v${decision.criteriaVersion}`;
   }
 </script>
 
@@ -136,7 +161,9 @@
       <article class="trace" aria-label={`Decision path for ${current.toolName}`}>
         <header class="trace-head">
           <div class="trace-title">
-            <p class="kicker">Decision trace</p>
+            <Copyable value={traceText(current)} label="Copy decision trace" data-tip-below>
+              <span class="kicker">Decision trace</span>
+            </Copyable>
             <h3>{current.toolName}</h3>
             <p class="trace-meta">
               {current.evaluator}, turn {current.turnNumber}{#if current.role === "subagent"}
@@ -152,7 +179,7 @@
         </header>
 
         <ol class="decision-tree" aria-label="Decision stages">
-          {#each current.stages as stage}
+          {#each current.stages as stage (stage.kind)}
             <li class={`stage ${stage.kind}`}>
               <span class="stage-marker" aria-hidden="true"></span>
 
@@ -225,7 +252,7 @@
                   </div>
 
                   <div class="branch-grid three">
-                    {#each ["approve", "deny", "escalate"] as branchVerdict}
+                    {#each ["approve", "deny", "escalate"] as branchVerdict (branchVerdict)}
                       {@const typedVerdict = branchVerdict as ApprovalVerdict}
                       {@const branchProbability = probability(stage.probabilities, typedVerdict)}
                       <div
@@ -330,13 +357,27 @@
             </div>
           {/if}
           <div>
+            <dt class="kicker">Tool call</dt>
+            <dd>
+              <Copyable value={current.toolId} label="Copy tool call ID">{current.toolId}</Copyable>
+            </dd>
+          </div>
+          <div>
             <dt class="kicker">Evaluation</dt>
-            <dd>{current.evaluationId}</dd>
+            <dd>
+              <Copyable value={current.evaluationId} label="Copy evaluation ID">
+                {current.evaluationId}
+              </Copyable>
+            </dd>
           </div>
           {#if current.requestId}
             <div>
               <dt class="kicker">Request</dt>
-              <dd>{current.requestId}</dd>
+              <dd>
+                <Copyable value={current.requestId} label="Copy request ID">
+                  {current.requestId}
+                </Copyable>
+              </dd>
             </div>
           {/if}
         </dl>

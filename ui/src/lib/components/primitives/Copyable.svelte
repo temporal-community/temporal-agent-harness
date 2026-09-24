@@ -26,9 +26,11 @@
     label?: string;
     /** What the copy control sits beside; hovering or focusing any of it reveals the control. */
     children?: Snippet;
+    /** Tip placement and the like (`data-tip-below`, `data-tip-align`), passed to the button. */
+    [key: string]: unknown;
   }
 
-  let { value, label = "Copy", children }: Props = $props();
+  let { value, label = "Copy", children, ...rest }: Props = $props();
 
   let outcome = $state<"idle" | "copied" | "failed">("idle");
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -49,7 +51,7 @@
 
 <span class="copyable">
   {@render children?.()}
-  <IconButton label={name} class={outcome === "idle" ? "copy" : "copy shown"} onclick={copy}>
+  <IconButton {...rest} label={name} class={outcome === "idle" ? "copy" : "copy shown"} onclick={copy}>
     {#if outcome === "copied"}
       <Check size={12} aria-hidden="true" />
     {:else}

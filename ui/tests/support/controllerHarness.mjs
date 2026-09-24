@@ -99,6 +99,20 @@ export function installBrowserSurface({ controllableRaf = false } = {}) {
   return { storage, freshStorage, rafQueue, flushRaf, listeners };
 }
 
+/**
+ * SSR markup without Svelte's `<!--[-->` hydration markers. Repeated until nothing
+ * changes, because one pass can splice a new marker out of the pieces around one it
+ * removed.
+ */
+export function stripComments(html) {
+  let prev;
+  do {
+    prev = html;
+    html = html.replace(/<!--[\s\S]*?-->/g, "");
+  } while (html !== prev);
+  return html;
+}
+
 /** Session row shaped like the wire. */
 export function session(id, over = {}) {
   return {

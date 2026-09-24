@@ -271,7 +271,7 @@
 
   <div class="transcript-controls">
     <div class="filter-chips" role="group" aria-label="Filter logs">
-      {#each filters as item}
+      {#each filters as item (item.key)}
         <Chip
           label={item.label}
           tone="accent"
@@ -446,7 +446,9 @@
                     <div class="line-details" id={`log-row-${row.id}-details`}>
                       {#if primary}
                         <section class="primary-payload" aria-label={`${primary.label} preview`}>
-                          <span class="payload-label">{primary.label}</span>
+                          <Copyable value={primary.text} label={`Copy ${primary.label}`}>
+                            <span class="payload-label">{primary.label}</span>
+                          </Copyable>
                           {#if primary.kind === "text"}
                             <p>{primary.text}</p>
                           {:else}
@@ -456,7 +458,7 @@
                       {/if}
                       {#if row.citations.length}
                         <div class="citations">
-                          {#each row.citations as citation}
+                          {#each row.citations as citation, i (i)}
                             <a
                               href={citation.custom_metadata?.deep_url ?? citation.document_uri ?? "#"}
                               target="_blank"
@@ -467,14 +469,34 @@
                           {/each}
                         </div>
                       {/if}
+                      {#if row.workflowId || row.toolId}
+                        <dl class="row-ids">
+                          {#if row.workflowId}
+                            <div>
+                              <dt>workflow</dt>
+                              <dd>
+                                <Copyable value={row.workflowId} label="Copy workflow ID">
+                                  <code>{row.workflowId}</code>
+                                </Copyable>
+                              </dd>
+                            </div>
+                          {/if}
+                          {#if row.toolId}
+                            <div>
+                              <dt>tool call</dt>
+                              <dd>
+                                <Copyable value={row.toolId} label="Copy tool call ID">
+                                  <code>{row.toolId}</code>
+                                </Copyable>
+                              </dd>
+                            </div>
+                          {/if}
+                        </dl>
+                      {/if}
                       <section class="full-details" aria-label="Full details">
-                        {#if row.workflowId}
-                          <Copyable value={row.workflowId} label="Copy workflow ID">
-                            <span class="payload-label">Full details</span>
-                          </Copyable>
-                        {:else}
+                        <Copyable value={fullDetail} label="Copy full details">
                           <span class="payload-label">Full details</span>
-                        {/if}
+                        </Copyable>
                         <pre>{fullDetail}</pre>
                       </section>
                     </div>
@@ -904,6 +926,42 @@
 
   .primary-pre {
     color: var(--text-1);
+  }
+
+  .row-ids {
+    display: grid;
+    gap: 2px;
+    margin: 0;
+  }
+
+  .row-ids div {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr);
+    align-items: center;
+    gap: 6px;
+  }
+
+  .row-ids dt {
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    text-transform: uppercase;
+  }
+
+  .row-ids dd {
+    min-width: 0;
+    margin: 0;
+  }
+
+  .row-ids code {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: var(--font-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .full-details pre {
