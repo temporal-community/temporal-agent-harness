@@ -3,12 +3,11 @@
 // reader had scrolled by hand: `scrollIntoView` scrolls every scrollable ANCESTOR, and PaneRail's
 // `.rail` is `overflow-x: auto` on purpose. So this pins four things — one write to one element per
 // frame, "nearest" semantics so a visible row is never moved, standing down when the reader scrolls
-// away, and handing control back when they scroll to the playhead again — and then greps the two
-// panes that follow the playhead to make sure neither has grown a scrollIntoView or a focus() call
-// back. This is the check that fails when someone reaches for scrollIntoView again.
+// away, and handing control back when they scroll to the playhead again — and then greps every
+// component for a scrollIntoView call, and the panes that follow the playhead for a focus() call. This is the check that fails when someone reaches for scrollIntoView again.
 
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "vitest";
 
@@ -212,13 +211,36 @@ describe("scrollFollower", () => {
   });
 });
 
-/* --- neither pane may reach for scrollIntoView or focus ------------------- */
+/* --- no pane may reach for scrollIntoView, and followers may not focus ---- */
 
-/* The panes that follow the playhead. Both had the same scrollIntoView call, and both
-   scrolled the same rail with it. */
+/* Every component a pane can render, found rather than listed: a list is what let the
+   state pane keep its scrollIntoView after the other two lost theirs. PaneRail is not
+   under here, and is the one caller that means to scroll the rail. */
+const COMPONENTS_DIR = new URL("../components/", import.meta.url);
+const COMPONENTS = (await readdir(COMPONENTS_DIR, { recursive: true })).filter((file) =>
+  file.endsWith(".svelte")
+);
+
+describe.each(COMPONENTS)("%s", (file) => {
+  it("does not call scrollIntoView", async () => {
+    const source = await readFile(fileURLToPath(new URL(file, COMPONENTS_DIR)), "utf8");
+    /* The call form, not the bare word: panes name `scrollIntoView` in a comment
+       explaining why they no longer call it, and a check that forbade saying so would
+       be pressure to delete the explanation. */
+    assert.doesNotMatch(
+      source,
+      /scrollIntoView\s*\(/,
+      `${file} must not call scrollIntoView: it scrolls every scrollable ancestor, ` +
+        `and PaneRail's .rail is one — see followScroll.ts`
+    );
+  });
+});
+
+/* The panes that follow the playhead. */
 const PANES = [
   "../components/agent/TranscriptPanel.svelte",
-  "../components/flow/LatencyWaterfall.svelte"
+  "../components/flow/LatencyWaterfall.svelte",
+  "../components/agent/AgentStatePanel.svelte"
 ];
 
 describe.each(PANES)("%s", (path) => {
@@ -227,15 +249,6 @@ describe.each(PANES)("%s", (path) => {
   it("follows the playhead through scrollFollower, and moves nothing else", async () => {
     const source = await readFile(fileURLToPath(new URL(path, import.meta.url)), "utf8");
 
-    /* The call form, not the bare word: both panes name `scrollIntoView` in a comment
-       explaining why they no longer call it, and a check that forbade saying so would
-       be pressure to delete the explanation. */
-    assert.doesNotMatch(
-      source,
-      /scrollIntoView\s*\(/,
-      `${name} must not call scrollIntoView: it scrolls every scrollable ancestor, ` +
-        `and PaneRail's .rail is one — see followScroll.ts`
-    );
     /* Scroll-following must never take the caret. This is the flat rule rather than a
        careful one, because there is no reason for either pane to move focus at all. */
     assert.doesNotMatch(
