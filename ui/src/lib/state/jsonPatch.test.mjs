@@ -119,4 +119,13 @@ describe("applying ops", () => {
     ]);
     assert.match(error, /no container at/);
   });
+
+  it("refuses a pointer that reaches the prototype chain", () => {
+    for (const path of ["/__proto__/polluted", "/constructor/prototype/polluted"]) {
+      const { applied, error } = applyOps(doc(), [{ op: "add", path, value: true }]);
+      assert.equal(applied.length, 0);
+      assert.match(error, /unsafe pointer/);
+    }
+    assert.equal({}.polluted, undefined);
+  });
 });

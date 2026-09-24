@@ -71,6 +71,8 @@ export function valueAt(doc: JsonValue, pointer: string): JsonValue | undefined 
   return node;
 }
 
+const FORBIDDEN_TOKENS = new Set(["__proto__", "constructor", "prototype"]);
+
 function isContainer(node: unknown): node is JsonValue[] | Record<string, JsonValue> {
   return node !== null && typeof node === "object";
 }
@@ -120,6 +122,11 @@ export function applyOps(doc: JsonValue, ops: readonly JsonPatchOp[]): PatchResu
     }
 
     const tokens = parsePointer(op.path);
+    if (tokens.some((token) => FORBIDDEN_TOKENS.has(token))) {
+      /* State keys can be model-invented, and writing through one of these
+         reaches the prototype chain rather than the document. */
+      return { doc: next, applied, error: `unsafe pointer ${op.path}` };
+    }
 
     /* The whole document, which is what `ref.set()` emits. */
     if (tokens.length === 0) {
