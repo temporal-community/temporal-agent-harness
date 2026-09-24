@@ -206,14 +206,17 @@
   let itemsElement = $state<HTMLElement | null>(null);
   const follower = scrollFollower(() => itemsElement);
 
+  /* Follow the cursor's row; do not open it. Opening it is what made a scrub look
+     broken: every tick closed one detail block and opened another, and those blocks are
+     tall — on the mock run alone the cursor's `Full details` measures 130..350px, so a
+     single tick moved up to 700px of content past the reader while the follower chased a
+     row whose position had just changed under it. The cursor's row is already marked, by
+     `.active-row`, by its active StatusChip, and by the turn group's border; it does not
+     also have to be the one row the reader is allowed to have open. LatencyWaterfall
+     follows the same playhead and has only ever followed. */
   $effect(() => {
-    const rowId = activeRowId;
-    if (rowId == null) {
-      expandedRows = {};
-      return;
-    }
-    expandedRows = { [rowId]: true };
-    follower.to(`log-row-${rowId}`);
+    if (activeRowId == null) return;
+    follower.to(`log-row-${activeRowId}`);
   });
 
   function time(value: number): string {
@@ -304,7 +307,13 @@
     {:else if visibleGroups.length === 0}
       <p class="empty">No events match this filter.</p>
     {:else}
-      {#each visibleGroups as group}
+      <!-- Keyed, because a scrub inserts into the MIDDLE of this list rather than only
+           appending to it. Rows arrive in frame order but render grouped by turn, and
+           the two orders disagree: a queued message is accepted for a turn that has not
+           started, so its row sits here while the turn before it is still filling in
+           above. On the mock run 23 of 162 ticks move a row that is already on screen,
+           63 of them at once. Unkeyed, Svelte rewrites all 63 in place. -->
+      {#each visibleGroups as group (group.turnNumber)}
         <section
           class={`turn-group ${activeTurnNumber === group.turnNumber ? "active-turn" : ""}`}
           aria-label={`Turn ${group.turnNumber}`}
@@ -342,7 +351,7 @@
           </header>
 
           <div class="log-lines" id={`turn-${group.turnNumber}-logs`}>
-            {#each group.rows as row}
+            {#each group.rows as row (row.id)}
               <!-- A seam, drawn where it is rather than as a badge on the rows around
                    it: the log's whole claim is that consecutive lines are consecutive
                    events, and this is the one place that is untrue. -->
