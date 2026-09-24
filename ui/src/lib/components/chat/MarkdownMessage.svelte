@@ -1094,9 +1094,11 @@
 </div>
 
 <style>
+  /* An implicit `auto` column would size to a wide table's min-content, not the bubble. */
   .markdown-message {
     min-width: 0;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--markdown-block-gap, 9px);
     font-family: var(--markdown-font-family, inherit);
     overflow-wrap: anywhere;

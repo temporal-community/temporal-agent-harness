@@ -1574,6 +1574,7 @@
         <div class="composer-toolbar">
           {#if showTarget && selectedHandler}
             <Chip
+              class="target-chip"
               tone="model"
               fill="quiet"
               toned
@@ -1697,11 +1698,15 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* Every grid in the chat pins its one column to `minmax(0, 1fr)`. Left implicit it is
+     `auto`, which grows to its widest child's min-content — an approval card, a long tool
+     input — and carries everything else past the pane's edge with it. */
   .chat-shell {
     position: relative;
     min-width: 0;
     min-height: 0;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) auto auto;
     border-right: 1px solid var(--border);
   }
@@ -1826,6 +1831,7 @@
     position: relative;
     width: min(720px, 82%);
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     align-self: flex-start;
     margin-left: 40px;
     padding: 8px 10px;
@@ -2251,6 +2257,7 @@
      single approval look like chrome stacked on chrome. */
   .pending-approvals {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     margin: 0 clamp(18px, 5vw, 72px) 10px;
   }
@@ -2262,6 +2269,7 @@
   .pending-approval-card {
     min-width: 0;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     padding: 12px;
     border: 1px solid var(--border);
@@ -2497,6 +2505,15 @@
     gap: var(--gap-sm);
     align-items: center;
     margin-bottom: var(--gap-sm);
+  }
+
+  /* The handler chip gives way first, truncating its target; the rest keep their words. */
+  .composer-toolbar :global(.chip) {
+    flex-shrink: 0;
+  }
+
+  .composer-toolbar :global(.target-chip) {
+    flex-shrink: 1;
   }
 
   .composer-toolbar :global(.stop-chip) {
