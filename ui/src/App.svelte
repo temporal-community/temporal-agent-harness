@@ -31,6 +31,7 @@
     type ReplaySurface
   } from "$lib/state/replayHotkeys";
   import { setFaviconTone } from "$lib/state/favicon";
+  import { focusReturnTarget } from "$lib/state/quickSwitch";
 
   const savedPrefs = readOperatorPrefs();
 
@@ -522,12 +523,33 @@
     history.replaceState(history.state, "", url);
   }
 
+  /* A plain field, like `drawerSized`: nothing on screen reads it. */
+  let focusBeforeSessionManager: HTMLElement | null = null;
+
   function holdSessionManager(open: boolean): void {
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const drawerNode = document.getElementById("session-manager-drawer");
+    /* Body means nothing was focused — Safari does not focus a clicked button — which the
+       return below reads as "the icon". */
+    if (open && !sessionDrawerOpen) focusBeforeSessionManager = active === document.body ? null : active;
+    /* Only when the drawer is holding focus, because closing it would drop focus on the body. A
+       close from the icon or from the rail leaves focus where the reader already has it. */
+    const returnFocus = !open && active != null && drawerNode?.contains(active) === true;
+
     sessionManagerHeld = open;
     /* Dragged shut and then asked for again: the width it opens at, like the
        bottom drawer's own height. */
     if (open && sessionDrawerWidth === 0) sessionDrawerWidth = SESSION_DRAWER_DEFAULT_W;
     persistSessionManager(open);
+
+    if (returnFocus) {
+      /* `preventScroll`, because the rail scrolls sideways and focus() would slide it. */
+      focusReturnTarget(
+        focusBeforeSessionManager,
+        drawerNode,
+        document.querySelector<HTMLElement>(".session-drawer-trigger")
+      )?.focus({ preventScroll: true });
+    }
   }
 
   function toggleSessionManager(): void {
@@ -689,6 +711,7 @@
           refreshingAgents={run.refreshingAgents}
           agentsError={run.agentsError}
           onTabChange={(tab) => (sessionManagerTab = tab)}
+          onClose={() => holdSessionManager(false)}
         />
       </DockedDrawer>
     </aside>

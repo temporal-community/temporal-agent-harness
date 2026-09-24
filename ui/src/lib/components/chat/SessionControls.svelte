@@ -23,6 +23,8 @@
     STATUS_TONES,
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
+  import { scrollFollower } from "$lib/state/followScroll";
+  import { handleListKey, keptHighlight } from "$lib/state/quickSwitch";
 
   type MenuTab = "sessions" | "new";
   type Display = "launcher" | "pane";
@@ -58,6 +60,8 @@
     /** Agent re-list failure — shown in the picker, like `sessionsError`. */
     agentsError?: string | null;
     onTabChange?: (tab: MenuTab) => void;
+    /** Pane only: Enter and Escape from the keyboard are done with the drawer. */
+    onClose?: () => void;
   }
 
   let {
@@ -84,7 +88,8 @@
     onRefreshAgents,
     refreshingAgents = false,
     agentsError = null,
-    onTabChange
+    onTabChange,
+    onClose
   }: Props = $props();
 
   /**
@@ -371,6 +376,52 @@
     if (menuTab === "new") await onRefreshAgents?.();
     else await onRefreshSessions?.();
   }
+
+  /* What the reader last arrowed to. The row shown as highlighted is derived from it, so a
+     filter that hides that row lands on the first match without an effect to keep in step. */
+  let arrowedId = $state<string | null>(null);
+  const filteredIds = $derived(filteredSessionItems.map((session) => session.workflow_id));
+  const highlightedId = $derived(keptHighlight(filteredIds, arrowedId));
+  let sessionListElement = $state<HTMLElement | null>(null);
+  /* No `onscroll` handed over, on purpose: that is how the follower stands down for a reader
+     who scrolled the playhead away, and here every arrow press is the reader asking to see
+     the row. */
+  const listFollower = scrollFollower(() => sessionListElement);
+
+  $effect(() => {
+    if (highlightedId) listFollower.to(sessionOptionId(highlightedId));
+  });
+
+  function sessionOptionId(workflowId: string): string {
+    return `session-option-${workflowId}`;
+  }
+
+  function handleSearchKeydown(event: KeyboardEvent): void {
+    handleListKey(event, highlightedId == null ? -1 : filteredIds.indexOf(highlightedId), filteredIds.length, {
+      move: (index) => (arrowedId = filteredIds[index]),
+      pick: (index) => {
+        void openSession(filteredIds[index]);
+        onClose?.();
+      },
+      close: () => onClose?.()
+    });
+  }
+
+  /* The New session tab has no search box: its first row takes focus on open, so the keys
+     move real focus along the rows (the menu pattern) instead of a highlight. */
+  function handleAgentListKeydown(event: KeyboardEvent): void {
+    const rows = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(".agent-row")];
+    handleListKey(event, rows.indexOf(document.activeElement as HTMLElement), rows.length, {
+      move: (index) => rows[index].focus(),
+      /* A blocked row stays inert to Enter, and a press that started nothing is not "done". */
+      pick: (index) => {
+        if (agentBlocked(agents[index])) return;
+        void startNewSession(agents[index]);
+        onClose?.();
+      },
+      close: () => onClose?.()
+    });
+  }
 </script>
 
 {#if display === "launcher"}
@@ -446,7 +497,7 @@
           {#if agentsError}
             <p class="session-empty">{agentsError}</p>
           {/if}
-          <div class="agent-list" role="menu" {@attach focusFirst}>
+          <div class="agent-list" role="menu" tabindex="-1" onkeydown={handleAgentListKeydown} {@attach focusFirst}>
             <!-- Keyed on `key`, which load_agent_registry refuses to let repeat.
                  `workflow_type` it does not check, and a Svelte duplicate key throws
                  in production too — so keying on it would turn a survivable typo in
@@ -496,15 +547,29 @@
         {:else}
           <label class="session-search">
             <Search size={14} aria-hidden="true" />
+            <!-- Typing starts the pick over from the first match, as every quick switcher does. -->
             <input
               {@attach focusFirst}
               bind:value={sessionSearch}
               placeholder="Search sessions"
               aria-label="Search sessions"
+              role="combobox"
+              aria-autocomplete="list"
+              aria-controls="session-listbox"
+              aria-expanded="true"
+              aria-activedescendant={highlightedId ? sessionOptionId(highlightedId) : undefined}
+              oninput={() => (arrowedId = null)}
+              onkeydown={handleSearchKeydown}
             />
           </label>
 
-          <div class="session-list">
+          <div
+            class="session-list"
+            id="session-listbox"
+            role="listbox"
+            aria-label="Sessions"
+            bind:this={sessionListElement}
+          >
             {#if sessionsError}
               <p class="session-empty">{sessionsError}</p>
             {/if}
@@ -517,7 +582,10 @@
               <div class="session-item">
                 <button
                   type="button"
-                  class={`session-row ${item.workflow_id === sessionId ? "active" : ""}`}
+                  id={sessionOptionId(item.workflow_id)}
+                  class={["session-row", item.workflow_id === sessionId && "active", item.workflow_id === highlightedId && "highlighted"]}
+                  role="option"
+                  aria-selected={item.workflow_id === highlightedId}
                   aria-current={item.workflow_id === sessionId ? "true" : undefined}
                   onclick={() => void openSession(item.workflow_id)}
                 >
@@ -712,7 +780,8 @@
      drawn outside a full-width row is clipped away by the container and only the
      top edge of it survives. */
   .agent-row:focus-visible,
-  .session-row:focus-visible {
+  .session-row:focus-visible,
+  .session-row.highlighted {
     outline: 2px solid var(--focus-ring);
     outline-offset: -2px;
   }
@@ -850,6 +919,14 @@
     .session-item:hover {
       transform: translateY(-1px);
     }
+  }
+
+  /* The hover fill, outside the hover query: the highlight is where the keyboard is, on any
+     device. Before `.active`, so the current session keeps its own fill and the ring above
+     says which row Enter will open. */
+  .session-row.highlighted {
+    border-color: color-mix(in srgb, var(--reasoning) 38%, var(--border-strong));
+    background: color-mix(in srgb, var(--reasoning) 5%, var(--surface-2));
   }
 
   .session-row.active {
