@@ -9,7 +9,7 @@
   import HotkeyHelp from "$lib/components/flow/HotkeyHelp.svelte";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
-  import { Keyboard } from "@lucide/svelte";
+  import { Keyboard, PanelLeft } from "@lucide/svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
   import ApprovalDecisionPanel from "$lib/components/agent/ApprovalDecisionPanel.svelte";
   import AgentStatePanel from "$lib/components/agent/AgentStatePanel.svelte";
@@ -30,6 +30,7 @@
     type ReplaySurface
   } from "$lib/state/replayHotkeys";
   import { setFaviconTone } from "$lib/state/favicon";
+  import { dismissable } from "$lib/state/dismissable.svelte";
 
   const savedPrefs = readOperatorPrefs();
 
@@ -87,6 +88,8 @@
       : "all"
   );
   let hotkeyHelpOpen = $state(false);
+  let sessionManagerTab = $state<"sessions" | "new">("sessions");
+  let sessionManagerOpen = $state(false);
 
   if (savedPrefs.followDefault === false) {
     run.following = false;
@@ -535,6 +538,11 @@
     }
     if (drawer.groups.length === 0) drawer.openPane({ kind: "latency" });
   }
+
+  function toggleSessionManager(): void {
+    sessionManagerOpen = !sessionManagerOpen;
+    if (sessionManagerOpen) void run.ensureSessionsEnriched();
+  }
 </script>
 
 <svelte:window
@@ -560,28 +568,18 @@
   <div class="chrome">
     <PaneMinimap {stack} describe={describePane}>
       {#snippet lead()}
-        <SessionControls
-          sessions={run.sessions}
-          agents={run.agents}
-          sessionId={run.runInfo.sessionId}
-          connecting={run.connecting}
-          sending={run.sending}
-          creatingSession={run.creatingSession}
-          refreshingSessions={run.refreshingSessions}
-          closed={run.sessionClosed}
-          closedWorkflowIds={run.closedWorkflowIds}
-          error={run.connectionError}
-          sessionsError={run.sessionsError}
-          {pendingApprovalCount}
-          onNewSession={(workflowType) => run.startNewSession(workflowType)}
-          onSelectSession={(sessionId) => run.selectSession(sessionId)}
-          onRefreshSessions={() => run.refreshSessions()}
-          onEnsureSessions={() => run.ensureSessionsEnriched()}
-          onEnsureAgents={() => run.ensureAgents()}
-          onRefreshAgents={() => run.refreshAgents()}
-          refreshingAgents={run.refreshingAgents}
-          agentsError={run.agentsError}
-        />
+        <IconButton
+          class="rail-icon session-drawer-trigger"
+          label={sessionManagerOpen ? "Close Session Manager" : "Open Session Manager"}
+          pressed={sessionManagerOpen}
+          aria-expanded={sessionManagerOpen}
+          aria-controls="session-manager-drawer"
+          data-tip-below
+          data-tip-align="start"
+          onclick={toggleSessionManager}
+        >
+          <PanelLeft size={13} />
+        </IconButton>
       {/snippet}
 
       <!-- The shortcuts are only real if they can be found. The minimap is the
@@ -612,6 +610,43 @@
         report={stack.unknownPanes}
         onDismiss={() => stack.dismissUnknownPanes()}
       />
+    {/if}
+
+    {#if sessionManagerOpen}
+      <aside
+        class="session-drawer"
+        id="session-manager-drawer"
+        aria-label="Session Manager"
+        {@attach dismissable({
+          ondismiss: () => (sessionManagerOpen = false),
+          keep: ".session-drawer-trigger"
+        })}
+      >
+        <SessionControls
+          tab={sessionManagerTab}
+          sessions={run.sessions}
+          agents={run.agents}
+          sessionId={run.runInfo.sessionId}
+          connecting={run.connecting}
+          sending={run.sending}
+          creatingSession={run.creatingSession}
+          refreshingSessions={run.refreshingSessions}
+          closed={run.sessionClosed}
+          closedWorkflowIds={run.closedWorkflowIds}
+          error={run.connectionError}
+          sessionsError={run.sessionsError}
+          {pendingApprovalCount}
+          onNewSession={(workflowType) => run.startNewSession(workflowType)}
+          onSelectSession={(sessionId) => run.selectSession(sessionId)}
+          onRefreshSessions={() => run.refreshSessions()}
+          onEnsureSessions={() => run.ensureSessionsEnriched()}
+          onEnsureAgents={() => run.ensureAgents()}
+          onRefreshAgents={() => run.refreshAgents()}
+          refreshingAgents={run.refreshingAgents}
+          agentsError={run.agentsError}
+          onTabChange={(tab) => (sessionManagerTab = tab)}
+        />
+      </aside>
     {/if}
   </div>
 
@@ -1001,9 +1036,41 @@
   /* One grid row, however many rows of chrome are in it, so the rail keeps the
      whole of what is left whether or not the notice is up. */
   .chrome {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
+  }
+
+  /* A meta-control over the desk, not one of its columns. Anchoring it to the
+     chrome keeps it out of the app grid and leaves every pane at the same width
+     whether the drawer is mounted or not. */
+  .session-drawer {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 44;
+    width: min(420px, calc(100vw - 32px));
+    height: min(560px, calc(100vh - 104px));
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+    border: 1px solid var(--border-strong);
+    border-left: 0;
+    background: var(--surface-1);
+    box-shadow: var(--shadow-popover);
+    opacity: 1;
+    transform: translateX(0);
+    transition:
+      opacity var(--duration-fast) var(--ease-out),
+      transform var(--duration-fast) var(--ease-out);
+  }
+
+  @starting-style {
+    .session-drawer {
+      opacity: 0;
+      transform: translateX(-12px);
+    }
   }
 
   /* PaneShell's own body is a flex column, so `flex: 1 1 0` is what gives this a
@@ -1063,5 +1130,18 @@
 
   .pane-content :global(.roll) {
     flex: 1 1 120px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .session-drawer {
+      transition: none;
+    }
+
+    @starting-style {
+      .session-drawer {
+        opacity: 0;
+        transform: none;
+      }
+    }
   }
 </style>
