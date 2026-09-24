@@ -30,6 +30,7 @@
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
   import { codeModeHostsByRow } from "$lib/state/codeModeNesting";
   import { formatLogValue } from "$lib/state/logValue";
+  import { NO_THOUGHT_SUMMARY, foldTurnThought, type TurnThought } from "$lib/state/thoughtSummary";
   import { formatElapsedDuration, type ReplayLogRow } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
@@ -135,6 +136,9 @@
   let observedSessionId = $state<string | null>(null);
   let expandedActivityTurns = $state<number[]>([]);
   let expandedLogRows = $state<string[]>([]);
+  /* By turn id rather than on the element: the list is unkeyed and re-renders as rows
+     arrive or the cursor moves, and a reader's open thought has to outlive both. */
+  let openThoughts = $state<string[]>([]);
   let observedActivitySessionId = $state<string | null>(null);
   let observedActivityOrdinals = $state<Record<number, number>>({});
   let resolvingApprovalIds = $state<string[]>([]);
@@ -541,6 +545,19 @@
     expandedActivityTurns = activityExpanded(turnNumber)
       ? expandedActivityTurns.filter((item) => item !== turnNumber)
       : [...expandedActivityTurns, turnNumber];
+  }
+
+  function setThoughtOpen(turnId: string, open: boolean): void {
+    if (open === openThoughts.includes(turnId)) return;
+    openThoughts = open
+      ? [...openThoughts, turnId]
+      : openThoughts.filter((item) => item !== turnId);
+  }
+
+  function thoughtLabel(thought: TurnThought): string {
+    return thought.seconds > 0
+      ? `Thought ${formatElapsedDuration(thought.seconds * 1000)}`
+      : "Thought";
   }
 
   function logExpanded(row: ReplayLogRow): boolean {
@@ -1190,6 +1207,7 @@
           {@const expanded = activityExpanded(message.turnNumber)}
           {#if activityLogs.length > 0 && activeLog}
             {@const turnSummary = turnActivitySummary(message.turnNumber, activityLogs)}
+            {@const thought = foldTurnThought(activityLogs)}
             <div class={`activity-feed ${expanded ? "expanded" : ""}`}>
               {#key activeLog.ordinal}
                 <button
@@ -1224,65 +1242,83 @@
               {#if expanded}
                 <div class="activity-list">
                   {#each activityLogs as log}
-                    {@const rowExpanded = logExpanded(log)}
-                    {@const fullDetail = logFullDetail(log)}
-                    {@const scriptDetail = logScript(log)}
-                    {@const rowDuration = logElapsedDuration(log, activityLogs)}
-                    {@const nested = codeModeHosts.has(log.id)}
-                    <div
-                      class={`activity-row ${rowExpanded ? "expanded" : ""} ${nested ? "nested" : ""}`}
-                    >
-                      <button
-                        type="button"
-                        class={`${activityLineClass(log, log.ordinal === activeLog.ordinal)} activity-row-button`}
-                        aria-expanded={rowExpanded}
-                        onclick={() => toggleLog(log)}
-                      >
-                        <span class="activity-icon" aria-hidden="true">
-                          {#if log.actor === "model"}
-                            <Cpu size={14} />
-                          {:else if log.actor === "reasoning"}
-                            <BrainCircuit size={14} />
-                          {:else if log.actor === "tool"}
-                            <Wrench size={14} />
-                          {:else if log.actor === "approval"}
-                            <ShieldCheck size={14} />
-                          {:else if log.actor === "subagent"}
-                            <MessageCircle size={14} />
-                          {:else if logTone(log) === "error"}
-                            <AlertTriangle size={14} />
-                          {:else if logTone(log) === "done"}
-                            <CheckCircle2 size={14} />
-                          {:else}
-                            <Clock3 size={14} />
-                          {/if}
-                        </span>
-                        <span class="activity-copy">
-                          <strong>{log.label}</strong>
-                          {#if nested}
-                            <StatusChip label="host call" kind="tool" compact />
-                          {/if}
-                          {#if logDetail(log)}
-                            <span>{logDetail(log)}</span>
-                          {/if}
-                        </span>
-                        <span
-                          class="activity-duration"
-                          aria-hidden={rowDuration ? undefined : "true"}
+                    {#if log.actor === "reasoning" && thought}
+                      {#if log.id === thought.firstRowId}
+                        <details
+                          class="activity-row thought"
+                          open={openThoughts.includes(thought.turnId)}
+                          ontoggle={(event) => setThoughtOpen(thought.turnId, event.currentTarget.open)}
                         >
-                          {rowDuration ?? ""}
-                        </span>
-                        <time>{time(log.timestamp)}</time>
-                        <ChevronDown class="activity-row-chevron" size={13} aria-hidden="true" />
-                      </button>
-
-                      {#if rowExpanded}
-                        {#if scriptDetail}
-                          <div class="script-detail-wrap"><pre class="activity-script-detail" data-language="python"><code>{scriptDetail}</code></pre></div>
-                        {/if}
-                        <pre class="activity-detail">{fullDetail}</pre>
+                          <summary class="thought-summary">
+                            <span class="thought-label">{thoughtLabel(thought)}</span>
+                            {#if thought.thinking}
+                              <StatusChip label="thinking" kind="reasoning" active compact />
+                            {/if}
+                          </summary>
+                          <p class="thought-text">{thought.text.trim() || NO_THOUGHT_SUMMARY}</p>
+                        </details>
                       {/if}
-                    </div>
+                    {:else}
+                      {@const rowExpanded = logExpanded(log)}
+                      {@const fullDetail = logFullDetail(log)}
+                      {@const scriptDetail = logScript(log)}
+                      {@const rowDuration = logElapsedDuration(log, activityLogs)}
+                      {@const nested = codeModeHosts.has(log.id)}
+                      <div
+                        class={`activity-row ${rowExpanded ? "expanded" : ""} ${nested ? "nested" : ""}`}
+                      >
+                        <button
+                          type="button"
+                          class={`${activityLineClass(log, log.ordinal === activeLog.ordinal)} activity-row-button`}
+                          aria-expanded={rowExpanded}
+                          onclick={() => toggleLog(log)}
+                        >
+                          <span class="activity-icon" aria-hidden="true">
+                            {#if log.actor === "model"}
+                              <Cpu size={14} />
+                            {:else if log.actor === "reasoning"}
+                              <BrainCircuit size={14} />
+                            {:else if log.actor === "tool"}
+                              <Wrench size={14} />
+                            {:else if log.actor === "approval"}
+                              <ShieldCheck size={14} />
+                            {:else if log.actor === "subagent"}
+                              <MessageCircle size={14} />
+                            {:else if logTone(log) === "error"}
+                              <AlertTriangle size={14} />
+                            {:else if logTone(log) === "done"}
+                              <CheckCircle2 size={14} />
+                            {:else}
+                              <Clock3 size={14} />
+                            {/if}
+                          </span>
+                          <span class="activity-copy">
+                            <strong>{log.label}</strong>
+                            {#if nested}
+                              <StatusChip label="host call" kind="tool" compact />
+                            {/if}
+                            {#if logDetail(log)}
+                              <span>{logDetail(log)}</span>
+                            {/if}
+                          </span>
+                          <span
+                            class="activity-duration"
+                            aria-hidden={rowDuration ? undefined : "true"}
+                          >
+                            {rowDuration ?? ""}
+                          </span>
+                          <time>{time(log.timestamp)}</time>
+                          <ChevronDown class="activity-row-chevron" size={13} aria-hidden="true" />
+                        </button>
+
+                        {#if rowExpanded}
+                          {#if scriptDetail}
+                            <div class="script-detail-wrap"><pre class="activity-script-detail" data-language="python"><code>{scriptDetail}</code></pre></div>
+                          {/if}
+                          <pre class="activity-detail">{fullDetail}</pre>
+                        {/if}
+                      </div>
+                    {/if}
                   {/each}
                 </div>
               {/if}
@@ -1707,6 +1743,45 @@
     min-width: 0;
     display: grid;
     gap: 6px;
+  }
+
+  .thought-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--gap-sm);
+    width: max-content;
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .thought-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .thought-summary:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    outline-offset: 2px;
+  }
+
+  .thought-label {
+    padding: 2px 6px;
+    border: 1px solid color-mix(in srgb, var(--reasoning) 40%, var(--border));
+    border-radius: var(--radius-sm);
+    background: var(--surface-1);
+    color: var(--reasoning);
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
+  }
+
+  .thought-text {
+    margin: 0 0 0 30px;
+    color: var(--text-3);
+    font-size: var(--font-sm);
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   /* A call a Code Mode script made, hung off the host's icon column. */

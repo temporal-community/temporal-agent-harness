@@ -12,7 +12,7 @@ import { describe, it } from "vitest";
 
 import { buildAgentGraph } from "./flowProjection.ts";
 import { buildReplayLog } from "./replayLog.ts";
-import { NO_THOUGHT_SUMMARY, thoughtDeltaText } from "./thoughtSummary.ts";
+import { NO_THOUGHT_SUMMARY, foldTurnThought, thoughtDeltaText } from "./thoughtSummary.ts";
 import { buildTranscript } from "./transcript.ts";
 
 /* The shapes, as the three producers in temporal_agent_harness/ai_sdks actually dump them —
@@ -199,5 +199,49 @@ describe("one extractor, not four", () => {
         `${path} has grown its own copy of the thought extractor again`
       );
     }
+  });
+});
+
+describe("folding a turn's reasoning into one row", () => {
+  /* Think, run a tool, think again: 4s and 1s of thinking inside 13s of turn. */
+  const rows = [
+    ["model_interaction_started", 100],
+    ["thought_summary", 101, "Weighing "],
+    ["thought_summary", 104, "options. "],
+    ["model_interaction_ended", 105],
+    ["tool_start", 106],
+    ["tool_end", 110],
+    ["model_interaction_started", 111],
+    ["thought_summary", 112, "Done."],
+    ["model_interaction_ended", 113]
+  ].map(([event, timestamp, body], index) => ({
+    id: `r${index}`,
+    turnId: "turn-1",
+    event,
+    timestamp,
+    body
+  }));
+
+  it("sums each model call's thinking from frame timestamps, not the turn's span", () => {
+    const thought = foldTurnThought(rows);
+    assert.equal(thought.seconds, 5, "the tool call between the two thoughts is not thinking");
+    assert.equal(thought.text, "Weighing options. Done.");
+    assert.equal(thought.thinking, false);
+    assert.equal(thought.firstRowId, "r1");
+    assert.equal(thought.turnId, "turn-1");
+  });
+
+  it("reads a prefix as of its last row", () => {
+    const midThought = foldTurnThought(rows.slice(0, 3));
+    assert.equal(midThought.seconds, 4, "the duration stops where the prefix does");
+    assert.equal(midThought.thinking, true, "the call that is thinking has not ended yet");
+
+    const between = foldTurnThought(rows.slice(0, 7));
+    assert.equal(between.seconds, 4);
+    assert.equal(between.thinking, false, "a new call has not thought yet");
+  });
+
+  it("is nothing for a turn that has not thought", () => {
+    assert.equal(foldTurnThought(rows.slice(0, 1)), null);
   });
 });
