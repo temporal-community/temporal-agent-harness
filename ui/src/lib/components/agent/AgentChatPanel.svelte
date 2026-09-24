@@ -1686,6 +1686,7 @@
 
 <style>
   .agent-chat {
+    container: agent-chat / inline-size;
     width: 100%;
     height: 100%;
     min-height: 0;
@@ -1921,6 +1922,26 @@
     margin-left: 10px;
     padding-left: 12px;
     border-left: 1px solid var(--border);
+  }
+
+  /* The chip names why the row is indented, so it keeps its words; the tool name after it
+     is what gives way. `Chip` allows itself to shrink, which suits a lone chip, not this. */
+  .activity-row-button .activity-copy > :global(.chip) {
+    flex-shrink: 0;
+  }
+
+  /* At the default chat width a label, the chip and a tool name do not fit on one line beside
+     the duration and time, so the name wraps below them rather than vanishing. */
+  @container agent-chat (max-width: 480px) {
+    .activity-row.nested {
+      margin-left: 4px;
+      padding-left: 6px;
+    }
+
+    .activity-row.nested .activity-copy {
+      flex-wrap: wrap;
+      row-gap: 2px;
+    }
   }
 
   .activity-summary,

@@ -50,6 +50,15 @@ describe("the chat pane stays inside its pane", () => {
     assert.match(rule(chat, ".message-list"), /isolation: isolate;/);
   });
 
+  it("keeps a Code Mode child's HOST CALL chip whole, and its tool name on screen", () => {
+    assert.match(rule(chat, ".activity-row-button .activity-copy > :global(.chip)"), /flex-shrink: 0;/);
+    assert.match(rule(chat, ".agent-chat"), /container: agent-chat \/ inline-size;/);
+    const narrow = chat.match(/@container agent-chat \(max-width: 480px\) \{([\s\S]*?)\n {2}\}/)?.[1];
+    assert.ok(narrow, "a narrow-chat rule for nested rows");
+    assert.match(narrow, /\.activity-row\.nested \{[^}]*margin-left: 4px;/, "a smaller indent");
+    assert.match(narrow, /\.activity-row\.nested \.activity-copy \{[^}]*flex-wrap: wrap;/);
+  });
+
   it("lets only the handler chip give way in the footer toolbar", () => {
     assert.match(rule(chat, ".composer-toolbar :global(.chip)"), /flex-shrink: 0;/);
     assert.match(rule(chat, ".composer-toolbar :global(.target-chip)"), /flex-shrink: 1;/);
