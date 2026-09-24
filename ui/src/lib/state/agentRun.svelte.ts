@@ -8,7 +8,7 @@ import type {
 import type { AgentApi } from "$lib/api/client";
 import type { AgentDescriptor, Session } from "$lib/api/types";
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
-import { HttpAgentApi } from "$lib/api/httpClient";
+import { HttpAgentApi, approvalAlreadyResolved } from "$lib/api/httpClient";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
 import { chooseBootSession } from "./bootSession";
@@ -1565,8 +1565,10 @@ export class AgentRunController {
         remember: approved && remember
       });
     } catch (error) {
-      this.connectionError =
-        error instanceof Error ? error.message : "Failed to resolve tool approval.";
+      if (!approvalAlreadyResolved(error)) {
+        this.connectionError =
+          error instanceof Error ? error.message : "Failed to resolve tool approval.";
+      }
       throw error;
     }
   }

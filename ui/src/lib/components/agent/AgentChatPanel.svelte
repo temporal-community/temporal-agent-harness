@@ -23,6 +23,7 @@
     FileCitationAnnotation,
     Session
   } from "$lib/api/types";
+  import { approvalAlreadyResolved } from "$lib/api/httpClient";
   import { formatTokens } from "$lib/cost/pricing";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
@@ -137,6 +138,7 @@
   let observedActivityOrdinals = $state<Record<number, number>>({});
   let resolvingApprovalIds = $state<string[]>([]);
   let approvalErrors = $state<Record<string, string>>({});
+  let decidedApprovalIds = $state<string[]>([]);
   let messageListElement = $state<HTMLDivElement | null>(null);
   let pickerSelectionIndex = $state(0);
   let pickerSignature = $state("");
@@ -274,7 +276,8 @@
       sending ? "sending" : "idle",
       connecting ? "connecting" : "connected",
       resolvingApprovalIds.length,
-      Object.keys(approvalErrors).length
+      Object.keys(approvalErrors).length,
+      decidedApprovalIds.length
     ].join("|")
   );
   $effect(() => {
@@ -451,6 +454,11 @@
   function approvalError(row: ReplayLogRow): string | null {
     const key = approvalKey(row);
     return key ? approvalErrors[key] ?? null : null;
+  }
+
+  function approvalDecidedElsewhere(row: ReplayLogRow): boolean {
+    const key = approvalKey(row);
+    return key != null && decidedApprovalIds.includes(key);
   }
 
   /* The card's body: what is being gated. One line, because this is a decision
@@ -748,10 +756,14 @@
     try {
       await onApproveTool(approvalWorkflowId(row), toolId, approved, remember);
     } catch (error) {
-      approvalErrors = {
-        ...approvalErrors,
-        [key]: error instanceof Error ? error.message : "Approval request failed."
-      };
+      if (approvalAlreadyResolved(error)) {
+        decidedApprovalIds = [...decidedApprovalIds, key];
+      } else {
+        approvalErrors = {
+          ...approvalErrors,
+          [key]: error instanceof Error ? error.message : "Approval request failed."
+        };
+      }
     } finally {
       resolvingApprovalIds = resolvingApprovalIds.filter((item) => item !== key);
     }
@@ -1354,7 +1366,9 @@
                 Reject
               </Chip>
             </div>
-            {#if approvalError(approval)}
+            {#if approvalDecidedElsewhere(approval)}
+              <p class="approval-note">Already decided</p>
+            {:else if approvalError(approval)}
               <p class="approval-error">{approvalError(approval)}</p>
             {/if}
           </article>
@@ -1930,6 +1944,12 @@
     margin: 0;
     min-width: 0;
     color: var(--error);
+    font-size: var(--font-sm);
+  }
+
+  .approval-note {
+    margin: 0;
+    color: var(--text-3);
     font-size: var(--font-sm);
   }
 

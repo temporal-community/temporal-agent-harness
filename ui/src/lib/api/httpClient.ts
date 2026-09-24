@@ -19,24 +19,43 @@ function apiPath(path: string): string {
   return `api/${path.replace(/^\/+/, "")}`;
 }
 
+/** A failed request, carrying the server's `error` code alongside its message. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly code: string | null
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * The approval was answered before this request landed — by another tab, or by an
+ * "Always allow" rule. The decision stands; this one simply arrived second.
+ */
+export function approvalAlreadyResolved(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "ToolApprovalAlreadyResolved";
+}
+
 async function json<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
   if (!response.ok) {
-    throw new Error(await responseErrorMessage(response, `Request failed (${response.status})`));
+    throw await responseError(response, `Request failed (${response.status})`);
   }
   return response.json() as Promise<T>;
 }
 
-async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
+async function responseError(response: Response, fallback: string): Promise<ApiError> {
   const body = await response.text();
-  if (!body) return fallback;
+  if (!body) return new ApiError(fallback, null);
   try {
-    const parsed = JSON.parse(body) as { message?: unknown };
-    return typeof parsed.message === "string" && parsed.message.trim()
-      ? parsed.message
-      : body;
+    const parsed = JSON.parse(body) as { message?: unknown; error?: unknown };
+    return new ApiError(
+      typeof parsed.message === "string" && parsed.message.trim() ? parsed.message : body,
+      typeof parsed.error === "string" ? parsed.error : null
+    );
   } catch {
-    return body;
+    return new ApiError(body, null);
   }
 }
 
@@ -115,7 +134,7 @@ export class HttpAgentApi implements AgentApi {
       { signal }
     );
     if (!response.ok) {
-      throw new Error(await responseErrorMessage(response, `Attach failed (${response.status})`));
+      throw await responseError(response, `Attach failed (${response.status})`);
     }
     yield* readSse(response);
   }
@@ -140,7 +159,7 @@ export class HttpAgentApi implements AgentApi {
       signal
     });
     if (!response.ok) {
-      throw new Error(await responseErrorMessage(response, `Chat failed (${response.status})`));
+      throw await responseError(response, `Chat failed (${response.status})`);
     }
     yield* readSse(response);
   }
