@@ -67,6 +67,7 @@
   import {
     formatDuration,
     formatTimestamp,
+    rowIdentifiers,
     statusNote,
     type TurnLogGroup
   } from "$lib/state/replayLog";
@@ -443,6 +444,7 @@
                   {#if expanded}
                     {@const primary = primaryPayload(row)}
                     {@const fullDetail = fullLogDetail(row)}
+                    {@const ids = rowIdentifiers(row)}
                     <div class="line-details" id={`log-row-${row.id}-details`}>
                       {#if primary}
                         <section class="primary-payload" aria-label={`${primary.label} preview`}>
@@ -469,28 +471,18 @@
                           {/each}
                         </div>
                       {/if}
-                      {#if row.workflowId || row.toolId}
+                      {#if ids.length}
                         <dl class="row-ids">
-                          {#if row.workflowId}
+                          {#each ids as id (id.label)}
                             <div>
-                              <dt>workflow</dt>
+                              <dt>{id.label}</dt>
                               <dd>
-                                <Copyable value={row.workflowId} label="Copy workflow ID">
-                                  <code>{row.workflowId}</code>
+                                <Copyable value={id.value} label={`Copy ${id.label} ID`}>
+                                  <code title={id.value}>{id.value}</code>
                                 </Copyable>
                               </dd>
                             </div>
-                          {/if}
-                          {#if row.toolId}
-                            <div>
-                              <dt>tool call</dt>
-                              <dd>
-                                <Copyable value={row.toolId} label="Copy tool call ID">
-                                  <code>{row.toolId}</code>
-                                </Copyable>
-                              </dd>
-                            </div>
-                          {/if}
+                          {/each}
                         </dl>
                       {/if}
                       <section class="full-details" aria-label="Full details">
@@ -928,18 +920,21 @@
     color: var(--text-1);
   }
 
+  /* One label column for the whole list, as wide as its widest label, so the
+     values line up whichever IDs a row happens to have. */
   .row-ids {
     display: grid;
-    gap: 2px;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 2px 6px;
     margin: 0;
   }
 
   .row-ids div {
     min-width: 0;
     display: grid;
-    grid-template-columns: 64px minmax(0, 1fr);
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
     align-items: center;
-    gap: 6px;
   }
 
   .row-ids dt {
