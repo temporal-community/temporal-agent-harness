@@ -15,7 +15,6 @@
   import { RefreshCw, Search } from "@lucide/svelte";
   import type { Attachment } from "svelte/attachments";
   import type { AgentDescriptor, Session } from "$lib/api/types";
-  import AgentGlyph from "$lib/components/primitives/AgentGlyph.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import Copyable from "$lib/components/primitives/Copyable.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
@@ -24,7 +23,7 @@
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
   import { scrollFollower } from "$lib/state/followScroll";
-  import { handleListKey, keptHighlight } from "$lib/state/quickSwitch";
+  import { chooseAgentRow, handleListKey, keptHighlight } from "$lib/state/quickSwitch";
 
   type MenuTab = "sessions" | "new";
   type Display = "launcher" | "pane";
@@ -223,17 +222,6 @@
     );
   }
 
-  function glyphStatusForSession(
-    session: Session
-  ): "available" | "busy" | "approval" | "error" | "idle" {
-    if (sessionClosedById(session.workflow_id)) return "idle";
-    if (session.workflow_id !== sessionId) return "idle";
-    if (statusKind === "error") return "error";
-    if (statusKind === "approval") return "approval";
-    if (statusKind === "available" || statusKind === "complete") return "available";
-    return "busy";
-  }
-
   function agentDescription(agent: AgentDescriptor): string {
     return agent.description?.trim() || agent.workflow_type;
   }
@@ -274,35 +262,18 @@
   }
 
   /**
-   * The line under the description, for the two states that ask something of the reader.
-   *
-   * It carries the whole message — the condition AND what to do about it — because there is
-   * no reliable hover surface here to put the second half on. The app's `data-tip` is
-   * painted with the host's own pseudo-elements (app.css: "painted, not portalled"), and
-   * this list is a scroll box, so a bubble above the first row is clipped away by
-   * `.agent-list` exactly when someone hovers the thing they cannot click. A native `title`
-   * survives that but costs a second of still hover to appear, which is too well hidden for
-   * the one line that says why the row will not open.
-   *
-   * So it is always on screen: no hover, no delay, and it reads the same to a keyboard or
-   * touch user. `ready` gets nothing — the chip already said it, and the poller count is
-   * trivia.
+   * The readiness chip's hover text, naming the queue. On the chip rather than as a line in the
+   * row, so every row is the same two lines; what to do about it is the hint a press opens.
    */
-  function agentWorkerNote(
-    agent: AgentDescriptor
-  ): { lead: string; tail: string } | null {
+  function agentWorkerTip(agent: AgentDescriptor): string | undefined {
     switch (agent.worker?.status) {
       case "ready":
-        return null;
+        return undefined;
       case "no_worker":
-        return { lead: "No worker polling", tail: " — start one to use this agent" };
+        return `No worker polling ${agent.task_queue}`;
       default:
-        return { lead: "Could not check for workers on", tail: "" };
+        return `Could not check for workers on ${agent.task_queue}`;
     }
-  }
-
-  function agentGlyphStatus(agent: AgentDescriptor): "available" | "idle" {
-    return agent.worker?.status === "ready" ? "available" : "idle";
   }
 
   /**
@@ -312,20 +283,6 @@
    */
   function agentBlocked(agent: AgentDescriptor): boolean {
     return agent.worker?.status === "no_worker";
-  }
-
-  /**
-   * Why the row will not open, as a native `title`.
-   *
-   * Not the app's `data-tip`: that bubble is painted with the host's own pseudo-elements
-   * (app.css says so in as many words — "painted, not portalled"), and this list is a
-   * scrolling list inside a clipped pane. A tip on the first row would
-   * be clipped away by `.agent-list` exactly when someone hovers the thing they cannot
-   * click. `title` is the browser's, drawn above everything, and cannot be cut off.
-   */
-  function agentBlockedReason(agent: AgentDescriptor): string | undefined {
-    if (!agentBlocked(agent)) return undefined;
-    return `Start a worker polling ${agent.task_queue} before opening a session with this agent.`;
   }
 
   function sessionMatchesSearch(session: Session, term: string): boolean {
@@ -413,15 +370,29 @@
     const rows = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(".agent-row")];
     handleListKey(event, rows.indexOf(document.activeElement as HTMLElement), rows.length, {
       move: (index) => rows[index].focus(),
-      /* A blocked row stays inert to Enter, and a press that started nothing is not "done". */
+      /* A press that only opened the hint started nothing, so it is not "done". */
       pick: (index) => {
-        if (agentBlocked(agents[index])) return;
-        void startNewSession(agents[index]);
-        onClose?.();
+        if (chooseAgent(agents[index])) onClose?.();
       },
       close: () => onClose?.()
     });
   }
+
+  /* One key, so one hint. The drawer closing unmounts all of this, which clears it too. */
+  let hintedAgentKey = $state<string | null>(null);
+
+  /** Click and Enter both: true when a session was started. */
+  function chooseAgent(agent: AgentDescriptor): boolean {
+    const choice = chooseAgentRow(agent.key, agentBlocked(agent));
+    hintedAgentKey = choice.hint;
+    if (choice.start) void startNewSession(agent);
+    return choice.start;
+  }
+
+  /* Leaving the tab unmounts the list; the hint does not wait for it to come back. */
+  const clearHintOnLeave: Attachment<HTMLElement> = () => () => {
+    hintedAgentKey = null;
+  };
 </script>
 
 {#if display === "launcher"}
@@ -497,51 +468,64 @@
           {#if agentsError}
             <p class="session-empty">{agentsError}</p>
           {/if}
-          <div class="agent-list" role="menu" tabindex="-1" onkeydown={handleAgentListKeydown} {@attach focusFirst}>
+          <div
+            class="agent-list"
+            role="menu"
+            tabindex="-1"
+            onkeydown={handleAgentListKeydown}
+            {@attach focusFirst}
+            {@attach clearHintOnLeave}
+          >
             <!-- Keyed on `key`, which load_agent_registry refuses to let repeat.
                  `workflow_type` it does not check, and a Svelte duplicate key throws
                  in production too — so keying on it would turn a survivable typo in
                  agents.toml into an uncaught throw while rendering this list. -->
-            {#each agents as agent (agent.key)}
-              <!-- `aria-disabled`, never `disabled`: the whole point of the state is the
-                   explanation attached to it, and `disabled` drops the row out of the tab
-                   order and suppresses its tooltip — deleting that explanation for a
-                   keyboard user at precisely the moment it becomes true. Same call
-                   IconButton and StepController already make. -->
-              <button
-                type="button"
-                class="agent-row"
-                role="menuitem"
-                aria-disabled={agentBlocked(agent) ? "true" : undefined}
-                title={agentBlockedReason(agent)}
-                onclick={() => void startNewSession(agent)}
-              >
-                <AgentGlyph
-                  label={agent.label}
-                  status={agentGlyphStatus(agent)}
-                />
-                <span class="agent-copy">
-                  <strong>{agent.label}</strong>
-                  <small>{agentDescription(agent)}</small>
-                  <!-- Named queue, not just "no worker": the reader's next move is to start
-                       that worker, and they need to know which one. -->
-                  {#if agentWorkerNote(agent)}
-                    {@const note = agentWorkerNote(agent)!}
-                    <small
-                      class={agent.worker?.status === "no_worker"
-                        ? "agent-note warn"
-                        : "agent-note"}
-                    >
-                      {note.lead} <code>{agent.task_queue}</code>{note.tail}
-                    </small>
+            {#each agents as agent, index (agent.key)}
+              <div class="agent-item">
+                <!-- `aria-disabled`, never `disabled`: a no-worker row still has to be
+                     pressable, because the press is what opens the hint saying which worker
+                     to start. `disabled` would drop it from the tab order and swallow the
+                     click. Same call IconButton and StepController already make. -->
+                <button
+                  type="button"
+                  class="agent-row"
+                  role="menuitem"
+                  aria-disabled={agentBlocked(agent) ? "true" : undefined}
+                  onclick={() => chooseAgent(agent)}
+                >
+                  <span class="agent-copy">
+                    <strong>{agent.label}</strong>
+                    <!-- `title`, not `data-tip`: a description runs to several lines of bubble,
+                         and a painted one is clipped by this scrolling list. -->
+                    <small title={agentDescription(agent)}>{agentDescription(agent)}</small>
+                  </span>
+                  <!-- The tip needs a host, because StatusChip spreads no attributes. Below on
+                       the first row only: above it, the list's own top edge would clip it. -->
+                  <span
+                    class="agent-readiness"
+                    data-tip={agentWorkerTip(agent)}
+                    data-tip-align="end"
+                    data-tip-below={index === 0 || undefined}
+                  >
+                    <StatusChip
+                      label={agentWorkerStatusLabel(agent)}
+                      kind={agentWorkerStatusKind(agent)}
+                      compact
+                    />
+                  </span>
+                </button>
+                <!-- Always mounted and empty until pressed, so the hint is inserted into a live
+                     region that already exists, which is what gets it announced. -->
+                <div class="agent-hint-slot" aria-live="polite">
+                  {#if hintedAgentKey === agent.key}
+                    <p class="agent-hint">
+                      Start a worker on
+                      <Copyable value={agent.task_queue} label="Copy task queue name"><code>{agent.task_queue}</code></Copyable>
+                      to use this agent
+                    </p>
                   {/if}
-                </span>
-                <StatusChip
-                  label={agentWorkerStatusLabel(agent)}
-                  kind={agentWorkerStatusKind(agent)}
-                  compact
-                />
-              </button>
+                </div>
+              </div>
             {/each}
           </div>
         {:else}
@@ -589,10 +573,6 @@
                   aria-current={item.workflow_id === sessionId ? "true" : undefined}
                   onclick={() => void openSession(item.workflow_id)}
                 >
-                  <AgentGlyph
-                    label={sessionAgentLabel(item)}
-                    status={glyphStatusForSession(item)}
-                  />
                   <span class="session-copy">
                     <time>{sessionCreatedAt(item.created_at)}</time>
                     <strong>{sessionInitialMessage(item)}</strong>
@@ -756,10 +736,15 @@
     gap: 8px;
   }
 
+  .agent-item {
+    min-width: 0;
+    display: grid;
+  }
+
   .agent-row {
     min-width: 0;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 9px;
     align-items: center;
     padding: 10px;
@@ -811,7 +796,6 @@
     cursor: default;
   }
 
-  .agent-row[aria-disabled="true"] :global(.agent-glyph),
   .agent-row[aria-disabled="true"] .agent-copy strong {
     opacity: var(--disabled-opacity);
   }
@@ -841,27 +825,23 @@
     white-space: nowrap;
   }
 
-  /* Louder than the description above it when it is a warning, because it is the one line
-     on the row that changes what the reader does next. `unknown` stays muted — it reports
-     that the server could not ask, which is not the agent's fault and not yet the reader's
-     problem. Both keep the ellipsis discipline of their sibling: a long queue name must not
-     widen the pane. */
-  .agent-copy small.agent-note.warn {
-    color: var(--error);
+  /* Under the row it explains, inside the same item, so opening it grows that one row and
+     moves nothing else but what sits below it. */
+  .agent-hint {
+    margin: 0;
+    padding: 6px 10px 0;
+    color: var(--text-2);
+    font-size: var(--font-sm);
   }
 
-  /* The one line allowed to wrap. Its siblings ellipse because a description is expendable
-     past the first clause; this one ends in the instruction, so clipping it would cut off
-     the half that says what to do. */
-  .agent-copy small.agent-note {
-    overflow: visible;
-    text-overflow: clip;
-    white-space: normal;
-  }
-
-  .agent-copy small.agent-note code {
+  .agent-hint code {
     font-family: var(--font-mono);
     font-size: inherit;
+  }
+
+  /* Shown, not hover-revealed: copying the queue name is the one thing this line is for. */
+  .agent-hint :global(.copyable .copy) {
+    opacity: 1;
   }
 
   .session-list {
@@ -876,7 +856,7 @@
   .session-row {
     min-width: 0;
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 9px;
     align-items: start;
     padding: 10px;

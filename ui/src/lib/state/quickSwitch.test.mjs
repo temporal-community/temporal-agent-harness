@@ -114,6 +114,7 @@ describe("the highlight and the filter", () => {
     assert.match(input, /aria-expanded="true"/);
     assert.match(input, /aria-activedescendant="session-option-wf-new"/);
     assert.match(body, /id="session-listbox"[^>]*role="listbox"/);
+    assert.doesNotMatch(body, /agent-glyph/, "the icon repeated the agent named on the row and the status chip beside it");
     const options = [...body.matchAll(/<button[^>]*role="option"[^>]*>/g)].map(([tag]) => tag);
     assert.equal(options.length, 3);
     assert.match(options[0], /id="session-option-wf-new"[^>]*aria-selected="true"/);
