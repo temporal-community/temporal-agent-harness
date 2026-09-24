@@ -28,6 +28,7 @@
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
+  import { codeModeHostsByRow } from "$lib/state/codeModeNesting";
   import { formatLogValue } from "$lib/state/logValue";
   import { formatElapsedDuration, type ReplayLogRow } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
@@ -158,6 +159,7 @@
       .map((message) => message.text)
   );
   const logsByTurn = $derived(groupLogsByTurn(logs));
+  const codeModeHosts = $derived(codeModeHostsByRow(logs));
   const resolvedApprovalKeys = $derived(resolvedApprovalIds(logs));
   const pendingApprovalRows = $derived(logs.filter((row) => isApprovalPending(row)));
   const sources = $derived(uniqueCitations(messages.flatMap((message) => message.citations)));
@@ -1226,7 +1228,10 @@
                     {@const fullDetail = logFullDetail(log)}
                     {@const scriptDetail = logScript(log)}
                     {@const rowDuration = logElapsedDuration(log, activityLogs)}
-                    <div class={`activity-row ${rowExpanded ? "expanded" : ""}`}>
+                    {@const nested = codeModeHosts.has(log.id)}
+                    <div
+                      class={`activity-row ${rowExpanded ? "expanded" : ""} ${nested ? "nested" : ""}`}
+                    >
                       <button
                         type="button"
                         class={`${activityLineClass(log, log.ordinal === activeLog.ordinal)} activity-row-button`}
@@ -1254,6 +1259,9 @@
                         </span>
                         <span class="activity-copy">
                           <strong>{log.label}</strong>
+                          {#if nested}
+                            <StatusChip label="host call" kind="tool" compact />
+                          {/if}
                           {#if logDetail(log)}
                             <span>{logDetail(log)}</span>
                           {/if}
@@ -1699,6 +1707,13 @@
     min-width: 0;
     display: grid;
     gap: 6px;
+  }
+
+  /* A call a Code Mode script made, hung off the host's icon column. */
+  .activity-row.nested {
+    margin-left: 10px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border);
   }
 
   .activity-summary,
