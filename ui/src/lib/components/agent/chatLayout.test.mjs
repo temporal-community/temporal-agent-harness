@@ -41,6 +41,15 @@ describe("the chat pane stays inside its pane", () => {
     assert.match(wrap, /overflow-x: auto;/);
   });
 
+  it("draws the replay strip opaque, over the messages and out of flow", () => {
+    const strip = rule(chat, ".replay-strip");
+    assert.match(strip, /position: absolute;/);
+    assert.match(strip, /background: var\(--surface-0\);/, "the chat's own background, no alpha");
+    assert.match(strip, /z-index: 2;/);
+    assert.match(rule(chat, ".agent-chat"), /background: var\(--surface-0\);/);
+    assert.match(rule(chat, ".message-list"), /isolation: isolate;/);
+  });
+
   it("lets only the handler chip give way in the footer toolbar", () => {
     assert.match(rule(chat, ".composer-toolbar :global(.chip)"), /flex-shrink: 0;/);
     assert.match(rule(chat, ".composer-toolbar :global(.target-chip)"), /flex-shrink: 1;/);

@@ -1727,6 +1727,8 @@
     flex-direction: column;
     gap: 16px;
     padding: 22px clamp(18px, 5vw, 72px);
+    /* Whatever a message stacks — a citation's tooltip — stays under the replay strip. */
+    isolation: isolate;
   }
 
   .agent-chat.embedded .message-list {
@@ -2236,7 +2238,7 @@
     gap: var(--gap-sm);
     padding: var(--gap-xs) 12px;
     border-bottom: 1px solid var(--border);
-    background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+    background: var(--surface-0);
   }
 
   .replay-strip .kicker {
