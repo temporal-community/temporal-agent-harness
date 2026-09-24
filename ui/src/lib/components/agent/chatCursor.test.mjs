@@ -208,3 +208,69 @@ describe("the chat footer", () => {
     assert.doesNotMatch(toolbar, /queues/, "a single-handler agent still looks like a chat box");
   });
 });
+
+describe("the composer's handler surface", () => {
+  const ask = common.agentInterface;
+  /* What App hands the pane: the cursor-scoped view plus the live message targets. */
+  const paneOf = (controller) =>
+    html({
+      ...controller.chatView,
+      agentInterface: undefined,
+      messageTargets: controller.messageTargets,
+      agentLabel: controller.runInfo.agentLabel,
+      sessionId: controller.runInfo.sessionId,
+      onStopAgent: async () => {},
+      onRetryInterface: () => {}
+    });
+  const controllerWith = (agentInterface) => {
+    const controller = new AgentRunController(
+      new Proxy({}, { get: (_, key) => (key === "agentInterface" ? agentInterface : async () => []) })
+    );
+    controller.sessions = realisticQaScenario.sessions;
+    controller.session = realisticQaScenario.sessions[0];
+    controller.frames = realisticQaScenario.frames;
+    return controller;
+  };
+
+  it("comes from the live run however far back the cursor is", () => {
+    const controller = controllerWith(async () => ask);
+    controller.agentInterfaces = { [controller.session.workflow_id]: ask };
+    controller.goTo(1);
+    assert.equal(controller.chatView.live, false);
+    const composer = composerOf(paneOf(controller));
+    assert.doesNotMatch(composer, /disabled/);
+    assert.match(composer, /placeholder="text → /i, "addressed to the live handler");
+  });
+
+  it("says a failed lookup failed, offers Retry, and recovers when it succeeds", async () => {
+    let workerUp = false;
+    const controller = controllerWith(async () => {
+      if (!workerUp) throw new Error("query timed out");
+      return ask;
+    });
+    const id = controller.session.workflow_id;
+    await controller.retryAgentInterface(id);
+    assert.equal(controller.messageTargets[0].interfaceStatus, "failed");
+    const failed = paneOf(controller);
+    assert.match(composerOf(failed), /placeholder="Couldn't load the messages [^"]+ accepts"/);
+    assert.doesNotMatch(failed, /declares no messages/, "a failure is not an agent with none");
+    assert.match(failed, /<button[^>]*title="Ask the agent for the messages it accepts again"/);
+
+    workerUp = true;
+    await controller.retryAgentInterface(id);
+    assert.equal(controller.messageTargets[0].interfaceStatus, "loaded");
+    const recovered = paneOf(controller);
+    assert.doesNotMatch(composerOf(recovered), /disabled/);
+    assert.doesNotMatch(recovered, /messages it accepts again/, "Retry goes once it worked");
+  });
+
+  it("says it is loading until the lookup answers, and 'none' only once it has", async () => {
+    const pending = controllerWith(() => new Promise(() => {}));
+    void pending.retryAgentInterface(pending.session.workflow_id);
+    assert.match(composerOf(paneOf(pending)), /placeholder="Loading the messages [^"]+ accepts…"/);
+
+    const none = controllerWith(async () => []);
+    await none.retryAgentInterface(none.session.workflow_id);
+    assert.match(composerOf(paneOf(none)), /placeholder="This agent declares no messages"/);
+  });
+});

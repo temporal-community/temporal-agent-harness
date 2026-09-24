@@ -757,6 +757,7 @@
           error={run.connectionError}
           onSend={(message, workflowId) => run.sendMessage(message, workflowId)}
           onStopAgent={(workflowId) => run.stopAgent(workflowId)}
+          onRetryInterface={(workflowId) => run.retryAgentInterface(workflowId)}
           onApproveTool={(workflowId, toolId, approved, remember) =>
             run.approveTool(workflowId, toolId, approved, remember)}
         />

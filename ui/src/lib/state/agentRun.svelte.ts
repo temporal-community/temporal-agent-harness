@@ -75,11 +75,16 @@ export interface ObservedSubagent {
  * different messages than its parent — the composer reads `agentInterface` from whichever
  * target is selected rather than assuming the parent's surface applies everywhere.
  */
+/** Whether an agent's handler surface has been asked for yet, arrived, or could not be read. */
+export type InterfaceStatus = "loading" | "loaded" | "failed";
+
 export interface MessageTarget {
   workflowId: string;
   role: "parent" | "subagent";
   label: string;
   agentInterface: AgentInterfaceFunction[];
+  /** An empty surface means "declares none" only when this is `loaded`. */
+  interfaceStatus: InterfaceStatus;
   closed: boolean;
 }
 
@@ -211,6 +216,7 @@ export class AgentRunController {
   frames = $state<AgentSseFrame[]>([]);
   observedSubagents = $state<ObservedSubagent[]>([]);
   agentInterfaces = $state<Record<string, AgentInterfaceFunction[]>>({});
+  failedInterfaceIds = $state<string[]>([]);
   closedWorkflowIds = $state<string[]>([]);
   viewIndex = $state(0);
   playing = $state(false);
@@ -755,6 +761,7 @@ export class AgentRunController {
         role: "parent",
         label: this.runInfo.agentLabel,
         agentInterface: this.agentInterfaces[session.workflow_id] ?? [],
+        interfaceStatus: this.#interfaceStatus(session.workflow_id),
         closed: this.#isWorkflowClosed(session.workflow_id)
       },
       ...this.observedSubagents.map((agent) => ({
@@ -763,9 +770,20 @@ export class AgentRunController {
         label: agent.label,
         agentInterface:
           this.agentInterfaces[agent.workflowId] ?? agent.agentInterface ?? [],
+        interfaceStatus: this.#interfaceStatus(agent.workflowId, agent.agentInterface),
         closed: agent.stopped || this.#isWorkflowClosed(agent.workflowId)
       }))
     ];
+  }
+
+  #interfaceStatus(workflowId: string, observed?: AgentInterfaceFunction[]): InterfaceStatus {
+    if (this.agentInterfaces[workflowId] || observed) return "loaded";
+    return this.failedInterfaceIds.includes(workflowId) ? "failed" : "loading";
+  }
+
+  /** Ask an agent for its handler surface again, after a lookup that failed. */
+  retryAgentInterface(workflowId: string): Promise<void> {
+    return this.#fetchAgentInterface(workflowId);
   }
 
   #subagentLabel(agentKey: string, subagentId: string): string {
@@ -811,6 +829,7 @@ export class AgentRunController {
       return;
     }
     this.#interfaceRequests.add(workflowId);
+    this.failedInterfaceIds = this.failedInterfaceIds.filter((id) => id !== workflowId);
     try {
       const agentInterface = await this.#api.agentInterface(workflowId);
       this.agentInterfaces = {
@@ -823,7 +842,9 @@ export class AgentRunController {
         );
       }
     } catch {
-      // Agent-interface discovery is auxiliary UI metadata; streaming remains authoritative.
+      /* Streaming does not depend on this, but the composer does: an empty surface would
+         otherwise read as an agent that accepts nothing. A query needs a live worker. */
+      this.failedInterfaceIds = [...this.failedInterfaceIds, workflowId];
     } finally {
       this.#interfaceRequests.delete(workflowId);
     }

@@ -9,6 +9,7 @@
     Cpu,
     History,
     MessageCircle,
+    RotateCw,
     ShieldCheck,
     Sparkles,
     XCircle,
@@ -38,6 +39,7 @@
     type ReplayLogRow
   } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
+  import type { InterfaceStatus } from "$lib/state/agentRun.svelte";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
   import SchemaForm from "$lib/components/chat/SchemaForm.svelte";
   import {
@@ -58,6 +60,8 @@
     role: MessageTargetRole;
     label: string;
     agentInterface: AgentInterfaceFunction[];
+    /** Absent means loaded: the caller handed the surface over directly. */
+    interfaceStatus?: InterfaceStatus;
     closed?: boolean;
   }
   /** A row in the `/` picker: either choose the target agent, or choose one of its handlers. */
@@ -103,6 +107,8 @@
     ) => void | Promise<void>;
     /** Stop an agent via the harness close signal — a control action, not a message. */
     onStopAgent?: (workflowId?: string | null) => void | Promise<void>;
+    /** Ask an agent for its accepted messages again, after the lookup failed. */
+    onRetryInterface?: (workflowId: string) => void | Promise<void>;
     onApproveTool?: (
       workflowId: string,
       toolId: string,
@@ -151,6 +157,7 @@
     error = null,
     onSend,
     onStopAgent,
+    onRetryInterface,
     onApproveTool
   }: Props = $props();
   let draft = $state("");
@@ -250,7 +257,22 @@
   const composerPlaceholder = $derived.by(() => {
     if (closed) return `${agentLabel} is closed`;
     if (activeTarget?.closed) return `${activeTarget.label} is closed`;
-    if (handlers.length === 0) return "This agent declares no messages";
+    if (handlers.length === 0) {
+      const label = activeTarget?.label ?? agentLabel;
+      const status = activeTarget?.interfaceStatus ?? "loaded";
+      switch (status) {
+        case "loading":
+          return `Loading the messages ${label} accepts…`;
+        case "failed":
+          return `Couldn't load the messages ${label} accepts`;
+        case "loaded":
+          return "This agent declares no messages";
+        default: {
+          const unhandled: never = status;
+          return unhandled;
+        }
+      }
+    }
     if (!selectedHandler) return `Message ${agentLabel}`;
     // The field's own title is the best hint we have, and it comes from the schema — so the
     // prompt reads naturally for `text`, `script`, `prompt`, or anything else.
@@ -1161,6 +1183,9 @@
     selectedHandler != null && (handlers.length > 1 || targetsSubagent || showTargetPicker)
   );
   const showStop = $derived(onStopAgent != null && activeTarget != null && !activeTarget.closed);
+  const showRetry = $derived(
+    onRetryInterface != null && activeTarget?.interfaceStatus === "failed" && !activeTarget.closed
+  );
 
   function handleSubmit(event: SubmitEvent): void {
     event.preventDefault();
@@ -1545,7 +1570,7 @@
 
       <!-- Which handler is being addressed and what sending mid-turn will do, beside the stop
            control. -->
-      {#if showTarget || showStop}
+      {#if showTarget || showStop || showRetry}
         <div class="composer-toolbar">
           {#if showTarget && selectedHandler}
             <Chip
@@ -1572,6 +1597,18 @@
               label={midTurnLabel(selectedHandler.mid_turn)}
               title={midTurnHint(selectedHandler.mid_turn)}
             />
+          {/if}
+          {#if showRetry}
+            <Chip
+              fill="quiet"
+              title="Ask the agent for the messages it accepts again"
+              onclick={() => activeTarget && void onRetryInterface?.(activeTarget.workflowId)}
+            >
+              {#snippet lead()}
+                <RotateCw size={13} />
+              {/snippet}
+              Retry
+            </Chip>
           {/if}
           {#if showStop}
             <!-- Stopping is a control-plane action (the harness close signal), not a message —
