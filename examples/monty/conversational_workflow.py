@@ -122,8 +122,7 @@ Board calls are cheap and are not gated on the user's approval — there is noth
 about your own notes — so there is never a reason to batch them up or skip them."""
 
 
-@workflow.defn(name="MontyChatAgent")
-@agent.defn
+@agent.defn(name="MontyChatAgent")
 class MontyChatAgentWorkflow:
     trip_board = agent.state(trip_board.TripBoard)
 

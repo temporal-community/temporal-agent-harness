@@ -1,7 +1,7 @@
 # ABOUTME: The ``agent`` namespace for authoring agent workflows and their tools.
-# Decorate the workflow class with ``@agent.defn`` (a contract-checked ``@workflow.defn``)
-# and each tool with ``@agent.activity_tool_defn()`` (durable, activity-backed) or
-# ``@agent.tool_defn()`` (inline in the workflow). Each publishes its own
+# Decorate the workflow class with ``@agent.defn`` (a contract-checked ``@workflow.defn``,
+# used in its place) and each tool with ``@agent.activity_tool_defn()`` (durable,
+# activity-backed) or ``@agent.tool_defn()`` (inline in the workflow). Each publishes its own
 # tool_start/tool_end lifecycle events and can gate execution on a human approval.
 #
 # Usage::
@@ -81,6 +81,7 @@ from temporal_agent_harness.harness.agent_workflow import (
     AutoModeEvaluator,
     Injected,
     ToolApprovalDenied,
+    WorkflowDefnOptions,
     accepts,
     activity_tool_defn,
     callback_tool_defn,
@@ -110,6 +111,7 @@ __all__ = [
     "AutoApprovalContext",
     "ToolApprovalDenied",
     "ToolApprovalPolicy",
+    "WorkflowDefnOptions",
     "accepts",
     "activity_tool_defn",
     "callback_tool_defn",

@@ -52,8 +52,7 @@ MODEL = "jev-latest"
 OUTLOOK_LEVELS = ("losing", "even", "winning")
 
 
-@workflow.defn(name="TicTacToeAgent")
-@agent.defn
+@agent.defn(name="TicTacToeAgent")
 class TicTacToeAgentWorkflow:
     board = agent.state(game.Board)
 

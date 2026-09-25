@@ -238,7 +238,7 @@ def subagent_toolset(
     subagent registry — through the ambient ``_CURRENT_RUNNER`` at call time.
 
     Args:
-        agent_cls: the child agent's ``@workflow.defn`` + ``@agent.defn`` class.
+        agent_cls: the child agent's ``@agent.defn`` class.
         key: short, stable namespace for this wired agent (a parent may wire several). Tool
             names are ``start_<key>`` / ``<key>_<fn>`` / ``stop_<key>``.
         task_queue: the task queue the child agent's worker polls (where instances are started).

@@ -525,7 +525,6 @@ _PROBE_CRITERIA = AutoApprovalCriteria(
 )
 
 
-@workflow.defn
 @agent.defn
 class JevApprovalProbeAgent:
     """Gates everything, with AUTO MODE on, so every gated call goes to the Jev approver."""

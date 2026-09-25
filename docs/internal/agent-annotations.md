@@ -9,7 +9,7 @@ five decorators and one type annotation — plus related helpers. For *how* Pyth
 
 | Annotation | Kind | For |
 |---|---|---|
-| `@agent.defn` | class decorator | Stacked *with* `@workflow.defn`. Contract-checks the class is a valid harness agent (`run`/`__init__` takes exactly one `AgentConfig`) and stamps its discovered `@agent.accepts` handlers at import. Returns the class unchanged; fails fast on a malformed agent. |
+| `@agent.defn` | class decorator | Used *instead of* `@workflow.defn` (it applies it: `name=` sets the workflow type; other `@workflow.defn` settings go in `workflow_options=agent.WorkflowDefnOptions(...)`). Contract-checks the class is a valid harness agent (`run`/`__init__` takes exactly one `AgentConfig`), stamps its discovered `@agent.accepts` handlers at import, then registers it as a workflow. Fails fast on a malformed agent. |
 | `@agent.accepts` | method decorator | Marks a typed, self-describing **operation** — `async def name(self, msg: InputModel) -> OutputModel`. Method name = operation name; input/output pydantic models = the schemas; docstring = the description; the return value becomes the turn's reply. The set of these is the agent's discoverable interface (`agent_interface`). Pure marker (sets an attribute; discovery happens in `@agent.defn`). |
 | `@agent.tool_defn` | decorator factory | An **inline** tool — runs in the workflow. |
 | `@agent.activity_tool_defn` | decorator factory | A **durable activity-backed** tool — runs as a retried Temporal activity. Returns the in-workflow dispatcher; the generated `@activity.defn` body is registered via `agent.tool_activity(t)`. |
@@ -41,10 +41,10 @@ Same `agent.*` namespace, but helpers/factories/types (not decorators):
 
 ## Notes
 
-- Agents also use Temporal's own decorators — `@workflow.defn`, `@workflow.init`, `@workflow.run`.
-  `@agent.defn` is designed to **stack with** `@workflow.defn` (it doesn't replace it). By contrast
-  `@agent.activity_tool_defn` **replaces** the need for `@activity.defn` (and forbids stacking it) —
-  it generates the activity for you. See `python-idioms-for-java-spring-devs.md`.
+- Agents also use Temporal's own method decorators — `@workflow.init`, `@workflow.run`.
+  `@agent.defn` **replaces** `@workflow.defn` (and stacking both raises, since Temporal refuses to
+  define a class twice), just as `@agent.activity_tool_defn` **replaces** the need for
+  `@activity.defn` (and forbids stacking it) — each generates the Temporal definition for you. See `python-idioms-for-java-spring-devs.md`.
 - **Slash commands** and the **operator interface** are *not* in this annotation set — they're
   registry/config-based, not `@agent.*` decorators.
 - These names are re-exported by `agent.py` from `agent_workflow.py` (and `code_mode` /

@@ -49,8 +49,7 @@ async def get_weather(city: str) -> str:
     return f"It's 72°F and sunny in {city}."
 
 
-@workflow.defn(name="OpenAIHelloAgent")
-@agent.defn
+@agent.defn(name="OpenAIHelloAgent")
 class OpenAIHelloAgentWorkflow:
     """A one-tool conversational agent driven by the OpenAI Agents SDK."""
 

@@ -20,7 +20,7 @@ import contextvars
 import inspect
 import textwrap
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -38,6 +38,7 @@ from typing import (
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from temporalio import activity, workflow
+from temporalio.common import VersioningBehavior
 from temporalio.contrib.workflow_streams import (
     TopicHandle,
     WorkflowStream,
@@ -730,7 +731,7 @@ def _workflow_run_arg_types(cls: type) -> list[type]:
     if run_fn is None:
         raise TypeError(
             f"@agent.defn requires {cls.__name__!r} to define a @workflow.run method "
-            f"(stack it with @workflow.defn on an agent workflow class)."
+            f"(on an agent workflow class)."
         )
     hints = get_type_hints(run_fn)
     positional = (
@@ -917,31 +918,60 @@ def agent_handlers(cls: type) -> dict[str, _AcceptedHandler]:
     return discovered
 
 
+@dataclass(frozen=True)
+class WorkflowDefnOptions:
+    """Options :func:`defn` forwards to the ``@workflow.defn`` it applies.
+
+    Grouped apart from the agent-level parameters so a Temporal workflow setting (e.g.
+    ``sandboxed``, the workflow sandbox) is never mistaken for an agent-level one. The
+    workflow name is not here: it is the agent's identity, so it is ``defn``'s own
+    ``name=``. ``dynamic`` is not offered: a dynamic workflow takes ``Sequence[RawValue]``,
+    which the agent contract rules out.
+    """
+
+    sandboxed: bool = True
+    failure_exception_types: Sequence[type[BaseException]] = ()
+    versioning_behavior: VersioningBehavior = VersioningBehavior.UNSPECIFIED
+
+
 @overload
 def defn(cls: _WorkflowClass, /) -> _WorkflowClass: ...
 @overload
-def defn(cls: None = None, /) -> Callable[[_WorkflowClass], _WorkflowClass]: ...
-def defn(cls: type | None = None, /) -> Any:
-    """Validate that a class honors the standardized agent contract, returning it
-    unchanged. Stack it WITH ``@workflow.defn`` — it does not replace it (Temporal stays
-    visible)::
+def defn(
+    *,
+    name: str | None = None,
+    workflow_options: WorkflowDefnOptions = WorkflowDefnOptions(),
+) -> Callable[[_WorkflowClass], _WorkflowClass]: ...
+def defn(
+    cls: type | None = None,
+    /,
+    *,
+    name: str | None = None,
+    workflow_options: WorkflowDefnOptions = WorkflowDefnOptions(),
+) -> Any:
+    """Declare an agent workflow class: validate that it honors the standardized agent
+    contract, then register it as a Temporal workflow via ``@workflow.defn``. Use it IN
+    PLACE of ``@workflow.defn`` — stacking both raises, since Temporal refuses to define a
+    class twice::
 
-        @workflow.defn(name="MyAgent")
-        @agent.defn
+        @agent.defn(name="MyAgent")
         class MyAgent:
             @workflow.run
             async def run(self, config: AgentConfig) -> None: ...
+
+    ``name`` is the workflow type name (defaults to the class name). Any other
+    ``@workflow.defn`` setting goes in ``workflow_options`` (see
+    :class:`WorkflowDefnOptions`).
 
     The check runs at definition (import) time: it inspects the ``@workflow.run`` method
     and requires its arguments to be exactly one :class:`AgentConfig`. A misconfigured
     agent therefore raises :class:`TypeError` the moment its module is imported (e.g. at
     worker startup), with a clear message — instead of starting and then hanging by
     repeatedly failing its first workflow task at execution time (where the caller would
-    only ever see a timeout).
+    only ever see a timeout). The contract is checked before ``@workflow.defn`` runs, so
+    Temporal's own definition errors only surface for a class that is a valid agent.
 
-    Order-independent with ``@workflow.defn`` (it keys off the ``@workflow.run`` marker,
-    which class-body evaluation sets before either class decorator runs). The same
-    contract is re-checked when the runner is built
+    The same contract is re-checked when the runner is built
     (:func:`_assert_standardized_agent_signature`), as a backstop for any agent declared
     with a bare ``@workflow.defn``.
     """
@@ -952,7 +982,12 @@ def defn(cls: type | None = None, /) -> Any:
         # so the runner / agent_interface query / subagent generator read them without
         # re-introspecting (and a malformed handler fails fast at import).
         setattr(c, _HANDLERS_ATTR, _discover_handlers(c))
-        return c
+        return workflow.defn(
+            name=name,
+            sandboxed=workflow_options.sandboxed,
+            failure_exception_types=workflow_options.failure_exception_types,
+            versioning_behavior=workflow_options.versioning_behavior,
+        )(c)
 
     return decorate(cls) if cls is not None else decorate
 

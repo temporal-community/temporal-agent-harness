@@ -83,8 +83,7 @@ _TEMPORAL_AGENT = TemporalAgent(
 )
 
 
-@workflow.defn(name="PydanticAIHelloAgent")
-@agent.defn
+@agent.defn(name="PydanticAIHelloAgent")
 class PydanticAIHelloAgentWorkflow:
     """A one-tool conversational agent driven by Pydantic AI."""
 

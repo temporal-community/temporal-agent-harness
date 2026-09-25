@@ -32,8 +32,7 @@ event history of its own.
 All of it:
 
 ```python
-@workflow.defn(name="PlannerAgent")
-@agent.defn
+@agent.defn(name="PlannerAgent")
 class PlannerAgent:
     plan = agent.state(PlanState)   # the attribute name is the state id
 

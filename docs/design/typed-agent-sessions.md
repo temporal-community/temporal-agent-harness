@@ -106,8 +106,7 @@ Where we deliberately differ:
 ### State is declared on the class
 
 ```python
-@workflow.defn(name="TicTacToeAgent")
-@agent.defn
+@agent.defn(name="TicTacToeAgent")
 class TicTacToeAgentWorkflow:
     board = agent.state(game.Board)          # state_id "board", from the attribute name
     # agent.state(Board, initial=lambda: Board(...)) when the default constructor isn't right

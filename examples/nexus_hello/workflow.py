@@ -50,8 +50,7 @@ You are a friendly assistant. Answer the user in brief, natural prose.
 """
 
 
-@workflow.defn(name="NexusHelloAgent")
-@agent.defn
+@agent.defn(name="NexusHelloAgent")
 class NexusHelloAgentWorkflow:
     """A conversational agent with three tools reached over Nexus."""
 

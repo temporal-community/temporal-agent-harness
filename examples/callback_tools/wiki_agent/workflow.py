@@ -92,8 +92,7 @@ contents you didn't read.
 (the path), so they can find it later."""
 
 
-@workflow.defn(name="WikiAgent")
-@agent.defn
+@agent.defn(name="WikiAgent")
 class WikiAgentWorkflow:
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
