@@ -363,13 +363,13 @@ Its tests use React Testing Library in happy-dom, including StrictMode and `rend
 
 ### The tic-tac-toe app
 
-`examples/tictactoe/ui` replaces the old `play.html`. It is a Vite + Svelte app written only against
-the binding and the generated `TicTacToeAgent` type: the board is `agent.states.board`, moves are
-`agent.sendMessage("play", { cell })`, the last TypeSafe judgment is read off `agent.messages`, the
-ledger off `agent.frames`, and gated calls get approve / deny buttons from `agent.pendingApprovals`.
-The board and the ledger each construct their own `AgentSession`; the `createHarnessContext()`
-above them makes them share one connection. CI type-checks and builds it against the committed
-generated types, so a model change that breaks it fails there.
+`examples/tictactoe/ui` replaces the old `play.html`. It is a single Svelte component, written only
+against the binding and the generated `TicTacToeAgent` type: the board is `agent.states.board`,
+moves are `agent.sendMessage("play", { cell })`, the last TypeSafe judgment is read off
+`agent.messages`, the ledger off `agent.frames`, and gated calls get approve / deny buttons from
+`agent.pendingApprovals`. It has no build step: an import map and a service worker let the browser
+compile it. CI type-checks it against the committed generated types, so a model change that breaks
+it fails there.
 
 ## Phases
 

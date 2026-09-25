@@ -86,7 +86,6 @@ jobs:
           cache-dependency-path: |
             packages/client/package-lock.json
             packages/svelte/package-lock.json
-            examples/tictactoe/ui/package-lock.json
       # The binding links ../client, which it resolves through that package's build.
       - name: Build packages/client
         working-directory: packages/client
@@ -100,9 +99,9 @@ jobs:
       - working-directory: packages/svelte
         run: npm run build
       # The tic-tac-toe board is written against the binding and the example's committed
-      # generated types, so it is checked and built with them.
+      # generated types, so it is type-checked with them (it has no build of its own).
       - working-directory: examples/tictactoe/ui
-        run: npm ci && npm run check && npm run build
+        run: ../../../packages/svelte/node_modules/.bin/svelte-check --tsconfig ./tsconfig.json
 
   react:
     name: packages/react tests

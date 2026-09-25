@@ -6,7 +6,7 @@
 #   just session-manager   # 2. packaged session-manager worker
 #   just server            # 3. FastAPI API + UI on :8000
 #   just worker            # 4. this example's agent worker
-#   just play              # 5. optional: the Svelte board on http://localhost:5173
+#   just play              # 5. optional: the Svelte board on http://127.0.0.1:5173
 #
 # uv installs the project's `examples` dependency group (incl. the TypeSafe SDK) on demand, so
 # there's no separate install step. First-time setup: `cp .env.example .env.local` from the
@@ -48,12 +48,22 @@ server:
 ui-dev:
     pnpm --dir "{{ui}}" run dev
 
-# Run the Svelte board (ui/) on http://localhost:5173, built on @temporal-agent-harness/svelte.
-# Needs Node, and `just server` + `just worker` running for it to talk to.
+# Serve the Svelte board (ui/) on http://127.0.0.1:5173. The page has no build step (the browser
+# compiles App.svelte); Node only builds the harness packages it imports.
+# Needs `just server` + `just worker` running for it to talk to.
+# TODO: once @temporal-agent-harness/{client,svelte} are published to npm, drop the build and the
+# links below and point ui/index.html's import map at a CDN instead.
 play:
-    cd "{{root}}/packages/client" && npm ci --prefer-offline --no-audit --no-fund && npm run --silent build
-    cd "{{root}}/packages/svelte" && npm ci --prefer-offline --no-audit --no-fund && npm run --silent build
-    cd "{{justfile_directory()}}/ui" && npm ci --prefer-offline --no-audit --no-fund && npx vite
+    @cd "{{root}}/packages/client" && npm ci --prefer-offline --no-audit --no-fund --silent && npm run --silent build
+    @cd "{{root}}/packages/svelte" && npm ci --prefer-offline --no-audit --no-fund --silent && npm run --silent build >/dev/null
+    @ln -sfn "{{root}}/packages/client/dist" ui/harness-client
+    @ln -sfn "{{root}}/packages/svelte/dist" ui/harness-svelte
+    @cd ui && python3 -u -m http.server 5173 --bind 127.0.0.1 2>/dev/null
+
+# Type-check ui/App.svelte against the generated client types (after `just play` has installed
+# packages/svelte).
+check-ui:
+    cd "{{justfile_directory()}}/ui" && "{{root}}/packages/svelte/node_modules/.bin/svelte-check" --tsconfig ./tsconfig.json
 
 # Run the tic-tac-toe agent worker.
 worker:

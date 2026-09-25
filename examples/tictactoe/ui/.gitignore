@@ -1,2 +1,3 @@
-dist/
-node_modules/
+# Links `just play` makes to the harness packages' builds.
+/harness-client
+/harness-svelte

@@ -1,16 +1,22 @@
 {
+  // For type-checking App.svelte against the generated client types. The page itself is never
+  // built; `svelte`, the binding and the client resolve through packages/svelte's install.
   "compilerOptions": {
-    "target": "ES2022",
+    "target": "ES2023",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
-    "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["svelte", "vite/client", "node"]
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": [],
+    "paths": {
+      "svelte": ["../../../packages/svelte/node_modules/svelte"],
+      "svelte/*": ["../../../packages/svelte/node_modules/svelte/*"],
+      "@temporal-agent-harness/svelte": ["../../../packages/svelte/src/lib/index.ts"]
+    }
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["App.svelte"]
 }

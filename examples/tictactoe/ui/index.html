@@ -2,12 +2,29 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Tic-Tac-Toe Ledger</title>
+    <title>Tic-Tac-Toe</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "svelte": "https://esm.sh/svelte@5.57.1",
+          "svelte/": "https://esm.sh/svelte@5.57.1/",
+          "@temporal-agent-harness/svelte": "./harness-svelte/index.js",
+          "@temporal-agent-harness/client": "./harness-client/src/index.js"
+        }
+      }
+    </script>
+    <script type="module">
+      // svelte-sw.js compiles App.svelte as it loads, once it controls the page.
+      await navigator.serviceWorker.register("./svelte-sw.js");
+      if (!navigator.serviceWorker.controller) {
+        await new Promise((resolve) => navigator.serviceWorker.addEventListener("controllerchange", resolve));
+      }
+      const [{ mount }, { default: App }] = await Promise.all([import("svelte"), import("./App.svelte")]);
+      mount(App, { target: document.body });
+    </script>
   </head>
-  <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
-  </body>
+  <body></body>
 </html>

@@ -45,7 +45,7 @@ chooses among cells the code offers, so an illegal move is impossible by constru
 - `workflow.py` — `TicTacToeAgent`: the `new_game` / `play` handlers, the question design, and
   the two `run_tool` dispatches (judge, then act).
 - `models.py` — the accepted messages and the activity's request/result shapes.
-- `ui/` — a Svelte board for playing it, built on `@temporal-agent-harness/svelte` (see below).
+- `ui/` — a Svelte board for playing it, one component on `@temporal-agent-harness/svelte` (see below).
 - `client_sdk/TicTacToeAgent.ts` — the agent's TypeScript types, generated from its Python
   models by `just codegen-client-sdk`.
 
@@ -86,17 +86,15 @@ Open <http://localhost:8000>, start a **Tic-Tac-Toe (TypeSafe)** session, send `
 ## `ui/` — a board drawn from observable state
 
 With `just server` and `just worker` up, `just play` serves the board on
-http://localhost:5173. It talks to the dev server's `/api` (default `http://localhost:8000`,
-editable in the page; the server allows any origin), lists your open Tic-Tac-Toe sessions or
-creates one, and lets you play by clicking cells (or pressing 1–9).
+http://127.0.0.1:5173. It talks to the dev server's `/api` at
+`http://localhost:8000` (the server allows any origin). Start a game to create a session, then
+play by clicking cells (or pressing 1–9); the session id stays in the URL, so a reload replays it.
 
-The board is rendered **only** from the agent's observable state: `agent.states.board`, typed as
-the generated `Board`, which `AgentSession` keeps current from the session's `state_snapshot`
-and `state_patch` events. The page has no idea how a move is applied. The ledger on the right
-reads the same session's raw frames — each patch's ops as they land (`replace /cells/4 "O"`),
-the TypeSafe tool's request and answer, and the agent's reply — and the last judgment's per-cell
-probabilities are washed onto the empty cells so you can see what the model weighed. A gated
-tool call shows approve / deny buttons.
-
-The board and the ledger each construct their own `AgentSession` for the session; the
-`createHarnessContext()` above them makes the two share one connection.
+The page is one Svelte component, `ui/App.svelte`, with no build step: the browser compiles it
+(see [`ui/README.md`](ui/README.md)). The board is rendered **only** from the agent's observable
+state: `agent.states.board`, typed as the generated `Board`, which `AgentSession` keeps current
+from the session's `state_snapshot` and `state_patch` events. The page has no idea how a move is
+applied. The ledger on the right reads the same session's raw frames — each patch's ops as they
+land (`replace /cells/4 "O"`), the TypeSafe tool's request and answer, and the agent's reply — and
+the last judgment's per-cell probabilities are washed onto the empty cells so you can see what the
+model weighed. A gated tool call shows approve / deny buttons.
