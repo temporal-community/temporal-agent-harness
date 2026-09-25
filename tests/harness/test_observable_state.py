@@ -70,8 +70,7 @@ class PlanState(HarnessState):
     scratch: dict[str, str] = {}
 
 
-@workflow.defn(name="StateProbeAgent")
-@agent.defn
+@agent.defn(name="StateProbeAgent")
 class StateProbeAgent:
     """An agent with one declared piece of observable state."""
 
@@ -110,8 +109,7 @@ class StateProbeAgent:
         return TextReply(text=f"{len(self.plan.current.steps)} step(s) left")
 
 
-@workflow.defn(name="EarlyStateProbeAgent")
-@agent.defn
+@agent.defn(name="EarlyStateProbeAgent")
 class EarlyStateProbeAgent:
     """Reads and mutates its declared state in __init__ BEFORE building the runner."""
 

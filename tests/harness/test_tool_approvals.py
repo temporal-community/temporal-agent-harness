@@ -170,7 +170,6 @@ class _BaseProbe:
         return self._last_reply
 
 
-@workflow.defn
 @agent.defn
 class ApprovalProbeAgent(_BaseProbe):
     @workflow.init
@@ -213,7 +212,6 @@ _EVALUATED = AutoApprovalCriteria(
 )
 
 
-@workflow.defn
 @agent.defn
 class EvaluatorProbeAgent(_BaseProbe):
     """Gates everything by default, but wires a custom fallback that auto-approves
@@ -239,7 +237,6 @@ class EvaluatorProbeAgent(_BaseProbe):
         await self._runner.run(self)
 
 
-@workflow.defn
 @agent.defn
 class VerdictEvaluatorProbeAgent(_BaseProbe):
     """Gates everything by default, with an ASYNC three-valued fallback wired — the shape
@@ -265,7 +262,6 @@ class VerdictEvaluatorProbeAgent(_BaseProbe):
         await self._runner.run(self)
 
 
-@workflow.defn
 @agent.defn
 class SlowEvaluatorProbeAgent(_BaseProbe):
     """A fallback that does not answer until the test says so, then DENIES.
@@ -315,7 +311,6 @@ class SlowEvaluatorProbeAgent(_BaseProbe):
         await self._runner.run(self)
 
 
-@workflow.defn
 @agent.defn
 class NonsenseEvaluatorProbeAgent(_BaseProbe):
     """An evaluator that returns the wrong type — a developer bug, not an exception."""
@@ -340,7 +335,6 @@ class NonsenseEvaluatorProbeAgent(_BaseProbe):
         await self._runner.run(self)
 
 
-@workflow.defn
 @agent.defn
 class BrokenEvaluatorProbeAgent(_BaseProbe):
     """Gates everything, with a fallback that raises — the guardrail must fail SAFE."""

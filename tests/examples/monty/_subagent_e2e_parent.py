@@ -73,8 +73,7 @@ class DriveExistingSubagent(BaseModel):
     scripts: list[str] = Field(description="Scripts to run in order, one turn each.")
 
 
-@workflow.defn(name="SubagentE2EParent")
-@agent.defn
+@agent.defn(name="SubagentE2EParent")
 class SubagentE2EParentWorkflow:
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
@@ -124,8 +123,7 @@ class SubagentE2EParentWorkflow:
         return out.get("text", "")
 
 
-@workflow.defn(name="ApprovalGatedSubagentParent")
-@agent.defn
+@agent.defn(name="ApprovalGatedSubagentParent")
 class ApprovalGatedSubagentParentWorkflow:
     """Like :class:`SubagentE2EParentWorkflow`, but drives the subagent through the GENERATED
     toolset via ``run_tool`` under ``always_require_human_approval`` — so each send is gated on a

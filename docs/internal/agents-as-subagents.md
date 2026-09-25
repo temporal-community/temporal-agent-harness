@@ -251,8 +251,7 @@ dev declares one async method per accepted message; its **param type is the inpu
 strictly less dev code (each former `case` body is just a method, plus a one-line `run`).
 
 ```python
-@workflow.defn(name="QaAgent")
-@agent.defn
+@agent.defn(name="QaAgent")
 class QaAgentWorkflow:
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:

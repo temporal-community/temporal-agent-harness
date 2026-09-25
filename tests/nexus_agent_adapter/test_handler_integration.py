@@ -60,7 +60,6 @@ class AskReply(BaseModel):
     text: str
 
 
-@workflow.defn
 @agent.defn
 class ProbeAgent:
     """2s reply delay so pollMessages is provably still pending (async path, not sync)."""
@@ -366,7 +365,6 @@ async def gated_tool(text: str) -> str:
     return f"tool-result:{text}"
 
 
-@workflow.defn
 @agent.defn
 class GatedProbeAgent:
     """Gates every tool call, unlike ProbeAgent — needed to exercise approveToolCall."""

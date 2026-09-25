@@ -135,7 +135,6 @@ class Picked(BaseModel):
     model: str
 
 
-@workflow.defn
 @agent.defn
 class TypedProbeAgent:
     """Two handlers — greet(Greeting)->Greeted and pick(ModelPick)->Picked — plus a
@@ -178,7 +177,6 @@ class TypedProbeAgent:
         return self._seen
 
 
-@workflow.defn
 @agent.defn
 class NoEvaluatorProbeAgent:
     """No ``auto_mode_evaluator`` wired, and a handler that tries to switch auto mode on
@@ -214,7 +212,6 @@ class NoEvaluatorProbeAgent:
         return self._seen
 
 
-@workflow.defn
 @agent.defn
 class MidTurnProbeAgent:
     """Covers all three ``mid_turn`` modes plus ``Injected[MessageContext]``.
@@ -568,6 +565,21 @@ class _ValidAgentShape:
     async def run(self, config: AgentConfig) -> None: ...
 
 
+class _NamedShape:
+    @workflow.run
+    async def run(self, config: AgentConfig) -> None: ...
+
+
+class _BareShape:
+    @workflow.run
+    async def run(self, config: AgentConfig) -> None: ...
+
+
+class _StackedShape:
+    @workflow.run
+    async def run(self, config: AgentConfig) -> None: ...
+
+
 class _MissingConfigShape:
     @workflow.run
     async def run(self) -> None: ...
@@ -580,6 +592,26 @@ class _WrongInputShape:
 
 def test_agent_defn_accepts_single_agentconfig():
     assert agent.defn(_ValidAgentShape) is _ValidAgentShape
+
+
+def test_agent_defn_registers_the_workflow_with_forwarded_options():
+    agent.defn(
+        name="NamedProbeAgent",
+        workflow_options=agent.WorkflowDefnOptions(sandboxed=False),
+    )(_NamedShape)
+    defn = workflow._Definition.must_from_class(_NamedShape)
+    assert defn.name == "NamedProbeAgent"
+    assert defn.sandboxed is False
+
+
+def test_agent_defn_defaults_workflow_name_to_class_name():
+    agent.defn(_BareShape)
+    assert workflow._Definition.must_from_class(_BareShape).name == "_BareShape"
+
+
+def test_agent_defn_cannot_be_stacked_with_workflow_defn():
+    with pytest.raises(ValueError, match="already contains workflow definition"):
+        workflow.defn(agent.defn(_StackedShape))
 
 
 def test_agent_defn_rejects_missing_config_at_definition_time():

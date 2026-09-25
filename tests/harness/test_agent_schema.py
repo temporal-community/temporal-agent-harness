@@ -95,8 +95,7 @@ class Echo(BaseModel):
     text: str = ""
 
 
-@workflow.defn(name="EchoAgent")
-@agent.defn
+@agent.defn(name="EchoAgent")
 class EchoAgent:
     notes = agent.state(Note)
 
@@ -131,8 +130,7 @@ FirstPayload = _same_named_model("pkg.first")
 SecondPayload = _same_named_model("pkg.second")
 
 
-@workflow.defn(name="CollidingAgent")
-@agent.defn
+@agent.defn(name="CollidingAgent")
 class CollidingAgent:
     @workflow.run
     async def run(self, config: AgentConfig) -> None: ...
@@ -148,8 +146,7 @@ class CollidingAgent:
         raise NotImplementedError
 
 
-@workflow.defn(name="CrossModeCollidingAgent")
-@agent.defn
+@agent.defn(name="CrossModeCollidingAgent")
 class CrossModeCollidingAgent:
     @workflow.run
     async def run(self, config: AgentConfig) -> None: ...

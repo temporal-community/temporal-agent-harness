@@ -90,7 +90,6 @@ _SCENARIOS = {
 }
 
 
-@workflow.defn
 @agent.defn
 class CallbackProbeAgent:
     @workflow.init

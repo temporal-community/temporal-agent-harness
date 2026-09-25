@@ -84,8 +84,7 @@ answer to continue. Prefer asking over guessing when it matters. If the user's a
 call `ask_user` again."""
 
 
-@workflow.defn(name="ReactAgent")
-@agent.defn
+@agent.defn(name="ReactAgent")
 class ReactAgentWorkflow:
     """A ReAct agent (weather/geo/IP tools + F1 MCP) driven by the OpenAI Agents SDK."""
 

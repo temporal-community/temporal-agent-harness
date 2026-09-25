@@ -44,8 +44,7 @@ with workflow.unsafe.imports_passed_through():
 TASK_QUEUE = "monty-dynamic-agent"
 
 
-@workflow.defn(name="MontyDynamicAgent")
-@agent.defn
+@agent.defn(name="MontyDynamicAgent")
 class MontyDynamicAgentWorkflow:
     # There is no model in this agent, so the script is what keeps the board current; see
     # `trip_board.py`.

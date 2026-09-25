@@ -106,7 +106,6 @@ class _BaseMCPProbe:
         return TextReply(text=block.text)
 
 
-@workflow.defn
 @agent.defn
 class GatedMCPProbeAgent(_BaseMCPProbe):
     """Safe-by-default: every tool call is gated, MCP calls included."""
@@ -129,7 +128,6 @@ class GatedMCPProbeAgent(_BaseMCPProbe):
         await self._runner.run(self)
 
 
-@workflow.defn
 @agent.defn
 class UngatedMCPProbeAgent(_BaseMCPProbe):
     """Approvals skipped, so the call runs straight through — the bracket must still

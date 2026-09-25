@@ -29,7 +29,6 @@ MCP_TOOL_NAME = "lookup"
 CALL_ID = "call_stream_1"
 
 
-@workflow.defn
 @agent.defn
 class McpStreamingAgent:
     """An agent whose only tool comes from an MCP server. Nothing here wires up

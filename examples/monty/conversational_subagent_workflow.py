@@ -114,8 +114,7 @@ options, prices, confirmations. You may run more scripts in follow-up turns.
 - Never invent flight/hotel ids or confirmation codes — only use ones returned by a script."""
 
 
-@workflow.defn(name="MontyChatSubagentAgent")
-@agent.defn
+@agent.defn(name="MontyChatSubagentAgent")
 class MontyChatSubagentWorkflow:
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:

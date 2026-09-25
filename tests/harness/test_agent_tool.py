@@ -62,7 +62,6 @@ async def echo_workflow_tool(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-@workflow.defn
 @agent.defn
 class ToolProbeAgent:
     @workflow.init
