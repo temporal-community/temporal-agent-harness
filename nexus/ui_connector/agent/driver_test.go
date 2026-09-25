@@ -29,8 +29,6 @@ func TestTurnEventToDelta(t *testing.T) {
 		wantNil   bool
 	}{
 		{"reply_delta", turnEvent{Type: "reply_delta", Text: "hello"}, "hello", false, false},
-		{"reply", turnEvent{Type: "reply", Text: "full text"}, "", true, false},
-		{"error", turnEvent{Type: "error", Message: "crash"}, "[error] crash", true, false},
 		{"thought_summary empty text", turnEvent{Type: "thought_summary", Delta: map[string]any{"text": ""}}, "", false, true},
 		{"unknown type", turnEvent{Type: "unknown_event"}, "", false, true},
 	}
@@ -140,13 +138,6 @@ func TestToolStatusCarriesNoText(t *testing.T) {
 	assert.Empty(t, start.Text)
 	assert.Empty(t, end.Text)
 	assert.Equal(t, "A Local Activity runs in the Workflow process.", reply.Text)
-}
-
-func TestReplyEventDoesNotAppendText(t *testing.T) {
-	d := turnEventToDelta(turnEvent{Type: "reply", Text: "full response"})
-	require.NotNil(t, d)
-	assert.Empty(t, d.Text, "reply event should not contribute text to avoid duplicate in stream")
-	assert.True(t, d.IsFinal)
 }
 
 func TestToolApprovalRequestedEvent_ProducesApprovalRequestedDelta(t *testing.T) {

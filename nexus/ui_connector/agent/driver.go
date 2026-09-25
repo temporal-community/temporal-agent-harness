@@ -101,11 +101,13 @@ func turnEventToDelta(e turnEvent) *router.Delta {
 		if citations := extractCitations(e.Delta); len(citations) > 0 {
 			return &router.Delta{Citations: citations}
 		}
-	case "reply":
-		// Text was already fully streamed via reply_delta events; this just signals completion.
+	case "turn_end":
+		// Every message in the turn has finished. The text already arrived as
+		// reply_delta events, so this only ends the stream.
 		return &router.Delta{IsFinal: true}
-	case "error":
-		return &router.Delta{Text: "[error] " + e.Message, IsFinal: true}
+	case "message_handler_error":
+		// Ends one message, not the turn. turn_end still follows.
+		return &router.Delta{Text: "[error] " + e.Message}
 	case "tool_approval_requested":
 		// Tool approval gates surface as a delta with no text; the approval workflow
 		// (started by the interaction webhook) later calls approveToolCall, which
@@ -333,7 +335,9 @@ func (d *Driver) PollTurn(ctx workflow.Context, handle router.TurnHandle, cursor
 			workflow.GetLogger(ctx).Warn("PollTurn: decodeTurnEvent failed", "error", err)
 			continue
 		}
-		if turnNumber < int(handle.TurnNumber) {
+		// Stream only this handle's turn. Events of a later turn belong to the
+		// router workflow that started that turn.
+		if turnNumber != int(handle.TurnNumber) {
 			continue
 		}
 		if delta := turnEventToDelta(*event); delta != nil {
