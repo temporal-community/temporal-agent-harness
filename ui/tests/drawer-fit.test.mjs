@@ -61,6 +61,26 @@ describe("the bottom drawer is fitted to the trace it holds", () => {
     );
   });
 
+  /* A dragged height that is saved but not honoured is the bug this pins: the fit ran
+     on every load and every reopen and wrote over it, and because every fit was saved
+     too, a drag could not be told apart from one. */
+  it("lets a dragged height outrank the fit, across reloads", () => {
+    assert.match(source, /onResizeEnd=\{keepDrawerHeight\}/, "the drawer's height is kept when a drag ends");
+    assert.match(
+      source,
+      /let drawerSized = chosenDrawerHeightNow\(\) != null;/,
+      "a saved height must count as sized on load, or the first fit writes over it"
+    );
+    const prefsAt = source.indexOf("writeOperatorPrefs({\n      transcriptFilter");
+    assert.ok(prefsAt > -1, "the standing prefs write must still be findable");
+    const prefsEffect = source.slice(prefsAt);
+    assert.doesNotMatch(
+      prefsEffect.slice(0, prefsEffect.indexOf("});")),
+      /drawerHeight/,
+      "fits must not be saved as if they were chosen"
+    );
+  });
+
   /* The poll this replaced sampled every 400ms and gave up after twenty tries, so a
      run that changed shape for eight seconds straight stopped being fitted. Nothing
      may count measurements again: the observer stops when the content does. */

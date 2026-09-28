@@ -9,6 +9,7 @@
   import HotkeyHelp from "$lib/components/flow/HotkeyHelp.svelte";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
   import DockedDrawer from "$lib/components/primitives/DockedDrawer.svelte";
+  import { restoredDrawerSize } from "$lib/components/primitives/resizeKeys";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import { Keyboard, PanelLeft } from "@lucide/svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
@@ -70,13 +71,25 @@
      without being asked for should be able to take three fifths of the window; the
      reader who wants that drags for it, and the gutter goes all the way to 60vh. */
   const DRAWER_FIT_MAX_FRACTION = 0.5;
+  /* The ceilings the layout already applies — `min(60vw, …)` and `min(60vh, …)` on the
+     grid — so a drawer is never set larger than it can be drawn. */
+  const DRAWER_MAX_FRACTION = 0.6;
 
   let rail = $state<PaneRail | null>(null);
   let drawerRail = $state<PaneRail | null>(null);
   let drawerElement = $state<HTMLElement | null>(null);
-  let drawerHeight = $state(
-    typeof savedPrefs.drawerHeight === "number" ? savedPrefs.drawerHeight : DRAWER_DEFAULT_H
-  );
+  /* The height the reader last dragged or stepped the drawer to, which outranks every
+     fit until they ask for one back with double-click or Home. Only a choice is saved:
+     a fit is recomputed on open, so saving it would pass it off as one. */
+  let chosenDrawerHeight = savedPrefs.drawerHeight;
+  function chosenDrawerHeightNow(): number | null {
+    return restoredDrawerSize(
+      chosenDrawerHeight,
+      DRAWER_MIN_H,
+      window.innerHeight * DRAWER_MAX_FRACTION
+    );
+  }
+  let drawerHeight = $state(chosenDrawerHeightNow() ?? DRAWER_DEFAULT_H);
   /* Which of the two rails the arrows, F and Escape act on: the last one touched,
      because both are on screen at once and neither is "the" rail any more. */
   let drawerActive = $state(false);
@@ -154,7 +167,6 @@
   $effect(() => {
     writeOperatorPrefs({
       transcriptFilter,
-      drawerHeight,
       sessionDrawerWidth,
       followDefault: run.following
     });
@@ -405,7 +417,7 @@
 
   /* A plain field, not `$state`: bookkeeping about whether a fit is owed, which
      nothing on screen reads and no fit should re-trigger. */
-  let drawerSized = false;
+  let drawerSized = chosenDrawerHeightNow() != null;
 
   /**
    * Fit when the drawer opens, and then leave it alone.
@@ -430,9 +442,9 @@
     void run.session?.workflow_id;
 
     if (!holding) {
-      /* An emptied drawer has no height anyone chose. The next open is a fresh
-         one, and fresh means fitted. */
-      drawerSized = false;
+      /* The next open is a fresh one: fitted, unless the reader has a height of
+         their own for it. */
+      drawerSized = chosenDrawerHeightNow() != null;
       return;
     }
     if (drawerSized) return;
@@ -492,12 +504,13 @@
     }
     if (drawerHeight === 0) {
       /* Dragging to the floor asks for the drawer to be gone, not for it to be
-         that tall next time, so reopening is a fresh open and gets a fresh fit.
-         The fixed height is what it opens at while the fit has nothing to measure,
-         and what it keeps if it never does. */
-      drawerHeight = DRAWER_DEFAULT_H;
-      drawerSized = false;
-      requestAnimationFrame(() => fitDrawerToContent());
+         that tall next time, so reopening is a fresh open: the reader's own height
+         if they have one, or else a fresh fit. The fixed height is what it opens at
+         while the fit has nothing to measure, and what it keeps if it never does. */
+      const chosen = chosenDrawerHeightNow();
+      drawerHeight = chosen ?? DRAWER_DEFAULT_H;
+      drawerSized = chosen != null;
+      if (chosen == null) requestAnimationFrame(() => fitDrawerToContent());
     }
     if (drawer.groups.length === 0) drawer.openPane({ kind: "latency" });
   }
@@ -555,9 +568,6 @@
     holdSessionManager(true);
   }
 
-  /* The ceilings the layout already applies — `min(60vw, …)` and `min(60vh, …)` on the
-     grid — so a drawer is never set larger than it can be drawn. */
-  const DRAWER_MAX_FRACTION = 0.6;
   let windowWidth = $state(window.innerWidth);
   let windowHeight = $state(window.innerHeight);
 
@@ -566,8 +576,18 @@
   });
 
   function fitBottomDrawer(): void {
+    chosenDrawerHeight = undefined;
+    writeOperatorPrefs({ drawerHeight: undefined });
     drawerSized = false;
     if (fitDrawerToContent() == null) drawerHeight = DRAWER_DEFAULT_H;
+  }
+
+  /* Written when a drag or key step ends, not on every move. Dragged to the floor is
+     not a height to reopen at, so that leaves the last real one standing. */
+  function keepDrawerHeight(): void {
+    if (drawerHeight < DRAWER_MIN_H) return;
+    chosenDrawerHeight = drawerHeight;
+    writeOperatorPrefs({ drawerHeight });
   }
 </script>
 
@@ -834,6 +854,7 @@
         maxSize={windowHeight * DRAWER_MAX_FRACTION}
         onResize={(height) => (drawerHeight = height)}
         onResizeStart={() => (drawerSized = true)}
+        onResizeEnd={keepDrawerHeight}
         onFit={fitBottomDrawer}
       >
         <PaneRail

@@ -15,6 +15,7 @@ import {
   RESIZE_STEP,
   drawerResizeKeys,
   resizeKeyIntent,
+  restoredDrawerSize,
   stepDrawerSize
 } from "./resizeKeys.ts";
 
@@ -62,6 +63,16 @@ describe("keyboard resizing a docked drawer", () => {
       assert.equal(afterKey(edge, 0, shrink), 0);
       assert.equal(afterKey(edge, 0, grow), MIN, `${edge} reopens at its minimum`);
     }
+  });
+
+  it("restores a saved size inside this window, and nothing that was not a size", () => {
+    assert.equal(restoredDrawerSize(300, MIN, MAX), 300);
+    assert.equal(restoredDrawerSize(900, MIN, MAX), MAX, "a taller window's size is brought inside");
+    assert.equal(restoredDrawerSize(300, MIN, MIN - 20), MIN, "never restored below its minimum");
+    assert.equal(restoredDrawerSize(0, MIN, MAX), null, "a drawer saved shut is not a size");
+    assert.equal(restoredDrawerSize(undefined, MIN, MAX), null);
+    assert.equal(restoredDrawerSize("300", MIN, MAX), null);
+    assert.equal(restoredDrawerSize(Number.NaN, MIN, MAX), null);
   });
 
   it("leaves modified arrows to the rail", () => {

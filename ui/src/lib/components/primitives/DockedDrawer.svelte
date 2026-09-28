@@ -17,6 +17,8 @@
     maxSize: number;
     onResize: (size: number) => void;
     onResizeStart?: () => void;
+    /** Once per drag or key step, after the last `onResize` — the size worth keeping. */
+    onResizeEnd?: () => void;
     onFit: () => void;
     children: Snippet;
   }
@@ -29,6 +31,7 @@
     maxSize,
     onResize,
     onResizeStart,
+    onResizeEnd,
     onFit,
     children
   }: Props = $props();
@@ -69,11 +72,13 @@
   }
 
   function stopResize(event: PointerEvent): void {
+    const wasResizing = resizing;
     resizing = false;
     const handle = event.currentTarget as HTMLElement;
     if (handle.hasPointerCapture(event.pointerId)) {
       handle.releasePointerCapture(event.pointerId);
     }
+    if (wasResizing) onResizeEnd?.();
   }
 
   /* Home does what a double-click does: fit the bottom drawer, reset the left one. */
@@ -87,6 +92,7 @@
     }
     onResizeStart?.();
     onResize(stepDrawerSize(size, intent, minSize, maxSize));
+    onResizeEnd?.();
   }
 
   const resizeLabel = $derived(`Resize the ${edge} drawer`);

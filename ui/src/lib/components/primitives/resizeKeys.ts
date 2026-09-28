@@ -46,6 +46,16 @@ export function clampDrawerSize(size: number, minSize: number, maxSize: number):
 }
 
 /**
+ * A size saved by an earlier drag, or null when there is none worth restoring. A saved
+ * shut drawer is not a size anyone wants back, and a size saved in a larger window is
+ * brought inside this one's maximum.
+ */
+export function restoredDrawerSize(saved: unknown, minSize: number, maxSize: number): number | null {
+  if (typeof saved !== "number" || !Number.isFinite(saved) || saved < minSize) return null;
+  return Math.max(minSize, Math.min(maxSize, saved));
+}
+
+/**
  * One key step. The same snap as a drag, except that growing a drawer that is shut
  * opens it at its minimum — a step smaller than the minimum would otherwise snap it
  * straight back, and the keyboard could never reopen it.
