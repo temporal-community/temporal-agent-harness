@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { Wrench, X } from "@lucide/svelte";
+  import { Funnel, X } from "@lucide/svelte";
   import {
     Background,
     BackgroundVariant,
@@ -242,11 +242,14 @@
          are the same question and belong in the same corner. -->
     <Controls {fitViewOptions} showLock={false}>
       <ControlButton
-        aria-label="Show every tool"
-        aria-pressed={!focus}
+        class="graph-focus-toggle"
+        aria-label="Hide finished tool calls"
+        aria-pressed={focus}
         onclick={() => onFocusChange(!focus)}
       >
-        <Wrench size={14} />
+        <!-- Not Wrench (a tool call everywhere else in the app), and not a
+             size/layout glyph (it sits under zoom and fit). -->
+        <Funnel size={14} />
       </ControlButton>
     </Controls>
     <MiniMap
@@ -560,6 +563,24 @@
     background: var(--surface-2);
     border-bottom-color: var(--border);
     color: var(--text-2);
+  }
+
+  /* xyflow fills control svgs and caps them at 12px, which turns a stroked
+     Lucide icon solid. Scoped to Lucide so xyflow's own filled glyphs keep
+     their fill. */
+  :global(.svelte-flow__controls-button svg.lucide-icon) {
+    fill: none;
+    max-width: none;
+    max-height: none;
+    width: 14px;
+    height: 14px;
+  }
+
+  /* IconButton's pressed recipe; out-specifies xyflow's :hover. */
+  :global(.svelte-flow__controls-button.graph-focus-toggle[aria-pressed="true"]) {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    background: color-mix(in srgb, var(--accent) 13%, var(--surface-2));
   }
 
   :global(.svelte-flow__minimap) {
