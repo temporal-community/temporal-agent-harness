@@ -1,4 +1,6 @@
 import type {
+  CallbackResultRequest,
+  CallbackResultResponse,
   AgentInterfaceFunction,
   AgentStatusResponse,
   AgentRegistryResponse,
@@ -35,6 +37,14 @@ export class ApiError extends Error {
  */
 export function approvalAlreadyResolved(error: unknown): boolean {
   return error instanceof ApiError && error.code === "ToolApprovalAlreadyResolved";
+}
+
+/** The callback was fulfilled (or timed out) before this result landed — e.g. by a CLI client. */
+export function callbackAlreadyResolved(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.code === "CallbackAlreadyResolved" || error.code === "UnknownCallback")
+  );
 }
 
 async function json<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
@@ -166,6 +176,16 @@ export class HttpAgentApi implements AgentApi {
 
   async approve(request: ToolApprovalRequest): Promise<ToolApprovalResponse> {
     return json<ToolApprovalResponse>(apiPath("approve"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request)
+    });
+  }
+
+  async provideCallbackResult(
+    request: CallbackResultRequest
+  ): Promise<CallbackResultResponse> {
+    return json<CallbackResultResponse>(apiPath("callback-result"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request)

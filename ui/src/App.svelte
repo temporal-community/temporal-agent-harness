@@ -31,6 +31,7 @@
     type ReplaySurface
   } from "$lib/state/replayHotkeys";
   import { setFaviconTone } from "$lib/state/favicon";
+  import { countPendingRequests, pendingRequestLabel } from "$lib/state/pendingRequests";
   import { focusReturnTarget } from "$lib/state/quickSwitch";
 
   const savedPrefs = readOperatorPrefs();
@@ -192,20 +193,7 @@
     stack.pendingCursor = null;
   });
 
-  const pendingApprovalCount = $derived.by(() => {
-    const resolvedToolIds = new Set<string>();
-    for (const row of run.fullReplayLog.rows) {
-      if (row.event === "tool_approval_resolved" && row.toolId) {
-        resolvedToolIds.add(row.toolId);
-      }
-    }
-    return run.fullReplayLog.rows.filter(
-      (row) =>
-        row.event === "tool_approval_requested" &&
-        row.toolId != null &&
-        !resolvedToolIds.has(row.toolId)
-    ).length;
-  });
+  const pendingLabel = $derived(pendingRequestLabel(countPendingRequests(run.fullReplayLog.rows)));
 
   function selectNode(nodeId: string): void {
     const localNodeId = nodeId.split("::").at(-1) ?? nodeId;
@@ -233,8 +221,8 @@
       case "chat":
         return {
           title: (run.session ? run.runInfo.agentLabel : "") || "Agent chat",
-          statusTone: pendingApprovalCount > 0 ? "--live" : null,
-          statusLabel: pendingApprovalCount > 0 ? "needs you" : null
+          statusTone: pendingLabel ? "--live" : null,
+          statusLabel: pendingLabel ? "needs you" : null
         };
       case "graph":
         return {
@@ -638,7 +626,7 @@
           creatingSession={run.creatingSession}
           closed={run.sessionClosed}
           error={run.connectionError}
-          {pendingApprovalCount}
+          {pendingLabel}
           onEnsureSessions={() => run.ensureSessionsEnriched()}
           onTabChange={openSessionManager}
         />
@@ -701,7 +689,7 @@
           closedWorkflowIds={run.closedWorkflowIds}
           error={run.connectionError}
           sessionsError={run.sessionsError}
-          {pendingApprovalCount}
+          {pendingLabel}
           onNewSession={(workflowType) => run.startNewSession(workflowType)}
           onSelectSession={(sessionId) => run.selectSession(sessionId)}
           onRefreshSessions={() => run.refreshSessions()}
@@ -760,6 +748,8 @@
           onRetryInterface={(workflowId) => run.retryAgentInterface(workflowId)}
           onApproveTool={(workflowId, toolId, approved, remember) =>
             run.approveTool(workflowId, toolId, approved, remember)}
+          onCallbackResult={(workflowId, toolId, outcome) =>
+            run.provideCallbackResult(workflowId, toolId, outcome)}
         />
       {:else if pane.kind === "latency"}
         <LatencyWaterfall

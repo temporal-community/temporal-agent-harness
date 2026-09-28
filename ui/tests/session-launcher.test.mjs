@@ -91,7 +91,7 @@ describe("the session anchor in the app chrome", () => {
       "creatingSession={run.creatingSession}",
       "closed={run.sessionClosed}",
       "error={run.connectionError}",
-      "{pendingApprovalCount}"
+      "{pendingLabel}"
     ]) {
       assert.ok(
         lead.includes(prop),

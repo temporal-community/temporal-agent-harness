@@ -42,6 +42,7 @@
   import type { InterfaceStatus } from "$lib/state/agentRun.svelte";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
   import SchemaForm from "$lib/components/chat/SchemaForm.svelte";
+  import PendingCallbackCard, { type CallbackOutcome } from "./PendingCallbackCard.svelte";
   import {
     buildPayload,
     describeSchema,
@@ -115,6 +116,12 @@
       approved: boolean,
       remember?: boolean
     ) => void | Promise<void>;
+    /** Fulfill a pending callback tool call (e.g. answer an `ask_user` question). */
+    onCallbackResult?: (
+      workflowId: string,
+      toolId: string,
+      outcome: CallbackOutcome
+    ) => void | Promise<void>;
   }
 
   interface ChatMessage {
@@ -158,7 +165,8 @@
     onSend,
     onStopAgent,
     onRetryInterface,
-    onApproveTool
+    onApproveTool,
+    onCallbackResult
   }: Props = $props();
   let draft = $state("");
   let composerInput = $state<HTMLInputElement | null>(null);
@@ -201,6 +209,22 @@
   const codeModeHosts = $derived(codeModeHostsByRow(logs));
   const resolvedApprovalKeys = $derived(resolvedApprovalIds(runLogs));
   const pendingApprovalRows = $derived(runLogs.filter((row) => isApprovalPending(row)));
+  /* Cleared by `callback_resolved` whoever fulfilled it — this pane, another tab, or a CLI. */
+  const resolvedCallbackKeys = $derived(
+    new Set(
+      runLogs
+        .filter((row) => row.event === "callback_resolved")
+        .map((row) => approvalKey(row))
+    )
+  );
+  const pendingCallbackRows = $derived(
+    runLogs.filter(
+      (row) =>
+        row.event === "callback_requested" &&
+        approvalKey(row) != null &&
+        !resolvedCallbackKeys.has(approvalKey(row))
+    )
+  );
   const sources = $derived(uniqueCitations(messages.flatMap((message) => message.citations)));
   const activeSession = $derived(
     sessions.find((item) => item.workflow_id === sessionId) ?? null
@@ -332,6 +356,7 @@
       sending ? "sending" : "idle",
       connecting ? "connecting" : "connected",
       resolvingApprovalIds.length,
+      pendingCallbackRows.length,
       Object.keys(approvalErrors).length,
       decidedApprovalIds.length
     ].join("|")
@@ -1518,6 +1543,28 @@
               <p class="approval-error">{approvalError(approval)}</p>
             {/if}
           </article>
+        {/each}
+      </section>
+    {/if}
+
+    {#if pendingCallbackRows.length > 0}
+      <section class="pending-approvals" aria-label="Pending callback requests">
+        <StatusChip
+          label={`${pendingCallbackRows.length} response${
+            pendingCallbackRows.length === 1 ? "" : "s"
+          } needed`}
+          kind="approval"
+          active
+        />
+        {#each pendingCallbackRows as callback (approvalKey(callback))}
+          <PendingCallbackCard
+            row={callback}
+            ahead={!viewRowIds.has(callback.id)}
+            onSubmit={onCallbackResult && callback.toolId
+              ? (outcome) =>
+                  onCallbackResult(approvalWorkflowId(callback), callback.toolId!, outcome)
+              : undefined}
+          />
         {/each}
       </section>
     {/if}

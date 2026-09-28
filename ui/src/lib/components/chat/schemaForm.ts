@@ -196,6 +196,24 @@ export function singleStringField(schema: JsonRecord | Schema): string | null {
   return only.name;
 }
 
+/**
+ * The form for a callback tool's result, from its output schema. An object result renders
+ * field-by-field; anything else (`str`, `int`, a list) is wrapped as one `result` field, and
+ * `wrapped` says to unwrap it from the built payload before sending.
+ */
+export function resultForm(schema: JsonRecord): { fields: SchemaField[]; wrapped: boolean } {
+  const direct = describeSchema(schema);
+  if (direct.length > 0) return { fields: direct, wrapped: false };
+  const { $defs, ...rest } = schema;
+  const wrapper: Schema = {
+    type: "object",
+    properties: { result: { title: "Response", ...rest } },
+    required: ["result"],
+    $defs
+  };
+  return { fields: describeSchema(wrapper), wrapped: true };
+}
+
 /** A blank form value for a field — its schema default when it has one. */
 export function emptyValue(field: SchemaField): unknown {
   if (field.default !== undefined) return field.default;

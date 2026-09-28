@@ -45,7 +45,8 @@
     error?: string | null;
     /** List refresh failure — shown in the manager, not as stream "Needs attention". */
     sessionsError?: string | null;
-    pendingApprovalCount?: number;
+    /** What the agent is waiting on the reader for, e.g. "1 response needed". */
+    pendingLabel?: string | null;
     onNewSession?: (workflowType: string) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
     onRefreshSessions?: () => void | Promise<void>;
@@ -78,7 +79,7 @@
     closedWorkflowIds = [],
     error = null,
     sessionsError = null,
-    pendingApprovalCount = 0,
+    pendingLabel = null,
     onNewSession,
     onSelectSession,
     onRefreshSessions,
@@ -140,8 +141,8 @@
       ? "Starting"
       : connecting
         ? "Connecting"
-        : pendingApprovalCount > 0
-          ? `${pendingApprovalCount} approval${pendingApprovalCount === 1 ? "" : "s"} needed`
+        : pendingLabel
+          ? pendingLabel
           : sending
             ? "Thinking"
             : error
@@ -195,7 +196,7 @@
   function currentStatusKind(): StatusKind {
     if (closed) return "closed";
     if (error) return "error";
-    if (pendingApprovalCount > 0) return "approval";
+    if (pendingLabel) return "approval";
     if (creatingSession) return "starting";
     if (connecting) return "connecting";
     if (sending) return "thinking";

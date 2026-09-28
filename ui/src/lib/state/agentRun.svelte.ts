@@ -1608,6 +1608,20 @@ export class AgentRunController {
     }
   }
 
+  /** Errors surface on the callback's own card, not the connection banner: a malformed result
+   *  leaves the call pending and is corrected in place. */
+  async provideCallbackResult(
+    workflowId: string,
+    toolId: string,
+    outcome: { result: unknown } | { error: string }
+  ): Promise<void> {
+    if (!this.session) throw new Error("No active session.");
+    if (!this.#isKnownWorkflowId(workflowId)) {
+      throw new Error("Cannot answer a callback for an unknown agent workflow.");
+    }
+    await this.#api.provideCallbackResult({ session_id: workflowId, tool_id: toolId, ...outcome });
+  }
+
   async #loadAgents(): Promise<AgentDescriptor[]> {
     if (this.agents.length > 0) return this.agents;
     const { agents } = await this.#api.listAgents();

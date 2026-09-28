@@ -1,4 +1,6 @@
 import type {
+  CallbackResultRequest,
+  CallbackResultResponse,
   AgentInterfaceFunction,
   AgentStatusResponse,
   AgentRegistryResponse,
@@ -32,4 +34,5 @@ export interface AgentApi {
   submitMessage(request: ChatRequest, signal?: AbortSignal): Promise<SubmitMessageResponse>;
   chat(request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame>;
   approve(request: ToolApprovalRequest): Promise<ToolApprovalResponse>;
+  provideCallbackResult(request: CallbackResultRequest): Promise<CallbackResultResponse>;
 }

@@ -1,4 +1,6 @@
 import type {
+  CallbackResultRequest,
+  CallbackResultResponse,
   AgentInterfaceFunction,
   AgentStatusResponse,
   AgentRegistryResponse,
@@ -216,6 +218,13 @@ export class MockAgentApi implements AgentApi {
   }
 
   async approve(request: ToolApprovalRequest): Promise<ToolApprovalResponse> {
+    await sleep(120);
+    return { tool_id: request.tool_id, accepted: true };
+  }
+
+  async provideCallbackResult(
+    request: CallbackResultRequest
+  ): Promise<CallbackResultResponse> {
     await sleep(120);
     return { tool_id: request.tool_id, accepted: true };
   }

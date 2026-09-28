@@ -190,6 +190,20 @@ export interface ToolApprovalResponse {
   accepted: true;
 }
 
+/** Exactly one of `result` / `error` is meaningful; the server validates `result` against the
+ *  callback tool's declared output type. */
+export interface CallbackResultRequest {
+  session_id: WorkflowId;
+  tool_id: ToolId;
+  result?: unknown;
+  error?: string | null;
+}
+
+export interface CallbackResultResponse {
+  tool_id: ToolId;
+  accepted: true;
+}
+
 export interface PendingTurn {
   turn_number: number;
   turn_id: TurnId;

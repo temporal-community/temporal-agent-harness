@@ -78,6 +78,8 @@ export interface ReplayLogRow {
    *  render differently — see formatLogValue in $lib/state/logValue. */
   input?: JsonRecord | null;
   output?: string;
+  /** JSON schema of the result a `callback_requested` row is waiting on. */
+  outputSchema?: JsonRecord;
   citations: FileCitationAnnotation[];
   usage?: UsageTotals;
   estimatedCostUsd?: number | null;
@@ -488,6 +490,37 @@ function rowFromFrame(
       status: "failed",
       marker: "error",
       markerLabel: "tool failed"
+    };
+  }
+
+  if (frame.event === "callback_requested") {
+    return {
+      ...base,
+      actor: "tool",
+      tone: "approval",
+      label: "Waiting on client",
+      body: frame.data.tool_name,
+      toolId: frame.data.tool_id,
+      toolName: frame.data.tool_name,
+      input: frame.data.tool_input,
+      outputSchema: frame.data.output_schema,
+      status: "awaiting",
+      marker: "approval",
+      markerLabel: "callback requested"
+    };
+  }
+
+  if (frame.event === "callback_resolved") {
+    const ok = frame.data.outcome === "ok";
+    return {
+      ...base,
+      actor: "tool",
+      tone: ok ? "done" : "error",
+      label: ok ? "Client responded" : `Callback ${frame.data.outcome}`,
+      body: frame.data.error ?? frame.data.tool_name,
+      toolId: frame.data.tool_id,
+      toolName: frame.data.tool_name,
+      status: frame.data.outcome
     };
   }
 
