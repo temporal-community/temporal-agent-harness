@@ -59,6 +59,19 @@ var AgentService = struct {
 	ProvideCallbackResult: nexus.NewOperationReference[ProvideCallbackResultInput, ProvideCallbackResultOutput]("ProvideCallbackResult"),
 }
 
+// AcceptedFunctionMidTurn Request policy during an active turn: enqueue waits, reject
+// refuses the request, and accept runs the handler
+type AcceptedFunctionMidTurn string
+
+const (
+	// AcceptedFunctionMidTurnEnqueue is the AcceptedFunctionMidTurn value "enqueue".
+	AcceptedFunctionMidTurnEnqueue AcceptedFunctionMidTurn = "enqueue"
+	// AcceptedFunctionMidTurnReject is the AcceptedFunctionMidTurn value "reject".
+	AcceptedFunctionMidTurnReject AcceptedFunctionMidTurn = "reject"
+	// AcceptedFunctionMidTurnAccept is the AcceptedFunctionMidTurn value "accept".
+	AcceptedFunctionMidTurnAccept AcceptedFunctionMidTurn = "accept"
+)
+
 
 // AcceptedFunction One @agent.accepts handler exposed by the agent, described
 // tool-style (mirrors harness AcceptedFunction)
@@ -71,12 +84,22 @@ type AcceptedFunction struct {
 	Parameters string `json:"parameters"`
 	// Output JSON-encoded JSON Schema for the handler's return model
 	Output string `json:"output"`
+	// MidTurn Request policy during an active turn: enqueue waits, reject refuses the
+	// request, and accept runs the handler
+	MidTurn *AcceptedFunctionMidTurn `json:"midTurn,omitempty"`
 }
 
 // Validate checks m against every constraint and returns a *ValidationError
 // listing any violations.
 func (m AcceptedFunction) Validate() error {
 	var errs []Violation
+	if m.MidTurn != nil {
+		switch (*m.MidTurn) {
+		case AcceptedFunctionMidTurnEnqueue, AcceptedFunctionMidTurnReject, AcceptedFunctionMidTurnAccept:
+		default:
+			errs = append(errs, Violation{"midTurn", fmt.Sprintf("must be one of [\"enqueue\",\"reject\",\"accept\"], got %q", (*m.MidTurn))})
+		}
+	}
 	if len(errs) > 0 {
 		return &ValidationError{Violations: errs}
 	}
@@ -93,7 +116,7 @@ func (m *AcceptedFunction) UnmarshalJSON(data []byte) error {
 	var errs []Violation
 	for k := range all {
 		switch k {
-		case "name", "description", "parameters", "output":
+		case "name", "description", "parameters", "output", "midTurn":
 		default:
 			errs = append(errs, Violation{k, "unknown field"})
 		}
@@ -117,6 +140,15 @@ func (m *AcceptedFunction) UnmarshalJSON(data []byte) error {
 	if v, ok := parseStringField(get("output"), "output", true, false, &errs); ok {
 		m.Output = v
 	}
+	if v, ok := parseStringField(get("midTurn"), "midTurn", false, false, &errs); ok {
+		typed := AcceptedFunctionMidTurn(v)
+		switch typed {
+		case AcceptedFunctionMidTurnEnqueue, AcceptedFunctionMidTurnReject, AcceptedFunctionMidTurnAccept:
+			m.MidTurn = &typed
+		default:
+			errs = append(errs, Violation{"midTurn", fmt.Sprintf("must be one of [\"enqueue\",\"reject\",\"accept\"], got %q", typed)})
+		}
+	}
 	if len(errs) > 0 {
 		return &ValidationError{Violations: errs}
 	}
@@ -133,6 +165,9 @@ func (m AcceptedFunction) MarshalJSON() ([]byte, error) {
 	marshalField(out, "description", m.Description, &errs)
 	marshalField(out, "parameters", m.Parameters, &errs)
 	marshalField(out, "output", m.Output, &errs)
+	if m.MidTurn != nil {
+		marshalField(out, "midTurn", *m.MidTurn, &errs)
+	}
 	if len(errs) > 0 {
 		return nil, &ValidationError{Violations: errs}
 	}
@@ -1977,6 +2012,8 @@ type SendMessageOutput struct {
 	// Pending True if the message was queued behind an active turn rather than dispatched
 	// immediately
 	Pending *bool `json:"pending,omitempty"`
+	// MessageId Message ID used to filter pollMessages events for this reply
+	MessageId *string `json:"messageId,omitempty"`
 }
 
 // Validate checks m against every constraint and returns a *ValidationError
@@ -2005,7 +2042,7 @@ func (m *SendMessageOutput) UnmarshalJSON(data []byte) error {
 	var errs []Violation
 	for k := range all {
 		switch k {
-		case "turnNumber", "turnId", "streamHeadOffset", "pending":
+		case "turnNumber", "turnId", "streamHeadOffset", "pending", "messageId":
 		default:
 			errs = append(errs, Violation{k, "unknown field"})
 		}
@@ -2029,6 +2066,9 @@ func (m *SendMessageOutput) UnmarshalJSON(data []byte) error {
 	if v, ok := parseBoolField(get("pending"), "pending", false, false, &errs); ok {
 		m.Pending = &v
 	}
+	if v, ok := parseStringField(get("messageId"), "messageId", false, false, &errs); ok {
+		m.MessageId = &v
+	}
 	if len(errs) > 0 {
 		return &ValidationError{Violations: errs}
 	}
@@ -2048,6 +2088,9 @@ func (m SendMessageOutput) MarshalJSON() ([]byte, error) {
 	}
 	if m.Pending != nil {
 		marshalField(out, "pending", *m.Pending, &errs)
+	}
+	if m.MessageId != nil {
+		marshalField(out, "messageId", *m.MessageId, &errs)
 	}
 	if len(errs) > 0 {
 		return nil, &ValidationError{Violations: errs}

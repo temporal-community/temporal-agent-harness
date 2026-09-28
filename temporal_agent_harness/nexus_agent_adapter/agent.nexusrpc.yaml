@@ -72,6 +72,9 @@ $defs:
       pending:
         type: boolean
         description: "True if the message was queued behind an active turn rather than dispatched immediately"
+      messageId:
+        type: string
+        description: "Message ID used to filter pollMessages events for this reply"
     required:
       - turnNumber
       - turnId
@@ -180,6 +183,10 @@ $defs:
       output:
         type: string
         description: "JSON-encoded JSON Schema for the handler's return model"
+      midTurn:
+        type: string
+        enum: ["enqueue", "reject", "accept"]
+        description: "Request policy during an active turn: enqueue waits, reject refuses the request, and accept runs the handler"
     required:
       - name
       - description

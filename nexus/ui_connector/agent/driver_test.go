@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	harnessgen "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/agent/generated"
 
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/sdk/testsuite"
@@ -18,77 +19,50 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// -- Unit tests for pure helper functions ------------------------------------
-
-func TestTurnEventToDelta(t *testing.T) {
-	cases := []struct {
-		name      string
-		event     turnEvent
-		wantText  string
-		wantFinal bool
-		wantNil   bool
-	}{
-		{"reply_delta", turnEvent{Type: "reply_delta", Text: "hello"}, "hello", false, false},
-		{"thought_summary empty text", turnEvent{Type: "thought_summary", Delta: map[string]any{"text": ""}}, "", false, true},
-		{"unknown type", turnEvent{Type: "unknown_event"}, "", false, true},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			d := turnEventToDelta(tc.event)
-			if tc.wantNil {
-				assert.Nil(t, d)
-				return
-			}
-			require.NotNil(t, d)
-			assert.Equal(t, tc.wantText, d.Text)
-			assert.Equal(t, tc.wantFinal, d.IsFinal)
-		})
-	}
-}
-
-func TestTurnEventToDelta_ToolStatus(t *testing.T) {
+func TestTurnEventToEvent_Chunks(t *testing.T) {
 	cases := []struct {
 		name  string
 		event turnEvent
-		want  router.ToolStatus
+		want  protocol.Chunk
 	}{
-		{
-			"tool_start",
-			turnEvent{Type: "tool_start", ToolID: "t1", ToolName: "search"},
-			router.ToolStatus{ToolID: "t1", ToolName: "search", Status: router.ToolStarted},
-		},
-		{
-			"tool_end",
-			turnEvent{Type: "tool_end", ToolID: "t1", ToolName: "search"},
-			router.ToolStatus{ToolID: "t1", ToolName: "search", Status: router.ToolCompleted},
-		},
-		{
-			"tool_error",
-			turnEvent{Type: "tool_error", ToolID: "t1", ToolName: "search", Message: "oops"},
-			router.ToolStatus{ToolID: "t1", ToolName: "search", Status: router.ToolErrored, Message: "oops"},
-		},
+		{"reply_delta", turnEvent{Type: "reply_delta", Text: "hello"}, protocol.Chunk{Text: "hello"}},
+		{"thought_summary", turnEvent{Type: "thought_summary", Delta: map[string]any{"text": "hmm"}},
+			protocol.Chunk{Thought: &protocol.ThoughtChunk{Delta: "hmm"}}},
+		{"tool_start", turnEvent{Type: "tool_start", ToolID: "t1", ToolName: "search", ToolInput: map[string]any{"q": "x"}},
+			protocol.Chunk{Tool: &protocol.ToolChunk{ID: "t1", Name: "search", Phase: protocol.ToolRunning, Input: `{"q":"x"}`}}},
+		{"tool_end", turnEvent{Type: "tool_end", ToolID: "t1", ToolName: "search", ToolOutput: "3 hits"},
+			protocol.Chunk{Tool: &protocol.ToolChunk{ID: "t1", Name: "search", Phase: protocol.ToolComplete, Output: "3 hits"}}},
+		{"tool_error", turnEvent{Type: "tool_error", ToolID: "t1", ToolName: "search", Message: "oops"},
+			protocol.Chunk{Tool: &protocol.ToolChunk{ID: "t1", Name: "search", Phase: protocol.ToolErrored, Error: "oops"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			d := turnEventToDelta(tc.event)
-			require.NotNil(t, d)
-			require.NotNil(t, d.ToolStatus)
-			assert.Equal(t, tc.want, *d.ToolStatus)
-			assert.Empty(t, d.Text, "tool status deltas carry no text - rendering is up to the outbound driver")
+			ev, final := turnEventToEvent(tc.event, false)
+			require.NotNil(t, ev)
+			require.NotNil(t, ev.Chunk)
+			assert.Equal(t, tc.want, *ev.Chunk)
+			assert.False(t, final)
 		})
 	}
 }
 
-func TestTurnEventToDelta_ThoughtSummary(t *testing.T) {
-	d := turnEventToDelta(turnEvent{Type: "thought_summary", Delta: map[string]any{"text": "thinking..."}})
-	require.NotNil(t, d)
-	assert.Equal(t, "thinking...", d.ThoughtSummary)
-	assert.Empty(t, d.Text, "thought summaries are not reply text - citations must not be indexed against them")
+func TestTurnEventToEvent_Ignored(t *testing.T) {
+	for _, e := range []turnEvent{
+		{Type: "reply_delta"},
+		{Type: "thought_summary", Delta: map[string]any{"text": ""}},
+		{Type: "text_annotation", Delta: map[string]any{}},
+		{Type: "turn_started"},
+		{Type: "message_accepted"},
+		{Type: "unknown_event"},
+	} {
+		ev, final := turnEventToEvent(e, false)
+		assert.Nil(t, ev, e.Type)
+		assert.False(t, final, e.Type)
+	}
 }
 
-func TestTurnEventToDelta_TextAnnotation_ProducesCitations(t *testing.T) {
-	d := turnEventToDelta(turnEvent{
+func TestTurnEventToEvent_TextAnnotation_ProducesCitations(t *testing.T) {
+	ev, _ := turnEventToEvent(turnEvent{
 		Type: "text_annotation",
 		Delta: map[string]any{
 			"annotations": []any{
@@ -102,301 +76,290 @@ func TestTurnEventToDelta_TextAnnotation_ProducesCitations(t *testing.T) {
 						"heading":  "Section 2",
 					},
 				},
-				map[string]any{
-					"type":      "file_citation",
-					"file_name": "notes.txt",
-				},
+				map[string]any{"type": "file_citation", "file_name": "notes.txt"},
 			},
 		},
-	})
-
-	require.NotNil(t, d)
-	assert.Empty(t, d.Text)
-	require.Len(t, d.Citations, 2)
-	assert.Equal(t, router.Citation{URL: "https://example.com/runbook#section-2", Title: "Section 2", EndIndex: 42}, d.Citations[0])
-	assert.Equal(t, router.Citation{URL: "", Title: "notes.txt", EndIndex: -1}, d.Citations[1])
+	}, false)
+	require.NotNil(t, ev)
+	require.Len(t, ev.Chunk.Citations, 2)
+	assert.Equal(t, protocol.Citation{URL: "https://example.com/runbook#section-2", Title: "Section 2", EndIndex: 42}, ev.Chunk.Citations[0])
+	assert.Equal(t, protocol.Citation{URL: "", Title: "notes.txt", EndIndex: -1}, ev.Chunk.Citations[1])
 }
 
-func TestTurnEventToDelta_TextAnnotation_NoAnnotations_ReturnsNil(t *testing.T) {
-	d := turnEventToDelta(turnEvent{Type: "text_annotation", Delta: map[string]any{}})
-	assert.Nil(t, d)
-}
-
-// TestToolStatusCarriesNoText guards against tool_start/tool_end/tool_error deltas
-// contributing anything to the reply text that citations get indexed against - see
-// teamsoutbound.flattenSegments for where this structured status gets turned back
-// into the "\n_toolName..._" ✅ text Teams shows, and slackoutbound's UpdateStream for
-// how Slack renders it as a separate threaded message instead.
-func TestToolStatusCarriesNoText(t *testing.T) {
-	start := turnEventToDelta(turnEvent{Type: "tool_start", ToolID: "t1", ToolName: "file_search"})
-	end := turnEventToDelta(turnEvent{Type: "tool_end", ToolID: "t1", ToolName: "file_search"})
-	reply := turnEventToDelta(turnEvent{Type: "reply_delta", Text: "A Local Activity runs in the Workflow process."})
-	require.NotNil(t, start)
-	require.NotNil(t, end)
-	require.NotNil(t, reply)
-
-	assert.Empty(t, start.Text)
-	assert.Empty(t, end.Text)
-	assert.Equal(t, "A Local Activity runs in the Workflow process.", reply.Text)
-}
-
-func TestToolApprovalRequestedEvent_ProducesApprovalRequestedDelta(t *testing.T) {
-	d := turnEventToDelta(turnEvent{
+func TestTurnEventToEvent_Approvals(t *testing.T) {
+	req, _ := turnEventToEvent(turnEvent{
 		Type: "tool_approval_requested", ToolID: "t1", ToolName: "search",
 		ToolInput: map[string]any{"query": "foo"},
-	})
-	require.NotNil(t, d)
-	require.NotNil(t, d.ApprovalRequested)
-	assert.Equal(t, "t1", d.ApprovalRequested.ToolID)
-	assert.Equal(t, "search", d.ApprovalRequested.ToolName)
-	assert.JSONEq(t, `{"query":"foo"}`, d.ApprovalRequested.ToolInputJSON)
+	}, false)
+	require.NotNil(t, req.ApprovalRequested)
+	assert.JSONEq(t, `{"query":"foo"}`, req.ApprovalRequested.ToolInputJSON)
+
+	res, _ := turnEventToEvent(turnEvent{
+		Type: "tool_approval_resolved", ToolID: "t1", ToolName: "search",
+		Approved: true, Remember: true, Reason: "by U",
+	}, false)
+	assert.Equal(t, &protocol.ApprovalResolution{ToolID: "t1", ToolName: "search", Approved: true, Remember: true, Reason: "by U"}, res.ApprovalResolved)
+}
+
+// A turn-scoped reply ends at turn_end. A message-scoped reply ends at its own
+// handler's end, because turn_end may belong to a turn the message only joined.
+func TestTurnEventToEvent_TerminalEvents(t *testing.T) {
+	ev, final := turnEventToEvent(turnEvent{Type: "turn_end"}, false)
+	assert.Nil(t, ev)
+	assert.True(t, final)
+	_, final = turnEventToEvent(turnEvent{Type: "turn_end"}, true)
+	assert.False(t, final)
+
+	for _, scoped := range []bool{false, true} {
+		out, final := turnEventToEvent(turnEvent{Type: "message_handler_end", Output: map[string]any{"text": "Done!"}}, scoped)
+		assert.Equal(t, map[string]any{"text": "Done!"}, out.HandlerOutput.Value)
+		assert.Equal(t, scoped, final)
+
+		failed, final := turnEventToEvent(turnEvent{Type: "message_handler_error", Message: "boom"}, scoped)
+		assert.Equal(t, "The agent's handler failed: boom", failed.Error)
+		assert.Equal(t, scoped, final)
+	}
 }
 
 func TestDecodeTurnEvent_RoundTrip(t *testing.T) {
-	si := streamItem{
-		TurnID:     "t1",
-		TurnNumber: 3,
-		Timestamp:  1700000000.0,
-		Event:      turnEvent{Type: "reply_delta", Text: "hello"},
-	}
-	item := makeTestStreamItem(t, si, 0, turnEventsTopic)
-
-	turnNumber, got, err := decodeTurnEvent(item)
+	si := streamItem{TurnID: "t1", TurnNumber: 3, MessageID: "msg-1", Timestamp: 1700000000.0,
+		Event: turnEvent{Type: "reply_delta", Text: "hello"}}
+	got, err := decodeTurnEvent(makeTestStreamItem(t, si, 0, turnEventsTopic))
 	require.NoError(t, err)
-	assert.Equal(t, 3, turnNumber)
-	assert.Equal(t, "reply_delta", got.Type)
-	assert.Equal(t, "hello", got.Text)
+	assert.Equal(t, 3, got.TurnNumber)
+	assert.Equal(t, "msg-1", got.MessageID)
+	assert.Equal(t, "hello", got.Event.Text)
 }
 
-// -- Driver tests -------------------------------------------------------------
-
-// runStartTurnWorkflow and runPollTurnWorkflow are package-level wrappers so Driver's
-// workflow.Context methods can be exercised through the Temporal test environment.
-func runStartTurnWorkflow(ctx workflow.Context, input router.Input) (router.StartResult, error) {
-	d := &Driver{}
-	return d.StartTurn(ctx, input)
+func runStart(ctx workflow.Context, req protocol.Request) (router.Start, error) {
+	return (&Driver{}).Start(ctx, req)
 }
 
-type pollTurnWorkflowInput struct {
-	Handle router.TurnHandle
-	Cursor int64
-}
-
-func runPollTurnWorkflow(ctx workflow.Context, in pollTurnWorkflowInput) (router.PollResult, error) {
-	d := &Driver{}
-	return d.PollTurn(ctx, in.Handle, in.Cursor)
+func runPoll(ctx workflow.Context, handle router.Handle) (router.Poll, error) {
+	return (&Driver{}).Poll(ctx, handle)
 }
 
 func newTestEnv(t *testing.T, svc *nexus.Service) *testsuite.TestWorkflowEnvironment {
 	t.Helper()
-	s := testsuite.WorkflowTestSuite{}
-	env := s.NewTestWorkflowEnvironment()
-	env.RegisterWorkflow(runStartTurnWorkflow)
-	env.RegisterWorkflow(runPollTurnWorkflow)
+	env := (&testsuite.WorkflowTestSuite{}).NewTestWorkflowEnvironment()
+	env.RegisterWorkflow(runStart)
+	env.RegisterWorkflow(runPoll)
 	env.RegisterNexusService(svc)
 	return env
 }
 
-func TestStartTurn_Message_ReturnsHandleFromSendAgentMessage(t *testing.T) {
+func agentService(ops ...nexus.RegisterableOperation) *nexus.Service {
 	svc := nexus.NewService(harnessgen.AgentService.ServiceName)
-	svc.MustRegister(nexus.NewSyncOperation(
-		harnessgen.AgentService.SendAgentMessage.Name(),
-		func(ctx context.Context, input harnessgen.SendAgentMessageInput, opts nexus.StartOperationOptions) (harnessgen.SendMessageOutput, error) {
-			assert.Equal(t, "ask", input.MsgType)
-			return harnessgen.SendMessageOutput{TurnNumber: 2, StreamHeadOffset: ptr(int64(5))}, nil
-		},
-	))
-
-	env := newTestEnv(t, svc)
-	env.ExecuteWorkflow(runStartTurnWorkflow, router.Input{
-		SessionID: "slack:C1",
-		Message:   &router.IncomingMessage{Text: "hi"},
-	})
-
-	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError())
-	var result router.StartResult
-	require.NoError(t, env.GetWorkflowResult(&result))
-	require.NotNil(t, result.Handle)
-	assert.Equal(t, int64(2), result.Handle.TurnNumber)
-	assert.Equal(t, int64(5), result.Handle.StreamHeadOffset)
-	assert.Equal(t, "slack:C1", result.Handle.SessionID)
+	svc.MustRegister(ops...)
+	return svc
 }
 
-func TestStartTurn_Slash_HarnessCommand_ReturnsSynchronousReply(t *testing.T) {
-	svc := nexus.NewService(harnessgen.AgentService.ServiceName)
-	svc.MustRegister(nexus.NewSyncOperation(
-		harnessgen.AgentService.QueryOperatorInterface.Name(),
-		func(ctx context.Context, input harnessgen.QuerySessionInput, opts nexus.StartOperationOptions) (harnessgen.QueryOperatorInterfaceOutput, error) {
-			return harnessgen.QueryOperatorInterfaceOutput{Commands: []harnessgen.OperatorCommand{
-				{Name: "stop", Source: "harness"},
+func sendOp(got *harnessgen.SendAgentMessageInput) nexus.RegisterableOperation {
+	return nexus.NewSyncOperation(harnessgen.AgentService.SendAgentMessage.Name(),
+		func(ctx context.Context, input harnessgen.SendAgentMessageInput, _ nexus.StartOperationOptions) (harnessgen.SendMessageOutput, error) {
+			*got = input
+			return harnessgen.SendMessageOutput{TurnNumber: 2, StreamHeadOffset: ptr(int64(5)), MessageId: ptr("msg-1")}, nil
+		})
+}
+
+const setModelSchema = `{"properties":{"model":{"enum":["fast","smart"],"type":"string"}},"required":["model"],"type":"object"}`
+
+func interfaceOp(fail bool) nexus.RegisterableOperation {
+	return nexus.NewSyncOperation(harnessgen.AgentService.QueryAgentInterface.Name(),
+		func(ctx context.Context, input harnessgen.QuerySessionInput, _ nexus.StartOperationOptions) (harnessgen.AgentInterfaceOutput, error) {
+			if fail {
+				return harnessgen.AgentInterfaceOutput{}, nexus.HandlerErrorf(nexus.HandlerErrorTypeNotFound, "no session")
+			}
+			accept := harnessgen.AcceptedFunctionMidTurnAccept
+			return harnessgen.AgentInterfaceOutput{Handlers: []harnessgen.AcceptedFunction{
+				{Name: "ask", Description: "Chat.", Parameters: `{"properties":{"text":{"type":"string"}},"required":["text"]}`, Output: "{}"},
+				{Name: "set_model", Description: "Set the model.", Parameters: setModelSchema, Output: "{}", MidTurn: &accept},
 			}}, nil
-		},
-	))
-	svc.MustRegister(nexus.NewSyncOperation(
-		harnessgen.AgentService.ExecuteOperatorCommand.Name(),
-		func(ctx context.Context, input harnessgen.ExecuteOperatorCommandInput, opts nexus.StartOperationOptions) (harnessgen.ExecuteOperatorCommandOutput, error) {
-			assert.Equal(t, "stop", input.Name)
-			return harnessgen.ExecuteOperatorCommandOutput{Reply: "Stopped."}, nil
-		},
-	))
-
-	env := newTestEnv(t, svc)
-	env.ExecuteWorkflow(runStartTurnWorkflow, router.Input{
-		SessionID: "slack:C1",
-		Slash:     &router.SlashCommand{Name: "stop"},
-	})
-
-	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError())
-	var result router.StartResult
-	require.NoError(t, env.GetWorkflowResult(&result))
-	assert.Equal(t, "Stopped.", result.Reply)
-	assert.Nil(t, result.Handle)
+		})
 }
 
-func TestStartTurn_Slash_AgentOwned_CreatesTurn(t *testing.T) {
-	svc := nexus.NewService(harnessgen.AgentService.ServiceName)
-	svc.MustRegister(nexus.NewSyncOperation(
-		harnessgen.AgentService.QueryOperatorInterface.Name(),
-		func(ctx context.Context, input harnessgen.QuerySessionInput, opts nexus.StartOperationOptions) (harnessgen.QueryOperatorInterfaceOutput, error) {
-			return harnessgen.QueryOperatorInterfaceOutput{Commands: []harnessgen.OperatorCommand{}}, nil // "scope" is not harness-owned
-		},
-	))
-	svc.MustRegister(nexus.NewSyncOperation(
-		harnessgen.AgentService.SendAgentMessage.Name(),
-		func(ctx context.Context, input harnessgen.SendAgentMessageInput, opts nexus.StartOperationOptions) (harnessgen.SendMessageOutput, error) {
-			assert.Equal(t, "slash", input.MsgType)
-			return harnessgen.SendMessageOutput{TurnNumber: 1}, nil
-		},
-	))
-
+func start(t *testing.T, svc *nexus.Service, req protocol.Request) router.Start {
+	t.Helper()
 	env := newTestEnv(t, svc)
-	env.ExecuteWorkflow(runStartTurnWorkflow, router.Input{
-		SessionID: "slack:C1",
-		Slash:     &router.SlashCommand{Name: "scope", Arg: "docs"},
-	})
-
+	env.ExecuteWorkflow(runStart, req)
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	var result router.StartResult
+	var result router.Start
 	require.NoError(t, env.GetWorkflowResult(&result))
-	require.NotNil(t, result.Handle)
-	assert.Empty(t, result.Reply)
+	return result
 }
 
-func TestStartTurn_Approval_CallsApproveToolCall(t *testing.T) {
-	var gotToolID string
-	var gotApproved bool
-	svc := nexus.NewService(harnessgen.AgentService.ServiceName)
-	svc.MustRegister(nexus.NewSyncOperation(
-		harnessgen.AgentService.ApproveToolCall.Name(),
-		func(ctx context.Context, input harnessgen.ApproveToolCallInput, opts nexus.StartOperationOptions) (harnessgen.ApproveToolCallOutput, error) {
-			gotToolID, gotApproved = input.ToolId, input.Approved
+func message(text string) protocol.Request {
+	return protocol.Request{SessionID: "slack:C1:1.0", Message: &protocol.Message{Text: text}}
+}
+
+func replyText(t *testing.T, r router.Start) string {
+	t.Helper()
+	require.Len(t, r.Events, 1)
+	require.NotNil(t, r.Events[0].Chunk)
+	return r.Events[0].Chunk.Text
+}
+
+func TestStart_PlainTextGoesToAsk(t *testing.T) {
+	var got harnessgen.SendAgentMessageInput
+	result := start(t, agentService(sendOp(&got)), message(" hi there "))
+
+	assert.Equal(t, "ask", got.MsgType)
+	assert.JSONEq(t, `{"text":"hi there"}`, got.Payload)
+	assert.Equal(t, []protocol.Event{{TurnStarted: true}}, result.Events)
+	assert.JSONEq(t, `{"sessionId":"slack:C1:1.0","turnNumber":2,"messageId":"msg-1","cursor":5}`, string(result.Handle))
+}
+
+func TestStart_FirstContactAddsTheGuide(t *testing.T) {
+	var got harnessgen.SendAgentMessageInput
+	req := message("hi")
+	req.Message.FirstContact = true
+	result := start(t, agentService(sendOp(&got), interfaceOp(false)), req)
+
+	require.Len(t, result.Events, 2)
+	guide := result.Events[0].Guide
+	require.NotNil(t, guide)
+	require.Len(t, guide.Handlers, 2)
+	h := guide.Handlers[1]
+	assert.Equal(t, "set_model", h.Name)
+	assert.Equal(t, "accept", h.MidTurn)
+	assert.Equal(t, []string{"fast", "smart"}, h.Fields[0].Options)
+	assert.Equal(t, []string{"fast", "smart"}, h.Fields[0].Options)
+	assert.True(t, result.Events[1].TurnStarted)
+}
+
+func TestStart_FirstContactGuideFailureKeepsTheReply(t *testing.T) {
+	var got harnessgen.SendAgentMessageInput
+	req := message("hi")
+	req.Message.FirstContact = true
+	result := start(t, agentService(sendOp(&got), interfaceOp(true)), req)
+	assert.Equal(t, []protocol.Event{{TurnStarted: true}}, result.Events)
+	assert.NotNil(t, result.Handle)
+}
+
+func TestStart_Help(t *testing.T) {
+	result := start(t, agentService(interfaceOp(false)), message("/help"))
+	require.Len(t, result.Events, 1)
+	assert.Len(t, result.Events[0].Guide.Handlers, 2)
+	assert.True(t, router.Empty(result.Handle))
+
+	result = start(t, agentService(interfaceOp(true)), message("/help"))
+	assert.Equal(t, noSessionReply, replyText(t, result))
+}
+
+func TestStart_HandlerFromText(t *testing.T) {
+	var got harnessgen.SendAgentMessageInput
+	result := start(t, agentService(sendOp(&got), interfaceOp(false)), message("/set_model model=smart"))
+	assert.Equal(t, "set_model", got.MsgType)
+	assert.JSONEq(t, `{"model":"smart"}`, got.Payload)
+	assert.NotNil(t, result.Handle)
+
+	bad := start(t, agentService(interfaceOp(false)), message("/set_model model=huge"))
+	require.Len(t, bad.Events, 1)
+	help := bad.Events[0].HandlerHelp
+	require.NotNil(t, help)
+	assert.Equal(t, "set_model", help.Handler.Name)
+	assert.Equal(t, map[string]string{"model": "Must be one of: fast, smart."}, help.Errors)
+
+	missing := start(t, agentService(interfaceOp(false)), message("/set_model"))
+	require.NotNil(t, missing.Events[0].HandlerHelp)
+	assert.Empty(t, missing.Events[0].HandlerHelp.Errors)
+	assert.Equal(t, "Unknown handler \"nope\". This agent accepts: ask, set_model",
+		replyText(t, start(t, agentService(interfaceOp(false)), message("/nope"))))
+}
+
+func TestStart_CallSendsPayloadVerbatim(t *testing.T) {
+	var got harnessgen.SendAgentMessageInput
+	result := start(t, agentService(sendOp(&got)), protocol.Request{
+		SessionID: "slack:C1:1.0",
+		Call:      &protocol.HandlerCall{Name: "set_model", Payload: `{"model":"fast"}`},
+	})
+	assert.Equal(t, "set_model", got.MsgType)
+	assert.Equal(t, `{"model":"fast"}`, got.Payload)
+	assert.NotNil(t, result.Handle)
+}
+
+func TestStart_OpenFormReturnsTheHandler(t *testing.T) {
+	result := start(t, agentService(interfaceOp(false)), protocol.Request{
+		SessionID: "slack:C1:1.0", OpenForm: &protocol.FormRequest{Handler: "set_model"},
+	})
+	require.Len(t, result.Events, 1)
+	assert.Equal(t, "set_model", result.Events[0].Form.Name)
+}
+
+func TestStart_ApprovalCallsApproveToolCallAndReturnsTheDecision(t *testing.T) {
+	var got harnessgen.ApproveToolCallInput
+	svc := agentService(nexus.NewSyncOperation(harnessgen.AgentService.ApproveToolCall.Name(),
+		func(ctx context.Context, input harnessgen.ApproveToolCallInput, _ nexus.StartOperationOptions) (harnessgen.ApproveToolCallOutput, error) {
+			got = input
 			return harnessgen.ApproveToolCallOutput{Accepted: true, ToolId: input.ToolId}, nil
-		},
-	))
-
-	env := newTestEnv(t, svc)
-	env.ExecuteWorkflow(runStartTurnWorkflow, router.Input{
+		}))
+	result := start(t, svc, protocol.Request{
 		SessionID: "slack:C1",
-		Approval:  &router.ApprovalDecision{ToolID: "t1", Approved: true},
+		Approval:  &protocol.ApprovalDecision{ToolID: "t1", ToolName: "search", Approved: true, Remember: true, Reason: "by U"},
 	})
 
-	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError())
-	var result router.StartResult
-	require.NoError(t, env.GetWorkflowResult(&result))
-	assert.Equal(t, router.StartResult{}, result, "approval resolves fire-and-forget")
-	assert.Equal(t, "t1", gotToolID)
-	assert.True(t, gotApproved)
+	assert.Equal(t, "t1", got.ToolId)
+	assert.Equal(t, ptr(true), got.Remember)
+	assert.Equal(t, ptr("by U"), got.Reason)
+	assert.True(t, router.Empty(result.Handle))
+	assert.Equal(t, []protocol.Event{{ApprovalResolved: &protocol.ApprovalResolution{
+		ToolID: "t1", ToolName: "search", Approved: true, Remember: true, Reason: "by U",
+	}}}, result.Events)
 }
 
-func TestPollTurn_StartsFromCursorAndSkipsStaleEvents(t *testing.T) {
-	items := []harnessgen.StreamItem{
-		makeTestStreamItem(t, streamItem{TurnID: "old", TurnNumber: 1, Event: turnEvent{Type: "reply_delta", Text: "stale"}}, 0, turnEventsTopic),
-		makeTestStreamItem(t, streamItem{TurnID: "t2", TurnNumber: 2, Event: turnEvent{Type: "reply_delta", Text: "fresh"}}, 1, turnEventsTopic),
-	}
-
-	svc := nexus.NewService(harnessgen.AgentService.ServiceName)
+func poll(t *testing.T, items []harnessgen.StreamItem, closed bool, h turnHandle) router.Poll {
+	t.Helper()
 	var gotCursor int64
-	svc.MustRegister(nexus.NewSyncOperation(
-		harnessgen.AgentService.PollMessages.Name(),
-		func(ctx context.Context, input harnessgen.PollMessagesInput, opts nexus.StartOperationOptions) (harnessgen.PollMessagesOutput, error) {
+	svc := agentService(nexus.NewSyncOperation(harnessgen.AgentService.PollMessages.Name(),
+		func(ctx context.Context, input harnessgen.PollMessagesInput, _ nexus.StartOperationOptions) (harnessgen.PollMessagesOutput, error) {
 			gotCursor = input.Cursor
-			return harnessgen.PollMessagesOutput{Items: items, NextOffset: 2}, nil
-		},
-	))
-
+			return harnessgen.PollMessagesOutput{Items: items, NextOffset: input.Cursor + int64(len(items)), Closed: ptr(closed)}, nil
+		}))
+	handle, err := json.Marshal(h)
+	require.NoError(t, err)
 	env := newTestEnv(t, svc)
-	env.ExecuteWorkflow(runPollTurnWorkflow, pollTurnWorkflowInput{
-		Handle: router.TurnHandle{SessionID: "slack:C1", TurnNumber: 2},
-		Cursor: 5,
-	})
-
+	env.ExecuteWorkflow(runPoll, router.Handle(handle))
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
-	var result router.PollResult
+	var result router.Poll
 	require.NoError(t, env.GetWorkflowResult(&result))
-	assert.Equal(t, int64(5), gotCursor, "PollTurn must start from the given cursor")
-	require.Len(t, result.Deltas, 1, "the stale turn-1 event must be dropped")
-	assert.Equal(t, "fresh", result.Deltas[0].Text)
-	assert.Equal(t, int64(2), result.NextCursor)
-	assert.False(t, result.Closed)
+	assert.Equal(t, h.Cursor, gotCursor, "Poll reads from the handle's cursor")
+	return result
 }
 
-func TestPollTurn_ToolApprovalRequested_ProducesApprovalDelta(t *testing.T) {
+func TestPoll_TurnScopedSkipsOtherTurnsAndAdvancesTheCursor(t *testing.T) {
 	items := []harnessgen.StreamItem{
-		makeTestStreamItem(t, streamItem{TurnID: "t1", TurnNumber: 1, Event: turnEvent{
-			Type: "tool_approval_requested", ToolID: "t1", ToolName: "search",
-		}}, 0, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnNumber: 1, Event: turnEvent{Type: "reply_delta", Text: "stale"}}, 0, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnNumber: 2, Event: turnEvent{Type: "reply_delta", Text: "fresh"}}, 1, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnNumber: 2, Event: turnEvent{Type: "reply_delta", Text: "other topic"}}, 2, "other"),
 	}
-	svc := nexus.NewService(harnessgen.AgentService.ServiceName)
-	svc.MustRegister(nexus.NewSyncOperation(
-		harnessgen.AgentService.PollMessages.Name(),
-		func(ctx context.Context, input harnessgen.PollMessagesInput, opts nexus.StartOperationOptions) (harnessgen.PollMessagesOutput, error) {
-			return harnessgen.PollMessagesOutput{Items: items, NextOffset: 1}, nil
-		},
-	))
-
-	env := newTestEnv(t, svc)
-	env.ExecuteWorkflow(runPollTurnWorkflow, pollTurnWorkflowInput{
-		Handle: router.TurnHandle{SessionID: "slack:C1", TurnNumber: 1},
-	})
-
-	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError())
-	var result router.PollResult
-	require.NoError(t, env.GetWorkflowResult(&result))
-	require.Len(t, result.Deltas, 1)
-	require.NotNil(t, result.Deltas[0].ApprovalRequested)
-	assert.Equal(t, "search", result.Deltas[0].ApprovalRequested.ToolName)
+	result := poll(t, items, false, turnHandle{SessionID: "s", TurnNumber: 2, Cursor: 7})
+	require.Len(t, result.Events, 1)
+	assert.Equal(t, "fresh", result.Events[0].Chunk.Text)
+	assert.False(t, result.Done)
+	assert.JSONEq(t, `{"sessionId":"s","turnNumber":2,"cursor":10}`, string(result.Handle))
 }
 
-func TestPollTurn_Closed(t *testing.T) {
-	svc := nexus.NewService(harnessgen.AgentService.ServiceName)
-	svc.MustRegister(nexus.NewSyncOperation(
-		harnessgen.AgentService.PollMessages.Name(),
-		func(ctx context.Context, input harnessgen.PollMessagesInput, opts nexus.StartOperationOptions) (harnessgen.PollMessagesOutput, error) {
-			return harnessgen.PollMessagesOutput{Closed: ptr(true), NextOffset: input.Cursor, Items: []harnessgen.StreamItem{}}, nil
-		},
-	))
-
-	env := newTestEnv(t, svc)
-	env.ExecuteWorkflow(runPollTurnWorkflow, pollTurnWorkflowInput{
-		Handle: router.TurnHandle{SessionID: "slack:C1"},
-		Cursor: 3,
-	})
-
-	require.True(t, env.IsWorkflowCompleted())
-	require.NoError(t, env.GetWorkflowError())
-	var result router.PollResult
-	require.NoError(t, env.GetWorkflowResult(&result))
-	assert.True(t, result.Closed)
-	assert.Equal(t, int64(3), result.NextCursor)
+// A message that joined an open turn shows only its own events, and ends at its own
+// handler's end.
+func TestPoll_MessageScopedSkipsOtherMessages(t *testing.T) {
+	items := []harnessgen.StreamItem{
+		makeTestStreamItem(t, streamItem{TurnNumber: 1, MessageID: "other", Event: turnEvent{Type: "reply_delta", Text: "not mine"}}, 0, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnNumber: 1, MessageID: "mine", Event: turnEvent{Type: "message_handler_end", Output: map[string]any{"text": "Set."}}}, 1, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnNumber: 1, MessageID: "mine", Event: turnEvent{Type: "reply_delta", Text: "after the end"}}, 2, turnEventsTopic),
+	}
+	result := poll(t, items, false, turnHandle{SessionID: "s", TurnNumber: 1, MessageID: "mine"})
+	require.Len(t, result.Events, 1, "events after the end are dropped")
+	assert.Equal(t, map[string]any{"text": "Set."}, result.Events[0].HandlerOutput.Value)
+	assert.True(t, result.Done)
 }
 
-// -- Test helpers ------------------------------------------------------------
+func TestPoll_Closed(t *testing.T) {
+	result := poll(t, []harnessgen.StreamItem{}, true, turnHandle{SessionID: "s", Cursor: 3})
+	assert.True(t, result.Done)
+	assert.Empty(t, result.Events)
+}
 
 // makeTestStreamItem encodes a streamItem into the wire format expected by decodeTurnEvent:
 // base64(proto.Marshal(Payload{encoding:"json/plain", data:<json>}))
@@ -415,4 +378,10 @@ func makeTestStreamItem(t *testing.T, si streamItem, offset int64, topic string)
 		Offset: offset,
 		Data:   base64.StdEncoding.EncodeToString(b),
 	}
+}
+
+func TestStartPreservesLiteralMentions(t *testing.T) {
+	var got harnessgen.SendAgentMessageInput
+	start(t, agentService(sendOp(&got)), message("<@U1> is the on-call engineer"))
+	assert.JSONEq(t, `{"text":"<@U1> is the on-call engineer"}`, got.Payload)
 }

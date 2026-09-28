@@ -1,16 +1,15 @@
-// Package agent implements router.BackendDriver against the
-// temporal-agent-harness's Nexus agent service. This enables us to know
-// how to route a message from the inbound driver to the temporal-agent-harness.
+// Package agent implements router.Backend for the temporal-agent-harness Nexus service.
 package agent
 
 import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	harnessgen "github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/agent/generated"
-
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
 	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/sdk/workflow"
@@ -27,9 +26,7 @@ const (
 	DefaultExistingSessionQueryTimeout = 30 * time.Second
 )
 
-// derefOrZero returns *p, or the zero value of T if p is nil. This utility
-// helps us read optional fields from the IDL stubs, which are represented as
-// pointer-typed fields in Go.
+// derefOrZero returns the field value, or its zero value if the pointer is nil.
 func derefOrZero[T any](p *T) T {
 	if p == nil {
 		var zero T
@@ -38,15 +35,13 @@ func derefOrZero[T any](p *T) T {
 	return *p
 }
 
-// ptr returns a pointer to v, for populating our IDL stub's optional fields,
-// which are represented as pointer-typed fields in Go.
 func ptr[T any](v T) *T { return &v }
 
-// turnEvent matches harness/agent_client.py TurnEvent (json/plain, snake_case).
-// streamItem is the outer wrapper from WorkflowStream._log.
+// streamItem matches the turn event payload written by WorkflowStream._log.
 type streamItem struct {
 	TurnID     string    `json:"turn_id"`
 	TurnNumber int       `json:"turn_number"`
+	MessageID  string    `json:"message_id"`
 	Timestamp  float64   `json:"timestamp"`
 	Event      turnEvent `json:"event"`
 }
@@ -60,74 +55,97 @@ type turnEvent struct {
 	ToolOutput string         `json:"tool_output"`
 	Message    string         `json:"message"`
 	Delta      map[string]any `json:"delta"`
+	Output     map[string]any `json:"output"`
+	Approved   bool           `json:"approved"`
+	Remember   bool           `json:"remember"`
+	Reason     string         `json:"reason"`
 }
 
-func decodeTurnEvent(item harnessgen.StreamItem) (int, *turnEvent, error) {
+func decodeTurnEvent(item harnessgen.StreamItem) (*streamItem, error) {
 	b, err := base64.StdEncoding.DecodeString(item.Data)
 	if err != nil {
 		b, err = base64.URLEncoding.DecodeString(item.Data)
 		if err != nil {
-			return 0, nil, fmt.Errorf("base64: %w", err)
+			return nil, fmt.Errorf("base64: %w", err)
 		}
 	}
 	var payload commonpb.Payload
 	if err := proto.Unmarshal(b, &payload); err != nil {
-		return 0, nil, fmt.Errorf("unmarshal Payload: %w", err)
+		return nil, fmt.Errorf("unmarshal Payload: %w", err)
 	}
 	var si streamItem
 	if err := json.Unmarshal(payload.Data, &si); err != nil {
-		return 0, nil, fmt.Errorf("unmarshal streamItem: %w", err)
+		return nil, fmt.Errorf("unmarshal streamItem: %w", err)
 	}
-	return si.TurnNumber, &si.Event, nil
+	return &si, nil
 }
 
-// turnEventToDelta maps one decoded turn event to a generic router.Delta, or nil if
-// the event type carries no deliverable content.
-func turnEventToDelta(e turnEvent) *router.Delta {
+// turnEventToEvent converts a harness event. It returns nil if the event has no
+// output. final is true when the reply ends. A message-scoped reply ends at
+// message_handler_end, not turn_end.
+func turnEventToEvent(e turnEvent, messageScoped bool) (ev *protocol.Event, final bool) {
+	chunk := func(c protocol.Chunk) *protocol.Event { return &protocol.Event{Chunk: &c} }
 	switch e.Type {
 	case "reply_delta":
-		return &router.Delta{Text: e.Text}
+		if e.Text != "" {
+			return chunk(protocol.Chunk{Text: e.Text}), false
+		}
 	case "thought_summary":
 		if text, ok := e.Delta["text"].(string); ok && text != "" {
-			return &router.Delta{ThoughtSummary: text}
+			return chunk(protocol.Chunk{Thought: &protocol.ThoughtChunk{Delta: text}}), false
 		}
 	case "tool_start":
-		return &router.Delta{ToolStatus: &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolStarted}}
+		return chunk(protocol.Chunk{Tool: &protocol.ToolChunk{ID: e.ToolID, Name: e.ToolName, Phase: protocol.ToolRunning, Input: toolInputJSON(e.ToolInput)}}), false
 	case "tool_end":
-		return &router.Delta{ToolStatus: &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolCompleted}}
+		return chunk(protocol.Chunk{Tool: &protocol.ToolChunk{ID: e.ToolID, Name: e.ToolName, Phase: protocol.ToolComplete, Output: e.ToolOutput}}), false
 	case "tool_error":
-		return &router.Delta{ToolStatus: &router.ToolStatus{ToolID: e.ToolID, ToolName: e.ToolName, Status: router.ToolErrored, Message: e.Message}}
+		return chunk(protocol.Chunk{Tool: &protocol.ToolChunk{ID: e.ToolID, Name: e.ToolName, Phase: protocol.ToolErrored, Error: e.Message}}), false
 	case "text_annotation":
 		if citations := extractCitations(e.Delta); len(citations) > 0 {
-			return &router.Delta{Citations: citations}
+			return chunk(protocol.Chunk{Citations: citations}), false
 		}
 	case "turn_end":
-		// Every message in the turn has finished. The text already arrived as
-		// reply_delta events, so this only ends the stream.
-		return &router.Delta{IsFinal: true}
+		return nil, !messageScoped
+	case "message_handler_end":
+		return &protocol.Event{HandlerOutput: &protocol.HandlerOutput{Value: e.Output}}, messageScoped
 	case "message_handler_error":
-		// Ends one message, not the turn. turn_end still follows.
-		return &router.Delta{Text: "[error] " + e.Message}
+		return &protocol.Event{Error: "The agent's handler failed: " + e.Message}, messageScoped
 	case "tool_approval_requested":
-		// Tool approval gates surface as a delta with no text; the approval workflow
-		// (started by the interaction webhook) later calls approveToolCall, which
-		// StartTurn's Approval case resolves.
-		inputJSON, _ := json.Marshal(e.ToolInput)
-		return &router.Delta{ApprovalRequested: &router.ApprovalRequest{
+		return &protocol.Event{ApprovalRequested: &protocol.ApprovalRequest{
 			ToolID:        e.ToolID,
 			ToolName:      e.ToolName,
-			ToolInputJSON: string(inputJSON),
-		}}
+			ToolInputJSON: toolInputJSON(e.ToolInput),
+		}}, false
+	case "tool_approval_resolved":
+		return &protocol.Event{ApprovalResolved: &protocol.ApprovalResolution{
+			ToolID:   e.ToolID,
+			ToolName: e.ToolName,
+			Approved: e.Approved,
+			Remember: e.Remember,
+			Reason:   e.Reason,
+		}}, false
 	}
-	return nil
+	return nil, false
 }
 
-// extractCitations decodes a text_annotation event's annotations into router.Citations.
+// toolInputJSON returns the tool arguments as JSON, or "" when there are none.
+func toolInputJSON(input map[string]any) string {
+	if len(input) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(input)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// extractCitations decodes a text_annotation event's annotations into protocol.Citations.
 // URL falls back from custom_metadata.deep_url to document_uri; title from
 // custom_metadata.heading, then .title, then file_name, then "Source".
-func extractCitations(delta map[string]any) []router.Citation {
+func extractCitations(delta map[string]any) []protocol.Citation {
 	raw, _ := delta["annotations"].([]any)
-	citations := make([]router.Citation, 0, len(raw))
+	citations := make([]protocol.Citation, 0, len(raw))
 	for _, item := range raw {
 		ann, ok := item.(map[string]any)
 		if !ok {
@@ -156,28 +174,23 @@ func extractCitations(delta map[string]any) []router.Citation {
 			endIndex = int(v)
 		}
 
-		citations = append(citations, router.Citation{URL: url, Title: title, EndIndex: endIndex})
+		citations = append(citations, protocol.Citation{URL: url, Title: title, EndIndex: endIndex})
 	}
 	return citations
 }
 
-// Driver implements router.BackendDriver against the temporal-agent-harness's Nexus agent
-// service.
+// Driver implements router.Backend with the harness Nexus agent service.
 type Driver struct {
-	// NexusEndpoint is the Nexus endpoint name to target. Leave empty to use
-	// AgentNexusEndpoint. Set this explicitly when running multiple
-	// environments (e.g. prod/staging/ondemand) against the same Temporal
-	// Cloud account — Nexus endpoint names must be unique account-wide, not
-	// just namespace-wide, so each environment needs its own.
+	// NexusEndpoint selects the agent service endpoint. Empty uses AgentNexusEndpoint.
 	NexusEndpoint string
 
-	// ExistingSessionQueryTimeout bounds the QueryAgentStatus probe in
-	// StartTurn's RequiresExistingSession branch. Leave zero to use
-	// DefaultExistingSessionQueryTimeout.
+	// ExistingSessionQueryTimeout bounds the session probe for a message that needs an
+	// existing session. Zero uses DefaultExistingSessionQueryTimeout.
 	ExistingSessionQueryTimeout time.Duration
 }
 
-// nexusEndpoint returns d.NexusEndpoint, or AgentNexusEndpoint if unset.
+var _ router.Backend = (*Driver)(nil)
+
 func (d *Driver) nexusEndpoint() string {
 	if d.NexusEndpoint == "" {
 		return AgentNexusEndpoint
@@ -185,8 +198,6 @@ func (d *Driver) nexusEndpoint() string {
 	return d.NexusEndpoint
 }
 
-// existingSessionQueryTimeout returns d.ExistingSessionQueryTimeout, or
-// DefaultExistingSessionQueryTimeout if unset.
 func (d *Driver) existingSessionQueryTimeout() time.Duration {
 	if d.ExistingSessionQueryTimeout == 0 {
 		return DefaultExistingSessionQueryTimeout
@@ -194,156 +205,258 @@ func (d *Driver) existingSessionQueryTimeout() time.Duration {
 	return d.ExistingSessionQueryTimeout
 }
 
-// StartTurn dispatches a message, slash command, or approval decision to the agent
-// nexus service, translating the backend's response into a generic router.StartResult.
-func (d *Driver) StartTurn(ctx workflow.Context, input router.Input) (router.StartResult, error) {
-	agentClient := workflow.NewNexusClient(d.nexusEndpoint(), harnessgen.AgentService.ServiceName)
+func (d *Driver) client() workflow.NexusClient {
+	return workflow.NewNexusClient(d.nexusEndpoint(), harnessgen.AgentService.ServiceName)
+}
 
+// turnHandle is the router.Handle of a running turn.
+type turnHandle struct {
+	SessionID  string `json:"sessionId"`
+	TurnNumber int64  `json:"turnNumber"`
+	// MessageID scopes the stream to this message, so a message that joins an open
+	// turn shows only its own events.
+	MessageID string `json:"messageId,omitempty"`
+	Cursor    int64  `json:"cursor"`
+}
+
+const noSessionReply = "No agent session exists yet. Send a chat message first; then use /help to list supported requests."
+
+func reply(text string) router.Start {
+	return router.Start{Events: []protocol.Event{{Chunk: &protocol.Chunk{Text: text}}}}
+}
+
+// Start sends the request to the agent.
+func (d *Driver) Start(ctx workflow.Context, req protocol.Request) (router.Start, error) {
+	c := d.client()
 	switch {
-	case input.Message != nil:
-		if input.Message.RequiresExistingSession {
-			// Mention-free thread continuation: only proceed if the agent already has a
-			// live session for this thread by probing with a query.
-			var statusOut harnessgen.AgentStatusOutput
-			if err := agentClient.ExecuteOperation(ctx, harnessgen.AgentService.QueryAgentStatus,
-				harnessgen.QuerySessionInput{SessionId: input.SessionID},
-				workflow.NexusOperationOptions{ScheduleToCloseTimeout: d.existingSessionQueryTimeout()},
-			).Get(ctx, &statusOut); err != nil {
-				return router.StartResult{}, nil
-			}
-		}
+	case req.Message != nil:
+		return d.startMessage(ctx, c, req.SessionID, req.Message)
 
-		payload := fmt.Sprintf(`{"text":%q}`, input.Message.Text)
-		sendOut, err := sendAgentMessage(ctx, agentClient, input.SessionID, "ask", payload)
+	case req.Call != nil:
+		return startHandler(ctx, c, req.SessionID, req.Call.Name, req.Call.Payload)
+
+	case req.OpenForm != nil:
+		handlers, err := queryHandlers(ctx, c, req.SessionID)
 		if err != nil {
-			return router.StartResult{}, err
+			return reply(noSessionReply), nil
 		}
-		return router.StartResult{Handle: &router.TurnHandle{
-			SessionID:        input.SessionID,
-			TurnID:           sendOut.TurnId,
-			TurnNumber:       sendOut.TurnNumber,
-			StreamHeadOffset: derefOrZero(sendOut.StreamHeadOffset),
-		}}, nil
+		if h := findHandler(handlers, req.OpenForm.Handler); h != nil {
+			return router.Start{Events: []protocol.Event{{Form: h}}}, nil
+		}
+		return reply(unknownHandlerReply(req.OpenForm.Handler, handlers)), nil
 
-	case input.Slash != nil:
-		return startSlashTurn(ctx, agentClient, input.SessionID, input.Slash)
-
-	case input.Approval != nil:
-		return resolveApproval(ctx, agentClient, input.SessionID, input.Approval)
-
-	default:
-		return router.StartResult{}, nil
+	case req.Approval != nil:
+		return resolveApproval(ctx, c, req.SessionID, req.Approval), nil
 	}
+	return router.Start{}, nil
 }
 
-func sendAgentMessage(ctx workflow.Context, agentClient workflow.NexusClient, sessionID, msgType, payload string) (harnessgen.SendMessageOutput, error) {
-	var sendOut harnessgen.SendMessageOutput
-	err := agentClient.ExecuteOperation(ctx, harnessgen.AgentService.SendAgentMessage,
-		harnessgen.SendAgentMessageInput{SessionId: sessionID, MsgType: msgType, Payload: payload},
-		workflow.NexusOperationOptions{ScheduleToCloseTimeout: 60 * time.Second},
-	).Get(ctx, &sendOut)
-	return sendOut, err
+// startMessage reads a chat message: plain text goes to "ask", "/help" returns the
+// guide, and "/name args" calls that handler.
+func (d *Driver) startMessage(ctx workflow.Context, c workflow.NexusClient, sessionID string, m *protocol.Message) (router.Start, error) {
+	if m.RequiresExistingSession {
+		// Deliver a message without a mention only to an existing session.
+		var statusOut harnessgen.AgentStatusOutput
+		if err := c.ExecuteOperation(ctx, harnessgen.AgentService.QueryAgentStatus,
+			harnessgen.QuerySessionInput{SessionId: sessionID},
+			workflow.NexusOperationOptions{ScheduleToCloseTimeout: d.existingSessionQueryTimeout()},
+		).Get(ctx, &statusOut); err != nil {
+			return router.Start{}, nil
+		}
+	}
+
+	in := parseIntent(m.Text)
+	switch in.Kind {
+	case intentGuide:
+		handlers, err := queryHandlers(ctx, c, sessionID)
+		if err != nil {
+			return reply(noSessionReply), nil
+		}
+		return router.Start{Events: []protocol.Event{{Guide: &protocol.Guide{Handlers: handlers}}}}, nil
+
+	case intentHandler:
+		return handlerFromText(ctx, c, sessionID, in.Handler, in.Args)
+	}
+
+	payload, _ := json.Marshal(map[string]string{"text": in.Text})
+	result, err := startHandler(ctx, c, sessionID, "ask", string(payload))
+	if err != nil {
+		return result, err
+	}
+	if m.FirstContact {
+		// Deliver the reply even if the guide query fails.
+		if handlers, err := queryHandlers(ctx, c, sessionID); err == nil {
+			result.Events = append([]protocol.Event{{Guide: &protocol.Guide{Handlers: handlers}}}, result.Events...)
+		} else {
+			workflow.GetLogger(ctx).Warn("Start: could not fetch the first-contact guide", "error", err)
+		}
+	}
+	return result, nil
 }
 
-// startSlashTurn decides whether s names a harness-owned operator command (synchronous,
-// no turn) or an agent-owned slash command (creates a turn), and dispatches accordingly.
-// Agent-owned slash commands (@agent.accepts slash) are NOT in the operator interface -
-// they route directly to sendAgentMessage(type="slash").
-func startSlashTurn(ctx workflow.Context, agentClient workflow.NexusClient, sessionID string, s *router.SlashCommand) (router.StartResult, error) {
-	var ifaceOut harnessgen.QueryOperatorInterfaceOutput
-	if err := agentClient.ExecuteOperation(ctx, harnessgen.AgentService.QueryOperatorInterface,
+// handlerFromText parses arguments and returns field errors for invalid input.
+func handlerFromText(ctx workflow.Context, c workflow.NexusClient, sessionID, name, args string) (router.Start, error) {
+	handlers, err := queryHandlers(ctx, c, sessionID)
+	if err != nil {
+		return reply(noSessionReply), nil
+	}
+	h := findHandler(handlers, name)
+	if h == nil {
+		return reply(unknownHandlerReply(name, handlers)), nil
+	}
+	if args == "" && len(h.Fields) > 0 {
+		return router.Start{Events: []protocol.Event{{HandlerHelp: &protocol.HandlerHelp{Handler: *h}}}}, nil
+	}
+	payload, errs := protocol.Decode(h.Fields, parseText(h.Fields, args))
+	if len(errs) > 0 {
+		return router.Start{Events: []protocol.Event{{HandlerHelp: &protocol.HandlerHelp{Handler: *h, Errors: errs}}}}, nil
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return router.Start{}, err
+	}
+	return startHandler(ctx, c, sessionID, name, string(body))
+}
+
+func unknownHandlerReply(name string, handlers []protocol.Handler) string {
+	names := make([]string, len(handlers))
+	for i, h := range handlers {
+		names[i] = h.Name
+	}
+	return fmt.Sprintf("Unknown handler %q. This agent accepts: %s", name, strings.Join(names, ", "))
+}
+
+func findHandler(handlers []protocol.Handler, name string) *protocol.Handler {
+	for i := range handlers {
+		if handlers[i].Name == name {
+			return &handlers[i]
+		}
+	}
+	return nil
+}
+
+// queryHandlers returns the session's handlers. It fails when the session does not
+// exist yet.
+func queryHandlers(ctx workflow.Context, c workflow.NexusClient, sessionID string) ([]protocol.Handler, error) {
+	var out harnessgen.AgentInterfaceOutput
+	if err := c.ExecuteOperation(ctx, harnessgen.AgentService.QueryAgentInterface,
 		harnessgen.QuerySessionInput{SessionId: sessionID},
 		workflow.NexusOperationOptions{ScheduleToCloseTimeout: 10 * time.Second},
-	).Get(ctx, &ifaceOut); err != nil {
-		return router.StartResult{Reply: "_No active session. Start a conversation first before using slash commands._"}, nil
+	).Get(ctx, &out); err != nil {
+		return nil, err
 	}
-
-	var cmd *harnessgen.OperatorCommand
-	for i := range ifaceOut.Commands {
-		if ifaceOut.Commands[i].Name == s.Name {
-			cmd = &ifaceOut.Commands[i]
-			break
+	handlers := make([]protocol.Handler, len(out.Handlers))
+	for i, h := range out.Handlers {
+		handlers[i] = protocol.Handler{
+			Name:        h.Name,
+			Description: h.Description,
+			MidTurn:     string(derefOrZero(h.MidTurn)),
+		}
+		if fields, err := planFields(h.Parameters); err == nil {
+			handlers[i].Fields = fields
 		}
 	}
-
-	if cmd != nil && cmd.Source == "harness" {
-		// Harness operator command: synchronous, no turn, returns text directly.
-		var opOut harnessgen.ExecuteOperatorCommandOutput
-		if err := agentClient.ExecuteOperation(ctx, harnessgen.AgentService.ExecuteOperatorCommand,
-			harnessgen.ExecuteOperatorCommandInput{SessionId: sessionID, Name: s.Name, Arg: &s.Arg},
-			workflow.NexusOperationOptions{ScheduleToCloseTimeout: 30 * time.Second},
-		).Get(ctx, &opOut); err != nil {
-			return router.StartResult{Reply: fmt.Sprintf("_Command failed: %v_", err)}, nil
-		}
-		return router.StartResult{Reply: opOut.Reply}, nil
-	}
-
-	// Agent slash command: creates a turn, same as a message.
-	payload, _ := json.Marshal(map[string]string{"name": s.Name, "arg": s.Arg})
-	sendOut, err := sendAgentMessage(ctx, agentClient, sessionID, "slash", string(payload))
-	if err != nil {
-		return router.StartResult{Reply: fmt.Sprintf("_Command failed: %v_", err)}, nil
-	}
-	return router.StartResult{Handle: &router.TurnHandle{
-		SessionID:        sessionID,
-		TurnID:           sendOut.TurnId,
-		TurnNumber:       sendOut.TurnNumber,
-		StreamHeadOffset: derefOrZero(sendOut.StreamHeadOffset),
-	}}, nil
+	return handlers, nil
 }
 
-func resolveApproval(ctx workflow.Context, agentClient workflow.NexusClient, sessionID string, a *router.ApprovalDecision) (router.StartResult, error) {
+// startHandler sends one message to a handler and returns the handle of its turn.
+func startHandler(ctx workflow.Context, c workflow.NexusClient, sessionID, msgType, payload string) (router.Start, error) {
+	var sendOut harnessgen.SendMessageOutput
+	if err := c.ExecuteOperation(ctx, harnessgen.AgentService.SendAgentMessage,
+		harnessgen.SendAgentMessageInput{SessionId: sessionID, MsgType: msgType, Payload: payload},
+		workflow.NexusOperationOptions{ScheduleToCloseTimeout: 60 * time.Second},
+	).Get(ctx, &sendOut); err != nil {
+		return router.Start{}, err
+	}
+	handle, err := json.Marshal(turnHandle{
+		SessionID:  sessionID,
+		TurnNumber: sendOut.TurnNumber,
+		MessageID:  derefOrZero(sendOut.MessageId),
+		Cursor:     derefOrZero(sendOut.StreamHeadOffset),
+	})
+	if err != nil {
+		return router.Start{}, err
+	}
+	return router.Start{Events: []protocol.Event{{TurnStarted: true}}, Handle: handle}, nil
+}
+
+// resolveApproval sends the decision and returns it as an event, so the outbound
+// driver can update the prompt that was clicked.
+func resolveApproval(ctx workflow.Context, c workflow.NexusClient, sessionID string, a *protocol.ApprovalDecision) router.Start {
+	in := harnessgen.ApproveToolCallInput{SessionId: sessionID, ToolId: a.ToolID, Approved: a.Approved}
+	if a.Remember && a.Approved {
+		in.Remember = ptr(true)
+	}
+	if a.Reason != "" {
+		in.Reason = ptr(a.Reason)
+	}
 	var out harnessgen.ApproveToolCallOutput
-	if err := agentClient.ExecuteOperation(ctx, harnessgen.AgentService.ApproveToolCall,
-		harnessgen.ApproveToolCallInput{SessionId: sessionID, ToolId: a.ToolID, Approved: a.Approved},
+	if err := c.ExecuteOperation(ctx, harnessgen.AgentService.ApproveToolCall, in,
 		workflow.NexusOperationOptions{ScheduleToCloseTimeout: 30 * time.Second},
 	).Get(ctx, &out); err != nil {
-		workflow.GetLogger(ctx).Warn("StartTurn: approveToolCall failed",
+		workflow.GetLogger(ctx).Warn("Start: approveToolCall failed",
 			"toolId", a.ToolID, "approved", a.Approved, "error", err)
 	}
-	return router.StartResult{}, nil
+	return router.Start{Events: []protocol.Event{{ApprovalResolved: &protocol.ApprovalResolution{
+		ToolID: a.ToolID, ToolName: a.ToolName, Approved: a.Approved, Remember: a.Remember, Reason: a.Reason,
+	}}}}
 }
 
-// PollTurn polls the Nexus agent response stream starting from cursor and decodes each
-// item into a generic router.Delta.
-func (d *Driver) PollTurn(ctx workflow.Context, handle router.TurnHandle, cursor int64) (router.PollResult, error) {
-	agentClient := workflow.NewNexusClient(d.nexusEndpoint(), harnessgen.AgentService.ServiceName)
-
+// Poll reads the next items of the session stream and converts them to events.
+func (d *Driver) Poll(ctx workflow.Context, handle router.Handle) (router.Poll, error) {
+	var h turnHandle
+	if err := json.Unmarshal(handle, &h); err != nil {
+		return router.Poll{}, fmt.Errorf("decode handle: %w", err)
+	}
 	var pollOut harnessgen.PollMessagesOutput
-	if err := agentClient.ExecuteOperation(ctx, harnessgen.AgentService.PollMessages,
+	if err := d.client().ExecuteOperation(ctx, harnessgen.AgentService.PollMessages,
 		harnessgen.PollMessagesInput{
-			SessionId:      handle.SessionID,
-			Cursor:         cursor,
+			SessionId:      h.SessionID,
+			Cursor:         h.Cursor,
 			TimeoutSeconds: ptr(5.0),
 		},
 		workflow.NexusOperationOptions{ScheduleToCloseTimeout: 120 * time.Second},
 	).Get(ctx, &pollOut); err != nil {
-		return router.PollResult{}, err
+		return router.Poll{}, err
 	}
-
 	if derefOrZero(pollOut.Closed) {
-		return router.PollResult{NextCursor: pollOut.NextOffset, Closed: true}, nil
+		return router.Poll{Done: true}, nil
 	}
 
-	var deltas []router.Delta
+	messageScoped := h.MessageID != ""
+	var events []protocol.Event
 	for _, item := range pollOut.Items {
 		if item.Topic != turnEventsTopic {
 			continue
 		}
-		turnNumber, event, err := decodeTurnEvent(item)
+		si, err := decodeTurnEvent(item)
 		if err != nil {
-			workflow.GetLogger(ctx).Warn("PollTurn: decodeTurnEvent failed", "error", err)
+			workflow.GetLogger(ctx).Warn("Poll: decodeTurnEvent failed", "error", err)
 			continue
 		}
-		// Stream only this handle's turn. Events of a later turn belong to the
-		// router workflow that started that turn.
-		if turnNumber != int(handle.TurnNumber) {
+		if messageScoped {
+			// Keep events for this message and shared events with no message ID.
+			if si.MessageID != "" && si.MessageID != h.MessageID {
+				continue
+			}
+		} else if int64(si.TurnNumber) != h.TurnNumber {
+			// Events of a later turn belong to the router workflow that started it.
 			continue
 		}
-		if delta := turnEventToDelta(*event); delta != nil {
-			deltas = append(deltas, *delta)
+		ev, final := turnEventToEvent(si.Event, messageScoped)
+		if ev != nil {
+			events = append(events, *ev)
+		}
+		if final {
+			return router.Poll{Events: events, Done: true}, nil
 		}
 	}
 
-	return router.PollResult{Deltas: deltas, NextCursor: pollOut.NextOffset}, nil
+	h.Cursor = pollOut.NextOffset
+	next, err := json.Marshal(h)
+	if err != nil {
+		return router.Poll{}, err
+	}
+	return router.Poll{Events: events, Handle: next}, nil
 }

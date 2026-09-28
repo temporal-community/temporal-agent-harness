@@ -13,6 +13,7 @@ from ._definitions import (
     _check_unique_items,
     _collect,
     _parse_spec_integer,
+    _quote,
     _transfer_type_convertible,
 )
 
@@ -69,8 +70,21 @@ class _AcceptedFunctionTransferTypeConverter(
             else:
                 output_value = output_value_raw
 
+        mid_turn_value: typing.Literal["enqueue", "reject", "accept"] | None = None
+        if "midTurn" in raw:
+            mid_turn_value_raw = raw["midTurn"]
+            if mid_turn_value_raw is None:
+                violations.append(Violation(path="midTurn", reason="explicit null not allowed"))
+            else:
+                if not isinstance(mid_turn_value_raw, str):
+                    violations.append(Violation(path="midTurn", reason="expected string"))
+                elif mid_turn_value_raw not in ("enqueue", "reject", "accept"):
+                    violations.append(Violation(path="midTurn", reason=f'must be one of ["enqueue", "reject", "accept"], got {_quote(mid_turn_value_raw)}'))
+                else:
+                    mid_turn_value = mid_turn_value_raw
+
         for key in raw:
-            if key != "name" and key != "description" and key != "parameters" and key != "output":
+            if key != "name" and key != "description" and key != "parameters" and key != "output" and key != "midTurn":
                 violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
@@ -79,15 +93,23 @@ class _AcceptedFunctionTransferTypeConverter(
             description=description_value,
             parameters=parameters_value,
             output=output_value,
+            mid_turn=mid_turn_value,
         )
 
     @typing_extensions.override
     def to_transfer_type(self, value: "AcceptedFunction") -> typing.Any:
+        violations: list[Violation] = []
         out: dict[str, typing.Any] = {}
         out["name"] = value.name
         out["description"] = value.description
         out["parameters"] = value.parameters
         out["output"] = value.output
+        if value.mid_turn is not None:
+            if typing.cast("object", value.mid_turn) not in ("enqueue", "reject", "accept"):
+                violations.append(Violation(path="midTurn", reason=f'must be one of ["enqueue", "reject", "accept"], got {_quote(value.mid_turn)}'))
+            out["midTurn"] = value.mid_turn
+        if violations:
+            raise ValidationError(violations)
         return out
 
 
@@ -109,6 +131,11 @@ class AcceptedFunction:
 
     output: str
     """JSON-encoded JSON Schema for the handler's return model"""
+
+    mid_turn: typing.Literal["enqueue", "reject", "accept"] | None = None
+    """Request policy during an active turn: enqueue waits, reject refuses the request,
+    and accept runs the handler
+    """
 
 
 class _AgentInterfaceOutputTransferTypeConverter(
@@ -1980,8 +2007,19 @@ class _SendMessageOutputTransferTypeConverter(
                 else:
                     pending_value = pending_value_raw
 
+        message_id_value: str | None = None
+        if "messageId" in raw:
+            message_id_value_raw = raw["messageId"]
+            if message_id_value_raw is None:
+                violations.append(Violation(path="messageId", reason="explicit null not allowed"))
+            else:
+                if not isinstance(message_id_value_raw, str):
+                    violations.append(Violation(path="messageId", reason="expected string"))
+                else:
+                    message_id_value = message_id_value_raw
+
         for key in raw:
-            if key != "turnNumber" and key != "turnId" and key != "streamHeadOffset" and key != "pending":
+            if key != "turnNumber" and key != "turnId" and key != "streamHeadOffset" and key != "pending" and key != "messageId":
                 violations.append(Violation(path=key, reason="unknown field"))
         if violations:
             raise ValidationError(violations)
@@ -1990,6 +2028,7 @@ class _SendMessageOutputTransferTypeConverter(
             turn_id=turn_id_value,
             stream_head_offset=stream_head_offset_value,
             pending=pending_value,
+            message_id=message_id_value,
         )
 
     @typing_extensions.override
@@ -2001,6 +2040,8 @@ class _SendMessageOutputTransferTypeConverter(
             out["streamHeadOffset"] = value.stream_head_offset
         if value.pending is not None:
             out["pending"] = value.pending
+        if value.message_id is not None:
+            out["messageId"] = value.message_id
         return out
 
 
@@ -2022,6 +2063,10 @@ class SendMessageOutput:
     pending: bool | None = None
     """True if the message was queued behind an active turn rather than dispatched
     immediately
+    """
+
+    message_id: str | None = None
+    """Message ID used to filter pollMessages events for this reply
     """
 
 

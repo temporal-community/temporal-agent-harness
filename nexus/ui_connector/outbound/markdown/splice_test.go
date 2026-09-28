@@ -1,10 +1,11 @@
-package citations
+package markdown
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
 )
 
 func mrkdwnLink(url, title string) string {
@@ -15,7 +16,7 @@ func TestSplice(t *testing.T) {
 	cases := []struct {
 		name string
 		text string
-		cs   []router.Citation
+		cs   []protocol.Citation
 		link func(url, title string) string
 		want string
 	}{
@@ -27,42 +28,42 @@ func TestSplice(t *testing.T) {
 			// Slack/Teams have no equivalent for.
 			"marker inserted at EndIndex, title is not rendered inline",
 			"hello world",
-			[]router.Citation{{URL: "https://example.com/doc", Title: "Doc", EndIndex: 5}},
+			[]protocol.Citation{{URL: "https://example.com/doc", Title: "Doc", EndIndex: 5}},
 			mrkdwnLink,
 			"hello <https://example.com/doc|[1]> world",
 		},
 		{
 			"commonmark marker inserted at EndIndex",
 			"hello world",
-			[]router.Citation{{URL: "https://example.com/doc", Title: "Doc", EndIndex: 5}},
+			[]protocol.Citation{{URL: "https://example.com/doc", Title: "Doc", EndIndex: 5}},
 			CommonMarkLink,
 			"hello [[1]](https://example.com/doc) world",
 		},
 		{
 			"empty URL falls back to # instead of an empty href",
 			"hello world",
-			[]router.Citation{{URL: "", Title: "notes.txt", EndIndex: 5}},
+			[]protocol.Citation{{URL: "", Title: "notes.txt", EndIndex: 5}},
 			mrkdwnLink,
 			"hello <#|[1]> world",
 		},
 		{
 			"negative EndIndex appends at the end",
 			"hello world",
-			[]router.Citation{{URL: "https://example.com/doc", EndIndex: -1}},
+			[]protocol.Citation{{URL: "https://example.com/doc", EndIndex: -1}},
 			mrkdwnLink,
 			"hello world <https://example.com/doc|[1]>",
 		},
 		{
 			"EndIndex past the end of the text clamps to the end",
 			"hello",
-			[]router.Citation{{URL: "https://example.com/doc", EndIndex: 999}},
+			[]protocol.Citation{{URL: "https://example.com/doc", EndIndex: 999}},
 			mrkdwnLink,
 			"hello <https://example.com/doc|[1]>",
 		},
 		{
 			"citations at the same index coalesce adjacent, numbered by array order",
 			"hello world",
-			[]router.Citation{
+			[]protocol.Citation{
 				{URL: "https://example.com/a", EndIndex: 5},
 				{URL: "https://example.com/b", EndIndex: 5},
 			},
@@ -72,7 +73,7 @@ func TestSplice(t *testing.T) {
 		{
 			"repeated source is not deduped - gets a new number each time",
 			"a b",
-			[]router.Citation{
+			[]protocol.Citation{
 				{URL: "https://example.com/doc", EndIndex: 1},
 				{URL: "https://example.com/doc", EndIndex: 3},
 			},
@@ -85,7 +86,7 @@ func TestSplice(t *testing.T) {
 			// The internal sentinel marker must not be confused with it.
 			"pre-existing bracket-number text is not mistaken for the real marker",
 			"See item [1] in the list. More text here.",
-			[]router.Citation{{URL: "https://example.com/doc", EndIndex: len("See item [1] in the list. More text here.")}},
+			[]protocol.Citation{{URL: "https://example.com/doc", EndIndex: len("See item [1] in the list. More text here.")}},
 			mrkdwnLink,
 			"See item [1] in the list. More text here. <https://example.com/doc|[1]>",
 		},
@@ -94,7 +95,7 @@ func TestSplice(t *testing.T) {
 			// marker must snap past the rest of the word rather than splitting it.
 			"EndIndex mid-word snaps to the end of the word",
 			"downscaling step regardless",
-			[]router.Citation{{URL: "https://example.com/doc", EndIndex: 14}},
+			[]protocol.Citation{{URL: "https://example.com/doc", EndIndex: 14}},
 			mrkdwnLink,
 			"downscaling step <https://example.com/doc|[1]> regardless",
 		},
@@ -104,7 +105,7 @@ func TestSplice(t *testing.T) {
 			// the marker, not the original spacing preserved verbatim.
 			"marker gets exactly one space on each side regardless of existing spacing",
 			"these operations",
-			[]router.Citation{{URL: "https://example.com/doc", EndIndex: 6}},
+			[]protocol.Citation{{URL: "https://example.com/doc", EndIndex: 6}},
 			mrkdwnLink,
 			"these <https://example.com/doc|[1]> operations",
 		},
@@ -114,7 +115,7 @@ func TestSplice(t *testing.T) {
 			// must move past the heading into the body text.
 			"EndIndex inside a heading moves past it into body text, trailing that line",
 			"### Step 1: Commands\nDo the thing.",
-			[]router.Citation{{URL: "https://example.com/doc", EndIndex: len("### Step 1: Commands")}},
+			[]protocol.Citation{{URL: "https://example.com/doc", EndIndex: len("### Step 1: Commands")}},
 			mrkdwnLink,
 			"### Step 1: Commands\n Do the thing. <https://example.com/doc|[1]>",
 		},
@@ -124,7 +125,7 @@ func TestSplice(t *testing.T) {
 			// Slack's ordered-list parsing. It must move to the end of item 2 instead.
 			"EndIndex at the start of a list item moves to the end of that item",
 			"1. Scale Up.\n2. Durable Sleep.\n3. Scale Down.",
-			[]router.Citation{{URL: "https://example.com/doc", EndIndex: len("1. Scale Up.\n")}},
+			[]protocol.Citation{{URL: "https://example.com/doc", EndIndex: len("1. Scale Up.\n")}},
 			mrkdwnLink,
 			// A leading space before "2." is expected and harmless - CommonMark allows
 			// up to 3 spaces of indentation before a list marker.
@@ -136,7 +137,7 @@ func TestSplice(t *testing.T) {
 			// span at all - CommonMark requires no whitespace right before it.
 			"EndIndex right before a closing italics marker doesn't break the italics",
 			"*(For example, this allocates capacity).*",
-			[]router.Citation{
+			[]protocol.Citation{
 				{URL: "https://example.com/a", EndIndex: len("*(For example, this allocates capacity).")},
 				{URL: "https://example.com/b", EndIndex: len("*(For example, this allocates capacity).")},
 			},
@@ -149,6 +150,63 @@ func TestSplice(t *testing.T) {
 			assert.Equal(t, tc.want, Splice(tc.text, tc.cs, tc.link))
 		})
 	}
+}
+
+func TestSpliceCitationsOutsideCode(t *testing.T) {
+	cases := []struct {
+		name, text, prefix, want string
+	}{
+		{"inside inline code", "A customer saw `WorkflowTaskScheduled/Started/Completed` events.", "A customer saw `WorkflowTaskScheduled/Started", "A customer saw `WorkflowTaskScheduled/Started/Completed` LINK events."},
+		{"before closing backtick", "Use `x` here.", "Use `x", "Use `x` LINK here."},
+		{"before opening backtick", "Use `x` here.", "Use ", "Use LINK `x` here."},
+		{"after closing backtick", "Use `x` here.", "Use `x`", "Use `x` LINK here."},
+		{"multiple backticks", "Use ``a`b`` here.", "Use ``a", "Use ``a`b`` LINK here."},
+		{"triple backticks inline", "```x``` here.", "```x", "```x``` LINK here."},
+		{"unicode offset", "Use `éé` here.", "Use `é", "Use `éé` LINK here."},
+		{"punctuation after code", "Use `x`. Next.", "Use `x", "Use `x`. LINK Next."},
+		{"escaped backticks", "Use \\`x\\` here.", "Use \\`x", "Use \\`x LINK \\` here."},
+		{"inside fenced code", "Before.\n```go\nx := 1\n```\nAfter.", "Before.\n```go\nx", "Before.\n```go\nx := 1\n```\n\nLINK\n\nAfter."},
+		{"fence at end", "```\nx\n```", "```\nx", "```\nx\n```\n\nLINK"},
+		{"tilde fence", "~~~\nx\n~~~", "~~~\nx", "~~~\nx\n~~~\n\nLINK"},
+		{"longer closing fence", "````\nx\n`````", "````\nx", "````\nx\n`````\n\nLINK"},
+		{"shorter fence does not close", "````\nx\n```\ny\n````", "````\nx", "````\nx\n```\ny\n````\n\nLINK"},
+		{"unclosed fence", "Before.\n```go\nx := 1", "Before.\n```go\nx", "Before.\n\nLINK\n\n```go\nx := 1"},
+		{"unclosed fence at start", "```\nx", "```\nx", "LINK\n\n```\nx"},
+		{"after fence remains outside", "```\nx\n```\nAfter.", "```\nx\n```\nAfter.", "```\nx\n```\nAfter. LINK"},
+	}
+	for _, format := range []struct {
+		name string
+		link func(string, string) string
+	}{
+		{"commonmark", CommonMarkLink},
+		{"mrkdwn", mrkdwnLink},
+	} {
+		t.Run(format.name, func(t *testing.T) {
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					cs := []protocol.Citation{{URL: "https://example.com", EndIndex: len([]rune(tc.prefix))}}
+					want := strings.ReplaceAll(tc.want, "LINK", format.link(cs[0].URL, "[1]"))
+					assert.Equal(t, want, Splice(tc.text, cs, format.link))
+				})
+			}
+		})
+	}
+}
+
+func TestSpliceCodeCitationsKeepNumbering(t *testing.T) {
+	text := "Use `first` and `second`."
+	cs := []protocol.Citation{
+		{URL: "https://a", EndIndex: len("Use `first` and `sec")},
+		{URL: "https://b", EndIndex: len("Use `fir")},
+		{URL: "https://c", EndIndex: len("Use `first")},
+	}
+	assert.Equal(t, "Use `first` <https://b|[2]> <https://c|[3]> and `second`. <https://a|[1]>", Splice(text, cs, mrkdwnLink))
+
+	cs[0].EndIndex, cs[1].EndIndex, cs[2].EndIndex = 5, 6, 7
+	assert.Equal(t, "```\nabc\n```\n\n<https://a|[1]> <https://b|[2]> <https://c|[3]>", Splice("```\nabc\n```", cs, mrkdwnLink))
+
+	cs = []protocol.Citation{{URL: "https://a", EndIndex: -1}}
+	assert.Equal(t, "Before.\n\n<https://a|[1]>\n\n```\nx", Splice("Before.\n```\nx", cs, mrkdwnLink))
 }
 
 func TestCitationInsertionIndex(t *testing.T) {

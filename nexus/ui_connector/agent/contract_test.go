@@ -96,9 +96,7 @@ func loadFixture(t *testing.T, name string) []byte {
 	return data
 }
 
-// -- Stream item / TurnEvent contract tests ----------------------------------
-// TODO: unify this with some schema, we shouldn't duplicate them between Python and Go parts
-//       of the agent. In the meantime these tests are stopgap regression tests.
+// Check the Python event payload against the Go decoder.
 
 func TestStreamItemContract_ReplyDelta(t *testing.T) {
 	var si streamItem
@@ -116,16 +114,14 @@ func TestStreamItemContract_ToolStart(t *testing.T) {
 	assert.Equal(t, "search", si.Event.ToolName)
 }
 
-// TestStreamItemContract_TurnEventToDelta verifies the full decode pipeline:
-// fixture JSON → streamItem → turnEvent → agentDelta.
-func TestStreamItemContract_TurnEventToDelta(t *testing.T) {
+func TestStreamItemContract_TurnEventToEvent(t *testing.T) {
 	cases := []struct {
-		fixture   string
-		wantType  string
-		wantFinal bool
-		wantText  bool
+		fixture  string
+		wantType string
+		wantText bool
+		wantTool bool
 	}{
-		{"stream_item_reply_delta", "reply_delta", false, true},
+		{"stream_item_reply_delta", "reply_delta", true, false},
 		{"stream_item_tool_start", "tool_start", false, true},
 	}
 	for _, tc := range cases {
@@ -134,12 +130,12 @@ func TestStreamItemContract_TurnEventToDelta(t *testing.T) {
 			require.NoError(t, json.Unmarshal(loadFixture(t, tc.fixture), &si))
 			assert.Equal(t, tc.wantType, si.Event.Type)
 
-			d := turnEventToDelta(si.Event)
-			require.NotNil(t, d, "turnEventToDelta returned nil for %s", tc.wantType)
-			assert.Equal(t, tc.wantFinal, d.IsFinal)
-			if tc.wantText {
-				assert.NotEmpty(t, d.Text)
-			}
+			ev, final := turnEventToEvent(si.Event, false)
+			require.NotNil(t, ev, "turnEventToEvent returned nil for %s", tc.wantType)
+			require.NotNil(t, ev.Chunk)
+			assert.False(t, final)
+			assert.Equal(t, tc.wantText, ev.Chunk.Text != "")
+			assert.Equal(t, tc.wantTool, ev.Chunk.Tool != nil)
 		})
 	}
 }
