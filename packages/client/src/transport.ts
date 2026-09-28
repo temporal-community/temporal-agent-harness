@@ -1,7 +1,9 @@
 // How a session reaches its agent. `SessionTransport` is everything the session core needs;
-// `HttpTransport` implements it over the harness web API (`temporal_agent_harness.web.app`).
+// `HttpTransport` implements it over the harness web API (`temporal_agent_harness.web.app`),
+// along with `SessionStarter` and listing the server's sessions.
 
 import type { AgentSseFrame, MessageDisposition } from "./frames.ts";
+import type { CreateSessionRequest, SessionStarter, SessionSummary } from "./start.ts";
 
 export interface SubmitMessageResponse {
   turn_number: number;
@@ -71,7 +73,7 @@ export class HttpError extends Error {
   }
 }
 
-export class HttpTransport implements SessionTransport {
+export class HttpTransport implements SessionTransport, SessionStarter {
   readonly #base: string;
   readonly #fetch: typeof fetch;
   readonly #headers: HeadersInit | undefined;
@@ -121,6 +123,15 @@ export class HttpTransport implements SessionTransport {
   async workflowStatus(sessionId: string, signal?: AbortSignal): Promise<WorkflowExecutionState> {
     const path = `workflow-status/${encodeURIComponent(sessionId)}`;
     return (await (await this.#request(path, { signal })).json()) as WorkflowExecutionState;
+  }
+
+  async createSession(request: CreateSessionRequest, signal?: AbortSignal): Promise<SessionSummary> {
+    return this.#json("sessions", request, signal);
+  }
+
+  /** Every session the server knows about, open or closed, across all its agents. */
+  async listSessions(signal?: AbortSignal): Promise<SessionSummary[]> {
+    return (await (await this.#request("sessions", { signal })).json()) as SessionSummary[];
   }
 
   async closeSession(sessionId: string): Promise<void> {

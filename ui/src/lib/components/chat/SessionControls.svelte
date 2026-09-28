@@ -14,7 +14,8 @@
    */
   import { RefreshCw, Search } from "@lucide/svelte";
   import type { Attachment } from "svelte/attachments";
-  import type { AgentDescriptor, Session } from "$lib/api/types";
+  import type { AgentDescriptor, JsonRecord, Session } from "$lib/api/types";
+  import StartSessionDialog from "$lib/components/chat/StartSessionDialog.svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import Copyable from "$lib/components/primitives/Copyable.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
@@ -23,6 +24,7 @@
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
   import { scrollFollower } from "$lib/state/followScroll";
+  import { takesInitData } from "$lib/state/initData";
   import { chooseAgentRow, handleListKey, keptHighlight } from "$lib/state/quickSwitch";
 
   type MenuTab = "sessions" | "new";
@@ -47,7 +49,8 @@
     sessionsError?: string | null;
     /** What the agent is waiting on the reader for, e.g. "1 response needed". */
     pendingLabel?: string | null;
-    onNewSession?: (workflowType: string) => void | Promise<void>;
+    /** `data` is the agent's init data, for an agent that takes it (see `init_data`). */
+    onNewSession?: (workflowType: string, data?: JsonRecord) => void | Promise<void>;
     onSelectSession?: (sessionId: string) => void | Promise<void>;
     onRefreshSessions?: () => void | Promise<void>;
     /** Quiet enrich when the picker opens (age-gated). */
@@ -110,6 +113,8 @@
     "closed"
   ]);
 
+  /** The agent whose init data the start dialog is asking for; `null` when it is closed. */
+  let startingAgent = $state<AgentDescriptor | null>(null);
   let sessionSearch = $state("");
 
   const focusFirst: Attachment<HTMLElement> = (node) => {
@@ -319,7 +324,18 @@
   async function startNewSession(agent: AgentDescriptor): Promise<void> {
     if (agentBlocked(agent)) return;
     if (!agent.workflow_type || !onNewSession || creatingSession) return;
+    if (takesInitData(agent)) {
+      // Its data is asked for first; the dialog starts the session.
+      startingAgent = agent;
+      return;
+    }
     await onNewSession(agent.workflow_type);
+  }
+
+  async function startWithInitData(workflowType: string, data?: JsonRecord): Promise<void> {
+    if (!onNewSession) return;
+    await onNewSession(workflowType, data);
+    startingAgent = null;
   }
 
   async function openSession(nextSessionId: string): Promise<void> {
@@ -382,12 +398,13 @@
   /* One key, so one hint. The drawer closing unmounts all of this, which clears it too. */
   let hintedAgentKey = $state<string | null>(null);
 
-  /** Click and Enter both: true when a session was started. */
+  /** Click and Enter both: true when a session was started. An agent that takes init data
+      only opens its dialog, so the drawer holding that dialog stays open. */
   function chooseAgent(agent: AgentDescriptor): boolean {
     const choice = chooseAgentRow(agent.key, agentBlocked(agent));
     hintedAgentKey = choice.hint;
     if (choice.start) void startNewSession(agent);
-    return choice.start;
+    return choice.start && !takesInitData(agent);
   }
 
   /* Leaving the tab unmounts the list; the hint does not wait for it to come back. */
@@ -606,6 +623,14 @@
       </div>
     </section>
 {/if}
+
+<!-- showModal() puts it in the top layer, above the drawer this component lives in. -->
+<StartSessionDialog
+  agent={startingAgent}
+  starting={creatingSession}
+  onStart={startWithInitData}
+  onClose={() => (startingAgent = null)}
+/>
 
 <style>
   /* `0 1 auto`, not `none`: this sits in the minimap's lead zone, and the mark next

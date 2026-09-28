@@ -76,17 +76,13 @@ class StateProbeAgent:
 
     plan = agent.state(PlanState)
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def make_plan(self, message: TextMessage) -> TextReply:
@@ -115,7 +111,7 @@ class EarlyStateProbeAgent:
 
     plan = agent.state(PlanState)
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         with self.plan.mutate() as d:
             d.goal = "set before the runner existed"
@@ -124,10 +120,6 @@ class EarlyStateProbeAgent:
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def plan_it(self, message: TextMessage) -> TextReply:
@@ -221,7 +213,7 @@ async def test_registration_publishes_one_snapshot_outside_any_turn(events):
     assert envelope.event.state_id == "plan"
     assert envelope.event.version == 0
     assert envelope.event.value == {"goal": "", "steps": [], "scratch": {}}
-    # Registered in @workflow.init, so there is no turn to attribute it to; the runner
+    # Registered in @agent.init, so there is no turn to attribute it to; the runner
     # follows the operator-command convention rather than inventing a turn.
     assert envelope.turn_number == 0
     assert events.index(snapshots[0]) == 0, "the snapshot must precede every patch"

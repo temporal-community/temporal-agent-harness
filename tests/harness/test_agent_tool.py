@@ -16,7 +16,6 @@ import uuid
 from datetime import timedelta
 
 import pytest_asyncio
-from temporalio import workflow
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamClient
@@ -64,17 +63,13 @@ async def echo_workflow_tool(text: str) -> str:
 
 @agent.defn
 class ToolProbeAgent:
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
-
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def probe(self, message: TextMessage) -> TextReply:

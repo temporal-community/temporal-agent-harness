@@ -2,12 +2,13 @@
      typed AgentSession: the board is its `board` state, a move is a `play` message, and the
      ledger is its raw frames. The rest of this file only draws what those give it. -->
 <script lang="ts">
-  import { AgentSession, HttpTransport } from "@temporal-agent-harness/svelte";
+  import { AgentSession, HttpTransport, startSession } from "@temporal-agent-harness/svelte";
   import { scale } from "svelte/transition";
 
   import type { TicTacToeAgent } from "../client_sdk/TicTacToeAgent";
 
   const API = "http://localhost:8000/api/";
+  const transport = new HttpTransport({ baseUrl: API });
 
   let sessionId = $state(new URLSearchParams(location.search).get("session") ?? "");
 
@@ -15,7 +16,7 @@
     get sessionId() {
       return sessionId;
     },
-    transport: new HttpTransport({ baseUrl: API })
+    transport
   });
 
   const board = $derived(agent.states.board); // the agent's `Board` model, kept current
@@ -23,19 +24,23 @@
   const newGame = (agent_goes_first: boolean) => agent.sendMessage("new_game", { agent_goes_first });
 
   // Creating a session is the harness API, not the agent's: the one call made without `agent`.
+  // The agent's init data is optional (`settings: MatchSettings | None = None`), so the typed
+  // start lets this omit it. The definition is written inline because the generated
+  // TicTacToeAgent value is TypeScript, which this page loads without a build step.
+  let playerName = $state("");
   let startError = $state<string | null>(null);
   async function start(agentGoesFirst: boolean): Promise<void> {
     if (!sessionId) {
-      const response = await fetch(`${API}sessions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent_workflow_type: "TicTacToeAgent" })
-      }).catch((error: Error) => error);
-      if (!(response instanceof Response) || !response.ok) {
+      const name = playerName.trim();
+      try {
+        const created = await startSession<TicTacToeAgent>(transport, { workflowType: "TicTacToeAgent" }, {
+          data: name ? { player_name: name } : undefined
+        });
+        sessionId = created.workflow_id;
+      } catch {
         startError = `Cannot create a session at ${API} — are \`just server\` and \`just worker\` running?`;
         return;
       }
-      sessionId = ((await response.json()) as { workflow_id: string }).workflow_id;
       history.replaceState(null, "", `?session=${sessionId}`);
       startError = null;
     }
@@ -136,6 +141,10 @@
   <!-- Nothing reads `agent` until there is a session: reading it is what opens the connection. -->
   <section class="start">
     <p>Play the TypeSafe tic-tac-toe agent. You are X unless it opens.</p>
+    <label class="player">
+      Your name
+      <input bind:value={playerName} placeholder="optional" maxlength="40" />
+    </label>
     {@render newGameButtons(false)}
     {#if startError}<div class="notice error">{startError}</div>{/if}
   </section>

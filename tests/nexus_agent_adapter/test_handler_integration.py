@@ -64,17 +64,13 @@ class AskReply(BaseModel):
 class ProbeAgent:
     """2s reply delay so pollMessages is provably still pending (async path, not sync)."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def ask(self, message: AskMessage) -> AskReply:
@@ -369,17 +365,13 @@ async def gated_tool(text: str) -> str:
 class GatedProbeAgent:
     """Gates every tool call, unlike ProbeAgent — needed to exercise approveToolCall."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.always_require_human_approval(),
         )
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def use_tool(self, message: AskMessage) -> AskReply:

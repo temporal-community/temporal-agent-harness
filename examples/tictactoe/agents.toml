@@ -3,11 +3,13 @@
 # `temporal-agent-harness serve` reads this file and passes the parsed registry into the
 # packaged SessionManagerWorkflow, which serves it back over the `available_agents` query so
 # the UI can list it. To expose a new agent: register its @workflow.defn on a worker, then add
-# a [[agents]] entry here.
+# a [[agents]] entry here. `agent` names the class, so the server can read what it takes to start
+# (its init data) and the UI can ask for it.
 
 [[agents]]
 key = "tictactoe"
 workflow_type = "TicTacToeAgent"
+agent = "examples.tictactoe.workflow:TicTacToeAgentWorkflow"
 task_queue = "tictactoe-agent"
 label = "Tic-Tac-Toe (TypeSafe)"
 description = """

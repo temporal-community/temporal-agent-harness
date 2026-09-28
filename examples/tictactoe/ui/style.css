@@ -36,6 +36,11 @@ header a { color: var(--muted); font-size: 12px; }
 .conn[data-state="error"]::before { color: var(--bad); }
 
 .start { max-width: 440px; }
+.player { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.player input {
+  width: 180px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--surface); color: var(--ink); font: inherit;
+}
 main { display: grid; grid-template-columns: minmax(280px, 440px) minmax(280px, 1fr); gap: 24px; align-items: start; }
 @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
 

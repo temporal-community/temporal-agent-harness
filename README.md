@@ -142,10 +142,19 @@ That registry is what lists the launchable agents:
 [[agents]]
 key = "my-agent"
 workflow_type = "MyAgent"
+agent = "my_app.workflow:MyAgentWorkflow"   # optional; see below
 task_queue = "my-agent-task-queue"
 label = "My Agent"
 description = "A short description shown in the UI."
 ```
+
+`agent` names the agent's class, which the server imports at startup to learn what the agent takes
+to start. If its `@agent.init` takes a `data` model after its config, required (`data: MyData`) or
+optional (`data: MyData | None = None`), `GET /api/agents` publishes it and the console asks for it
+in a form before starting a session. `POST /api/sessions` checks the `data` it is sent against the
+model and answers `422` if it does not fit. Without `agent`, the agent is started with no data, and
+any `data` a caller sends goes through unchecked for the agent itself to validate. A class that
+fails to import is logged, and treated the same way.
 
 Both subcommands resolve their Temporal connection through temporalio's standard client config,
 so they land on the same namespace. With nothing configured they use `localhost:7233` — the
@@ -391,7 +400,6 @@ with lookups auto-approved and bookings still coming to you.
 from datetime import timedelta
 
 from pydantic import BaseModel
-from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.workflow import ActivityConfig
 
@@ -419,10 +427,21 @@ class Itinerary(BaseModel):
     total_usd: float
 
 
+# The agent's own init data, passed after the AgentConfig when a session starts.
+class TravelerProfile(BaseModel):
+    """Who the agent is planning for."""
+
+    name: str
+    home_airport: str
+
+
+# @agent.defn makes the class a Temporal workflow and provides its run method, which drives
+# the turn loop. Add an optional `@agent.setup` / `@agent.teardown` method for one-time async
+# work before the first message or after the agent closes.
 @agent.defn
 class TravelAgent:
-    @workflow.init
-    def __init__(self, config: AgentConfig) -> None:
+    @agent.init
+    def __init__(self, config: AgentConfig, profile: TravelerProfile | None = None) -> None:
         # Tool approvals are safe-by-default; here, auto-approve only tools that
         # statically declare themselves inherently safe.
         self._runner = AgentWorkflowRunner(
@@ -430,10 +449,9 @@ class TravelAgent:
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
-
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
+        # Optional, so a caller may start it without a profile. Declare it without the
+        # `| None = None` to make it required.
+        self._profile = profile
 
     # A typed, self-describing operation. The agent advertises this signature, so callers —
     # your code or another agent — can drive it programmatically. Your turn logic goes here:

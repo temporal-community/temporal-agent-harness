@@ -94,7 +94,7 @@ contents you didn't read.
 
 @agent.defn(name="WikiAgent")
 class WikiAgentWorkflow:
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -112,9 +112,6 @@ class WikiAgentWorkflow:
         # The model-facing callback toolset, plus a name -> tool map for dispatch.
         self._tools = list(WIKI_TOOLS)
         self._tools_by_name = {tool.__name__: tool for tool in self._tools}
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
         # The Temporal-aware AsyncClient from the Gemini plugin; the runner is wired in so reply
         # text streams to the workflow stream as it is generated.
         self._gemini = google_genai_client(
@@ -123,7 +120,6 @@ class WikiAgentWorkflow:
             ),
             runner=self._runner,
         )
-        await self._runner.run(self)
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:

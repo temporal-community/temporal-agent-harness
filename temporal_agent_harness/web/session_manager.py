@@ -8,6 +8,7 @@ knows only the standard harness protocol, not any concrete example agent.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from temporalio import workflow
 from temporalio.exceptions import ApplicationError
@@ -28,6 +29,9 @@ class AgentDescriptor:
     task_queue: str
     label: str
     description: str
+    # Where the agent's class is defined ("module.path:ClassName"), so the web server can read
+    # its start interface. ``None`` when the registry does not say.
+    agent: str | None = None
 
 
 @dataclass
@@ -53,6 +57,9 @@ class CreateSessionRequest:
     agent_workflow_type: str
     config: AgentConfig
     task_queue: str | None = None
+    # The agent's init data, as JSON, passed as its second workflow argument. The agent
+    # validates it; the manager only forwards it.
+    data: dict[str, Any] | None = None
     # Caller-chosen workflow id for the session, instead of a minted
     # ``agent-session-{uuid4}``. For an integration whose conversation identity is minted
     # elsewhere — a Slack thread, a Discord channel, a ticket — where the session id must be
@@ -125,7 +132,7 @@ class SessionManagerWorkflow:
         session_id = request.session_id or f"agent-session-{workflow.uuid4()}"
         await workflow.start_child_workflow(
             request.agent_workflow_type,
-            request.config,
+            args=[request.config] if request.data is None else [request.config, request.data],
             id=session_id,
             task_queue=task_queue,
         )

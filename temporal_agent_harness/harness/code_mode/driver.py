@@ -67,7 +67,7 @@ class CodeModeDriver:
     Constructed per invocation by the ``code_mode_tool`` closure (which resolves the live
     :class:`AgentWorkflowRunner` from the ambient ``_CURRENT_RUNNER``). ``tools_by_name`` and
     ``coercers`` are precomputed once by the factory (validated + type-adapters built at
-    ``@workflow.init``); ``type_check_stubs`` is the auto-generated stub source the sandbox
+    ``@agent.init``); ``type_check_stubs`` is the auto-generated stub source the sandbox
     type-checks the script against before running it. Never runs the sandbox engine itself — that
     happens in the ``code_start_batch`` / ``code_resume_batch`` activities."""
 

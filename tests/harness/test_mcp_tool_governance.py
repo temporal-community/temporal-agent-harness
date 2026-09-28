@@ -86,7 +86,7 @@ class _ProbeMetaContext:
 
 
 class _BaseMCPProbe:
-    # Declared for the type checker; each concrete probe builds it in @workflow.init.
+    # Declared for the type checker; each concrete probe builds it in @agent.init.
     _runner: AgentWorkflowRunner
     _server_calls: list[Any]
 
@@ -110,7 +110,7 @@ class _BaseMCPProbe:
 class GatedMCPProbeAgent(_BaseMCPProbe):
     """Safe-by-default: every tool call is gated, MCP calls included."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -123,17 +123,13 @@ class GatedMCPProbeAgent(_BaseMCPProbe):
     def server_call_count(self) -> int:
         return len(self._server_calls)
 
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
-
 
 @agent.defn
 class UngatedMCPProbeAgent(_BaseMCPProbe):
     """Approvals skipped, so the call runs straight through — the bracket must still
     be published."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -145,10 +141,6 @@ class UngatedMCPProbeAgent(_BaseMCPProbe):
     @workflow.query
     def server_call_count(self) -> int:
         return len(self._server_calls)
-
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
 
 
 @pytest_asyncio.fixture

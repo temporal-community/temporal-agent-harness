@@ -58,7 +58,7 @@ class CodeModeStubError(Exception):
     """Raised when a tool's signature cannot be rendered into faithful type-check stubs.
 
     Carries the tool and the parameter/field path so the developer can fix the tool's types.
-    Raised at ``code_mode_tool`` construction time (i.e. at ``@workflow.init``), so an
+    Raised at ``code_mode_tool`` construction time (i.e. at ``@agent.init``), so an
     unrepresentable tool set fails fast rather than silently under-validating scripts."""
 
 

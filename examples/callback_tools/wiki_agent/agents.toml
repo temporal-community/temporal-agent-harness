@@ -6,6 +6,7 @@
 [[agents]]
 key = "wiki"
 workflow_type = "WikiAgent"
+agent = "examples.callback_tools.wiki_agent.workflow:WikiAgentWorkflow"
 task_queue = "wiki-agent"
 label = "Wiki Keeper (Callback Tools)"
 description = """

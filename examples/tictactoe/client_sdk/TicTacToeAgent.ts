@@ -11,6 +11,18 @@ export interface Board {
   moves: Move[];
 }
 /**
+ * Who the agent is playing. Optional when starting a session.
+ */
+export interface MatchSettings {
+  /**
+   * Your name, used when the agent talks to you.
+   *
+   * @minLength 1
+   * @maxLength 40
+   */
+  player_name: string;
+}
+/**
  * One move that has been played, in order.
  */
 export interface Move {
@@ -48,8 +60,10 @@ export interface TextReply {
   text: string;
 }
 
-/** The `TicTacToeAgent` agent's handlers (message in, reply out) and observable state. */
+/** The `TicTacToeAgent` agent's init data, handlers (message in, reply out) and observable
+ *  state. */
 export interface TicTacToeAgent {
+  initData: { data: MatchSettings; required: false };
   handlers: {
     /**
      * Reset the board and start a new game. You are X and open unless
@@ -66,3 +80,8 @@ export interface TicTacToeAgent {
     board: Board;
   };
 }
+
+/** Pass to `startSession` to start a `TicTacToeAgent` session. */
+export const TicTacToeAgent: { readonly workflowType: "TicTacToeAgent"; readonly schema?: TicTacToeAgent } = {
+  workflowType: "TicTacToeAgent"
+};

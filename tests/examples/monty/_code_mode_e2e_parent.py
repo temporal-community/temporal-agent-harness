@@ -101,7 +101,7 @@ class RunCode(BaseModel):
 
 @agent.defn(name="CodeModeE2EParent")
 class CodeModeE2EParentWorkflow:
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -112,10 +112,6 @@ class CodeModeE2EParentWorkflow:
         self._run_code = agent.code_mode_tool(
             CODE_MODE_TOOLS, name="run_code", injections={"secret": INJECTED_SECRET}
         )
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def run_code(self, msg: RunCode) -> TextReply:

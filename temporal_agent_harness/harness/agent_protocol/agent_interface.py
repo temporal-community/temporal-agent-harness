@@ -633,18 +633,17 @@ class AgentConfig(BaseModel):
     :data:`AgentId` shape on ``agent_id`` — are actually VALIDATED when an ``AgentConfig`` crosses
     the data converter into a workflow, rather than being mere annotations.
 
-    The harness enforces a uniform construction shape: an agent ``@workflow.defn``
-    class that builds an ``AgentWorkflowRunner`` must declare its ``run``/``__init__``
-    to take EITHER no argument OR exactly one argument of this type. That invariant is
-    asserted when the runner is built (see
-    ``AgentWorkflowRunner._assert_standardized_agent_signature``).
+    The harness enforces a uniform construction shape: an agent's ``@agent.init`` takes one
+    argument of this type, plus optionally one agent-specific ``data`` model — required
+    (``data: TripData``) or optional (``data: TripData | None = None``). ``@agent.defn``
+    checks that at import time.
 
     Standardizing the input is what lets any harness agent be substituted for another —
     as a top-level agent or as a sub-agent — since a caller can always construct one
-    knowing only ``AgentConfig``, never a bespoke per-agent input type. Consequently
-    this carries ONLY knobs universal to every agent; agent-specific behavior is
-    configured at runtime through the agent's own ``@agent.accepts`` handlers, never
-    through a custom input type.
+    knowing only ``AgentConfig``, and an agent with no data or optional data starts with it
+    alone. Consequently this carries ONLY knobs universal to every agent; agent-specific
+    input goes in the separate ``data`` argument, and agent-specific behavior is configured
+    at runtime through the agent's own ``@agent.accepts`` handlers.
 
     EVERY field is optional, with ``None`` meaning "the caller did not specify this."
     An agent supplies its own default for any unspecified field (via the matching

@@ -34,17 +34,13 @@ class McpStreamingAgent:
     """An agent whose only tool comes from an MCP server. Nothing here wires up
     approvals or tool events -- the harness must supply both on its own."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
-
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:

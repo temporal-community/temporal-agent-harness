@@ -119,7 +119,7 @@ def _stopped(agent_id: str, parent_turn: int, *, child: str) -> AgentEvent:
 
 
 def _state_snapshot(agent_id: str) -> AgentEvent:
-    """What an agent publishes when it registers observable state in ``@workflow.init``.
+    """What an agent publishes when it registers observable state in ``@agent.init``.
 
     Turn 0, following the operator-command convention: it happened before any turn, so there
     is no turn for it to belong to.
@@ -377,7 +377,7 @@ def test_open_gate_does_not_strand_a_child_event_that_belongs_to_no_turn():
     No ``subagent_message_sent`` carries ``subagent_turn=0``, so the open gate has no way to
     let one through — holding it is not a delay, it is forever. And a held event stays the
     cursor's HEAD, so it takes the child's entire stream down with it: a subagent that
-    registered observable state in ``@workflow.init`` delivered nothing at all.
+    registered observable state in ``@agent.init`` delivered nothing at all.
     """
     gates = Gates()
     assert gates.ready(is_child=True, source_workflow_id="C", ev=_state_snapshot("C"))
@@ -440,7 +440,7 @@ async def test_child_state_registered_before_any_turn_does_not_wedge_its_stream(
     """The engine-level half of the gate exemption, on the shape that actually shipped it.
 
     Found by giving the Monty script-runner an observable trip board: registering state in
-    ``@workflow.init`` puts a turn-0 event at offset 0 of the child's stream, and the merged
+    ``@agent.init`` puts a turn-0 event at offset 0 of the child's stream, and the merged
     view then lost every event of the child's FIRST turn — the second turn only surfaced
     because it mounts a fresh cursor past the stranded head, which is what made the symptom
     read as a turn-counting bug rather than a stuck stream.

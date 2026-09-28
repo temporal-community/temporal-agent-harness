@@ -6,12 +6,13 @@ import type {
   WorkflowExecutionState
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
-import type { AgentDescriptor, Session } from "$lib/api/types";
+import type { AgentDescriptor, JsonRecord, Session } from "$lib/api/types";
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
 import { HttpAgentApi } from "$lib/api/httpClient";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
 import { chooseBootSession } from "./bootSession";
+import { defaultBootAgent } from "./initData";
 import {
   readCachedFrames,
   readOperatorPrefs,
@@ -859,15 +860,16 @@ export class AgentRunController {
 
     try {
       const agents = await this.#loadAgents();
-      const defaultAgent = agents.find((agent) => agent.key === "qa") ?? agents[0];
-      if (!defaultAgent) throw new Error("No agent is registered.");
+      if (agents.length === 0) throw new Error("No agent is registered.");
+      /* Boot has nobody to ask for init data, so it never picks an agent that requires it. */
+      const defaultAgent = defaultBootAgent(agents);
 
       await this.#loadSessions();
       const wantedSessionId = readUrlSessionId() ?? readStoredActiveSessionId();
       let openable = chooseBootSession(
         this.sessions,
         wantedSessionId,
-        defaultAgent.workflow_type
+        defaultAgent?.workflow_type ?? agents[0]!.workflow_type
       );
 
       if (!openable && wantedSessionId) {
@@ -877,6 +879,11 @@ export class AgentRunController {
       if (openable) {
         this.session = openable;
       } else {
+        if (!defaultAgent) {
+          throw new Error(
+            "Every registered agent needs init data to start. Start one from New session."
+          );
+        }
         this.session = await this.#api.createSession({
           agent_workflow_type: defaultAgent.workflow_type
         });
@@ -1033,7 +1040,8 @@ export class AgentRunController {
     });
   }
 
-  async startNewSession(workflowType?: string): Promise<void> {
+  /** `data` is the agent's init data, when it takes some; the server checks it. */
+  async startNewSession(workflowType?: string, data?: JsonRecord): Promise<void> {
     const connectionVersion = this.#beginConnection();
     this.#sendVersion += 1;
     this.#stopStream();
@@ -1057,9 +1065,11 @@ export class AgentRunController {
 
       if (!agent) throw new Error("No agent is registered.");
 
-      const session = await this.#api.createSession({
-        agent_workflow_type: agent.workflow_type
-      });
+      const session = await this.#api.createSession(
+        data === undefined
+          ? { agent_workflow_type: agent.workflow_type }
+          : { agent_workflow_type: agent.workflow_type, data }
+      );
 
       this.sessions = [...this.sessions.filter((item) => item.workflow_id !== session.workflow_id), session];
       if (!this.#isCurrentConnection(connectionVersion)) return;

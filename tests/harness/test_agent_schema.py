@@ -15,12 +15,12 @@ from typing import Any
 
 import pytest
 from pydantic import BaseModel
-from temporalio import workflow
 
 from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.agent_protocol import AgentConfig
 from temporal_agent_harness.harness.agent_protocol.events import AgentEventType
 from temporal_agent_harness.harness.agent_schema import (
+    agent_init_data_schema,
     agent_schema,
     dump_agent_schema,
     dump_protocol_schema,
@@ -99,13 +99,49 @@ class Echo(BaseModel):
 class EchoAgent:
     notes = agent.state(Note)
 
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None: ...
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None: ...
 
     @agent.accepts
     async def echo(self, message: Echo) -> Echo:
         """Echo the message back."""
         return message
+
+
+class Brief(BaseModel):
+    """What to work on."""
+
+    topic: str
+    depth: int = 1
+
+
+@agent.defn(name="BriefedAgent")
+class BriefedAgent:
+    @agent.init
+    def __init__(self, config: AgentConfig, brief: Brief) -> None: ...
+
+    @agent.accepts
+    async def echo(self, message: Echo) -> Echo:
+        """Echo the message back."""
+        return message
+
+
+def test_init_data_is_published_in_validation_mode_with_whether_it_is_required():
+    doc = agent_schema(BriefedAgent)
+    assert doc["init_data"] == {"data": {"$ref": "#/$defs/Brief"}, "required": True}
+    # A caller may omit a defaulted field, as with handler inputs.
+    assert doc["$defs"]["Brief"]["required"] == ["topic"]
+    assert agent_schema(EchoAgent)["init_data"] is None
+
+
+def test_init_data_schema_is_self_contained_for_a_form():
+    start = agent_init_data_schema(BriefedAgent)
+    assert start is not None and start["required"] is True
+    assert start["schema"]["title"] == "Brief"
+    assert set(start["schema"]["properties"]) == {"topic", "depth"}
+    assert agent_init_data_schema(EchoAgent) is None
+    optional = agent_init_data_schema(_tictactoe())
+    assert optional is not None and optional["required"] is False
 
 
 def test_a_model_used_both_ways_gets_an_input_and_an_output_definition():
@@ -132,8 +168,8 @@ SecondPayload = _same_named_model("pkg.second")
 
 @agent.defn(name="CollidingAgent")
 class CollidingAgent:
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None: ...
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None: ...
 
     @agent.accepts
     async def take_first(self, message: FirstPayload) -> Echo:  # type: ignore[valid-type]
@@ -148,8 +184,8 @@ class CollidingAgent:
 
 @agent.defn(name="CrossModeCollidingAgent")
 class CrossModeCollidingAgent:
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None: ...
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None: ...
 
     @agent.accepts
     async def swap(self, message: FirstPayload) -> SecondPayload:  # type: ignore[valid-type]

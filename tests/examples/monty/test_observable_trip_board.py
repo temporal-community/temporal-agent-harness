@@ -131,7 +131,7 @@ async def test_the_board_streams_and_replays_into_what_the_agent_holds(client_an
     assert snapshot.event.state_id == "trip_board"
     assert snapshot.event.version == 0
     assert snapshot.event.value == {"trips": []}
-    # Registered in @workflow.init, before any turn exists — hence turn 0, the same
+    # Registered in @agent.init, before any turn exists — hence turn 0, the same
     # convention an operator command follows.
     assert snapshot.turn_number == 0
 

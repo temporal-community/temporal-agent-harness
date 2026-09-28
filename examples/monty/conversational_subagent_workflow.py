@@ -116,7 +116,7 @@ options, prices, confirmations. You may run more scripts in follow-up turns.
 
 @agent.defn(name="MontyChatSubagentAgent")
 class MontyChatSubagentWorkflow:
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -139,9 +139,6 @@ class MontyChatSubagentWorkflow:
             task_queue=TASK_QUEUE,
         )
         self._callables_by_name = {fn.__name__: fn for fn in self._tools}
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
         # Same Temporal-aware AsyncClient as the QA / inline-Monty agents; the runner is wired
         # in so reply text streams to the workflow stream as it is generated.
         self._gemini = google_genai_client(
@@ -150,7 +147,6 @@ class MontyChatSubagentWorkflow:
             ),
             runner=self._runner,
         )
-        await self._runner.run(self)
 
     @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def ask(self, message: TextMessage) -> TextReply:

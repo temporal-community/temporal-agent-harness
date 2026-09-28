@@ -101,7 +101,7 @@ command output you didn't actually read."""
 
 @agent.defn(name="CodingAgent")
 class CodingAgentWorkflow:
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -123,9 +123,6 @@ class CodingAgentWorkflow:
         # Durable workflow state: the agent's task list, replaced in place by the inline
         # `todowrite` tool (injected as its `sink`). Survives across turns like any workflow field.
         self._todos: list = []
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
         # The Temporal-aware AsyncClient from the Gemini plugin; the runner is wired in so reply
         # text streams to the workflow stream as it is generated.
         self._gemini = google_genai_client(
@@ -134,7 +131,6 @@ class CodingAgentWorkflow:
             ),
             runner=self._runner,
         )
-        await self._runner.run(self)
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:

@@ -102,7 +102,7 @@ stream, not the resurrected entries.
 
 ## How the harness uses the stream
 
-- **One stream per agent**, constructed in the agent's `@workflow.init` (root *and* every subagent
+- **One stream per agent**, constructed in the agent's `@agent.init` (root *and* every subagent
   has its own; subagent streams are never mirrored onto the parent — see
   [`unified-subagent-event-stream.md`](unified-subagent-event-stream.md)).
 - **One topic**, `turn_events`, typed to `AgentEvent`. The `AgentEvent` envelope carries routing

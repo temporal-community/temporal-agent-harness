@@ -13,6 +13,19 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
+# Init data
+# ---------------------------------------------------------------------------
+
+
+class MatchSettings(BaseModel):
+    """Who the agent is playing. Optional when starting a session."""
+
+    player_name: str = Field(
+        min_length=1, max_length=40, description="Your name, used when the agent talks to you."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Accepted messages
 # ---------------------------------------------------------------------------
 

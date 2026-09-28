@@ -202,7 +202,7 @@ about your own notes — so there is never a reason to batch them up or skip the
 class AutoModeTravelAgentWorkflow:
     trip_board = agent.state(trip_board.TripBoard)
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -238,9 +238,6 @@ class AutoModeTravelAgentWorkflow:
             # trip, never the state it lives in.
             injections={"board": self.trip_board},
         )
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
         # The Temporal-aware AsyncClient from the Gemini plugin; the runner is wired in so reply
         # text streams to the workflow stream as it is generated.
         self._gemini = google_genai_client(
@@ -249,7 +246,6 @@ class AutoModeTravelAgentWorkflow:
             ),
             runner=self._runner,
         )
-        await self._runner.run(self)
 
     @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def ask(self, message: TextMessage) -> TextReply:

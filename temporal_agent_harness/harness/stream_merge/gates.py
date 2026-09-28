@@ -111,11 +111,11 @@ class Gates:
         #
         # Turn 0 is exempt, and that is the absence of a rule rather than a special case: an
         # event a child publishes outside any turn — observable state registered in
-        # ``@workflow.init``, an operator command — belongs to no bracket, so no
+        # ``@agent.init``, an operator command — belongs to no bracket, so no
         # ``subagent_message_sent`` exists that could ever open one for it. Holding such an
         # event does not delay it, it strands it; and because the engine holds a gated event as
         # its cursor's HEAD, every later event on that child queues behind it forever. A child
-        # that registered state in ``@workflow.init`` delivered nothing at all before this.
+        # that registered state in ``@agent.init`` delivered nothing at all before this.
         if (
             is_child
             and ev.turn_number != 0

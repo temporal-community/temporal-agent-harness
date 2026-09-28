@@ -1,6 +1,14 @@
 // Compile-time checks on the golden output: `tsc` fails the build if any of these stop holding.
 
-import type { Board, NewGame, PlayMove, TextReply, TicTacToeAgent } from "./golden/TicTacToeAgent.ts";
+import type {
+  Board,
+  MatchSettings,
+  NewGame,
+  PlayMove,
+  TextReply,
+  TicTacToeAgent
+} from "./golden/TicTacToeAgent.ts";
+import { TicTacToeAgent as definition } from "./golden/TicTacToeAgent.ts";
 
 type Equals<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -11,6 +19,9 @@ holds<Equals<TicTacToeAgent["handlers"]["play"]["input"], PlayMove>>();
 holds<Equals<TicTacToeAgent["handlers"]["play"]["output"], TextReply>>();
 holds<Equals<keyof TicTacToeAgent["states"], "board">>();
 holds<Equals<TicTacToeAgent["states"]["board"], Board>>();
+holds<Equals<TicTacToeAgent["initData"], { data: MatchSettings; required: false }>>();
+holds<Equals<typeof definition.workflowType, "TicTacToeAgent">>();
+holds<Equals<NonNullable<typeof definition.schema>, TicTacToeAgent>>();
 
 // A handler input may omit a defaulted field; a state document always carries every field.
 const newGame: NewGame = {};

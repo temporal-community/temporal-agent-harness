@@ -45,6 +45,11 @@ from temporal_agent_harness.harness.agent_protocol import (
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.utils.large_payload import DEFAULT_PAYLOAD_STORAGE
+from temporal_agent_harness.web.agent_starts import (
+    InvalidStartData,
+    resolve_agent_starts,
+    validated_start_data,
+)
 from temporal_agent_harness.web.registry import load_agent_registry
 from temporal_agent_harness.web.session_manager import (
     SESSION_MANAGER_ID,
@@ -70,6 +75,8 @@ class CreateSessionRequestBody(BaseModel):
     # is derivable from that identity instead of needing a mapping table. Creation is
     # idempotent when it is set.
     session_id: str | None = None
+    # The agent's init data, as JSON — see each agent's ``init_data`` in ``GET /api/agents``.
+    data: dict[str, Any] | None = None
 
 
 class ChatRequestBody(BaseModel):
@@ -151,6 +158,9 @@ def create_agent_harness_app(
         )
 
         resolved_registry = _resolve_registry(registry, registry_path)
+        # Read from this process's own registry rather than the manager's copy, so a change to
+        # an agent's init data shows up on restart without resetting the manager.
+        app.state.agent_starts = resolve_agent_starts(resolved_registry)
 
         app.state.manager_handle = await _ensure_session_manager_workflow(
             app.state.temporal,
@@ -161,6 +171,8 @@ def create_agent_harness_app(
         yield
 
     app = FastAPI(lifespan=lifespan)
+    # Filled at startup; empty means every agent's start interface is unknown.
+    app.state.agent_starts = {}
     # Open CORS: this is a local dev server whose API is meant to be driven by any client,
     # including a standalone HTML page opened from disk (origin ``null``).
     # Nothing here is credentialed, so the wildcard is safe.
@@ -201,10 +213,18 @@ def create_agent_harness_app(
             app.state.temporal,
             (agent.task_queue for agent in registry_result.agents),
         )
+        starts = app.state.agent_starts
         content = {
             "agents": [
                 {
                     **asdict(agent),
+                    # {"required": bool, "schema": {...}}, or null when the agent takes no
+                    # init data (or its registry entry does not name its class).
+                    "init_data": (
+                        starts[agent.workflow_type].init_data_schema
+                        if agent.workflow_type in starts
+                        else None
+                    ),
                     "worker": asdict(workers.for_task_queue(agent.task_queue)),
                 }
                 for agent in registry_result.agents
@@ -230,12 +250,18 @@ def create_agent_harness_app(
 
     @app.post("/api/sessions")
     async def create_session(req: CreateSessionRequestBody):
+        data = validated_start_data(
+            req.agent_workflow_type,
+            app.state.agent_starts.get(req.agent_workflow_type),
+            req.data,
+        )
         session: Session = await app.state.manager_handle.execute_update(
             SessionManagerWorkflow.create_session,
             ManagerCreateSessionRequest(
                 agent_workflow_type=req.agent_workflow_type,
                 config=AgentConfig(),
                 session_id=req.session_id,
+                data=data,
             ),
             result_type=Session,
         )
@@ -357,6 +383,14 @@ def create_agent_harness_app(
                 "message": str(exc),
                 "reply": asdict(exc.reply),
             },
+        )
+
+    @app.exception_handler(InvalidStartData)
+    async def invalid_start_data_handler(request, exc):
+        # 422: the start was not attempted. ``errors`` are pydantic's, for a form to place.
+        return JSONResponse(
+            status_code=422,
+            content={"error": "invalid_init_data", "message": str(exc), "errors": exc.errors},
         )
 
     @app.exception_handler(MidTurnRejectedError)

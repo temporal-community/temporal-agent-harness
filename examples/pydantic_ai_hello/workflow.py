@@ -87,7 +87,7 @@ _TEMPORAL_AGENT = TemporalAgent(
 class PydanticAIHelloAgentWorkflow:
     """A one-tool conversational agent driven by Pydantic AI."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -98,10 +98,6 @@ class PydanticAIHelloAgentWorkflow:
         )
         # Pydantic AI conversation state, threaded across turns as its message history.
         self._history: list[ModelMessage] = []
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:

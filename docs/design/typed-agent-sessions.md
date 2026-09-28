@@ -111,7 +111,7 @@ class TicTacToeAgentWorkflow:
     board = agent.state(game.Board)          # state_id "board", from the attribute name
     # agent.state(Board, initial=lambda: Board(...)) when the default constructor isn't right
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(config, stream=WorkflowStream(), ...)
 
@@ -172,15 +172,18 @@ harness. See **Rejected** for the tool-typing design this replaces.
 
 `harness/agent_schema.py`:
 
-- **`agent_schema(cls)`** — handlers and declared states, printed by
+- **`agent_schema(cls)`** — init data, handlers and declared states, printed by
   `temporal-agent-harness schema module:Class`:
 
   ```
-  { agent, source, handlers: { name: { description, mid_turn, input, output } }, states: { id: ref }, $defs }
+  { agent, source, init_data: { data: ref, required } | null,
+    handlers: { name: { description, mid_turn, input, output } }, states: { id: ref }, $defs }
   ```
 
-  One `models_json_schema` call, so every model shares one `$defs`. Handler inputs use
-  `mode="validation"` (a field with a default may be omitted going in); handler outputs and states
+  `init_data` is the model the agent's `@agent.init` takes after its `AgentConfig`, and whether a
+  session start must send it (`data: Model`) or may omit it (`data: Model | None = None`).
+  One `models_json_schema` call, so every model shares one `$defs`. Init data and handler inputs
+  use `mode="validation"` (a field with a default may be omitted going in); handler outputs and states
   use `mode="serialization"` with **every model field required**, via a small `GenerateJsonSchema`
   subclass — pydantic's default marks defaulted fields optional even in serialization mode, which
   would type a reply or state document as possibly missing fields it always carries. A model used
@@ -204,6 +207,7 @@ over `$defs` and appends what no off-the-shelf tool produces:
 
   ```ts
   export interface TicTacToeAgent {
+    initData: { data: MatchSettings; required: false };   // null for an agent that takes none
     handlers: {
       /** Reset the board and start a new game. ... */
       new_game: { input: NewGame; output: TextReply };
@@ -212,7 +216,15 @@ over `$defs` and appends what no off-the-shelf tool produces:
     };
     states: { board: Board };
   }
+
+  /** Pass to `startSession` to start a `TicTacToeAgent` session. */
+  export const TicTacToeAgent: { readonly workflowType: "TicTacToeAgent"; readonly schema?: TicTacToeAgent } = {
+    workflowType: "TicTacToeAgent"
+  };
   ```
+
+  The value shares the mapping type's name and carries it as a phantom `schema`, so the generated
+  file needs no import (it lives outside any package, e.g. `examples/tictactoe/client_sdk/`).
 
 - **For the protocol**, `AgentStreamItem` (the union of payloads) and
   `AgentEventType = AgentStreamItem["type"]`.
@@ -231,6 +243,23 @@ owns a `codegen-client-sdk` recipe in its own justfile and commits the output
 protocol types are committed as `packages/client/src/protocol.ts` (`npm run generate:protocol`
 there). The `client-sdk` CI workflow regenerates both — for every example whose justfile defines
 the recipe — and fails on any difference.
+
+### Starting a session
+
+`startSession(starter, Agent, options?)` (`packages/client/src/start.ts`) posts
+`{ agent_workflow_type, session_id?, data? }` to `POST /api/sessions` and returns the new
+session. `Agent` is the generated definition value, so `A` comes from it: for
+`initData: { data: D; required: true }` the options, and `data` in them, are required; for
+`required: false` they are optional; for `initData: null` a `data` is a type error.
+`HttpTransport` implements `SessionStarter` (and `listSessions()`), so a UI starts, lists and
+follows sessions through one object. The server checks `data` against the agent's model when its
+registry entry names the class (`agent = "module:Class"`), rejecting a bad start with `422`
+`invalid_init_data`, which arrives as an `HttpError` with that `code`.
+
+The console does not use the generated types — it hosts many agents — but reads the same start
+interface off `GET /api/agents` (`init_data: { required, schema }`) and renders the model's
+schema as a form before starting a session, skippable when the data is optional. On boot it
+never starts an agent whose data is required, since there is nobody to ask.
 
 ### The client core
 
@@ -363,10 +392,11 @@ Its tests use React Testing Library in happy-dom, including StrictMode and `rend
 ### The tic-tac-toe app
 
 `examples/tictactoe/ui` replaces the old `play.html`. It is a single Svelte component, written only
-against the binding and the generated `TicTacToeAgent` type: the board is `agent.states.board`,
-moves are `agent.sendMessage("play", { cell })`, the last TypeSafe judgment is read off
-`agent.messages`, the ledger off `agent.frames`, and gated calls get approve / deny buttons from
-`agent.pendingApprovals`. It has no build step: an import map and a service worker let the browser
+against the binding and the generated `TicTacToeAgent` type: a session is started with
+`startSession<TicTacToeAgent>(transport, ...)`, sending the optional `MatchSettings` when a name is
+entered; the board is `agent.states.board`, moves are `agent.sendMessage("play", { cell })`, the
+last TypeSafe judgment is read off `agent.messages`, the ledger off `agent.frames`, and gated calls
+get approve / deny buttons from `agent.pendingApprovals`. It has no build step: an import map and a service worker let the browser
 compile it. CI type-checks it against the committed generated types, so a model change that breaks
 it fails there.
 
@@ -424,7 +454,7 @@ headless browser.
 
 ## Risks
 
-- **The stack walk.** The runner finds its agent instance by walking to the `@workflow.init` frame's
+- **The stack walk.** The runner finds its agent instance by walking to the `@agent.init` frame's
   `self`. A runner built somewhere that frame isn't on the stack would publish no declared state.
 - **Stale types across deploys.** A session started on an older build can replay snapshots with an
   older shape. Accepted for now; a schema hash on `AgentStateSnapshot` would detect it.

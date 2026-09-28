@@ -11,6 +11,8 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from typing import Any, TypeVar
 
+from pydantic import BaseModel
+
 from temporalio.client import Client, WithStartWorkflowOperation, WorkflowUpdateFailedError
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
 
@@ -371,6 +373,7 @@ class AgentClient:
         workflow_name: str,
         task_queue: str,
         start_config: AgentConfig,
+        start_data: BaseModel | dict[str, Any] | None = None,
         update_id: str | None = None,
     ) -> AgentMessageReply:
         """Like :meth:`_submit_message`, but starts the workflow first if it isn't already
@@ -379,6 +382,9 @@ class AgentClient:
         ``workflow_name``/``task_queue`` since every other method assumes the workflow is
         already running and never needs them.
 
+        ``start_data`` is the agent's init data, passed as its second workflow argument when the
+        workflow is started (ignored when it is already running).
+
         ``update_id`` — see :meth:`approve_tool`'s note.
 
         Raises:
@@ -386,7 +392,7 @@ class AgentClient:
         """
         start_op = WithStartWorkflowOperation(
             workflow_name,
-            start_config,
+            args=[start_config] if start_data is None else [start_config, start_data],
             id=self._workflow_id,
             task_queue=task_queue,
             id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
@@ -642,7 +648,7 @@ class AgentClient:
             #
             # State registration is the one exception, because it publishes BEFORE any
             # turn exists: declared state is registered when the runner is built in
-            # `@workflow.init`, so its snapshot lands at the very front of the stream stamped
+            # `@agent.init`, so its snapshot lands at the very front of the stream stamped
             # `turn_number=0`,
             # which is why it is matched on that rather than on being a snapshot. It is
             # the only event a replay can end on that no `turn_end` will ever follow, so

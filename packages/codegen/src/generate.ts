@@ -1,6 +1,7 @@
 // TypeScript types from the documents `temporal-agent-harness schema` prints. For one agent:
-// an interface per model in its `$defs`, plus one mapping type naming every handler's input
-// and output and every declared state. For the event protocol (`--protocol`): an interface
+// an interface per model in its `$defs`, one mapping type naming its init data, every
+// handler's input and output and every declared state, and a same-named definition value that
+// `startSession` takes. For the event protocol (`--protocol`): an interface
 // per event payload and the envelope, plus the union of payloads and of their `type`s.
 
 import { compile, type JSONSchema } from "json-schema-to-typescript";
@@ -9,6 +10,8 @@ import { compile, type JSONSchema } from "json-schema-to-typescript";
 export interface AgentSchemaDocument {
   agent: string;
   source: string;
+  /** Absent in documents from before init data existed; treated as `null`. */
+  init_data?: { data: SchemaRef; required: boolean } | null;
   handlers: Record<
     string,
     { description: string; mid_turn: string; input: SchemaRef; output: SchemaRef }
@@ -71,6 +74,8 @@ export async function generateAgentTypes(
     await compileModels(doc.$defs, names),
     "",
     mappingType(doc, typeName, names),
+    "",
+    definitionValue(doc, typeName),
     ""
   ].join("\n");
 }
@@ -188,13 +193,30 @@ function mappingType(
   );
   const block = (lines: string[]) =>
     lines.length === 0 ? "Record<never, never>" : `{\n${lines.join("\n")}\n  }`;
+  const initData = doc.init_data
+    ? `{ data: ${resolve(doc.init_data.data)}; required: ${doc.init_data.required} }`
+    : "null";
 
   return [
-    `/** The \`${doc.agent}\` agent's handlers (message in, reply out) and observable state. */`,
+    `/** The \`${doc.agent}\` agent's init data, handlers (message in, reply out) and observable`,
+    " *  state. */",
     `export interface ${typeName} {`,
+    `  initData: ${initData};`,
     `  handlers: ${block(handlers)};`,
     `  states: ${block(states)};`,
     "}"
+  ].join("\n");
+}
+
+/** The value `startSession` takes, named like the mapping type (a type and a value may share a
+ *  name). Its type carries the mapping type as a phantom `schema`, so the file needs no import. */
+function definitionValue(doc: AgentSchemaDocument, typeName: string): string {
+  const workflowType = JSON.stringify(doc.agent);
+  return [
+    `/** Pass to \`startSession\` to start a \`${doc.agent}\` session. */`,
+    `export const ${typeName}: { readonly workflowType: ${workflowType}; readonly schema?: ${typeName} } = {`,
+    `  workflowType: ${workflowType}`,
+    "};"
   ].join("\n");
 }
 

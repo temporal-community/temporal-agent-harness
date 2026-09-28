@@ -11,6 +11,7 @@
 [[agents]]
 key = "monty-chat"
 workflow_type = "MontyChatAgent"
+agent = "examples.monty.conversational_workflow:MontyChatAgentWorkflow"
 task_queue = "monty-dynamic-agent"
 label = "Monty (Conversational)"
 description = """
@@ -22,6 +23,7 @@ replying with the results."""
 [[agents]]
 key = "monty-chat-subagent"
 workflow_type = "MontyChatSubagentAgent"
+agent = "examples.monty.conversational_subagent_workflow:MontyChatSubagentWorkflow"
 task_queue = "monty-dynamic-agent"
 label = "Monty (Conversational, Subagent)"
 description = """

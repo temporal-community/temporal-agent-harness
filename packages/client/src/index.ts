@@ -3,6 +3,7 @@ export * from "./messages.ts";
 export * from "./schema.ts";
 export * from "./transport.ts";
 export * from "./session.ts";
+export * from "./start.ts";
 export { PlainSessionState } from "./plainState.ts";
 export * from "./views.ts";
 export {

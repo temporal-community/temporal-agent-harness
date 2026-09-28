@@ -197,7 +197,7 @@
 >   caller's `AgentConfig` or a handler's `set_approval_policy` can ask for it, not just the
 >   author. `_assert_auto_mode_has_an_evaluator` raises a non-retryable `ApplicationError`
 >   (`type="AutoModeWithoutEvaluator"`) wherever a policy is installed: from
->   `@workflow.init` that fails the workflow cleanly, from a handler it fails that message
+>   `@agent.init` that fails the workflow cleanly, from a handler it fails that message
 >   and leaves the live policy untouched.
 > - **The allow-list outranks the machine.** A call layers 0–2 approved never reaches the
 >   evaluator, so an explicit human "always allow this tool" (`remember=True`) permanently

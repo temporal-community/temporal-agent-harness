@@ -64,12 +64,25 @@ export interface AgentWorker {
   error: string | null;
 }
 
+/** The init data an agent's `@agent.init` takes, as `GET /api/agents` describes it. */
+export interface AgentInitData {
+  /** Whether a session cannot start without it. */
+  required: boolean;
+  /** The data model's JSON Schema, self-contained (its own `$defs`). */
+  schema: JsonRecord;
+}
+
 export interface AgentDescriptor {
   key: string;
   workflow_type: AgentWorkflowType;
   task_queue: string;
   label: string;
   description: string;
+  /** Where the agent's class is defined, from its registry entry. */
+  agent?: string | null;
+  /** `null` when the agent takes none, or its registry entry does not name its class. Absent
+   *  from older servers. */
+  init_data?: AgentInitData | null;
   /** Absent from older servers, and from fixtures that predate worker readiness. */
   worker?: AgentWorker;
 }
@@ -99,6 +112,8 @@ export interface WorkflowExecutionState {
 
 export interface CreateSessionRequest {
   agent_workflow_type: AgentWorkflowType;
+  /** The agent's init data; the server rejects it (422) if it does not fit. */
+  data?: JsonRecord;
 }
 
 export type CreateSessionResponse = Session;

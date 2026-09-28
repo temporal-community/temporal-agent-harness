@@ -36,7 +36,7 @@ All of it:
 class PlannerAgent:
     plan = agent.state(PlanState)   # the attribute name is the state id
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(config, stream=WorkflowStream(), ...)
 
@@ -114,7 +114,7 @@ State events ride `turn_events` as two new `AgentEventType` members rather than 
 - **The envelope is already right.** `AgentEvent` stamps `agent_id` / `turn_id` /
   `turn_number` / `timestamp`, which is exactly the attribution a patch wants.
 
-State registered in `@workflow.init` has no turn to belong to, so its snapshot publishes with
+State registered in `@agent.init` has no turn to belong to, so its snapshot publishes with
 `turn_number=0`, following the operator-command convention.
 
 ## Determinism
@@ -155,7 +155,7 @@ it is, unconditionally, because the one type that could not honour that is not s
   root's — but nothing in the *canvas* draws it.
 
   One thing this did break, and it is fixed rather than outstanding: registering state in
-  `@workflow.init` puts a `turn_number=0` event at offset 0 of a subagent's stream, and
+  `@agent.init` puts a `turn_number=0` event at offset 0 of a subagent's stream, and
   `stream_merge`'s open gate held every child event whose turn had no bracket. Nothing can ever
   open a bracket for turn 0, so that was not a delay but a strand — and a held event stays its
   cursor's head, so the child's whole stream queued behind it. Turn-0 child events are now

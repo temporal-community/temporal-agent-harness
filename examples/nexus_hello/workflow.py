@@ -54,7 +54,7 @@ You are a friendly assistant. Answer the user in brief, natural prose.
 class NexusHelloAgentWorkflow:
     """A conversational agent with three tools reached over Nexus."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -63,10 +63,6 @@ class NexusHelloAgentWorkflow:
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
         self._conversation: list[TResponseInputItem] = []
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:

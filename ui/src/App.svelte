@@ -710,7 +710,7 @@
           error={run.connectionError}
           sessionsError={run.sessionsError}
           {pendingLabel}
-          onNewSession={(workflowType) => run.startNewSession(workflowType)}
+          onNewSession={(workflowType, data) => run.startNewSession(workflowType, data)}
           onSelectSession={(sessionId) => run.selectSession(sessionId)}
           onRefreshSessions={() => run.refreshSessions()}
           onEnsureSessions={() => run.ensureSessionsEnriched()}

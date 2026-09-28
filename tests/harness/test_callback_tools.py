@@ -92,7 +92,7 @@ _SCENARIOS = {
 
 @agent.defn
 class CallbackProbeAgent:
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -108,10 +108,6 @@ class CallbackProbeAgent:
     @workflow.query
     def last_reply(self) -> str | None:
         return self._last_reply
-
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def act(self, message: TextMessage) -> TextReply:

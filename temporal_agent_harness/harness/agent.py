@@ -1,6 +1,7 @@
 # ABOUTME: The ``agent`` namespace for authoring agent workflows and their tools.
 # Decorate the workflow class with ``@agent.defn`` (a contract-checked ``@workflow.defn``,
-# used in its place) and each tool with ``@agent.activity_tool_defn()`` (durable,
+# used in its place, that also provides the workflow's ``run``), its ``__init__`` with
+# ``@agent.init``, and each tool with ``@agent.activity_tool_defn()`` (durable,
 # activity-backed) or ``@agent.tool_defn()`` (inline in the workflow). Each publishes its own
 # tool_start/tool_end lifecycle events and can gate execution on a human approval.
 #
@@ -11,10 +12,21 @@
 #     from harness import agent
 #     from harness.agent_protocol import AgentConfig
 #
-#     @agent.defn   # enforces the agent contract
+#     @agent.defn   # enforces the agent contract and generates the workflow's run
 #     class MyAgent:
-#         @workflow.run
-#         async def run(self, config: AgentConfig) -> None: ...
+#         @agent.init
+#         def __init__(self, config: AgentConfig) -> None:
+#             self._runner = AgentWorkflowRunner(config, stream=WorkflowStream(), ...)
+#
+#         @agent.setup      # optional: awaited once, before the first message
+#         async def setup(self) -> None: ...
+#
+#         @agent.teardown   # optional: awaited once, after close drains (or on cancel)
+#         async def teardown(self) -> None: ...
+#
+# An agent that needs custom init data takes it as a second ``@agent.init`` parameter typed to a
+# pydantic model: ``data: TripData | None = None`` if a caller may omit it, ``data: TripData`` if
+# not (a start without it then fails the workflow).
 #
 #     # Durable, activity-backed tool. Register it on the worker via tool_activity():
 #     #   Worker(..., activities=[agent.tool_activity(get_page_outline), ...])
@@ -86,6 +98,9 @@ from temporal_agent_harness.harness.agent_workflow import (
     activity_tool_defn,
     callback_tool_defn,
     defn,
+    init,
+    setup,
+    teardown,
     tool_activity,
     tool_defn,
 )
@@ -117,11 +132,14 @@ __all__ = [
     "callback_tool_defn",
     "code_mode_tool",
     "defn",
+    "init",
     "jev_evaluator",
     "StateDecl",
     "SubagentToolPolicy",
     "state",
+    "setup",
     "subagent_toolset",
+    "teardown",
     "tool_activity",
     "tool_defn",
 ]
