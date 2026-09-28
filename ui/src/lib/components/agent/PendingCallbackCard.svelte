@@ -9,8 +9,8 @@
   import Chip from "$lib/components/primitives/Chip.svelte";
   import SchemaForm from "$lib/components/chat/SchemaForm.svelte";
   import { buildPayload, emptyValues, resultForm, validate } from "$lib/components/chat/schemaForm";
-  import { formatLogValue } from "$lib/state/logValue";
   import { formatTimestamp, type ReplayLogRow } from "$lib/state/replayLog";
+  import CallInput from "./CallInput.svelte";
 
   interface Props {
     row: ReplayLogRow;
@@ -29,19 +29,7 @@
   let settledElsewhere = $state(false);
   let error = $state<string | null>(null);
 
-  const prompt = $derived(promptText(row.input));
   const locked = $derived(!onSubmit || submitting || sent || settledElsewhere);
-
-  /* A call whose only argument is a question-like string (ask_user's `question`) reads as that
-     sentence; anything else, like tree's `path`, is shown as its named arguments. */
-  function promptText(input: ReplayLogRow["input"]): string {
-    const entries = input ? Object.entries(input) : [];
-    if (entries.length === 1) {
-      const [key, value] = entries[0];
-      if (typeof value === "string" && /^(question|prompt|message)$/i.test(key)) return value;
-    }
-    return formatLogValue(input);
-  }
 
   async function send(outcome: CallbackOutcome): Promise<void> {
     if (locked) return;
@@ -81,9 +69,7 @@
     <strong>{row.toolName ?? "Callback"}</strong>
     <span>Turn {row.turnNumber} · {formatTimestamp(row.timestamp)}</span>
   </header>
-  {#if prompt}
-    <p class="prompt">{prompt}</p>
-  {/if}
+  <CallInput input={row.input} />
   {#if ahead}
     <p class="note">Requested ahead of the replay cursor · waiting on you now</p>
   {/if}
@@ -158,15 +144,6 @@
     font-family: var(--font-mono);
     font-size: var(--font-2xs);
     line-height: 1.4;
-  }
-
-  .prompt {
-    margin: 0;
-    color: var(--text-1);
-    font-size: var(--font-lg);
-    line-height: 1.45;
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
   }
 
   .actions {

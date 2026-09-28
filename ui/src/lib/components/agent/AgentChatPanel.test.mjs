@@ -46,20 +46,42 @@ describe("the pending-approval card", () => {
     const body = cardHtml(approvalRow("tool-1", "start_monty", {}));
 
     assert.match(body, /start_monty/, "the gated call should still be named");
-    assert.doesNotMatch(body, /pending-approval-detail/, "an empty {} rendered as a detail line");
+    assert.doesNotMatch(body, /<dl class="args/, "an empty {} rendered as an argument list");
+    assert.doesNotMatch(body, /\{\}/);
   });
 
-  it("still shows the arguments a call does take", () => {
+  it("lists the arguments a call does take by name, with no full view when nothing is hidden", () => {
     const body = cardHtml(approvalRow("tool-2", "issue_refund", { amount: 42 }));
 
-    assert.match(body, /pending-approval-detail/);
-    assert.match(body, /\{ "amount": 42 \}/);
+    assert.match(body, /<dt[^>]*>amount<\/dt>\s*<dd[^>]*>42<\/dd>/);
+    assert.doesNotMatch(body, /Full input/);
+  });
+
+  it("offers the full input when a value is nested or too long to show", () => {
+    const body = cardHtml(
+      approvalRow("tool-4", "book", { trip: { city: "Palm Springs", nights: 3 }, note: "x".repeat(120) })
+    );
+
+    assert.match(body, /<details[^>]*>\s*<summary[^>]*>Full input<\/summary>/);
+    assert.match(body, /&quot;city&quot;: &quot;Palm Springs&quot;|"city": "Palm Springs"/);
+  });
+
+  it("shows a nested script whole, line by line, under its key path", () => {
+    const script = "import asyncio\n\nasync def main():\n    board = await read_trip_board()\n    return board\n\nasyncio.run(main())";
+    const body = cardHtml(
+      approvalRow("call_235193", "monty_run_script", { subagent: "d69656-f486d1", message: { script } })
+    );
+
+    assert.match(body, /<dt[^>]*>message\.script<\/dt>\s*<dd class="[^"]*\bblock\b[^"]*">import asyncio\n/);
+    assert.ok(body.includes("await read_trip_board()\n    return board\n\nasyncio.run(main())"));
+    assert.doesNotMatch(body, /import async\.\.\./, "the approver must see the script, not its log preview");
+    assert.doesNotMatch(body, /Full input/, "nothing is hidden, so there is no fuller view to offer");
   });
 
   it("still says so when the arguments are unknown", () => {
     const body = cardHtml(approvalRow("tool-3", "issue_refund", null));
 
-    assert.match(body, /pending-approval-detail/);
+    assert.match(body, /class="prose unknown/);
     assert.ok(
       body.includes("stream ended before they could be parsed"),
       "lost arguments must be reported, not suppressed as if the call took none"

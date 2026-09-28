@@ -42,6 +42,7 @@
   import type { InterfaceStatus } from "$lib/state/agentRun.svelte";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
   import SchemaForm from "$lib/components/chat/SchemaForm.svelte";
+  import CallInput from "./CallInput.svelte";
   import PendingCallbackCard, { type CallbackOutcome } from "./PendingCallbackCard.svelte";
   import {
     buildPayload,
@@ -528,18 +529,6 @@
   function approvalDecidedElsewhere(row: ReplayLogRow): boolean {
     const key = approvalKey(row);
     return key != null && decidedApprovalIds.includes(key);
-  }
-
-  /* The card's body: what is being gated. One line, because this is a decision
-     about a call, not the inspector. */
-  function approvalDetail(row: ReplayLogRow): string {
-    const input = formatLogValue(scrubScriptValue(row.input));
-    if (!input) return "";
-    const compact = input.replace(/\s+/g, " ").trim();
-    /* A call that takes no arguments has nothing to say, but UNKNOWN_TOOL_INPUT is not
-       that case — it says the arguments were lost, which the approver still needs. */
-    if (compact === "{}" || compact === "[]") return "";
-    return compact.length > 160 ? `${compact.slice(0, 159)}…` : compact;
   }
 
   function logsForTurn(turnNumber: number | undefined): ReplayLogRow[] {
@@ -1492,9 +1481,7 @@
                 </div>
               </dl>
             {/if}
-            {#if approvalDetail(approval)}
-              <p class="pending-approval-detail">{approvalDetail(approval)}</p>
-            {/if}
+            <CallInput input={approval.input} />
             {#if !viewRowIds.has(approval.id)}
               <!-- Live state, not history: the agent is blocked on this now, so it stays
                    answerable however far back the cursor is. -->
@@ -2371,14 +2358,6 @@
     font-family: var(--font-mono);
     font-size: var(--font-2xs);
     line-height: 1.4;
-  }
-
-  .pending-approval-detail {
-    margin: 0;
-    color: var(--text-3);
-    font-size: var(--font-md);
-    line-height: 1.4;
-    overflow-wrap: anywhere;
   }
 
   .thinking {

@@ -71,9 +71,9 @@ describe("pending callback card", () => {
       data: { ...requested.data, tool_id: "call_tree1", tool_name: "tree", tool_input: { path: "." } }
     };
     const body = chatHtml([tree]);
-    assert.match(body, /<p class="prompt[^"]*">\{\s*"path": "\."\s*\}<\/p>/);
-    assert.doesNotMatch(body, /<p class="prompt[^"]*">\.<\/p>/);
-    assert.match(chatHtml([requested]), /<p class="prompt[^"]*">Which Springfield do you mean\?<\/p>/);
+    assert.match(body, /<dt[^>]*>path<\/dt>\s*<dd[^>]*>\.<\/dd>/);
+    assert.doesNotMatch(body, /<p class="prose[^"]*">\.<\/p>/);
+    assert.match(chatHtml([requested]), /<p class="prose[^"]*">Which Springfield do you mean\?<\/p>/);
   });
 
   it("goes away once the callback resolves, whoever answered it", () => {
