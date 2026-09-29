@@ -307,13 +307,17 @@ export class PaneStack {
    * A column's width. Tabs share it, so a width set by dragging the gutter holds
    * whichever tab is in front — the column is the thing being sized, not the
    * pane. Failing an explicit width, a flexible tab makes the whole column
-   * flexible, and otherwise the frontmost tab's default decides.
+   * flexible, and otherwise the frontmost tab's default decides. A split column
+   * has every pane in front, so the widest default decides there: following
+   * focus would reflow the column under a click on a pane's header, between the
+   * press that focuses it and the release that lands on its buttons.
    */
   sizeOfGroup(group: Pane[]): number {
     const explicit = group.find((pane) => pane.size != null);
     if (explicit) return this.sizeOf(explicit);
     const flexible = group.find((pane) => PANE_META[pane.kind].flexible);
     if (flexible) return this.sizeOf(flexible);
+    if (isSplit(group)) return Math.max(...group.map((pane) => this.sizeOf(pane)));
     return this.sizeOf(activeIn(group));
   }
 

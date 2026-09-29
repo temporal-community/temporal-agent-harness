@@ -1,6 +1,6 @@
 // ABOUTME: Asserts that a stacked (split) column moves along the rail as one column, by drag and
 // by keyboard, and survives the address-bar round trip — while a lone pane still moves alone and a
-// pane dropped on its own column's edge still detaches.
+// pane dropped on its own column's edge still detaches — and holds its width as focus moves inside it.
 
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "vitest";
@@ -83,5 +83,24 @@ describe("moving a stacked column", () => {
     stack.setSplit("usage", false);
     stack.placePane("decisions", "logs", "before");
     assert.deepEqual(ids(stack), [["decisions"], ["logs"], ["graph"], ["usage"], ["chat"]]);
+  });
+
+  /* Focus lands on pointerdown, so a width that followed it moved a header's
+     buttons out from under the press before the release: one click to focus the
+     pane, a second to hit the collapse button. */
+  it("holds its width while focus moves between its panes", () => {
+    const { stack } = deskWithStack();
+    const column = () => stack.groups[1];
+    stack.focusPane("usage");
+    const width = stack.sizeOfGroup(column());
+    stack.focusPane("decisions");
+    assert.equal(stack.sizeOfGroup(column()), width);
+    assert.equal(width, 660, "the widest pane's default, so neither is squeezed");
+
+    stack.setSplit("usage", false);
+    stack.focusPane("decisions");
+    assert.equal(stack.sizeOfGroup(column()), 660, "tabbed, the front tab still decides");
+    stack.focusPane("usage");
+    assert.equal(stack.sizeOfGroup(column()), 400);
   });
 });
