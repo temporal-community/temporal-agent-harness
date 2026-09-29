@@ -911,11 +911,14 @@
     font-weight: 650;
   }
 
+  /* Capped like CallInput's full input, so a traceback scrolls inside its block instead of
+     filling the pane. */
   pre {
+    max-height: 320px;
     margin: 0;
     padding: 8px;
     border-radius: var(--radius-sm);
-    overflow-x: auto;
+    overflow: auto;
     background: var(--surface-0);
     color: var(--text-2);
     font-size: var(--font-sm);

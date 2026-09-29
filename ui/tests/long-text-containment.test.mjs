@@ -54,4 +54,10 @@ describe("long text stays inside its container", () => {
     assert.match(rule(css, ".line-meta > :global(.chip)"), /flex-shrink: 0;/);
     assert.match(rule(css, ".line-tool"), /min-width: 0;[\s\S]*text-overflow: ellipsis;/);
   });
+
+  it("caps a Logs row's detail blocks, scrolling a long traceback inside them", () => {
+    const pre = rule(source("components/agent/TranscriptPanel.svelte"), "pre");
+    assert.match(pre, /max-height: 320px;/);
+    assert.match(pre, /overflow: auto;/);
+  });
 });
