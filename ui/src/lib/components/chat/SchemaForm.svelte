@@ -171,10 +171,15 @@
   /* Tokens come from ui/src/app.css (a dark theme): --surface-0..3, --text-1..3, --border,
      --border-strong, --accent, --error. No fallbacks — a missing token should look obviously
      wrong in dev rather than silently render a light-theme control on a dark panel. */
+  /* Pinned to the form's width: an implicit `auto` column grows to a long unbroken title or
+     description and carries every control past the card's edge. */
   .field {
+    min-width: 0;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 5px;
     margin-bottom: 11px;
+    overflow-wrap: anywhere;
   }
 
   .field.inline {
@@ -201,17 +206,21 @@
   }
 
   .check {
-    display: inline-flex;
+    min-width: 0;
+    display: flex;
     gap: 7px;
-    align-items: center;
+    align-items: flex-start;
     cursor: pointer;
   }
 
   .check .label-text {
+    min-width: 0;
     color: var(--text-1);
   }
 
   .check input {
+    flex: none;
+    margin: 1px 0 0;
     accent-color: var(--accent);
   }
 
@@ -267,6 +276,11 @@
     align-items: center;
   }
 
+  .row > :first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
   .row-action,
   .row-add {
     padding: 5px 9px;
@@ -295,7 +309,9 @@
     justify-self: start;
   }
 
+  /* A fieldset's default `min-inline-size` is its content's, which would undo the pinning. */
   .nested {
+    min-width: 0;
     margin: 0;
     padding: 10px 11px;
     border: 1px solid var(--border);
