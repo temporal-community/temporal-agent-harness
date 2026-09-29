@@ -1,0 +1,23 @@
+# Scoped justfile for the OpenAI automatic-model-selection example.
+
+import '../../scripts/untagged-notice.just'
+
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+
+default:
+    @just --list
+
+temporal:
+    temporal server start-dev
+
+session-manager:
+    cd "{{root}}" && uv run --group examples temporal-agent-harness session-manager
+
+server:
+    cd "{{root}}" && uv run --group examples temporal-agent-harness serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+worker:
+    cd "{{root}}" && uv run --group examples python -m examples.openai_auto_router.worker

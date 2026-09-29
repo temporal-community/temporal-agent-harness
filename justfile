@@ -4,8 +4,8 @@
 #   * ALL examples behind one UI — the aggregate recipes below: `server` merges every example's
 #     agents.toml so the UI lists all agents; run each agent worker (or `just workers` to co-launch
 #     them), plus the clients for the human-in-the-loop / callback agents.
-# The aggregate recipes read the shared repo-root .env.local (creds: OPENAI_API_KEY, GEMINI_API_KEY,
-# F1_MCP_SERVER_HOME, ...). Prerequisites + run order: see the "Run everything" section in README.md.
+# The aggregate recipes read the shared repo-root .env.local (creds: OPENAI_API_KEY, TYPESAFE_API_KEY,
+# GEMINI_API_KEY, F1_MCP_SERVER_HOME, ...). Prerequisites + run order: see the "Run everything" section in README.md.
 # Build/package + Nexus/Slack/Teams connector recipes follow the run recipes.
 
 # Shows a notice when running from an untagged commit (silent on a release archive).
@@ -188,6 +188,7 @@ server:
     set -a; [ -f .env.local ] && . ./.env.local; set +a
     uv run --group examples temporal-agent-harness serve \
         examples/openai_hello/agents.toml \
+        examples/openai_auto_router/agents.toml \
         examples/pydantic_ai_hello/agents.toml \
         examples/react_agent/agents.toml \
         examples/monty/agents.toml \
@@ -207,6 +208,9 @@ ui-dev:
 # --- Per-example agent workers (each loads .env.local via its own justfile) ---
 worker-openai-hello:
     cd "{{justfile_directory()}}/examples/openai_hello" && just worker
+
+worker-openai-auto-router:
+    cd "{{justfile_directory()}}/examples/openai_auto_router" && just worker
 
 worker-pydantic:
     cd "{{justfile_directory()}}/examples/pydantic_ai_hello" && just worker
@@ -229,7 +233,7 @@ worker-wiki:
 worker-coding:
     cd "{{justfile_directory()}}/examples/callback_tools/coding_agent" && just worker
 
-# Co-launch all eight agent workers in one terminal (Ctrl-C stops them all; logs interleave).
+# Co-launch all nine agent workers in one terminal (Ctrl-C stops them all; logs interleave).
 # Requires every agent's prerequisites at once (both API keys, the F1 MCP server, etc.).
 workers:
     #!/usr/bin/env bash
@@ -240,6 +244,7 @@ workers:
     # foreground process group; this makes the intent explicit and cleans up any straggler.)
     trap 'trap - INT TERM EXIT; kill 0' INT TERM EXIT
     just worker-openai-hello &
+    just worker-openai-auto-router &
     just worker-pydantic &
     just worker-react &
     just worker-monty &

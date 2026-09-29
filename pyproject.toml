@@ -65,6 +65,10 @@ openai-agents = [
     "mcp>=2.1.1,<3",
     "temporalio[opentelemetry]>=1.31.0",
 ]
+# Optional support for OpenAI Agents SDK ``model='auto'`` selection.
+model-routing = [
+    "typesafe-sdk>=0.6.0",
+]
 # The Pydantic AI integration: temporal_agent_harness.ai_sdks.pydantic_ai_harness. Unlike the
 # openai-agents/genai integrations, the upstream plugin (pydantic_ai.durable_exec.temporal, shipped
 # in pydantic-ai-slim[temporal]) is used UNMODIFIED — its first-class `event_stream_handler` hook is
@@ -118,9 +122,9 @@ examples = [
     "pydantic-monty==0.0.18",  # Monty sandbox; pinned per the code-mode extra's TODO
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
     "openai-agents>=0.22.0",  # the OpenAI Agents SDK example (examples/openai_hello, examples/react_agent)
+    "typesafe-sdk>=0.6.0",  # TypeSafe examples and model='auto' selection
     "pydantic-ai-slim[temporal]>=2.13",  # the Pydantic AI example (examples/pydantic_ai_hello)
     "httpx>=0.27",  # the react_agent example's tools call real weather / geo / IP APIs
-    "typesafe-sdk>=0.6.0",
 ]
 # Test + lint tooling. The full tests/ suite imports both the Gemini SDK (the ai_sdks plugin
 # tests) and pydantic-monty (the monty example tests), which live in the `examples` group —

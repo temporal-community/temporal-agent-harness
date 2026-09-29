@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -3124,6 +3124,9 @@ genai = [
 jev = [
     { name = "typesafe-sdk" },
 ]
+model-routing = [
+    { name = "typesafe-sdk" },
+]
 nexus-mcp = [
     { name = "mcp" },
     { name = "openai-agents" },
@@ -3195,8 +3198,9 @@ requires-dist = [
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'nexus-mcp'", specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'openai-agents'", specifier = ">=1.31.0" },
     { name = "typesafe-sdk", marker = "extra == 'jev'", specifier = ">=0.6.0" },
+    { name = "typesafe-sdk", marker = "extra == 'model-routing'", specifier = ">=0.6.0" },
 ]
-provides-extras = ["genai", "s3", "openai-agents", "pydantic-ai", "ui", "code-mode", "jev", "nexus-mcp"]
+provides-extras = ["genai", "s3", "openai-agents", "model-routing", "pydantic-ai", "ui", "code-mode", "jev", "nexus-mcp"]
 
 [package.metadata.requires-dev]
 dev = [
