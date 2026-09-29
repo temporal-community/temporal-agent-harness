@@ -48,4 +48,10 @@ describe("long text stays inside its container", () => {
       assert.match(block, /overflow-wrap: anywhere;/);
     }
   });
+
+  it("keeps the Logs kind and status chips whole, truncating the tool name instead", () => {
+    const css = source("components/agent/TranscriptPanel.svelte");
+    assert.match(rule(css, ".line-meta > :global(.chip)"), /flex-shrink: 0;/);
+    assert.match(rule(css, ".line-tool"), /min-width: 0;[\s\S]*text-overflow: ellipsis;/);
+  });
 });

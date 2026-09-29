@@ -844,6 +844,11 @@
     flex-wrap: wrap;
   }
 
+  /* The kind and status chips keep their words; only the tool name gives way. */
+  .line-meta > :global(.chip) {
+    flex-shrink: 0;
+  }
+
   /* An identifier, so it stays mono and unshouted, as tool names are elsewhere.
      It shrinks before the label does: `reprice_ro…` still reads as the tool it
      names, which a truncated label does not. */
