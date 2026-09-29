@@ -192,8 +192,11 @@
   }
 
   .error {
+    max-height: 6lh;
     margin: 0;
+    overflow-y: auto;
     color: var(--error);
     font-size: var(--font-sm);
+    overflow-wrap: anywhere;
   }
 </style>

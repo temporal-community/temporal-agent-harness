@@ -8,7 +8,7 @@ import type {
 import type { AgentApi } from "$lib/api/client";
 import type { AgentDescriptor, Session } from "$lib/api/types";
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
-import { HttpAgentApi, approvalAlreadyResolved } from "$lib/api/httpClient";
+import { HttpAgentApi } from "$lib/api/httpClient";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
 import { chooseBootSession } from "./bootSession";
@@ -1578,6 +1578,7 @@ export class AgentRunController {
     }
   }
 
+  /** Errors surface on the approval's own card, not the connection banner. */
   async approveTool(
     workflowId: string,
     toolId: string,
@@ -1590,22 +1591,13 @@ export class AgentRunController {
       throw new Error("Cannot resolve approval for an unknown agent workflow.");
     }
 
-    this.connectionError = null;
-    try {
-      await this.#api.approve({
-        session_id: workflowId,
-        tool_id: toolId,
-        approved,
-        reason: approved ? null : "Rejected in chat.",
-        remember: approved && remember
-      });
-    } catch (error) {
-      if (!approvalAlreadyResolved(error)) {
-        this.connectionError =
-          error instanceof Error ? error.message : "Failed to resolve tool approval.";
-      }
-      throw error;
-    }
+    await this.#api.approve({
+      session_id: workflowId,
+      tool_id: toolId,
+      approved,
+      reason: approved ? null : "Rejected in chat.",
+      remember: approved && remember
+    });
   }
 
   /** Errors surface on the callback's own card, not the connection banner: a malformed result

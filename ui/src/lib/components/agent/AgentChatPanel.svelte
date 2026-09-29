@@ -1535,7 +1535,7 @@
                 {#if approvalDecidedElsewhere(approval)}
                   <p class="approval-note">Already decided</p>
                 {:else if approvalError(approval)}
-                  <p class="approval-error">{approvalError(approval)}</p>
+                  <p class="approval-error" role="alert">{approvalError(approval)}</p>
                 {/if}
               </article>
             {/each}
@@ -2291,10 +2291,13 @@
   }
 
   .approval-error {
+    max-height: 6lh;
     margin: 0;
     min-width: 0;
+    overflow-y: auto;
     color: var(--error);
     font-size: var(--font-sm);
+    overflow-wrap: anywhere;
   }
 
   .replay-strip {

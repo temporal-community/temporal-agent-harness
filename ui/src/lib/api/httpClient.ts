@@ -55,18 +55,44 @@ async function json<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T>
   return response.json() as Promise<T>;
 }
 
-async function responseError(response: Response, fallback: string): Promise<ApiError> {
-  const body = await response.text();
-  if (!body) return new ApiError(fallback, null);
+const MAX_ERROR_LENGTH = 500;
+
+/** FastAPI's `detail`: a string from `HTTPException`, or a 422's list of `{loc, msg}`. */
+function detailText(detail: unknown): string | null {
+  if (typeof detail === "string") return detail;
+  if (!Array.isArray(detail)) return null;
+  const messages = detail
+    .map((item) => (typeof item === "string" ? item : item?.msg))
+    .filter((msg): msg is string => typeof msg === "string" && msg.trim() !== "");
+  return messages.length > 0 ? messages.join("; ") : null;
+}
+
+/**
+ * The readable part of a failed response: the harness's `message`, FastAPI's `detail`, or a
+ * plain-text body, cut to a length a card can hold. A proxy's HTML error page is markup, not
+ * a message, so it falls back to the status line.
+ */
+export function errorFromBody(body: string, fallback: string): ApiError {
+  let message: string | null = null;
+  let code: string | null = null;
   try {
-    const parsed = JSON.parse(body) as { message?: unknown; error?: unknown };
-    return new ApiError(
-      typeof parsed.message === "string" && parsed.message.trim() ? parsed.message : body,
-      typeof parsed.error === "string" ? parsed.error : null
-    );
+    const parsed = JSON.parse(body) as { message?: unknown; error?: unknown; detail?: unknown };
+    code = typeof parsed?.error === "string" ? parsed.error : null;
+    message =
+      typeof parsed?.message === "string" && parsed.message.trim()
+        ? parsed.message
+        : detailText(parsed?.detail);
   } catch {
-    return new ApiError(body, null);
+    message = /^\s*</.test(body) ? null : body;
   }
+  message = message?.trim() || fallback;
+  const chars = Array.from(message);
+  if (chars.length > MAX_ERROR_LENGTH) message = `${chars.slice(0, MAX_ERROR_LENGTH).join("")}…`;
+  return new ApiError(message, code);
+}
+
+async function responseError(response: Response, fallback: string): Promise<ApiError> {
+  return errorFromBody(await response.text(), fallback);
 }
 
 async function* readSse(response: Response): AsyncIterable<AgentSseFrame> {

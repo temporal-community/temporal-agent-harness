@@ -38,4 +38,14 @@ describe("long text stays inside its container", () => {
     assert.match(rule(css, ".nested"), /min-width: 0;/, "a fieldset's default min size is its content's");
     assert.match(rule(css, ".check"), /display: flex;/, "a long boolean label wraps");
   });
+
+  it("bounds a submit error under its card, scrolling what does not fit", () => {
+    const chat = source("components/agent/AgentChatPanel.svelte");
+    const callback = source("components/agent/PendingCallbackCard.svelte");
+    for (const block of [rule(chat, ".approval-error"), rule(callback, ".error")]) {
+      assert.match(block, /max-height: 6lh;/);
+      assert.match(block, /overflow-y: auto;/);
+      assert.match(block, /overflow-wrap: anywhere;/);
+    }
+  });
 });
