@@ -972,8 +972,14 @@ export class AgentRunController {
     }
     try {
       await this.#loadSessions();
-    } catch {
-      // Quiet: the next open or the refresh button can surface a failure.
+      this.sessionsError = null;
+    } catch (error) {
+      // Quiet while an earlier list is still on screen. With none, an empty list would read
+      // as "no sessions", so the failure is the thing to show.
+      if (this.#sessionsLoadedAt === 0) {
+        this.sessionsError =
+          error instanceof Error ? error.message : "Failed to load sessions.";
+      }
     }
   }
 

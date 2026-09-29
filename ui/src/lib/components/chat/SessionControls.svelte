@@ -556,9 +556,20 @@
             bind:this={sessionListElement}
           >
             {#if sessionsError}
-              <p class="session-empty">{sessionsError}</p>
-            {/if}
-            {#if filteredSessionItems.length === 0}
+              <div class="session-error" role="alert">
+                <p class="session-empty">{sessionsError}</p>
+                {#if onRefreshSessions}
+                  <Chip
+                    size="xs"
+                    fill="quiet"
+                    disabled={refreshingSessions}
+                    onclick={() => void onRefreshSessions?.()}
+                  >
+                    Retry
+                  </Chip>
+                {/if}
+              </div>
+            {:else if filteredSessionItems.length === 0}
               <p class="session-empty">No matching sessions.</p>
             {/if}
             {#each filteredSessionItems as item (item.workflow_id)}
@@ -959,6 +970,23 @@
     margin: 6px 0;
     color: var(--text-3);
     font-size: var(--font-md);
+    overflow-wrap: anywhere;
+  }
+
+  .session-error {
+    display: flex;
+    gap: var(--gap-sm);
+    align-items: baseline;
+    justify-content: space-between;
+  }
+
+  .session-error .session-empty {
+    min-width: 0;
+    color: var(--error);
+  }
+
+  .session-error :global(.chip) {
+    flex-shrink: 0;
   }
 
   @media (prefers-reduced-motion: reduce) {
