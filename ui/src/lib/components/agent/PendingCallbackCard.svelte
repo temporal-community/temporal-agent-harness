@@ -72,9 +72,9 @@
   }
 </script>
 
-<article class="pending-callback-card" aria-label={`${row.toolName ?? "Callback"} is waiting for a response`}>
+<article class="pending-callback-card" aria-label={`${row.toolName || "Callback"} is waiting for a response`}>
   <header class="head">
-    <strong>{row.toolName ?? "Callback"}</strong>
+    <strong>{row.toolName || "Callback"}</strong>
     <span>Turn {row.turnNumber} · {formatTimestamp(row.timestamp)}</span>
   </header>
   <CallInput input={row.input} />

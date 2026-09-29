@@ -1474,7 +1474,7 @@
             {#each pendingApprovalRows as approval (approvalKey(approval) ?? approval.ordinal)}
               <article class="pending-approval-card">
                 <header class="pending-approval-head">
-                  <strong>{approval.toolName ?? approval.body ?? "Tool approval"}</strong>
+                  <strong>{approval.toolName || approval.body || "Tool approval"}</strong>
                   <span>Turn {approval.turnNumber} · {formatTimestamp(approval.timestamp)}</span>
                 </header>
                 {#if approval.toolId}

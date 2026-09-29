@@ -150,7 +150,7 @@
               : "Available"
   );
   const agentTitle = $derived(
-    activeAgent?.label ?? activeSession?.agent_workflow_type ?? "No session"
+    activeAgent?.label || activeSession?.agent_workflow_type || "No session"
   );
   /* One control, two errands. The manager's header is shared by both views, so the refresh
      button belongs to whichever list is on screen — refreshing sessions while looking at
@@ -188,7 +188,7 @@
 
   function sessionAgentLabel(session: Session): string {
     return (
-      agents.find((agent) => agent.workflow_type === session.agent_workflow_type)?.label ??
+      agents.find((agent) => agent.workflow_type === session.agent_workflow_type)?.label ||
       session.agent_workflow_type
     );
   }
@@ -495,7 +495,7 @@
                   onclick={() => chooseAgent(agent)}
                 >
                   <span class="agent-copy">
-                    <strong>{agent.label}</strong>
+                    <strong>{agent.label || agent.workflow_type}</strong>
                     <!-- `title`, not `data-tip`: a description runs to several lines of bubble,
                          and a painted one is clipped by this scrolling list. -->
                     <small title={agentDescription(agent)}>{agentDescription(agent)}</small>

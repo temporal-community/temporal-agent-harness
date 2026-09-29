@@ -244,7 +244,7 @@
     if (row.actor === "user") return "User";
     if (row.actor === "agent") return "Agent";
     if (row.actor === "model") return `${prefix}Model`;
-    if (row.actor === "tool") return `${prefix}${row.toolName ?? "Tool"}`;
+    if (row.actor === "tool") return `${prefix}${row.toolName || "Tool"}`;
     if (row.actor === "approval") return `${prefix}Approval`;
     if (row.actor === "subagent") return "Subagent";
     if (row.actor === "queue") return `${prefix}Queue`;

@@ -551,7 +551,7 @@ export class AgentRunController {
     );
     return {
       sessionId: session?.workflow_id ?? "unknown-session",
-      agentLabel: agent?.label ?? "Agent",
+      agentLabel: agent?.label || "Agent",
       startedAt: session?.created_at ?? 0
     };
   }
