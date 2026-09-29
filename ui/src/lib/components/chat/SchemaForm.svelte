@@ -2,7 +2,7 @@
   // Renders one handler's input schema as a form. Purely schema-driven — see schemaForm.ts.
   // Recurses through itself for nested object fields.
   import type { SchemaField } from "./schemaForm";
-  import { emptyValue } from "./schemaForm";
+  import { emptyValue, fieldPath } from "./schemaForm";
   // Self-import so a nested object field recurses. This is the Svelte 5 way; the legacy
   // self-referencing element is deprecated (and is rejected by check:svelte5).
   import SchemaForm from "./SchemaForm.svelte";
@@ -11,16 +11,30 @@
     fields,
     values = $bindable(),
     disabled = false,
-    idPrefix = "sf"
+    idPrefix = "sf",
+    errors = {},
+    path = ""
   }: {
     fields: SchemaField[];
     values: Record<string, unknown>;
     disabled?: boolean;
     idPrefix?: string;
+    /** `validate()`'s result for the whole form; each field shows its own entry. */
+    errors?: Record<string, string>;
+    /** This form's key prefix in `errors` when it is nested in another. */
+    path?: string;
   } = $props();
 
   function fieldId(field: SchemaField): string {
     return `${idPrefix}-${field.name}`;
+  }
+
+  function fieldError(field: SchemaField): string | undefined {
+    return errors[fieldPath(path, field.name)];
+  }
+
+  function describedBy(field: SchemaField): string | undefined {
+    return fieldError(field) ? `${fieldId(field)}-error` : undefined;
   }
 
   function asArray(value: unknown): unknown[] {
@@ -53,7 +67,7 @@
           id={fieldId(field)}
           type="checkbox"
           {disabled}
-          checked={Boolean(values[field.name])}
+          checked={values[field.name] === true}
           onchange={(event) =>
             (values[field.name] = event.currentTarget.checked)}
         />
@@ -76,6 +90,8 @@
       <select
         id={fieldId(field)}
         {disabled}
+        aria-invalid={fieldError(field) ? "true" : undefined}
+        aria-describedby={describedBy(field)}
         value={String(values[field.name] ?? "")}
         onchange={(event) => (values[field.name] = event.currentTarget.value)}
       >
@@ -90,6 +106,8 @@
       <textarea
         id={fieldId(field)}
         {disabled}
+        aria-invalid={fieldError(field) ? "true" : undefined}
+        aria-describedby={describedBy(field)}
         rows={field.kind === "json" ? 4 : 3}
         placeholder={field.kind === "json" ? "JSON value" : ""}
         value={String(values[field.name] ?? "")}
@@ -100,6 +118,8 @@
         id={fieldId(field)}
         type="number"
         {disabled}
+        aria-invalid={fieldError(field) ? "true" : undefined}
+        aria-describedby={describedBy(field)}
         step={field.kind === "integer" ? 1 : "any"}
         min={field.minimum}
         max={field.maximum}
@@ -110,9 +130,21 @@
       <div class="rows">
         {#each asArray(values[field.name]) as entry, index (index)}
           <div class="row">
-            {#if field.item?.kind === "enum"}
+            {#if field.item?.kind === "object" && field.item.fields}
+              <fieldset class="nested">
+                <SchemaForm
+                  fields={field.item.fields}
+                  bind:values={(values[field.name] as Record<string, unknown>[])[index]}
+                  {disabled}
+                  idPrefix={`${fieldId(field)}-${index}`}
+                  {errors}
+                  path={fieldPath(fieldPath(path, field.name), index)}
+                />
+              </fieldset>
+            {:else if field.item?.kind === "enum"}
               <select
                 {disabled}
+                aria-label={`${field.title} ${index + 1}`}
                 value={String(entry ?? "")}
                 onchange={(event) => setItem(field, index, event.currentTarget.value)}
               >
@@ -126,6 +158,7 @@
                   ? "number"
                   : "text"}
                 {disabled}
+                aria-label={`${field.title} ${index + 1}`}
                 value={String(entry ?? "")}
                 oninput={(event) => setItem(field, index, event.currentTarget.value)}
               />
@@ -153,16 +186,24 @@
           bind:values={values[field.name] as Record<string, unknown>}
           {disabled}
           idPrefix={fieldId(field)}
+          {errors}
+          path={fieldPath(path, field.name)}
         />
       </fieldset>
-    {:else}
+    {:else if field.kind !== "boolean"}
       <input
         id={fieldId(field)}
         type="text"
         {disabled}
+        aria-invalid={fieldError(field) ? "true" : undefined}
+        aria-describedby={describedBy(field)}
         value={String(values[field.name] ?? "")}
         oninput={(event) => (values[field.name] = event.currentTarget.value)}
       />
+    {/if}
+
+    {#if fieldError(field)}
+      <p class="field-error" id={`${fieldId(field)}-error`}>{fieldError(field)}</p>
     {/if}
   </div>
 {/each}
@@ -205,6 +246,13 @@
     line-height: 1.4;
   }
 
+  .field-error {
+    margin: 0;
+    color: var(--error);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
   .check {
     min-width: 0;
     display: flex;
@@ -237,6 +285,10 @@
     color: var(--text-1);
     font: inherit;
     font-size: 12px;
+  }
+
+  [aria-invalid="true"] {
+    border-color: color-mix(in srgb, var(--error) 60%, var(--border));
   }
 
   input[type="text"]:focus-visible,

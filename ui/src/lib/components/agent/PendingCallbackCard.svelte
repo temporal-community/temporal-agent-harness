@@ -8,7 +8,13 @@
   import { callbackAlreadyResolved } from "$lib/api/httpClient";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import SchemaForm from "$lib/components/chat/SchemaForm.svelte";
-  import { buildPayload, emptyValues, resultForm, validate } from "$lib/components/chat/schemaForm";
+  import {
+    buildPayload,
+    emptyValues,
+    problemSummary,
+    resultForm,
+    validate
+  } from "$lib/components/chat/schemaForm";
   import { formatTimestamp, type ReplayLogRow } from "$lib/state/replayLog";
   import CallInput from "./CallInput.svelte";
 
@@ -28,6 +34,10 @@
   let sent = $state(false);
   let settledElsewhere = $state(false);
   let error = $state<string | null>(null);
+  /* Marks follow the values once Send was pressed, so a fixed field clears as it is fixed. */
+  let attempted = $state(false);
+  const problems = $derived(attempted ? validate(form.fields, values) : {});
+  const alert = $derived(problemSummary(problems) ?? error);
 
   const locked = $derived(!onSubmit || submitting || sent || settledElsewhere);
 
@@ -48,11 +58,9 @@
 
   function handleSubmit(event: SubmitEvent): void {
     event.preventDefault();
-    const problems = validate(form.fields, values);
-    if (problems.length > 0) {
-      error = problems.join(" ");
-      return;
-    }
+    attempted = true;
+    error = null;
+    if (Object.keys(problems).length > 0) return;
     let payload;
     try {
       payload = buildPayload(form.fields, values);
@@ -79,6 +87,7 @@
       bind:values
       disabled={locked}
       idPrefix={`callback-${row.toolId ?? row.id}`}
+      errors={problems}
     />
     <div class="actions">
       <Chip
@@ -103,8 +112,8 @@
     <p class="note">Already answered elsewhere</p>
   {:else if sent}
     <p class="note" role="status">Sent · waiting for the agent to continue</p>
-  {:else if error}
-    <p class="error" role="alert">{error}</p>
+  {:else if alert}
+    <p class="error" role="alert">{alert}</p>
   {/if}
 </article>
 

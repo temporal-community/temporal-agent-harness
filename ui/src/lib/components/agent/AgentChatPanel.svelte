@@ -48,6 +48,7 @@
     buildPayload,
     describeSchema,
     emptyValues,
+    problemSummary,
     singleStringField,
     validate
   } from "$lib/components/chat/schemaForm";
@@ -193,6 +194,7 @@
   // Form values for a handler that is not single-string-shaped, keyed by field name.
   let handlerFormValues = $state<Record<string, unknown>>({});
   let handlerFormError = $state<string | null>(null);
+  let handlerFormAttempted = $state(false);
 
   const transcriptMessages = $derived(seedMessages(items));
   const messages = $derived([...transcriptMessages, ...localMessages]);
@@ -342,6 +344,10 @@
   const canSubmitForm = $derived(
     canSendToTarget && !composerBusy && textFieldName == null && handlerFields.length > 0
   );
+  const handlerProblems = $derived(
+    handlerFormAttempted ? validate(handlerFields, handlerFormValues) : {}
+  );
+  const handlerFormAlert = $derived(problemSummary(handlerProblems) ?? handlerFormError);
   const latestMessage = $derived(messages[messages.length - 1] ?? null);
   const latestLog = $derived(logs[logs.length - 1] ?? null);
   const chatScrollSignature = $derived(
@@ -409,6 +415,7 @@
     if (resolved !== selectedHandlerName) {
       selectedHandlerName = resolved;
       handlerFormError = null;
+      handlerFormAttempted = false;
       handlerFormValues = resolved && textFieldName == null
         ? emptyValues(describeSchema(selectedHandler!.parameters))
         : {};
@@ -983,6 +990,7 @@
   function selectHandler(handler: AgentInterfaceFunction): void {
     selectedHandlerName = handler.name;
     handlerFormError = null;
+    handlerFormAttempted = false;
     const single = singleStringField(handler.parameters);
     handlerFormValues = single ? {} : emptyValues(describeSchema(handler.parameters));
     // Clear the `/` draft: the handler is chosen now, so the box (or the form) takes over.
@@ -1021,11 +1029,9 @@
   async function submitHandlerForm(): Promise<void> {
     const handler = selectedHandler;
     if (!handler || !canSubmitForm) return;
-    const problems = validate(handlerFields, handlerFormValues);
-    if (problems.length > 0) {
-      handlerFormError = problems.join(" ");
-      return;
-    }
+    handlerFormAttempted = true;
+    handlerFormError = null;
+    if (Object.keys(handlerProblems).length > 0) return;
     let payload;
     try {
       payload = buildPayload(handlerFields, handlerFormValues);
@@ -1034,8 +1040,8 @@
         error instanceof Error ? error.message : "Could not build the payload.";
       return;
     }
-    handlerFormError = null;
     await dispatchMessage(handler, payload, summarizePayload(handler.name, payload));
+    handlerFormAttempted = false;
     handlerFormValues = emptyValues(handlerFields);
   }
 
@@ -1686,9 +1692,10 @@
             bind:values={handlerFormValues}
             disabled={composerDisabled}
             idPrefix={`handler-${selectedHandler.name}`}
+            errors={handlerProblems}
           />
-          {#if handlerFormError}
-            <p class="form-error">{handlerFormError}</p>
+          {#if handlerFormAlert}
+            <p class="form-error" role="alert">{handlerFormAlert}</p>
           {/if}
           <div class="form-actions">
             <button type="submit" class="form-send" disabled={!canSubmitForm}>
