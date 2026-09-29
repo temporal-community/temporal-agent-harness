@@ -1449,111 +1449,115 @@
       </div>
     {/if}
 
-    {#if pendingApprovalRows.length > 0}
-      <!-- Chip, then a card per gated call: identity, the details, the answer.
-           That is the thing that scales — a second approval is another card, not
-           another kind of layout — and it is what the rest of the harness already
-           does with a tool that needs a decision. -->
-      <section class="pending-approvals" aria-label="Pending tool approvals">
-        <StatusChip
-          label={`${pendingApprovalRows.length} approval${
-            pendingApprovalRows.length === 1 ? "" : "s"
-          } needed`}
-          kind="approval"
-          active
-        />
+    {#if pendingApprovalRows.length > 0 || pendingCallbackRows.length > 0}
+      <div class="pending-stack">
+        {#if pendingApprovalRows.length > 0}
+          <!-- Chip, then a card per gated call: identity, the details, the answer.
+               That is the thing that scales — a second approval is another card, not
+               another kind of layout — and it is what the rest of the harness already
+               does with a tool that needs a decision. -->
+          <section class="pending-approvals" aria-label="Pending tool approvals">
+            <StatusChip
+              label={`${pendingApprovalRows.length} approval${
+                pendingApprovalRows.length === 1 ? "" : "s"
+              } needed`}
+              kind="approval"
+              active
+            />
 
-        {#each pendingApprovalRows as approval (approvalKey(approval) ?? approval.ordinal)}
-          <article class="pending-approval-card">
-            <header class="pending-approval-head">
-              <strong>{approval.toolName ?? approval.body ?? "Tool approval"}</strong>
-              <span>Turn {approval.turnNumber} · {formatTimestamp(approval.timestamp)}</span>
-            </header>
-            {#if approval.toolId}
-              <dl class="row-ids">
-                <div>
-                  <dt>tool call</dt>
-                  <dd>
-                    <Copyable value={approval.toolId} label="Copy tool call ID">
-                      <code title={approval.toolId}>{approval.toolId}</code>
-                    </Copyable>
-                  </dd>
+            {#each pendingApprovalRows as approval (approvalKey(approval) ?? approval.ordinal)}
+              <article class="pending-approval-card">
+                <header class="pending-approval-head">
+                  <strong>{approval.toolName ?? approval.body ?? "Tool approval"}</strong>
+                  <span>Turn {approval.turnNumber} · {formatTimestamp(approval.timestamp)}</span>
+                </header>
+                {#if approval.toolId}
+                  <dl class="row-ids">
+                    <div>
+                      <dt>tool call</dt>
+                      <dd>
+                        <Copyable value={approval.toolId} label="Copy tool call ID">
+                          <code title={approval.toolId}>{approval.toolId}</code>
+                        </Copyable>
+                      </dd>
+                    </div>
+                  </dl>
+                {/if}
+                <CallInput input={approval.input} />
+                {#if !viewRowIds.has(approval.id)}
+                  <!-- Live state, not history: the agent is blocked on this now, so it stays
+                       answerable however far back the cursor is. -->
+                  <p class="approval-note">Requested ahead of the replay cursor · waiting on you now</p>
+                {/if}
+                <div class="approval-actions">
+                  <Chip
+                    fill="quiet"
+                    disabled={!onApproveTool || isApprovalResolving(approval)}
+                    onclick={(event) => void resolveApproval(event, approval, true)}
+                    onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
+                  >
+                    {#snippet lead()}
+                      <CheckCircle2 size={13} />
+                    {/snippet}
+                    Approve
+                  </Chip>
+                  <Chip
+                    fill="quiet"
+                    disabled={!onApproveTool || isApprovalResolving(approval)}
+                    onclick={(event) => void resolveApproval(event, approval, true, true)}
+                    onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
+                  >
+                    {#snippet lead()}
+                      <ShieldCheck size={13} />
+                    {/snippet}
+                    Always allow
+                  </Chip>
+                  <Chip
+                    tone="error"
+                    fill="quiet"
+                    toned
+                    disabled={!onApproveTool || isApprovalResolving(approval)}
+                    onclick={(event) => void resolveApproval(event, approval, false)}
+                    onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
+                  >
+                    {#snippet lead()}
+                      <XCircle size={13} />
+                    {/snippet}
+                    Reject
+                  </Chip>
                 </div>
-              </dl>
-            {/if}
-            <CallInput input={approval.input} />
-            {#if !viewRowIds.has(approval.id)}
-              <!-- Live state, not history: the agent is blocked on this now, so it stays
-                   answerable however far back the cursor is. -->
-              <p class="approval-note">Requested ahead of the replay cursor · waiting on you now</p>
-            {/if}
-            <div class="approval-actions">
-              <Chip
-                fill="quiet"
-                disabled={!onApproveTool || isApprovalResolving(approval)}
-                onclick={(event) => void resolveApproval(event, approval, true)}
-                onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
-              >
-                {#snippet lead()}
-                  <CheckCircle2 size={13} />
-                {/snippet}
-                Approve
-              </Chip>
-              <Chip
-                fill="quiet"
-                disabled={!onApproveTool || isApprovalResolving(approval)}
-                onclick={(event) => void resolveApproval(event, approval, true, true)}
-                onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
-              >
-                {#snippet lead()}
-                  <ShieldCheck size={13} />
-                {/snippet}
-                Always allow
-              </Chip>
-              <Chip
-                tone="error"
-                fill="quiet"
-                toned
-                disabled={!onApproveTool || isApprovalResolving(approval)}
-                onclick={(event) => void resolveApproval(event, approval, false)}
-                onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
-              >
-                {#snippet lead()}
-                  <XCircle size={13} />
-                {/snippet}
-                Reject
-              </Chip>
-            </div>
-            {#if approvalDecidedElsewhere(approval)}
-              <p class="approval-note">Already decided</p>
-            {:else if approvalError(approval)}
-              <p class="approval-error">{approvalError(approval)}</p>
-            {/if}
-          </article>
-        {/each}
-      </section>
-    {/if}
+                {#if approvalDecidedElsewhere(approval)}
+                  <p class="approval-note">Already decided</p>
+                {:else if approvalError(approval)}
+                  <p class="approval-error">{approvalError(approval)}</p>
+                {/if}
+              </article>
+            {/each}
+          </section>
+        {/if}
 
-    {#if pendingCallbackRows.length > 0}
-      <section class="pending-approvals" aria-label="Pending callback requests">
-        <StatusChip
-          label={`${pendingCallbackRows.length} response${
-            pendingCallbackRows.length === 1 ? "" : "s"
-          } needed`}
-          kind="approval"
-          active
-        />
-        {#each pendingCallbackRows as callback (approvalKey(callback))}
-          <PendingCallbackCard
-            row={callback}
-            ahead={!viewRowIds.has(callback.id)}
-            onSubmit={onCallbackResult && callback.toolId
-              ? (outcome) =>
-                  onCallbackResult(approvalWorkflowId(callback), callback.toolId!, outcome)
-              : undefined}
-          />
-        {/each}
-      </section>
+        {#if pendingCallbackRows.length > 0}
+          <section class="pending-approvals" aria-label="Pending callback requests">
+            <StatusChip
+              label={`${pendingCallbackRows.length} response${
+                pendingCallbackRows.length === 1 ? "" : "s"
+              } needed`}
+              kind="approval"
+              active
+            />
+            {#each pendingCallbackRows as callback (approvalKey(callback))}
+              <PendingCallbackCard
+                row={callback}
+                ahead={!viewRowIds.has(callback.id)}
+                onSubmit={onCallbackResult && callback.toolId
+                  ? (outcome) =>
+                      onCallbackResult(approvalWorkflowId(callback), callback.toolId!, outcome)
+                  : undefined}
+              />
+            {/each}
+          </section>
+        {/if}
+      </div>
     {/if}
 
     <div class="composer-wrap">
@@ -1750,11 +1754,16 @@
     border-right: 0;
   }
 
+  /* Named rows, so an absent banner or pending stack never moves the composer into a row
+     sized for something else. The pane clips its bottom edge, so when it is short only the
+     pending stack gives way, scrolling inside its row while the transcript keeps a floor. */
   .agent-chat.headerless .chat-shell {
-    grid-template-rows: minmax(0, 1fr) auto auto;
+    grid-template-rows: minmax(min(96px, 25%), 1fr) auto minmax(0, auto) auto;
+    grid-template-areas: "messages" "banner" "pending" "composer";
   }
 
   .message-list {
+    grid-area: messages;
     min-height: 0;
     overflow-y: auto;
     overflow-anchor: none;
@@ -2309,6 +2318,22 @@
     font-size: var(--font-sm);
   }
 
+  .pending-stack {
+    grid-area: pending;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 10px;
+    margin: 0 clamp(18px, 5vw, 72px) 10px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .agent-chat.embedded .pending-stack {
+    margin: 0 12px 10px;
+  }
+
   /* No outer frame. The chip names the gate; each card is one call. A tinted
      section around that mixed two objects into one box, which is what made a
      single approval look like chrome stacked on chrome. */
@@ -2316,11 +2341,6 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 10px;
-    margin: 0 clamp(18px, 5vw, 72px) 10px;
-  }
-
-  .agent-chat.embedded .pending-approvals {
-    margin: 0 12px 10px;
   }
 
   .pending-approval-card {
@@ -2391,6 +2411,10 @@
   }
 
   .error-banner {
+    grid-area: banner;
+    max-height: 6lh;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
     margin: 0 clamp(18px, 5vw, 72px) 10px;
     padding: 8px 10px;
     border: 1px solid color-mix(in srgb, var(--error) 35%, var(--border));
@@ -2405,6 +2429,7 @@
   }
 
   .closed-banner {
+    grid-area: banner;
     min-width: 0;
     display: flex;
     align-items: center;
@@ -2429,6 +2454,7 @@
   }
 
   .composer-wrap {
+    grid-area: composer;
     position: relative;
     margin: 0 clamp(18px, 5vw, 72px) 18px;
   }
