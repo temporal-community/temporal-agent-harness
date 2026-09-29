@@ -29,6 +29,7 @@ from temporal_agent_harness.harness.agent_protocol import RUN_SUBAGENT_TURN_ACTI
 from temporal_agent_harness.harness.code_mode.batch_models import (
     CODE_RESUME_BATCH_ACTIVITY,
     CODE_START_BATCH_ACTIVITY,
+    CODE_TYPE_CHECK_ACTIVITY,
 )
 from temporal_agent_harness.harness.jev_approvals.activity import (
     JEV_APPROVAL_ACTIVITIES,
@@ -46,7 +47,7 @@ from temporal_agent_harness.utils.large_payload import (
     local_payload_storage,
 )
 
-_CODE_MODE_NAMES = {CODE_START_BATCH_ACTIVITY, CODE_RESUME_BATCH_ACTIVITY}
+_CODE_MODE_NAMES = {CODE_START_BATCH_ACTIVITY, CODE_RESUME_BATCH_ACTIVITY, CODE_TYPE_CHECK_ACTIVITY}
 # Every activity the plugin registers on a worker regardless of configuration — the ones
 # their callers dispatch BY NAME, so an unregistered name would be a retryable Temporal
 # error and a hung turn rather than one actionable failure. Their optional extras are

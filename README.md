@@ -68,7 +68,7 @@ just worker            # 4. this example's agent worker
 
 Open <http://localhost:8000> and start a session. There's no install step — `uv` fetches
 dependencies on demand. Every example follows the same four recipes; see
-[Run the examples](#run-the-examples) for the rest of them, including running all eight behind
+[Run the examples](#run-the-examples) for the rest of them, including running all nine behind
 one UI.
 
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
@@ -729,7 +729,7 @@ each in its own terminal:
 just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
 just session-manager   # shared session-manager worker
 just server            # serves the MERGED registry (all agents) on http://localhost:8000
-just workers           # co-launch all eight agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
+just workers           # co-launch all nine agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
 ```
 
 Then create a session for any agent in the UI. A few need extra setup or a client:
@@ -743,6 +743,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
 | Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client --wiki-dir ./wiki`** — required, or its tool calls hang |
 | Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
+| Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](examples/agent_dag/README.md)); best in its own UI, **`just studio`** from `examples/agent_dag` |
 
 **Gotcha — the session manager caches its registry.** The server seeds the `session-manager`
 workflow with the registry on first start and reuses the existing one after that. So when you switch

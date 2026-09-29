@@ -1,4 +1,5 @@
-"""The two worker-side activities that step the Monty sandbox, surfacing host calls to the workflow.
+"""The worker-side activities that step the Monty sandbox, surfacing host calls to the workflow,
+and type-check a script without running it.
 
 Thin Temporal wrappers. Each checks that the optional ``code-mode`` extra is installed, then
 delegates to :mod:`.monty_stepper`, which holds the actual stepping logic — see that module for
@@ -22,7 +23,7 @@ The workflow-side driver dispatches these activities by NAME (``CODE_START_BATCH
 
 Why the extra is checked HERE, per call, rather than at import: this module deliberately does
 not import ``pydantic_monty``, so it loads with or without the ``code-mode`` extra and a worker
-can always register these two activities. That matters because the driver dispatches by NAME —
+can always register these activities. That matters because the driver dispatches by NAME —
 with nothing registered under these names Temporal answers with
 ``ApplicationError(type="NotFoundError")``, which is RETRYABLE, so a worker missing the extra
 would retry "is not registered on this worker" forever and the turn would just hang. Checking
@@ -47,6 +48,7 @@ from temporalio.exceptions import ApplicationError
 from .batch_models import (
     CODE_RESUME_BATCH_ACTIVITY,
     CODE_START_BATCH_ACTIVITY,
+    CODE_TYPE_CHECK_ACTIVITY,
     CodeBatchStep,
     ResumeBatchInput,
 )
@@ -107,7 +109,18 @@ async def code_resume_batch(input: ResumeBatchInput) -> CodeBatchStep:
     return resume_batch(input)
 
 
-# The two sandbox-stepping activities every Code Mode worker registers, regardless of which
+@activity.defn(name=CODE_TYPE_CHECK_ACTIVITY)
+async def code_type_check(script: str, type_check_stubs: str) -> str:
+    """Type-check ``script`` without running it: the checker's report, or ``""`` if clean.
+
+    See :func:`.monty_stepper.type_check`."""
+    _require_code_mode_extra()
+    from .monty_stepper import type_check
+
+    return type_check(script, type_check_stubs) or ""
+
+
+# The Code Mode activities every Code Mode worker registers, regardless of which
 # tools its Code Mode tools expose (they are tool-agnostic — the tools are dispatched through the
 # runner as their own activities). ``AgentHarnessPlugin`` registers these unconditionally — the
 # extra is checked per call by _require_code_mode_extra(), not at registration — alongside the
@@ -120,4 +133,4 @@ async def code_resume_batch(input: ResumeBatchInput) -> CodeBatchStep:
 # Use this list directly only when assembling a worker's activity list by hand::
 #
 #     Worker(..., activities=[*CODE_MODE_ACTIVITIES, agent.tool_activity(my_tool), ...])
-CODE_MODE_ACTIVITIES = [code_start_batch, code_resume_batch]
+CODE_MODE_ACTIVITIES = [code_start_batch, code_resume_batch, code_type_check]

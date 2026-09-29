@@ -108,9 +108,12 @@ jobs:
         run: npm test
       - working-directory: packages/svelte
         run: npm run build
-      # The tic-tac-toe board is written against the binding and the example's committed
-      # generated types, so it is type-checked with them (it has no build of its own).
+      # The tic-tac-toe board and the agent DAG studio are written against the binding and their
+      # example's committed generated types, so they are type-checked with them (neither has a
+      # build of its own).
       - working-directory: examples/tictactoe/ui
+        run: ../../../packages/svelte/node_modules/.bin/svelte-check --tsconfig ./tsconfig.json
+      - working-directory: examples/agent_dag/ui
         run: ../../../packages/svelte/node_modules/.bin/svelte-check --tsconfig ./tsconfig.json
 
   react:

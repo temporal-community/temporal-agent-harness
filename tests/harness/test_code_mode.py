@@ -7,6 +7,7 @@ from __future__ import annotations
 import inspect
 
 import pytest
+from pydantic import BaseModel
 from temporalio.exceptions import ApplicationError
 
 from temporal_agent_harness.harness import agent
@@ -115,6 +116,93 @@ def test_distinct_names_allow_multiple_code_mode_tools_over_overlapping_sets():
     assert a is not b
 
 
+# ---------------------------------------------------------------- type-checking without running
+
+
+def test_the_tool_carries_the_stubs_code_mode_type_check_reads():
+    tool = agent.code_mode_tool([beta], name="run_code")
+    assert tool.__code_mode_stubs__ == render_type_check_stubs([beta])
+
+
+def test_code_mode_type_check_rejects_a_tool_code_mode_did_not_make():
+    import asyncio
+
+    with pytest.raises(TypeError, match="not a tool returned by code_mode_tool"):
+        asyncio.run(agent.code_mode_type_check(beta, "x = 1"))
+
+
+def test_type_check_reports_errors_by_line_and_runs_nothing():
+    pytest.importorskip("pydantic_monty")
+    from temporal_agent_harness.harness.code_mode import monty_stepper
+
+    stubs = render_type_check_stubs([beta])
+    clean = "import asyncio\nasync def main():\n    return await beta(1)\nasyncio.run(main())\n"
+    assert monty_stepper.type_check(clean, stubs) is None
+
+    # A clean script with a side effect is still only checked: nothing prints.
+    noisy = clean.replace("    return", "    print('ran')\n    return")
+    assert monty_stepper.type_check(noisy, stubs) is None
+
+    report = monty_stepper.type_check(clean.replace("beta(1)", 'beta("one")'), stubs)
+    assert report is not None and report.startswith("MontyTypingError")
+    assert "main.py:3" in report
+
+
+class Box(BaseModel):
+    size: int
+
+
+@agent.tool_defn()
+async def pack(box: Box) -> Box:
+    """Pack a box."""
+    ...
+
+
+_PACK = "import asyncio\n{head}async def main():\n{body}    return await pack({{'size': 1}})\nasyncio.run(main())\n"
+
+
+@pytest.mark.parametrize(
+    ("head", "body", "expected"),
+    [
+        # The checker resolves the stubs as `type_stubs`; the sandbox has no such module.
+        ("from type_stubs import pack, Box\n", "", "`type_stubs` exists only for the type checker"),
+        ("import dataclasses\n", "", "No module named 'dataclasses'"),
+        ("from typing import TypedDict\n", "", "cannot import name 'TypedDict'"),
+        # Found even where only running that line would reach it.
+        ("", "    import collections\n", "No module named 'collections'"),
+        ("", "    b = Box(size=1)\n", "`Box` is only a type for the checker"),
+    ],
+)
+def test_type_check_catches_what_only_fails_at_run_time(head, body, expected):
+    pytest.importorskip("pydantic_monty")
+    from temporal_agent_harness.harness.code_mode import monty_stepper
+
+    stubs = render_type_check_stubs([pack])
+    script = _PACK.format(head=head, body=body)
+    report = monty_stepper.type_check(script, stubs)
+    assert report is not None and expected in report, report
+    assert "SandboxCheckError" in report and "--> main.py:" in report
+    # A run refuses it too, before anything starts.
+    step = monty_stepper.start_batch(script, stubs)
+    assert step.done and not step.pending and expected in (step.error or "")
+
+
+@pytest.mark.parametrize(
+    ("head", "body"),
+    [
+        ("from asyncio import gather\nimport json\n", ""),
+        ("", "    b: Box = {'size': 2}\n"),
+        ("def size(b: Box) -> int:\n    return b['size']\n", ""),
+    ],
+)
+def test_type_check_allows_what_runs(head, body):
+    pytest.importorskip("pydantic_monty")
+    from temporal_agent_harness.harness.code_mode import monty_stepper
+
+    script = _PACK.format(head=head, body=body)
+    assert monty_stepper.type_check(script, render_type_check_stubs([pack])) is None
+
+
 # ---------------------------------------------------------------- activities module typing
 
 
@@ -153,7 +241,7 @@ def test_the_activities_module_imports_without_the_code_mode_extra():
     sys.modules["pydantic_monty"] = None  # type: ignore[assignment]
     try:
         activities = importlib.import_module(module)
-        assert len(activities.CODE_MODE_ACTIVITIES) == 2
+        assert len(activities.CODE_MODE_ACTIVITIES) == 3
         with pytest.raises(ApplicationError) as caught:
             activities._require_code_mode_extra()
         assert caught.value.type == activities.CODE_MODE_MISSING_EXTRA_ERROR

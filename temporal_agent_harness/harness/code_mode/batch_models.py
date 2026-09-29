@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # register under exactly these names.
 CODE_START_BATCH_ACTIVITY = "code_start_batch"
 CODE_RESUME_BATCH_ACTIVITY = "code_resume_batch"
+CODE_TYPE_CHECK_ACTIVITY = "code_type_check"
 
 # Snapshot bytes are arbitrary binary (a serialized sandbox continuation), so they are NOT
 # valid UTF-8. Pydantic's default JSON encoding for ``bytes`` is UTF-8 and would fail

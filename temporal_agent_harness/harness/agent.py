@@ -104,7 +104,7 @@ from temporal_agent_harness.harness.agent_workflow import (
     tool_activity,
     tool_defn,
 )
-from temporal_agent_harness.harness.code_mode import code_mode_tool
+from temporal_agent_harness.harness.code_mode import code_mode_tool, code_mode_type_check
 from temporal_agent_harness.harness.state.decl import StateDecl, state
 from temporal_agent_harness.harness.jev_approvals import jev_evaluator
 from temporal_agent_harness.harness.subagent_toolset import (
@@ -131,6 +131,7 @@ __all__ = [
     "activity_tool_defn",
     "callback_tool_defn",
     "code_mode_tool",
+    "code_mode_type_check",
     "defn",
     "init",
     "jev_evaluator",
