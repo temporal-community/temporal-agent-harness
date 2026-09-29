@@ -72,4 +72,14 @@ describe("tips shown for focus", () => {
       /\[data-tip\]\[data-tip-quiet\]:not\(:hover\)::before,\s*\[data-tip\]\[data-tip-quiet\]:not\(:hover\)::after \{\s*opacity: 0;/
     );
   });
+
+  /* Clicking the session chip opened the drawer under a still-hovered chip, and its tip sat
+     over the drawer's own tabs. */
+  it("hides the tip of a control whose menu or drawer is open", () => {
+    const css = readFileSync(new URL("../../../app.css", import.meta.url), "utf8");
+    assert.match(
+      css,
+      /\[data-tip\]\[aria-expanded="true"\]::before,\s*\[data-tip\]\[aria-expanded="true"\]::after \{\s*opacity: 0;/
+    );
+  });
 });
