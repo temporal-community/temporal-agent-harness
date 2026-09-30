@@ -28,7 +28,7 @@ import {
   type ToolApprovalDecision,
   type UntypedAgent,
   type WaitingToolCall
-} from "@temporal-agent-harness/client";
+} from "@temporalio/agent-harness-client";
 
 import { ReactSessionState, type SessionSnapshot } from "./state.js";
 

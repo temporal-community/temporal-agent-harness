@@ -5,4 +5,4 @@ export {
   type AgentSessionOptions
 } from "./session.svelte.js";
 export { SvelteSessionState } from "./state.svelte.js";
-export * from "@temporal-agent-harness/client";
+export * from "@temporalio/agent-harness-client";

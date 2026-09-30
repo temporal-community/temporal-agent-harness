@@ -1,6 +1,6 @@
 # Tic-Tac-Toe board
 
-A Svelte page for the tic-tac-toe agent, written against `@temporal-agent-harness/svelte` and the
+A Svelte page for the tic-tac-toe agent, written against `@temporalio/agent-harness-svelte` and the
 agent's generated types (`../client_sdk/TicTacToeAgent.ts`, from `just codegen-client-sdk`). Run
 it with `just play` from `examples/tictactoe`, then open http://127.0.0.1:5173/.
 
@@ -8,7 +8,7 @@ The whole page is `App.svelte`, and its whole integration is the top of that fil
 
 ```svelte
 <script lang="ts">
-  import { AgentSession, HttpTransport } from "@temporal-agent-harness/svelte";
+  import { AgentSession, HttpTransport } from "@temporalio/agent-harness-svelte";
   import type { TicTacToeAgent } from "../client_sdk/TicTacToeAgent";
 
   const agent = new AgentSession<TicTacToeAgent>({

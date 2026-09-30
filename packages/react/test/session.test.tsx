@@ -11,7 +11,7 @@ import type {
   SessionTransport,
   SubmitMessageResponse,
   WorkflowExecutionState
-} from "@temporal-agent-harness/client";
+} from "@temporalio/agent-harness-client";
 
 import { HarnessProvider, useAgentSession, type AgentSession } from "../src/index.js";
 

@@ -2,7 +2,7 @@
      typed AgentSession: the board is its `board` state, a move is a `play` message, and the
      ledger is its raw frames. The rest of this file only draws what those give it. -->
 <script lang="ts">
-  import { AgentSession, HttpTransport, startSession } from "@temporal-agent-harness/svelte";
+  import { AgentSession, HttpTransport, startSession } from "@temporalio/agent-harness-svelte";
   import { scale } from "svelte/transition";
 
   import type { TicTacToeAgent } from "../client_sdk/TicTacToeAgent";

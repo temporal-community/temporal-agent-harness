@@ -1,10 +1,10 @@
-# @temporal-agent-harness/react
+# @temporalio/agent-harness-react
 
-A React binding for `@temporal-agent-harness/client`: `useAgentSession`, a hook that follows one
+A React binding for `@temporalio/agent-harness-client`: `useAgentSession`, a hook that follows one
 harness agent session. React 18.2 or later.
 
 ```tsx
-import { useAgentSession } from "@temporal-agent-harness/react";
+import { useAgentSession } from "@temporalio/agent-harness-react";
 import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from harness-codegen
 
 function Board({ sessionId }: { sessionId: string }) {
@@ -37,10 +37,13 @@ function Board({ sessionId }: { sessionId: string }) {
 
 ## Development
 
-This package links `../client` and resolves it through that package's build:
+This package depends on the published `@temporalio/agent-harness-client` package from npm.
+Run these commands from `packages/react`:
 
 ```sh
-(cd ../client && npm ci && npm run build)
 npm ci
 npm run check && npm test && npm run build
 ```
+
+Changes in `packages/client` are not picked up automatically. To use a new client release,
+update this package's dependency and lockfile with `npm install @temporalio/agent-harness-client@<version>`.

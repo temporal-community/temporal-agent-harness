@@ -1,11 +1,11 @@
-# @temporal-agent-harness/svelte
+# @temporalio/agent-harness-svelte
 
-A Svelte 5 binding for `@temporal-agent-harness/client`: `AgentSession`, a reactive handle on one
+A Svelte 5 binding for `@temporalio/agent-harness-client`: `AgentSession`, a reactive handle on one
 harness agent session.
 
 ```svelte
 <script lang="ts">
-  import { AgentSession } from "@temporal-agent-harness/svelte";
+  import { AgentSession } from "@temporalio/agent-harness-svelte";
   import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent"; // from harness-codegen
 
   let { sessionId } = $props();
@@ -31,10 +31,13 @@ harness agent session.
 
 ## Development
 
-This package links `../client` and resolves it through that package's build:
+This package depends on the published `@temporalio/agent-harness-client` package from npm.
+Run these commands from `packages/svelte`:
 
 ```sh
-(cd ../client && npm ci && npm run build)
 npm ci
 npm run check && npm test && npm run build
 ```
+
+Changes in `packages/client` are not picked up automatically. To use a new client release,
+update this package's dependency and lockfile with `npm install @temporalio/agent-harness-client@<version>`.

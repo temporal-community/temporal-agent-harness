@@ -26,7 +26,7 @@ people actually want to build a UI around — read it as untyped JSON.
 
 ```svelte
 <script lang="ts">
-  import { AgentSession } from "@temporal-agent-harness/svelte";
+  import { AgentSession } from "@temporalio/agent-harness-svelte";
   import type { TicTacToeAgent } from "../../client_sdk/TicTacToeAgent";   // generated
 
   let { sessionId } = $props();
@@ -57,9 +57,9 @@ the console, and each can be published on its own later:
 | package | what it is | toolchain |
 | --- | --- | --- |
 | `packages/codegen` — `@temporal-agent-harness/codegen` | `harness-codegen`: schema document → TypeScript | TypeScript 7, `node --test` |
-| `packages/client` — `@temporal-agent-harness/client` | the framework-independent core, transport, projection, and the generated protocol types | TypeScript 7, `node --test` |
-| `packages/svelte` — `@temporal-agent-harness/svelte` | the Svelte 5 binding | `svelte-package`, vitest in happy-dom, TypeScript 6 |
-| `packages/react` — `@temporal-agent-harness/react` | the React binding (18.2+) | `tsc`, vitest with React Testing Library in happy-dom, TypeScript 7 |
+| `packages/client` — `@temporalio/agent-harness-client` | the framework-independent core, transport, projection, and the generated protocol types | TypeScript 7, `node --test` |
+| `packages/svelte` — `@temporalio/agent-harness-svelte` | the Svelte 5 binding | `svelte-package`, vitest in happy-dom, TypeScript 6 |
+| `packages/react` — `@temporalio/agent-harness-react` | the React binding (18.2+) | `tsc`, vitest with React Testing Library in happy-dom, TypeScript 7 |
 
 There is no root workspace. Local packages depend on each other through `file:` links with
 `install-links=false` (in each package's `.npmrc`), so they are symlinks that build against the
