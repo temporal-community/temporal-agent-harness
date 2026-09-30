@@ -2,7 +2,7 @@
 
 The client, React binding, and Svelte binding release independently through
 [Prepare npm release](../.github/workflows/prepare-npm-release.yml). Run the action,
-review its release PR, and merge it to publish using npm trusted publishing.
+open a PR from its prepared branch, and merge it to publish using npm trusted publishing.
 [Publish to npm](../.github/workflows/publish-npm.yml) performs the actual build and publication.
 
 | Package | Tag format |
@@ -37,10 +37,11 @@ All fields must match exactly. No `NPM_TOKEN` secret is needed. See the
 3. For a binding, optionally enter an already published client version such as `0.1.1`.
    Leave it blank to keep the current dependency. The workflow records it as `^0.1.1`.
 4. Run the workflow. It updates the package manifest and lockfile, checks, tests, and
-   builds the package, then opens a release PR. Find the PR link in the run summary.
-5. Review the version and dependency changes. If GitHub shows **Approve workflows to run**,
-   approve the pending CI runs. Wait for the required checks and merge the PR through GitHub.
-6. **Release merged npm PR** tags the exact merged commit and explicitly dispatches
+   builds the package, then pushes a release branch.
+5. In the run summary, click **Create the release pull request**. The link prefills
+   the branch, title, and description. Click **Create pull request** on GitHub.
+6. Review the version and dependency changes, wait for the required CI checks, and merge.
+7. **Release merged npm PR** tags the exact merged commit and explicitly dispatches
    **Publish to npm**, which tests and builds again before publishing.
 
 Only one open release PR per package is allowed. Merge or close it before preparing
@@ -48,20 +49,21 @@ another release for that package. Closing without merging does not publish anyth
 If preparing a binding with a new client dependency, release the client first and
 wait for its version to become available on npm.
 
-In **Settings → Actions → General → Workflow permissions**, enable **Allow GitHub
-Actions to create and approve pull requests**. Organization policy may control this
-setting. The workflows request their own scoped write permissions, so no additional
-GitHub token or npm secret is needed. Existing npm trusted publisher settings remain
+The workflow pushes branches with `contents: write` and checks for existing release
+PRs with `pull-requests: read`. You create the PR yourself, so **Allow GitHub Actions
+to create and approve pull requests** can remain disabled. No additional GitHub token
+or npm secret is needed. Existing npm trusted publisher settings remain
 `publish-npm.yml` with environment `npm`.
 
 The preparation workflow must be run from `main`; other refs are skipped. Release PRs
 use branches named `release/npm-<package>-v<version>`. Keep these names unchanged.
-Tagging only happens for merged release PRs created by `github-actions[bot]` in this
-repository. The workflow does not create GitHub Releases or trigger PyPI publishing.
+Tagging only happens for release branches in this repository merged into `main`,
+with the package and lockfile versions matching the release branch. The PR author
+can be a maintainer. The workflow does not create GitHub Releases or trigger PyPI publishing.
 
 GitHub does not trigger push workflows for tags created with `GITHUB_TOKEN`, so the
-merge workflow dispatches publishing explicitly. PRs created with that token may
-require a maintainer to approve CI runs. See [GitHub's workflow triggering rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+merge workflow dispatches publishing explicitly. Opening the PR yourself triggers
+the normal PR checks. See [GitHub's workflow triggering rules](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
 
 ## Manual fallback
 
@@ -103,11 +105,10 @@ does trigger that workflow, so use tag pushes for npm releases.
 
 ## Recovering a failed automated release
 
-- If preparation fails before opening a PR, fix the error and rerun it. If the branch
-  was pushed but PR creation failed (for example, Actions lacked permission to open
-  PRs), open a PR from that existing branch to review the changes. Because automated
-  tagging requires a bot-authored PR, use the manual tag fallback after merging a
-  manually opened PR, or delete the unused branch and rerun preparation.
+- If preparation fails before pushing the branch, fix the error and rerun it. If the
+  branch was already pushed, open a PR from that branch using the run summary link
+  or GitHub's **Compare & pull request** button. The workflow never force-pushes an
+  existing branch; delete an unused release branch before preparing that version again.
 - If **Release merged npm PR** fails, rerun that job. It reuses a tag only when it
   already points to the same merged commit and never moves an existing tag.
 - If **Publish to npm** fails, inspect that run and retry it against the same tag.

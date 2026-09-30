@@ -4,12 +4,12 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { finish, prepare, releaseDetails, validateInputs } from './npm-release.mjs';
+import { finish, prepare, releaseDetails, releasePrUrl, summarize, validateInputs } from './npm-release.mjs';
 
 const repository = 'temporal-community/temporal-agent-harness';
 const sha = 'a'.repeat(40);
 const event = () => ({ action: 'closed', pull_request: {
-  merged: true, merge_commit_sha: sha, user: { login: 'github-actions[bot]' },
+  merged: true, merge_commit_sha: sha, user: { login: 'maintainer' },
   base: { ref: 'main', repo: { full_name: repository } },
   head: { ref: 'release/npm-react-v0.1.1', repo: { full_name: repository } },
 } });
@@ -58,7 +58,7 @@ test('rejects unsafe or unsupported release input', () => {
   }
 });
 
-test('tags the exact merged commit before dispatching the trusted publishing workflow', () => fixture(() => {
+test('tags a human-authored release PR at its merged commit before dispatching publishing', () => fixture(() => {
   const mock = mockGitHub();
   assert.equal(finish(event(), repository, mock.run), 'npm-react-v0.1.1');
   assert.deepEqual(mock.calls.at(-2), ['gh', 'api', '--method', 'POST',
@@ -77,17 +77,38 @@ test('retry reuses a matching tag, but never moves a conflicting tag', () => fix
   assert(!conflict.calls.some((call) => call.includes('workflow')));
 }));
 
-test('rejects unmerged, foreign, or unprepared PRs before any external calls', () => {
+test('rejects unmerged, foreign, or incorrectly named PRs before any external calls', () => {
   const variants = [
     (pr) => { pr.merged = false; }, (pr) => { pr.base.ref = 'develop'; },
     (pr) => { pr.head.repo.full_name = 'someone/fork'; },
-    (pr) => { pr.user.login = 'someone'; }, (pr) => { pr.head.ref = 'feature'; },
+    (pr) => { pr.head.ref = 'feature'; },
   ];
   for (const mutate of variants) {
     const input = event(); mutate(input.pull_request);
     assert.throws(() => finish(input, repository, () => assert.fail('External call')));
   }
 });
+
+test('PR creation link prefills the correct base, branch, title, and multiline body', () => {
+  const body = 'Release notes\n\nDependency: ^0.2.0 & checks passed.';
+  const url = new URL(releasePrUrl(repository, 'release/npm-react-v0.1.1', body));
+  assert.equal(decodeURIComponent(url.pathname), `/${repository}/compare/main...release/npm-react-v0.1.1`);
+  assert.equal(url.searchParams.get('quick_pull'), '1');
+  assert.equal(url.searchParams.get('title'), 'Release npm-react-v0.1.1');
+  assert.equal(url.searchParams.get('body'), body);
+  assert.throws(() => releasePrUrl(repository, 'feature', body));
+});
+
+test('summary provides a PR creation link without any GitHub API mutations', () => fixture((root) => {
+  writeFileSync(join(root, 'npm-release-body.md'), 'Release notes');
+  const summary = join(root, 'summary');
+  summarize({ GITHUB_REPOSITORY: repository, RELEASE_BRANCH: 'release/npm-react-v0.1.1',
+    RUNNER_TEMP: root, GITHUB_STEP_SUMMARY: summary });
+  const text = readFileSync(summary, 'utf8');
+  assert.match(text, /Create the release pull request/);
+  assert.match(text, /quick_pull=1/);
+  assert.match(text, /click \*\*Create pull request\*\*/);
+}));
 
 test('rejects a stale release PR whose version no longer matches the merged manifest', () => fixture(() => {
   const input = event(); input.pull_request.head.ref = 'release/npm-react-v0.1.2';

@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
+      pull-requests: read
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -60,7 +60,7 @@ jobs:
           npm test
           npm run build
 
-      - name: Open release PR
+      - name: Push release branch and show PR creation link
         env:
           RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
@@ -72,7 +72,4 @@ jobs:
           git add "$PACKAGE_DIRECTORY/package.json" "$PACKAGE_DIRECTORY/package-lock.json"
           git commit -m "Release $RELEASE_TAG"
           git push origin "$RELEASE_BRANCH"
-          pr_url=$(gh pr create --repo "$GITHUB_REPOSITORY" --base main \
-            --head "$RELEASE_BRANCH" --title "Release $RELEASE_TAG" \
-            --body-file "$RUNNER_TEMP/npm-release-body.md")
-          echo "Review and merge the release PR: $pr_url" >> "$GITHUB_STEP_SUMMARY"
+          node scripts/npm-release.mjs summary

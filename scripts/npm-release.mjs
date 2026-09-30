@@ -71,8 +71,7 @@ export function prepare(env = process.env, run = execute) {
     dependency ? `Shared client dependency: \`${dependency}\`.` : '',
     '',
     'This PR was prepared by **Prepare npm release**. The package checks, tests, and build',
-    'ran before the PR was opened. Approve any pending GitHub workflow runs and wait',
-    'for the required checks before merging.',
+    'ran before the release branch was pushed. Wait for the required PR checks before merging.',
     '',
     `Merging creates \`${tag}\` on the merged commit and dispatches **Publish to npm**,`,
     'which tests and builds that commit again before publishing with OIDC.',
@@ -83,13 +82,32 @@ export function prepare(env = process.env, run = execute) {
   ].join('\n'));
 }
 
+export function releasePrUrl(repository, branch, body) {
+  const { tag } = releaseDetails(branch);
+  const query = new URLSearchParams({ quick_pull: '1', title: `Release ${tag}`, body });
+  return `https://github.com/${repository}/compare/main...${encodeURIComponent(branch)}?${query}`;
+}
+
+export function summarize(env = process.env) {
+  const body = readFileSync(`${env.RUNNER_TEMP}/npm-release-body.md`, 'utf8');
+  const url = releasePrUrl(env.GITHUB_REPOSITORY, env.RELEASE_BRANCH, body);
+  appendFileSync(env.GITHUB_STEP_SUMMARY, [
+    `Release branch pushed: \`${env.RELEASE_BRANCH}\`.`,
+    '',
+    `[Create the release pull request](${url})`,
+    '',
+    'Click the link, review the prefilled title and description, and click **Create pull request**.',
+    'Wait for CI, then review and merge. Merging automatically tags and publishes the release.',
+    '',
+  ].join('\n'));
+}
+
 export function finish(event, repository, run = execute) {
   const pr = event.pull_request;
   assert(event.action === 'closed' && pr?.merged, 'Only merged PRs can release');
   assert.equal(pr.base.ref, 'main');
   assert.equal(pr.base.repo.full_name, repository);
   assert.equal(pr.head.repo.full_name, repository, 'Release PR must belong to this repository');
-  assert.equal(pr.user.login, 'github-actions[bot]', 'Expected a prepared release PR');
   const { pkg, version, tag, directory } = releaseDetails(pr.head.ref);
   assert(/^[a-f0-9]{40}$/.test(pr.merge_commit_sha), 'Invalid merge commit');
   assert.equal(run('git', ['rev-parse', 'HEAD']), pr.merge_commit_sha,
@@ -117,11 +135,13 @@ export function finish(event, repository, run = execute) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (process.argv[2] === 'prepare') {
     prepare();
+  } else if (process.argv[2] === 'summary') {
+    summarize();
   } else if (process.argv[2] === 'finish') {
     const tag = finish(readJson(process.env.GITHUB_EVENT_PATH), process.env.GITHUB_REPOSITORY);
     appendFileSync(process.env.GITHUB_STEP_SUMMARY,
       `Dispatched **Publish to npm** for \`${tag}\`. Check that workflow for the publication result.\n`);
   } else {
-    throw new Error('Usage: node scripts/npm-release.mjs prepare|finish');
+    throw new Error('Usage: node scripts/npm-release.mjs prepare|summary|finish');
   }
 }
