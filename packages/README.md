@@ -11,6 +11,68 @@ open a PR from its prepared branch, and merge it to publish using npm trusted pu
 | `@temporalio/agent-harness-react` | `npm-react-v<version>` |
 | `@temporalio/agent-harness-svelte` | `npm-svelte-v<version>` |
 
+## Testing local changes without publishing
+
+Run these commands from the repository root to build the shared client and link it
+into both bindings:
+
+```sh
+(cd packages/client && npm install && npm run build)
+(cd packages/react && npm install --no-save --package-lock=false ../client)
+(cd packages/svelte && npm install --no-save --package-lock=false ../client)
+```
+
+The bindings' `.npmrc` files set `install-links=false`, so the local client is linked
+instead of copied. The `--no-save --package-lock=false` flags keep the bindings'
+published dependency declarations and lockfiles unchanged.
+
+Check, test, and build the bindings against the local client:
+
+```sh
+(cd packages/react && npm run check && npm test && npm run build)
+(cd packages/svelte && npm run check && npm test && npm run build)
+```
+
+After editing the shared client, rebuild it so the bindings see the changes:
+
+```sh
+(cd packages/client && npm run build)
+```
+
+To restore the published dependencies from the lockfiles:
+
+```sh
+(cd packages/react && npm ci)
+(cd packages/svelte && npm ci)
+```
+
+### Testing in a separate application
+
+After building the local client and bindings, create tarballs containing the files
+that would be published:
+
+```sh
+(cd packages/client && npm pack)
+(cd packages/react && npm pack)
+(cd packages/svelte && npm pack)
+```
+
+Each command prints the generated `.tgz` filename in that package's directory. In
+your test app, install the client tarball and the relevant binding tarball together,
+using their absolute paths. For example:
+
+```sh
+npm install --no-save --package-lock=false \
+  /path/to/temporal-agent-harness/packages/client/temporalio-agent-harness-client-0.1.0.tgz \
+  /path/to/temporal-agent-harness/packages/react/temporalio-agent-harness-react-0.1.0.tgz
+```
+
+Use the filenames produced by `npm pack`, and substitute the Svelte tarball for a
+Svelte app. The local client's version must satisfy the binding's declared dependency
+range so npm uses it for the binding. Tarballs are snapshots: rebuild, repack, and
+reinstall after further edits. Run `npm ci` in the test app to restore its locked
+dependencies, and keep generated `.tgz` files out of commits.
+
 ## One-time setup
 
 1. Merge the workflows, release scripts, and package metadata into `main`.
