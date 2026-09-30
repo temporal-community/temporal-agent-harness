@@ -1,6 +1,6 @@
 <!-- Every DagBuilderAgent session the server knows about, newest first. -->
 <script lang="ts">
-  import type { SessionSummary } from "@temporal-agent-harness/svelte";
+  import type { SessionSummary } from "@temporalio/agent-harness-svelte";
 
   interface Props {
     sessions: readonly SessionSummary[];

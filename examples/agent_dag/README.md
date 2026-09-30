@@ -106,8 +106,8 @@ just studio            # 5. the studio on http://127.0.0.1:5173
 
 Pick a starter prompt (or write your own), watch the agent write the flow, press **Run flow**, and
 click any node for its instructions, prompt, tool calls and reply. Follow-ups like "add a budget
-reviewer before the judge" arrive as targeted edits; if a run fails, just say so — the builder sees
-the last run's output on your next message.
+reviewer before the judge" arrive as targeted edits. If a run fails, the chat offers to send the
+failure to the builder; nothing is sent until you confirm.
 
 The generic console on http://localhost:8000 can drive the agent too (send `generate`, then
 `execute`), but nothing there answers the editor tools, so `generate` waits for a client that

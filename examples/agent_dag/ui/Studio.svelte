@@ -5,7 +5,7 @@
      to run. Mounted once per session (keyed by its id); a draft with no session yet has no agent
      and creates the session on its first prompt. -->
 <script lang="ts">
-  import { AgentSession, type HttpTransport, type ToolCall, type ToolPart } from "@temporal-agent-harness/svelte";
+  import { AgentSession, type HttpTransport, type ToolCall, type ToolPart } from "@temporalio/agent-harness-svelte";
   import { onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
 

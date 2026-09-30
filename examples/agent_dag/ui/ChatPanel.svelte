@@ -29,7 +29,7 @@
 </script>
 
 <script lang="ts">
-  import type { HarnessMessage, ToolPart } from "@temporal-agent-harness/svelte";
+  import type { HarnessMessage, ToolPart } from "@temporalio/agent-harness-svelte";
   import type { DagBuilderAgent } from "../client_sdk/DagBuilderAgent";
   import { readOutput } from "./RunPanel.svelte";
 

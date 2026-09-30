@@ -3,7 +3,7 @@
      feeds the next. A step's live detail comes from its own subagent view; its spec and reply
      come from the host call on the builder's stream, so the graph survives a reload. -->
 <script module lang="ts">
-  import type { AgentSession, AgentSseFrame, AgentView, HarnessMessage, ToolPart } from "@temporal-agent-harness/svelte";
+  import type { AgentSession, AgentSseFrame, AgentView, HarnessMessage, ToolPart } from "@temporalio/agent-harness-svelte";
   import type { DagBuilderAgent } from "../client_sdk/DagBuilderAgent";
   import type { DagStepAgent, StepSpec } from "../client_sdk/DagStepAgent";
 
