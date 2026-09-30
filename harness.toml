@@ -1,0 +1,81 @@
+# The project manifest for this repository's examples: every agent, the worker processes that
+# run them, and the paths that trigger worker reloads.
+#
+#   uv run --group examples temporal-agent-harness dev      # or: just dev
+#
+# starts Temporal, the session manager, the console on http://localhost:8000, and every worker
+# below whose required keys are set in .env.local. See docs/internal/development.md.
+
+[project]
+name = "temporal-agent-harness-examples"
+env_file = ".env.local"
+registries = [
+    "examples/openai_hello/agents.toml",
+    "examples/pydantic_ai_hello/agents.toml",
+    "examples/react_agent/agents.toml",
+    "examples/monty/agents.toml",
+    "examples/tictactoe/agents.toml",
+    "examples/auto_mode/agents.toml",
+    "examples/callback_tools/wiki_agent/agents.toml",
+    "examples/callback_tools/coding_agent/agents.toml",
+]
+
+[dev]
+gateway_port = 8000
+temporal_ui_port = 8233
+
+# ---------------------------------------------------------------------------
+# Workers. `watch` restarts a worker when anything under those paths changes; examples that
+# import another example's tools watch both.
+# ---------------------------------------------------------------------------
+
+[[workers]]
+name = "openai-hello"
+command = ["python", "-m", "examples.openai_hello.worker"]
+requires = ["OPENAI_API_KEY"]
+watch = ["examples/openai_hello"]
+
+[[workers]]
+name = "pydantic-hello"
+command = ["python", "-m", "examples.pydantic_ai_hello.worker"]
+requires = ["OPENAI_API_KEY"]
+watch = ["examples/pydantic_ai_hello"]
+
+[[workers]]
+# Its F1 tools also need the F1 MCP server at F1_MCP_SERVER_HOME; chat works without it.
+name = "react"
+command = ["python", "-m", "examples.react_agent.worker"]
+requires = ["OPENAI_API_KEY"]
+watch = ["examples/react_agent"]
+
+[[workers]]
+name = "monty"
+command = ["python", "-m", "examples.monty.worker"]
+requires = ["GEMINI_API_KEY"]
+watch = ["examples/monty"]
+
+[[workers]]
+name = "tictactoe"
+command = ["python", "-m", "examples.tictactoe.worker"]
+requires = ["TYPESAFE_API_KEY"]
+watch = ["examples/tictactoe"]
+
+[[workers]]
+name = "auto-mode"
+command = ["python", "-m", "examples.auto_mode.worker"]
+requires = ["GEMINI_API_KEY", "TYPESAFE_API_KEY"]
+watch = ["examples/auto_mode", "examples/monty"]
+
+[[workers]]
+# The wiki agent's tools run in `just wiki-client --wiki-dir ./wiki`; without it its calls wait.
+name = "wiki"
+command = ["python", "-m", "examples.callback_tools.wiki_agent.worker"]
+requires = ["GEMINI_API_KEY"]
+watch = ["examples/callback_tools/wiki_agent"]
+
+[[workers]]
+# Needs `just coding-shim <dir>` and the OpenCode TUI to do anything useful.
+name = "coding"
+command = ["python", "-m", "examples.callback_tools.coding_agent.worker"]
+requires = ["GEMINI_API_KEY"]
+watch = ["examples/callback_tools/coding_agent"]

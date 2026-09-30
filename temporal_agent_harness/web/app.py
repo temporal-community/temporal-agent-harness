@@ -629,6 +629,7 @@ async def _ensure_session_manager_workflow(
     else:
         if desc.status == WorkflowExecutionStatus.RUNNING:
             print(f"Connected to existing session manager: {manager_workflow_id}")
+            await _refresh_manager_registry(handle, registry)
             return handle
         print(
             "Existing session manager "
@@ -649,6 +650,27 @@ async def _ensure_session_manager_workflow(
     else:
         print(f"Ensured session manager is running: {manager_workflow_id}")
     return handle
+
+
+async def _refresh_manager_registry(
+    handle: WorkflowHandle[Any, Any], registry: AgentRegistry
+) -> None:
+    """Push this server's registry to a session manager that was already running.
+
+    The manager is seeded with a registry only when it first starts, so without this a changed
+    agent list (a new agent, a new task queue) wouldn't take effect until someone terminated the
+    manager — and every session it started along with it.
+    """
+    try:
+        await handle.execute_update(SessionManagerWorkflow.set_registry, registry)
+    except Exception as exc:  # noqa: BLE001 - an older manager without the update still serves
+        print(
+            "Could not update the running session manager's agent list "
+            f"({type(exc).__name__}: {exc}). It keeps the list it started with; restart it to "
+            "pick up changes."
+        )
+    else:
+        print(f"Updated the session manager's agent list ({len(registry.agents)} agents)")
 
 
 def _mount_static_ui(

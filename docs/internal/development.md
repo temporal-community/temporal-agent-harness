@@ -38,14 +38,56 @@ just app-check     # Svelte checks
 just package       # UI build + UI checks + pytest + uv build
 ```
 
-Local stack recipes delegate into `examples/monty`:
+Run the local stack in one terminal:
+
+```bash
+just dev                         # Temporal, session manager, web server, and available workers
+just dev --only monty,tictactoe    # select workers by their names in harness.toml
+just dev --fresh                  # discard the saved local Temporal database
+just dev --no-watch               # run without restarting workers on file changes
+```
+
+Example startup with all eight example workers:
+
+![just dev starting Temporal, the session manager, the web server, and eight workers](images/dev-hot-reload.png)
+
+`harness.toml` lists the example registries and worker commands. The runner loads `.env.local`
+without overriding exported variables and skips workers whose required keys are missing.
+Editing a watched path restarts only the workers watching it; editing an agent registry reloads
+the web server and updates the session manager's agent list without terminating sessions.
+Changes to worker definitions in `harness.toml` require restarting `just dev`.
+
+The runner reuses a reachable Temporal server and leaves it running on exit. Otherwise, it starts
+a local server and stores its database in `.harness/`, so sessions survive restarts. `--fresh`
+discards that database only when starting its own server. Ctrl-C stops all processes it started.
+
+The same runner works in other projects with `temporal-agent-harness[ui]` installed:
+
+```toml
+[project]
+name = "my-agents"
+env_file = ".env.local"
+registries = ["agents.toml"]
+
+[[workers]]
+name = "my-agent"
+command = ["python", "-m", "my_app.worker"]
+requires = ["OPENAI_API_KEY"]
+watch = ["my_app"]
+```
+
+Save this as `harness.toml` and run `uv run temporal-agent-harness dev`, or pass
+`--manifest path/to/harness.toml`. Paths resolve relative to the manifest. A leading `python`
+or `python3` in a worker command uses the runner's interpreter and installed dependencies.
+
+Individual processes can also run in separate terminals:
 
 ```bash
 just temporal          # local Temporal dev server
 just session-manager   # packaged session-manager worker
 just server            # serves the COMMITTED UI build + FastAPI API on http://localhost:8000
 just dev-server        # rebuild the UI first, then serve (use after editing ui/)
-just monty-worker      # Monty agent worker
+just worker-monty      # Monty agent worker
 just ui-dev            # Vite hot reload on http://127.0.0.1:5173
 ```
 

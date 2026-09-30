@@ -162,8 +162,11 @@ teams-webhook:
 
 # ===== Run ALL example agents behind one UI (each example is still runnable from its own dir) =====
 
+# Run Temporal, the session manager, the web UI, and workers; restart workers on save.
+dev *ARGS:
+    uv run --group examples temporal-agent-harness dev {{ARGS}}
+
 # Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
-# Start this fresh, or run `just reset-manager` before `server`, so the merged registry takes effect.
 temporal:
     temporal server start-dev
 
@@ -266,8 +269,8 @@ coding-shim *ARGS:
     cd "{{justfile_directory()}}"
     uv run --group examples python -m examples.callback_tools.coding_agent.opencode_shim {{ARGS}}
 
-# Terminate the session-manager workflow so the next `server` start re-seeds it with the current
-# (merged) registry. Needed when switching which agents are served without a fresh Temporal.
+# Terminate the session-manager workflow and its sessions. Registry edits no longer need this:
+# the server refreshes the running manager's agent list on startup.
 reset-manager:
     temporal workflow terminate -w session-manager || true
 

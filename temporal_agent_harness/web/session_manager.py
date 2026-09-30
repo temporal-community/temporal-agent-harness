@@ -101,6 +101,11 @@ class SessionManagerWorkflow:
         return self._registry
 
     @workflow.update
+    def set_registry(self, registry: AgentRegistry) -> None:
+        """Refresh the agents available for new sessions, preserving running sessions."""
+        self._registry = registry
+
+    @workflow.update
     async def create_session(self, request: CreateSessionRequest) -> Session:
         """Launch one child agent workflow and track it.
 
