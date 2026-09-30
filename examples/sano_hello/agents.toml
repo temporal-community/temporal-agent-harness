@@ -1,0 +1,13 @@
+# The agent the Sano Hello web UI lists. `just web-connector` reads this file and maps
+# the agent to nexus_endpoint, the Nexus endpoint that targets the worker's task queue.
+
+[[agents]]
+key = "sano-hello"
+workflow_type = "SanoHelloAgent"
+agent = "examples.sano_hello.workflow:SanoHelloAgentWorkflow"
+task_queue = "sano-hello"
+nexus_endpoint = "sano-hello-agent-endpoint"
+label = "Sano Hello"
+description = """
+A hello-world OpenAI Agents SDK agent with two activity tools (get_weather,
+get_local_time). The UI reaches it over HTTP and standalone Nexus operations."""

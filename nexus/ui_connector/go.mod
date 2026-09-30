@@ -1,15 +1,19 @@
 module github.com/temporal-community/temporal-agent-harness/nexus/ui_connector
 
-go 1.25.0
+go 1.26.0
 
 require (
-	github.com/nexus-rpc/sdk-go v0.6.0
+	github.com/BurntSushi/toml v1.6.0
+	github.com/nexus-rpc/sdk-go v0.7.0
 	github.com/slack-go/slack v0.23.1
 	github.com/stretchr/testify v1.11.1
-	go.temporal.io/api v1.62.3-0.20260330144107-1e2b1facde20
-	go.temporal.io/sdk v1.41.1
+	github.com/temporalio/nexus-inbound-http-connector v0.0.0-20260916234748-e97f026ad8af
+	go.temporal.io/api v1.63.6
+	go.temporal.io/sdk v1.49.0
 	google.golang.org/protobuf v1.36.11
 )
+
+require github.com/nexus-rpc/nexus-proto-annotations v0.1.0 // indirect
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -23,6 +27,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
+	go.temporal.io/sdk/contrib/envconfig v1.0.2 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
@@ -33,3 +38,5 @@ require (
 	google.golang.org/grpc v1.83.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/temporalio/nexus-inbound-http-connector => github.com/bergundy/nexus-inbound-http-connector v0.0.0-20260916234748-e97f026ad8af

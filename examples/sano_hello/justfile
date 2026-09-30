@@ -1,0 +1,74 @@
+# Scoped justfile for the Sano Hello example (examples/sano_hello).
+# Run from this directory: `just <recipe>`.
+#
+# Path: browser -> HTTP (web-connector) -> standalone Nexus operation in the "connector"
+# namespace -> AgentService (in the worker) -> agent workflow. No FastAPI server.
+#
+# Local stack (each in its own terminal, in this order):
+#   just temporal          # 1. local Temporal dev server with the Nexus settings
+#   just setup-nexus       # 2. ONE-SHOT: the "connector" namespace + the agent's endpoint
+#   just worker            # 3. agent workflow, tool activities, and AgentService
+#   just web-connector     # 4. UI + HTTP connector on http://localhost:8080
+#
+# First-time setup: `cp .env.example .env.local` from the repo root and fill in
+# OPENAI_API_KEY. Needs Go 1.26+ and the `temporal` CLI >= 1.9.1.
+
+# Shows a notice when running from an untagged commit (silent on a release archive).
+import '../../scripts/untagged-notice.just'
+
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+ui := root / "ui"
+
+# TEMPORAL_CONFIG_FILE in .env.local is relative to the repo root.
+set working-directory := "../.."
+
+connector_namespace := "connector"
+agent_namespace := "default"
+agent_endpoint := "sano-hello-agent-endpoint"
+agent_task_queue := "sano-hello"
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# The dynamic config enables update-with-callback and standalone Nexus operations.
+# Start a local Temporal dev server (Web UI: http://localhost:8233).
+temporal:
+    temporal server start-dev \
+        --dynamic-config-value 'system.maxCallbacksPerWorkflow=500' \
+        --dynamic-config-value 'component.nexusoperations.callback.endpoint.template="http://localhost:7243/namespaces/{{{{.NamespaceName}}/nexus/callback"' \
+        --dynamic-config-value 'callback.allowedAddresses=[{"Pattern":"*","AllowInsecure":true}]' \
+        --dynamic-config-value 'history.enableUpdateCallbacks=true' \
+        --dynamic-config-value 'nexusoperation.enableStandalone=true'
+
+# The UI's standalone Nexus operations live in "connector"; the endpoint targets the worker.
+# ONE-SHOT: create the connector namespace and the agent's Nexus endpoint. Safe to re-run.
+setup-nexus:
+    temporal operator namespace create --namespace {{connector_namespace}} \
+        || echo "(namespace create failed — probably already exists; continuing)"
+    temporal operator nexus endpoint create \
+        --name {{agent_endpoint}} \
+        --target-namespace {{agent_namespace}} \
+        --target-task-queue {{agent_task_queue}} \
+        || echo "(endpoint create failed — probably already exists; continuing)"
+
+# Run the agent worker: the workflow, its tool activities, and the AgentService handler.
+worker:
+    cd "{{root}}" && uv run --group examples python -m examples.sano_hello.worker
+
+# Serve the built UI and the inbound HTTP connector on http://localhost:8080.
+web-connector:
+    cd "{{root}}/nexus/ui_connector" && \
+        TEMPORAL_ADDRESS="${TEMPORAL_ADDRESS:-localhost:7233}" \
+        CONNECTOR_NAMESPACE={{connector_namespace}} \
+        AGENT_REGISTRY="{{justfile_directory()}}/agents.toml" \
+        UI_DIST="{{root}}/temporal_agent_harness/ui/dist" \
+        WEB_ADDR=127.0.0.1:8080 \
+        go run ./cmd/web/
+
+# Build the shared Svelte UI into temporal_agent_harness/ui/dist. Restart web-connector after.
+app-build:
+    cd "{{ui}}" && pnpm run build
