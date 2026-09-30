@@ -40,7 +40,7 @@ async def main():
         run_agent({"name": "Flights", "instructions": "Find flights.", "prompt": "SFO to SEA",
                    "tools": ["search_flights"]}),
         run_agent({"name": "Weather", "instructions": "Check weather.", "prompt": "Seattle",
-                   "tools": ["get_weather"], "model": "gpt-5-mini"}),
+                   "tools": ["get_weather"], "model": "gpt-6.1-sol"}),
     )
     plan = await run_agent({
         "name": "Planner",
@@ -104,8 +104,8 @@ async def test_flow_runs_parallel_then_sequential_steps(client_and_queue):
 
     # Each step echoed the spec the script gave it, and the planner saw both scouts' replies.
     assert (
-        "Planner[|gpt-6-sol]: Flights[search_flights|gpt-6-sol]: SFO to SEA"
-        " / Weather[get_weather|gpt-5-mini]: Seattle"
+        "Planner[|gpt-6-luna]: Flights[search_flights|gpt-6-luna]: SFO to SEA"
+        " / Weather[get_weather|gpt-6.1-sol]: Seattle"
     ) in reply
 
     started = [e.event for e in events if e.event.type == AgentEventType.SUBAGENT_STARTED]
@@ -130,13 +130,35 @@ async def test_flow_runs_parallel_then_sequential_steps(client_and_queue):
     ]
 
 
+# Building a step by calling its type, as in Python, gives the step agent the same plain dict.
+TYPED_FLOW = FLOW.replace(
+    'run_agent({"name": "Weather", "instructions": "Check weather.", "prompt": "Seattle",\n'
+    '                   "tools": ["get_weather"], "model": "gpt-6.1-sol"})',
+    'run_agent(AgentStep(name="Weather", instructions="Check weather.", prompt="Seattle",\n'
+    '                            tools=["get_weather"], model="gpt-6.1-sol"))',
+)
+
+
+async def test_a_flow_can_build_its_steps_by_calling_their_type(client_and_queue):
+    assert TYPED_FLOW != FLOW
+    client, task_queue = client_and_queue
+    reply, _ = await _execute(client, task_queue, TYPED_FLOW)
+
+    assert (
+        "Planner[|gpt-6-luna]: Flights[search_flights|gpt-6-luna]: SFO to SEA"
+        " / Weather[get_weather|gpt-6.1-sol]: Seattle"
+    ) in reply
+
+
 async def test_importing_the_host_stubs_fails_before_any_step(client_and_queue):
+    # The type checker resolves `type_stubs` (it is how it loads the host stubs), but the sandbox
+    # has no such module, so the run fails on the import, before any host call.
     client, task_queue = client_and_queue
     script = "from type_stubs import AgentStep, AgentStepResult, run_agent\n" + FLOW
     reply, events = await _execute(client, task_queue, script)
 
-    assert reply.startswith("Script error (SandboxCheckError")
-    assert "type_stubs" in reply
+    assert reply.startswith("Script error (MontyRuntimeError")
+    assert "No module named 'type_stubs'" in reply
     assert not [e for e in events if e.event.type == AgentEventType.SUBAGENT_STARTED]
 
 

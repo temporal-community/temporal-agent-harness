@@ -9,7 +9,8 @@ This module derives that source by reflecting over each tool's model-facing sign
 recursively, the fields of any pydantic model it references (rendered as ``TypedDict``s so the
 checker can validate key access on results). Two renderings are produced from the same walk:
 
-  * :func:`render_type_check_stubs` — the stub source fed to the sandbox's type checker.
+  * :func:`render_type_check_stubs` — the stub source fed to the sandbox's type checker, with
+    the names of the ``TypedDict``\\ s it defines.
   * :func:`render_host_interface` — the same signatures + ``TypedDict``s, but with each tool's
     docstring attached, for embedding in the run-code tool's own docstring (what the model reads).
 
@@ -42,6 +43,8 @@ from typing import Any, Literal, Union, get_args, get_origin
 from uuid import UUID
 
 from pydantic import BaseModel
+
+from .batch_models import TypeCheckStubs
 
 _NoneType = type(None)
 
@@ -133,6 +136,10 @@ class _StubBuilder:
         if func_blocks:
             sections.append("\n\n".join(func_blocks))
         return "\n\n\n".join(sections) + "\n"
+
+    def type_names(self) -> list[str]:
+        """The names of the ``TypedDict``\\ s the last :meth:`build` rendered, in order."""
+        return [self._name_by_model[model] for model in self._model_order]
 
     def _render_tool(
         self, tool: Callable[..., Awaitable[Any]], *, with_doc: bool
@@ -321,13 +328,16 @@ class _StubBuilder:
         return f"{candidate}_{counter}"
 
 
-def render_type_check_stubs(tools: list[Callable[..., Awaitable[Any]]]) -> str:
+def render_type_check_stubs(tools: list[Callable[..., Awaitable[Any]]]) -> TypeCheckStubs:
     """Render the Python stub source the sandbox type-checks a Code Mode script against.
 
     One ``async def <tool_name>(...) -> ...: ...`` per tool, preceded by a ``TypedDict`` for every
-    pydantic model referenced by any tool's parameters or result. Raises :class:`CodeModeStubError`
-    if any parameter/field/return type cannot be rendered faithfully (see the module docstring)."""
-    return _StubBuilder().build(tools, with_doc=False)
+    pydantic model referenced by any tool's parameters or result, whose names come back as
+    ``type_names``. Raises :class:`CodeModeStubError` if any parameter/field/return type cannot be
+    rendered faithfully (see the module docstring)."""
+    builder = _StubBuilder()
+    source = builder.build(tools, with_doc=False)
+    return TypeCheckStubs(source=source, type_names=builder.type_names())
 
 
 def render_host_interface(tools: list[Callable[..., Awaitable[Any]]]) -> str:

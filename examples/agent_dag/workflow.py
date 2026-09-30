@@ -50,7 +50,7 @@ with workflow.unsafe.imports_passed_through():
     from .step_agent import WORKFLOW_TYPE as STEP_WORKFLOW_TYPE
 
 
-BUILDER_MODEL = "gpt-6-sol"
+BUILDER_MODEL = "gpt-6-luna"
 
 # The subagent key every step is started under; it prefixes each step's workflow id.
 STEP_KEY = "step"
@@ -109,6 +109,10 @@ The script lives in the user's editor, and you can only reach it through these t
 script, as several small, targeted edits rather than one big one — the user watches each edit \
 land, so make each one a meaningful step.
 - `check_code` type-checks the script without running it and reports every error with its line.
+
+You can call several of these at once. The editor applies them one at a time, in the order you \
+list them, so write each `edit_code` against the script as the edits before it leave it, and \
+never let two edits in one batch overlap.
 
 Never hand back a script that doesn't type-check. When you have finished editing, call \
 `check_code`; if it reports errors, fix them with `edit_code` and call it again, until it \
@@ -183,9 +187,10 @@ class DagBuilderAgentWorkflow:
                     injections={"runner": self._runner, "flow_tool": self._run_flow},
                 ),
             ],
-            # One edit at a time: each is made against the script the last one left, and the
-            # user watches them land in order.
-            model_settings=ModelSettings(parallel_tool_calls=False),
+            # Several edits may come in one response. The studio applies its editor callbacks
+            # one at a time, in the order they reach the stream, so each edit lands on the
+            # script the one before it left.
+            model_settings=ModelSettings(parallel_tool_calls=True),
         )
         result = Runner.run_streamed(
             sdk_agent,

@@ -31,7 +31,7 @@ from temporal_agent_harness.harness.agent_protocol import (
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 
 from ._check_parent import CheckCodeParentWorkflow
-from .test_execute_flow import FLOW
+from .test_execute_flow import FLOW, TYPED_FLOW
 
 
 @pytest_asyncio.fixture
@@ -109,16 +109,10 @@ async def test_errors_come_back_with_their_lines(client_and_queue):
     assert not [e for e in events if e.event.type == AgentEventType.SUBAGENT_STARTED]
 
 
-async def test_importing_the_host_stubs_is_caught(client_and_queue):
-    # The type checker resolves `type_stubs` (it is how it loads the host stubs), but the sandbox
-    # has no such module, so this passed the check and then failed the run.
+async def test_a_flow_that_calls_a_step_type_passes(client_and_queue):
     client, task_queue = client_and_queue
-    script = "from type_stubs import AgentStep, AgentStepResult, run_agent\n" + FLOW
-    reply, _ = await _check(client, task_queue, script)
-
-    assert reply.startswith("The script has errors")
-    assert "No module named 'type_stubs'" in reply
-    assert "main.py:1:1" in reply
+    reply, _ = await _check(client, task_queue, TYPED_FLOW)
+    assert reply.startswith("No errors"), reply
 
 
 async def test_an_empty_editor_is_reported(client_and_queue):

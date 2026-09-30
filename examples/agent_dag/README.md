@@ -13,7 +13,7 @@ async def main():
     flights, hotels, weather = await asyncio.gather(          # parallel
         run_agent({"name": "Flight scout", "instructions": "You find flights...",
                    "prompt": "Find flights SFO to Seattle, Oct 16-18.",
-                   "tools": ["search_flights"], "model": "gpt-5-mini"}),
+                   "tools": ["search_flights"], "model": "gpt-6.1-sol"}),
         run_agent({"name": "Hotel scout", ..., "tools": ["search_hotels"]}),
         run_agent({"name": "Weather scout", ..., "tools": ["get_weather"]}),
     )

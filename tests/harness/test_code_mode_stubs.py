@@ -80,7 +80,7 @@ def _func_by_name(src: str, name: str) -> ast.AsyncFunctionDef:
 def test_primitives_render_with_no_typeddicts():
     async def do(a: str, b: int, c: float, d: bool) -> str: ...
 
-    src = render_type_check_stubs([do])
+    src = render_type_check_stubs([do]).source
     _parse(src)
     assert _typed_dict_names(src) == []
     assert "async def do(a: str, b: int, c: float, d: bool) -> str: ..." in src
@@ -89,7 +89,7 @@ def test_primitives_render_with_no_typeddicts():
 def test_nested_model_param_and_list_of_model_return():
     async def search(request: SearchReq) -> SearchResp: ...
 
-    src = render_type_check_stubs([search])
+    src = render_type_check_stubs([search]).source
     names = _typed_dict_names(src)
     assert set(names) == {"SearchReq", "SearchResp", "Item"}
     assert "items: list[Item]" in src
@@ -99,7 +99,7 @@ def test_nested_model_param_and_list_of_model_return():
 def test_optional_and_union_render_as_pep604():
     async def f(a: Optional[int], b: int | str) -> str: ...  # noqa: UP045
 
-    src = render_type_check_stubs([f])
+    src = render_type_check_stubs([f]).source
     fn = _func_by_name(src, "f")
     assert ast.unparse(fn.args.args[0].annotation) == "int | None"
     assert ast.unparse(fn.args.args[1].annotation) == "int | str"
@@ -108,7 +108,7 @@ def test_optional_and_union_render_as_pep604():
 def test_dict_container_renders_key_and_value():
     async def f(m: dict[str, int]) -> str: ...
 
-    src = render_type_check_stubs([f])
+    src = render_type_check_stubs([f]).source
     assert "m: dict[str, int]" in src
 
 
@@ -117,7 +117,7 @@ def test_unknown_type_raises_naming_context():
     async def f(x: complex) -> str: ...
 
     with pytest.raises(CodeModeStubError) as exc:
-        render_type_check_stubs([f])
+        render_type_check_stubs([f]).source
     assert "f(x)" in str(exc.value)
 
 
@@ -125,28 +125,28 @@ def test_missing_param_annotation_raises():
     async def f(a) -> str: ...  # noqa: ANN001
 
     with pytest.raises(CodeModeStubError, match="no type annotation"):
-        render_type_check_stubs([f])
+        render_type_check_stubs([f]).source
 
 
 def test_missing_return_annotation_raises():
     async def f(a: str): ...
 
     with pytest.raises(CodeModeStubError, match="no return annotation"):
-        render_type_check_stubs([f])
+        render_type_check_stubs([f]).source
 
 
 def test_bare_container_raises():
     async def f(xs: list) -> str: ...  # noqa: ANN401
 
     with pytest.raises(CodeModeStubError, match="element type"):
-        render_type_check_stubs([f])
+        render_type_check_stubs([f]).source
 
 
 def test_shared_model_is_emitted_once():
     async def a(req: SearchReq) -> Item: ...
     async def b(req: SearchReq) -> Item: ...
 
-    src = render_type_check_stubs([a, b])
+    src = render_type_check_stubs([a, b]).source
     names = _typed_dict_names(src)
     # SearchReq and Item each appear exactly once despite being referenced by both tools.
     assert names.count("SearchReq") == 1
@@ -170,7 +170,7 @@ def test_name_collision_gets_distinct_typeddict_names():
             return_annotation=str,
         )
 
-    src = render_type_check_stubs([a, b])
+    src = render_type_check_stubs([a, b]).source
     names = [n for n in _typed_dict_names(src) if n.startswith("Dup")]
     # Two distinct classes with the same __name__ get two distinct TypedDicts (not merged).
     assert len(names) == 2
@@ -180,7 +180,7 @@ def test_name_collision_gets_distinct_typeddict_names():
 def test_recursive_model_terminates_and_references_itself():
     async def f(n: Node) -> Node: ...
 
-    src = render_type_check_stubs([f])
+    src = render_type_check_stubs([f]).source
     assert _typed_dict_names(src).count("Node") == 1
     # The self-reference is what this pins; `children` has a default_factory, so the field
     # itself is NotRequired (see test_defaulted_field_is_not_required).
@@ -198,7 +198,7 @@ def test_defaulted_field_is_not_required():
 
     async def f(n: Node) -> Node: ...
 
-    src = render_type_check_stubs([f])
+    src = render_type_check_stubs([f]).source
     assert "value: int" in src
     assert "value: NotRequired" not in src
     assert "children: NotRequired[list[Node]]" in src
@@ -208,7 +208,7 @@ def test_defaulted_field_is_not_required():
 def test_enum_renders_as_literal_of_values():
     async def f(c: Color) -> str: ...
 
-    src = render_type_check_stubs([f])
+    src = render_type_check_stubs([f]).source
     assert "c: Literal['red', 'green']" in src
     assert "from typing import" in src and "Literal" in src
 
@@ -216,7 +216,7 @@ def test_enum_renders_as_literal_of_values():
 def test_json_scalar_types_render_as_str():
     async def f(bag: ScalarBag) -> str: ...
 
-    src = render_type_check_stubs([f])
+    src = render_type_check_stubs([f]).source
     # datetime / UUID / Decimal / bytes all serialize to strings under model_dump(mode="json").
     assert "created: str" in src
     assert "ref: str" in src
@@ -227,14 +227,14 @@ def test_json_scalar_types_render_as_str():
 def test_keyword_only_params_render_star_separator():
     async def f(a: str, *, b: int) -> str: ...
 
-    src = render_type_check_stubs([f])
+    src = render_type_check_stubs([f]).source
     assert "async def f(a: str, *, b: int) -> str: ..." in src
 
 
 def test_defaults_are_not_emitted():
     async def f(a: str, b: int = 5) -> str: ...
 
-    src = render_type_check_stubs([f])
+    src = render_type_check_stubs([f]).source
     fn = _func_by_name(src, "f")
     # No default values in the stub (types only) — the host supplies behavior, not the stub.
     assert fn.args.defaults == []
@@ -243,7 +243,7 @@ def test_defaults_are_not_emitted():
 def test_explicit_any_is_allowed():
     async def f(x: Any) -> str: ...
 
-    src = render_type_check_stubs([f])
+    src = render_type_check_stubs([f]).source
     assert "x: Any" in src
     assert "from typing import" in src and "Any" in src
 
@@ -287,7 +287,7 @@ def test_subagent_send_tool_signature_renders():
         t.__name__: t
         for t in agent.subagent_toolset(_ChildAgent, key="child", task_queue="q")
     }
-    src = render_type_check_stubs([tools["child_ask"]])
+    src = render_type_check_stubs([tools["child_ask"]]).source
     _parse(src)
     # subagent handle (str) + the child's real input model, returning the real output model.
     assert "async def child_ask(subagent: str, q: _Question) -> _Answer: ..." in src
@@ -314,14 +314,14 @@ _search_tool.__name__ = "search"
 
 
 def test_generated_stubs_type_check_a_good_script():
-    stubs = render_type_check_stubs([_search_tool])
+    stubs = render_type_check_stubs([_search_tool]).source
     monty.Monty(_good_script(), type_check=True, type_check_stubs=stubs).start(
         print_callback=monty.CollectString()
     )
 
 
 def test_generated_stubs_reject_unknown_result_key():
-    stubs = render_type_check_stubs([_search_tool])
+    stubs = render_type_check_stubs([_search_tool]).source
     bad = (
         "import asyncio\n"
         "async def main():\n"
@@ -336,7 +336,7 @@ def test_generated_stubs_reject_unknown_result_key():
 
 
 def test_generated_stubs_reject_wrong_argument_type():
-    stubs = render_type_check_stubs([_search_tool])
+    stubs = render_type_check_stubs([_search_tool]).source
     bad = (
         "import asyncio\n"
         "async def main():\n"

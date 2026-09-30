@@ -107,13 +107,26 @@
     }
   };
 
+  // The builder may make several calls in one response, and the session starts each handler as
+  // soon as it sees the request, in stream order. Chain them so each runs on the script the one
+  // before it left: the same order `replay` rebuilds the script in.
+  let queue: Promise<unknown> = Promise.resolve();
+  const inOrder =
+    (tool: (call: ToolCall) => Promise<string>) =>
+    (call: ToolCall): Promise<string> => {
+      const run = queue.then(() => tool(call));
+      queue = run.catch(() => undefined);
+      return run;
+    };
+  const callbackTools = Object.fromEntries(Object.entries(editorTools).map(([name, tool]) => [name, inOrder(tool)]));
+
   // The parent re-mounts this component for each session, so these props never change here.
   // svelte-ignore state_referenced_locally
   const agent = sessionId
     ? new AgentSession<DagBuilderAgent>({
         sessionId,
         transport,
-        callbackTools: editorTools,
+        callbackTools,
         // A send made while an attach is still opening can miss its wake-up; poll often so the
         // turn it starts shows up promptly anyway.
         idlePollMs: 1000

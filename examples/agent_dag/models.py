@@ -23,9 +23,9 @@ StepToolName = Literal[
     "get_weather",
 ]
 
-StepModel = Literal["gpt-6-sol", "gpt-5.1", "gpt-5-mini"]
+StepModel = Literal["gpt-6-luna", "gpt-6.1-sol"]
 
-DEFAULT_STEP_MODEL: StepModel = "gpt-6-sol"
+DEFAULT_STEP_MODEL: StepModel = "gpt-6-luna"
 
 
 # ---------------------------------------------------------------------------

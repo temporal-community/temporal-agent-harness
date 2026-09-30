@@ -51,7 +51,14 @@ class DagStepAgentWorkflow:
     @agent.init
     def __init__(self, config: AgentConfig, spec: StepSpec) -> None:
         self._spec = spec
-        self.profile.set(StepProfile.model_validate(spec.model_dump()))
+        self.profile.set(
+            StepProfile(
+                name=spec.name,
+                instructions=spec.instructions,
+                tools=list(spec.tools),
+                model=spec.model,
+            )
+        )
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),

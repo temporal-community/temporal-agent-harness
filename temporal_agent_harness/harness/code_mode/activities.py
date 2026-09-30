@@ -51,6 +51,7 @@ from .batch_models import (
     CODE_TYPE_CHECK_ACTIVITY,
     CodeBatchStep,
     ResumeBatchInput,
+    TypeCheckStubs,
 )
 
 # The error type an operator (or an agent's error handling) can match on to tell a worker
@@ -87,7 +88,7 @@ def _require_code_mode_extra() -> None:
 
 @activity.defn(name=CODE_START_BATCH_ACTIVITY)
 async def code_start_batch(
-    script: str, type_check_stubs: str | None = None
+    script: str, stubs: TypeCheckStubs | None = None
 ) -> CodeBatchStep:
     """Compile + start ``script``, running to the first awaited batch of host calls or done.
 
@@ -95,7 +96,7 @@ async def code_start_batch(
     _require_code_mode_extra()
     from .monty_stepper import start_batch
 
-    return start_batch(script, type_check_stubs)
+    return start_batch(script, stubs)
 
 
 @activity.defn(name=CODE_RESUME_BATCH_ACTIVITY)
@@ -110,14 +111,14 @@ async def code_resume_batch(input: ResumeBatchInput) -> CodeBatchStep:
 
 
 @activity.defn(name=CODE_TYPE_CHECK_ACTIVITY)
-async def code_type_check(script: str, type_check_stubs: str) -> str:
+async def code_type_check(script: str, stubs: TypeCheckStubs) -> str:
     """Type-check ``script`` without running it: the checker's report, or ``""`` if clean.
 
     See :func:`.monty_stepper.type_check`."""
     _require_code_mode_extra()
     from .monty_stepper import type_check
 
-    return type_check(script, type_check_stubs) or ""
+    return type_check(script, stubs) or ""
 
 
 # The Code Mode activities every Code Mode worker registers, regardless of which

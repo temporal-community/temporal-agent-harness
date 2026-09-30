@@ -41,6 +41,7 @@ with workflow.unsafe.imports_passed_through():
         CallResult,
         CodeBatchStep,
         ResumeBatchInput,
+        TypeCheckStubs,
     )
 
 
@@ -67,8 +68,8 @@ class CodeModeDriver:
     Constructed per invocation by the ``code_mode_tool`` closure (which resolves the live
     :class:`AgentWorkflowRunner` from the ambient ``_CURRENT_RUNNER``). ``tools_by_name`` and
     ``coercers`` are precomputed once by the factory (validated + type-adapters built at
-    ``@agent.init``); ``type_check_stubs`` is the auto-generated stub source the sandbox
-    type-checks the script against before running it. Never runs the sandbox engine itself — that
+    ``@agent.init``); ``stubs`` are the auto-generated stubs the sandbox type-checks the script
+    against before running it. Never runs the sandbox engine itself — that
     happens in the ``code_start_batch`` / ``code_resume_batch`` activities."""
 
     def __init__(
@@ -78,14 +79,14 @@ class CodeModeDriver:
         coercers: Mapping[str, Mapping[str, TypeAdapter[Any]]],
         *,
         injections: Mapping[str, Any],
-        type_check_stubs: str,
+        stubs: TypeCheckStubs,
         step_timeout: timedelta,
     ) -> None:
         self._runner = runner
         self._tools_by_name = tools_by_name
         self._coercers = coercers
         self._injections = injections
-        self._type_check_stubs = type_check_stubs
+        self._stubs = stubs
         self._step_timeout = step_timeout
 
     async def run_script(self, script: str) -> str:
@@ -95,7 +96,7 @@ class CodeModeDriver:
         Each ``CodeBatchStep`` is a set of host calls the script is awaiting together (one
         ``await``, or several via ``asyncio.gather``); they run CONCURRENTLY as durable
         activities, so a script that gathers independent calls genuinely parallelizes them. The
-        auto-generated ``type_check_stubs`` are passed so the sandbox type-checks the script
+        auto-generated ``stubs`` are passed so the sandbox type-checks the script
         first — a bad call comes back as ``error`` for the author to fix, not a mid-run failure."""
         log = workflow.logger
         log.info(
@@ -107,7 +108,7 @@ class CodeModeDriver:
         stdout_parts: list[str] = []
         step: CodeBatchStep = await workflow.execute_activity(
             CODE_START_BATCH_ACTIVITY,
-            args=[script, self._type_check_stubs],
+            args=[script, self._stubs],
             result_type=CodeBatchStep,
             start_to_close_timeout=self._step_timeout,
         )
@@ -137,7 +138,9 @@ class CodeModeDriver:
             ]
             step = await workflow.execute_activity(
                 CODE_RESUME_BATCH_ACTIVITY,
-                ResumeBatchInput(snapshot=step.snapshot, results=results_input),
+                ResumeBatchInput(
+                    snapshot=step.snapshot, results=results_input, type_names=self._stubs.type_names
+                ),
                 result_type=CodeBatchStep,
                 start_to_close_timeout=self._step_timeout,
             )

@@ -28,7 +28,7 @@ export interface StepSpec {
    * The tools this step agent may call.
    */
   tools?: ("search_flights" | "search_hotels" | "book_flight" | "book_hotel" | "get_trip_summary" | "get_weather")[];
-  model?: "gpt-6-sol" | "gpt-5.1" | "gpt-5-mini";
+  model?: "gpt-6-luna" | "gpt-6.1-sol";
 }
 /**
  * Free-form natural-language text from the user (the input to a plain chat handler).

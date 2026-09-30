@@ -11,7 +11,9 @@ self.addEventListener("fetch", (event) => {
   if (!/\.svelte(\.js)?$/.test(pathname)) return;
   event.respondWith(
     (async () => {
-      const source = await (await fetch(event.request)).text();
+      // Always the file on disk: the server sends no cache headers, so the browser would
+      // otherwise keep compiling a stale copy for a while after an edit.
+      const source = await (await fetch(event.request, { cache: "no-store" })).text();
       const { js } = pathname.endsWith(".svelte")
         ? svelte.compile(source, { filename: pathname, css: "injected" })
         : svelte.compileModule(source, { filename: pathname });

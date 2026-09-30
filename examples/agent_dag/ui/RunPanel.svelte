@@ -58,7 +58,7 @@
       const t = times.get(call.toolId);
       return {
         id: call.toolId,
-        spec: { ...spec, tools: spec.tools ?? [], model: spec.model ?? "gpt-6-sol" },
+        spec: { ...spec, tools: spec.tools ?? [], model: spec.model ?? "gpt-6-luna" },
         status: call.state === "done" ? "done" : call.state === "failed" || call.state === "denied" ? "failed" : "running",
         output,
         error: call.error,

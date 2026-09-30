@@ -34,6 +34,18 @@ CODE_TYPE_CHECK_ACTIVITY = "code_type_check"
 _BYTES_AS_BASE64 = ConfigDict(ser_json_bytes="base64", val_json_bytes="base64")
 
 
+class TypeCheckStubs(BaseModel):
+    """What the sandbox needs to know about a Code Mode tool's host functions, rendered from its
+    tools by :func:`~temporal_agent_harness.harness.code_mode.stubs.render_type_check_stubs`.
+
+    ``source`` is the stub source a script is type-checked against. ``type_names`` are the
+    ``TypedDict``\\ s it defines, which the sandbox does not; the stepper answers a script's call
+    to one with a dict instead of surfacing it as a host call."""
+
+    source: str
+    type_names: list[str] = Field(default_factory=list)
+
+
 class PendingCall(BaseModel):
     """One host call the script is awaiting, surfaced to the workflow to run durably.
 
@@ -77,9 +89,13 @@ class CallResult(BaseModel):
 
 class ResumeBatchInput(BaseModel):
     """Input to ``code_resume_batch``: the serialized FutureSnapshot plus the results for
-    every call the workflow just ran (one :class:`CallResult` per pending call)."""
+    every call the workflow just ran (one :class:`CallResult` per pending call).
+
+    ``type_names`` are :attr:`TypeCheckStubs.type_names`, carried alone because resuming needs
+    only the names, not the stub source."""
 
     model_config = _BYTES_AS_BASE64
 
     snapshot: bytes
     results: list[CallResult] = Field(default_factory=list)
+    type_names: list[str] = Field(default_factory=list)

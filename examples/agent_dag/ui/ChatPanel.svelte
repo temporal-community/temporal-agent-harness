@@ -31,6 +31,7 @@
 <script lang="ts">
   import type { HarnessMessage, ToolPart } from "@temporal-agent-harness/svelte";
   import type { DagBuilderAgent } from "../client_sdk/DagBuilderAgent";
+  import { readOutput } from "./RunPanel.svelte";
 
   type Message = HarnessMessage<DagBuilderAgent>;
 
@@ -49,6 +50,7 @@
 
   let draft = $state("");
   let log: HTMLElement | undefined = $state();
+  let input: HTMLTextAreaElement | undefined = $state();
 
   const STARTERS = [
     {
@@ -66,11 +68,36 @@
   ];
   const FOLLOW_UPS = [
     "Add a budget reviewer before the judge",
-    "Run the scouts on gpt-5-mini",
+    "Run the judge on gpt-6.1-sol",
     "Have the judge return a pass/fail verdict"
   ];
 
   const all = $derived([...messages, ...pending]);
+
+  /** Why a finished run failed: the handler's error, or the script's. `null` if it didn't. */
+  function runFailure(m: Message): string | null {
+    if (m.handler !== "execute") return null;
+    if (m.status === "error" && m.turnNumber !== null) return m.error ?? "The run failed.";
+    if (m.status === "done" && m.output) return readOutput(m.output.text).error;
+    return null;
+  }
+
+  // When the latest message is a failed run, offer to send its failure to the assistant. It is
+  // only offered: the user sends it, so a flow that keeps failing never loops on its own. Any
+  // message or run after it withdraws the offer.
+  let dismissed = $state<string | null>(null);
+  const failedRun = $derived.by(() => {
+    const last = all.at(-1);
+    const error = last ? runFailure(last) : null;
+    return last && error !== null && last.id !== dismissed ? { id: last.id, error } : null;
+  });
+  const fixRequest = (error: string) => `The flow failed when I ran it:\n\n${error}\n\nFix the script so it runs.`;
+
+  function editFixRequest(run: { id: string; error: string }): void {
+    draft = fixRequest(run.error);
+    dismissed = run.id;
+    input?.focus();
+  }
 
   function send(text = draft): void {
     const trimmed = text.trim();
@@ -100,14 +127,21 @@
 
   function editLabel(p: ToolPart): { icon: string; text: string } {
     const input = p.input as Record<string, string>;
-    if (p.toolName === "read_code") return { icon: "eye", text: "Read the script" };
+    // Editor calls wait their turn in the page's queue, so a call is only past tense once the
+    // page has finished it.
+    const finished = p.state === "done" || p.state === "failed";
+    if (p.toolName === "read_code") return { icon: "eye", text: finished ? "Read the script" : "Reading the script…" };
     if (p.toolName === "check_code") {
       if (p.state !== "done") return { icon: "check", text: "Type-checking the script…" };
       return checkErrors(p) ? { icon: "warn", text: "Type check found errors" } : { icon: "check", text: "Type-checks cleanly" };
     }
-    if (p.toolName === "write_code") return { icon: "file", text: `Wrote ${String(input.code ?? "").split("\n").length} lines` };
+    if (p.toolName === "write_code") {
+      const lines = String(input.code ?? "").split("\n").length;
+      return { icon: "file", text: `${finished ? "Wrote" : "Writing"} ${lines} lines` };
+    }
     const first = String(input.new_text ?? "").trim().split("\n")[0] ?? "";
-    return { icon: "pen", text: input.new_text ? `Edited: ${first.slice(0, 56)}${first.length > 56 ? "…" : ""}` : "Deleted a block" };
+    if (!input.new_text) return { icon: "pen", text: finished ? "Deleted a block" : "Deleting a block…" };
+    return { icon: "pen", text: `${finished ? "Edited" : "Editing"}: ${first.slice(0, 56)}${first.length > 56 ? "…" : ""}` };
   }
 
   function seconds(m: Message): string {
@@ -126,7 +160,7 @@
 <section class="chat">
   <header>
     <b>Assistant</b>
-    <span>gpt-6-sol · edits your flow through callback tools</span>
+    <span>gpt-6-luna · edits your flow through callback tools</span>
   </header>
 
   <div class="log" bind:this={log}>
@@ -190,12 +224,13 @@
         {/if}
       {:else}
         {@const steps = m.parts.filter((p) => p.type === "tool" && p.toolName === "run_agent").length}
-        <button class="run" class:selected={selectedRun === m.id} data-status={m.status} onclick={() => onopenrun(m.id)}>
+        {@const failed = m.status === "error" || runFailure(m) !== null}
+        <button class="run" class:selected={selectedRun === m.id} data-status={failed ? "error" : m.status} onclick={() => onopenrun(m.id)}>
           <span class="play">
-            {#if m.status === "running" || m.status === "accepted" || m.status === "sending"}<i class="spinner"></i>{:else if m.status === "error"}!{:else}▶{/if}
+            {#if m.status === "running" || m.status === "accepted" || m.status === "sending"}<i class="spinner"></i>{:else if failed}!{:else}▶{/if}
           </span>
           <span>
-            {m.status === "done" ? "Ran the flow" : m.status === "error" ? "Run failed" : "Running the flow"}
+            {failed ? "Run failed" : m.status === "done" ? "Ran the flow" : "Running the flow"}
             · {steps} step{steps === 1 ? "" : "s"}
           </span>
           <span class="time">{seconds(m)}</span>
@@ -211,7 +246,17 @@
   </div>
 
   <div class="composer">
-    {#if hasCode && !busy && draft === ""}
+    {#if failedRun && !busy}
+      <div class="suggest">
+        <div class="head"><span class="icon" data-icon="warn"></span><b>The run failed.</b> Ask the assistant to fix it?</div>
+        <pre>{failedRun.error}</pre>
+        <div class="actions">
+          <button class="primary" onclick={() => send(fixRequest(failedRun.error))}>Send to assistant</button>
+          <button onclick={() => editFixRequest(failedRun)}>Edit first</button>
+          <button onclick={() => (dismissed = failedRun.id)}>Dismiss</button>
+        </div>
+      </div>
+    {:else if hasCode && !busy && draft === ""}
       <div class="chips">
         {#each FOLLOW_UPS as f (f)}
           <button onclick={() => send(f)}>{f}</button>
@@ -220,6 +265,7 @@
     {/if}
     <div class="box" class:busy>
       <textarea
+        bind:this={input}
         bind:value={draft}
         onkeydown={keydown}
         rows="3"
@@ -332,6 +378,15 @@
 
   .failed { font-size: 12px; color: var(--bad); display: flex; gap: 8px; align-items: center; }
   .failed button { border: 1px solid var(--line); background: var(--panel-2); border-radius: 6px; padding: 2px 8px; }
+
+  .suggest { margin-bottom: 8px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line)); border-radius: 9px; background: color-mix(in srgb, var(--warn) 7%, var(--panel-2)); font-size: 12.5px; animation: rise 0.25s ease-out; }
+  .suggest .head { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+  .suggest .head b { color: var(--ink); }
+  .suggest pre { margin: 7px 0 8px; padding: 7px 9px; max-height: 120px; overflow: auto; white-space: pre-wrap; font-size: 11px; color: var(--warn); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+  .suggest .actions { display: flex; gap: 6px; }
+  .suggest button { font-size: 11.5px; padding: 4px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); }
+  .suggest button:hover { color: var(--ink); border-color: var(--line-2); }
+  .suggest button.primary { border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 
   .composer { flex: none; padding: 10px 12px 12px; border-top: 1px solid var(--line); background: var(--panel); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
