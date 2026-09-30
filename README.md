@@ -24,6 +24,9 @@ build yourself:
   user's laptop, capturing a photo on their phone — even though the agent runs on a remote worker;
 - agents are **fully observable** — a standardized, full-lifecycle event stream lets you watch them
   live or replay exactly what they did;
+- **typed React and Svelte SDKs** turn an agent's Python class into one live, type-checked session
+  object, so you build the product UI — a game board, a trip planner, a document the agent edits —
+  instead of a streaming protocol client;
 
 all while you write the actual turn logic with the **AI SDKs you already know**.
 
@@ -50,7 +53,7 @@ worth cloning once to watch the whole stack work.
 Clone at a release tag. No Node/pnpm needed: the browser UI ships prebuilt.
 
 ```bash
-git clone --branch 0.4.0 https://github.com/temporal-community/temporal-agent-harness.git
+git clone --branch 0.5.0 https://github.com/temporal-community/temporal-agent-harness.git
 cd temporal-agent-harness
 cp .env.example .env.local   # then set GEMINI_API_KEY (and/or OPENAI_API_KEY)
 ```
@@ -74,7 +77,7 @@ one UI.
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
 the tag rather than on a branch. Later, move to a newer release with
 `git fetch --tags && git checkout <version>`, or see what changed between two of them with
-`git diff 0.3.0 0.4.0`.
+`git diff 0.4.0 0.5.0`.
 
 ### Build with it — install from PyPI
 
@@ -83,7 +86,7 @@ The harness is published to
 [`uv`](https://docs.astral.sh/uv/)-managed project:
 
 ```bash
-uv add 'temporal-agent-harness[ui]==0.4.0'
+uv add 'temporal-agent-harness[ui]==0.5.0'
 ```
 
 Or declare it in `pyproject.toml` — an ordinary dependency, no `[tool.uv.sources]` needed:
@@ -103,7 +106,7 @@ dependencies = [
     #   s3              S3-backed offload for large payloads
     #
     # What each one pulls in, and when you actually need it, is in the Extras table below.
-    "temporal-agent-harness[ui]==0.4.0",
+    "temporal-agent-harness[ui]==0.5.0",
 ]
 ```
 
@@ -187,7 +190,7 @@ opt-in:
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 
-Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.4.0'`.
+Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.5.0'`.
 
 ## Versioning and stability
 
@@ -199,7 +202,7 @@ UI matches the source it was built from.
 
 Two artifacts come out of a release, and they pin differently:
 
-- **The library** — pin an exact version from PyPI (`temporal-agent-harness==0.4.0`).
+- **The library** — pin an exact version from PyPI (`temporal-agent-harness==0.5.0`).
 - **The examples** — check out the matching git tag. They are *not* shipped in the package, so a
   PyPI install gives you the library, the packaged UI, and the CLI, but no `examples/` tree.
 
@@ -231,6 +234,15 @@ you build. **Watch an agent live** as it works, or **replay exactly what happene
 what it decided, which tools it ran, what it cost, and where a human stepped in. You instrument
 once; every agent on the harness gets it.
 
+### 🖥️ Your own UI, typed end to end — React and Svelte
+Build the product UI for your agent — a game board, a trip planner, a document it edits —
+without writing a streaming client. Generate TypeScript types from the agent's Python class, and
+`useAgentSession<MyAgent>()` (React) or `new AgentSession<MyAgent>()` (Svelte) gives you one
+reactive object holding the session's messages, observable state, subagents, approvals, and
+callbacks. `sendMessage` is type-checked against the agent's message handlers, and state you
+declare in Python arrives in the browser typed and current. Reloads, extra tabs, and server restarts all pick the session
+back up. See [Build a UI in React or Svelte](#build-a-ui-in-react-or-svelte).
+
 ### 🙋 Human-in-the-loop, solved
 Tool approvals are built in and **safe-by-default**: any tool call can require human sign-off, and
 a gated call **pauses inside the workflow and resumes durably** whenever a decision arrives (no
@@ -260,7 +272,8 @@ Tools come in two on-worker flavors — durable, activity-backed tools (`@agent.
 that run as retried, observable Temporal activities, and inline workflow tools
 (`@agent.tool_defn`). Each publishes its own start/end lifecycle events onto the agent's
 standardized event stream. (A third flavor — **callback tools** — runs on an attached client
-instead of the worker; see below.)
+instead of the worker; see
+[Callback tools](#-callback-tools--let-the-client-run-the-tool).)
 
 ### 📞 Callback tools — let the client run the tool
 An agent running on a Temporal worker often needs to act somewhere it can't reach — a file on the
@@ -666,6 +679,163 @@ handler names — which is exactly what the packaged UI does. Human/operator
 actions that are *not* messages stay first-class and separate: approve or deny a
 gated tool call (`tool_approval`, whose `remember` flag also relaxes the live
 policy), read state (`agent_status`), and stop the agent (the `close` signal).
+
+## Build a UI in React or Svelte
+
+A UI on a harness agent should be about the product, not the protocol. The client SDKs take care
+of the event stream, reconnects, JSON Patch state, pairing replies with messages, and the
+subagent tree, and they type all of it from the agent's Python class. The integration is one
+line:
+
+```ts
+const agent = useAgentSession<TicTacToeAgent>({ sessionId });                      // React
+const agent = new AgentSession<TicTacToeAgent>({ get sessionId() { return id; } }); // Svelte
+```
+
+| Package | What it is |
+| --- | --- |
+| [`@temporalio/agent-harness-react`](packages/react) | `useAgentSession`, a hook for React 18.2+ |
+| [`@temporalio/agent-harness-svelte`](packages/svelte) | `AgentSession`, a reactive class for Svelte 5 |
+| [`@temporalio/agent-harness-client`](packages/client) | the framework-free core both bindings share; re-exported by each |
+
+**1. Declare state on the agent.** `agent.state(...)` makes a model observable: every
+committed `mutate()` block is published on the event stream as JSON Patch ops. A tool reaches
+the state as an injected `StateRef`, which the workflow supplies and the model never sees, so
+the browser watches the board change as the model plays.
+
+```python
+from agents import Agent, Runner
+
+from temporal_agent_harness.ai_sdks.openai_agents_harness import as_openai_agent_tool
+from temporal_agent_harness.harness.state import HarnessState, StateRef
+
+
+class Board(HarnessState):
+    """Nine cells, read left to right, top to bottom."""
+
+    cells: list[Literal["X", "O"] | None] = [None] * 9
+
+
+class PlayMove(BaseModel):
+    """The player's move."""
+
+    cell: int
+
+
+# The model supplies `cell` and `mark`; the workflow injects `board`.
+@agent.tool_defn(inherently_safe=True)
+async def place_mark(
+    cell: int, mark: Literal["X", "O"], board: agent.Injected[StateRef[Board]]
+) -> str:
+    """Place a mark on an empty cell, 1-9."""
+    with board.mutate() as draft:
+        draft.cells[cell - 1] = mark
+    return f"{mark} is on cell {cell}."
+
+
+@agent.defn(name="TicTacToeAgent")
+class TicTacToeAgentWorkflow:
+    board = agent.state(Board)
+
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
+        )
+        self._sdk_agent = Agent(
+            name="TicTacToe",
+            instructions="You play O. Record the player's X with place_mark, then place your O.",
+            model="gpt-5.1",
+            tools=[as_openai_agent_tool(self._runner, place_mark, injections={"board": self.board})],
+        )
+
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
+    async def play(self, move: PlayMove) -> TextReply:
+        """Play X on a cell; the agent answers with its O."""
+        prompt = f"Board: {self.board.current.cells}. I play X on cell {move.cell}."
+        result = await Runner.run(self._sdk_agent, input=prompt)
+        return TextReply(text=str(result.final_output))
+```
+
+**2. Generate the types.** `temporal-agent-harness schema` prints an agent's handlers, state,
+and init data as JSON Schema, and [`harness-codegen`](packages/codegen) turns that into
+TypeScript. The generator runs from a checkout of this repo: build it once with
+`npm ci && npm run build` in `packages/codegen`, then from the repo root (the same steps as the
+`codegen-client-sdk` recipe in [`examples/tictactoe/justfile`](examples/tictactoe/justfile)):
+
+```bash
+uv run temporal-agent-harness schema examples.tictactoe.workflow:TicTacToeAgentWorkflow \
+  | node packages/codegen/dist/src/cli.js - -o client_sdk/TicTacToeAgent.ts
+```
+
+Commit the output and regenerate it in CI. Renaming a field on `Board` without regenerating then
+fails the type check, not production.
+
+**3. Render the session.**
+
+```bash
+npm install @temporalio/agent-harness-react    # or @temporalio/agent-harness-svelte
+```
+
+```tsx
+import { useAgentSession } from "@temporalio/agent-harness-react";
+import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent";
+
+function Game({ sessionId }: { sessionId: string }) {
+  const agent = useAgentSession<TicTacToeAgent>({ sessionId });
+  const board = agent.states.board; // typed as the Python `Board`
+
+  return (
+    <>
+      {board?.cells.map((cell, i) => (
+        // the handler name and its payload are both checked against the agent
+        <button key={i} onClick={() => agent.sendMessage("play", { cell: i + 1 })}>{cell ?? ""}</button>
+      ))}
+
+      {agent.messages.map((m) => (
+        <p key={m.id}>{m.handler} · {m.status} {m.output?.text}</p>
+      ))}
+
+      {agent.pendingApprovals.map(({ part }) => (
+        <div key={part.toolId}>
+          <strong>{part.toolName}</strong>
+          <button onClick={() => agent.respondToApproval(part.toolId, { approved: true })}>Approve</button>
+          <button onClick={() => agent.respondToApproval(part.toolId, { approved: false })}>Deny</button>
+        </div>
+      ))}
+    </>
+  );
+}
+```
+
+The Svelte binding has the same fields and actions; a component reads `agent.states.board` in a
+`$derived` and the connection stays open while anything reads it. Both packages' READMEs have the
+full example.
+
+**What the session gives you**
+
+- **Typed messages.** `agent.messages` narrows on `handler`, so `input` and `output` are that
+  handler's models. Each message's `parts` are its model calls, tool calls, and reply deltas, as
+  they stream.
+- **The whole agent tree.** Every subagent, at any depth, gets its own messages and state
+  through `agent.agents` and `agent.agent(id)`. `pendingApprovals` and `pendingCallbacks`
+  collect waiting tool calls from all of them and answer the right workflow.
+- **Callback tools in the browser.** Tools listed in `callbackTools` are answered by the page
+  itself (`get_timezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone`); any other
+  callback, such as an `ask_user`, waits in `pendingCallbacks` for
+  `agent.provideToolOutput(toolId, output)`.
+- **Durable by default.** A reload returns the same session, two tabs both stay live, and after a
+  server restart the stream resumes where it left off.
+- **One connection per session.** Components following the same session share one connection
+  under a `<HarnessProvider>` (React) or `createHarnessContext()` (Svelte).
+- **Typed starts.** `startSession(transport, TicTacToeAgent, { data })` creates a session, with
+  `data` required, optional, or refused to match the agent's init data.
+
+[`examples/tictactoe/ui`](examples/tictactoe/ui) is a complete board in one Svelte component, and
+[`examples/agent_dag/ui`](examples/agent_dag/ui) is a larger studio. The design and its reasoning
+are in [`docs/design/typed-agent-sessions.md`](docs/design/typed-agent-sessions.md).
 
 ## Requirements
 
