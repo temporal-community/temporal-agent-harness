@@ -151,14 +151,14 @@ async def test_a_flow_can_build_its_steps_by_calling_their_type(client_and_queue
 
 
 async def test_importing_the_host_stubs_fails_before_any_step(client_and_queue):
-    # The type checker resolves `type_stubs` (it is how it loads the host stubs), but the sandbox
-    # has no such module, so the run fails on the import, before any host call.
+    # The host stubs are declarations for the type checker, not a module the script can import,
+    # so the import is rejected when the script is checked, before any host call.
     client, task_queue = client_and_queue
     script = "from type_stubs import AgentStep, AgentStepResult, run_agent\n" + FLOW
     reply, events = await _execute(client, task_queue, script)
 
-    assert reply.startswith("Script error (MontyRuntimeError")
-    assert "No module named 'type_stubs'" in reply
+    assert reply.startswith("Script error (MontyTypingError")
+    assert "Cannot resolve imported module `type_stubs`" in reply
     assert not [e for e in events if e.event.type == AgentEventType.SUBAGENT_STARTED]
 
 

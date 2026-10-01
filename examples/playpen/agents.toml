@@ -1,0 +1,15 @@
+# Registry of agents the Playpen example UI can launch.
+#
+# The packaged server (`just server`) reads this file and passes the parsed registry into the
+# packaged SessionManagerWorkflow, which serves it back over the `available_agents` query.
+
+[[agents]]
+key = "playpen-support"
+workflow_type = "PlaypenSupportAgent"
+agent = "examples.playpen.workflow:PlaypenSupportAgentWorkflow"
+task_queue = "playpen-support-agent"
+label = "Support agent (Playpen policy)"
+description = """
+A store support agent that writes and runs Code Mode scripts. Every host call its script makes
+is decided by a Dogwood policy before it runs: lookups go through, mail goes only to addresses
+on file, each order is refunded once, and refunds over $50 come to you."""

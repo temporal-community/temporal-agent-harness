@@ -81,10 +81,15 @@ class CodeBatchStep(BaseModel):
 
 
 class CallResult(BaseModel):
-    """A host call's result, keyed by ``call_id`` for resuming the FutureSnapshot."""
+    """A host call's result, keyed by ``call_id`` for resuming the FutureSnapshot.
+
+    ``permission_denied`` is set instead of ``return_value`` when the agent's approval policy
+    refused the call: the call never ran, and the script resumes with ``PermissionError``
+    raised at its ``await``, carrying this message."""
 
     call_id: int
     return_value: Any = None
+    permission_denied: str | None = None
 
 
 class ResumeBatchInput(BaseModel):

@@ -1,0 +1,66 @@
+// The Playpen support agent's policy. Every host call the agent's script makes is decided
+// against these rules, and the session's history, before it runs.
+//
+// How a call is decided:
+//   - a permit rule that matches lets it run, unless a forbid also matches;
+//   - a forbid annotated @on_deny("escalate") sends it to a person instead of failing it;
+//   - anything else is refused, and the script sees PermissionError with the @reason.
+// No rule matching means refused: the agent can do only what is written down here.
+//
+// The history a rule can look back over (see temporal_agent_harness/playpen):
+//   Action::"x"::request   a call to x that was attempted, whatever its verdict
+//   Action::"x"::admitted  a call to x that was let through, by this policy or by a person
+//   Action::"x"::response  a call to x that completed, with its result in output.*
+//
+// Edits take effect on the next call; no restart needed.
+
+@id("lookups")
+@reason("Reading tickets, customers and orders is always allowed.")
+permit (
+    principal,
+    action in [
+        Support::Action::"list_open_tickets",
+        Support::Action::"get_ticket",
+        Support::Action::"get_customer",
+        Support::Action::"get_order"
+    ],
+    resource
+);
+
+// Prompt injection. A ticket is written by whoever opened it, so an address in a ticket is
+// a claim, not a fact. Mail goes only to an address the CRM returned this session.
+@id("email_address_on_file")
+@reason("Email goes only to a customer's address on file, as the CRM returned it, never to an address taken from a ticket.")
+permit (principal, action == Support::Action::"send_email", resource)
+when temporal {
+    formerly within 24h Support::Action::"get_customer"::response{ output.email: context.input.to }
+};
+
+// A refund must be for an order the agent actually looked up, for no more than it cost.
+@id("refund_up_to_order_total")
+@reason("A refund must be for an order you have looked up with get_order, for at most its total_cents.")
+permit (principal, action == Support::Action::"issue_refund", resource)
+when temporal {
+    exists (total: Long). (
+        formerly within 24h Support::Action::"get_order"::response{
+            output.order_id: context.input.order_id,
+            output.total_cents: total
+        }
+        && context.input.amount_cents <= total
+    )
+};
+
+// Something silly. Two tickets about one order are still one order: refund it once.
+@id("one_refund_per_order")
+@reason("This order has already been refunded.")
+forbid (principal, action == Support::Action::"issue_refund", resource)
+when temporal {
+    formerly within 24h Support::Action::"issue_refund"::admitted{ input.order_id: context.input.order_id }
+};
+
+// Big refunds are fine, but a person signs off on them.
+@id("large_refund_needs_a_person")
+@on_deny("escalate")
+@reason("Refunds over $50 need a person to sign off.")
+forbid (principal, action == Support::Action::"issue_refund", resource)
+when { context.input.amount_cents > 5000 };

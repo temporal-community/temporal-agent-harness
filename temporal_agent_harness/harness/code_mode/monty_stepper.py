@@ -10,17 +10,24 @@ that doesn't have the extra and can report its absence as an actionable activity
 ``pydantic_monty`` raises ImportError. :func:`.activities._require_code_mode_extra` is that
 check, and the two activities call it before importing anything from here.
 
+=== Where the sandbox runs ===
+
+Monty runs every script in a ``monty`` worker SUBPROCESS (the binary ships in the
+``pydantic-monty-runtime`` dependency), owned by a pool. Each activity call opens its own
+one-worker pool and closes it on return: a pool costs about ten milliseconds to start, and
+holding none between calls keeps the activities stateless — nothing ties a call to the
+worker process, the event loop, or an earlier call, so a retry or a different Temporal worker
+picks up a script exactly where the snapshot left it.
+
 === Async / concurrent driver (FutureSnapshot batches) ===
 
-Monty's *synchronous* stepping API (``Monty(code).start()`` / ``snapshot.resume(...)``) runs the
-sandboxed script until it calls a function the sandbox doesn't define — at which point it
-SUSPENDS and hands the host the pending call. The host does the real work, then ``resume(...)``
-continues from exactly that point.
+``session.feed_start(script)`` runs the sandboxed script until it calls a function the sandbox
+doesn't define — at which point it SUSPENDS and hands the host the pending call. The host does
+the real work, then ``resume(...)`` continues from exactly that point.
 
 Host functions are ``async`` (the stubs declare ``async def``; scripts ``await`` them), so a
 script runs host calls CONCURRENTLY with ``await asyncio.gather(search_flights(...),
-search_hotels(...))``. Monty's async-host-function protocol over the synchronous stepping API
-makes that work:
+search_hotels(...))``. Monty's async-host-function protocol makes that work:
 
   * When the script calls an ``async def`` host function, Monty yields a FunctionSnapshot.
     Instead of resolving it, we resume with ``{"future": ...}`` (an ExternalFuture) — "this
@@ -29,27 +36,36 @@ makes that work:
     point Monty yields a FutureSnapshot whose ``pending_call_ids`` is the batch the script
     is blocked on. We hand that whole batch to the workflow, which runs every call
     CONCURRENTLY as its own durable activity (``asyncio.gather`` over ``execute_activity``)
-    and resumes the FutureSnapshot with ``{call_id: {"return_value": ...}}`` for all of them.
+    and resumes the FutureSnapshot with ``{call_id: {"return_value": ...}}`` for all of them
+    — or ``{"exception": PermissionError(...)}`` for a call the approval policy refused.
 
 So concurrency is real and durable: one Temporal activity per host call, all in flight at
 once, orchestrated by the workflow. The defer loop (resuming ExternalFutures) does no host
 work, so it runs entirely inside the activity — only the awaited batch crosses to the
-workflow. A purely sequential script (``await`` one call at a time) just produces single-call
-batches; a synchronous (non-awaited) script is not supported — host functions are async by
-contract.
+workflow, as the FutureSnapshot's dump, which the next activity restores into a fresh session.
+A purely sequential script (``await`` one call at a time) just produces single-call batches; a
+synchronous (non-awaited) script is not supported — host functions are async by contract.
 
-=== Calling a stub type ===
+=== What the host answers itself ===
 
-The ``TypedDict``\\ s in the stubs exist only for the type checker, so the sandbox does not
-define them. A script that calls one as a value (``StepSpec(name=..., prompt=...)``) passes the
-type check, and at run time the sandbox surfaces the call like a host-function call.
-:func:`_drive_to_batch` answers it inside the activity with the ``dict`` the arguments build,
-which is what calling a ``TypedDict`` returns in CPython. The workflow never sees these calls.
+The workflow sees only host-function calls. Three other suspensions are answered here:
+
+  * a call to one of the stubs' ``TypedDict``\\ s, which exist only for the type checker, so the
+    sandbox does not define them. A script that calls one as a value (``StepSpec(name=...,
+    prompt=...)``) passes the type check, and at run time the sandbox surfaces the call like a
+    host-function call. :func:`_drive_to_batch` answers it with the ``dict`` the arguments
+    build, which is what calling a ``TypedDict`` returns in CPython;
+  * an OS call (a file, the environment, a subprocess). Code Mode's sandbox has no filesystem,
+    no network and no environment, so every OS call is answered "not handled" and fails inside
+    the sandbox. Its only capabilities are the host functions;
+  * a read of a name nothing defines, which is left undefined, so the sandbox raises
+    ``NameError`` at it.
 
 No ``from __future__ import annotations`` — matching :mod:`.batch_models` and the rest of the
 agent's Temporal-facing modules, whose annotations must stay runtime-resolvable.
 """
 
+import json
 from collections.abc import Collection
 from typing import Any
 
@@ -64,33 +80,61 @@ from .batch_models import (
     TypeCheckStubs,
 )
 
+# How long a check-only feed may run before its first host call. The check itself happens
+# before anything runs; this only bounds a script that computes for a while before calling out.
+_TYPE_CHECK_LIMITS: monty.ResourceLimits = {"max_feed_duration_secs": 1.0}
 
-def _drive_to_batch(
-    snap: Any, stdout: monty.CollectString, type_names: Collection[str]
+
+def _pool() -> monty.AsyncMonty:
+    """A one-worker pool for one activity call (see the module docstring)."""
+    return monty.AsyncMonty(min_processes=1, max_processes=1)
+
+
+def _jsonable(value: Any) -> Any:
+    """The script's final value as JSON-native data, the shape ``CodeBatchStep`` carries it in.
+
+    Sequences and sets become lists and mappings dicts, as ``json`` would have them. A value
+    with no JSON shape — bytes, a sandbox class instance — is carried as its ``repr``, which is
+    how the driver presents a final value to the model anyway."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable(v) for v in value]
+    return repr(value)
+
+
+async def _drive_to_batch(
+    snap: monty.AsyncSnapshot, stdout: monty.CollectString, type_names: Collection[str]
 ) -> CodeBatchStep:
     """Run Monty forward, deferring each external call as a future, until it awaits a batch.
 
     Loops: a FunctionSnapshot calling one of ``type_names`` (a stub ``TypedDict``) is answered
-    with a dict, as in this module's docstring; any other FunctionSnapshot (an ``async`` host
-    call) is recorded and resumed with ``{"future": ...}`` so execution continues; a
-    FutureSnapshot means the script is now awaiting — return its ``pending_call_ids`` (resolved
-    to the recorded calls) for the workflow to run; MontyComplete means done. Any ``snapshot.resume`` may raise a
-    MontyError if the script errors mid-run — the callers translate that to ``error``."""
+    with a dict, and an OS call or a bare undefined name is answered as in this module's
+    docstring; any other FunctionSnapshot (an ``async`` host call) is recorded and resumed with
+    ``{"future": ...}`` so execution continues; a FutureSnapshot means the script is now
+    awaiting — return its ``pending_call_ids`` (resolved to the recorded calls) for the workflow
+    to run; MontyComplete means done. Any ``resume`` may raise a MontyError if the script errors
+    mid-run — the callers translate that to ``error``."""
     seen: dict[int, PendingCall] = {}
     while True:
         if isinstance(snap, monty.MontyComplete):
             return CodeBatchStep(
-                done=True, stdout=stdout.output, output_json=snap.output_json()
+                done=True, stdout=stdout.output, output_json=json.dumps(_jsonable(snap.output))
             )
-        if isinstance(snap, monty.FunctionSnapshot) and snap.function_name in type_names:
+        if isinstance(snap, monty.AsyncFunctionSnapshot) and snap.is_os_function:
+            snap = await snap.resume_not_handled()
+            continue
+        if isinstance(snap, monty.AsyncFunctionSnapshot) and snap.function_name in type_names:
             try:
                 value = dict(*snap.args, **snap.kwargs)
             except (TypeError, ValueError) as e:
-                snap = snap.resume({"exception": e})
+                snap = await snap.resume({"exception": e})
             else:
-                snap = snap.resume({"return_value": value})
+                snap = await snap.resume({"return_value": value})
             continue
-        if isinstance(snap, monty.FunctionSnapshot):
+        if isinstance(snap, monty.AsyncFunctionSnapshot):
             seen[snap.call_id] = PendingCall(
                 call_id=snap.call_id,
                 function_name=str(snap.function_name),
@@ -98,9 +142,12 @@ def _drive_to_batch(
                 kwargs=dict(snap.kwargs),
             )
             # ExternalFuture: "pending, keep going" — does no host work, so stay in-activity.
-            snap = snap.resume({"future": ...})
+            snap = await snap.resume({"future": ...})
             continue
-        if isinstance(snap, monty.FutureSnapshot):
+        if isinstance(snap, monty.AsyncNameLookupSnapshot):
+            snap = await snap.resume()
+            continue
+        if isinstance(snap, monty.AsyncFutureSnapshot):
             ids = list(snap.pending_call_ids)
             missing = [i for i in ids if i not in seen]
             if missing:
@@ -119,7 +166,6 @@ def _drive_to_batch(
                 snapshot=snap.dump(),
                 pending=[seen[i] for i in ids],
             )
-        # NameLookupSnapshot (unknown bare name) — unsupported by this driver.
         raise ApplicationError(
             f"unsupported Monty suspension: {type(snap).__name__}",
             type="UnsupportedMontySuspension",
@@ -127,7 +173,7 @@ def _drive_to_batch(
         )
 
 
-def start_batch(script: str, stubs: TypeCheckStubs | None = None) -> CodeBatchStep:
+async def start_batch(script: str, stubs: TypeCheckStubs | None = None) -> CodeBatchStep:
     """Compile + start ``script`` (async driver), running to the first awaited batch or done.
 
     Type-checks against ``stubs`` when provided (Code Mode always passes the auto-generated
@@ -140,19 +186,21 @@ def start_batch(script: str, stubs: TypeCheckStubs | None = None) -> CodeBatchSt
         stubs is not None,
     )
     stdout = monty.CollectString()
-    try:
-        instance = monty.Monty(
-            script,
+    async with _pool() as pool:
+        async with pool.checkout(
             type_check=stubs is not None,
             type_check_stubs=stubs.source if stubs is not None else None,
-        )
-        snap = instance.start(print_callback=stdout)
-        step = _drive_to_batch(snap, stdout, stubs.type_names if stubs is not None else ())
-    except monty.MontyError as e:
-        activity.logger.warning("code_start_batch: %s: %s", type(e).__name__, e)
-        return CodeBatchStep(
-            done=True, stdout=stdout.output, error=f"{type(e).__name__}: {e}"
-        )
+        ) as session:
+            try:
+                snap = await session.feed_start(script, print_callback=stdout)
+                step = await _drive_to_batch(
+                    snap, stdout, stubs.type_names if stubs is not None else ()
+                )
+            except monty.MontyError as e:
+                activity.logger.warning("code_start_batch: %s: %s", type(e).__name__, e)
+                return CodeBatchStep(
+                    done=True, stdout=stdout.output, error=f"{type(e).__name__}: {e}"
+                )
     activity.logger.info(
         "code_start_batch: %s",
         "done"
@@ -162,32 +210,42 @@ def start_batch(script: str, stubs: TypeCheckStubs | None = None) -> CodeBatchSt
     return step
 
 
-def resume_batch(input: ResumeBatchInput) -> CodeBatchStep:
+async def resume_batch(input: ResumeBatchInput) -> CodeBatchStep:
     """Resume a FutureSnapshot with the workflow-computed results, then run to the next batch.
 
     ``input.results`` carries one :class:`CallResult` per call the workflow ran (the batch
-    that was awaited). Resumes the FutureSnapshot with ``{call_id: {"return_value": ...}}``
-    for all of them, then drives forward to the next awaited batch or completion. The body of
-    :func:`.activities.code_resume_batch`."""
+    that was awaited). Restores the snapshot into a fresh session (which brings back the
+    script's type-check state with it) and resumes it with ``{call_id: {"return_value": ...}}``
+    for all of them — or ``{"exception": PermissionError(...)}`` for a call the approval policy
+    refused, so the script sees the refusal at that call's ``await`` while the rest of the batch
+    delivers normally — then drives forward to the next awaited batch or completion. The body
+    of :func:`.activities.code_resume_batch`."""
     stdout = monty.CollectString()
-    snap = monty.load_snapshot(input.snapshot, print_callback=stdout)
-    if not isinstance(snap, monty.FutureSnapshot):
-        raise ApplicationError(
-            f"code_resume_batch expected a FutureSnapshot, got {type(snap).__name__}",
-            type="MontyResumeKind",
-            non_retryable=True,
-        )
     results_map: dict[int, Any] = {
-        r.call_id: {"return_value": r.return_value} for r in input.results
-    }
-    try:
-        resumed = snap.resume(results_map)
-        step = _drive_to_batch(resumed, stdout, input.type_names)
-    except monty.MontyError as e:
-        activity.logger.warning("code_resume_batch: %s: %s", type(e).__name__, e)
-        return CodeBatchStep(
-            done=True, stdout=stdout.output, error=f"{type(e).__name__}: {e}"
+        r.call_id: (
+            {"exception": PermissionError(r.permission_denied)}
+            if r.permission_denied is not None
+            else {"return_value": r.return_value}
         )
+        for r in input.results
+    }
+    async with _pool() as pool:
+        async with pool.checkout() as session:
+            snap = await session.load_snapshot(input.snapshot, print_callback=stdout)
+            if not isinstance(snap, monty.AsyncFutureSnapshot):
+                raise ApplicationError(
+                    f"code_resume_batch expected a FutureSnapshot, got {type(snap).__name__}",
+                    type="MontyResumeKind",
+                    non_retryable=True,
+                )
+            try:
+                resumed = await snap.resume(results_map)
+                step = await _drive_to_batch(resumed, stdout, input.type_names)
+            except monty.MontyError as e:
+                activity.logger.warning("code_resume_batch: %s: %s", type(e).__name__, e)
+                return CodeBatchStep(
+                    done=True, stdout=stdout.output, error=f"{type(e).__name__}: {e}"
+                )
     activity.logger.info(
         "code_resume_batch: %s",
         "done"
@@ -197,15 +255,24 @@ def resume_batch(input: ResumeBatchInput) -> CodeBatchStep:
     return step
 
 
-def type_check(script: str, stubs: TypeCheckStubs) -> str | None:
-    """Check ``script`` against ``stubs`` exactly as :func:`start_batch` does, without
-    running it.
+async def type_check(script: str, stubs: TypeCheckStubs) -> str | None:
+    """Check ``script`` against ``stubs`` exactly as :func:`start_batch` does, without letting
+    it act.
 
-    Returns the checker's syntax or type errors, each with its line, or ``None`` when the script
-    is clean. Monty checks when the script is compiled, and nothing runs until ``start``, which
-    this never calls. The body of :func:`.activities.code_type_check`."""
-    try:
-        monty.Monty(script, type_check=True, type_check_stubs=stubs.source)
-    except monty.MontyError as e:
-        return f"{type(e).__name__}: {e}"
+    Returns the checker's syntax or type errors, each with its line, or ``None`` when the
+    script is clean. Monty checks a script as it is fed, before any of it runs; a clean script
+    then starts, and this abandons it at its first suspension — no host call is answered, so it
+    cannot reach anything, and a long computation before that point is cut off by
+    :data:`_TYPE_CHECK_LIMITS`. A runtime error is not a type error, so it reports nothing. The
+    body of :func:`.activities.code_type_check`."""
+    async with _pool() as pool:
+        async with pool.checkout(
+            type_check=True, type_check_stubs=stubs.source, limits=_TYPE_CHECK_LIMITS
+        ) as session:
+            try:
+                await session.feed_start(script, print_callback=monty.CollectString())
+            except (monty.MontySyntaxError, monty.MontyTypingError) as e:
+                return f"{type(e).__name__}: {e}"
+            except monty.MontyRuntimeError:
+                return None
     return None

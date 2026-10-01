@@ -35,3 +35,9 @@ pyrightconfig.json
 
 # Local LLM configs
 .claude/
+
+# The Playpen example builds its Dogwood CLI here (`just install-dogwood`).
+examples/playpen/.dogwood/
+
+# Recordings and screenshots from Playwright sessions.
+output/playwright/

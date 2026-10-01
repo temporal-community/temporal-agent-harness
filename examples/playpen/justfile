@@ -1,0 +1,67 @@
+# Scoped justfile for the Playpen example (examples/playpen).
+# Run from this directory: `just <recipe>`.
+#
+# One-time: build the Dogwood CLI that decides each host call (needs a Rust toolchain, rustc 1.89+):
+#   just install-dogwood
+#
+# Self-contained local stack (each in its own terminal):
+#   just temporal          # 1. local Temporal dev server (or bring your own)
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API + UI on :8000
+#   just worker            # 4. this example's agent worker
+#
+# First-time setup: `cp .env.example .env.local` from the repo root and set GEMINI_API_KEY.
+
+# Shows a notice when running from an untagged commit (silent on a release archive).
+import '../../scripts/untagged-notice.just'
+
+# Read the single shared env file at the repo root (resolved relative to this justfile).
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+policies := justfile_directory() / "policies"
+
+# The Dogwood revision this example is written against.
+dogwood_repo := "https://github.com/dogwood-policy/dogwood"
+dogwood_rev := "996d756de1013b7ae209a14f566a80375a59f2f0"
+
+# Where `install-dogwood` puts the CLI; set DOGWOOD_CLI in .env.local to use another build.
+export DOGWOOD_CLI := env_var_or_default("DOGWOOD_CLI", justfile_directory() / ".dogwood" / "bin" / "dogwood")
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Build the Dogwood CLI into examples/playpen/.dogwood (gitignored). Needs rustc 1.89 or newer;
+# with an older default toolchain, pick a newer one: `RUSTUP_TOOLCHAIN=1.96 just install-dogwood`.
+install-dogwood:
+    cargo install --git {{dogwood_repo}} --rev {{dogwood_rev}} dogwood-cli --root "{{justfile_directory()}}/.dogwood"
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Run the packaged session-manager worker (`temporal-agent-harness session-manager`).
+session-manager:
+    cd "{{root}}" && uv run --group examples temporal-agent-harness session-manager
+
+# Serve the Svelte UI + FastAPI API on http://localhost:8000, pointed at this example's registry.
+server:
+    cd "{{root}}" && uv run --group examples temporal-agent-harness serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Run the support agent worker (needs GEMINI_API_KEY and the Dogwood CLI).
+worker:
+    cd "{{root}}" && uv run --group examples python -m examples.playpen.worker
+
+# Check the support policy against its schema, and its annotations, without running anything.
+check:
+    cd "{{root}}" && uv run --group examples python -m temporal_agent_harness.playpen.check "{{policies}}/support" --dogwood "$DOGWOOD_CLI"
+
+# Regenerate the support policy's Cedar schema after changing a host function's signature.
+schema:
+    cd "{{root}}" && uv run --group examples python -m temporal_agent_harness.playpen.schema examples.playpen.store:STORE_TOOLS --namespace Support --dogwood "$DOGWOOD_CLI" -o "{{policies}}/support/schema.cedarschema"
+
+# Run this example's tests, Dogwood included.
+test:
+    cd "{{root}}" && uv run --group examples python -m pytest tests/playpen tests/examples/playpen -v

@@ -88,6 +88,13 @@ def resolve_hints(obj: Callable[..., Any]) -> dict[str, Any]:
         return {}
 
 
+# Builtins the script may name that the sandbox's type checker does not define. A host call the
+# approval policy refuses raises ``PermissionError`` at its ``await`` (see the driver), so a
+# script that catches it must type-check. Declared for the checker only: stubs never execute, so
+# at run time the name is the sandbox's own builtin, which is what the driver raises.
+_CHECKER_BUILTINS = "class PermissionError(OSError): ..."
+
+
 class _StubBuilder:
     """Accumulates the ``TypedDict`` definitions referenced by a set of tools, and renders each
     tool's signature. One builder handles one render pass over one tool list."""
@@ -102,11 +109,17 @@ class _StubBuilder:
         self._uses_not_required = False
 
     def build(
-        self, tools: list[Callable[..., Awaitable[Any]]], *, with_doc: bool
+        self,
+        tools: list[Callable[..., Awaitable[Any]]],
+        *,
+        with_doc: bool,
+        checker_builtins: bool = False,
     ) -> str:
         """Render ``tools`` to source: the referenced ``TypedDict``s followed by one ``async def``
         per tool. ``with_doc`` attaches each tool's docstring as the stub body (for the
-        model-facing interface); otherwise the body is ``...`` (for the type checker)."""
+        model-facing interface); otherwise the body is ``...`` (for the type checker).
+        ``checker_builtins`` adds :data:`_CHECKER_BUILTINS` after the imports, for the type
+        checker only."""
         func_blocks = [self._render_tool(t, with_doc=with_doc) for t in tools]
 
         typing_imports: list[str] = []
@@ -131,6 +144,8 @@ class _StubBuilder:
             typed_dicts.append(f"class {name}(TypedDict):\n{body}")
 
         sections = ["\n".join(header)]
+        if checker_builtins:
+            sections.append(_CHECKER_BUILTINS)
         if typed_dicts:
             sections.append("\n\n".join(typed_dicts))
         if func_blocks:
@@ -336,7 +351,7 @@ def render_type_check_stubs(tools: list[Callable[..., Awaitable[Any]]]) -> TypeC
     ``type_names``. Raises :class:`CodeModeStubError` if any parameter/field/return type cannot be
     rendered faithfully (see the module docstring)."""
     builder = _StubBuilder()
-    source = builder.build(tools, with_doc=False)
+    source = builder.build(tools, with_doc=False, checker_builtins=True)
     return TypeCheckStubs(source=source, type_names=builder.type_names())
 
 

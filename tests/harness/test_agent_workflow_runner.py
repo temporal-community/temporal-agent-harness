@@ -93,6 +93,7 @@ def _ctx(tool_name: str, **kwargs) -> AutoApprovalContext:
             "criteria_set", AutoApprovalCriteriaSet(effect="Does something.")
         ),
         criteria_set_name=kwargs.pop("criteria_set_name", "default"),
+        tool_id=kwargs.pop("tool_id", "tool-1"),
         **kwargs,
     )
 
@@ -1184,6 +1185,7 @@ def _auto_ctx(runner, tool_name="run_sql", declared=None):
         inherently_safe=False,
         tool_description="Run a SQL statement.",
         declared_criteria_set=declared,
+        tool_id="tool-1",
     )
 
 

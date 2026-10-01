@@ -9,7 +9,9 @@ as text.
 
 The host-call surface is generic: the driver holds a ``{name: tool}`` map and dispatches each
 call the script makes to the matching harness tool via ``runner.run_tool`` — so every host call
-inherits that tool's approval policy and tool_start/tool_end lifecycle.
+inherits that tool's approval policy and tool_start/tool_end lifecycle. A call the policy refuses
+is not a failure of the script: the script resumes with ``PermissionError`` raised at that call's
+``await``, and the rest of its batch delivers normally.
 
 Sandbox-safe: this module imports only ``pydantic`` + ``temporalio`` + the workflow-safe
 :mod:`.batch_models`. It never imports ``pydantic_monty`` — the sandbox engine runs only in the
@@ -25,6 +27,7 @@ import asyncio
 import inspect
 import json
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -33,7 +36,10 @@ from temporalio import workflow
 from temporalio.exceptions import ApplicationError
 
 with workflow.unsafe.imports_passed_through():
-    from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_harness.harness.agent_workflow import (
+        AgentWorkflowRunner,
+        ToolApprovalDenied,
+    )
 
     from .batch_models import (
         CODE_RESUME_BATCH_ACTIVITY,
@@ -62,6 +68,32 @@ def _to_sandbox(value: Any) -> Any:
     return value
 
 
+@dataclass(frozen=True)
+class HostCallResult:
+    """One host call that ran to completion: what the script asked for, and what it got back.
+
+    Handed to a ``code_mode_tool``'s ``on_host_call_result`` observer, in-workflow, as each
+    call returns. ``tool_id`` is the id the call ran under — the same one its approval gate
+    and its ``tool_start``/``tool_end`` events carry. ``tool_input`` and ``result`` are
+    JSON-native (models dumped, as the script itself sees them). A call the approval policy
+    refused, or that raised, never produces one."""
+
+    tool_id: str
+    tool_name: str
+    tool_input: dict[str, Any]
+    result: Any
+
+
+HostCallObserver = Callable[[HostCallResult], None]
+
+
+@dataclass(frozen=True)
+class _Refused:
+    """A host call the approval policy refused, carrying the refusal for the script."""
+
+    message: str
+
+
 class CodeModeDriver:
     """Runs a Code Mode script to completion, dispatching its host calls to real harness tools.
 
@@ -81,6 +113,7 @@ class CodeModeDriver:
         injections: Mapping[str, Any],
         stubs: TypeCheckStubs,
         step_timeout: timedelta,
+        on_host_call_result: HostCallObserver | None = None,
     ) -> None:
         self._runner = runner
         self._tools_by_name = tools_by_name
@@ -88,6 +121,7 @@ class CodeModeDriver:
         self._injections = injections
         self._stubs = stubs
         self._step_timeout = step_timeout
+        self._on_host_call_result = on_host_call_result
 
     async def run_script(self, script: str) -> str:
         """Drive ``script`` to completion via the async batch loop; return its stdout + final
@@ -126,6 +160,9 @@ class CodeModeDriver:
             # Run the whole awaited batch CONCURRENTLY — each host call is its own durable
             # activity (dispatched via run_tool, so each is independently approval-gated and
             # publishes its own tool lifecycle). Order is preserved to key results by call_id.
+            # A refused call comes back as a value, not an exception, so a refusal cannot
+            # abandon the rest of the batch mid-flight: every sibling runs to its own end and
+            # the script hears about each outcome at its own await.
             results = await asyncio.gather(
                 *(
                     self._dispatch_host_call(c.function_name, c.args, c.kwargs)
@@ -133,7 +170,9 @@ class CodeModeDriver:
                 )
             )
             results_input = [
-                CallResult(call_id=c.call_id, return_value=r)
+                CallResult(call_id=c.call_id, permission_denied=r.message)
+                if isinstance(r, _Refused)
+                else CallResult(call_id=c.call_id, return_value=r)
                 for c, r in zip(step.pending, results)
             ]
             step = await workflow.execute_activity(
@@ -170,7 +209,10 @@ class CodeModeDriver:
         NOT coerce at a Temporal boundary the way activity tools do), then dispatches through
         ``runner.run_tool`` (which applies the tool's own approval policy + publishes its
         tool_start/tool_end lifecycle). The result is rendered to JSON-native data for the
-        sandbox."""
+        sandbox, and reported to the ``on_host_call_result`` observer if one is wired.
+
+        A call the approval policy refuses returns :class:`_Refused` rather than raising, so the
+        driver can hand the refusal to the script as ``PermissionError``."""
         tool = self._tools_by_name.get(name) if name is not None else None
         if tool is None:
             # Defense in depth: type-checking against the generated stubs should already reject
@@ -200,7 +242,22 @@ class CodeModeDriver:
 
         # The script supplies only the model-facing arguments; the tool's Injected[...] parameters
         # are hidden from it and filled from the harness-owned injections here.
-        result = await self._runner.run_tool(
-            str(workflow.uuid4()), tool, injections=self._injections, **coerced
-        )
-        return _to_sandbox(result)
+        tool_id = str(workflow.uuid4())
+        try:
+            result = _to_sandbox(
+                await self._runner.run_tool(
+                    tool_id, tool, injections=self._injections, **coerced
+                )
+            )
+        except ToolApprovalDenied as e:
+            return _Refused(str(e))
+        if self._on_host_call_result is not None:
+            self._on_host_call_result(
+                HostCallResult(
+                    tool_id=tool_id,
+                    tool_name=name,
+                    tool_input=_to_sandbox(coerced),
+                    result=result,
+                )
+            )
+        return result

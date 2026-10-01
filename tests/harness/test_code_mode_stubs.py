@@ -66,7 +66,12 @@ def _parse(src: str) -> ast.Module:
 
 def _typed_dict_names(src: str) -> list[str]:
     tree = _parse(src)
-    return [n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+    return [
+        n.name
+        for n in ast.walk(tree)
+        if isinstance(n, ast.ClassDef)
+        and any(ast.unparse(base).startswith("TypedDict") for base in n.bases)
+    ]
 
 
 def _func_by_name(src: str, name: str) -> ast.AsyncFunctionDef:
@@ -75,6 +80,20 @@ def _func_by_name(src: str, name: str) -> ast.AsyncFunctionDef:
         if isinstance(n, ast.AsyncFunctionDef) and n.name == name:
             return n
     raise AssertionError(f"no async def {name} in stub:\n{src}")
+
+
+def test_type_check_stubs_declare_permission_error_after_the_future_import():
+    """A refused host call raises PermissionError, which the sandbox's checker does not know as
+    a builtin; the stubs declare it so a script that catches it type-checks. It must follow the
+    ``from __future__`` import, which has to stay the first statement."""
+
+    async def do(a: str) -> str: ...
+
+    src = render_type_check_stubs([do]).source
+    compile(src, "<stubs>", "exec")
+    assert src.startswith("from __future__ import annotations\n")
+    assert "class PermissionError(OSError): ..." in src
+    assert "PermissionError" not in render_host_interface([do])
 
 
 def test_primitives_render_with_no_typeddicts():
@@ -313,15 +332,18 @@ async def _search_tool(request: SearchReq) -> SearchResp: ...
 _search_tool.__name__ = "search"
 
 
-def test_generated_stubs_type_check_a_good_script():
-    stubs = render_type_check_stubs([_search_tool]).source
-    monty.Monty(_good_script(), type_check=True, type_check_stubs=stubs).start(
-        print_callback=monty.CollectString()
-    )
+async def _sandbox_type_check(script: str) -> str | None:
+    """What the sandbox's checker says about ``script`` against the ``search`` stubs."""
+    from temporal_agent_harness.harness.code_mode import monty_stepper
+
+    return await monty_stepper.type_check(script, render_type_check_stubs([_search_tool]))
 
 
-def test_generated_stubs_reject_unknown_result_key():
-    stubs = render_type_check_stubs([_search_tool]).source
+async def test_generated_stubs_type_check_a_good_script():
+    assert await _sandbox_type_check(_good_script()) is None
+
+
+async def test_generated_stubs_reject_unknown_result_key():
     bad = (
         "import asyncio\n"
         "async def main():\n"
@@ -329,21 +351,30 @@ def test_generated_stubs_reject_unknown_result_key():
         '    return r["items"][0]["nope"]\n'
         "asyncio.run(main())"
     )
-    with pytest.raises(monty.MontyError):
-        monty.Monty(bad, type_check=True, type_check_stubs=stubs).start(
-            print_callback=monty.CollectString()
-        )
+    report = await _sandbox_type_check(bad)
+    assert report is not None and report.startswith("MontyTypingError")
 
 
-def test_generated_stubs_reject_wrong_argument_type():
-    stubs = render_type_check_stubs([_search_tool]).source
+async def test_generated_stubs_reject_wrong_argument_type():
     bad = (
         "import asyncio\n"
         "async def main():\n"
         '    return await search({"origin": "SFO", "n": "three"})\n'
         "asyncio.run(main())"
     )
-    with pytest.raises(monty.MontyError):
-        monty.Monty(bad, type_check=True, type_check_stubs=stubs).start(
-            print_callback=monty.CollectString()
-        )
+    report = await _sandbox_type_check(bad)
+    assert report is not None and report.startswith("MontyTypingError")
+
+
+async def test_generated_stubs_let_a_script_catch_permission_error():
+    """The stubs declare PermissionError for the checker, so catching a refusal type-checks."""
+    script = (
+        "import asyncio\n"
+        "async def main():\n"
+        "    try:\n"
+        '        return await search({"origin": "SFO", "n": 3})\n'
+        "    except PermissionError as e:\n"
+        "        return str(e)\n"
+        "asyncio.run(main())"
+    )
+    assert await _sandbox_type_check(script) is None

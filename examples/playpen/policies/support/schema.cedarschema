@@ -1,0 +1,157 @@
+namespace Support {
+  type SystemContext = {
+    now: datetime
+  };
+
+  type get_customerInput = {
+    customer_id: String
+  };
+
+  type get_customerOutput = {
+    customer_id: String,
+    email: String,
+    name: String
+  };
+
+  type get_orderInput = {
+    order_id: String
+  };
+
+  type get_orderOutput = {
+    customer_id: String,
+    item: String,
+    order_id: String,
+    total_cents: Long
+  };
+
+  type get_ticketInput = {
+    ticket_id: String
+  };
+
+  type get_ticketOutput = {
+    body: String,
+    customer_id: String,
+    order_id: String,
+    subject: String,
+    ticket_id: String
+  };
+
+  type issue_refundInput = {
+    amount_cents: Long,
+    order_id: String
+  };
+
+  type issue_refundOutput = {
+    amount_cents: Long,
+    order_id: String,
+    refund_id: String
+  };
+
+  type list_open_ticketsInput = {  };
+
+  type list_open_ticketsOutput = {
+    tickets: Set<Support::list_open_tickets_Output_tickets>
+  };
+
+  type send_emailInput = {
+    body: String,
+    subject: String,
+    to: String
+  };
+
+  type send_emailOutput = {
+    message_id: String,
+    to: String
+  };
+
+  entity Gateway;
+
+  entity User;
+
+  entity list_open_tickets_Output_tickets = {
+    customer_id: String,
+    order_id: String,
+    subject: String,
+    ticket_id: String
+  };
+
+  action "CallTool" in [Action::"Mcp"] appliesTo {
+    principal: [User],
+    resource: [Gateway],
+    context: {
+      isOutput: Bool,
+      output?: {      },
+      system: SystemContext
+    }
+  };
+
+  action "Mcp" appliesTo {
+    principal: [User],
+    resource: [Gateway],
+    context: {
+      isOutput: Bool,
+      output?: {      },
+      system: SystemContext
+    }
+  };
+
+  action "get_customer" in [Action::"CallTool"] appliesTo {
+    principal: [User],
+    resource: [Gateway],
+    context: {
+      input: get_customerInput,
+      output?: get_customerOutput,
+      system: SystemContext
+    }
+  };
+
+  action "get_order" in [Action::"CallTool"] appliesTo {
+    principal: [User],
+    resource: [Gateway],
+    context: {
+      input: get_orderInput,
+      output?: get_orderOutput,
+      system: SystemContext
+    }
+  };
+
+  action "get_ticket" in [Action::"CallTool"] appliesTo {
+    principal: [User],
+    resource: [Gateway],
+    context: {
+      input: get_ticketInput,
+      output?: get_ticketOutput,
+      system: SystemContext
+    }
+  };
+
+  action "issue_refund" in [Action::"CallTool"] appliesTo {
+    principal: [User],
+    resource: [Gateway],
+    context: {
+      input: issue_refundInput,
+      output?: issue_refundOutput,
+      system: SystemContext
+    }
+  };
+
+  action "list_open_tickets" in [Action::"CallTool"] appliesTo {
+    principal: [User],
+    resource: [Gateway],
+    context: {
+      input: list_open_ticketsInput,
+      output?: list_open_ticketsOutput,
+      system: SystemContext
+    }
+  };
+
+  action "send_email" in [Action::"CallTool"] appliesTo {
+    principal: [User],
+    resource: [Gateway],
+    context: {
+      input: send_emailInput,
+      output?: send_emailOutput,
+      system: SystemContext
+    }
+  };
+}

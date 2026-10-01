@@ -592,6 +592,7 @@ async def _apply_approval_policy(
         inherently_safe=inherently_safe,
         tool_description=tool_description,
         declared_criteria_set=auto_approval_criteria,
+        tool_id=tool_id,
     )
     decision = (
         await runner._run_auto_mode_evaluator(auto_ctx, tool_id=tool_id, stream=ctx)
@@ -2417,6 +2418,7 @@ class AgentWorkflowRunner:
         inherently_safe: bool,
         tool_description: str | None,
         declared_criteria_set: str | None,
+        tool_id: str,
     ) -> AutoApprovalContext | None:
         """The context to put to the evaluator, or ``None`` if auto mode must not decide
         this call.
@@ -2463,6 +2465,7 @@ class AgentWorkflowRunner:
             # after set_name_for() returned a name that is registered and non-empty.
             criteria_set=criteria_set,
             criteria_set_name=name or "",
+            tool_id=tool_id,
         )
 
     def _warn_ungoverned_tool(

@@ -357,6 +357,11 @@ class AutoApprovalContext:
     (0 = still the ones the session started with). An evaluator should record it alongside
     its verdict: criteria change over the life of an agent, so "which rules decided this
     call" is only answerable if the decision names the generation it applied.
+
+    ``tool_id`` is the id of this one invocation — the same id its ``tool_requested``,
+    ``tool_approval_*`` and ``tool_start``/``tool_end`` events carry. An evaluator that keeps
+    its own history of calls (a policy engine judging a call against what came before it)
+    uses it to tie its decision to the call's later outcome.
     """
 
     tool_name: str
@@ -369,6 +374,7 @@ class AutoApprovalContext:
     # Required is the point: see the guarantee in the class docstring.
     criteria_set: AutoApprovalCriteriaSet = field(kw_only=True)
     criteria_set_name: str = field(kw_only=True)
+    tool_id: str = field(kw_only=True)
 
     @property
     def thresholds(self) -> tuple[float, float | None]:

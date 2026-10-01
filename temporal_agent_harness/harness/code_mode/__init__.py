@@ -11,7 +11,9 @@ the sandbox engine (the optional ``code-mode`` extra):
 
   * Workflow-safe (this ``__init__`` and the ``batch_models`` / ``stubs`` / ``driver`` / ``tool``
     modules): safe to import anywhere, including inside a workflow. ``code_mode_tool``,
-    ``code_mode_type_check`` and ``CodeModeStubError`` are the public surface, re-exported here.
+    ``code_mode_type_check``, ``CodeModeStubError`` and ``HostCallResult`` (what a
+    ``code_mode_tool``'s ``on_host_call_result`` observer receives) are the public surface,
+    re-exported here.
   * Worker-side (:mod:`.activities`): the sandbox-stepping and type-check activities.
     ``AgentHarnessPlugin`` registers them on every worker (a worker can also register
     ``CODE_MODE_ACTIVITIES`` from that module by hand); nothing here imports that module, so
@@ -24,7 +26,14 @@ the sandbox engine (the optional ``code-mode`` extra):
     type-checked against it; import it only after that extra check.
 """
 
+from .driver import HostCallObserver, HostCallResult
 from .stubs import CodeModeStubError
 from .tool import code_mode_tool, code_mode_type_check
 
-__all__ = ["CodeModeStubError", "code_mode_tool", "code_mode_type_check"]
+__all__ = [
+    "CodeModeStubError",
+    "HostCallObserver",
+    "HostCallResult",
+    "code_mode_tool",
+    "code_mode_type_check",
+]

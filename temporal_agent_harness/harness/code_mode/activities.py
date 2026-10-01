@@ -96,7 +96,7 @@ async def code_start_batch(
     _require_code_mode_extra()
     from .monty_stepper import start_batch
 
-    return start_batch(script, stubs)
+    return await start_batch(script, stubs)
 
 
 @activity.defn(name=CODE_RESUME_BATCH_ACTIVITY)
@@ -107,7 +107,7 @@ async def code_resume_batch(input: ResumeBatchInput) -> CodeBatchStep:
     _require_code_mode_extra()
     from .monty_stepper import resume_batch
 
-    return resume_batch(input)
+    return await resume_batch(input)
 
 
 @activity.defn(name=CODE_TYPE_CHECK_ACTIVITY)
@@ -118,7 +118,7 @@ async def code_type_check(script: str, stubs: TypeCheckStubs) -> str:
     _require_code_mode_extra()
     from .monty_stepper import type_check
 
-    return type_check(script, stubs) or ""
+    return (await type_check(script, stubs)) or ""
 
 
 # The Code Mode activities every Code Mode worker registers, regardless of which

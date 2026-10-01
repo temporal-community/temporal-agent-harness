@@ -114,6 +114,7 @@ def _ctx(**kwargs) -> AutoApprovalContext:
         criteria_set_name=kwargs.pop(
             "criteria_set_name", criteria.set_name_for(tool_name, declared=declared) or ""
         ),
+        tool_id=kwargs.pop("tool_id", "tool-1"),
         **kwargs,
     )
 

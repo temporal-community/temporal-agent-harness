@@ -80,9 +80,9 @@ ui = [
 # (temporal_agent_harness.harness.code_mode). Only the worker-side stepping activities import
 # it; the workflow-side factory (agent.code_mode_tool) stays free of this dependency.
 code-mode = [
-    # TODO: 0.0.19 swapped Monty's script-compiler API for a process pool (checkout/session).
-    # Port monty_stepper.py to it, then unpin.
-    "pydantic-monty==0.0.18",
+    # Pinned: Monty is pre-stable in practice, and the stepper drives its snapshot protocol
+    # directly (temporal_agent_harness.harness.code_mode.monty_stepper).
+    "pydantic-monty==1.0.0",
 ]
 # Jev-backed auto mode for tool approvals: temporal_agent_harness.harness.jev_approvals.
 # Needed on the WORKER only — the workflow-side approver builds plain dicts and dispatches
@@ -115,7 +115,7 @@ nexus-mcp = [
 examples = [
     "google-genai>=2.0.0",
     "google-auth>=2.53.0",
-    "pydantic-monty==0.0.18",  # Monty sandbox; pinned per the code-mode extra's TODO
+    "pydantic-monty==1.0.0",  # Monty sandbox; pinned with the code-mode extra
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
     "openai-agents>=0.22.0",  # the OpenAI Agents SDK example (examples/openai_hello, examples/react_agent)
     "pydantic-ai-slim[temporal]>=2.13",  # the Pydantic AI example (examples/pydantic_ai_hello)

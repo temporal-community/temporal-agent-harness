@@ -27,7 +27,7 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_workflow import _current_runner, tool_defn
 
     from .batch_models import CODE_TYPE_CHECK_ACTIVITY
-    from .driver import CodeModeDriver
+    from .driver import CodeModeDriver, HostCallObserver
     from .stubs import render_host_interface, render_type_check_stubs, resolve_hints
 
 # A single sandbox step is one compile-and-run-to-first-batch, or one resume-to-next-batch. The
@@ -58,6 +58,10 @@ The value of the script's LAST EXPRESSION becomes the result (along with anythin
 Run INDEPENDENT host calls CONCURRENTLY with `asyncio.gather(...)`; only await sequentially when \
 a later call needs an earlier call's result. Host results come back as plain dicts/lists/scalars \
 — index into them with normal Python (e.g. `results[0]["field"]`).
+
+Every host call is checked against the agent's approval policy before it runs. A call the policy \
+refuses does not run: its `await` raises `PermissionError` with the reason. Catch it \
+(`except PermissionError as e:`) to carry on with the rest of the work and report what was refused.
 
 Your script is STATICALLY TYPE-CHECKED against the host-function signatures below BEFORE it runs: \
 a wrong argument type, or reading a result key that doesn't exist, comes back as an error to fix \
@@ -127,6 +131,7 @@ def code_mode_tool(
     auto_approval_criteria: str | None = None,
     injections: Mapping[str, Any] | None = None,
     step_timeout: timedelta = DEFAULT_STEP_TIMEOUT,
+    on_host_call_result: HostCallObserver | None = None,
 ) -> Callable[..., Awaitable[str]]:
     """Expose ``tools`` to a model as ONE tool that runs a Python script calling them.
 
@@ -165,6 +170,11 @@ def code_mode_tool(
         step_timeout: the ``start_to_close_timeout`` for one sandbox step (compile-to-first-batch
             or resume-to-next-batch). Host calls run as their own activities with their own
             timeouts; this bounds only the sandbox stepping.
+        on_host_call_result: called in-workflow with a :class:`~.driver.HostCallResult` each
+            time a host call returns — for an evaluator that judges calls against what earlier
+            calls returned (a policy engine keeping its own history). It runs inside the
+            workflow, so it must be deterministic and must not do I/O. Not called for a call
+            the approval policy refused, which the script sees as ``PermissionError``.
 
     Raises:
         ValueError: the tool set is empty, contains a non-harness callable, or has a duplicate
@@ -188,6 +198,7 @@ def code_mode_tool(
             injections=injection_values,
             stubs=stubs,
             step_timeout=step_timeout,
+            on_host_call_result=on_host_call_result,
         )
         return await driver.run_script(script)
 
@@ -213,13 +224,14 @@ def code_mode_tool(
 
 
 async def code_mode_type_check(code_tool: Callable[..., Awaitable[str]], script: str) -> str | None:
-    """Type-check ``script`` against ``code_tool``'s host functions, without running it.
+    """Type-check ``script`` against ``code_tool``'s host functions, without letting it act.
 
     ``code_tool`` is a tool :func:`code_mode_tool` returned. The script gets the same checks
     that tool gives it before every run — syntax, unknown host functions, wrong argument shapes
-    and result keys that don't exist — and the script itself never executes, so no host call is
-    made. Returns the checker's report, each error with its line, or ``None`` when the script is
-    clean. Call it from workflow code: it runs the check as one short activity.
+    and result keys that don't exist — and no host call is made: Monty checks a script before
+    running any of it, and a clean script is abandoned in the sandbox at its first host call,
+    unanswered. Returns the checker's report, each error with its line, or ``None`` when the
+    script is clean. Call it from workflow code: it runs the check as one short activity.
 
     Use it to let an author (typically a model writing scripts for a user to run later) confirm a
     script will start before handing it over.
