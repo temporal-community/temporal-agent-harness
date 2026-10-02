@@ -20,34 +20,21 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import timedelta
-from functools import partial
-from typing import Sequence
 
 from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
-from temporalio.exceptions import ApplicationError
 from temporalio.workflow import ActivityConfig
 
 with workflow.unsafe.imports_passed_through():
     from google.genai._interactions.types import (
-        ErrorEvent,
         FunctionCallStep,
-        InteractionCompletedEvent,
-        StepDelta,
-        StepStart,
-        ToolParam,
     )
-    from google.genai._interactions.types.error_event import Error
     from google.genai._interactions.types.function_result_step_param import (
         FunctionResultStepParam,
     )
-    from google.genai._interactions.types.interaction_create_params import Input
-    from google.genai._interactions.types.step_delta import (
-        DeltaArgumentsDelta,
-        DeltaText,
-    )
     from google.genai.client import AsyncClient
     from temporal_agent_harness.ai_sdks.google_genai_plugin import (
+        InteractionConversation,
         function_param,
         google_genai_client,
     )
@@ -106,9 +93,9 @@ class WikiAgentWorkflow:
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
         self._model: str = DEFAULT_MODEL
-        # Server-side conversation chaining id (Interactions API); updated each turn. Safe to
-        # chain here because this agent uses only function tools (no file_search).
-        self._previous_interaction_id: str | None = None
+        # The whole conversation, sent as the input of every model call (see
+        # InteractionConversation for why it is not chained by interaction id).
+        self._conversation = InteractionConversation()
         # The model-facing callback toolset, plus a name -> tool map for dispatch.
         self._tools = list(WIKI_TOOLS)
         self._tools_by_name = {tool.__name__: tool for tool in self._tools}
@@ -134,28 +121,25 @@ class WikiAgentWorkflow:
     async def _handle_chat_turn(self, gemini: AsyncClient, user_text: str) -> str:
         """Run one conversational turn: stream the model, dispatch any tool calls (each pausing
         for the client to fulfill), feed results back, and loop until the model replies with no
-        further calls. Updates ``self._previous_interaction_id`` for chaining the next turn."""
+        further calls.
+
+        The whole conversation goes out as the input of every call; see
+        ``InteractionConversation`` for why it is not chained by interaction id."""
         tools = [function_param(tool) for tool in self._tools]
-        next_input: Input = user_text
+        self._conversation.add_user_text(user_text)
         while True:
-            (
-                reply_text,
-                pending_calls,
-                self._previous_interaction_id,
-            ) = await self._execute_agent_interaction(
-                gemini=gemini,
+            stream = await gemini.interactions.create(
                 model=self._model,
-                input=next_input,
-                tools=tools,
+                input=self._conversation.steps,
                 system_instruction=SYSTEM_INSTRUCTION,
-                previous_interaction_id=self._previous_interaction_id,
+                tools=tools,
+                stream=True,
             )
-
-            if not pending_calls:
-                return reply_text
-
-            next_input = await asyncio.gather(
-                *(self._run_one_tool(fc) for fc in pending_calls)
+            reply = await self._conversation.read_reply(stream)
+            if not reply.function_calls:
+                return reply.text
+            self._conversation.add_function_results(
+                await asyncio.gather(*(self._run_one_tool(fc) for fc in reply.function_calls))
             )
 
     async def _run_one_tool(self, call: FunctionCallStep) -> FunctionResultStepParam:
@@ -169,7 +153,7 @@ class WikiAgentWorkflow:
             tool = self._tools_by_name.get(call.name)
             if tool is None:
                 raise ValueError(f"unknown tool: {call.name!r}")
-            result = await self._runner.run_tool(call.id, tool, **call.arguments)
+            result = await self._runner.run_tool(call.id, tool, injections=None, **call.arguments)
             response: FunctionResultStepParam = {
                 "type": "function_result",
                 "call_id": call.id,
@@ -190,77 +174,6 @@ class WikiAgentWorkflow:
             if call.signature:
                 response["signature"] = call.signature
             return response
-
-    async def _execute_agent_interaction(
-        self,
-        *,
-        gemini: AsyncClient,
-        model: str,
-        input: Input,
-        tools: Sequence[ToolParam],
-        system_instruction: str,
-        previous_interaction_id: str | None,
-    ) -> tuple[str, list[FunctionCallStep], str]:
-        """Stream one ``interactions.create`` and reduce it into actionable state.
-
-        Returns ``(reply_text, function_calls, interaction_id)``. Text comes from ``DeltaText``
-        events; function calls are captured from each ``StepStart`` whose step is a
-        ``FunctionCallStep``, with their JSON-string ``arguments`` fragments buffered per step
-        index and ``json.loads``-ed once the stream ends. Raises :class:`ApplicationError` on
-        stream errors or if the stream ends without a completed event."""
-        interactions_create_fn = partial(
-            gemini.interactions.create,
-            model=model,
-            input=input,
-            system_instruction=system_instruction,
-            tools=tools,
-            stream=True,
-        )
-        if previous_interaction_id:
-            stream = await interactions_create_fn(
-                previous_interaction_id=previous_interaction_id
-            )
-        else:
-            stream = await interactions_create_fn()
-
-        text_parts: list[str] = []
-        calls_by_index: dict[int, FunctionCallStep] = {}
-        arg_buffers: dict[int, str] = {}
-        interaction_id: str | None = None
-        async for event in stream:
-            match event:
-                case ErrorEvent(error=Error(message=msg, code=code)):
-                    raise ApplicationError(
-                        msg or "stream error", type=code or "stream_error"
-                    )
-                case ErrorEvent():
-                    raise ApplicationError("unknown stream error", type="stream_error")
-                case StepStart(index=idx, step=FunctionCallStep() as call):
-                    calls_by_index[idx] = call
-                case StepDelta(
-                    index=idx, delta=DeltaArgumentsDelta(arguments=args)
-                ) if args:
-                    arg_buffers[idx] = arg_buffers.get(idx, "") + args
-                case StepDelta(delta=DeltaText(text=text)) if text:
-                    text_parts.append(text)
-                case InteractionCompletedEvent(interaction=interaction):
-                    interaction_id = interaction.id
-
-        if interaction_id is None:
-            raise ApplicationError(
-                "stream ended without interaction.completed event",
-                type="stream_error",
-            )
-
-        function_calls = [
-            calls_by_index[idx].model_copy(
-                update={"arguments": json.loads(arg_buffers[idx])}
-            )
-            if arg_buffers.get(idx)
-            else calls_by_index[idx]
-            for idx in sorted(calls_by_index)
-        ]
-        return "".join(text_parts), function_calls, interaction_id
 
 
 def _render_tool_result(result: object) -> str:

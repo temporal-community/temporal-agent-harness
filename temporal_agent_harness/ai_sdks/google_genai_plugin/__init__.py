@@ -26,6 +26,10 @@ Temporal's event history.
   API has no AFC, so the workflow drives the tool-calling loop itself;
   pair this helper with the ``gemini.interactions.create(...)`` call on
   the client returned by :func:`google_genai_client`.
+- :class:`InteractionConversation` — the conversation such a loop sends as
+  ``input=`` on every ``interactions.create``, rebuilt from each streamed reply.
+  Use it instead of chaining calls with ``previous_interaction_id``, which the
+  API cannot rebuild once streamed calls follow one another.
 
 Quickstart::
 
@@ -55,6 +59,7 @@ Quickstart::
 from __future__ import annotations
 
 from ._google_genai_plugin import GoogleGenAIPlugin
+from ._interactions_conversation import InteractionConversation, InteractionReply
 from ._interactions_workflow import function_param
 from .workflow import (
     google_genai_client,
@@ -62,6 +67,8 @@ from .workflow import (
 
 __all__ = [
     "GoogleGenAIPlugin",
+    "InteractionConversation",
+    "InteractionReply",
     "function_param",
     "google_genai_client",
 ]
