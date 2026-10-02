@@ -4,6 +4,10 @@ The ``TemporalApiClient`` in the workflow dispatches calls here. This
 activity holds a user-provided ``genai.Client`` and forwards structured
 requests. Credentials are fetched/refreshed only within the activity —
 they never appear in workflow event history.
+
+Every activity here runs its SDK call under :func:`translate_gemini_errors`,
+so a Gemini client error (4xx other than 408/429) fails it non-retryably
+instead of retrying the identical request forever.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from temporalio import activity
 
 from temporal_agent_harness.harness.agent_protocol import ReplyDelta
 from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+from ._errors import translate_gemini_errors
 from ._interactions_activity import make_gemini_interactions_create_streamed
 from ._models import (
     _GeminiApiRequest,
@@ -98,14 +103,17 @@ class GeminiApiCaller:
             req: _GeminiApiRequest,
         ) -> _GeminiApiResponse:
             """Execute a Gemini SDK API call with real credentials."""
-            response: SdkHttpResponse = (
-                await self._client.aio._api_client.async_request(
-                    http_method=req.http_method,
-                    path=req.path,
-                    request_dict=req.request_dict,
-                    http_options=_resolve_http_options(req.http_options_overrides),
+            with translate_gemini_errors():
+                response: SdkHttpResponse = (
+                    await self._client.aio._api_client.async_request(
+                        http_method=req.http_method,
+                        path=req.path,
+                        request_dict=req.request_dict,
+                        http_options=_resolve_http_options(
+                            req.http_options_overrides
+                        ),
+                    )
                 )
-            )
             return _GeminiApiResponse(
                 headers=response.headers or {},
                 body=response.body or "",
@@ -123,37 +131,40 @@ class GeminiApiCaller:
             visible to the UI in real time. Function-call chunks (no text
             parts) are silently skipped.
             """
-            stream = await self._client.aio._api_client.async_request_streamed(
-                http_method=req.http_method,
-                path=req.path,
-                request_dict=req.request_dict,
-                http_options=_resolve_http_options(req.http_options_overrides),
-            )
-
             chunks: list[_GeminiApiResponse] = []
 
-            # If a stream context rode in on the request, hand it to the
-            # harness's publisher helper. The activity never unpacks
-            # turn_id/turn_number itself — it just forwards the opaque
-            # carrier and calls ``publish`` per chunk.
-            async with AsyncExitStack() as stack:
-                publisher = None
-                if req.stream_context is not None:
-                    publisher = await stack.enter_async_context(
-                        AgentWorkflowRunner.publisher_from_activity(
-                            req.stream_context,
-                        )
-                    )
+            # The SDK raises a mid-stream error chunk while iterating, so the
+            # translation covers the whole stream, not just opening it.
+            with translate_gemini_errors():
+                stream = await self._client.aio._api_client.async_request_streamed(
+                    http_method=req.http_method,
+                    path=req.path,
+                    request_dict=req.request_dict,
+                    http_options=_resolve_http_options(req.http_options_overrides),
+                )
 
-                async for chunk in stream:
-                    body = chunk.body or ""
-                    chunks.append(
-                        _GeminiApiResponse(headers=chunk.headers or {}, body=body)
-                    )
-                    if publisher is not None:
-                        delta = _extract_text_delta(body)
-                        if delta:
-                            publisher.publish(ReplyDelta(text=delta))
+                # If a stream context rode in on the request, hand it to the
+                # harness's publisher helper. The activity never unpacks
+                # turn_id/turn_number itself — it just forwards the opaque
+                # carrier and calls ``publish`` per chunk.
+                async with AsyncExitStack() as stack:
+                    publisher = None
+                    if req.stream_context is not None:
+                        publisher = await stack.enter_async_context(
+                            AgentWorkflowRunner.publisher_from_activity(
+                                req.stream_context,
+                            )
+                        )
+
+                    async for chunk in stream:
+                        body = chunk.body or ""
+                        chunks.append(
+                            _GeminiApiResponse(headers=chunk.headers or {}, body=body)
+                        )
+                        if publisher is not None:
+                            delta = _extract_text_delta(body)
+                            if delta:
+                                publisher.publish(ReplyDelta(text=delta))
 
             return _GeminiApiStreamedResponse(chunks=chunks)
 
@@ -169,16 +180,20 @@ class GeminiApiCaller:
             else:
                 file_arg = req.file_path
 
-            return await self._client.aio.files.upload(file=file_arg, config=req.config)
+            with translate_gemini_errors():
+                return await self._client.aio.files.upload(
+                    file=file_arg, config=req.config
+                )
 
         @activity.defn
         async def gemini_files_download(
             req: _GeminiDownloadFileRequest,
         ) -> bytes:
             """Download a file using the real genai.Client on the worker."""
-            return await self._client.aio.files.download(
-                file=req.file, config=req.config
-            )
+            with translate_gemini_errors():
+                return await self._client.aio.files.download(
+                    file=req.file, config=req.config
+                )
 
         @activity.defn
         async def gemini_files_register(
@@ -198,11 +213,12 @@ class GeminiApiCaller:
                     "Pass extra_credentials to GoogleGenAIPlugin or initialize "
                     "the genai.Client with credentials."
                 )
-            return await self._client.aio.files.register_files(
-                auth=auth,
-                uris=req.uris,
-                config=req.config,
-            )
+            with translate_gemini_errors():
+                return await self._client.aio.files.register_files(
+                    auth=auth,
+                    uris=req.uris,
+                    config=req.config,
+                )
 
         @activity.defn
         async def gemini_file_search_stores_upload(
@@ -216,13 +232,12 @@ class GeminiApiCaller:
             else:
                 file_arg = req.file_path
 
-            return (
-                await self._client.aio.file_search_stores.upload_to_file_search_store(
+            with translate_gemini_errors():
+                return await self._client.aio.file_search_stores.upload_to_file_search_store(
                     file_search_store_name=req.file_search_store_name,
                     file=file_arg,
                     config=req.config,
                 )
-            )
 
         return [
             gemini_api_client_async_request,
