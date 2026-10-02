@@ -1,22 +1,30 @@
-"""The workflow-safe host-call driver that runs one Code Mode script to completion.
+"""The workflow-side host-call driver that runs one Code Mode script to completion.
 
-Runs a model-authored Python script in the sandbox by alternating two durable activities:
-``code_start_batch`` compiles and runs the script to its first awaited batch of host calls;
-then, for each batch, the driver runs every call CONCURRENTLY as its own durable activity and
-feeds the results into ``code_resume_batch``, which resumes the script to the next batch. This
-repeats until the script finishes, and its stdout + final value (or a script error) is returned
-as text.
+Runs a model-authored Python script in the sandbox, stepping it from workflow code (see
+:mod:`.monty_stepper` for why that is durable): the first step type-checks the script and runs
+it to its first awaited batch of host calls; the driver then runs every call in the batch
+CONCURRENTLY as its own durable activity and resumes the script with their results, until the
+script finishes. Its stdout + final value (or a script error) is returned as text.
 
 The host-call surface is generic: the driver holds a ``{name: tool}`` map and dispatches each
 call the script makes to the matching harness tool via ``runner.run_tool`` — so every host call
 inherits that tool's approval policy and tool_start/tool_end lifecycle.
 
-Sandbox-safe: this module imports only ``pydantic`` + ``temporalio`` + the workflow-safe
-:mod:`.batch_models`. It never imports ``pydantic_monty`` — the sandbox engine runs only in the
-worker-side ``code_start_batch`` / ``code_resume_batch`` activities, which the driver dispatches
-BY NAME (``CODE_START_BATCH_ACTIVITY`` / ``CODE_RESUME_BATCH_ACTIVITY``). A worker that hosts
-Code Mode needs the ``code-mode`` extra installed, but merely importing this module (and thus
-``harness.agent``) does not.
+=== Replay-safe step limits ===
+
+A step that runs longer than ``_STEP_TIME_LIMIT_SECS`` between host interactions is killed (see
+:mod:`.monty_stepper`). Whether that happens depends on the machine, so it must not be decided
+again on replay. When a step is aborted on its original run, the driver records a patch marker
+naming the script and step, and returns an error. On replay, it checks for that marker before
+running the step: if present, it returns the same error without running the step; if absent,
+the step completed originally and is re-run with only a generous backstop limit. A skipped step
+must leave no trace in what the workflow does next, so the script draws entropy from its own
+generator rather than the workflow's, and an error reply carries no stdout.
+
+Sandbox-safe: this module never imports ``pydantic_monty`` at module scope. The stepping engine
+is imported through the sandbox's pass-through by :func:`load_stepper`, which ``code_mode_tool``
+calls at construction so a worker without the ``code-mode`` extra fails the workflow task (and
+is retried until a worker with it picks the task up) instead of failing a tool call.
 """
 
 from __future__ import annotations
@@ -24,25 +32,59 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import random
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import timedelta
-from typing import Any
+from types import ModuleType
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, TypeAdapter
 from temporalio import workflow
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError, is_cancelled_exception
 
 with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
-    from .batch_models import (
-        CODE_RESUME_BATCH_ACTIVITY,
-        CODE_START_BATCH_ACTIVITY,
-        CallResult,
-        CodeBatchStep,
-        ResumeBatchInput,
-        TypeCheckStubs,
-    )
+    from .stubs import TypeCheckStubs
+
+_T = TypeVar("_T")
+
+# The longest a script may compute between host interactions (from its start to its first
+# ``await``, or from one awaited batch to the next) before it is stopped with an error. The
+# sandbox steps inside a workflow task, which Temporal's deadlock detector fails after two
+# seconds, so this stays under that. Host calls run as activities with their own timeouts; this
+# bounds only the script's own computation.
+_STEP_TIME_LIMIT_SECS = 1.0
+
+# The limit a step runs under on replay, where it is known to have finished within
+# ``_STEP_TIME_LIMIT_SECS`` on its original run. It only has to free the thread if the step somehow
+# never ends: by the time it fires, Temporal's deadlock detector has already failed the task.
+_REPLAY_BACKSTOP_SECS = 30.0
+
+# A step that crashes on replay ran to completion originally, so the crash is the machine's,
+# not the script's. Try it again a few times before giving up.
+_REPLAY_ATTEMPTS = 3
+
+
+def load_stepper() -> ModuleType:
+    """Import the sandbox engine, :mod:`.monty_stepper`, or explain the missing extra."""
+    try:
+        with workflow.unsafe.imports_passed_through():
+            # Absolute, so the sandbox passes the module through by name.
+            import temporal_agent_harness.harness.code_mode.monty_stepper as monty_stepper
+    except ImportError as e:
+        raise RuntimeError(
+            "Code Mode needs the harness's `code-mode` extra, which provides pydantic-monty — "
+            "the sandbox Code Mode scripts run in. Install temporal-agent-harness[code-mode] on "
+            "every worker that runs this agent."
+        ) from e
+    return monty_stepper
+
+
+def call_monty(fn: Callable[..., _T], *args: Any) -> _T:
+    """Call into the sandbox engine with imports passed through the workflow sandbox: Monty
+    imports ``opentelemetry`` lazily, from native code, on its first run."""
+    with workflow.unsafe.imports_passed_through():
+        return fn(*args)
 
 
 def _to_sandbox(value: Any) -> Any:
@@ -50,9 +92,7 @@ def _to_sandbox(value: Any) -> Any:
 
     Pydantic models → ``model_dump(mode="json")`` (so ``datetime``/``enum``/``UUID``/``Decimal``
     become their JSON scalars, matching the generated type-check stubs); lists/tuples and dicts
-    recurse; everything else passes through. ``mode="json"`` is deliberate — the value re-crosses
-    into the resume activity (``CallResult.return_value``) and then into the Monty sandbox, both
-    of which want JSON-native data, not Python objects."""
+    recurse; everything else passes through."""
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     if isinstance(value, (list, tuple)):
@@ -69,8 +109,7 @@ class CodeModeDriver:
     :class:`AgentWorkflowRunner` from the ambient ``_CURRENT_RUNNER``). ``tools_by_name`` and
     ``coercers`` are precomputed once by the factory (validated + type-adapters built at
     ``@agent.init``); ``stubs`` are the auto-generated stubs the sandbox type-checks the script
-    against before running it. Never runs the sandbox engine itself — that
-    happens in the ``code_start_batch`` / ``code_resume_batch`` activities."""
+    against before running it."""
 
     def __init__(
         self,
@@ -80,84 +119,105 @@ class CodeModeDriver:
         *,
         injections: Mapping[str, Any],
         stubs: TypeCheckStubs,
-        step_timeout: timedelta,
     ) -> None:
         self._runner = runner
         self._tools_by_name = tools_by_name
         self._coercers = coercers
         self._injections = injections
         self._stubs = stubs
-        self._step_timeout = step_timeout
 
     async def run_script(self, script: str) -> str:
-        """Drive ``script`` to completion via the async batch loop; return its stdout + final
-        value (or the error, as plain text).
+        """Drive ``script`` to completion; return its stdout + final value (or the error, as
+        plain text).
 
-        Each ``CodeBatchStep`` is a set of host calls the script is awaiting together (one
-        ``await``, or several via ``asyncio.gather``); they run CONCURRENTLY as durable
-        activities, so a script that gathers independent calls genuinely parallelizes them. The
-        auto-generated ``stubs`` are passed so the sandbox type-checks the script
-        first — a bad call comes back as ``error`` for the author to fix, not a mid-run failure."""
+        Each step ends at a set of host calls the script is awaiting together (one ``await``,
+        or several via ``asyncio.gather``); they run CONCURRENTLY as durable activities, so a
+        script that gathers independent calls genuinely parallelizes them. The sandbox
+        type-checks the script first, so a bad call comes back as an error for the author to
+        fix, not a mid-run failure."""
         log = workflow.logger
         log.info(
-            "code_mode: starting async batch run (script_len=%d)\n--- script ---\n%s\n--- end ---",
+            "code_mode: starting script (script_len=%d)\n--- script ---\n%s\n--- end ---",
             len(script),
             script,
         )
-
-        stdout_parts: list[str] = []
-        step: CodeBatchStep = await workflow.execute_activity(
-            CODE_START_BATCH_ACTIVITY,
-            args=[script, self._stubs],
-            result_type=CodeBatchStep,
-            start_to_close_timeout=self._step_timeout,
+        stepper = load_stepper()
+        script_id = str(workflow.uuid4())
+        entropy = random.Random(workflow.random().getrandbits(64))
+        run = stepper.ScriptRun(
+            script, self._stubs, answer_os=lambda name, args: _answer_os(name, args, entropy)
         )
-        stdout_parts.append(step.stdout)
 
-        batch_no = 0
+        step = self._step(script_id, 0, lambda limit: run.start(time_limit=limit))
+        step_no = 0
         while not step.done:
-            batch_no += 1
+            step_no += 1
             log.info(
-                "code_mode: batch %d — running %d host call(s) concurrently: %s",
-                batch_no,
-                len(step.pending),
-                [c.function_name for c in step.pending],
+                "code_mode: step %d — running %d host call(s) concurrently: %s",
+                step_no,
+                len(step.awaiting),
+                [getattr(c, "function_name", "asyncio.sleep") for c in step.awaiting],
             )
             # Run the whole awaited batch CONCURRENTLY — each host call is its own durable
             # activity (dispatched via run_tool, so each is independently approval-gated and
-            # publishes its own tool lifecycle). Order is preserved to key results by call_id.
-            results = await asyncio.gather(
-                *(
-                    self._dispatch_host_call(c.function_name, c.args, c.kwargs)
-                    for c in step.pending
-                )
+            # publishes its own tool lifecycle). A call that fails is raised inside the script at
+            # its await, where the script may catch it; the rest of the batch still completes.
+            outcomes = await asyncio.gather(
+                *(self._run_call(call, stepper) for call in step.awaiting), return_exceptions=True
             )
-            results_input = [
-                CallResult(call_id=c.call_id, return_value=r)
-                for c, r in zip(step.pending, results)
-            ]
-            step = await workflow.execute_activity(
-                CODE_RESUME_BATCH_ACTIVITY,
-                ResumeBatchInput(
-                    snapshot=step.snapshot, results=results_input, type_names=self._stubs.type_names
-                ),
-                result_type=CodeBatchStep,
-                start_to_close_timeout=self._step_timeout,
+            results = {
+                call.call_id: _script_outcome(outcome)
+                for call, outcome in zip(step.awaiting, outcomes)
+            }
+            step = self._step(
+                script_id, step_no, lambda limit: run.resume(results, time_limit=limit)
             )
-            stdout_parts.append(step.stdout)
 
         if step.error:
             log.warning("code_mode: script error: %s", step.error)
             return f"Script error ({step.error})"
 
-        output = json.loads(step.output_json) if step.output_json else None
         parts: list[str] = []
-        combined = "".join(stdout_parts).strip()
+        combined = run.stdout.output.strip()
         if combined:
             parts.append(f"output:\n{combined}")
-        parts.append(f"result: {output!r}")
-        log.info("code_mode: run complete after %d batch(es); returning reply", batch_no)
+        parts.append(f"result: {_render(step.output)!r}")
+        log.info("code_mode: run complete after %d step(s); returning reply", step_no + 1)
         return "\n".join(parts)
+
+    def _step(self, script_id: str, step_no: int, advance: Callable[[float | None], Any]) -> Any:
+        """Run one step under the replay-safe limit described in the module docstring."""
+        timed_out_marker = f"temporal-agent-harness/code-mode/timed-out/{script_id}/{step_no}"
+        crashed_marker = f"temporal-agent-harness/code-mode/crashed/{script_id}/{step_no}"
+        stepper = load_stepper()
+        if workflow.unsafe.is_replaying():
+            if workflow.patched(timed_out_marker):
+                return stepper.Step(done=True, error=_TIMED_OUT_ERROR)
+            if workflow.patched(crashed_marker):
+                return stepper.Step(done=True, error=_CRASHED_ERROR)
+            for _ in range(_REPLAY_ATTEMPTS):
+                step = call_monty(advance, _REPLAY_BACKSTOP_SECS)
+                if not step.aborted:
+                    return step
+            raise RuntimeError(
+                f"Code Mode script {script_id} step {step_no} completed on its original run but "
+                f"its sandbox worker died on replay {_REPLAY_ATTEMPTS} times: {step.error}"
+            )
+
+        step = call_monty(advance, _STEP_TIME_LIMIT_SECS)
+        if not step.aborted:
+            return step
+        workflow.patched(timed_out_marker if step.timed_out else crashed_marker)
+        workflow.logger.warning("code_mode: step %d aborted: %s", step_no, step.error)
+        if step.timed_out:
+            return stepper.Step(done=True, error=_TIMED_OUT_ERROR)
+        return stepper.Step(done=True, error=_CRASHED_ERROR)
+
+    async def _run_call(self, call: Any, stepper: ModuleType) -> Any:
+        if isinstance(call, stepper.Sleep):
+            await workflow.sleep(call.seconds)
+            return None
+        return await self._dispatch_host_call(call.function_name, call.args, call.kwargs)
 
     async def _dispatch_host_call(
         self, name: str | None, args: list[Any], kwargs: dict[str, Any]
@@ -204,3 +264,55 @@ class CodeModeDriver:
             str(workflow.uuid4()), tool, injections=self._injections, **coerced
         )
         return _to_sandbox(result)
+
+
+def _script_outcome(outcome: Any) -> Any:
+    """What a host call's outcome is to the script: its value, or the exception it failed with.
+
+    Cancellation is the workflow's, not the call's, so it propagates instead. A failed activity is
+    unwrapped to its cause, which carries the tool's own message. The sandbox raises a built-in
+    exception as its own type and anything else as ``Exception``, so a non-built-in keeps its
+    type name in the message."""
+    if not isinstance(outcome, BaseException):
+        return outcome
+    if not isinstance(outcome, Exception) or is_cancelled_exception(outcome):
+        raise outcome
+    error: BaseException = outcome
+    if isinstance(error, ActivityError) and error.cause is not None:
+        error = error.cause
+    if type(error).__module__ == "builtins":
+        return error
+    return Exception(f"{type(error).__name__}: {error}")
+
+
+_TIMED_OUT_ERROR = (
+    f"TimeoutError: the script ran for more than {_STEP_TIME_LIMIT_SECS:g}s without awaiting a "
+    f"host function, and was stopped"
+)
+_CRASHED_ERROR = "MontyCrashedError: the sandbox worker running the script crashed"
+
+
+def _answer_os(name: str, args: tuple[Any, ...], entropy: random.Random) -> Any:
+    """Answer the session's clock, entropy and environment calls from workflow-deterministic
+    sources. The sandbox's local zone is UTC, so naive times are UTC."""
+    now = workflow.now()
+    if name == "datetime.now":
+        tz = args[0] if args else None
+        return now.astimezone(tz) if tz is not None else now.replace(tzinfo=None)
+    if name == "date.today":
+        return now.date()
+    if name == "time.time":
+        return now.timestamp()
+    if name == "os.urandom":
+        return entropy.randbytes(args[0])
+    if name == "os.getenv":
+        return args[1] if len(args) > 1 else None
+    if name == "os.environ":
+        return {}
+    raise NotImplementedError(name)
+
+
+def _render(value: Any) -> Any:
+    """The script's final value as JSON-native data, so the reply reads the same however Monty
+    represents it."""
+    return json.loads(json.dumps(value, default=str))

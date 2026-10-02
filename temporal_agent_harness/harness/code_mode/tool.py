@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import timedelta
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -26,14 +25,8 @@ from temporalio import workflow
 with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_workflow import _current_runner, tool_defn
 
-    from .batch_models import CODE_TYPE_CHECK_ACTIVITY
-    from .driver import CodeModeDriver
+    from .driver import CodeModeDriver, call_monty, load_stepper
     from .stubs import render_host_interface, render_type_check_stubs, resolve_hints
-
-# A single sandbox step is one compile-and-run-to-first-batch, or one resume-to-next-batch. The
-# host calls themselves run as separate activities with their own tool timeouts, so this only
-# bounds the sandbox stepping, not the work a script triggers.
-DEFAULT_STEP_TIMEOUT = timedelta(seconds=30)
 
 # The model-facing contract. ``{interface}`` is replaced with the generated host-function
 # signatures (and their descriptions + result TypedDicts) for this tool's specific tool set.
@@ -57,7 +50,9 @@ script like this:
 The value of the script's LAST EXPRESSION becomes the result (along with anything you `print`). \
 Run INDEPENDENT host calls CONCURRENTLY with `asyncio.gather(...)`; only await sequentially when \
 a later call needs an earlier call's result. Host results come back as plain dicts/lists/scalars \
-— index into them with normal Python (e.g. `results[0]["field"]`).
+— index into them with normal Python (e.g. `results[0]["field"]`). A host function that fails \
+RAISES at its `await`: catch it with `try`/`except Exception` to handle the failure, or let it \
+propagate to end the script with an error.
 
 Your script is STATICALLY TYPE-CHECKED against the host-function signatures below BEFORE it runs: \
 a wrong argument type, or reading a result key that doesn't exist, comes back as an error to fix \
@@ -126,7 +121,6 @@ def code_mode_tool(
     inherently_safe: bool = True,
     auto_approval_criteria: str | None = None,
     injections: Mapping[str, Any] | None = None,
-    step_timeout: timedelta = DEFAULT_STEP_TIMEOUT,
 ) -> Callable[..., Awaitable[str]]:
     """Expose ``tools`` to a model as ONE tool that runs a Python script calling them.
 
@@ -162,17 +156,18 @@ def code_mode_tool(
             applies to the run-code tool only, NOT to the host calls the script makes — each of
             those re-enters the gate under its own tool's declared set. Leave unset to fall back
             to whatever the operator configured as the catch-all.
-        step_timeout: the ``start_to_close_timeout`` for one sandbox step (compile-to-first-batch
-            or resume-to-next-batch). Host calls run as their own activities with their own
-            timeouts; this bounds only the sandbox stepping.
 
     Raises:
         ValueError: the tool set is empty, contains a non-harness callable, or has a duplicate
             host-function name.
+        RuntimeError: the worker lacks the ``code-mode`` extra. Raised at construction (at
+            ``@agent.init``) so it fails the workflow task, which Temporal retries until a worker
+            with the extra picks it up.
         CodeModeStubError: a tool's parameter or result type cannot be rendered into faithful
             type-check stubs (see :mod:`.stubs`).
     """
     tools_by_name = _validate_tools(tools)
+    load_stepper()
     # Generated once at construction; raises now (not at script time) if a type is unrenderable.
     stubs = render_type_check_stubs(tools)
     host_interface = render_host_interface(tools)
@@ -187,7 +182,6 @@ def code_mode_tool(
             coercers,
             injections=injection_values,
             stubs=stubs,
-            step_timeout=step_timeout,
         )
         return await driver.run_script(script)
 
@@ -208,7 +202,6 @@ def code_mode_tool(
     )(_run_code)
     # Read back by code_mode_type_check, so a script can be checked against these exact stubs.
     tool.__code_mode_stubs__ = stubs  # type: ignore[attr-defined]
-    tool.__code_mode_step_timeout__ = step_timeout  # type: ignore[attr-defined]
     return tool
 
 
@@ -219,7 +212,8 @@ async def code_mode_type_check(code_tool: Callable[..., Awaitable[str]], script:
     that tool gives it before every run — syntax, unknown host functions, wrong argument shapes
     and result keys that don't exist — and the script itself never executes, so no host call is
     made. Returns the checker's report, each error with its line, or ``None`` when the script is
-    clean. Call it from workflow code: it runs the check as one short activity.
+    clean. Call it from workflow code or outside a workflow alike: the check is deterministic,
+    so it runs in place.
 
     Use it to let an author (typically a model writing scripts for a user to run later) confirm a
     script will start before handing it over.
@@ -227,10 +221,4 @@ async def code_mode_type_check(code_tool: Callable[..., Awaitable[str]], script:
     stubs = getattr(code_tool, "__code_mode_stubs__", None)
     if stubs is None:
         raise TypeError(f"{code_tool!r} is not a tool returned by code_mode_tool")
-    report: str = await workflow.execute_activity(
-        CODE_TYPE_CHECK_ACTIVITY,
-        args=[script, stubs],
-        result_type=str,
-        start_to_close_timeout=code_tool.__code_mode_step_timeout__,  # type: ignore[attr-defined]
-    )
-    return report or None
+    return call_monty(load_stepper().type_check, script, stubs)

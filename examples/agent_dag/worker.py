@@ -7,8 +7,9 @@ Run from the repo root with:
 
 Hosts both agents on one queue: DagBuilderAgent, and the DagStepAgent subagents its flows start.
 The step tools' durable bodies (the Monty example's travel activities) are registered through
-`AgentHarnessPlugin(tools=...)`, which also brings the Code Mode sandbox activities and the
-subagent-turn activity. The editor tools are callback tools and `get_weather` is inline, so
+`AgentHarnessPlugin(tools=...)`, which also brings the subagent-turn activity. Code Mode itself
+needs no activities: the workflow steps the sandbox, so this worker only needs the `code-mode`
+extra installed. The editor tools are callback tools and `get_weather` is inline, so
 neither needs a worker-side body.
 
 Env vars (set in .env.local — see .env.example):

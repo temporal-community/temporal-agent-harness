@@ -42,7 +42,7 @@ async def client_and_queue():
     )
     task_queue = f"monty-agent-test-{uuid.uuid4()}"
     # Mirrors examples/monty/worker.py: the harness plugin registers the travel tools' activity
-    # bodies and the Code Mode stepping activities. (Passed to the Worker rather than the
+    # bodies. (Passed to the Worker rather than the
     # client because the test env's client is already connected.)
     async with Worker(
         env.client,

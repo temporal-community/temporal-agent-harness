@@ -1,5 +1,5 @@
 # ABOUTME: Tests for AgentHarnessPlugin — the one plugin that wires a client + worker for the
-# harness. Covers what it registers (subagent, Code Mode, and tool activities), what it
+# harness. Covers what it registers (subagent, Jev approval, and tool activities), what it
 # refuses (a non-harness "tool"), how its data converter composes with an AI-SDK plugin's, and
 # that it never double-registers an activity a worker already passed by hand.
 #
@@ -11,35 +11,23 @@
 
 from __future__ import annotations
 
-import sys
 from datetime import timedelta
 
 import pytest
 from temporalio import activity, workflow
-from temporalio.client import WorkflowFailureError
 from temporalio.contrib.pydantic import PydanticPayloadConverter, pydantic_data_converter
 from temporalio.converter import DataConverter
-from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 from temporalio.workflow import ActivityConfig
 
 from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.agent_protocol import RUN_SUBAGENT_TURN_ACTIVITY
-from temporal_agent_harness.harness.code_mode.batch_models import (
-    CODE_RESUME_BATCH_ACTIVITY,
-    CODE_START_BATCH_ACTIVITY,
-    CODE_TYPE_CHECK_ACTIVITY,
-)
 from temporal_agent_harness.harness.jev_approvals.activity import (
     JEV_APPROVAL_ACTIVITIES,
 )
 from temporal_agent_harness.harness.jev_approvals.models import (
     JEV_TOOL_APPROVAL_ACTIVITY,
-)
-from temporal_agent_harness.harness.code_mode.activities import (
-    CODE_MODE_ACTIVITIES,
-    CODE_MODE_MISSING_EXTRA_ERROR,
 )
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporal_agent_harness.utils.large_payload import (
@@ -47,13 +35,13 @@ from temporal_agent_harness.utils.large_payload import (
     local_payload_storage,
 )
 
-_CODE_MODE_NAMES = {CODE_START_BATCH_ACTIVITY, CODE_RESUME_BATCH_ACTIVITY, CODE_TYPE_CHECK_ACTIVITY}
 # Every activity the plugin registers on a worker regardless of configuration — the ones
 # their callers dispatch BY NAME, so an unregistered name would be a retryable Temporal
 # error and a hung turn rather than one actionable failure. Their optional extras are
-# checked per call, inside the activity, never at registration.
-_ALWAYS_ON_ACTIVITIES = [*CODE_MODE_ACTIVITIES, *JEV_APPROVAL_ACTIVITIES]
-_ALWAYS_ON_NAMES = _CODE_MODE_NAMES | {JEV_TOOL_APPROVAL_ACTIVITY}
+# checked per call, inside the activity, never at registration. (Code Mode registers none: its
+# scripts run in the workflow, and only their host calls are activities.)
+_ALWAYS_ON_ACTIVITIES = [*JEV_APPROVAL_ACTIVITIES]
+_ALWAYS_ON_NAMES = {JEV_TOOL_APPROVAL_ACTIVITY}
 
 
 @agent.activity_tool_defn(
@@ -80,52 +68,12 @@ async def plain_function(x: int) -> int:
     return x
 
 
-@workflow.defn(name="PluginCodeModeStepWorkflow")
-class _CodeModeStepWorkflow:
-    """Dispatches one Code Mode sandbox step exactly as ``CodeModeDriver`` does — by NAME.
-
-    Standing in for a full Code Mode agent on purpose: the name-based dispatch IS the seam the
-    plugin's registration has to satisfy, and everything else an agent brings (a runner, turns,
-    approvals, the tool lifecycle) is unchanged and already covered by
-    tests/examples/monty/test_code_mode_e2e.py. Note the deliberate absence of a retry policy:
-    the default is unlimited attempts, so this workflow only fails fast if the error really is
-    non-retryable.
-    """
-
-    @workflow.run
-    async def run(self) -> object:
-        return await workflow.execute_activity(
-            CODE_START_BATCH_ACTIVITY,
-            args=["1 + 1", None],
-            start_to_close_timeout=timedelta(seconds=10),
-        )
-
-
 @workflow.defn(name="PluginTestWorkflow")
 class _StubWorkflow:
     """A placeholder so ``Worker`` has something to host (it rejects an empty worker)."""
 
     @workflow.run
     async def run(self) -> None: ...
-
-
-def _pretend_extra_missing(monkeypatch) -> None:
-    """Make the engine unavailable exactly as it is on a worker without the extra.
-
-    Binding the name to ``None`` in ``sys.modules`` is the documented way to make ``import
-    pydantic_monty`` raise ImportError; monkeypatch undoes it afterwards. Uninstalling the
-    extra for one test isn't an option on a dev machine that legitimately has it.
-
-    Also drops any already-imported ``monty_stepper``, since that module imports Monty at
-    module scope: without this, an earlier test's successful import would still be cached in
-    ``sys.modules`` and the activity's local import would succeed anyway.
-    """
-    monkeypatch.setitem(sys.modules, "pydantic_monty", None)
-    monkeypatch.delitem(
-        sys.modules,
-        "temporal_agent_harness.harness.code_mode.monty_stepper",
-        raising=False,
-    )
 
 
 def _plugin_activity_names(plugin: AgentHarnessPlugin) -> set[str]:
@@ -230,56 +178,19 @@ def test_tools_rejects_a_non_harness_tool():
         AgentHarnessPlugin(tools=[plain_function])
 
 
-# ---------------------------------------------------------------- code mode
+# ---------------------------------------------------------------- extra-backed activities
 
 
-def test_extra_backed_activities_are_registered_unconditionally(monkeypatch):
+def test_extra_backed_activities_are_registered_unconditionally():
     """Registration never branches on an extra — the check lives inside the activity.
 
-    Registering the NAMES is what matters: Code Mode and the Jev auto-approver are both
-    dispatched by name, and leaving a name unregistered would make Temporal retry "not
-    registered" forever — a hung turn instead of one actionable failure.
+    Registering the NAMES is what matters: the Jev auto-approver is dispatched by name, and
+    leaving its name unregistered would make Temporal retry "not registered" forever — a hung
+    turn instead of one actionable failure.
     """
-    assert set(AgentHarnessPlugin()._worker_activities) == set(_ALWAYS_ON_ACTIVITIES)
-
-    _pretend_extra_missing(monkeypatch)
     plugin = AgentHarnessPlugin()
     assert set(plugin._worker_activities) == set(_ALWAYS_ON_ACTIVITIES)
     assert _plugin_activity_names(plugin) == _ALWAYS_ON_NAMES
-
-
-async def test_a_code_mode_call_fails_actionably_without_the_extra(monkeypatch):
-    """One immediate, actionable failure instead of a hung turn.
-
-    Runs the REAL ``code_start_batch`` against an import that fails, asserting the developer
-    is told what to install and that the failure is non-retryable — so the turn ends instead
-    of retrying a missing dependency forever, which is what leaving the activity names
-    unregistered would do.
-    """
-    _pretend_extra_missing(monkeypatch)
-
-    async with await WorkflowEnvironment.start_time_skipping(
-        data_converter=pydantic_data_converter
-    ) as env:
-        async with Worker(
-            env.client,
-            task_queue="plugin-no-code-mode",
-            workflows=[_CodeModeStepWorkflow],
-            plugins=[AgentHarnessPlugin()],
-        ):
-            with pytest.raises(WorkflowFailureError) as caught:
-                await env.client.execute_workflow(
-                    _CodeModeStepWorkflow.run,
-                    id="plugin-no-code-mode-1",
-                    task_queue="plugin-no-code-mode",
-                )
-
-    # ActivityError -> ApplicationError, non-retryable, naming the extra to install.
-    cause = caught.value.cause.cause
-    assert isinstance(cause, ApplicationError)
-    assert cause.type == CODE_MODE_MISSING_EXTRA_ERROR
-    assert cause.non_retryable
-    assert "temporal-agent-harness[code-mode]" in str(cause)
 
 
 # ---------------------------------------------------------------- worker wiring
@@ -287,7 +198,6 @@ async def test_a_code_mode_call_fails_actionably_without_the_extra(monkeypatch):
 
 async def test_worker_gets_every_harness_activity_from_the_plugin():
     """The headline claim: add the plugin, declare only workflows, get the capabilities."""
-    pytest.importorskip("pydantic_monty")
     plugin = AgentHarnessPlugin(tools=[durable_tool, inline_tool])
 
     async with await WorkflowEnvironment.start_time_skipping(

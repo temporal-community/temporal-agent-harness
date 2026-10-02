@@ -296,7 +296,8 @@ def test_subagent_send_tool_signature_renders():
 
 # --- integration: the sandbox actually accepts good stubs and rejects bad scripts ---
 
-monty = pytest.importorskip("pydantic_monty")
+pytest.importorskip("pydantic_monty")
+from temporal_agent_harness.harness.code_mode.monty_stepper import type_check  # noqa: E402
 
 
 def _good_script() -> str:
@@ -314,14 +315,10 @@ _search_tool.__name__ = "search"
 
 
 def test_generated_stubs_type_check_a_good_script():
-    stubs = render_type_check_stubs([_search_tool]).source
-    monty.Monty(_good_script(), type_check=True, type_check_stubs=stubs).start(
-        print_callback=monty.CollectString()
-    )
+    assert type_check(_good_script(), render_type_check_stubs([_search_tool])) is None
 
 
 def test_generated_stubs_reject_unknown_result_key():
-    stubs = render_type_check_stubs([_search_tool]).source
     bad = (
         "import asyncio\n"
         "async def main():\n"
@@ -329,21 +326,16 @@ def test_generated_stubs_reject_unknown_result_key():
         '    return r["items"][0]["nope"]\n'
         "asyncio.run(main())"
     )
-    with pytest.raises(monty.MontyError):
-        monty.Monty(bad, type_check=True, type_check_stubs=stubs).start(
-            print_callback=monty.CollectString()
-        )
+    report = type_check(bad, render_type_check_stubs([_search_tool]))
+    assert report is not None and "nope" in report
 
 
 def test_generated_stubs_reject_wrong_argument_type():
-    stubs = render_type_check_stubs([_search_tool]).source
     bad = (
         "import asyncio\n"
         "async def main():\n"
         '    return await search({"origin": "SFO", "n": "three"})\n'
         "asyncio.run(main())"
     )
-    with pytest.raises(monty.MontyError):
-        monty.Monty(bad, type_check=True, type_check_stubs=stubs).start(
-            print_callback=monty.CollectString()
-        )
+    report = type_check(bad, render_type_check_stubs([_search_tool]))
+    assert report is not None and report.startswith("MontyTypingError")

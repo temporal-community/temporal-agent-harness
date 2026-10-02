@@ -42,9 +42,9 @@ from pathlib import Path
 from typing import Any, Literal, Union, get_args, get_origin
 from uuid import UUID
 
-from pydantic import BaseModel
+from dataclasses import dataclass, field
 
-from .batch_models import TypeCheckStubs
+from pydantic import BaseModel
 
 _NoneType = type(None)
 
@@ -55,6 +55,19 @@ _PRIMITIVES: dict[type, str] = {str: "str", int: "int", float: "float", bool: "b
 _JSON_STRING_TYPES: frozenset[type] = frozenset(
     {datetime, date, time, UUID, Decimal, Path, bytes}
 )
+
+
+@dataclass(frozen=True)
+class TypeCheckStubs:
+    """What the sandbox needs to know about a Code Mode tool's host functions, rendered from its
+    tools by :func:`render_type_check_stubs`.
+
+    ``source`` is the stub source a script is type-checked against. ``type_names`` are the
+    ``TypedDict``\\ s it defines, which the sandbox does not; the stepper answers a script's call
+    to one with a dict instead of surfacing it as a host call."""
+
+    source: str
+    type_names: list[str] = field(default_factory=list)
 
 
 class CodeModeStubError(Exception):

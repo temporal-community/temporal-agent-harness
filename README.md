@@ -183,7 +183,7 @@ opt-in:
 | Extra | Add it when you… |
 | --- | --- |
 | `ui` | want the browser UI and the `temporal-agent-harness` CLI (pulls in `fastapi[standard]`, including Uvicorn). The built Svelte assets are always in the wheel; only the server runtime is gated here, so agent-worker installs stay small. |
-| `code-mode` | run a worker that hosts **Code Mode** agents; pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in. The workflow-side `agent.code_mode_tool` factory needs nothing extra. |
+| `code-mode` | run a worker that hosts **Code Mode** agents; pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in. Importing `agent` needs nothing extra; building a `code_mode_tool` does. |
 | `genai` | use the **Google Gemini** integration (`ai_sdks.google_genai_plugin`). |
 | `jev` | run a worker whose agents use **`agent.jev_evaluator`**, the builtin AI auto mode evaluator; pulls in [`typesafe-sdk`](https://pypi.org/project/typesafe-sdk/). Worker-side only — the workflow-side factory needs nothing extra. |
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
@@ -541,9 +541,16 @@ run_code = agent.code_mode_tool(
 #     asyncio.run(main())
 ```
 
-- **Durable, gated, and observable per call.** The script runs in a sandbox; each host call is
+- **Durable, gated, and observable per call.** The script runs in a sandbox that the workflow
+  steps directly, and replay re-runs it against the recorded host results; each host call is
   dispatched back through the runner as its own durable activity — keeping that tool's approval
   policy and `tool_start`/`tool_end` events. Writing the script is inert; only the host calls act.
+  The script's clock, randomness and `asyncio.sleep` come from the workflow (a sleep is a
+  durable timer), and a script that computes for longer than a second without awaiting a host
+  call is stopped with an error.
+- **Failures are exceptions the script can handle.** A host call that fails (an activity error, a
+  denied approval) raises at its `await`, so the script can `try`/`except` it and carry on;
+  uncaught, it ends the script with an error the model sees.
 - **Type-checked before it runs.** Code Mode generates static type-check stubs from your tools'
   signatures, so a wrong argument or an unknown result key comes back as an error to fix rather
   than a bad run.
@@ -552,11 +559,12 @@ run_code = agent.code_mode_tool(
 - **Several per agent.** Give one agent multiple `code_mode_tool`s (distinct `name`s) over
   disjoint or overlapping tool sets.
 
-A worker that hosts a Code Mode agent needs the two sandbox-stepping activities and the durable
-bodies of any activity-backed host tools. Both come from
-[`AgentHarnessPlugin`](#running-a-worker--one-plugin) — the stepping activities as soon as the
-`code-mode` extra (which pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/),
-the sandbox the scripts run in) is installed:
+A worker that hosts a Code Mode agent needs the `code-mode` extra (which pulls in
+[`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in) and
+the durable bodies of any activity-backed host tools, which
+[`AgentHarnessPlugin`](#running-a-worker--one-plugin) registers. Code Mode has no activities of
+its own. A worker without the extra fails the workflow task that builds the tool, so Temporal
+retries it until a worker with the extra picks it up:
 
 ```python
 client = await Client.connect(..., plugins=[AgentHarnessPlugin(tools=my_tools)])
