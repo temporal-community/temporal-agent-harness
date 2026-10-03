@@ -44,13 +44,17 @@ a human approval therefore pins no subprocess, and a workflow evicted from the c
 === Bounding a step ===
 
 A script that loops forever would block the workflow thread for good: Temporal's deadlock
-detector reports it but cannot interrupt native code. Each step therefore takes a
-``time_limit``, enforced by the pool's ``request_timeout`` watchdog, which kills a worker that
-runs longer than that between host interactions; the step then comes back ``aborted``. The
-limit is a property of the pool, not of the session, so it never travels inside a dump: a step
-replayed under a different limit than it first ran under behaves the same. Whether a step
-overran depends on the machine, so the driver records each abort durably and replays it
-without re-running the step (see :mod:`.driver`). Every sandbox limit Monty enforces itself
+detector reports it but cannot interrupt native code. Each step therefore runs in a pool whose
+``request_timeout`` watchdog kills a worker that runs too long between host interactions; the
+step then comes back ``aborted``. There are two pools, because the watchdog has opposite jobs
+on either side of Temporal's two-second deadlock window. On a step's original run, the live
+pool's watchdog fires first and decides the outcome: the script gets an error and the agent
+carries on. On replay the outcome is already in history, so the replay pool's watchdog only
+fires after the deadlock detector has failed the task, and merely frees the thread. The limit is
+a property of the pool, not of the session, so it never travels inside a dump: a step resumed
+from a dump made during replay still runs under the live limit. Whether a step overran depends
+on the machine, so the driver records each abort durably and replays it without re-running the
+step (see :mod:`.driver`). Every sandbox limit Monty enforces itself
 (recursion depth, suspension count) counts deterministically and needs no special handling.
 
 === Calling a stub type ===
@@ -88,21 +92,49 @@ OS_POLICY: monty.OSPolicy = {
 _TYPE_CHECK_RUN_LIMIT_SECS = 0.05
 _TYPE_CHECK_ATTEMPTS = 3
 
-_pools_lock = threading.Lock()
-_pools: dict[float | None, monty.Monty] = {}
+# The longest a script may compute between host interactions (from its start to its first
+# ``await``, or from one awaited batch to the next) before it is stopped with an error. The
+# sandbox steps inside a workflow task, which Temporal's deadlock detector fails after two
+# seconds, so this stays under that. Host calls run as activities with their own timeouts; this
+# bounds only the script's own computation.
+STEP_TIME_LIMIT_SECS = 1.0
+
+# The limit a step runs under on replay, where it is known to have finished within
+# ``STEP_TIME_LIMIT_SECS`` on its original run, so a slow replay is not cut short. Temporal's
+# deadlock detector fails a replay that takes over two seconds, and nothing the step does after
+# that is used; this only ends a step that never finishes, which frees its thread and lets the
+# worker evict the workflow, since eviction waits for the deadlocked activation to return. It
+# stays above two seconds so the deadlock detector, not this limit, is what fails a slow replay.
+_REPLAY_BACKSTOP_SECS = 3.0
+
+# What a script that a step's watchdog stopped, or whose worker crashed, ends with.
+TIMED_OUT_ERROR = (
+    f"TimeoutError: the script ran for more than {STEP_TIME_LIMIT_SECS:g}s without awaiting a "
+    f"host function, and was stopped"
+)
+CRASHED_ERROR = "MontyCrashedError: the sandbox worker running the script crashed"
 
 
-def _pool(time_limit: float | None) -> monty.Monty:
-    """The process-wide worker pool whose watchdog kills a turn after ``time_limit`` seconds
-    (``None``: no watchdog), spawned on first use and shared by every workflow."""
-    with _pools_lock:
-        pool = _pools.get(time_limit)
-        if pool is None:
-            pool = monty.Monty(request_timeout=time_limit)
-            pool.__enter__()
-            atexit.register(pool.__exit__, None, None, None)
-            _pools[time_limit] = pool
-        return pool
+class _Pool:
+    """A process-wide worker pool, spawned on first use and shared by every workflow."""
+
+    def __init__(self, request_timeout: float) -> None:
+        self._request_timeout = request_timeout
+        self._lock = threading.Lock()
+        self._pool: monty.Monty | None = None
+
+    def __call__(self) -> monty.Monty:
+        with self._lock:
+            if self._pool is None:
+                pool = monty.Monty(request_timeout=self._request_timeout)
+                pool.__enter__()
+                atexit.register(pool.__exit__, None, None, None)
+                self._pool = pool
+            return self._pool
+
+
+_live_pool = _Pool(STEP_TIME_LIMIT_SECS)
+_replay_pool = _Pool(_REPLAY_BACKSTOP_SECS)
 
 
 @dataclass(frozen=True)
@@ -160,15 +192,15 @@ class ScriptRun:
         self._dump: bytes | None = None
         self.stdout = monty.CollectString()
 
-    def start(self, *, time_limit: float | None) -> Step:
+    def start(self, *, replaying: bool = False) -> Step:
         """Type-check and start the script, running it to its first awaited batch or done."""
 
         def begin(session: monty.MontySession) -> Any:
             return session.feed_start(self._script, print_callback=self.stdout)
 
-        return self._step(begin, time_limit)
+        return self._step(begin, replaying)
 
-    def resume(self, results: Mapping[int, Any], *, time_limit: float | None) -> Step:
+    def resume(self, results: Mapping[int, Any], *, replaying: bool = False) -> Step:
         """Resume the awaited batch with ``results`` (call id -> return value, or the exception
         the call failed with, which the script sees raised at its ``await``), then run on to the
         next batch or done. Safe to repeat after an aborted attempt: it restores the same dump.
@@ -190,10 +222,11 @@ class ScriptRun:
                 )
             return snap.resume(settled)
 
-        return self._step(restore, time_limit)
+        return self._step(restore, replaying)
 
-    def _step(self, begin: Callable[[monty.MontySession], Any], time_limit: float | None) -> Step:
-        checkout = _pool(time_limit).checkout(
+    def _step(self, begin: Callable[[monty.MontySession], Any], replaying: bool) -> Step:
+        pool = _replay_pool() if replaying else _live_pool()
+        checkout = pool.checkout(
             type_check=True, type_check_stubs=self._stubs.source, os_policy=OS_POLICY
         )
         try:
@@ -276,7 +309,7 @@ def type_check(script: str, stubs: TypeCheckStubs) -> str | None:
 
 
 def _type_check_once(script: str, stubs: TypeCheckStubs) -> str | None:
-    checkout = _pool(None).checkout(
+    checkout = _replay_pool().checkout(
         limits={"max_turn_duration_secs": _TYPE_CHECK_RUN_LIMIT_SECS},
         type_check=True,
         type_check_stubs=stubs.source,

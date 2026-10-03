@@ -12,8 +12,7 @@ inherits that tool's approval policy and tool_start/tool_end lifecycle.
 
 === Replay-safe step limits ===
 
-A step that runs longer than ``_STEP_TIME_LIMIT_SECS`` between host interactions is killed (see
-:mod:`.monty_stepper`). Whether that happens depends on the machine, so it must not be decided
+A step that runs too long between host interactions is killed (see :mod:`.monty_stepper`). Whether that happens depends on the machine, so it must not be decided
 again on replay. When a step is aborted on its original run, the driver records a patch marker
 naming the script and step, and returns an error. On replay, it checks for that marker before
 running the step: if present, it returns the same error without running the step; if absent,
@@ -47,21 +46,6 @@ with workflow.unsafe.imports_passed_through():
     from .stubs import TypeCheckStubs
 
 _T = TypeVar("_T")
-
-# The longest a script may compute between host interactions (from its start to its first
-# ``await``, or from one awaited batch to the next) before it is stopped with an error. The
-# sandbox steps inside a workflow task, which Temporal's deadlock detector fails after two
-# seconds, so this stays under that. Host calls run as activities with their own timeouts; this
-# bounds only the script's own computation.
-_STEP_TIME_LIMIT_SECS = 1.0
-
-# The limit a step runs under on replay, where it is known to have finished within
-# ``_STEP_TIME_LIMIT_SECS`` on its original run, so a slow replay is not cut short. Temporal's
-# deadlock detector fails a replay that takes over two seconds, and nothing the step does after
-# that is used; this only ends a step that never finishes, which frees its thread and lets the
-# worker evict the workflow, since eviction waits for the deadlocked activation to return. It
-# stays above two seconds so the deadlock detector, not this limit, is what fails a slow replay.
-_REPLAY_BACKSTOP_SECS = 3.0
 
 
 def load_stepper() -> ModuleType:
@@ -141,7 +125,7 @@ class CodeModeDriver:
             script, self._stubs, answer_os=lambda name, args: _answer_os(name, args, entropy)
         )
 
-        step = self._step(script_id, 0, lambda limit: run.start(time_limit=limit))
+        step = self._step(script_id, 0, lambda replaying: run.start(replaying=replaying))
         step_no = 0
         while not step.done:
             step_no += 1
@@ -157,7 +141,7 @@ class CodeModeDriver:
                 for call, outcome in zip(step.awaiting, outcomes)
             }
             step = self._step(
-                script_id, step_no, lambda limit: run.resume(results, time_limit=limit)
+                script_id, step_no, lambda replaying: run.resume(results, replaying=replaying)
             )
 
         if step.error:
@@ -170,17 +154,17 @@ class CodeModeDriver:
         parts.append(f"result: {_render(step.output)!r}")
         return "\n".join(parts)
 
-    def _step(self, script_id: str, step_no: int, advance: Callable[[float | None], Any]) -> Any:
+    def _step(self, script_id: str, step_no: int, advance: Callable[[bool], Any]) -> Any:
         """Run one step under the replay-safe limit described in the module docstring."""
         timed_out_marker = f"temporal-agent-harness/code-mode/timed-out/{script_id}/{step_no}"
         crashed_marker = f"temporal-agent-harness/code-mode/crashed/{script_id}/{step_no}"
         stepper = load_stepper()
         if workflow.unsafe.is_replaying():
             if workflow.patched(timed_out_marker):
-                return stepper.Step(done=True, error=_TIMED_OUT_ERROR)
+                return stepper.Step(done=True, error=stepper.TIMED_OUT_ERROR)
             if workflow.patched(crashed_marker):
-                return stepper.Step(done=True, error=_CRASHED_ERROR)
-            step = call_monty(advance, _REPLAY_BACKSTOP_SECS)
+                return stepper.Step(done=True, error=stepper.CRASHED_ERROR)
+            step = call_monty(advance, True)
             if step.aborted:
                 # The step completed on its original run, so this outcome cannot be returned.
                 # Fail the workflow task and let Temporal retry it.
@@ -190,14 +174,14 @@ class CodeModeDriver:
                 )
             return step
 
-        step = call_monty(advance, _STEP_TIME_LIMIT_SECS)
+        step = call_monty(advance, False)
         if not step.aborted:
             return step
         workflow.patched(timed_out_marker if step.timed_out else crashed_marker)
         workflow.logger.warning("code_mode: step %d aborted: %s", step_no, step.error)
         if step.timed_out:
-            return stepper.Step(done=True, error=_TIMED_OUT_ERROR)
-        return stepper.Step(done=True, error=_CRASHED_ERROR)
+            return stepper.Step(done=True, error=stepper.TIMED_OUT_ERROR)
+        return stepper.Step(done=True, error=stepper.CRASHED_ERROR)
 
     async def _run_call(self, call: Any, stepper: ModuleType) -> Any:
         if isinstance(call, stepper.Sleep):
@@ -270,12 +254,6 @@ def _script_outcome(outcome: Any) -> Any:
         return error
     return Exception(f"{type(error).__name__}: {error}")
 
-
-_TIMED_OUT_ERROR = (
-    f"TimeoutError: the script ran for more than {_STEP_TIME_LIMIT_SECS:g}s without awaiting a "
-    f"host function, and was stopped"
-)
-_CRASHED_ERROR = "MontyCrashedError: the sandbox worker running the script crashed"
 
 
 def _answer_os(name: str, args: tuple[Any, ...], entropy: random.Random) -> Any:

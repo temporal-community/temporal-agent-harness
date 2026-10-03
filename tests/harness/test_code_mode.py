@@ -181,11 +181,11 @@ def test_calling_a_stub_type_builds_a_dict_inside_the_sandbox():
         "asyncio.run(main())\n"
     )
     run = _script_run(script, render_type_check_stubs([pack]))
-    step = run.start(time_limit=None)
+    step = run.start()
     assert not step.done, step.error
     assert [(c.function_name, c.args) for c in step.awaiting] == [("pack", [{"size": 1}])]
 
-    step = run.resume({step.awaiting[0].call_id: {"size": 5}}, time_limit=None)
+    step = run.resume({step.awaiting[0].call_id: {"size": 5}})
     assert not step.done, step.error
     assert [(c.function_name, c.args) for c in step.awaiting] == [("pack", [{"size": 6}])]
 
@@ -195,7 +195,7 @@ def test_bad_arguments_to_a_stub_type_are_a_script_error():
     loose = TypeCheckStubs(
         source="from typing import Any\ndef Box(*args: Any) -> Any: ...\n", type_names=["Box"]
     )
-    step = _script_run("Box(1)\n", loose).start(time_limit=None)
+    step = _script_run("Box(1)\n", loose).start()
     assert step.done and step.error and "TypeError" in step.error
 
 
@@ -237,11 +237,11 @@ def test_a_call_made_in_one_batch_resolves_when_a_later_one_awaits_it():
         "asyncio.run(main())\n"
     )
     run = _script_run(script, _BETA)
-    step = run.start(time_limit=None)
+    step = run.start()
     # Monty resolves every outstanding call at the first await, in the order they were made.
     assert [(c.function_name, c.args) for c in step.awaiting] == [("beta", [1]), ("beta", [2])]
 
-    step = run.resume({c.call_id: c.args[0] * 10 for c in step.awaiting}, time_limit=None)
+    step = run.resume({c.call_id: c.args[0] * 10 for c in step.awaiting})
     assert step.done and step.output == [20, 10], step.error
 
 
@@ -261,18 +261,18 @@ def test_a_failed_host_call_raises_at_its_await():
         "asyncio.run(main())\n"
     )
     run = _script_run(script, _BETA)
-    first = run.start(time_limit=None).awaiting[0]
-    second = run.resume({first.call_id: ValueError("bad")}, time_limit=None).awaiting[0]
-    step = run.resume({second.call_id: Exception("Denied: no")}, time_limit=None)
+    first = run.start().awaiting[0]
+    second = run.resume({first.call_id: ValueError("bad")}).awaiting[0]
+    step = run.resume({second.call_id: Exception("Denied: no")})
     assert step.output == ["value: bad", "other: Denied: no"], step.error
 
 
 def test_a_sleep_is_handed_to_the_host():
     script = "import asyncio\nasync def main():\n    await asyncio.sleep(2.5)\n    return 1\nasyncio.run(main())\n"
     run = _script_run(script, _BETA)
-    step = run.start(time_limit=None)
+    step = run.start()
     assert step.awaiting == [monty_stepper.Sleep(call_id=step.awaiting[0].call_id, seconds=2.5)]
-    assert run.resume({step.awaiting[0].call_id: None}, time_limit=None).output == 1
+    assert run.resume({step.awaiting[0].call_id: None}).output == 1
 
 
 def test_the_clock_and_entropy_come_from_the_host():
@@ -289,7 +289,7 @@ def test_the_clock_and_entropy_come_from_the_host():
 
     def outputs():
         run = _script_run(script, _BETA, answer_os=lambda name, args: answers[name])
-        step = run.start(time_limit=None)
+        step = run.start()
         assert step.done, step.error
         return step.output
 
@@ -299,12 +299,12 @@ def test_the_clock_and_entropy_come_from_the_host():
 
 
 def test_an_os_call_the_host_leaves_unhandled_is_a_script_error():
-    step = _script_run("open('/etc/passwd').read()\n", _BETA).start(time_limit=None)
+    step = _script_run("open('/etc/passwd').read()\n", _BETA).start()
     assert step.done and step.error and not step.aborted
 
 
 def test_a_step_that_runs_too_long_is_aborted():
-    step = _script_run("while True:\n    pass\n", _BETA).start(time_limit=0.2)
+    step = _script_run("while True:\n    pass\n", _BETA).start()
     assert step.done and step.aborted and step.timed_out
 
 
@@ -320,9 +320,9 @@ def test_a_resume_can_be_repeated_after_an_abort():
         "asyncio.run(main())\n"
     )
     run = _script_run(script, _BETA)
-    call = run.start(time_limit=None).awaiting[0]
-    assert run.resume({call.call_id: 1}, time_limit=0.2).aborted
-    assert run.resume({call.call_id: 0}, time_limit=0.2).output == 0
+    call = run.start().awaiting[0]
+    assert run.resume({call.call_id: 1}).aborted
+    assert run.resume({call.call_id: 0}).output == 0
 
 
 def test_the_stepper_keeps_real_monty_annotations():
