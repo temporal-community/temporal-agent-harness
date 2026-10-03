@@ -56,13 +56,12 @@ _T = TypeVar("_T")
 _STEP_TIME_LIMIT_SECS = 1.0
 
 # The limit a step runs under on replay, where it is known to have finished within
-# ``_STEP_TIME_LIMIT_SECS`` on its original run. It only has to free the thread if the step somehow
-# never ends: by the time it fires, Temporal's deadlock detector has already failed the task.
-_REPLAY_BACKSTOP_SECS = 30.0
-
-# A step that crashes on replay ran to completion originally, so the crash is the machine's,
-# not the script's. Try it again a few times before giving up.
-_REPLAY_ATTEMPTS = 3
+# ``_STEP_TIME_LIMIT_SECS`` on its original run, so a slow replay is not cut short. Temporal's
+# deadlock detector fails a replay that takes over two seconds, and nothing the step does after
+# that is used; this only ends a step that never finishes, which frees its thread and lets the
+# worker evict the workflow, since eviction waits for the deadlocked activation to return. It
+# stays above two seconds so the deadlock detector, not this limit, is what fails a slow replay.
+_REPLAY_BACKSTOP_SECS = 3.0
 
 
 def load_stepper() -> ModuleType:
@@ -195,14 +194,15 @@ class CodeModeDriver:
                 return stepper.Step(done=True, error=_TIMED_OUT_ERROR)
             if workflow.patched(crashed_marker):
                 return stepper.Step(done=True, error=_CRASHED_ERROR)
-            for _ in range(_REPLAY_ATTEMPTS):
-                step = call_monty(advance, _REPLAY_BACKSTOP_SECS)
-                if not step.aborted:
-                    return step
-            raise RuntimeError(
-                f"Code Mode script {script_id} step {step_no} completed on its original run but "
-                f"its sandbox worker died on replay {_REPLAY_ATTEMPTS} times: {step.error}"
-            )
+            step = call_monty(advance, _REPLAY_BACKSTOP_SECS)
+            if step.aborted:
+                # The step completed on its original run, so this outcome cannot be returned.
+                # Fail the workflow task and let Temporal retry it.
+                raise RuntimeError(
+                    f"Code Mode script {script_id} step {step_no} completed on its original run "
+                    f"but not on replay: {step.error}"
+                )
+            return step
 
         step = call_monty(advance, _STEP_TIME_LIMIT_SECS)
         if not step.aborted:
