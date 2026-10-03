@@ -87,10 +87,8 @@ OS_POLICY: monty.OSPolicy = {
     "random_start": "call_host",
 }
 
-# How long type_check lets a clean script run before discarding it, and how many times it tries
-# a check whose worker crashed (see type_check).
+# How long type_check lets a clean script run before discarding it (see type_check).
 _TYPE_CHECK_RUN_LIMIT_SECS = 0.05
-_TYPE_CHECK_ATTEMPTS = 3
 
 # The longest a script may compute between host interactions (from its start to its first
 # ``await``, or from one awaited batch to the next) before it is stopped with an error. The
@@ -298,17 +296,9 @@ def type_check(script: str, stubs: TypeCheckStubs) -> str | None:
     first suspension (or a brief time limit), no host call it makes is ever answered, and how far
     it got is never looked at, so the report depends on the checker alone.
 
-    A worker that crashes says nothing about the script, so the check is retried a few times
-    and then raises, rather than reporting an answer a replay might not reproduce."""
-    for _ in range(_TYPE_CHECK_ATTEMPTS - 1):
-        try:
-            return _type_check_once(script, stubs)
-        except monty.MontyCrashedError:
-            continue
-    return _type_check_once(script, stubs)
-
-
-def _type_check_once(script: str, stubs: TypeCheckStubs) -> str | None:
+    A worker that crashes says nothing about the script, so its ``MontyCrashedError``
+    propagates rather than becoming an answer a replay might not reproduce: it fails the workflow
+    task, and Temporal retries it."""
     checkout = _replay_pool().checkout(
         limits={"max_turn_duration_secs": _TYPE_CHECK_RUN_LIMIT_SECS},
         type_check=True,
