@@ -134,12 +134,6 @@ class CodeModeDriver:
         script that gathers independent calls genuinely parallelizes them. The sandbox
         type-checks the script first, so a bad call comes back as an error for the author to
         fix, not a mid-run failure."""
-        log = workflow.logger
-        log.info(
-            "code_mode: starting script (script_len=%d)\n--- script ---\n%s\n--- end ---",
-            len(script),
-            script,
-        )
         stepper = load_stepper()
         script_id = str(workflow.uuid4())
         entropy = random.Random(workflow.random().getrandbits(64))
@@ -151,12 +145,6 @@ class CodeModeDriver:
         step_no = 0
         while not step.done:
             step_no += 1
-            log.info(
-                "code_mode: step %d — running %d host call(s) concurrently: %s",
-                step_no,
-                len(step.awaiting),
-                [getattr(c, "function_name", "asyncio.sleep") for c in step.awaiting],
-            )
             # Run the whole awaited batch CONCURRENTLY — each host call is its own durable
             # activity (dispatched via run_tool, so each is independently approval-gated and
             # publishes its own tool lifecycle). A call that fails is raised inside the script at
@@ -173,7 +161,6 @@ class CodeModeDriver:
             )
 
         if step.error:
-            log.warning("code_mode: script error: %s", step.error)
             return f"Script error ({step.error})"
 
         parts: list[str] = []
@@ -181,7 +168,6 @@ class CodeModeDriver:
         if combined:
             parts.append(f"output:\n{combined}")
         parts.append(f"result: {_render(step.output)!r}")
-        log.info("code_mode: run complete after %d step(s); returning reply", step_no + 1)
         return "\n".join(parts)
 
     def _step(self, script_id: str, step_no: int, advance: Callable[[float | None], Any]) -> Any:
