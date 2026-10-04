@@ -71,7 +71,7 @@ just worker            # 4. this example's agent worker
 
 Open <http://localhost:8000> and start a session. There's no install step — `uv` fetches
 dependencies on demand. Every example follows the same four recipes; see
-[Run the examples](#run-the-examples) for the rest of them, including running all nine behind
+[Run the examples](#run-the-examples) for the rest of them, including running all ten behind
 one UI.
 
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
@@ -558,6 +558,24 @@ run_code = agent.code_mode_tool(
   straight into `code_mode_tool([...])` — the model's script can drive subagents too.
 - **Several per agent.** Give one agent multiple `code_mode_tool`s (distinct `name`s) over
   disjoint or overlapping tool sets.
+- **A virtual filesystem, if you want one.** Pass `mounts=` and scripts read and write files with
+  plain `open()` and `pathlib`. A mount's backend is any async `FileSystem` your workflow can
+  await (an activity, a Nexus operation, a child workflow) or the built-in
+  `agent.InMemoryFileSystem`, optionally seeded by an activity. Every file operation goes through
+  the runner as an `fs_*` tool call, keeping the approval policy and tool events, and nothing
+  touches the worker's disk.
+
+```python
+run_code = agent.code_mode_tool(
+    tools,
+    name="run_code",
+    mounts=[
+        agent.Mount("/docs", agent.InMemoryFileSystem(seed=self._load_docs), read_only=True,
+                    description="Product docs, one Markdown file per page."),
+        agent.Mount("/workspace", agent.InMemoryFileSystem(), description="Write your output here."),
+    ],
+)
+```
 
 A worker that hosts a Code Mode agent needs the `code-mode` extra (which pulls in
 [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in) and
@@ -573,6 +591,8 @@ worker = Worker(client, task_queue=..., workflows=[MyAgent])
 
 See [`examples/monty`](examples/monty) for three agents all built on Code Mode: a no-model script
 runner, a conversational agent that writes its own scripts, and a subagent-driven variant.
+[`examples/code_mode_vfs`](examples/code_mode_vfs) shows a Code Mode tool working on a virtual
+filesystem.
 
 ## Accepted Messages
 
@@ -877,7 +897,7 @@ cp .env.example .env.local
 ```
 
 Set the creds for whichever agents you'll run: `OPENAI_API_KEY` (react_agent, openai_hello,
-pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding). The default committed
+pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding, code_mode_vfs). The default committed
 `temporal.local.toml` profile points at a local Temporal dev server.
 
 ### One example, standalone
@@ -907,7 +927,7 @@ each in its own terminal:
 just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
 just session-manager   # shared session-manager worker
 just server            # serves the MERGED registry (all agents) on http://localhost:8000
-just workers           # co-launch all nine agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
+just workers           # co-launch all ten agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
 ```
 
 Then create a session for any agent in the UI. A few need extra setup or a client:
@@ -921,6 +941,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
 | Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client --wiki-dir ./wiki`** — required, or its tool calls hang |
 | Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
+| Code Mode VFS | `GEMINI_API_KEY`; a Code Mode tool working on a virtual filesystem ([readme](examples/code_mode_vfs/README.md)); chat directly in the UI |
 | Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](examples/agent_dag/README.md)); best in its own UI, **`just studio`** from `examples/agent_dag` |
 
 **Gotcha — the session manager caches its registry.** The server seeds the `session-manager`
