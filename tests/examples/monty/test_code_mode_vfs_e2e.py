@@ -151,6 +151,31 @@ async def test_workspace_files_persist_across_scripts_and_the_seed_runs_once(cli
     await _replay(handle)
 
 
+async def test_a_tracked_workspace_publishes_its_changes_as_state_patches(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start(client, task_queue)
+    script = (
+        "from pathlib import Path\n"
+        "Path('/workspace/out').mkdir()\n"
+        "Path('/workspace/out/report.md').write_text('# Report')\n"
+        "Path('/workspace/out/report.md').read_text()\n"
+    )
+    reply, events = await _send(client, handle, script)
+    assert "result: '# Report'" in reply, reply
+
+    patches = [
+        e.event
+        for e in events
+        if e.event.type == AgentEventType.STATE_PATCH and e.event.state_id == "workspace"
+    ]
+    assert [[(op["op"], op["path"]) for op in p.ops] for p in patches] == [
+        [("add", "/directories/-")],
+        [("add", "/files/out~1report.md")],
+    ]
+    assert patches[1].ops[0]["value"] == {"content": "# Report", "encoding": "utf-8", "size": 8}
+    await _replay(handle)
+
+
 async def test_an_untouched_mount_is_never_seeded(client_and_queue):
     client, task_queue = client_and_queue
     handle = await _start(client, task_queue)

@@ -29,6 +29,7 @@ from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_workflow import Injected, tool_defn
+    from temporal_agent_harness.harness.state import HarnessState, StateRef
 
 
 @dataclass(frozen=True)
@@ -423,6 +424,122 @@ async def _mkdir(fs: Any, op: FileOp) -> None:
 
 # ---------------------------------------------------------------- the in-memory backend
 
+ROOT = PurePosixPath(".")
+
+
+class FileEntry(HarnessState):
+    """One file in a :class:`FileTree`. Text is stored as is, anything else as base64."""
+
+    content: str
+    encoding: Literal["utf-8", "base64"] = "utf-8"
+    size: int
+
+
+class FileTree(HarnessState):
+    """An :class:`InMemoryFileSystem`'s files as agent state.
+
+    ``files`` is keyed by mount-relative path (``"notes/todo.md"``), and ``directories`` lists
+    every directory except the mount's root. Declare it with ``agent.state(FileTree)`` and pass
+    the ref as ``InMemoryFileSystem(state=...)``: the files then live in the state, and every
+    change to them is published as a state patch."""
+
+    files: dict[str, FileEntry] = {}
+    directories: list[str] = []
+
+
+def _entry(data: bytes) -> FileEntry:
+    try:
+        return FileEntry(content=data.decode(), size=len(data))
+    except UnicodeDecodeError:
+        return FileEntry(
+            content=base64.b64encode(data).decode(), encoding="base64", size=len(data)
+        )
+
+
+def _content(entry: FileEntry) -> bytes:
+    if entry.encoding == "base64":
+        return base64.b64decode(entry.content)
+    return entry.content.encode()
+
+
+@dataclass
+class _Change:
+    """One change to an in-memory tree, applied in this order: files dropped, directories
+    removed, directories added, files put."""
+
+    drop: list[PurePosixPath] = field(default_factory=list)
+    rmdirs: list[PurePosixPath] = field(default_factory=list)
+    mkdirs: list[PurePosixPath] = field(default_factory=list)
+    put: dict[PurePosixPath, bytes] = field(default_factory=dict)
+
+
+class _DictStore:
+    """Files and directories in plain workflow memory."""
+
+    def __init__(self) -> None:
+        self._files: dict[PurePosixPath, bytes] = {}
+        self._dirs: set[PurePosixPath] = set()
+
+    def content(self, path: PurePosixPath) -> bytes | None:
+        return self._files.get(path)
+
+    def size(self, path: PurePosixPath) -> int | None:
+        data = self._files.get(path)
+        return None if data is None else len(data)
+
+    def is_dir(self, path: PurePosixPath) -> bool:
+        return path == ROOT or path in self._dirs
+
+    def paths(self) -> list[PurePosixPath]:
+        return [*self._dirs, *self._files]
+
+    def total(self) -> int:
+        return sum(len(data) for data in self._files.values())
+
+    def apply(self, change: _Change) -> None:
+        for path in change.drop:
+            del self._files[path]
+        self._dirs.difference_update(change.rmdirs)
+        self._dirs.update(change.mkdirs)
+        self._files.update(change.put)
+
+
+class _StateStore:
+    """Files and directories in a :class:`FileTree` state; each change is one state patch."""
+
+    def __init__(self, ref: StateRef[FileTree]) -> None:
+        self._ref = ref
+
+    def content(self, path: PurePosixPath) -> bytes | None:
+        entry = self._ref.current.files.get(str(path))
+        return None if entry is None else _content(entry)
+
+    def size(self, path: PurePosixPath) -> int | None:
+        entry = self._ref.current.files.get(str(path))
+        return None if entry is None else entry.size
+
+    def is_dir(self, path: PurePosixPath) -> bool:
+        return path == ROOT or str(path) in self._ref.current.directories
+
+    def paths(self) -> list[PurePosixPath]:
+        tree = self._ref.current
+        return [PurePosixPath(p) for p in (*tree.directories, *tree.files)]
+
+    def total(self) -> int:
+        return sum(entry.size for entry in self._ref.current.files.values())
+
+    def apply(self, change: _Change) -> None:
+        with self._ref.mutate() as draft:
+            for path in change.drop:
+                del draft.files[str(path)]
+            for path in change.rmdirs:
+                draft.directories.remove(str(path))
+            for path in change.mkdirs:
+                draft.directories.append(str(path))
+            for path, data in change.put.items():
+                draft.files[str(path)] = _entry(data)
+
+
 Seed = Callable[[], Awaitable[Mapping[str, str | bytes]]]
 
 
@@ -435,104 +552,133 @@ class InMemoryFileSystem:
     once, before the first operation on the mount. Load files from disk inside an activity the
     seed awaits: the activity's result is recorded, so a running workflow keeps the files it
     seeded even after a deploy changes them. ``max_bytes`` caps the total size of the files,
-    seeded ones included."""
+    seeded ones included.
 
-    def __init__(self, *, seed: Seed | None = None, max_bytes: int | None = None) -> None:
+    ``state`` (opt-in) keeps the files in a declared :class:`FileTree` state instead, so every
+    change is published as a state patch the UI can show. A patch carries each written file
+    whole, so track only filesystems whose files are worth streaming. The state's initial value
+    is the filesystem's initial contents."""
+
+    def __init__(
+        self,
+        *,
+        seed: Seed | None = None,
+        max_bytes: int | None = None,
+        state: StateRef[FileTree] | None = None,
+    ) -> None:
         self._seed = seed
         self._seeded = seed is None
         self._max_bytes = max_bytes
-        self._files: dict[PurePosixPath, bytes] = {}
-        self._dirs: set[PurePosixPath] = {PurePosixPath(".")}
+        self._store: _DictStore | _StateStore = (
+            _StateStore(state) if state is not None else _DictStore()
+        )
 
     @property
     def needs_seed(self) -> bool:
         return not self._seeded
 
     async def _seed_now(self) -> tuple[int, int]:
-        """Run the seed and load its files. Called by the ``fs_seed`` tool."""
+        """Run the seed and load its files, as one change. Called by the ``fs_seed`` tool."""
         assert self._seed is not None
         files = await self._seed()
         self._seeded = True
+        change = _Change()
         for raw, content in files.items():
             path = PurePosixPath(posixpath.normpath(raw))
-            if path.is_absolute() or path.parts[:1] == ("..",):
-                raise ValueError(f"seeded path {raw!r} must be relative to the mount")
-            for ancestor in path.parents:
-                self._dirs.add(ancestor)
-            await self.write(path, _encode(content))
-        return len(files), sum(len(_encode(c)) for c in files.values())
+            if path.is_absolute() or path.parts[:1] == ("..",) or path == ROOT:
+                raise ValueError(f"seeded path {raw!r} must name a file inside the mount")
+            for ancestor in reversed(path.parents[:-1]):
+                if not self._store.is_dir(ancestor) and ancestor not in change.mkdirs:
+                    change.mkdirs.append(ancestor)
+            change.put[path] = _encode(content)
+        self._check_budget(change.put)
+        self._store.apply(change)
+        return len(files), sum(len(data) for data in change.put.values())
+
+    def _check_budget(self, put: Mapping[PurePosixPath, bytes]) -> None:
+        if self._max_bytes is None:
+            return
+        replaced = sum(self._store.size(path) or 0 for path in put)
+        total = self._store.total() - replaced + sum(len(data) for data in put.values())
+        if total > self._max_bytes:
+            path = next(iter(put))
+            raise OSError(
+                errno.ENOSPC,
+                f"No space left on device: the filesystem is limited to {self._max_bytes} bytes",
+                str(path),
+            )
 
     async def stat(self, path: PurePosixPath) -> FileStat | None:
-        if path in self._dirs:
+        if self._store.is_dir(path):
             return FileStat(is_dir=True)
-        if path in self._files:
-            return FileStat(is_dir=False, size=len(self._files[path]))
-        return None
+        size = self._store.size(path)
+        return None if size is None else FileStat(is_dir=False, size=size)
 
     async def read(self, path: PurePosixPath) -> bytes:
-        if path in self._dirs:
+        if self._store.is_dir(path):
             raise _error(IsADirectoryError, errno.EISDIR, path)
-        try:
-            return self._files[path]
-        except KeyError:
-            raise _error(FileNotFoundError, errno.ENOENT, path) from None
+        data = self._store.content(path)
+        if data is None:
+            raise _error(FileNotFoundError, errno.ENOENT, path)
+        return data
 
     async def list(self, path: PurePosixPath) -> list[str]:
-        if path not in self._dirs:
+        if not self._store.is_dir(path):
             raise _error(NotADirectoryError, errno.ENOTDIR, path)
-        entries = [p for p in (*self._dirs, *self._files) if p != path and p.parent == path]
-        return sorted(p.name for p in entries)
+        return sorted(p.name for p in self._store.paths() if p != path and p.parent == path)
 
     async def write(self, path: PurePosixPath, data: bytes) -> None:
-        if path in self._dirs:
+        if self._store.is_dir(path):
             raise _error(IsADirectoryError, errno.EISDIR, path)
-        if path.parent not in self._dirs:
+        if not self._store.is_dir(path.parent):
             raise _error(FileNotFoundError, errno.ENOENT, path)
-        if self._max_bytes is not None:
-            total = sum(len(d) for d in self._files.values()) - len(self._files.get(path, b""))
-            if total + len(data) > self._max_bytes:
-                raise OSError(
-                    errno.ENOSPC,
-                    f"No space left on device: the filesystem is limited to "
-                    f"{self._max_bytes} bytes",
-                    str(path),
-                )
-        self._files[path] = bytes(data)
+        self._check_budget({path: bytes(data)})
+        self._store.apply(_Change(put={path: bytes(data)}))
 
     async def mkdir(self, path: PurePosixPath) -> None:
-        if path in self._dirs or path in self._files:
+        if self._store.is_dir(path) or self._store.size(path) is not None:
             raise _error(FileExistsError, errno.EEXIST, path)
-        if path.parent not in self._dirs:
+        if not self._store.is_dir(path.parent):
             raise _error(FileNotFoundError, errno.ENOENT, path)
-        self._dirs.add(path)
+        self._store.apply(_Change(mkdirs=[path]))
 
     async def delete(self, path: PurePosixPath) -> None:
-        if path in self._files:
-            del self._files[path]
-        elif path in self._dirs and path != PurePosixPath("."):
+        if self._store.size(path) is not None:
+            self._store.apply(_Change(drop=[path]))
+        elif self._store.is_dir(path) and path != ROOT:
             if await self.list(path):
                 raise _error(OSError, errno.ENOTEMPTY, path)
-            self._dirs.remove(path)
+            self._store.apply(_Change(rmdirs=[path]))
         else:
             raise _error(FileNotFoundError, errno.ENOENT, path)
 
     async def rename(self, path: PurePosixPath, target: PurePosixPath) -> None:
-        if target.parent not in self._dirs:
+        store = self._store
+        if not store.is_dir(target.parent):
             raise _error(FileNotFoundError, errno.ENOENT, target)
-        if path in self._files:
-            if target in self._dirs:
+        data = store.content(path)
+        if data is not None:
+            if store.is_dir(target):
                 raise _error(IsADirectoryError, errno.EISDIR, target)
-            self._files[target] = self._files.pop(path)
+            store.apply(_Change(drop=[path], put={target: data}))
             return
-        if path not in self._dirs or path == PurePosixPath("."):
+        if not store.is_dir(path) or path == ROOT:
             raise _error(FileNotFoundError, errno.ENOENT, path)
         if target == path or path in target.parents:
             raise _error(OSError, errno.EINVAL, target)
-        if target in self._files or (target in self._dirs and await self.list(target)):
+        if store.size(target) is not None or (store.is_dir(target) and await self.list(target)):
             raise _error(OSError, errno.ENOTEMPTY, target)
 
-        def moved(p: PurePosixPath) -> PurePosixPath:
-            return target / p.relative_to(path) if p == path or path in p.parents else p
-
-        self._dirs = {moved(p) for p in self._dirs}
-        self._files = {moved(p): d for p, d in self._files.items()}
+        change = _Change(rmdirs=[target] if store.is_dir(target) else [])
+        for old in store.paths():
+            if old != path and path not in old.parents:
+                continue
+            new = target / old.relative_to(path)
+            moved = store.content(old)
+            if moved is None:
+                change.rmdirs.append(old)
+                change.mkdirs.append(new)
+            else:
+                change.drop.append(old)
+                change.put[new] = moved
+        store.apply(change)

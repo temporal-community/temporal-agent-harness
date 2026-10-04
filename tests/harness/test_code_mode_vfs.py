@@ -14,13 +14,16 @@ import pytest
 from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.code_mode import monty_stepper
 from temporal_agent_harness.harness.code_mode.vfs import (
+    FileEntry,
     FileOp,
+    FileTree,
     InMemoryFileSystem,
     Mount,
     perform,
     route,
     validate_mounts,
 )
+from temporal_agent_harness.harness.state import StatePatch, StateRef
 
 
 @agent.tool_defn()
@@ -329,7 +332,7 @@ async def test_seeded_paths_must_be_relative():
     async def seed() -> dict[str, str | bytes]:
         return {"/etc/passwd": "x"}
 
-    with pytest.raises(ValueError, match="relative"):
+    with pytest.raises(ValueError, match="inside the mount"):
         await InMemoryFileSystem(seed=seed)._seed_now()
 
 
@@ -368,3 +371,102 @@ def test_open_type_checks_only_with_mounts():
     assert monty_stepper.type_check(script, with_mounts.__code_mode_stubs__) is None
     plain = agent.code_mode_tool([beta], name="run_code")
     assert monty_stepper.type_check(script, plain.__code_mode_stubs__) is not None
+
+
+# ---------------------------------------------------------------- state tracking (opt-in)
+
+
+def _tracked(initial: FileTree | None = None) -> tuple[StateRef[FileTree], list[StatePatch]]:
+    patches: list[StatePatch] = []
+    return StateRef("workspace", initial or FileTree(), publish=patches.append), patches
+
+
+async def test_a_tracked_filesystem_publishes_one_patch_per_change():
+    ref, patches = _tracked()
+    mounts = [Mount("/workspace", InMemoryFileSystem(state=ref))]
+    script = (
+        "from pathlib import Path\n"
+        "Path('/workspace/notes').mkdir()\n"
+        "Path('/workspace/notes/a.txt').write_text('hi')\n"
+        "Path('/workspace/logo.bin').write_bytes(b'\\x00\\xff')\n"
+        "Path('/workspace/notes/a.txt').write_text('hello')\n"
+        "Path('/workspace/logo.bin').unlink()\n"
+    )
+    await _run(script, mounts)
+
+    assert [[op["op"] for op in p.ops] for p in patches] == [
+        ["add"],  # mkdir
+        ["add"],  # new file
+        ["add"],  # new binary file
+        ["replace"],  # overwrite
+        ["remove"],  # unlink
+    ]
+    # Keys are mount-relative paths, escaped as JSON Pointer segments.
+    assert patches[1].ops[0]["path"] == "/files/notes~1a.txt"
+    assert patches[1].ops[0]["value"] == {"content": "hi", "encoding": "utf-8", "size": 2}
+    assert patches[2].ops[0]["value"] == {"content": "AP8=", "encoding": "base64", "size": 2}
+    assert ref.current.directories == ["notes"]
+    assert list(ref.current.files) == ["notes/a.txt"]
+    assert [p.version for p in patches] == [1, 2, 3, 4, 5]
+
+
+async def test_a_tracked_seed_is_one_patch():
+    async def seed() -> dict[str, str | bytes]:
+        return {"a/b/one.md": "1", "a/two.md": "2"}
+
+    ref, patches = _tracked()
+    mounts = [Mount("/skills", InMemoryFileSystem(seed=seed, state=ref), read_only=True)]
+    step, _ = await _run(
+        "from pathlib import Path\nPath('/skills/a/b/one.md').read_text()\n", mounts
+    )
+    assert step.output == "1"
+    assert len(patches) == 1
+    assert ref.current.directories == ["a", "a/b"]
+    assert set(ref.current.files) == {"a/b/one.md", "a/two.md"}
+
+
+async def test_a_tracked_rename_moves_a_directory_in_one_patch():
+    ref, patches = _tracked(
+        FileTree(
+            directories=["src", "src/pkg"],
+            files={"src/pkg/mod.py": FileEntry(content="x = 1", size=5)},
+        )
+    )
+    mounts = [Mount("/workspace", InMemoryFileSystem(state=ref))]
+    script = (
+        "from pathlib import Path\n"
+        "Path('/workspace/src').rename('/workspace/lib')\n"
+        "Path('/workspace/lib/pkg/mod.py').read_text()\n"
+    )
+    step, _ = await _run(script, mounts)
+    assert step.output == "x = 1"
+    assert len(patches) == 1
+    assert sorted(ref.current.directories) == ["lib", "lib/pkg"]
+    assert list(ref.current.files) == ["lib/pkg/mod.py"]
+
+
+async def test_the_initial_state_is_the_filesystems_initial_contents():
+    ref, patches = _tracked(FileTree(files={"todo.md": FileEntry(content="- ship it", size=9)}))
+    mounts = [Mount("/workspace", InMemoryFileSystem(state=ref))]
+    step, _ = await _run(
+        "from pathlib import Path\n[p.name for p in Path('/workspace').iterdir()]\n", mounts
+    )
+    assert step.output == ["todo.md"]
+    assert patches == []
+
+
+async def test_max_bytes_applies_to_a_tracked_filesystem():
+    ref, patches = _tracked()
+    mounts = [Mount("/workspace", InMemoryFileSystem(state=ref, max_bytes=3))]
+    script = (
+        "from pathlib import Path\n"
+        "try:\n"
+        "    Path('/workspace/a').write_text('abcd')\n"
+        "    out = 'written'\n"
+        "except OSError:\n"
+        "    out = 'full'\n"
+        "out\n"
+    )
+    step, _ = await _run(script, mounts)
+    assert step.output == "full"
+    assert patches == [] and ref.current.files == {}

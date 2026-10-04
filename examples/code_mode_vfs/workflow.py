@@ -6,6 +6,10 @@ read-only, and ``/workspace``, where the agent writes what it produces. Both are
 in the workflow. ``/skills`` is seeded by the ``load_skills`` activity before the first script
 touches it; ``/workspace`` starts empty and keeps its files for the whole conversation.
 
+``/workspace`` is tracked in the ``workspace`` state (opt-in, through ``state=``): its files live
+in that state, and every change is published as a state patch the console shows. ``/skills`` is
+left untracked, since nothing there changes after the seed.
+
 ``/skills`` holds a minimal sample of instruction-only skills from ``skills/``, as something for
 the scripts to read: the model learns about them from the system prompt and the mount
 descriptions, reads a ``SKILL.md`` when one fits the request, and follows it with ordinary file
@@ -64,6 +68,10 @@ follow its instructions, reading any files it points to. Write what you produce 
 
 @agent.defn(name="CodeModeVfsAgent")
 class CodeModeVfsAgentWorkflow:
+    # The /workspace files, as observable state: every file the agent writes is published as a
+    # state patch, so the console's AGENT STATE pane shows the workspace as it changes.
+    workspace = agent.state(agent.FileTree)
+
     @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
@@ -85,7 +93,7 @@ class CodeModeVfsAgentWorkflow:
                 ),
                 agent.Mount(
                     "/workspace",
-                    agent.InMemoryFileSystem(max_bytes=1_000_000),
+                    agent.InMemoryFileSystem(max_bytes=1_000_000, state=self.workspace),
                     description="Your scratch space; write everything you produce here.",
                 ),
             ],

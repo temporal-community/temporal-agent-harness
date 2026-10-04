@@ -105,8 +105,10 @@ from temporal_agent_harness.harness.agent_workflow import (
     tool_defn,
 )
 from temporal_agent_harness.harness.code_mode import (
+    FileEntry,
     FileStat,
     FileSystem,
+    FileTree,
     InMemoryFileSystem,
     Mount,
     code_mode_tool,
@@ -139,8 +141,10 @@ __all__ = [
     "callback_tool_defn",
     "code_mode_tool",
     "code_mode_type_check",
+    "FileEntry",
     "FileStat",
     "FileSystem",
+    "FileTree",
     "InMemoryFileSystem",
     "Mount",
     "defn",

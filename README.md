@@ -563,7 +563,8 @@ run_code = agent.code_mode_tool(
   await (an activity, a Nexus operation, a child workflow) or the built-in
   `agent.InMemoryFileSystem`, optionally seeded by an activity. Every file operation goes through
   the runner as an `fs_*` tool call, keeping the approval policy and tool events, and nothing
-  touches the worker's disk.
+  touches the worker's disk. Opt in with `InMemoryFileSystem(state=...)` to keep a filesystem's
+  files in [agent state](#build-a-ui-in-react-or-svelte), so every change streams to the UI.
 
 ```python
 run_code = agent.code_mode_tool(

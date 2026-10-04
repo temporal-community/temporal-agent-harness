@@ -24,12 +24,14 @@ Importing the package never requires the sandbox engine (the optional ``code-mod
 
 from .stubs import CodeModeStubError
 from .tool import code_mode_tool, code_mode_type_check
-from .vfs import FileStat, FileSystem, InMemoryFileSystem, Mount
+from .vfs import FileEntry, FileStat, FileSystem, FileTree, InMemoryFileSystem, Mount
 
 __all__ = [
     "CodeModeStubError",
+    "FileEntry",
     "FileStat",
     "FileSystem",
+    "FileTree",
     "InMemoryFileSystem",
     "Mount",
     "code_mode_tool",

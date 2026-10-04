@@ -43,6 +43,22 @@ recorded in history. A running agent keeps the files it seeded even after a depl
 `skills/`, and replaying it on any worker sees the same files. New conversations pick up the
 new files.
 
+## Watching the workspace
+
+`/workspace` is tracked in agent state, which is opt-in:
+
+```python
+class CodeModeVfsAgentWorkflow:
+    workspace = agent.state(agent.FileTree)
+    ...
+        agent.Mount("/workspace", agent.InMemoryFileSystem(max_bytes=1_000_000, state=self.workspace))
+```
+
+Its files live in the `workspace` state, and every write, mkdir, delete or rename is published
+as a state patch. Open the console's **AGENT STATE** pane to watch files appear as the agent
+writes them. `/skills` is left untracked: it never changes after the seed, and streaming it
+would only repeat what `skills/` already holds.
+
 ## What you see
 
 Every file operation runs through the runner as an `fs_*` tool call (`fs_seed`, `fs_stat`,

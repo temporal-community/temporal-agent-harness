@@ -1,10 +1,11 @@
 """A minimal, MODEL-FREE parent agent used only by the Code Mode filesystem end-to-end test.
 
 Its ``code_mode_tool`` mounts three filesystems: ``/skills``, an ``InMemoryFileSystem`` seeded by
-an activity; ``/workspace``, an empty writable one; and ``/remote``, a read-only ``FileSystem``
-whose every call is an activity over a store in the worker process. Together they exercise
-seeding, persistence across scripts, activity-backed backends and error mapping across the
-activity boundary, under a ``WorkflowEnvironment`` with no model in the loop.
+an activity; ``/workspace``, an empty writable one tracked in the ``workspace`` state; and
+``/remote``, a read-only ``FileSystem`` whose every call is an activity over a store in the worker
+process. Together they exercise seeding, persistence across scripts, state tracking,
+activity-backed backends and error mapping across the activity boundary, under a
+``WorkflowEnvironment`` with no model in the loop.
 
 Kept in its own module for the same reason as ``_code_mode_e2e_parent``: the workflow sandbox
 re-imports a workflow's defining module.
@@ -98,6 +99,8 @@ class RemoteFileSystem:
 
 @agent.defn(name="CodeModeVfsE2EParent")
 class CodeModeVfsE2EParentWorkflow:
+    workspace = agent.state(agent.FileTree)
+
     @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
@@ -115,7 +118,10 @@ class CodeModeVfsE2EParentWorkflow:
                     read_only=True,
                     description="Agent skills; read a skill's SKILL.md first.",
                 ),
-                agent.Mount("/workspace", agent.InMemoryFileSystem(max_bytes=10_000)),
+                agent.Mount(
+                    "/workspace",
+                    agent.InMemoryFileSystem(max_bytes=10_000, state=self.workspace),
+                ),
                 agent.Mount("/remote", RemoteFileSystem(), read_only=True),
             ],
         )

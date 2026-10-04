@@ -13,7 +13,7 @@
 ### Non-goals
 
 - **The worker's local disk.** Workflow tasks are not guaranteed to land on the same worker, and anything a script reads during a step is re-read on replay, so worker-local files can differ between the original run and a replay. Monty's native `MountDir` is not used.
-- **State tracking.** Filesystem contents are not mirrored into agent state; file operations are visible through tool events (§4.3).
+- **State tracking by default.** An in-memory filesystem's contents go into agent state only when the developer opts in (§3.5); otherwise file operations are visible through tool events (§4.3).
 - **A harness-generated skills index.** What a mount contains, and how the model learns about it, is up to the developer (§7).
 - Hydrating or caching remote trees in memory. Each remote file operation is one backend call. Optimize later if profiling asks for it.
 - Running skill scripts (bash, Node, third-party Python). §8 defines the seam only.
@@ -128,6 +128,26 @@ class MyAgent:
 - **`max_bytes`** (optional, default unlimited) caps the total stored size, seed included. A write that would exceed it raises `OSError` in the script. The contents are held in workflow memory, so the cap protects the worker. Remote backends take no budget from the harness. Temporal's per-payload limit on each result (a seed's included) still applies, and the large-payload offload (`utils/large_payload.py`) covers it.
 - The harness never continues-as-new today. If it ever does, the contents would have to be carried across.
 
+### 3.5 Tracking an in-memory filesystem in agent state (opt-in)
+
+Pass a declared `FileTree` state as `InMemoryFileSystem(state=...)` and the files live in that state instead of plain workflow memory:
+
+```python
+class MyAgent:
+    workspace = agent.state(agent.FileTree)
+
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None:
+        ...
+        Mount("/workspace", agent.InMemoryFileSystem(state=self.workspace))
+```
+
+- `FileTree` holds `files: dict[str, FileEntry]`, keyed by mount-relative path, and `directories: list[str]` (every directory but the mount's root). A `FileEntry` is `content`, `encoding` (`"utf-8"`, or `"base64"` for anything that is not UTF-8 text) and `size`.
+- The state is the only copy of the files, so tracking costs no second copy in memory. Its initial value is the filesystem's initial contents; a seed adds to it.
+- Every change commits through one `mutate()` block, so it is one state patch: one per write, mkdir, delete or rename (a directory rename moves its whole subtree in one patch), and one for a whole seed. Keys are escaped as JSON Pointer segments (`/files/out~1report.md`).
+- It is opt-in because of what it streams: the state's initial snapshot carries every file, and each patch carries the written file whole. Track a filesystem whose files are worth showing, like a workspace, and leave large or unchanging ones (seeded reference material) untracked.
+- `max_bytes` applies the same way.
+
 ---
 
 ## 4. Execution
@@ -227,7 +247,7 @@ Skills may ship scripts that Monty can read but not run. The seam is an ordinary
 1. Customizing approval for file operations, e.g. treating reads as safe or setting per-mount policy.
 2. Generated `fs_*` tool names: shared across every `code_mode_tool` on an agent, or prefixed with the Code Mode tool's name so approval criteria can tell them apart?
 3. Should a backend be able to answer multi-call operations (append, `mkdir(parents=True)`) natively, through optional protocol methods, to save steps?
-4. Mirroring filesystem contents into agent state, so the UI can show them.
+4. Tracking a remote `FileSystem` in agent state, or tracking only file metadata (paths and sizes) for filesystems too large to stream.
 
 ---
 
