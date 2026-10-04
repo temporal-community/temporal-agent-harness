@@ -1,0 +1,38 @@
+# Scoped justfile for the Code Mode VFS example (examples/code_mode_vfs).
+# Run from this directory: `just <recipe>`.
+#
+#   just temporal          # 1. local Temporal dev server (or bring your own)
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API + UI on :8000
+#   just worker            # 4. this example's agent worker
+#
+# First-time setup: `cp .env.example .env.local` at the repo root and fill it in (Temporal
+# connection + GEMINI_API_KEY).
+
+# Shows a notice when running from an untagged commit (silent on a release archive).
+import '../../scripts/untagged-notice.just'
+
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Run the packaged session-manager worker (`temporal-agent-harness session-manager`).
+session-manager:
+    cd "{{root}}" && uv run --group examples temporal-agent-harness session-manager
+
+# Serve the Svelte UI + FastAPI API on http://localhost:8000, pointed at this example's registry.
+server:
+    cd "{{root}}" && uv run --group examples temporal-agent-harness serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Run the Code Mode VFS agent worker.
+worker:
+    cd "{{root}}" && uv run --group examples python -m examples.code_mode_vfs.worker

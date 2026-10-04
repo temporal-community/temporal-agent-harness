@@ -196,6 +196,7 @@ server:
         examples/callback_tools/wiki_agent/agents.toml \
         examples/callback_tools/coding_agent/agents.toml \
         examples/agent_dag/agents.toml \
+        examples/code_mode_vfs/agents.toml \
         --host 0.0.0.0 --port 8000
 
 # Rebuild the Svelte UI, then serve — the contributor loop after editing ui/ (needs pnpm).

@@ -1,6 +1,6 @@
 # Code Mode Virtual Filesystem & Skills
 
-**Status:** Design, grounded in the harness's Code Mode implementation (`temporal_agent_harness/harness/code_mode/`) and pydantic-monty 1.0.0. Monty behavior cited here is from the [filesystem docs](https://pydantic.dev/docs/monty/concepts/filesystem/) and was checked against the installed 1.0.0 runtime; see the appendix.
+**Status:** Phases 1–3 implemented (`temporal_agent_harness/harness/code_mode/vfs.py`, with changes to `monty_stepper.py`, `driver.py` and `tool.py`; example in `examples/code_mode_vfs/`). Grounded in pydantic-monty 1.0.0. Monty behavior cited here is from the [filesystem docs](https://pydantic.dev/docs/monty/concepts/filesystem/) and was checked against the installed 1.0.0 runtime; see the appendix.
 
 ---
 
@@ -80,7 +80,7 @@ class FileSystem(Protocol):
 - Paths are relative to the mount, already normalized (§6).
 - `FileStat` carries `is_dir`, `size`, and an optional `mtime`. The harness converts it to Monty's `StatResult`.
 - A mount without the write methods can only be mounted `read_only=True`, checked at construction.
-- Failures surface in the script as the matching built-in exception: `FileNotFoundError`, `IsADirectoryError`, `NotADirectoryError`, `FileExistsError`, `PermissionError`, otherwise `OSError`. A backend that calls an activity raises these as `ApplicationError(type="FileNotFoundError", ...)`, so the driver maps those type names back to the built-in type. Today `_script_outcome` would turn them into a plain `Exception`.
+- Failures surface in the script as the matching built-in exception: `FileNotFoundError`, `IsADirectoryError`, `NotADirectoryError`, `FileExistsError`, `PermissionError`, otherwise `OSError`. A backend that calls an activity, child workflow or Nexus operation raises these as `ApplicationError(type="FileNotFoundError", ...)`, and the driver maps those type names back to the built-in type. The script sees the exception's type and message; Monty's exceptions carry no `errno`.
 
 ### 3.3 Operation mapping
 
@@ -103,7 +103,7 @@ The harness maps Monty's file operations onto the protocol, so backend authors n
 | `Path.rename` | `rename` (both paths must be in the same mount) |
 | `Path.resolve` / `absolute` | none (path math) |
 
-Reads and writes through an open file handle arrive as `Path.read_*` / `Path.write_*` calls carrying the handle's path, so they follow the same rows. `for line in f` is unsupported by Monty.
+Reads and writes through an open file handle arrive as path operations carrying the handle's path, so they follow the same rows. One `open()` reads the whole file once (`read(3)`, `readline()` and `readlines()` are served from it), and each `f.write(...)` arrives as `Path.append_*` after `open` has truncated or created the file. `for line in f` is unsupported by Monty.
 
 ### 3.4 `InMemoryFileSystem`
 
@@ -163,12 +163,13 @@ Because no file operation runs inside a step, the VFS does not affect how long a
 Every backend call, and every seed, dispatches through `runner.run_tool`, so it gets the agent's approval policy and `tool_start` / `tool_end` events like any host call:
 
 - The harness generates one inline tool per kind of call: `fs_seed`, `fs_stat`, `fs_read`, `fs_list`, `fs_write`, `fs_mkdir`, `fs_delete`, `fs_rename`.
-- Each takes the mount path and the mount-relative path as arguments, so approval criteria and the UI can see what a call touches.
+- Each takes the mount path and the mount-relative path as arguments, so approval criteria and the UI can see what a call touches. The backend itself is an `Injected` argument the driver supplies, so it never appears in tool events.
+- `fs_write` carries its data as `content` plus `encoding`: text as UTF-8, anything else as base64, so tool events stay JSON.
 - They are treated like any other tool: no tool is marked `inherently_safe`, and the approval policy applies to each as it does to the agent's own tools. Customizing approval for file operations comes later (§10).
 
 ### 4.4 Concurrency
 
-At each stop the driver starts every host call the script has made that is not yet running, and keeps them running across steps until a later stop asks for their results. A file operation therefore never holds back a host call the script already made.
+At each stop the driver starts every host call the script has made that is not yet running, and keeps them running across steps until a later stop asks for their results. A file operation therefore never holds back a host call the script already made. Calls still running when the script ends, made but never awaited, are cancelled.
 
 What stays sequential is inherent to sync calls: a sync call freezes the whole interpreter, so file operations never overlap each other. Five tasks in an `asyncio.gather` that each read a file read one after another.
 
@@ -176,7 +177,7 @@ What stays sequential is inherent to sync calls: a sync call freezes the whole i
 
 ## 5. Model-facing surface
 
-- The generated type-check stubs declare `open`. Monty's checker otherwise rejects `open` as an unresolved name. With a stub declaration the check passes, and at run time the call still reaches Monty's built-in `open` OS operation.
+- The generated type-check stubs declare `open` and the five `OSError` subclasses. Monty's checker otherwise rejects them as unresolved names. With the declarations the check passes, and at run time the names are still Monty's own `open` and exception types.
 - The Code Mode contract replaces "no filesystem" with a listing of the mounts: path, read-only or writable, and the developer's `description`. The listing comes from the `Mount`s, so it needs none of the filesystem's contents and nothing is read to build it. Scripts with no mounts keep today's contract.
 
 ---
@@ -214,9 +215,9 @@ Skills may ship scripts that Monty can read but not run. The seam is an ordinary
 
 ## 9. Phases
 
-1. **Stepper.** Stop a step at a file operation, resume a restored `FunctionSnapshot`, and start pending host calls at every stop.
-2. **VFS.** `Mount`, path routing and mode enforcement, the `FileSystem` protocol and operation mapping, `fs_*` dispatch through `run_tool`, exception mapping, `InMemoryFileSystem` with `seed` and `max_bytes`, the `open` stub, and the mount listing.
-3. **Examples.** A skills example seeded from an activity, and one remote backend over an activity.
+1. **Stepper.** (Done.) Stop a step at a file operation, resume a restored `FunctionSnapshot`, and start pending host calls at every stop.
+2. **VFS.** (Done.) `Mount`, path routing and mode enforcement, the `FileSystem` protocol and operation mapping, `fs_*` dispatch through `run_tool`, exception mapping, `InMemoryFileSystem` with `seed` and `max_bytes`, the `open` stub, and the mount listing.
+3. **Examples.** (Done.) A VFS example (`examples/code_mode_vfs/`) whose `/skills` mount is seeded from an activity with a minimal sample of instruction-only skills, and a remote backend over activities (the end-to-end test's `RemoteFileSystem`).
 4. **Script execution.** `run_skill_script` as an activity tool.
 
 ---
@@ -238,6 +239,7 @@ Checked against the installed runtime:
 - A sync OS `FunctionSnapshot` can be dumped, restored in another worker, and resumed with a value later.
 - File operations count against `max_suspensions`, under both `feed_run` and `feed_start`, even though the docs say they "do not count as suspensions". (The harness sets no `max_suspensions` today.) `open(...).read()` is two operations: `open`, then `Path.read_text` on the handle.
 - The `request_timeout` watchdog restarts at every OS call answered inside a step: a script interleaving 400 OS calls with computation ran 0.6s under a 0.3s watchdog. File operations end the step instead, so this only affects the clock and entropy calls answered inline.
-- Under `type_check=True`, `open` is an unresolved name unless the stubs declare it. `pathlib` type-checks as is.
+- Under `type_check=True`, `open` and the `OSError` subclasses are unresolved names unless the stubs declare them. `pathlib` type-checks as is.
+- At run time the `OSError` subclasses exist, and an exception the host resumes a file operation with keeps its type and message. It has no `errno` attribute.
 - Surfaced paths are absolute, joined onto the working directory, with `.` and `..` collapsed.
 - `MountDir` overlay writes do not survive `load_snapshot`, one reason native mounts are out of scope.

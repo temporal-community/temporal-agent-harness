@@ -8,7 +8,10 @@ script finishes. Its stdout + final value (or a script error) is returned as tex
 
 The host-call surface is generic: the driver holds a ``{name: tool}`` map and dispatches each
 call the script makes to the matching harness tool via ``runner.run_tool`` — so every host call
-inherits that tool's approval policy and tool_start/tool_end lifecycle.
+inherits that tool's approval policy and tool_start/tool_end lifecycle. A file operation on one
+of the tool's mounts is carried out the same way, as ``fs_*`` tool calls against the mount's
+backend (see :mod:`.vfs`). Calls the script made but has not awaited yet start as soon as a step
+hands them over, and keep running across steps until the script awaits them.
 
 === Replay-safe step limits ===
 
@@ -29,21 +32,37 @@ is retried until a worker with it picks the task up) instead of failing a tool c
 from __future__ import annotations
 
 import asyncio
+import builtins
 import inspect
 import json
 import random
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import ModuleType
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, TypeAdapter
 from temporalio import workflow
-from temporalio.exceptions import ActivityError, ApplicationError, is_cancelled_exception
+from temporalio.exceptions import (
+    ActivityError,
+    ApplicationError,
+    ChildWorkflowError,
+    NexusOperationError,
+    is_cancelled_exception,
+)
 
 with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
     from .stubs import TypeCheckStubs
+    from .vfs import (
+        BACKEND_INJECTION,
+        FileOp,
+        InMemoryFileSystem,
+        Mount,
+        ToolCalls,
+        fs_seed,
+        perform,
+    )
 
 _T = TypeVar("_T")
 
@@ -102,12 +121,14 @@ class CodeModeDriver:
         *,
         injections: Mapping[str, Any],
         stubs: TypeCheckStubs,
+        mounts: Sequence[Mount] = (),
     ) -> None:
         self._runner = runner
         self._tools_by_name = tools_by_name
         self._coercers = coercers
         self._injections = injections
         self._stubs = stubs
+        self._mounts = mounts
 
     async def run_script(self, script: str) -> str:
         """Drive ``script`` to completion; return its stdout + final value (or the error, as
@@ -122,27 +143,40 @@ class CodeModeDriver:
         script_id = str(workflow.uuid4())
         entropy = random.Random(workflow.random().getrandbits(64))
         run = stepper.ScriptRun(
-            script, self._stubs, answer_os=lambda name, args: _answer_os(name, args, entropy)
+            script,
+            self._stubs,
+            answer_os=lambda name, args: _answer_os(name, args, entropy),
+            mounts=self._mounts,
         )
 
         step = self._step(script_id, 0, lambda replaying: run.start(replaying=replaying))
         step_no = 0
-        while not step.done:
-            step_no += 1
-            # Run the whole awaited batch CONCURRENTLY — each host call is its own durable
-            # activity (dispatched via run_tool, so each is independently approval-gated and
-            # publishes its own tool lifecycle). A call that fails is raised inside the script at
-            # its await, where the script may catch it; the rest of the batch still completes.
-            outcomes = await asyncio.gather(
-                *(self._run_call(call, stepper) for call in step.awaiting), return_exceptions=True
-            )
-            results = {
-                call.call_id: _script_outcome(outcome)
-                for call, outcome in zip(step.awaiting, outcomes)
-            }
-            step = self._step(
-                script_id, step_no, lambda replaying: run.resume(results, replaying=replaying)
-            )
+        running: dict[int, asyncio.Task[Any]] = {}
+        try:
+            while not step.done:
+                step_no += 1
+                # Start every call the step handed over, then wait for the ones it is blocked
+                # on, CONCURRENTLY — each host call is its own durable dispatch via run_tool, so
+                # each is independently approval-gated and publishes its own tool lifecycle. A
+                # call that fails is raised inside the script at its await, where the script may
+                # catch it; the rest of the batch still completes.
+                for call in [*step.started, *step.awaiting]:
+                    if call.call_id not in running:
+                        running[call.call_id] = asyncio.create_task(self._run_call(call, stepper))
+                outcomes = await asyncio.gather(
+                    *(running.pop(call.call_id) for call in step.awaiting), return_exceptions=True
+                )
+                results = {
+                    call.call_id: _script_outcome(outcome)
+                    for call, outcome in zip(step.awaiting, outcomes)
+                }
+                step = self._step(
+                    script_id, step_no, lambda replaying: run.resume(results, replaying=replaying)
+                )
+        finally:
+            # Calls the script made but never awaited before it ended.
+            for task in running.values():
+                task.cancel()
 
         if step.error:
             return f"Script error ({step.error})"
@@ -187,7 +221,29 @@ class CodeModeDriver:
         if isinstance(call, stepper.Sleep):
             await workflow.sleep(call.seconds)
             return None
+        if isinstance(call, FileOp):
+            return await self._run_file_op(call)
         return await self._dispatch_host_call(call.function_name, call.args, call.kwargs)
+
+    async def _run_file_op(self, op: FileOp) -> Any:
+        """Carry out one file operation as ``fs_*`` tool calls against its mount's backend,
+        seeding an :class:`InMemoryFileSystem` before its first operation."""
+        backend = op.mount.backend
+
+        async def call_tool(tool: Callable[..., Awaitable[Any]], **kwargs: Any) -> Any:
+            return await self._runner.run_tool(
+                str(workflow.uuid4()), tool, injections={BACKEND_INJECTION: backend}, **kwargs
+            )
+
+        try:
+            if isinstance(backend, InMemoryFileSystem) and backend.needs_seed:
+                await call_tool(fs_seed, mount=op.mount.path)
+            return await perform(op, ToolCalls(op.mount, call_tool))
+        except Exception as e:
+            mapped = _builtin_os_error(e)
+            if mapped is e:
+                raise
+            raise mapped from e
 
     async def _dispatch_host_call(
         self, name: str | None, args: list[Any], kwargs: dict[str, Any]
@@ -254,6 +310,31 @@ def _script_outcome(outcome: Any) -> Any:
         return error
     return Exception(f"{type(error).__name__}: {error}")
 
+
+
+# The errors a backend raises across a Temporal boundary as ``ApplicationError(type=...)``, which
+# the script sees as the built-in exception of that name.
+_OS_ERRORS = frozenset(
+    {
+        "OSError",
+        "FileNotFoundError",
+        "FileExistsError",
+        "IsADirectoryError",
+        "NotADirectoryError",
+        "PermissionError",
+    }
+)
+
+
+def _builtin_os_error(error: Exception) -> Exception:
+    """``error`` as the built-in ``OSError`` its backend raised, when it crossed an activity,
+    child workflow or Nexus boundary as an ``ApplicationError`` named for one; else unchanged."""
+    cause: BaseException | None = error
+    while isinstance(cause, (ActivityError, ChildWorkflowError, NexusOperationError)):
+        cause = cause.cause
+    if isinstance(cause, ApplicationError) and cause.type in _OS_ERRORS:
+        return getattr(builtins, cause.type)(cause.message)
+    return error
 
 
 def _answer_os(name: str, args: tuple[Any, ...], entropy: random.Random) -> Any:

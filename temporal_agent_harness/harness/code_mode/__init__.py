@@ -9,11 +9,14 @@ lifecycle events.
 Scripts run inside the workflow: the workflow steps the sandbox itself, and only the host calls
 are activities, so Code Mode needs no activities of its own (see :mod:`.monty_stepper`).
 
+``mounts=`` gives scripts a virtual filesystem: ``Mount``\\ s of ``FileSystem`` backends such as
+``InMemoryFileSystem``, read and written with ``open()`` and ``pathlib`` (see :mod:`.vfs`).
+
 Importing the package never requires the sandbox engine (the optional ``code-mode`` extra):
 
-  * :mod:`.stubs`, :mod:`.driver` and :mod:`.tool` are safe to import anywhere, including
-    inside a workflow. ``code_mode_tool``, ``code_mode_type_check`` and ``CodeModeStubError``
-    are the public surface, re-exported here.
+  * :mod:`.stubs`, :mod:`.vfs`, :mod:`.driver` and :mod:`.tool` are safe to import anywhere,
+    including inside a workflow. ``code_mode_tool``, ``code_mode_type_check``,
+    ``CodeModeStubError`` and the filesystem types are the public surface, re-exported here.
   * :mod:`.monty_stepper` is the stepping engine and the only module that imports
     ``pydantic_monty``. ``code_mode_tool`` loads it, through the workflow sandbox's
     pass-through, when it builds a tool.
@@ -21,5 +24,14 @@ Importing the package never requires the sandbox engine (the optional ``code-mod
 
 from .stubs import CodeModeStubError
 from .tool import code_mode_tool, code_mode_type_check
+from .vfs import FileStat, FileSystem, InMemoryFileSystem, Mount
 
-__all__ = ["CodeModeStubError", "code_mode_tool", "code_mode_type_check"]
+__all__ = [
+    "CodeModeStubError",
+    "FileStat",
+    "FileSystem",
+    "InMemoryFileSystem",
+    "Mount",
+    "code_mode_tool",
+    "code_mode_type_check",
+]
