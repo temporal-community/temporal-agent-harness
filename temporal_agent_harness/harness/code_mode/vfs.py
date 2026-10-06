@@ -1,6 +1,6 @@
 """The Code Mode virtual filesystem: mounts a script reads and writes with ``open()`` and ``pathlib``.
 
-A :class:`Mount` puts a :class:`FileSystem` backend at a virtual path. Backend methods are async
+A :class:`VFSMount` puts a :class:`FileSystem` backend at a virtual path. Backend methods are async
 and run in workflow code, so a backend can reach storage through an activity, a Nexus operation,
 a child workflow, or hold its files in workflow memory like :class:`InMemoryFileSystem`. Nothing
 here touches the worker's disk: workflow tasks may land on any worker, and whatever a script
@@ -20,11 +20,13 @@ import base64
 import errno
 import os
 import posixpath
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any, Literal, Protocol
 
+from pydantic import JsonValue
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
@@ -42,7 +44,7 @@ class FileStat:
 
 
 class FileSystem(Protocol):
-    """Storage behind a :class:`Mount`.
+    """Storage behind a :class:`VFSMount`.
 
     Methods are awaited in workflow code, so their bodies must be workflow-safe. Paths are
     relative to the mount and normalized; the mount's root is ``PurePosixPath(".")``. Raise the
@@ -69,13 +71,71 @@ class FileSystem(Protocol):
 _WRITE_METHODS = ("write", "mkdir", "delete", "rename")
 
 
+class IndexEntry(HarnessState):
+    """What a session has seen of one path in a mount. ``is_dir`` is ``None`` for a name seen
+    only in a directory listing; ``size`` and ``mtime`` are ``None`` until a stat or read says.
+    ``writes`` counts the session's writes to the file, so every write changes the entry."""
+
+    is_dir: bool | None = None
+    size: int | None = None
+    mtime: float | None = None
+    writes: int = 0
+
+
+class IndexSource(HarnessState):
+    """Where a mount's files can be read outside the workflow: the
+    :class:`~.activity_fs.ActivityFileSystem` named ``filesystem``, built from ``config``,
+    whose ``vfs.<filesystem>.view`` activity runs on ``task_queue``."""
+
+    filesystem: str
+    config: dict[str, JsonValue]
+    task_queue: str
+
+
 @dataclass(frozen=True)
-class Mount:
+class FileSource:
+    """Which :class:`~.activity_fs.ActivityFileSystem` holds a mount's files, and its config as
+    JSON: enough to read them outside the workflow, by calling ``vfs.<filesystem>.view``."""
+
+    filesystem: str
+    config: dict[str, JsonValue]
+
+
+class FileIndex(HarnessState):
+    """The paths of a mount that this session has touched, as agent state: never the whole
+    store, and never file contents.
+
+    An ``agent.vfs_mount(...)`` over an ``ActivityFileSystem`` declares one. It starts with the
+    mount's details and no entries, then records every path the session's scripts look up,
+    list, read or change, with its metadata, publishing each change as a state patch. A file
+    no script has looked at is not in it, and a file another process changes appears changed
+    only once a script looks at it again.
+
+    ``entries`` is keyed by mount-relative path (``"notes/todo.md"``); the mount's root is
+    implicit. ``source`` is recorded with the first operation, so a viewer can fetch a file's
+    contents on demand. Those contents are the file as it is in the store
+    when it is fetched, not as it was at any earlier point in the agent's history: the index
+    can be replayed to any moment, the store cannot. (A :class:`FileTree` is different: it
+    holds an in-memory filesystem's contents, so they replay with it.)"""
+
+    kind: Literal["file_index"] = "file_index"
+    mount: str = ""
+    description: str = ""
+    read_only: bool = False
+    source: IndexSource | None = None
+    entries: dict[str, IndexEntry] = {}
+
+
+@dataclass(frozen=True)
+class VFSMount:
     """A :class:`FileSystem` at a virtual path inside the sandbox.
 
     ``path`` is absolute and normalized (``/skills``, not ``/skills/`` or ``/a/../skills``).
     ``read_only`` is enforced before any backend call. ``description`` is shown to the model
-    next to the mount, so say what is there and how to use it."""
+    next to the mount, so say what is there and how to use it.
+
+    Build one inline for a mount nobody needs to see. A mount the console shows is declared on
+    the agent class with ``agent.vfs_mount(...)`` and bound per instance, which returns one."""
 
     path: str
     backend: FileSystem
@@ -83,13 +143,7 @@ class Mount:
     description: str = ""
 
     def __post_init__(self) -> None:
-        if not self.path.startswith("/") or posixpath.normpath(self.path) != self.path:
-            raise ValueError(
-                f"mount path {self.path!r} must be an absolute, normalized POSIX path, "
-                f"like '/workspace'"
-            )
-        if self.path == "/":
-            raise ValueError("a mount cannot be the root '/'; mount at a named directory")
+        check_mount_path(self.path)
         for method in ("stat", "read", "list"):
             if not callable(getattr(self.backend, method, None)):
                 raise TypeError(
@@ -105,8 +159,32 @@ class Mount:
                 )
 
 
-def validate_mounts(mounts: Sequence[Mount]) -> tuple[Mount, ...]:
+@dataclass(frozen=True)
+class IndexedVFSMount(VFSMount):
+    """A bound ``agent.vfs_mount(...)`` over an ``ActivityFileSystem``: every operation that
+    succeeds is recorded in ``index``, and the first one also records ``source``."""
+
+    index: StateRef[FileIndex] = field(kw_only=True)
+    source: FileSource = field(kw_only=True)
+
+
+def check_mount_path(path: str) -> None:
+    if not path.startswith("/") or posixpath.normpath(path) != path:
+        raise ValueError(
+            f"mount path {path!r} must be an absolute, normalized POSIX path, like '/workspace'"
+        )
+    if path == "/":
+        raise ValueError("a mount cannot be the root '/'; mount at a named directory")
+
+
+def validate_mounts(mounts: Sequence[VFSMount]) -> tuple[VFSMount, ...]:
     """Reject mounts that repeat or nest, so every path belongs to at most one mount."""
+    for mount in mounts:
+        if not isinstance(mount, VFSMount):
+            raise TypeError(
+                f"mounts takes VFSMount objects, got {mount!r}; for a declared "
+                "agent.vfs_mount(...), pass self.<name>.bind(...)"
+            )
     ordered = sorted(mounts, key=lambda m: m.path)
     for outer, inner in zip(ordered, ordered[1:]):
         if inner.path == outer.path or inner.path.startswith(outer.path + "/"):
@@ -114,7 +192,9 @@ def validate_mounts(mounts: Sequence[Mount]) -> tuple[Mount, ...]:
     return tuple(mounts)
 
 
-def route(mounts: Sequence[Mount], path: PurePosixPath) -> tuple[Mount, PurePosixPath] | None:
+def route(
+    mounts: Sequence[VFSMount], path: PurePosixPath
+) -> tuple[VFSMount, PurePosixPath] | None:
     """The mount ``path`` falls in and the path relative to it, matching whole segments.
 
     Monty hands over absolute paths with ``.`` and ``..`` already collapsed, so no path that
@@ -187,7 +267,7 @@ class FileOp:
 
     call_id: int
     operation: str
-    mount: Mount
+    mount: VFSMount
     path: PurePosixPath
     virtual: PurePosixPath
     args: tuple[Any, ...] = ()
@@ -274,20 +354,33 @@ CallTool = Callable[..., Awaitable[Any]]
 
 class ToolCalls:
     """A mount's backend as a :class:`FileSystem` whose every call is an ``fs_*`` tool call made
-    through ``call_tool``, which supplies the backend as the tools' injected argument."""
+    through ``call_tool``, which supplies the backend as the tools' injected argument. When the
+    mount has an index, every call that succeeds is recorded in it."""
 
-    def __init__(self, mount: Mount, call_tool: CallTool) -> None:
+    def __init__(self, mount: VFSMount, call_tool: CallTool) -> None:
         self._mount = mount.path
         self._call_tool = call_tool
+        self._index = (
+            _Index(mount.index, mount.source) if isinstance(mount, IndexedVFSMount) else None
+        )
 
     async def stat(self, path: PurePosixPath) -> FileStat | None:
-        return await self._call_tool(fs_stat, mount=self._mount, path=str(path))
+        found = await self._call_tool(fs_stat, mount=self._mount, path=str(path))
+        if self._index:
+            self._index.saw_stat(path, found)
+        return found
 
     async def read(self, path: PurePosixPath) -> bytes:
-        return await self._call_tool(fs_read, mount=self._mount, path=str(path))
+        data = await self._call_tool(fs_read, mount=self._mount, path=str(path))
+        if self._index:
+            self._index.saw_read(path, len(data))
+        return data
 
     async def list(self, path: PurePosixPath) -> list[str]:
-        return await self._call_tool(fs_list, mount=self._mount, path=str(path))
+        names = await self._call_tool(fs_list, mount=self._mount, path=str(path))
+        if self._index:
+            self._index.saw_list(path, names)
+        return names
 
     async def write(self, path: PurePosixPath, data: bytes) -> None:
         try:
@@ -297,15 +390,143 @@ class ToolCalls:
         await self._call_tool(
             fs_write, mount=self._mount, path=str(path), content=content, encoding=encoding
         )
+        if self._index:
+            self._index.wrote(path, len(data))
 
     async def mkdir(self, path: PurePosixPath) -> None:
         await self._call_tool(fs_mkdir, mount=self._mount, path=str(path))
+        if self._index:
+            self._index.made_dir(path)
 
     async def delete(self, path: PurePosixPath) -> None:
         await self._call_tool(fs_delete, mount=self._mount, path=str(path))
+        if self._index:
+            self._index.removed(path)
 
     async def rename(self, path: PurePosixPath, target: PurePosixPath) -> None:
         await self._call_tool(fs_rename, mount=self._mount, path=str(path), target=str(target))
+        if self._index:
+            self._index.moved(path, target)
+
+
+class _Index:
+    """Records what a mount's operations reveal in its :class:`FileIndex`: one state patch
+    per operation that changed what the index knows. The first one also records where the
+    mount's files can be read outside the workflow."""
+
+    def __init__(self, ref: StateRef[FileIndex], source: FileSource) -> None:
+        self._ref = ref
+        self._source = source
+
+    @contextmanager
+    def _change(self) -> Iterator[FileIndex]:
+        with self._ref.mutate() as index:
+            if index.source is None and workflow.in_workflow():
+                index.source = IndexSource(
+                    filesystem=self._source.filesystem,
+                    config=self._source.config,
+                    task_queue=workflow.info().task_queue,
+                )
+            yield index
+
+    @staticmethod
+    def _put(entries: dict[str, IndexEntry], key: str, entry: IndexEntry) -> None:
+        if entries.get(key) != entry:
+            entries[key] = entry
+
+    @classmethod
+    def _put_dir(cls, entries: dict[str, IndexEntry], path: PurePosixPath) -> None:
+        """Record ``path`` and its ancestors as directories."""
+        for directory in [path, *path.parents]:
+            if directory == ROOT:
+                continue
+            found = entries.get(str(directory))
+            if found is None or found.is_dir is not True:
+                cls._put(entries, str(directory), IndexEntry(is_dir=True))
+
+    @staticmethod
+    def _drop(entries: dict[str, IndexEntry], path: PurePosixPath) -> None:
+        """Forget ``path`` and everything under it."""
+        key = str(path)
+        for known in [k for k in entries if k == key or k.startswith(key + "/")]:
+            del entries[known]
+
+    def _put_file(
+        self, entries: dict[str, IndexEntry], path: PurePosixPath, size: int, mtime: float | None
+    ) -> None:
+        known = entries.get(str(path))
+        self._put_dir(entries, path.parent)
+        self._put(
+            entries,
+            str(path),
+            IndexEntry(
+                is_dir=False,
+                size=size,
+                mtime=mtime,
+                writes=known.writes if known is not None else 0,
+            ),
+        )
+
+    def saw_stat(self, path: PurePosixPath, found: FileStat | None) -> None:
+        if path == ROOT:
+            return
+        with self._change() as index:
+            if found is None:
+                self._drop(index.entries, path)
+            elif found.is_dir:
+                self._put_dir(index.entries, path)
+            else:
+                self._put_file(index.entries, path, found.size, found.mtime or None)
+
+    def saw_read(self, path: PurePosixPath, size: int) -> None:
+        with self._change() as index:
+            known = index.entries.get(str(path))
+            mtime = known.mtime if known is not None and known.size == size else None
+            self._put_file(index.entries, path, size, mtime)
+
+    def saw_list(self, path: PurePosixPath, names: list[str]) -> None:
+        with self._change() as index:
+            self._put_dir(index.entries, path)
+            listed = {str(path / name) for name in names}
+            for key in [k for k in index.entries if PurePosixPath(k).parent == path]:
+                if key not in listed:
+                    self._drop(index.entries, PurePosixPath(key))
+            for key in sorted(listed):
+                if key not in index.entries:
+                    index.entries[key] = IndexEntry()
+
+    def wrote(self, path: PurePosixPath, size: int) -> None:
+        with self._change() as index:
+            known = index.entries.get(str(path))
+            self._put_dir(index.entries, path.parent)
+            index.entries[str(path)] = IndexEntry(
+                is_dir=False, size=size, writes=(known.writes if known is not None else 0) + 1
+            )
+
+    def made_dir(self, path: PurePosixPath) -> None:
+        with self._change() as index:
+            self._put_dir(index.entries, path)
+
+    def removed(self, path: PurePosixPath) -> None:
+        with self._change() as index:
+            self._drop(index.entries, path)
+
+    def moved(self, path: PurePosixPath, target: PurePosixPath) -> None:
+        with self._change() as index:
+            source = str(path)
+            moving = {
+                k: index.entries[k]
+                for k in index.entries
+                if k == source or k.startswith(source + "/")
+            }
+            self._drop(index.entries, target)
+            self._drop(index.entries, path)
+            self._put_dir(index.entries, target.parent)
+            for key, entry in moving.items():
+                moved_to = target / PurePosixPath(key).relative_to(path)
+                index.entries[str(moved_to)] = IndexEntry.model_validate(
+                    entry.model_dump()
+                )
 
 
 def _error(kind: type[OSError], code: int, path: PurePosixPath) -> OSError:
@@ -439,10 +660,14 @@ class FileTree(HarnessState):
     """An :class:`InMemoryFileSystem`'s files as agent state.
 
     ``files`` is keyed by mount-relative path (``"notes/todo.md"``), and ``directories`` lists
-    every directory except the mount's root. Declare it with ``agent.state(FileTree)`` and pass
-    the ref as ``InMemoryFileSystem(state=...)``: the files then live in the state, and every
-    change to them is published as a state patch."""
+    every directory except the mount's root. An ``agent.vfs_mount(...)`` over an
+    ``InMemoryFileSystem`` declares one, starting with the mount's details: the files then live
+    in the state, and every change to them is published as a state patch."""
 
+    kind: Literal["file_tree"] = "file_tree"
+    mount: str = ""
+    description: str = ""
+    read_only: bool = False
     files: dict[str, FileEntry] = {}
     directories: list[str] = []
 
@@ -554,24 +779,25 @@ class InMemoryFileSystem:
     seeded even after a deploy changes them. ``max_bytes`` caps the total size of the files,
     seeded ones included.
 
-    ``state`` (opt-in) keeps the files in a declared :class:`FileTree` state instead, so every
-    change is published as a state patch the UI can show. A patch carries each written file
-    whole, so track only filesystems whose files are worth streaming. The state's initial value
-    is the filesystem's initial contents."""
+    To keep the files in a :class:`FileTree` state the console can show, declare the mount with
+    ``agent.vfs_mount(path, InMemoryFileSystem, ...)`` instead of building one. A state patch
+    carries each written file whole, so track only filesystems whose files are worth
+    streaming."""
 
-    def __init__(
-        self,
-        *,
-        seed: Seed | None = None,
-        max_bytes: int | None = None,
-        state: StateRef[FileTree] | None = None,
-    ) -> None:
+    def __init__(self, *, seed: Seed | None = None, max_bytes: int | None = None) -> None:
         self._seed = seed
         self._seeded = seed is None
         self._max_bytes = max_bytes
-        self._store: _DictStore | _StateStore = (
-            _StateStore(state) if state is not None else _DictStore()
-        )
+        self._store: _DictStore | _StateStore = _DictStore()
+
+    @classmethod
+    def _in_state(
+        cls, state: StateRef[FileTree], *, seed: Seed | None, max_bytes: int | None
+    ) -> InMemoryFileSystem:
+        """A filesystem whose files live in ``state``, for a bound ``agent.vfs_mount``."""
+        fs = cls(seed=seed, max_bytes=max_bytes)
+        fs._store = _StateStore(state)
+        return fs
 
     @property
     def needs_seed(self) -> bool:

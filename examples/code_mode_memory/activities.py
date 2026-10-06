@@ -3,7 +3,8 @@
 The agent seeds its ``/skills`` mount from this activity's result. The files are read here, in
 an activity, rather than in workflow code: the result is recorded in history, so a running
 agent keeps the skills it started with even after a deploy changes the directory, and a replay
-on any worker sees the same files.
+on any worker sees the same files. (``/memory``'s activities come from ``LocalDisk``; see
+:mod:`.local_disk`.)
 """
 
 from __future__ import annotations

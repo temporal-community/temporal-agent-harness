@@ -8,6 +8,8 @@ import type {
   ChatRequest,
   CreateSessionRequest,
   CreateSessionResponse,
+  FileChunk,
+  FileViewRequest,
   Session,
   SubmitMessageResponse,
   ToolApprovalRequest,
@@ -227,5 +229,11 @@ export class MockAgentApi implements AgentApi {
   ): Promise<CallbackResultResponse> {
     await sleep(120);
     return { tool_id: request.tool_id, accepted: true };
+  }
+
+  async viewFile(request: FileViewRequest): Promise<FileChunk> {
+    await sleep(120);
+    const content = `Contents of ${request.path}, read just now.\n`;
+    return { content, encoding: "utf-8", offset: 0, size: content.length, mtime: Date.now() / 1000 };
   }
 }

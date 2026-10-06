@@ -1,6 +1,6 @@
 # Code Mode Virtual Filesystem & Skills
 
-**Status:** Phases 1–3 implemented (`temporal_agent_harness/harness/code_mode/vfs.py`, with changes to `monty_stepper.py`, `driver.py` and `tool.py`; example in `examples/code_mode_vfs/`). Grounded in pydantic-monty 1.0.0. Monty behavior cited here is from the [filesystem docs](https://pydantic.dev/docs/monty/concepts/filesystem/) and was checked against the installed 1.0.0 runtime; see the appendix.
+**Status:** Phases 1–3 implemented (`temporal_agent_harness/harness/code_mode/vfs.py`, with changes to `monty_stepper.py`, `driver.py` and `tool.py`; example in `examples/code_mode_memory/`). Grounded in pydantic-monty 1.0.0. Monty behavior cited here is from the [filesystem docs](https://pydantic.dev/docs/monty/concepts/filesystem/) and was checked against the installed 1.0.0 runtime; see the appendix.
 
 ---
 
@@ -13,7 +13,7 @@
 ### Non-goals
 
 - **The worker's local disk.** Workflow tasks are not guaranteed to land on the same worker, and anything a script reads during a step is re-read on replay, so worker-local files can differ between the original run and a replay. Monty's native `MountDir` is not used.
-- **State tracking by default.** An in-memory filesystem's contents go into agent state only when the developer opts in (§3.5); otherwise file operations are visible through tool events (§4.3).
+- **State tracking by default.** A mount is agent state only when the developer declares it with `agent.vfs_mount` (§3.5, §3.7); otherwise file operations are visible through tool events (§4.3).
 - **A harness-generated skills index.** What a mount contains, and how the model learns about it, is up to the developer (§7).
 - Hydrating or caching remote trees in memory. Each remote file operation is one backend call. Optimize later if profiling asks for it.
 - Running skill scripts (bash, Node, third-party Python). §8 defines the seam only.
@@ -37,19 +37,19 @@ The constraints below shape the design:
 
 ### 3.1 Mounts
 
-A mount is a virtual path plus a backend.
+A mount (`VFSMount`) is a virtual path plus a backend.
 
 ```python
 code_mode_tool(
     tools,
     name="run_code",
     mounts=[
-        Mount("/skills", InMemoryFileSystem(seed=self._load_skills), read_only=True,
-              description="Agent skills. Read each skill's SKILL.md before using it."),
-        Mount("/workspace", InMemoryFileSystem(max_bytes=5_000_000),
-              description="Scratch space for files you produce."),
-        Mount("/data", S3FileSystem(bucket="reports"), read_only=True,
-              description="Quarterly reports, one PDF per quarter."),
+        VFSMount("/skills", InMemoryFileSystem(seed=self._load_skills), read_only=True,
+                 description="Agent skills. Read each skill's SKILL.md before using it."),
+        VFSMount("/workspace", InMemoryFileSystem(max_bytes=5_000_000),
+                 description="Scratch space for files you produce."),
+        VFSMount("/data", S3FileSystem(bucket="reports"), read_only=True,
+                 description="Quarterly reports, one PDF per quarter."),
     ],
 )
 ```
@@ -128,25 +128,63 @@ class MyAgent:
 - **`max_bytes`** (optional, default unlimited) caps the total stored size, seed included. A write that would exceed it raises `OSError` in the script. The contents are held in workflow memory, so the cap protects the worker. Remote backends take no budget from the harness. Temporal's per-payload limit on each result (a seed's included) still applies, and the large-payload offload (`utils/large_payload.py`) covers it.
 - The harness never continues-as-new today. If it ever does, the contents would have to be carried across.
 
-### 3.5 Tracking an in-memory filesystem in agent state (opt-in)
+### 3.5 Declaring a mount the console shows
 
-Pass a declared `FileTree` state as `InMemoryFileSystem(state=...)` and the files live in that state instead of plain workflow memory:
+A mount declared on the agent class with `agent.vfs_mount(...)` is agent state, like `agent.state(...)`: published under the attribute name, so the console's files pane shows it. The declaration fixes what is static (path, description, access, filesystem class); `bind(...)` in `@agent.init` supplies what depends on the session and returns the `VFSMount`:
 
 ```python
 class MyAgent:
-    workspace = agent.state(agent.FileTree)
+    workspace = agent.vfs_mount("/workspace", agent.InMemoryFileSystem,
+                                description="Scratch space for files you produce.")
+    memory = agent.vfs_mount("/memory", LocalDisk, description="Your memory.")
 
     @agent.init
-    def __init__(self, config: AgentConfig) -> None:
+    def __init__(self, config: AgentConfig, data: MyData) -> None:
         ...
-        Mount("/workspace", agent.InMemoryFileSystem(state=self.workspace))
+        code_mode_tool(tools, name="run_code", mounts=[
+            self.workspace.bind(seed=None, max_bytes=5_000_000),
+            self.memory.bind(LocalDiskConfig(directory=data.memory_dir)),
+        ])
 ```
 
+- Over `InMemoryFileSystem` the state is a `FileTree` (below); over an `ActivityFileSystem` (§3.6) it is a `FileIndex` (§3.7). Either starts with the mount's details: `kind`, `mount`, `description`, `read_only`.
+- `bind` takes, for an in-memory mount, a keyword-only `seed` with no default (an async function, or an explicit `None`) and `max_bytes`; for an activity-backed one, the filesystem's own config type and an activity `timeout`. It may use `self` and the init data, and runs before or after the runner is built.
+- `bind` writes nothing to the state. Startup publishes each declaration's snapshot and nothing else, so attaching to a new session finishes (a turn-0 patch would leave the attach open). The state changes only as scripts use the mount.
+- A handle binds once; a second `bind` raises. Several Code Mode tools may share the bound `VFSMount`. Passing the unbound handle to `code_mode_tool` is refused with a hint to bind it.
+- See [`vfs-mount-declarations.md`](vfs-mount-declarations.md) for the alternatives considered.
+
+**`FileTree`.** The in-memory filesystem's files live in the state instead of plain workflow memory.
+
 - `FileTree` holds `files: dict[str, FileEntry]`, keyed by mount-relative path, and `directories: list[str]` (every directory but the mount's root). A `FileEntry` is `content`, `encoding` (`"utf-8"`, or `"base64"` for anything that is not UTF-8 text) and `size`.
-- The state is the only copy of the files, so tracking costs no second copy in memory. Its initial value is the filesystem's initial contents; a seed adds to it.
+- The state is the only copy of the files, so tracking costs no second copy in memory. A seed adds to it.
 - Every change commits through one `mutate()` block, so it is one state patch: one per write, mkdir, delete or rename (a directory rename moves its whole subtree in one patch), and one for a whole seed. Keys are escaped as JSON Pointer segments (`/files/out~1report.md`).
-- It is opt-in because of what it streams: the state's initial snapshot carries every file, and each patch carries the written file whole. Track a filesystem whose files are worth showing, like a workspace, and leave large or unchanging ones (seeded reference material) untracked.
+- Declaring is a choice because of what it streams: each patch carries the written file whole. Declare a filesystem whose files are worth showing, like a workspace, and build large or unchanging ones (seeded reference material) inline as plain `VFSMount`s.
 - `max_bytes` applies the same way.
+
+### 3.6 `ActivityFileSystem`
+
+A backend written as plain async methods that the harness runs as activities:
+
+```python
+class LocalDisk(agent.ActivityFileSystem[LocalDiskConfig], name="local-disk"):
+    def __init__(self, config: LocalDiskConfig) -> None: ...   # validates the config
+    async def stat(self, path) -> FileStat | None: ...
+    async def read(self, path, offset=0, length=None) -> bytes: ...
+    async def list(self, path) -> list[str]: ...
+    # write / mkdir / delete / rename for a writable mount
+```
+
+- The base class declares all seven methods; a subclass overrides `stat`, `read` and `list`, and all four write methods or none. Defining the subclass generates one activity per method, named `vfs.<name>.<method>`, plus `vfs.<name>.view`: a stat and a ranged read returning one page (at most 256 KB) with the file's size and mtime. `AgentHarnessPlugin(filesystems=[LocalDisk])` registers them.
+- `LocalDisk.backend(config)` is the workflow side: each operation runs the matching activity on the workflow's task queue. Every activity builds a fresh instance from the config it is given, so the config is validated on every call, and `OSError`s become non-retryable `ApplicationError`s named for the built-in.
+- The config is untrusted input, because the console's file viewer sends it back (below). A filesystem must accept only what is safe to act on.
+
+### 3.7 Indexing an `ActivityFileSystem` mount
+
+A declared mount over an `ActivityFileSystem` keeps a `FileIndex` state. **It holds only the paths this session's scripts have touched (looked up, listed, read or written), never the whole store**: a file no script has looked at is not in it, and another process's change shows up once a script looks at the path again. It is the mount's tree as the session has seen it, paths and metadata (`is_dir`, `size`, `mtime`, a count of the session's writes) but never contents. `ToolCalls` records each operation that succeeds: a stat adds or drops a path, a listing adds the names it returns and drops the children it no longer does, and writes, mkdirs, deletes and renames apply directly. Only a change publishes a patch.
+
+The index also carries a `source`: the filesystem's name, its config and the task queue. It is recorded in the same patch as the first operation, by the bound mount that holds the config; before that the index has no files to open. The console's files pane sends that source with a path to `POST /api/files/view`, which runs `vfs.<name>.view` as a **standalone activity** (`Client.execute_activity`): no workflow is involved, so viewing a file adds nothing to the agent's history and works after the agent has closed. It needs a server that runs standalone activities (the local dev server does; the time-skipping test server does not, and the route answers 501).
+
+**The content a viewer gets is the file as it is in the store now**, not as it was at the point in the agent's history being viewed: the index replays, the store does not. A `FileTree` is the opposite: it holds the contents, so they replay with the session.
 
 ---
 
@@ -198,7 +236,7 @@ What stays sequential is inherent to sync calls: a sync call freezes the whole i
 ## 5. Model-facing surface
 
 - The generated type-check stubs declare `open` and the five `OSError` subclasses. Monty's checker otherwise rejects them as unresolved names. With the declarations the check passes, and at run time the names are still Monty's own `open` and exception types.
-- The Code Mode contract replaces "no filesystem" with a listing of the mounts: path, read-only or writable, and the developer's `description`. The listing comes from the `Mount`s, so it needs none of the filesystem's contents and nothing is read to build it. Scripts with no mounts keep today's contract.
+- The Code Mode contract replaces "no filesystem" with a listing of the mounts: path, read-only or writable, and the developer's `description`. The listing comes from the `VFSMount`s, so it needs none of the filesystem's contents and nothing is read to build it. Scripts with no mounts keep today's contract.
 
 ---
 
@@ -236,8 +274,8 @@ Skills may ship scripts that Monty can read but not run. The seam is an ordinary
 ## 9. Phases
 
 1. **Stepper.** (Done.) Stop a step at a file operation, resume a restored `FunctionSnapshot`, and start pending host calls at every stop.
-2. **VFS.** (Done.) `Mount`, path routing and mode enforcement, the `FileSystem` protocol and operation mapping, `fs_*` dispatch through `run_tool`, exception mapping, `InMemoryFileSystem` with `seed` and `max_bytes`, the `open` stub, and the mount listing.
-3. **Examples.** (Done.) A VFS example (`examples/code_mode_vfs/`) whose `/skills` mount is seeded from an activity with a minimal sample of instruction-only skills, and a remote backend over activities (the end-to-end test's `RemoteFileSystem`).
+2. **VFS.** (Done.) `VFSMount`, path routing and mode enforcement, the `FileSystem` protocol and operation mapping, `fs_*` dispatch through `run_tool`, exception mapping, `InMemoryFileSystem` with `seed` and `max_bytes`, the `open` stub, and the mount listing.
+3. **Examples.** (Done.) A memory example (`examples/code_mode_memory/`) whose `/skills` mount is seeded from an activity, and whose `/memory` mount is an `ActivityFileSystem` over a directory of the worker's disk; and a remote backend over activities (the end-to-end test's `RemoteFileSystem`).
 4. **Script execution.** `run_skill_script` as an activity tool.
 
 ---
@@ -247,7 +285,7 @@ Skills may ship scripts that Monty can read but not run. The seam is an ordinary
 1. Customizing approval for file operations, e.g. treating reads as safe or setting per-mount policy.
 2. Generated `fs_*` tool names: shared across every `code_mode_tool` on an agent, or prefixed with the Code Mode tool's name so approval criteria can tell them apart?
 3. Should a backend be able to answer multi-call operations (append, `mkdir(parents=True)`) natively, through optional protocol methods, to save steps?
-4. Tracking a remote `FileSystem` in agent state, or tracking only file metadata (paths and sizes) for filesystems too large to stream.
+4. Declaring a mount over a hand-written `FileSystem` (neither `InMemoryFileSystem` nor an `ActivityFileSystem`). `vfs_mount` accepts only those two today: a `FileIndex` needs a `source` the console can read from.
 
 ---
 

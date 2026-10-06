@@ -6,7 +6,13 @@ import type {
   WorkflowExecutionState
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
-import type { AgentDescriptor, JsonRecord, Session } from "$lib/api/types";
+import type {
+  AgentDescriptor,
+  FileChunk,
+  FileViewRequest,
+  JsonRecord,
+  Session
+} from "$lib/api/types";
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
 import { HttpAgentApi } from "$lib/api/httpClient";
 import { realisticQaScenario } from "$lib/mock/scenarios";
@@ -39,6 +45,7 @@ import {
 } from "./hydration";
 import { displayTextForMessage, renderUserMessage } from "./inboundMessageText";
 import { buildAgentStateDocs } from "./agentState";
+import { buildMountViews, isFileStateDoc } from "./fileMounts";
 import { buildApprovalDecisions } from "./approvalDecisionTree";
 import { buildReplayLog, buildReplayMarkers, rowCovers } from "./replayLog";
 import { buildReplayTimeline, type ReplayTimelineEntry } from "./replayTimeline";
@@ -476,6 +483,10 @@ export class AgentRunController {
    * keeps two agents' `plan` from folding into one document.
    */
   agentStates = $derived(buildAgentStateDocs(this.visibleReplayTimeline));
+  /** The states agents declared for their own use: every state but the ones tracking mounts. */
+  declaredStates = $derived(this.agentStates.filter((doc) => !isFileStateDoc(doc)));
+  /** Code Mode mounts the agents track, as trees as of the playhead. */
+  fileMounts = $derived(buildMountViews(this.agentStates));
   /** Completed automatic approval judgments, as of the replay cursor. */
   approvalDecisions = $derived(buildApprovalDecisions(this.visibleReplayTimeline));
   /**
@@ -1592,6 +1603,11 @@ export class AgentRunController {
     } else {
       this.#markObservedSubagentStopped(targetWorkflowId);
     }
+  }
+
+  /** One page of a file in an activity-backed mount, read from its store as it is now. */
+  viewFile(request: FileViewRequest): Promise<FileChunk> {
+    return this.#api.viewFile(request);
   }
 
   /** Errors surface on the approval's own card, not the connection banner. */

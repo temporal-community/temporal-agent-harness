@@ -219,6 +219,30 @@ export interface CallbackResultResponse {
   accepted: true;
 }
 
+/** Where an activity-backed mount's files can be read: its `FileIndex.source`. */
+export interface FileSource {
+  filesystem: string;
+  /** The filesystem's config, sent back as is. */
+  config: Record<string, JsonValue>;
+  task_queue: string;
+}
+
+export interface FileViewRequest {
+  source: FileSource;
+  path: string;
+  offset?: number;
+}
+
+/** One page of a file, as it is in its store right now. */
+export interface FileChunk {
+  content: string;
+  encoding: "utf-8" | "base64";
+  offset: number;
+  /** The whole file's size in bytes. */
+  size: number;
+  mtime: number;
+}
+
 export interface PendingTurn {
   turn_number: number;
   turn_id: TurnId;

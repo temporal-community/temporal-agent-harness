@@ -58,8 +58,8 @@ with workflow.unsafe.imports_passed_through():
         BACKEND_INJECTION,
         FileOp,
         InMemoryFileSystem,
-        Mount,
         ToolCalls,
+        VFSMount,
         fs_seed,
         perform,
     )
@@ -121,7 +121,7 @@ class CodeModeDriver:
         *,
         injections: Mapping[str, Any],
         stubs: TypeCheckStubs,
-        mounts: Sequence[Mount] = (),
+        mounts: Sequence[VFSMount] = (),
     ) -> None:
         self._runner = runner
         self._tools_by_name = tools_by_name

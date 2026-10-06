@@ -1,9 +1,9 @@
-"""Worker for the Code Mode VFS example agent.
+"""Worker for the Code Mode memory example agent.
 
 Run from the repo root with:
-    uv run --group examples python -m examples.code_mode_vfs.worker
+    uv run --group examples python -m examples.code_mode_memory.worker
 
-(or `just worker` from examples/code_mode_vfs).
+(or `just worker` from examples/code_mode_memory).
 
 Connection settings come from a ``temporal.toml`` profile, resolved through temporalio's
 ``ClientConfig.load_client_connect_config()`` (TEMPORAL_CONFIG_FILE / TEMPORAL_PROFILE, set in
@@ -30,7 +30,8 @@ from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 
 from .activities import load_skills
-from .workflow import TASK_QUEUE, CodeModeVfsAgentWorkflow
+from .local_disk import LocalDisk
+from .workflow import TASK_QUEUE, CodeModeMemoryAgentWorkflow
 
 
 async def main() -> None:
@@ -38,20 +39,23 @@ async def main() -> None:
     if not api_key:
         sys.exit("error: GEMINI_API_KEY env var not set")
 
-    # Harness plugin LAST so the Gemini plugin's payload converter wins. Code Mode and its
-    # filesystem need no activities of their own; load_skills is this agent's seed.
+    # Harness plugin LAST so the Gemini plugin's payload converter wins. load_skills seeds
+    # /skills; LocalDisk's activities are /memory, so this worker's disk holds the memory.
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
         **connect_config,
-        plugins=[GoogleGenAIPlugin(GeminiClient(api_key=api_key)), AgentHarnessPlugin()],
+        plugins=[
+            GoogleGenAIPlugin(GeminiClient(api_key=api_key)),
+            AgentHarnessPlugin(filesystems=[LocalDisk]),
+        ],
     )
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
-        workflows=[CodeModeVfsAgentWorkflow],
+        workflows=[CodeModeMemoryAgentWorkflow],
         activities=[load_skills],
     )
-    print(f"Code Mode VFS worker ready: taskQueue={TASK_QUEUE}", flush=True)
+    print(f"Code Mode memory worker ready: taskQueue={TASK_QUEUE}", flush=True)
     await worker.run()
 
 

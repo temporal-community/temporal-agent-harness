@@ -23,7 +23,7 @@ import uuid
 import warnings
 from typing import Annotated, Any, ClassVar, ForwardRef, Literal, Union, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, JsonValue, PrivateAttr, TypeAdapter, model_validator
 
 from .containers import freeze
 from .errors import FrozenError, StateSchemaError
@@ -344,6 +344,12 @@ def _json_key_renderings(annotation: Any, values: tuple[Any, ...]) -> dict[str, 
 
 def _check_annotation(cls: type, field: str, annotation: Any, seen: set[int]) -> None:
     annotation = _strip_annotated(annotation)
+
+    # Arbitrary JSON: scalars, lists and string-keyed dicts, nested to any depth. Every one of
+    # those is something the drafts track and `freeze` freezes, so the value is owned like any
+    # typed container; it is only the recursive alias this check can't walk.
+    if annotation is JsonValue:
+        return
 
     if annotation is Any:
         warnings.warn(

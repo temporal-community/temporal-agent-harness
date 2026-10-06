@@ -196,7 +196,7 @@ server:
         examples/callback_tools/wiki_agent/agents.toml \
         examples/callback_tools/coding_agent/agents.toml \
         examples/agent_dag/agents.toml \
-        examples/code_mode_vfs/agents.toml \
+        examples/code_mode_memory/agents.toml \
         --host 0.0.0.0 --port 8000
 
 # Rebuild the Svelte UI, then serve — the contributor loop after editing ui/ (needs pnpm).
@@ -234,8 +234,8 @@ worker-coding:
 worker-agent-dag:
     cd "{{justfile_directory()}}/examples/agent_dag" && just worker
 
-worker-code-mode-vfs:
-    cd "{{justfile_directory()}}/examples/code_mode_vfs" && just worker
+worker-code-mode-memory:
+    cd "{{justfile_directory()}}/examples/code_mode_memory" && just worker
 
 # Co-launch all ten agent workers in one terminal (Ctrl-C stops them all; logs interleave).
 # Requires every agent's prerequisites at once (both API keys, the F1 MCP server, etc.).
@@ -256,7 +256,7 @@ workers:
     just worker-wiki &
     just worker-coding &
     just worker-agent-dag &
-    just worker-code-mode-vfs &
+    just worker-code-mode-memory &
     wait
 
 # --- Clients / external processes for the human-in-the-loop & callback agents ---

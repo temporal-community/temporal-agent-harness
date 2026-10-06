@@ -15,10 +15,15 @@ from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.code_mode import monty_stepper
 from temporal_agent_harness.harness.code_mode.vfs import (
     FileEntry,
+    FileIndex,
     FileOp,
     FileTree,
     InMemoryFileSystem,
-    Mount,
+    FileSource,
+    IndexEntry,
+    IndexedVFSMount,
+    ToolCalls,
+    VFSMount,
     perform,
     route,
     validate_mounts,
@@ -36,7 +41,7 @@ def _no_os(name: str, args: tuple) -> object:
     raise NotImplementedError(name)
 
 
-def _stubs(mounts: list[Mount]):
+def _stubs(mounts: list[VFSMount]):
     return agent.code_mode_tool([beta], name="run_code", mounts=mounts).__code_mode_stubs__
 
 
@@ -51,7 +56,7 @@ async def _carry_out(op: FileOp) -> Any:
         return e
 
 
-async def _run(script: str, mounts: list[Mount], host: dict[str, Any] | None = None):
+async def _run(script: str, mounts: list[VFSMount], host: dict[str, Any] | None = None):
     """Run ``script`` to completion and return its last step plus every file operation it
     stopped at."""
     run = monty_stepper.ScriptRun(script, _stubs(mounts), answer_os=_no_os, mounts=mounts)
@@ -85,7 +90,7 @@ def _skills() -> InMemoryFileSystem:
 
 
 async def test_a_script_reads_seeded_files_with_open_and_pathlib():
-    mounts = [Mount("/skills", _skills(), read_only=True)]
+    mounts = [VFSMount("/skills", _skills(), read_only=True)]
     script = (
         "from pathlib import Path\n"
         "with open('/skills/pdf/SKILL.md') as f:\n"
@@ -120,7 +125,7 @@ async def test_a_script_reads_seeded_files_with_open_and_pathlib():
 
 
 async def test_a_missing_file_raises_the_builtin_error_with_the_virtual_path():
-    mounts = [Mount("/skills", _skills(), read_only=True)]
+    mounts = [VFSMount("/skills", _skills(), read_only=True)]
     script = (
         "try:\n"
         "    open('/skills/nope.md').read()\n"
@@ -134,7 +139,7 @@ async def test_a_missing_file_raises_the_builtin_error_with_the_virtual_path():
 
 
 async def test_stat_times_never_come_from_the_worker_clock():
-    mounts = [Mount("/skills", _skills(), read_only=True)]
+    mounts = [VFSMount("/skills", _skills(), read_only=True)]
     step, _ = await _run(
         "from pathlib import Path\nPath('/skills/pdf/SKILL.md').stat().st_mtime\n", mounts
     )
@@ -146,7 +151,7 @@ async def test_stat_times_never_come_from_the_worker_clock():
 
 async def test_writes_persist_across_scripts_on_the_same_filesystem():
     workspace = InMemoryFileSystem()
-    mounts = [Mount("/workspace", workspace)]
+    mounts = [VFSMount("/workspace", workspace)]
     write = (
         "from pathlib import Path\n"
         "Path('/workspace/out').mkdir()\n"
@@ -167,7 +172,7 @@ async def test_writes_persist_across_scripts_on_the_same_filesystem():
 
 
 async def test_directory_operations():
-    mounts = [Mount("/workspace", InMemoryFileSystem())]
+    mounts = [VFSMount("/workspace", InMemoryFileSystem())]
     script = (
         "from pathlib import Path\n"
         "out = []\n"
@@ -195,7 +200,7 @@ async def test_directory_operations():
 
 
 async def test_max_bytes_caps_what_an_in_memory_filesystem_holds():
-    mounts = [Mount("/workspace", InMemoryFileSystem(max_bytes=4))]
+    mounts = [VFSMount("/workspace", InMemoryFileSystem(max_bytes=4))]
     script = (
         "from pathlib import Path\n"
         "Path('/workspace/a').write_text('abcd')\n"
@@ -213,7 +218,7 @@ async def test_max_bytes_caps_what_an_in_memory_filesystem_holds():
 
 
 async def test_a_read_only_mount_refuses_writes_without_reaching_the_backend():
-    mounts = [Mount("/skills", _skills(), read_only=True)]
+    mounts = [VFSMount("/skills", _skills(), read_only=True)]
     script = (
         "from pathlib import Path\n"
         "out = []\n"
@@ -230,7 +235,7 @@ async def test_a_read_only_mount_refuses_writes_without_reaching_the_backend():
 
 
 async def test_a_rename_across_mounts_is_refused():
-    mounts = [Mount("/a", InMemoryFileSystem()), Mount("/b", InMemoryFileSystem())]
+    mounts = [VFSMount("/a", InMemoryFileSystem()), VFSMount("/b", InMemoryFileSystem())]
     script = (
         "from pathlib import Path\n"
         "Path('/a/f').write_text('x')\n"
@@ -252,7 +257,7 @@ async def test_a_rename_across_mounts_is_refused():
     "path", ["/etc/passwd", "/workspace-evil/x", "/workspace/../etc/passwd", "relative.txt"]
 )
 async def test_paths_outside_every_mount_stay_unhandled(path):
-    mounts = [Mount("/workspace", InMemoryFileSystem())]
+    mounts = [VFSMount("/workspace", InMemoryFileSystem())]
     run = monty_stepper.ScriptRun(
         f"open({path!r}).read()\n", _stubs(mounts), answer_os=_no_os, mounts=mounts
     )
@@ -261,7 +266,7 @@ async def test_paths_outside_every_mount_stay_unhandled(path):
 
 
 def test_route_matches_whole_segments():
-    workspace = Mount("/workspace", InMemoryFileSystem())
+    workspace = VFSMount("/workspace", InMemoryFileSystem())
     assert route([workspace], PurePosixPath("/workspace")) == (workspace, PurePosixPath("."))
     assert route([workspace], PurePosixPath("/workspace/a/b")) == (
         workspace,
@@ -274,7 +279,7 @@ def test_route_matches_whole_segments():
 
 
 async def test_calls_made_before_a_file_operation_are_handed_over_to_start():
-    mounts = [Mount("/workspace", InMemoryFileSystem())]
+    mounts = [VFSMount("/workspace", InMemoryFileSystem())]
     script = (
         "import asyncio\n"
         "from pathlib import Path\n"
@@ -304,15 +309,15 @@ async def test_calls_made_before_a_file_operation_are_handed_over_to_start():
 def test_mount_paths_must_be_absolute_and_normalized():
     for bad in ("workspace", "/workspace/", "/a/../workspace", "/"):
         with pytest.raises(ValueError):
-            Mount(bad, InMemoryFileSystem())
+            VFSMount(bad, InMemoryFileSystem())
 
 
 def test_overlapping_mounts_are_rejected():
     with pytest.raises(ValueError, match="overlap"):
-        validate_mounts([Mount("/a", InMemoryFileSystem()), Mount("/a/b", InMemoryFileSystem())])
+        validate_mounts([VFSMount("/a", InMemoryFileSystem()), VFSMount("/a/b", InMemoryFileSystem())])
     with pytest.raises(ValueError, match="overlap"):
-        validate_mounts([Mount("/a", InMemoryFileSystem()), Mount("/a", InMemoryFileSystem())])
-    validate_mounts([Mount("/a", InMemoryFileSystem()), Mount("/ab", InMemoryFileSystem())])
+        validate_mounts([VFSMount("/a", InMemoryFileSystem()), VFSMount("/a", InMemoryFileSystem())])
+    validate_mounts([VFSMount("/a", InMemoryFileSystem()), VFSMount("/ab", InMemoryFileSystem())])
 
 
 def test_a_writable_mount_needs_a_writable_backend():
@@ -322,10 +327,10 @@ def test_a_writable_mount_needs_a_writable_backend():
         async def list(self, path): ...
 
     with pytest.raises(TypeError, match="read_only=True"):
-        Mount("/data", ReadOnly())
-    Mount("/data", ReadOnly(), read_only=True)
+        VFSMount("/data", ReadOnly())
+    VFSMount("/data", ReadOnly(), read_only=True)
     with pytest.raises(TypeError, match="not a FileSystem"):
-        Mount("/data", object(), read_only=True)
+        VFSMount("/data", object(), read_only=True)
 
 
 async def test_seeded_paths_must_be_relative():
@@ -341,8 +346,8 @@ def test_the_contract_lists_the_mounts_and_the_stubs_declare_open():
         [beta],
         name="run_code",
         mounts=[
-            Mount("/skills", _skills(), read_only=True, description="Agent skills."),
-            Mount("/workspace", InMemoryFileSystem()),
+            VFSMount("/skills", _skills(), read_only=True, description="Agent skills."),
+            VFSMount("/workspace", InMemoryFileSystem()),
         ],
     )
     doc = tool.__doc__ or ""
@@ -358,7 +363,7 @@ def test_the_contract_lists_the_mounts_and_the_stubs_declare_open():
 
 def test_a_tool_with_mounts_needs_no_host_functions():
     tool = agent.code_mode_tool(
-        [], name="run_code", mounts=[Mount("/workspace", InMemoryFileSystem())]
+        [], name="run_code", mounts=[VFSMount("/workspace", InMemoryFileSystem())]
     )
     assert "Host functions available:\n\n(none)" in (tool.__doc__ or "")
 
@@ -366,24 +371,35 @@ def test_a_tool_with_mounts_needs_no_host_functions():
 def test_open_type_checks_only_with_mounts():
     script = "with open('/workspace/a.txt', 'w') as f:\n    f.write('x')\n"
     with_mounts = agent.code_mode_tool(
-        [beta], name="run_code", mounts=[Mount("/workspace", InMemoryFileSystem())]
+        [beta], name="run_code", mounts=[VFSMount("/workspace", InMemoryFileSystem())]
     )
     assert monty_stepper.type_check(script, with_mounts.__code_mode_stubs__) is None
     plain = agent.code_mode_tool([beta], name="run_code")
     assert monty_stepper.type_check(script, plain.__code_mode_stubs__) is not None
 
 
-# ---------------------------------------------------------------- state tracking (opt-in)
+# ---------------------------------------------------------------- state tracking
 
 
-def _tracked(initial: FileTree | None = None) -> tuple[StateRef[FileTree], list[StatePatch]]:
+def _tracked(
+    initial: FileTree | None = None, *, mount: str = "/workspace", read_only: bool = False
+) -> tuple[StateRef[FileTree], list[StatePatch]]:
+    """A tracked tree whose header already names its mount, so the only patches are the
+    script's changes."""
+    tree = (initial or FileTree()).model_copy(update={"mount": mount, "read_only": read_only})
     patches: list[StatePatch] = []
-    return StateRef("workspace", initial or FileTree(), publish=patches.append), patches
+    return StateRef("workspace", tree, publish=patches.append), patches
+
+
+def _in_state(
+    ref: StateRef[FileTree], *, seed: Any = None, max_bytes: int | None = None
+) -> InMemoryFileSystem:
+    return InMemoryFileSystem._in_state(ref, seed=seed, max_bytes=max_bytes)
 
 
 async def test_a_tracked_filesystem_publishes_one_patch_per_change():
     ref, patches = _tracked()
-    mounts = [Mount("/workspace", InMemoryFileSystem(state=ref))]
+    mounts = [VFSMount("/workspace", _in_state(ref))]
     script = (
         "from pathlib import Path\n"
         "Path('/workspace/notes').mkdir()\n"
@@ -414,8 +430,8 @@ async def test_a_tracked_seed_is_one_patch():
     async def seed() -> dict[str, str | bytes]:
         return {"a/b/one.md": "1", "a/two.md": "2"}
 
-    ref, patches = _tracked()
-    mounts = [Mount("/skills", InMemoryFileSystem(seed=seed, state=ref), read_only=True)]
+    ref, patches = _tracked(mount="/skills", read_only=True)
+    mounts = [VFSMount("/skills", _in_state(ref, seed=seed), read_only=True)]
     step, _ = await _run(
         "from pathlib import Path\nPath('/skills/a/b/one.md').read_text()\n", mounts
     )
@@ -432,7 +448,7 @@ async def test_a_tracked_rename_moves_a_directory_in_one_patch():
             files={"src/pkg/mod.py": FileEntry(content="x = 1", size=5)},
         )
     )
-    mounts = [Mount("/workspace", InMemoryFileSystem(state=ref))]
+    mounts = [VFSMount("/workspace", _in_state(ref))]
     script = (
         "from pathlib import Path\n"
         "Path('/workspace/src').rename('/workspace/lib')\n"
@@ -447,7 +463,7 @@ async def test_a_tracked_rename_moves_a_directory_in_one_patch():
 
 async def test_the_initial_state_is_the_filesystems_initial_contents():
     ref, patches = _tracked(FileTree(files={"todo.md": FileEntry(content="- ship it", size=9)}))
-    mounts = [Mount("/workspace", InMemoryFileSystem(state=ref))]
+    mounts = [VFSMount("/workspace", _in_state(ref))]
     step, _ = await _run(
         "from pathlib import Path\n[p.name for p in Path('/workspace').iterdir()]\n", mounts
     )
@@ -457,7 +473,7 @@ async def test_the_initial_state_is_the_filesystems_initial_contents():
 
 async def test_max_bytes_applies_to_a_tracked_filesystem():
     ref, patches = _tracked()
-    mounts = [Mount("/workspace", InMemoryFileSystem(state=ref, max_bytes=3))]
+    mounts = [VFSMount("/workspace", _in_state(ref, max_bytes=3))]
     script = (
         "from pathlib import Path\n"
         "try:\n"
@@ -470,3 +486,96 @@ async def test_max_bytes_applies_to_a_tracked_filesystem():
     step, _ = await _run(script, mounts)
     assert step.output == "full"
     assert patches == [] and ref.current.files == {}
+
+
+# ---------------------------------------------------------------- file index
+
+
+async def _run_indexed(script: str, mounts: list[VFSMount]):
+    """Run ``script`` the way the driver does, through ``ToolCalls`` (so indexes are kept),
+    with each fs_* tool call carried out directly on the mount's backend."""
+
+    def tools_for(backend: Any):
+        async def call_tool(tool: Any, **kw: Any) -> Any:
+            path = PurePosixPath(kw.get("path", "."))
+            name = tool.__name__
+            if name == "fs_write":
+                return await backend.write(path, kw["content"].encode())
+            if name == "fs_rename":
+                return await backend.rename(path, PurePosixPath(kw["target"]))
+            return await getattr(backend, name.removeprefix("fs_"))(path)
+
+        return call_tool
+
+    async def carry_out(op: FileOp) -> Any:
+        try:
+            return await perform(op, ToolCalls(op.mount, tools_for(op.mount.backend)))
+        except Exception as e:
+            return e
+
+    run = monty_stepper.ScriptRun(script, _stubs(mounts), answer_os=_no_os, mounts=mounts)
+    step = run.start()
+    while not step.done:
+        step = run.resume({op.call_id: await carry_out(op) for op in step.awaiting})
+    assert step.error is None, step.error
+    return step
+
+
+def _indexed(
+    initial: dict[str, IndexEntry] | None = None,
+) -> tuple[StateRef[FileIndex], list[StatePatch], IndexedVFSMount]:
+    patches: list[StatePatch] = []
+    ref = StateRef("files", FileIndex(mount="/w", entries=initial or {}), publish=patches.append)
+    mount = IndexedVFSMount(
+        "/w", InMemoryFileSystem(), index=ref, source=FileSource(filesystem="fake", config={})
+    )
+    return ref, patches, mount
+
+
+async def test_an_index_records_what_scripts_do_and_see():
+    ref, patches, mount = _indexed()
+    script = (
+        "from pathlib import Path\n"
+        "Path('/w/notes').mkdir()\n"
+        "Path('/w/notes/a.md').write_text('hi')\n"
+        "Path('/w/notes/a.md').write_text('hello')\n"
+        "Path('/w/old.md').write_text('x')\n"
+        "Path('/w/notes').rename('/w/docs')\n"
+        "Path('/w/old.md').unlink()\n"
+        "Path('/w/docs/a.md').read_text()\n"
+    )
+    step = await _run_indexed(script, [mount])
+    assert step.output == "hello"
+    assert ref.current.entries == {
+        "docs": IndexEntry(is_dir=True),
+        "docs/a.md": IndexEntry(is_dir=False, size=5, writes=2),
+    }
+    # Metadata only: no patch ever carries a file's contents.
+    assert "hello" not in repr([p.ops for p in patches])
+
+
+async def test_a_listing_adds_what_it_names_and_drops_what_it_no_longer_does():
+    ref, _, mount = _indexed(
+        {"gone": IndexEntry(is_dir=True), "gone/x.md": IndexEntry(is_dir=False, size=1)}
+    )
+    await mount.backend.write(PurePosixPath("here.md"), b"1")
+    script = "from pathlib import Path\n[p.name for p in Path('/w').iterdir()]\n"
+    step = await _run_indexed(script, [mount])
+    assert step.output == ["here.md"]
+    assert ref.current.entries == {"here.md": IndexEntry()}
+
+
+async def test_a_lookup_that_finds_nothing_drops_the_path():
+    ref, _, mount = _indexed({"x.md": IndexEntry(is_dir=False, size=1)})
+    step = await _run_indexed("from pathlib import Path\nPath('/w/x.md').exists()\n", [mount])
+    assert step.output is False
+    assert ref.current.entries == {}
+
+
+async def test_an_operation_that_changes_nothing_publishes_nothing():
+    ref, patches, mount = _indexed()
+    await mount.backend.write(PurePosixPath("a.md"), b"abc")
+    script = "from pathlib import Path\nPath('/w/a.md').read_text()\nPath('/w/a.md').read_text()\n"
+    await _run_indexed(script, [mount])
+    assert ref.current.entries == {"a.md": IndexEntry(is_dir=False, size=3)}
+    assert len(patches) == 1

@@ -15,6 +15,7 @@
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
   import ApprovalDecisionPanel from "$lib/components/agent/ApprovalDecisionPanel.svelte";
   import AgentStatePanel from "$lib/components/agent/AgentStatePanel.svelte";
+  import FilesPanel from "$lib/components/agent/FilesPanel.svelte";
   import PaneRail, { type PaneDescription } from "$lib/panes/PaneRail.svelte";
   import PaneMinimap from "$lib/panes/PaneMinimap.svelte";
   import PaneLinkNotice from "$lib/panes/PaneLinkNotice.svelte";
@@ -272,7 +273,16 @@
         return {
           title: PANE_META.state.kindLabel,
           statusLabel:
-            run.agentStates.length > 0 ? `${run.agentStates.length} declared` : null,
+            run.declaredStates.length > 0 ? `${run.declaredStates.length} declared` : null,
+          statusTone: null
+        };
+      case "files":
+        return {
+          title: PANE_META.files.kindLabel,
+          statusLabel:
+            run.fileMounts.length > 0
+              ? `${run.fileMounts.length} ${run.fileMounts.length === 1 ? "mount" : "mounts"}`
+              : null,
           statusTone: null
         };
       default: {
@@ -791,7 +801,16 @@
         <!-- Handed the fold, not the frames: what an agent's state holds at the
              playhead is a projection like every other reading in the console, so
              scrubbing moves it and nothing here subscribes to anything. -->
-        <AgentStatePanel states={run.agentStates} />
+        <AgentStatePanel states={run.declaredStates} />
+      {:else if pane.kind === "files"}
+        <!-- Trees and in-memory contents are folds to the playhead like the state pane;
+             an indexed mount's contents are read from its store now, and the pane says so. -->
+        <FilesPanel
+          mounts={run.fileMounts}
+          live={run.viewIndex >= run.replayTimeline.length}
+          onViewFile={(request) => run.viewFile(request)}
+          onJumpToLive={() => run.jumpToLive()}
+        />
       {:else if pane.kind === "decisions"}
         <!-- The projection is already clipped to the playhead, so this pane
              rewinds with the graph and logs instead of leaking future verdicts.

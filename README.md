@@ -560,23 +560,72 @@ run_code = agent.code_mode_tool(
   disjoint or overlapping tool sets.
 - **A virtual filesystem, if you want one.** Pass `mounts=` and scripts read and write files with
   plain `open()` and `pathlib`. A mount's backend is any async `FileSystem` your workflow can
-  await (an activity, a Nexus operation, a child workflow) or the built-in
-  `agent.InMemoryFileSystem`, optionally seeded by an activity. Every file operation goes through
-  the runner as an `fs_*` tool call, keeping the approval policy and tool events, and nothing
-  touches the worker's disk. Opt in with `InMemoryFileSystem(state=...)` to keep a filesystem's
-  files in [agent state](#build-a-ui-in-react-or-svelte), so every change streams to the UI.
+  await (an activity, a Nexus operation, a child workflow), the built-in
+  `agent.InMemoryFileSystem` (optionally seeded by an activity), or an `agent.ActivityFileSystem`:
+  plain async methods the harness runs as activities for you. Every file operation goes through
+  the runner as an `fs_*` tool call, keeping the approval policy and tool events.
+- **Files you can watch.** The console's **VFS File Mounts** pane shows a mount's tree as the agent works.
+  Declare the mount on the agent class with `agent.vfs_mount(...)` and bind it in `@agent.init`.
+  Over `InMemoryFileSystem`, its files, contents included, are a `FileTree`
+  [agent state](#build-a-ui-in-react-or-svelte), so they replay with the session. Over an
+  `ActivityFileSystem`, its tree is a `FileIndex` state: **only the paths this session's scripts
+  have touched** (looked up, listed, read or written), never the whole store, and never
+  contents. A file
+  opens in a large viewer with the trees beside it; for an `ActivityFileSystem` it is read from
+  the store through a standalone activity, without touching the agent's workflow. **That content is the file as it is now, not as it was at that point in
+  the agent's history**: the tree replays, the store does not.
 
 ```python
 run_code = agent.code_mode_tool(
     tools,
     name="run_code",
     mounts=[
-        agent.Mount("/docs", agent.InMemoryFileSystem(seed=self._load_docs), read_only=True,
-                    description="Product docs, one Markdown file per page."),
-        agent.Mount("/workspace", agent.InMemoryFileSystem(), description="Write your output here."),
+        agent.VFSMount("/docs", agent.InMemoryFileSystem(seed=self._load_docs), read_only=True,
+                       description="Product docs, one Markdown file per page."),
+        agent.VFSMount("/workspace", agent.InMemoryFileSystem(), description="Write your output here."),
     ],
 )
 ```
+
+To show a mount in the console, declare it on the class instead. The declaration fixes the path,
+description, access and filesystem; `bind(...)` supplies what depends on the session, and returns
+the `VFSMount`:
+
+```python
+class MyAgent:
+    workspace = agent.vfs_mount("/workspace", agent.InMemoryFileSystem,
+                                description="Write your output here.")
+    files = agent.vfs_mount("/files", Bucket, description="The team's files.")
+
+    @agent.init
+    def __init__(self, config: AgentConfig, data: MyData) -> None:
+        ...
+        self._run_code = agent.code_mode_tool(tools, name="run_code", mounts=[
+            self.workspace.bind(seed=None),                     # or seed=<async fn>, required
+            self.files.bind(BucketConfig(prefix=data.team)),    # the filesystem's own config type
+        ])
+```
+
+An `ActivityFileSystem` is a config model plus async methods that run on a worker. Treat the
+config as untrusted input and validate it in `__init__`: the console's file viewer sends it back.
+
+```python
+class BucketConfig(BaseModel):
+    prefix: PurePosixPath
+
+class Bucket(agent.ActivityFileSystem[BucketConfig], name="bucket"):
+    def __init__(self, config: BucketConfig) -> None: ...   # refuse anything unsafe here
+    async def stat(self, path: PurePosixPath) -> agent.FileStat | None: ...
+    async def read(self, path: PurePosixPath, offset: int = 0, length: int | None = None) -> bytes: ...
+    async def list(self, path: PurePosixPath) -> list[str]: ...
+    # write / mkdir / delete / rename, for a writable mount
+
+# workflow:  files = agent.vfs_mount("/files", Bucket, ...); self.files.bind(BucketConfig(...))
+# worker:    AgentHarnessPlugin(filesystems=[Bucket])   # registers vfs.bucket.stat, .read, ...
+```
+
+Viewing an `ActivityFileSystem` file in the console needs a Temporal server that runs
+standalone activities (the local dev server does; the time-skipping test server does not).
 
 A worker that hosts a Code Mode agent needs the `code-mode` extra (which pulls in
 [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in) and
@@ -592,8 +641,8 @@ worker = Worker(client, task_queue=..., workflows=[MyAgent])
 
 See [`examples/monty`](examples/monty) for three agents all built on Code Mode: a no-model script
 runner, a conversational agent that writes its own scripts, and a subagent-driven variant.
-[`examples/code_mode_vfs`](examples/code_mode_vfs) shows a Code Mode tool working on a virtual
-filesystem.
+[`examples/code_mode_memory`](examples/code_mode_memory) shows a Code Mode tool working on a
+virtual filesystem: skills seeded into memory, and long-term memory on disk that sessions share.
 
 ## Accepted Messages
 
@@ -898,8 +947,8 @@ cp .env.example .env.local
 ```
 
 Set the creds for whichever agents you'll run: `OPENAI_API_KEY` (react_agent, openai_hello,
-pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding, code_mode_vfs). The default committed
-`temporal.local.toml` profile points at a local Temporal dev server.
+pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding, code_mode_memory).
+The default committed `temporal.local.toml` profile points at a local Temporal dev server.
 
 ### One example, standalone
 
@@ -942,7 +991,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
 | Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client --wiki-dir ./wiki`** — required, or its tool calls hang |
 | Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
-| Code Mode VFS | `GEMINI_API_KEY`; a Code Mode tool working on a virtual filesystem ([readme](examples/code_mode_vfs/README.md)); chat directly in the UI |
+| Code Mode Memory | `GEMINI_API_KEY`; long-term memory on the worker's disk, shared by sessions given the same `memory_dir` ([readme](examples/code_mode_memory/README.md)); chat directly in the UI |
 | Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](examples/agent_dag/README.md)); best in its own UI, **`just studio`** from `examples/agent_dag` |
 
 **Gotcha — the session manager caches its registry.** The server seeds the `session-manager`

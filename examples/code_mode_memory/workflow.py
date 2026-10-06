@@ -1,27 +1,32 @@
-"""A conversational agent whose Code Mode scripts work on a virtual filesystem.
+"""A conversational agent with long-term memory kept in a directory on the worker's disk.
 
-The agent's only tool is a Code Mode tool with no host functions and two mounts: ``/skills``,
-read-only, and ``/workspace``, where the agent writes what it produces. Both are
-:class:`~temporal_agent_harness.harness.agent.InMemoryFileSystem` instances, so their files live
-in the workflow. ``/skills`` is seeded by the ``load_skills`` activity before the first script
-touches it; ``/workspace`` starts empty and keeps its files for the whole conversation.
+The agent's only tool is a Code Mode tool with no host functions and two mounts:
 
-``/workspace`` is tracked in the ``workspace`` state (opt-in, through ``state=``): its files live
-in that state, and every change is published as a state patch the console shows. ``/skills`` is
-left untracked, since nothing there changes after the seed.
+- ``/skills``, read-only: an :class:`~temporal_agent_harness.harness.agent.InMemoryFileSystem`
+  seeded by the ``load_skills`` activity, holding the ``memory`` skill. The skill says how
+  memory is laid out and how to recall, save and forget.
+- ``/memory``, writable: :class:`~.local_disk.LocalDisk`, an ``ActivityFileSystem`` whose every
+  operation is an activity on the directory named by the session's init data
+  (``MemoryConfig``), inside this example's ``memories/`` folder.
 
-``/skills`` holds a minimal sample of instruction-only skills from ``skills/``, as something for
-the scripts to read: the model learns about them from the system prompt and the mount
-descriptions, reads a ``SKILL.md`` when one fits the request, and follows it with ordinary file
-reads and writes. Every file operation runs through the runner as an ``fs_*`` tool call, so it
-shows up in the tool lifecycle like any tool.
+Memory is not in the workflow: it lives on disk, so it outlasts the session, and every session
+started with the same ``memory_dir`` reads and writes the same memories. The system prompt only
+tells the model when to use the skill; what memory is and how to use it lives in the skill.
+
+Both mounts are declared on the class with ``agent.vfs_mount``, so the console's files panel
+shows them, and bound in ``@agent.init``, where the session's seed and config are known.
+``/skills`` is a ``FileTree``, so its files, contents included, are agent state. ``/memory`` is a
+``FileIndex``: paths and sizes only, with a file's contents read from disk when someone opens it
+in the panel.
 """
 
 from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+from pathlib import PurePosixPath
 
+from pydantic import BaseModel, Field
 from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.workflow import ActivityConfig
@@ -47,33 +52,56 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
 
     from .activities import load_skills
+    from .local_disk import LocalDisk, LocalDiskConfig
 
 
-TASK_QUEUE = "code-mode-vfs"
+TASK_QUEUE = "code-mode-memory"
 MODEL = "gemini-3.8-flash"
 
 SYSTEM_INSTRUCTION = """\
-You are a helpful assistant with skills. A skill is a folder of instructions and supporting \
-files under `/skills`. You work by writing short Python scripts and running them with the \
-`run_code` tool, which gives your scripts a filesystem.
+You are a helpful assistant with a long-term memory of the user. You work by writing short \
+Python scripts and running them with the `run_code` tool, which gives your scripts a filesystem.
 
-Available skills:
-- `expense-report`: turn a list of expenses into a categorized expense report with totals.
-- `meeting-notes`: turn a rough transcript or bullet dump into structured meeting notes.
+Your memory is managed by the `memory` skill at `/skills/memory/SKILL.md`. Use that skill:
+- whenever the user asks you to remember, update or forget something;
+- whenever the user asks something that may be in memory: anything about themselves, their \
+preferences, plans, people or projects, or something they told you before.
 
-When a request fits a skill, FIRST run a script that reads `/skills/<name>/SKILL.md`, then \
-follow its instructions, reading any files it points to. Write what you produce under \
-`/workspace`. Reply in plain prose once the work is done."""
+Before using memory in a conversation, FIRST run a script that reads \
+`/skills/memory/SKILL.md`, then follow it. Reply in plain prose."""
 
 
-@agent.defn(name="CodeModeVfsAgent")
-class CodeModeVfsAgentWorkflow:
-    # The /workspace files, as observable state: every file the agent writes is published as a
-    # state patch, so the console's AGENT STATE pane shows the workspace as it changes.
-    workspace = agent.state(agent.FileTree)
+class MemoryConfig(BaseModel):
+    """Where this session's memory lives."""
+
+    memory_dir: PurePosixPath = Field(
+        description=(
+            "Directory holding this session's memory, relative to the example's memories/ "
+            "folder (e.g. 'alice'), created if missing. Sessions given the same directory "
+            "share their memories."
+        ),
+    )
+
+
+@agent.defn(name="CodeModeMemoryAgent")
+class CodeModeMemoryAgentWorkflow:
+    skills = agent.vfs_mount(
+        "/skills",
+        agent.InMemoryFileSystem,
+        read_only=True,
+        description="Skills, one folder each; start with its SKILL.md.",
+    )
+    memory = agent.vfs_mount(
+        "/memory",
+        LocalDisk,
+        description=(
+            "Your long-term memory of the user, kept across sessions. Read and "
+            "write it only as /skills/memory/SKILL.md describes."
+        ),
+    )
 
     @agent.init
-    def __init__(self, config: AgentConfig) -> None:
+    def __init__(self, config: AgentConfig, data: MemoryConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
@@ -85,17 +113,8 @@ class CodeModeVfsAgentWorkflow:
             [],
             name="run_code",
             mounts=[
-                agent.Mount(
-                    "/skills",
-                    agent.InMemoryFileSystem(seed=self._load_skills),
-                    read_only=True,
-                    description="Skills, one folder each; start with its SKILL.md.",
-                ),
-                agent.Mount(
-                    "/workspace",
-                    agent.InMemoryFileSystem(max_bytes=1_000_000, state=self.workspace),
-                    description="Your scratch space; write everything you produce here.",
-                ),
+                self.skills.bind(seed=self._load_skills),
+                self.memory.bind(LocalDiskConfig(directory=data.memory_dir)),
             ],
         )
         self._gemini = google_genai_client(
@@ -110,9 +129,8 @@ class CodeModeVfsAgentWorkflow:
 
     @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def ask(self, message: TextMessage) -> TextReply:
-        """Chat with the assistant. Ask for an expense report or meeting notes, pasting the
-        expenses or transcript; it picks the matching skill, follows it, and writes the result
-        to its workspace."""
+        """Chat with the assistant. Tell it something to remember, or ask about something you
+        told it before, in this session or another one sharing its memory."""
         tools = [function_param(self._code_tool)]
         self._conversation.add_user_text(message.text)
         while True:

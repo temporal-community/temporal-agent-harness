@@ -55,7 +55,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from temporalio.contrib.pydantic import PydanticPayloadConverter
 from temporalio.converter import DataConverter, DefaultPayloadConverter, ExternalStorage
@@ -65,10 +65,37 @@ from temporalio.worker import WorkerConfig
 from temporal_agent_harness.harness.jev_approvals.activity import JEV_APPROVAL_ACTIVITIES
 from temporal_agent_harness.utils.large_payload import DEFAULT_PAYLOAD_STORAGE
 
+if TYPE_CHECKING:
+    from temporal_agent_harness.harness.code_mode.activity_fs import AnyFileSystem
+
 
 def _activity_name(fn: Callable[..., Any]) -> str | None:
     """The registered Temporal activity name of ``fn``, or ``None`` if it isn't an activity."""
     return getattr(getattr(fn, "__temporal_activity_definition", None), "name", None)
+
+
+def _filesystem_activities(
+    filesystems: Sequence[type[AnyFileSystem]],
+) -> list[Callable[..., Any]]:
+    """The ``vfs.<name>.*`` activities of each :class:`ActivityFileSystem` subclass in
+    ``filesystems``, refusing anything else and two filesystems with the same name."""
+    from temporal_agent_harness.harness.code_mode import ActivityFileSystem
+
+    names: set[str] = set()
+    activities: list[Callable[..., Any]] = []
+    for fs in filesystems:
+        if not (isinstance(fs, type) and issubclass(fs, ActivityFileSystem)):
+            raise TypeError(
+                f"AgentHarnessPlugin(filesystems=...) got {fs!r}, which is not an "
+                "ActivityFileSystem subclass"
+            )
+        if fs.name in names:
+            raise ValueError(
+                f"AgentHarnessPlugin(filesystems=...) has two filesystems named {fs.name!r}"
+            )
+        names.add(fs.name)
+        activities.extend(fs.activities)
+    return activities
 
 
 def _tool_activities(
@@ -137,11 +164,16 @@ class AgentHarnessPlugin(SimplePlugin):
       fails the check once and escalates the call to a human.
     * **Tool activities** — the durable body of each ``@agent.activity_tool_defn`` tool in
       ``tools``.
+    * **Filesystem activities** — the ``vfs.<name>.*`` activities of each
+      :class:`~temporal_agent_harness.harness.code_mode.ActivityFileSystem` in ``filesystems``.
 
     Args:
         tools: The agent's tools. The activity-backed ones get their durable bodies
             registered; inline and callback tools are skipped (they have no worker-side
             body), so an agent's whole toolset can be passed as-is.
+        filesystems: The ``ActivityFileSystem`` subclasses the worker's agents mount. Register
+            them on every worker of the agents' task queues: a mount runs its operations, and
+            the console reads its files, on the workflow's task queue.
         large_payload_offload: Where the data converter offloads oversized payloads —
             large tool results routinely exceed Temporal's ~2 MB
             limit. Defaults to :func:`~temporal_agent_harness.utils.large_payload.local_payload_storage`,
@@ -157,6 +189,7 @@ class AgentHarnessPlugin(SimplePlugin):
         self,
         *,
         tools: Sequence[Callable[..., Any]] = (),
+        filesystems: Sequence[type[AnyFileSystem]] = (),
         # Defaulting to the shared local storage rather than to ``None`` keeps ``None`` free
         # to mean the one other thing a caller might want: no offloading at all.
         large_payload_offload: ExternalStorage | None = DEFAULT_PAYLOAD_STORAGE,
@@ -166,6 +199,7 @@ class AgentHarnessPlugin(SimplePlugin):
         # SDK internals.
         self._worker_activities: list[Callable[..., Any]] = [
             *_tool_activities(tools),
+            *_filesystem_activities(filesystems),
             *JEV_APPROVAL_ACTIVITIES,
         ]
 

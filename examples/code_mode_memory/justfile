@@ -1,4 +1,4 @@
-# Scoped justfile for the Code Mode VFS example (examples/code_mode_vfs).
+# Scoped justfile for the Code Mode memory example (examples/code_mode_memory).
 # Run from this directory: `just <recipe>`.
 #
 #   just temporal          # 1. local Temporal dev server (or bring your own)
@@ -33,6 +33,6 @@ session-manager:
 server:
     cd "{{root}}" && uv run --group examples temporal-agent-harness serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
 
-# Run the Code Mode VFS agent worker.
+# Run the Code Mode memory agent worker.
 worker:
-    cd "{{root}}" && uv run --group examples python -m examples.code_mode_vfs.worker
+    cd "{{root}}" && uv run --group examples python -m examples.code_mode_memory.worker

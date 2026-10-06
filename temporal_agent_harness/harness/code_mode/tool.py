@@ -31,7 +31,7 @@ with workflow.unsafe.imports_passed_through():
 
     from .driver import CodeModeDriver, call_monty, load_stepper
     from .stubs import render_host_interface, render_type_check_stubs, resolve_hints
-    from .vfs import Mount, validate_mounts
+    from .vfs import VFSMount, validate_mounts
 
 # The model-facing contract. ``{sandbox}`` says what the sandbox can reach, ``{interface}`` is the
 # generated host-function signatures (and their descriptions + result TypedDicts) for this tool's
@@ -98,7 +98,7 @@ class PermissionError(OSError): ...
 """
 
 
-def _render_filesystem(mounts: Sequence[Mount]) -> str:
+def _render_filesystem(mounts: Sequence[VFSMount]) -> str:
     """The model-facing listing of the mounts."""
     if not mounts:
         return ""
@@ -169,7 +169,7 @@ def code_mode_tool(
     inherently_safe: bool = True,
     auto_approval_criteria: str | None = None,
     injections: Mapping[str, Any] | None = None,
-    mounts: Sequence[Mount] = (),
+    mounts: Sequence[VFSMount] = (),
 ) -> Callable[..., Awaitable[str]]:
     """Expose ``tools`` to a model as ONE tool that runs a Python script calling them.
 
@@ -205,10 +205,11 @@ def code_mode_tool(
             applies to the run-code tool only, NOT to the host calls the script makes — each of
             those re-enters the gate under its own tool's declared set. Leave unset to fall back
             to whatever the operator configured as the catch-all.
-        mounts: the sandbox's virtual filesystem, as :class:`~.vfs.Mount` objects at distinct,
-            non-nested paths. Each file operation a script makes is carried out as ``fs_*`` tool
+        mounts: the sandbox's virtual filesystem, as :class:`~.vfs.VFSMount` objects at
+            distinct, non-nested paths: bound ``agent.vfs_mount(...)`` declarations, or mounts
+            built inline. Each file operation a script makes is carried out as ``fs_*`` tool
             calls through the runner, so it is subject to the approval policy and publishes
-            tool lifecycle events. Build the mounts' backends in ``@agent.init``, so each
+            tool lifecycle events. Build or bind the mounts in ``@agent.init``, so each
             workflow has its own.
 
     Raises:

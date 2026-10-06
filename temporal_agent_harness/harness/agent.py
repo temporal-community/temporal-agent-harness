@@ -105,14 +105,17 @@ from temporal_agent_harness.harness.agent_workflow import (
     tool_defn,
 )
 from temporal_agent_harness.harness.code_mode import (
+    ActivityFileSystem,
     FileEntry,
+    FileIndex,
     FileStat,
     FileSystem,
     FileTree,
     InMemoryFileSystem,
-    Mount,
+    VFSMount,
     code_mode_tool,
     code_mode_type_check,
+    vfs_mount,
 )
 from temporal_agent_harness.harness.state.decl import StateDecl, state
 from temporal_agent_harness.harness.jev_approvals import jev_evaluator
@@ -141,12 +144,14 @@ __all__ = [
     "callback_tool_defn",
     "code_mode_tool",
     "code_mode_type_check",
+    "ActivityFileSystem",
     "FileEntry",
+    "FileIndex",
     "FileStat",
     "FileSystem",
     "FileTree",
     "InMemoryFileSystem",
-    "Mount",
+    "VFSMount",
     "defn",
     "init",
     "jev_evaluator",
@@ -158,4 +163,5 @@ __all__ = [
     "teardown",
     "tool_activity",
     "tool_defn",
+    "vfs_mount",
 ]

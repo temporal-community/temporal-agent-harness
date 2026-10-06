@@ -99,7 +99,9 @@ class RemoteFileSystem:
 
 @agent.defn(name="CodeModeVfsE2EParent")
 class CodeModeVfsE2EParentWorkflow:
-    workspace = agent.state(agent.FileTree)
+    workspace = agent.vfs_mount(
+        "/workspace", agent.InMemoryFileSystem, description="Scratch space."
+    )
 
     @agent.init
     def __init__(self, config: AgentConfig) -> None:
@@ -112,17 +114,14 @@ class CodeModeVfsE2EParentWorkflow:
             [add_tool],
             name="run_code",
             mounts=[
-                agent.Mount(
+                agent.VFSMount(
                     "/skills",
                     agent.InMemoryFileSystem(seed=self._load_skills),
                     read_only=True,
                     description="Agent skills; read a skill's SKILL.md first.",
                 ),
-                agent.Mount(
-                    "/workspace",
-                    agent.InMemoryFileSystem(max_bytes=10_000, state=self.workspace),
-                ),
-                agent.Mount("/remote", RemoteFileSystem(), read_only=True),
+                self.workspace.bind(seed=None, max_bytes=10_000),
+                agent.VFSMount("/remote", RemoteFileSystem(), read_only=True),
             ],
         )
 

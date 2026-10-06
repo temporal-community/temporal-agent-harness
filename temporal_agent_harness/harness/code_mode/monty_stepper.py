@@ -90,7 +90,7 @@ import pydantic_monty as monty
 import pydantic_monty._binary  # noqa: F401
 
 from .stubs import TypeCheckStubs
-from .vfs import FILE_OPERATIONS, FileOp, FileStat, Mount, Opened, is_write, route
+from .vfs import FILE_OPERATIONS, FileOp, FileStat, Opened, VFSMount, is_write, route
 
 # Route everything that would make a script depend on the worker to the host.
 OS_POLICY: monty.OSPolicy = {
@@ -211,7 +211,7 @@ class ScriptRun:
         stubs: TypeCheckStubs,
         *,
         answer_os: OsAnswer,
-        mounts: Sequence[Mount] = (),
+        mounts: Sequence[VFSMount] = (),
     ) -> None:
         self._script = script
         self._stubs = stubs
