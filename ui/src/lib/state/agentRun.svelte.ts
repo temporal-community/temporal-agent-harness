@@ -9,6 +9,7 @@ import type { AgentApi } from "$lib/api/client";
 import type { AgentDescriptor, JsonRecord, Session } from "$lib/api/types";
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
 import { HttpAgentApi } from "$lib/api/httpClient";
+import { ConnectorAgentApi, isConnectorTransport } from "$lib/api/connectorClient";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
 import { chooseBootSession } from "./bootSession";
@@ -341,7 +342,7 @@ export class AgentRunController {
     return this.#connectionErrorCode === "unreplayable_run";
   }
 
-  constructor(api: AgentApi = new HttpAgentApi()) {
+  constructor(api: AgentApi = isConnectorTransport() ? new ConnectorAgentApi() : new HttpAgentApi()) {
     this.#api = api;
     /* No teardown: one controller lives as long as the page (see
        createAgentRunController), and the handler is inert without a session. */

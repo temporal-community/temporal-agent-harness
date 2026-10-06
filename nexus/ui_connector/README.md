@@ -42,6 +42,7 @@ teams/             everything Teams (same inbound/outbound split)
   cmd/{webhook,worker}/  the two binaries
 
 agent/             the one BackendDriver impl: Nexus caller into temporal-agent-harness
+cmd/web/           the web UI server: built UI + inbound HTTP connector
 ```
 
 **Dependency direction:** `slack/*`, `teams/*`, `agent` all import `router`. `router`
@@ -50,6 +51,89 @@ imports nothing platform-specific. Never add a `router` -> platform import.
 **Two binaries per platform**, under that platform's own folder (`slack/cmd/`, `teams/cmd/`):
 - `cmd/webhook` - HTTP server + Temporal client only. No workflow/worker.
 - `cmd/worker` - registers `RouterWorkflow` + the outbound driver's activities.
+
+## Web UI through the inbound HTTP connector
+
+The packaged web UI can run without the FastAPI server. The browser calls the agent's
+`AgentService` as standalone Nexus operations over HTTP, with
+[nexus-inbound-http-connector](https://github.com/bergundy/nexus-inbound-http-connector):
+frontend -> HTTP -> standalone Nexus -> agent.
+
+```mermaid
+flowchart LR
+    Browser["Browser UI<br/>(ConnectorAgentApi)"]
+
+    subgraph Web["cmd/web"]
+        Middleware["Middleware<br/>agent -> endpoint, service"]
+        Connector["nexus-inbound-http-connector"]
+    end
+
+    subgraph ConnectorNS["connector namespace"]
+        Operations["Standalone Nexus operations"]
+    end
+
+    subgraph AgentNS["default namespace"]
+        AgentService["AgentService"]
+        Agent["SanoHelloAgent workflow"]
+    end
+
+    Browser -->|"HTTP: start + poll"| Middleware --> Connector
+    Connector --> Operations
+    Operations -->|"sano-hello-agent-endpoint"| AgentService
+    AgentService --> Agent
+```
+
+One turn, from send to the last event:
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant C as cmd/web + connector
+    participant A as AgentService
+    participant W as Agent workflow
+
+    B->>C: SendAgentMessage (POST /nexus/operations/{id}?agent=...)
+    C->>A: standalone Nexus operation
+    A->>W: start workflow + message update
+    A-->>B: turn N, stream offset (GET .../poll)
+
+    B->>C: QueryAgentStatus
+    C->>A: standalone Nexus operation
+    A-->>B: current turn, turn active
+    loop until turn N's turn_end
+        B->>C: PollMessages(cursor)
+        C->>A: standalone Nexus operation (async)
+        A->>W: stream poll update (waits for events)
+        W-->>B: events + next cursor
+    end
+    Note over B: Idle: no poll is open. The next send starts a new read.
+```
+
+- `cmd/web` serves the built UI and the connector at `/nexus/`. It loads `agents.toml`
+  and adds the agent list to the page. Its middleware maps `?agent=<workflow_type>` on
+  a start request to that agent's `nexus_endpoint` and sets the service to
+  `AgentService`. It accepts only the AgentService operations the UI uses, and rejects
+  other start fields, for example completion callbacks.
+- The browser decodes each `pollMessages` item (a base64 Temporal `Payload` that holds
+  one `AgentEvent`).
+- `pollMessages` waits until the agent publishes an event, and holds one update open
+  on the agent workflow until then. So the browser polls only while a turn runs, or
+  while it has not read a turn to its `turn_end`.
+- Sessions live in browser localStorage. The first message starts the agent workflow.
+
+`examples/sano_hello` uses this path. Run from that directory, each command in its own
+terminal:
+
+```bash
+just temporal        # local Temporal dev server with the Nexus settings
+just setup-nexus     # once: the "connector" namespace + the agent's endpoint
+just worker          # agent workflow, tool activities, and AgentService
+just web-connector   # http://localhost:8080
+```
+
+Limits of this prototype: no authentication; no close button, session previews, init
+data, or worker readiness; subagent streams are not read; each browser tab polls the
+agent itself; payloads offloaded to external storage cannot be read by the connector.
 
 ## Writing a new driver (e.g. Discord)
 
