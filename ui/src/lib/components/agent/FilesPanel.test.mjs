@@ -27,6 +27,8 @@ const doc = (stateId, value) => ({
   problem: null
 });
 
+const HOSTILE = '<script>alert(1)</script><img src=x onerror="alert(2)">';
+
 const mounts = buildMountViews([
   doc("memory", {
     kind: "file_index",
@@ -44,7 +46,10 @@ const mounts = buildMountViews([
     directories: ["memory"],
     files: {
       "memory/SKILL.md": { content: "# Memory skill", encoding: "utf-8", size: 14 },
-      "memory/run.py": { content: "x = 1\n```\ny = 2", encoding: "utf-8", size: 15 }
+      "memory/run.py": { content: "x = 1\n```\ny = 2", encoding: "utf-8", size: 15 },
+      // A file's contents are whatever a script wrote, so they are untrusted markup.
+      "memory/evil.md": { content: HOSTILE, encoding: "utf-8", size: HOSTILE.length },
+      "memory/evil.py": { content: HOSTILE, encoding: "utf-8", size: HOSTILE.length }
     }
   })
 ]);
@@ -120,9 +125,23 @@ describe("FilesPanel", () => {
     const dialog = viewer(html({ selected: { mountKey: "wf-1:skills", path: "memory/run.py" } }));
     assert.equal(dialog.match(/<pre class="md-code-block"/g)?.length, 1);
     assert.match(dialog, /data-language="Python"/);
-    // Highlighting wraps tokens in spans; the text itself is all there, after the fence.
-    assert.match(dialog.replace(/<[^>]+>/g, ""), /x = 1\n```\ny = 2/);
+    // Highlighting wraps operators and numbers in spans; the fence stays inside the one block.
+    assert.match(
+      dialog,
+      /x <span class="md-syntax-operator">=<\/span> <span class="md-syntax-number">1<\/span>\n```\ny /
+    );
   });
+
+  for (const path of ["memory/evil.md", "memory/evil.py"]) {
+    it(`escapes markup in a file's contents (${path})`, () => {
+      const dialog = viewer(html({ selected: { mountKey: "wf-1:skills", path } }));
+      assert.doesNotMatch(dialog, /<script/i);
+      assert.doesNotMatch(dialog, /<img/i);
+      // Shown as text. A code view highlights each `<` on its own, so check the pieces.
+      assert.match(dialog, /&lt;(<\/span>)?script/);
+      assert.match(dialog, /&quot;alert\(2\)&quot;/);
+    });
+  }
 
   it("says an indexed file is the file as it is now", () => {
     const dialog = viewer(html({ selected: { mountKey: "wf-1:memory", path: "MEMORY.md" } }));
