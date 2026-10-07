@@ -108,6 +108,15 @@ nexus-mcp = [
     "temporalio[opentelemetry]>=1.31.0",
 ]
 
+# The Claude Agent SDK integration: temporal_agent_harness.ai_sdks.claude_agent_sdk_harness.
+# EXPLORATORY: built on temporalio/ai-integrations#33 (temporalio.claude_agent_sdk), which is not
+# merged or released yet, so [tool.uv.sources] pins its head commit. Once it ships to PyPI, drop
+# the source pin and depend on `temporalio-claude-agent-sdk>=...`. Needs temporalio>=1.33.
+claude-agent-sdk = [
+    "temporalio-claude-agent-sdk",
+    "temporalio>=1.33.0",
+]
+
 [dependency-groups]
 # Everything needed to RUN the bundled Monty example from a checkout. Not part of the
 # published package's runtime deps — examples are not shipped.
@@ -166,6 +175,7 @@ include = ["temporal_agent_harness*"]
 
 [tool.uv.sources]
 temporal-nexus-mcp = { path = "nexus/mcp", editable = true }
+temporalio-claude-agent-sdk = { git = "https://github.com/osamastro7-droid/ai-integrations", subdirectory = "python/claude_agent_sdk", rev = "b1cf3848b15ad5cd1f009bd19524e3f751140439" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

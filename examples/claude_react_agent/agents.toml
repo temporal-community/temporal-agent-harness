@@ -1,0 +1,13 @@
+# Registry entry for the ReAct example running on the Claude Agent SDK.
+
+[[agents]]
+key = "claude-react-agent"
+workflow_type = "ClaudeReactAgent"
+agent = "examples.claude_react_agent.workflow:ClaudeReactAgentWorkflow"
+task_queue = "claude-react-agent"
+label = "ReAct Agent (Claude)"
+description = """
+The ReAct weather/location agent from the OpenAI example, driven by the Claude Agent SDK instead.
+Same harness tools (coordinates, IP, location, weather) and the ask_user callback tool; each model
+step and each tool call is its own Temporal Activity. No live token streaming yet: the reply
+arrives whole."""

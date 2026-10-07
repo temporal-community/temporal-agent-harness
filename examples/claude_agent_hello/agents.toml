@@ -1,0 +1,12 @@
+# Registry entry for the Claude Agent SDK hello-world example (see worker.py / workflow.py).
+
+[[agents]]
+key = "claude-hello"
+workflow_type = "ClaudeHelloAgent"
+agent = "examples.claude_agent_hello.workflow:ClaudeHelloAgentWorkflow"
+task_queue = "claude-hello"
+label = "Claude Hello"
+description = """
+A hello-world Claude Agent SDK agent. Ask about a city's weather (harness tool) or ask it to run
+a shell command: Bash runs as its own Activity, but only after a human approves it in the UI —
+the same approval gate and tool_start/tool_end events every other harness agent uses."""
