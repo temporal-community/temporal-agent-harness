@@ -405,9 +405,19 @@ pre[data-language]::before {
   transition-delay: 0s;
 }
 
-/* A tip that is being pressed is in the way of its own result. */
+/* Focus code moved here — handed back after a menu or a picker closes — is not a request for
+   the hint (see tipFocus.ts). Hover still shows it. */
+[data-tip][data-tip-quiet]:not(:hover)::before,
+[data-tip][data-tip-quiet]:not(:hover)::after {
+  opacity: 0;
+}
+
+/* A tip that is being pressed is in the way of its own result, and so is the tip of a
+   control whose menu or drawer is open under the pointer. */
 [data-tip]:active::before,
-[data-tip]:active::after {
+[data-tip]:active::after,
+[data-tip][aria-expanded="true"]::before,
+[data-tip][aria-expanded="true"]::after {
   opacity: 0;
   transition-delay: 0s;
 }

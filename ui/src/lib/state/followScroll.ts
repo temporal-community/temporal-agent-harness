@@ -96,3 +96,26 @@ export function scrollFollower(scroller: () => HTMLElement | null): ScrollFollow
     }
   };
 }
+
+/**
+ * Record where every scrolled box under `root` is, and return a function that puts them back.
+ *
+ * A keyed `{#each}` moves a reordered item by re-inserting its nodes, and a browser resets the
+ * scroll offset of every box inside a node it re-inserts. A column moved across the rail kept
+ * its panes mounted and still came back with chat parked on Turn 1. Boxes that left the
+ * document are skipped: a pane that was rebuilt restores itself on mount.
+ *
+ * Reads `scrollTop` on every element under `root`: a layout-sized cost paid once per move.
+ */
+export function keepScrollPositions(root: ParentNode): () => void {
+  const saved = [...root.querySelectorAll("*")]
+    .filter((box) => box.scrollTop !== 0 || box.scrollLeft !== 0)
+    .map((box) => ({ box, top: box.scrollTop, left: box.scrollLeft }));
+  return () => {
+    for (const { box, top, left } of saved) {
+      if (!box.isConnected) continue;
+      box.scrollTop = top;
+      box.scrollLeft = left;
+    }
+  };
+}

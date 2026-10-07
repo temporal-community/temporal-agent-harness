@@ -172,7 +172,7 @@ class _BaseProbe:
 
 @agent.defn
 class ApprovalProbeAgent(_BaseProbe):
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -189,10 +189,6 @@ class ApprovalProbeAgent(_BaseProbe):
     @workflow.query
     def last_reply(self) -> str | None:
         return self._last_reply
-
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
 
 
 # Auto mode only reaches an evaluator for a call a criteria set GOVERNS — a custom evaluator
@@ -217,7 +213,7 @@ class EvaluatorProbeAgent(_BaseProbe):
     """Gates everything by default, but wires a custom fallback that auto-approves
     ``gated_activity_tool`` — the FINAL approval layer."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -232,17 +228,13 @@ class EvaluatorProbeAgent(_BaseProbe):
     def last_reply(self) -> str | None:
         return self._last_reply
 
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
-
 
 @agent.defn
 class VerdictEvaluatorProbeAgent(_BaseProbe):
     """Gates everything by default, with an ASYNC three-valued fallback wired — the shape
     a Jev auto-approver takes."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -257,10 +249,6 @@ class VerdictEvaluatorProbeAgent(_BaseProbe):
     def last_reply(self) -> str | None:
         return self._last_reply
 
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
-
 
 @agent.defn
 class SlowEvaluatorProbeAgent(_BaseProbe):
@@ -270,7 +258,7 @@ class SlowEvaluatorProbeAgent(_BaseProbe):
     thinking while the gate is already open — but under the test's control, so the "a human
     decided first" ordering is asserted rather than raced for."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._released = False
         self._evaluator_cancelled = False
@@ -306,16 +294,12 @@ class SlowEvaluatorProbeAgent(_BaseProbe):
     def last_reply(self) -> str | None:
         return self._last_reply
 
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
-
 
 @agent.defn
 class NonsenseEvaluatorProbeAgent(_BaseProbe):
     """An evaluator that returns the wrong type — a developer bug, not an exception."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -330,16 +314,12 @@ class NonsenseEvaluatorProbeAgent(_BaseProbe):
     def last_reply(self) -> str | None:
         return self._last_reply
 
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
-
 
 @agent.defn
 class BrokenEvaluatorProbeAgent(_BaseProbe):
     """Gates everything, with a fallback that raises — the guardrail must fail SAFE."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -353,10 +333,6 @@ class BrokenEvaluatorProbeAgent(_BaseProbe):
     @workflow.query
     def last_reply(self) -> str | None:
         return self._last_reply
-
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
 
 
 # ---------------------------------------------------------------------------

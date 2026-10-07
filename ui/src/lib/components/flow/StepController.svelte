@@ -326,9 +326,11 @@
       disabled={!hasDetail}
       aria-expanded={detailOpen}
       aria-controls="now-card"
-      data-tip={hasDetail
-        ? `${eventTitle} — click for details (stays open while scrubbing)`
-        : eventTitle}
+      data-tip={detailOpen && hasDetail
+        ? undefined
+        : hasDetail
+          ? `${eventTitle} — click for details (stays open while scrubbing)`
+          : eventTitle}
       data-tip-align="end"
       onclick={() => (detailOpen = !detailOpen)}
     >

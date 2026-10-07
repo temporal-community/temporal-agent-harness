@@ -45,7 +45,7 @@ chooses among cells the code offers, so an illegal move is impossible by constru
 - `workflow.py` — `TicTacToeAgent`: the `new_game` / `play` handlers, the question design, and
   the two `run_tool` dispatches (judge, then act).
 - `models.py` — the accepted messages and the activity's request/result shapes.
-- `ui/` — a Svelte board for playing it, one component on `@temporal-agent-harness/svelte` (see below).
+- `ui/` — a Svelte board for playing it, one component on `@temporalio/agent-harness-svelte` (see below).
 - `client_sdk/TicTacToeAgent.ts` — the agent's TypeScript types, generated from its Python
   models by `just codegen-client-sdk`.
 

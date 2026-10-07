@@ -9,7 +9,8 @@ This module derives that source by reflecting over each tool's model-facing sign
 recursively, the fields of any pydantic model it references (rendered as ``TypedDict``s so the
 checker can validate key access on results). Two renderings are produced from the same walk:
 
-  * :func:`render_type_check_stubs` — the stub source fed to the sandbox's type checker.
+  * :func:`render_type_check_stubs` — the stub source fed to the sandbox's type checker, with
+    the names of the ``TypedDict``\\ s it defines.
   * :func:`render_host_interface` — the same signatures + ``TypedDict``s, but with each tool's
     docstring attached, for embedding in the run-code tool's own docstring (what the model reads).
 
@@ -18,7 +19,8 @@ that cannot be rendered faithfully raises :class:`CodeModeStubError` (naming the
 offending parameter/field) rather than degrading to ``Any``. Result shapes reflect what a script
 actually observes — a tool's return value rendered with ``model_dump(mode="json")`` — so
 ``datetime`` / ``UUID`` / ``Decimal`` / ``bytes`` become ``str``, enums become a ``Literal`` of
-their values, sets/tuples become lists, and a model field with a default becomes
+their values, sets/tuples become lists, pydantic's ``JsonValue`` (arbitrary JSON, which has no
+stub form) becomes ``Any``, and a model field with a default becomes
 ``NotRequired`` (it is optional at the boundary, so a stub calling it required would reject
 calls the tool accepts).
 
@@ -41,7 +43,9 @@ from pathlib import Path
 from typing import Any, Literal, Union, get_args, get_origin
 from uuid import UUID
 
-from pydantic import BaseModel
+from dataclasses import dataclass, field
+
+from pydantic import BaseModel, JsonValue
 
 _NoneType = type(None)
 
@@ -54,11 +58,24 @@ _JSON_STRING_TYPES: frozenset[type] = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class TypeCheckStubs:
+    """What the sandbox needs to know about a Code Mode tool's host functions, rendered from its
+    tools by :func:`render_type_check_stubs`.
+
+    ``source`` is the stub source a script is type-checked against. ``type_names`` are the
+    ``TypedDict``\\ s it defines, which the sandbox does not; the stepper answers a script's call
+    to one with a dict instead of surfacing it as a host call."""
+
+    source: str
+    type_names: list[str] = field(default_factory=list)
+
+
 class CodeModeStubError(Exception):
     """Raised when a tool's signature cannot be rendered into faithful type-check stubs.
 
     Carries the tool and the parameter/field path so the developer can fix the tool's types.
-    Raised at ``code_mode_tool`` construction time (i.e. at ``@workflow.init``), so an
+    Raised at ``code_mode_tool`` construction time (i.e. at ``@agent.init``), so an
     unrepresentable tool set fails fast rather than silently under-validating scripts."""
 
 
@@ -134,6 +151,10 @@ class _StubBuilder:
             sections.append("\n\n".join(func_blocks))
         return "\n\n\n".join(sections) + "\n"
 
+    def type_names(self) -> list[str]:
+        """The names of the ``TypedDict``\\ s the last :meth:`build` rendered, in order."""
+        return [self._name_by_model[model] for model in self._model_order]
+
     def _render_tool(
         self, tool: Callable[..., Awaitable[Any]], *, with_doc: bool
     ) -> str:
@@ -161,7 +182,9 @@ class _StubBuilder:
                     f"requires typed parameters for static validation."
                 )
             rendered = self._render_type(annotation, f"{name}({pname})")
-            rendered_params.append(f"{pname}: {rendered}")
+            # A parameter with a default may be left out, so the stub says it has one.
+            default = "" if param.default is inspect.Parameter.empty else " = ..."
+            rendered_params.append(f"{pname}: {rendered}{default}")
 
         if "return" in hints:
             return_annotation = hints["return"]
@@ -182,6 +205,11 @@ class _StubBuilder:
         return f'{signature}:\n    """\n{indented}\n    """'
 
     def _render_type(self, tp: Any, ctx: str) -> str:
+        # Arbitrary JSON. Its recursive alias has no stub form the checker accepts, so the
+        # script sees `Any`; the value is still validated as JSON when the call is dispatched.
+        if tp is JsonValue:
+            self._uses_any = True
+            return "Any"
         tp = _unwrap_annotated(tp)
 
         if isinstance(tp, str):
@@ -321,13 +349,16 @@ class _StubBuilder:
         return f"{candidate}_{counter}"
 
 
-def render_type_check_stubs(tools: list[Callable[..., Awaitable[Any]]]) -> str:
+def render_type_check_stubs(tools: list[Callable[..., Awaitable[Any]]]) -> TypeCheckStubs:
     """Render the Python stub source the sandbox type-checks a Code Mode script against.
 
     One ``async def <tool_name>(...) -> ...: ...`` per tool, preceded by a ``TypedDict`` for every
-    pydantic model referenced by any tool's parameters or result. Raises :class:`CodeModeStubError`
-    if any parameter/field/return type cannot be rendered faithfully (see the module docstring)."""
-    return _StubBuilder().build(tools, with_doc=False)
+    pydantic model referenced by any tool's parameters or result, whose names come back as
+    ``type_names``. Raises :class:`CodeModeStubError` if any parameter/field/return type cannot be
+    rendered faithfully (see the module docstring)."""
+    builder = _StubBuilder()
+    source = builder.build(tools, with_doc=False)
+    return TypeCheckStubs(source=source, type_names=builder.type_names())
 
 
 def render_host_interface(tools: list[Callable[..., Awaitable[Any]]]) -> str:

@@ -14,8 +14,8 @@ concurrently via ``asyncio.gather``.
 Contrast with the conversational Monty agent (``conversational_workflow.py``): that one drives
 the Gemini Interactions API with a model in the loop, over the same Code Mode tool. This one has
 no model — the script is the input. Both reuse the standard harness contract: ``@agent.defn`` +
-an :class:`AgentWorkflowRunner` built in ``@workflow.init``, the turn loop driven by
-``await runner.run(self)``, and a single ``@agent.accepts`` handler (``run_script``) whose return
+an :class:`AgentWorkflowRunner` built in ``@agent.init``, the turn loop driven by the ``run``
+that ``@agent.defn`` generates, and a single ``@agent.accepts`` handler (``run_script``) whose return
 value becomes the turn's reply.
 """
 
@@ -50,7 +50,7 @@ class MontyDynamicAgentWorkflow:
     # `trip_board.py`.
     trip_board = agent.state(trip_board.TripBoard)
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -70,10 +70,6 @@ class MontyDynamicAgentWorkflow:
             # the state the board lives in.
             injections={"board": self.trip_board},
         )
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     # ENQUEUE: a parent drives this one turn at a time through the subagent FIFO gate, but a
     # human can also address this agent directly at the same time — so a second message should

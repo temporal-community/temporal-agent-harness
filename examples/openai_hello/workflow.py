@@ -53,7 +53,7 @@ async def get_weather(city: str) -> str:
 class OpenAIHelloAgentWorkflow:
     """A one-tool conversational agent driven by the OpenAI Agents SDK."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -64,10 +64,6 @@ class OpenAIHelloAgentWorkflow:
         )
         # OpenAI conversation state, threaded across turns as the SDK's input-item list.
         self._conversation: list[TResponseInputItem] = []
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:

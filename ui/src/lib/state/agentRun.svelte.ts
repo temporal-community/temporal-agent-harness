@@ -6,12 +6,21 @@ import type {
   WorkflowExecutionState
 } from "$lib/api/types";
 import type { AgentApi } from "$lib/api/client";
-import type { AgentDescriptor, Session } from "$lib/api/types";
+import type {
+  AgentDescriptor,
+  FileChunk,
+  FileViewRequest,
+  JsonRecord,
+  OKFGraph,
+  OKFGraphRequest,
+  Session
+} from "$lib/api/types";
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
 import { HttpAgentApi } from "$lib/api/httpClient";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
 import { chooseBootSession } from "./bootSession";
+import { defaultBootAgent } from "./initData";
 import {
   readCachedFrames,
   readOperatorPrefs,
@@ -38,9 +47,11 @@ import {
 } from "./hydration";
 import { displayTextForMessage, renderUserMessage } from "./inboundMessageText";
 import { buildAgentStateDocs } from "./agentState";
+import { buildMountViews, isFileStateDoc } from "./fileMounts";
 import { buildApprovalDecisions } from "./approvalDecisionTree";
-import { buildReplayLog, buildReplayMarkers } from "./replayLog";
-import { buildReplayTimeline } from "./replayTimeline";
+import { buildReplayLog, buildReplayMarkers, rowCovers } from "./replayLog";
+import { buildReplayTimeline, type ReplayTimelineEntry } from "./replayTimeline";
+import { buildReplyRuns, replyRunAt } from "./replyRuns";
 import { buildStepBoundaries, buildStepTimeline } from "./stepTimeline";
 import { buildTranscript } from "./transcript";
 
@@ -74,11 +85,16 @@ export interface ObservedSubagent {
  * different messages than its parent — the composer reads `agentInterface` from whichever
  * target is selected rather than assuming the parent's surface applies everywhere.
  */
+/** Whether an agent's handler surface has been asked for yet, arrived, or could not be read. */
+export type InterfaceStatus = "loading" | "loaded" | "failed";
+
 export interface MessageTarget {
   workflowId: string;
   role: "parent" | "subagent";
   label: string;
   agentInterface: AgentInterfaceFunction[];
+  /** An empty surface means "declares none" only when this is `loaded`. */
+  interfaceStatus: InterfaceStatus;
   closed: boolean;
 }
 
@@ -210,6 +226,7 @@ export class AgentRunController {
   frames = $state<AgentSseFrame[]>([]);
   observedSubagents = $state<ObservedSubagent[]>([]);
   agentInterfaces = $state<Record<string, AgentInterfaceFunction[]>>({});
+  failedInterfaceIds = $state<string[]>([]);
   closedWorkflowIds = $state<string[]>([]);
   viewIndex = $state(0);
   playing = $state(false);
@@ -425,16 +442,39 @@ export class AgentRunController {
       ? this.fullReplayLog
       : buildReplayLog(this.visibleReplayTimeline)
   );
-  chatTranscript = $derived(
-    buildTranscript(
-      this.replayTimeline
-        .filter((entry) => entry.role === "parent")
-        .map((entry) => entry.frame)
-    )
-  );
+  chatTranscript = $derived(buildTranscript(this.#parentFrames(this.replayTimeline)));
+  /**
+   * What the chat pane is handed: the conversation as of the cursor, plus the
+   * whole run for the parts of it that are live state rather than history — a
+   * pending approval still blocks the agent however far back the reader has
+   * scrubbed. At the live head both halves are the very same arrays, so the
+   * chat there is exactly what it was before it could rewind.
+   */
+  chatView = $derived.by(() => {
+    const live = this.viewIndex >= this.replayTimeline.length;
+    return {
+      items: live
+        ? this.chatTranscript
+        : buildTranscript(this.#parentFrames(this.visibleReplayTimeline)),
+      logs: this.replayLog.rows,
+      liveItems: this.chatTranscript,
+      liveLogs: this.fullReplayLog.rows,
+      live,
+      viewIndex: this.viewIndex,
+      total: this.total
+    };
+  });
   currentLogRow = $derived(
-    this.fullReplayLog.rows.find((row) => row.index === this.viewIndex) ?? null
+    this.fullReplayLog.rows.find((row) => rowCovers(row, this.viewIndex)) ?? null
   );
+  /**
+   * The streamed replies in this run, each folded to the one event it reads as.
+   *
+   * Over every frame rather than the visible slice: this is what the step keys
+   * navigate by, and where the next stop is cannot depend on where the cursor
+   * currently is.
+   */
+  replyRuns = $derived(buildReplyRuns(this.replayTimeline));
   /**
    * Observable agent state as of the playhead — every state the agents in this
    * run registered, folded out of their snapshot and patch events.
@@ -445,8 +485,36 @@ export class AgentRunController {
    * keeps two agents' `plan` from folding into one document.
    */
   agentStates = $derived(buildAgentStateDocs(this.visibleReplayTimeline));
+  /** The states agents declared for their own use: every state but the ones tracking mounts. */
+  declaredStates = $derived(this.agentStates.filter((doc) => !isFileStateDoc(doc)));
+  /** Code Mode mounts the agents track, as trees as of the playhead. */
+  fileMounts = $derived(buildMountViews(this.agentStates));
   /** Completed automatic approval judgments, as of the replay cursor. */
   approvalDecisions = $derived(buildApprovalDecisions(this.visibleReplayTimeline));
+  /**
+   * How many completed judgments the whole run holds, cursor or no cursor.
+   *
+   * Counted off the frames rather than projected a second time, so it only
+   * re-reads when frames arrive — moving the cursor must not cost a pass over
+   * the run. buildApprovalDecisions emits exactly one decision per
+   * `auto_approval_evaluation_ended` entry, which is what makes the count equal.
+   */
+  completedApprovalDecisionCount = $derived(
+    this.replayTimeline.reduce(
+      (count, entry) =>
+        entry.frame.event === "auto_approval_evaluation_ended" ? count + 1 : count,
+      0
+    )
+  );
+  /**
+   * Judgments this run has made that the cursor has not reached.
+   *
+   * The pane is cursor-scoped, so "empty" there can mean either "nothing was judged" or "you are parked behind it". Only
+   * this tells them apart.
+   */
+  approvalDecisionsAhead = $derived(
+    this.completedApprovalDecisionCount - this.approvalDecisions.length
+  );
   usage = $derived(summarizeCost(this.visibleReplayFrames));
   usageTimeline = $derived(buildUsageTimeline(this.allReplayFrames));
   stepTimeline = $derived(buildStepTimeline(this.replayTimeline));
@@ -497,7 +565,7 @@ export class AgentRunController {
     );
     return {
       sessionId: session?.workflow_id ?? "unknown-session",
-      agentLabel: agent?.label ?? "Agent",
+      agentLabel: agent?.label || "Agent",
       startedAt: session?.created_at ?? 0
     };
   }
@@ -707,6 +775,7 @@ export class AgentRunController {
         role: "parent",
         label: this.runInfo.agentLabel,
         agentInterface: this.agentInterfaces[session.workflow_id] ?? [],
+        interfaceStatus: this.#interfaceStatus(session.workflow_id),
         closed: this.#isWorkflowClosed(session.workflow_id)
       },
       ...this.observedSubagents.map((agent) => ({
@@ -715,9 +784,20 @@ export class AgentRunController {
         label: agent.label,
         agentInterface:
           this.agentInterfaces[agent.workflowId] ?? agent.agentInterface ?? [],
+        interfaceStatus: this.#interfaceStatus(agent.workflowId, agent.agentInterface),
         closed: agent.stopped || this.#isWorkflowClosed(agent.workflowId)
       }))
     ];
+  }
+
+  #interfaceStatus(workflowId: string, observed?: AgentInterfaceFunction[]): InterfaceStatus {
+    if (this.agentInterfaces[workflowId] || observed) return "loaded";
+    return this.failedInterfaceIds.includes(workflowId) ? "failed" : "loading";
+  }
+
+  /** Ask an agent for its handler surface again, after a lookup that failed. */
+  retryAgentInterface(workflowId: string): Promise<void> {
+    return this.#fetchAgentInterface(workflowId);
   }
 
   #subagentLabel(agentKey: string, subagentId: string): string {
@@ -763,6 +843,7 @@ export class AgentRunController {
       return;
     }
     this.#interfaceRequests.add(workflowId);
+    this.failedInterfaceIds = this.failedInterfaceIds.filter((id) => id !== workflowId);
     try {
       const agentInterface = await this.#api.agentInterface(workflowId);
       this.agentInterfaces = {
@@ -775,7 +856,9 @@ export class AgentRunController {
         );
       }
     } catch {
-      // Agent-interface discovery is auxiliary UI metadata; streaming remains authoritative.
+      /* Streaming does not depend on this, but the composer does: an empty surface would
+         otherwise read as an agent that accepts nothing. A query needs a live worker. */
+      this.failedInterfaceIds = [...this.failedInterfaceIds, workflowId];
     } finally {
       this.#interfaceRequests.delete(workflowId);
     }
@@ -790,15 +873,16 @@ export class AgentRunController {
 
     try {
       const agents = await this.#loadAgents();
-      const defaultAgent = agents.find((agent) => agent.key === "qa") ?? agents[0];
-      if (!defaultAgent) throw new Error("No agent is registered.");
+      if (agents.length === 0) throw new Error("No agent is registered.");
+      /* Boot has nobody to ask for init data, so it never picks an agent that requires it. */
+      const defaultAgent = defaultBootAgent(agents);
 
       await this.#loadSessions();
       const wantedSessionId = readUrlSessionId() ?? readStoredActiveSessionId();
       let openable = chooseBootSession(
         this.sessions,
         wantedSessionId,
-        defaultAgent.workflow_type
+        defaultAgent?.workflow_type ?? agents[0]!.workflow_type
       );
 
       if (!openable && wantedSessionId) {
@@ -808,6 +892,11 @@ export class AgentRunController {
       if (openable) {
         this.session = openable;
       } else {
+        if (!defaultAgent) {
+          throw new Error(
+            "Every registered agent needs init data to start. Start one from New session."
+          );
+        }
         this.session = await this.#api.createSession({
           agent_workflow_type: defaultAgent.workflow_type
         });
@@ -903,8 +992,14 @@ export class AgentRunController {
     }
     try {
       await this.#loadSessions();
-    } catch {
-      // Quiet: the next open or the refresh button can surface a failure.
+      this.sessionsError = null;
+    } catch (error) {
+      // Quiet while an earlier list is still on screen. With none, an empty list would read
+      // as "no sessions", so the failure is the thing to show.
+      if (this.#sessionsLoadedAt === 0) {
+        this.sessionsError =
+          error instanceof Error ? error.message : "Failed to load sessions.";
+      }
     }
   }
 
@@ -958,7 +1053,8 @@ export class AgentRunController {
     });
   }
 
-  async startNewSession(workflowType?: string): Promise<void> {
+  /** `data` is the agent's init data, when it takes some; the server checks it. */
+  async startNewSession(workflowType?: string, data?: JsonRecord): Promise<void> {
     const connectionVersion = this.#beginConnection();
     this.#sendVersion += 1;
     this.#stopStream();
@@ -982,9 +1078,11 @@ export class AgentRunController {
 
       if (!agent) throw new Error("No agent is registered.");
 
-      const session = await this.#api.createSession({
-        agent_workflow_type: agent.workflow_type
-      });
+      const session = await this.#api.createSession(
+        data === undefined
+          ? { agent_workflow_type: agent.workflow_type }
+          : { agent_workflow_type: agent.workflow_type, data }
+      );
 
       this.sessions = [...this.sessions.filter((item) => item.workflow_id !== session.workflow_id), session];
       if (!this.#isCurrentConnection(connectionVersion)) return;
@@ -1509,6 +1607,17 @@ export class AgentRunController {
     }
   }
 
+  /** One page of a file in an activity-backed mount, read from its store as it is now. */
+  viewFile(request: FileViewRequest): Promise<FileChunk> {
+    return this.#api.viewFile(request);
+  }
+
+  /** An OKF bundle mount's whole graph, walked from its store as it is now. */
+  okfGraph(request: OKFGraphRequest): Promise<OKFGraph> {
+    return this.#api.okfGraph(request);
+  }
+
+  /** Errors surface on the approval's own card, not the connection banner. */
   async approveTool(
     workflowId: string,
     toolId: string,
@@ -1521,20 +1630,27 @@ export class AgentRunController {
       throw new Error("Cannot resolve approval for an unknown agent workflow.");
     }
 
-    this.connectionError = null;
-    try {
-      await this.#api.approve({
-        session_id: workflowId,
-        tool_id: toolId,
-        approved,
-        reason: approved ? null : "Rejected in chat.",
-        remember: approved && remember
-      });
-    } catch (error) {
-      this.connectionError =
-        error instanceof Error ? error.message : "Failed to resolve tool approval.";
-      throw error;
+    await this.#api.approve({
+      session_id: workflowId,
+      tool_id: toolId,
+      approved,
+      reason: approved ? null : "Rejected in chat.",
+      remember: approved && remember
+    });
+  }
+
+  /** Errors surface on the callback's own card, not the connection banner: a malformed result
+   *  leaves the call pending and is corrected in place. */
+  async provideCallbackResult(
+    workflowId: string,
+    toolId: string,
+    outcome: { result: unknown } | { error: string }
+  ): Promise<void> {
+    if (!this.session) throw new Error("No active session.");
+    if (!this.#isKnownWorkflowId(workflowId)) {
+      throw new Error("Cannot answer a callback for an unknown agent workflow.");
     }
+    await this.#api.provideCallbackResult({ session_id: workflowId, tool_id: toolId, ...outcome });
   }
 
   async #loadAgents(): Promise<AgentDescriptor[]> {
@@ -1602,6 +1718,11 @@ export class AgentRunController {
     } finally {
       this.refreshingAgents = false;
     }
+  }
+
+  /** The root agent's frames — the conversation the chat pane reads. */
+  #parentFrames(timeline: readonly ReplayTimelineEntry[]): AgentSseFrame[] {
+    return timeline.filter((entry) => entry.role === "parent").map((entry) => entry.frame);
   }
 
   #recordInitialUserMessage(message: string): void {
@@ -2023,13 +2144,34 @@ export class AgentRunController {
     if (this.following) this.pause();
   }
 
+  /**
+   * A streamed reply is one event, so the step keys cross it in one press.
+   *
+   * A run of `reply_delta` frames has a single stop, at its last frame — the
+   * state after the whole reply, which is also where the collapsed log row is
+   * addressed. Landing anywhere earlier inside it would show a sentence half
+   * arrived and call it a step of the run. A lone chunk is its own stop and
+   * these leave it exactly where it is.
+   *
+   * Scrubbing the lane still reaches every frame: it is free-form by design, and
+   * rowCovers() keeps a cursor inside a run reading as that run's event.
+   */
+  #stopAtOrAfter(index: number): number {
+    return replyRunAt(this.replyRuns, index)?.endIndex ?? index;
+  }
+
+  #stopAtOrBefore(index: number): number {
+    const run = replyRunAt(this.replyRuns, index);
+    return run && index < run.endIndex ? run.startIndex - 1 : index;
+  }
+
   stepBack(): void {
     this.pause();
-    this.goTo(this.viewIndex - 1);
+    this.goTo(this.#stopAtOrBefore(this.viewIndex - 1));
   }
 
   stepForward(): void {
-    this.goTo(this.viewIndex + 1);
+    this.goTo(this.#stopAtOrAfter(this.viewIndex + 1));
   }
 
   previousTurn(): void {
@@ -2105,7 +2247,11 @@ export class AgentRunController {
         this.following = true;
         return;
       }
-      this.stepForward();
+      /* Frame by frame, NOT by stepForward's collapsed stops: playback is the one
+         place a reply should arrive the way it arrived live, a chunk at a time.
+         Collapsing is for a reader working the keys, who wants the next thing that
+         happened — not for a recording, where the typing is the point. */
+      this.goTo(this.viewIndex + 1);
     }, basePlaybackDelayMs / this.playbackSpeed);
   }
 

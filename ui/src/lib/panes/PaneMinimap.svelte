@@ -16,10 +16,11 @@
    * the transport where in the run you are looking from.
    */
   import type { Snippet } from "svelte";
-  import { Plus } from "@lucide/svelte";
+  import { Check, Plus } from "@lucide/svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import type { PaneDescription } from "$lib/panes/PaneRail.svelte";
-  import { PANE_KINDS, PANE_META, type PaneKind } from "$lib/panes/registry";
+  import { handleLauncherKey, launcherItems, toggleView } from "$lib/panes/launcher";
+  import { PANE_META } from "$lib/panes/registry";
   import { dismissable } from "$lib/state/dismissable.svelte";
   import {
     activeIn,
@@ -31,6 +32,8 @@
 
   interface Props {
     stack: PaneStack;
+    /** The bottom drawer. A view open there counts as open, and closes from here too. */
+    drawer?: PaneStack;
     describe: (pane: Pane) => PaneDescription;
     /** Whatever anchors the row ahead of the map — in the app, the session menu. */
     lead?: Snippet;
@@ -38,7 +41,7 @@
     trail?: Snippet;
   }
 
-  let { stack, describe, lead, trail }: Props = $props();
+  let { stack, drawer, describe, lead, trail }: Props = $props();
 
   /**
    * The only hues that reach a tick.
@@ -57,9 +60,13 @@
   /** Where to draw the "you are here" box, in px within the tick run. */
   let marker = $state<{ x: number; width: number } | null>(null);
 
-  const closable = $derived(PANE_KINDS.filter((kind) => !stack.has(kind)));
+  const stacks = $derived(drawer ? [stack, drawer] : [stack]);
+  const views = $derived(launcherItems(stacks));
 
   let launcherOpen = $state(false);
+  /* Roving focus: the one row in the tab order, and the one arrows move from. */
+  let activeView = $state(0);
+
   /* The marker is one box that slides between cells rather than an outline that
      blinks on and off, so it has to be measured: cells share a budget, so their
      width is whatever is left after the row is laid out, not a constant. */
@@ -101,23 +108,44 @@
       .join(" · ");
   }
 
-  /* `aria-disabled` rather than `disabled`, so the one state where the button
-     does nothing is also the one state where its tip explains why — a disabled
-     button takes no pointer events, so the hint never appears. The guard is
-     what `disabled` was doing for free. */
-  function toggleLauncher(): void {
-    if (closable.length === 0) return;
+  /* The `+` takes focus before the menu mounts, so it is what the shared
+     attachment hands focus back to — Safari does not focus a clicked button,
+     and would otherwise leave the keyboard on the body. */
+  function toggleLauncher(event: MouseEvent): void {
+    if (!launcherOpen) {
+      (event.currentTarget as HTMLElement).focus({ preventScroll: true });
+      activeView = 0;
+    }
     launcherOpen = !launcherOpen;
   }
 
-  function openKind(kind: PaneKind): void {
-    launcherOpen = false;
-    stack.openPane({ kind }, stack.focusedId);
+  function onMenuKeydown(event: KeyboardEvent & { currentTarget: HTMLElement }): void {
+    const items = event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]');
+    handleLauncherKey(event, activeView, items.length, {
+      move: (index) => {
+        activeView = index;
+        items[index]?.focus({ preventScroll: true });
+      },
+      toggle: toggleAt
+    });
+  }
+
+  /* The menu stays open: adding four panes is four presses, not four round trips
+     through the `+`. */
+  function toggleAt(index: number): void {
+    activeView = index;
+    const view = views[index];
+    if (view) toggleView(view.kind, stack, stacks);
+  }
+
+  /* After `dismissable`, which has to see the `+` as the opener. */
+  function focusOnOpen(node: HTMLElement): void {
+    node.querySelector<HTMLElement>('[tabindex="0"]')?.focus({ preventScroll: true });
   }
 
   /* Escape and press-outside are the shared attachment's, on the popover itself; `keep` is
      the wrapper so the `+` that opened it can shut it again on one press rather than
-     racing its own toggle. */
+   racing its own toggle. */
 </script>
 
 <nav class="minimap" aria-label="Session and open panes">
@@ -206,9 +234,9 @@
         <IconButton
           class="rail-icon"
           label="Open a view"
-          tip={closable.length === 0 ? "Every view is already open" : "Open a view"}
+          tip="Open or close views"
+          aria-haspopup="menu"
           aria-expanded={launcherOpen}
-          aria-disabled={closable.length === 0 ? "true" : undefined}
           data-tip-below
           data-tip-align="end"
           onclick={toggleLauncher}
@@ -217,15 +245,36 @@
         </IconButton>
 
         {#if launcherOpen}
+          <!-- aria-disabled on a locked row rather than `disabled`, so it stays
+               focusable in the arrow walk and its tip can say why. -->
           <div
             class="launch-menu"
             role="menu"
             aria-label="Open a view"
+            tabindex="-1"
+            onkeydown={onMenuKeydown}
             {@attach dismissable({ ondismiss: () => (launcherOpen = false), keep: ".launcher" })}
+            {@attach focusOnOpen}
           >
-            {#each closable as kind (kind)}
-              <button type="button" role="menuitem" onclick={() => openKind(kind)}>
-                <span class="kicker">{PANE_META[kind].kindLabel}</span>
+            {#each views as view, index (view.kind)}
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={view.open}
+                aria-disabled={view.locked ? "true" : undefined}
+                aria-label={view.locked
+                  ? `${PANE_META[view.kind].kindLabel}, ${view.locked}`
+                  : undefined}
+                data-tip={view.locked ?? undefined}
+                data-tip-align={view.locked ? "end" : undefined}
+                tabindex={index === activeView ? 0 : -1}
+                onfocus={() => (activeView = index)}
+                onclick={() => toggleAt(index)}
+              >
+                <span class="check" aria-hidden="true">
+                  {#if view.open}<Check size={12} />{/if}
+                </span>
+                <span class="kicker" title={PANE_META[view.kind].kindLabel}>{PANE_META[view.kind].kindLabel}</span>
               </button>
             {/each}
           </div>
@@ -254,10 +303,14 @@
     background: var(--surface-head);
   }
 
+  /* The lead holds more than one object now — the drawer's switch and the session
+     anchor beside it — so the air between them belongs here rather than inside
+     whichever of them happens to be first. */
   .minimap-lead {
     min-width: 0;
     display: flex;
     align-items: center;
+    gap: var(--gap-xs);
     justify-self: start;
   }
 
@@ -483,7 +536,12 @@
 
   /* Grows out of the button it came from rather than fading in from nowhere.
      Chrome popovers sit in the 40s so they clear every pane-level overlay,
-     which tops out at 30. */
+     which tops out at 30.
+   *
+   * Sized to its longest label rather than to the 28px launcher it hangs from,
+     which is what shrink-to-fit would otherwise measure against. Anchored by
+     its right edge, so it grows leftward; the cap keeps the left edge a gutter
+     inside the window, allowing for the shortcuts button to the launcher's right. */
   .launch-menu {
     position: absolute;
     top: calc(100% + var(--gap-xs));
@@ -491,7 +549,9 @@
     z-index: 44;
     display: flex;
     flex-direction: column;
+    width: max-content;
     min-width: 150px;
+    max-width: calc(100vw - 2 * var(--gutter) - var(--control-height));
     padding: var(--gap-xs);
     border: 1px solid var(--border-strong);
     background: var(--surface-3);
@@ -513,14 +573,50 @@
   .launch-menu button {
     display: flex;
     align-items: center;
+    gap: var(--gap-sm);
+    min-width: 0;
     height: var(--control-height);
-    padding: 0 var(--gap-md);
+    padding: 0 var(--gap-md) 0 var(--gap-sm);
     border: 0;
     background: transparent;
     color: var(--text-2);
     cursor: pointer;
     font: inherit;
     text-align: left;
+  }
+
+  /* One line per row, always: a wrapped label made its row taller than the rest.
+     Ellipsis only once the viewport cap bites; the `title` carries the rest. */
+  .launch-menu .kicker {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* A fixed column whether or not it holds a tick, so the labels line up and a
+     row does not shift sideways when it is switched. */
+  .check {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--gap-lg);
+    height: var(--gap-lg);
+    color: var(--accent);
+  }
+
+  .launch-menu button[aria-checked="true"] .kicker {
+    color: var(--text-1);
+  }
+
+  .launch-menu button[aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  .launch-menu button[aria-disabled="true"] .check,
+  .launch-menu button[aria-disabled="true"] .kicker {
+    color: var(--text-4);
   }
 
   .launch-menu button:focus-visible {
@@ -533,8 +629,13 @@
       background: var(--text-1);
     }
 
-    .launch-menu button:hover {
+    .launch-menu button:not([aria-disabled="true"]):hover {
       background: var(--control-hover);
+    }
+
+    /* On the label, not the button: the global `.kicker` colour would win over an
+       inherited one, so an unchecked row never lit up on hover. */
+    .launch-menu button:not([aria-disabled="true"]):hover .kicker {
       color: var(--text-1);
     }
   }

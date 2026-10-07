@@ -1,9 +1,13 @@
 {
-  "name": "@temporal-agent-harness/svelte",
+  "name": "@temporalio/agent-harness-svelte",
   "version": "0.1.0",
-  "private": true,
+  "license": "MIT",
   "type": "module",
-  "description": "Svelte 5 binding for @temporal-agent-harness/client: a reactive AgentSession over a temporal-agent-harness agent's event stream.",
+  "description": "Svelte 5 binding for @temporalio/agent-harness-client: a reactive AgentSession over a temporal-agent-harness agent's event stream.",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -23,7 +27,7 @@
     "svelte": "^5.7.0"
   },
   "dependencies": {
-    "@temporal-agent-harness/client": "file:../client"
+    "@temporalio/agent-harness-client": "^0.1.0"
   },
   "devDependencies": {
     "@sveltejs/package": "^2.5.8",
@@ -35,5 +39,10 @@
     "typescript": "^6.0.3",
     "vite": "^8.3.0",
     "vitest": "^5.0.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/temporal-community/temporal-agent-harness.git",
+    "directory": "packages/svelte"
   }
 }

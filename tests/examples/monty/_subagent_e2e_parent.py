@@ -75,7 +75,7 @@ class DriveExistingSubagent(BaseModel):
 
 @agent.defn(name="SubagentE2EParent")
 class SubagentE2EParentWorkflow:
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -84,10 +84,6 @@ class SubagentE2EParentWorkflow:
             # tool approval never enters the picture; any policy works.
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def drive(self, msg: DriveSubagent) -> TextReply:
@@ -132,17 +128,13 @@ class ApprovalGatedSubagentParentWorkflow:
     ticket and gated calls unblock in approval order, not call order — the path a plain
     ``gather`` of ``run_subagent_turn`` (no gate-before-ticket await) does not exercise."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.always_require_human_approval(),
         )
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def drive(self, msg: DriveSubagent) -> TextReply:

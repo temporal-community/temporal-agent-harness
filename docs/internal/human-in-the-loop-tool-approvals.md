@@ -197,7 +197,7 @@
 >   caller's `AgentConfig` or a handler's `set_approval_policy` can ask for it, not just the
 >   author. `_assert_auto_mode_has_an_evaluator` raises a non-retryable `ApplicationError`
 >   (`type="AutoModeWithoutEvaluator"`) wherever a policy is installed: from
->   `@workflow.init` that fails the workflow cleanly, from a handler it fails that message
+>   `@agent.init` that fails the workflow cleanly, from a handler it fails that message
 >   and leaves the live policy untouched.
 > - **The allow-list outranks the machine.** A call layers 0–2 approved never reaches the
 >   evaluator, so an explicit human "always allow this tool" (`remember=True`) permanently
@@ -301,7 +301,7 @@
 > - **Not reachable by the agent.** Dispatched as a bare `workflow.execute_activity` by name,
 >   never through `run_tool` — so it is not a tool, the model cannot call it or influence what
 >   is asked about its own call, and the gate does not recurse into itself.
-> - **Registered unconditionally by `AgentHarnessPlugin`**, like the Code Mode activities, with
+> - **Registered unconditionally by `AgentHarnessPlugin`**, with
 >   the extra checked per call: an unregistered activity name is a *retryable* Temporal error,
 >   which would hang every gated call mid-approval instead of failing once.
 > - Splits along the workflow boundary: `approver.py`/`models.py` are workflow-safe (plain

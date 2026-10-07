@@ -24,6 +24,9 @@ build yourself:
   user's laptop, capturing a photo on their phone — even though the agent runs on a remote worker;
 - agents are **fully observable** — a standardized, full-lifecycle event stream lets you watch them
   live or replay exactly what they did;
+- **typed React and Svelte SDKs** turn an agent's Python class into one live, type-checked session
+  object, so you build the product UI — a game board, a trip planner, a document the agent edits —
+  instead of a streaming protocol client;
 
 all while you write the actual turn logic with the **AI SDKs you already know**.
 
@@ -50,7 +53,7 @@ worth cloning once to watch the whole stack work.
 Clone at a release tag. No Node/pnpm needed: the browser UI ships prebuilt.
 
 ```bash
-git clone --branch 0.4.0 https://github.com/temporal-community/temporal-agent-harness.git
+git clone --branch 0.6.0 https://github.com/temporal-community/temporal-agent-harness.git
 cd temporal-agent-harness
 cp .env.example .env.local   # then set GEMINI_API_KEY (and/or OPENAI_API_KEY)
 ```
@@ -68,13 +71,13 @@ just worker            # 4. this example's agent worker
 
 Open <http://localhost:8000> and start a session. There's no install step — `uv` fetches
 dependencies on demand. Every example follows the same four recipes; see
-[Run the examples](#run-the-examples) for the rest of them, including running all eight behind
+[Run the examples](#run-the-examples) for the rest of them, including running all ten behind
 one UI.
 
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
 the tag rather than on a branch. Later, move to a newer release with
 `git fetch --tags && git checkout <version>`, or see what changed between two of them with
-`git diff 0.3.0 0.4.0`.
+`git diff 0.5.0 0.6.0`.
 
 ### Build with it — install from PyPI
 
@@ -83,7 +86,7 @@ The harness is published to
 [`uv`](https://docs.astral.sh/uv/)-managed project:
 
 ```bash
-uv add 'temporal-agent-harness[ui]==0.4.0'
+uv add 'temporal-agent-harness[ui]==0.6.0'
 ```
 
 Or declare it in `pyproject.toml` — an ordinary dependency, no `[tool.uv.sources]` needed:
@@ -103,7 +106,7 @@ dependencies = [
     #   s3              S3-backed offload for large payloads
     #
     # What each one pulls in, and when you actually need it, is in the Extras table below.
-    "temporal-agent-harness[ui]==0.4.0",
+    "temporal-agent-harness[ui]==0.6.0",
 ]
 ```
 
@@ -142,10 +145,19 @@ That registry is what lists the launchable agents:
 [[agents]]
 key = "my-agent"
 workflow_type = "MyAgent"
+agent = "my_app.workflow:MyAgentWorkflow"   # optional; see below
 task_queue = "my-agent-task-queue"
 label = "My Agent"
 description = "A short description shown in the UI."
 ```
+
+`agent` names the agent's class, which the server imports at startup to learn what the agent takes
+to start. If its `@agent.init` takes a `data` model after its config, required (`data: MyData`) or
+optional (`data: MyData | None = None`), `GET /api/agents` publishes it and the console asks for it
+in a form before starting a session. `POST /api/sessions` checks the `data` it is sent against the
+model and answers `422` if it does not fit. Without `agent`, the agent is started with no data, and
+any `data` a caller sends goes through unchecked for the agent itself to validate. A class that
+fails to import is logged, and treated the same way.
 
 Both subcommands resolve their Temporal connection through temporalio's standard client config,
 so they land on the same namespace. With nothing configured they use `localhost:7233` — the
@@ -171,14 +183,14 @@ opt-in:
 | Extra | Add it when you… |
 | --- | --- |
 | `ui` | want the browser UI and the `temporal-agent-harness` CLI (pulls in `fastapi[standard]`, including Uvicorn). The built Svelte assets are always in the wheel; only the server runtime is gated here, so agent-worker installs stay small. |
-| `code-mode` | run a worker that hosts **Code Mode** agents; pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in. The workflow-side `agent.code_mode_tool` factory needs nothing extra. |
+| `code-mode` | run a worker that hosts **Code Mode** agents; pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in. Importing `agent` needs nothing extra; building a `code_mode_tool` does. |
 | `genai` | use the **Google Gemini** integration (`ai_sdks.google_genai_plugin`). |
 | `jev` | run a worker whose agents use **`agent.jev_evaluator`**, the builtin AI auto mode evaluator; pulls in [`typesafe-sdk`](https://pypi.org/project/typesafe-sdk/). Worker-side only — the workflow-side factory needs nothing extra. |
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 
-Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.4.0'`.
+Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.6.0'`.
 
 ## Versioning and stability
 
@@ -190,7 +202,7 @@ UI matches the source it was built from.
 
 Two artifacts come out of a release, and they pin differently:
 
-- **The library** — pin an exact version from PyPI (`temporal-agent-harness==0.4.0`).
+- **The library** — pin an exact version from PyPI (`temporal-agent-harness==0.6.0`).
 - **The examples** — check out the matching git tag. They are *not* shipped in the package, so a
   PyPI install gives you the library, the packaged UI, and the CLI, but no `examples/` tree.
 
@@ -222,6 +234,15 @@ you build. **Watch an agent live** as it works, or **replay exactly what happene
 what it decided, which tools it ran, what it cost, and where a human stepped in. You instrument
 once; every agent on the harness gets it.
 
+### 🖥️ Your own UI, typed end to end — React and Svelte
+Build the product UI for your agent — a game board, a trip planner, a document it edits —
+without writing a streaming client. Generate TypeScript types from the agent's Python class, and
+`useAgentSession<MyAgent>()` (React) or `new AgentSession<MyAgent>()` (Svelte) gives you one
+reactive object holding the session's messages, observable state, subagents, approvals, and
+callbacks. `sendMessage` is type-checked against the agent's message handlers, and state you
+declare in Python arrives in the browser typed and current. Reloads, extra tabs, and server restarts all pick the session
+back up. See [Build a UI in React or Svelte](#build-a-ui-in-react-or-svelte).
+
 ### 🙋 Human-in-the-loop, solved
 Tool approvals are built in and **safe-by-default**: any tool call can require human sign-off, and
 a gated call **pauses inside the workflow and resumes durably** whenever a decision arrives (no
@@ -251,7 +272,8 @@ Tools come in two on-worker flavors — durable, activity-backed tools (`@agent.
 that run as retried, observable Temporal activities, and inline workflow tools
 (`@agent.tool_defn`). Each publishes its own start/end lifecycle events onto the agent's
 standardized event stream. (A third flavor — **callback tools** — runs on an attached client
-instead of the worker; see below.)
+instead of the worker; see
+[Callback tools](#-callback-tools--let-the-client-run-the-tool).)
 
 ### 📞 Callback tools — let the client run the tool
 An agent running on a Temporal worker often needs to act somewhere it can't reach — a file on the
@@ -391,7 +413,6 @@ with lookups auto-approved and bookings still coming to you.
 from datetime import timedelta
 
 from pydantic import BaseModel
-from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.workflow import ActivityConfig
 
@@ -419,10 +440,21 @@ class Itinerary(BaseModel):
     total_usd: float
 
 
+# The agent's own init data, passed after the AgentConfig when a session starts.
+class TravelerProfile(BaseModel):
+    """Who the agent is planning for."""
+
+    name: str
+    home_airport: str
+
+
+# @agent.defn makes the class a Temporal workflow and provides its run method, which drives
+# the turn loop. Add an optional `@agent.setup` / `@agent.teardown` method for one-time async
+# work before the first message or after the agent closes.
 @agent.defn
 class TravelAgent:
-    @workflow.init
-    def __init__(self, config: AgentConfig) -> None:
+    @agent.init
+    def __init__(self, config: AgentConfig, profile: TravelerProfile | None = None) -> None:
         # Tool approvals are safe-by-default; here, auto-approve only tools that
         # statically declare themselves inherently safe.
         self._runner = AgentWorkflowRunner(
@@ -430,10 +462,9 @@ class TravelAgent:
             stream=WorkflowStream(),
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
-
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
+        # Optional, so a caller may start it without a profile. Declare it without the
+        # `| None = None` to make it required.
+        self._profile = profile
 
     # A typed, self-describing operation. The agent advertises this signature, so callers —
     # your code or another agent — can drive it programmatically. Your turn logic goes here:
@@ -510,9 +541,16 @@ run_code = agent.code_mode_tool(
 #     asyncio.run(main())
 ```
 
-- **Durable, gated, and observable per call.** The script runs in a sandbox; each host call is
+- **Durable, gated, and observable per call.** The script runs in a sandbox that the workflow
+  steps directly, and replay re-runs it against the recorded host results; each host call is
   dispatched back through the runner as its own durable activity — keeping that tool's approval
   policy and `tool_start`/`tool_end` events. Writing the script is inert; only the host calls act.
+  The script's clock, randomness and `asyncio.sleep` come from the workflow (a sleep is a
+  durable timer), and a script that computes for longer than a second without awaiting a host
+  call is stopped with an error.
+- **Failures are exceptions the script can handle.** A host call that fails (an activity error, a
+  denied approval) raises at its `await`, so the script can `try`/`except` it and carry on;
+  uncaught, it ends the script with an error the model sees.
 - **Type-checked before it runs.** Code Mode generates static type-check stubs from your tools'
   signatures, so a wrong argument or an unknown result key comes back as an error to fix rather
   than a bad run.
@@ -520,12 +558,122 @@ run_code = agent.code_mode_tool(
   straight into `code_mode_tool([...])` — the model's script can drive subagents too.
 - **Several per agent.** Give one agent multiple `code_mode_tool`s (distinct `name`s) over
   disjoint or overlapping tool sets.
+- **A virtual filesystem, if you want one.** Pass `mounts=` and scripts read and write files with
+  plain `open()` and `pathlib`. A mount's backend is any async `FileSystem` your workflow can
+  await (an activity, a Nexus operation, a child workflow), the built-in
+  `agent.InMemoryFileSystem` (optionally seeded by an activity), or an `agent.ActivityFileSystem`:
+  plain async methods the harness runs as activities for you. Every file operation goes through
+  the runner as an `fs_*` tool call, keeping the approval policy and tool events.
+- **Files you can watch.** The console's **VFS File Mounts** pane shows a mount's tree as the agent works.
+  Declare the mount on the agent class with `agent.vfs_mount(...)` and bind it in `@agent.init`.
+  Over `InMemoryFileSystem`, its files, contents included, are a `FileTree`
+  [agent state](#build-a-ui-in-react-or-svelte), so they replay with the session. Over an
+  `ActivityFileSystem`, its tree is a `FileIndex` state: **only the paths this session's scripts
+  have touched** (looked up, listed, read or written), never the whole store, and never
+  contents. A file opens in a large viewer with the trees beside it; for an
+  `ActivityFileSystem` it is read from the store through a standalone activity, without
+  touching the agent's workflow. **That content is the file as it is now, not as it was at that
+  point in the agent's history**: the tree replays, the store does not.
+- **Knowledge bundles.** `agent.okf_bundle_vfs_mount(...)` declares a mount whose files form an
+  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md)
+  (OKF) bundle: markdown files with YAML frontmatter, linked to each other. Pass it to
+  `agent.okf_code_mode_tool(...)` for a Code Mode tool that explains OKF to the model and gives
+  scripts `okf_concepts()`, `okf_links(id)` and `okf_render(frontmatter, body)`. The console
+  draws the whole bundle as a live graph. See [OKF bundles](#okf-bundles) below.
 
-A worker that hosts a Code Mode agent needs the two sandbox-stepping activities and the durable
-bodies of any activity-backed host tools. Both come from
-[`AgentHarnessPlugin`](#running-a-worker--one-plugin) — the stepping activities as soon as the
-`code-mode` extra (which pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/),
-the sandbox the scripts run in) is installed:
+```python
+run_code = agent.code_mode_tool(
+    tools,
+    name="run_code",
+    mounts=[
+        agent.VFSMount("/docs", agent.InMemoryFileSystem(seed=self._load_docs), read_only=True,
+                       description="Product docs, one Markdown file per page."),
+        agent.VFSMount("/workspace", agent.InMemoryFileSystem(), description="Write your output here."),
+    ],
+)
+```
+
+To show a mount in the console, declare it on the class instead. The declaration fixes the path,
+description, access and filesystem; `bind(...)` supplies what depends on the session, and returns
+the `VFSMount`:
+
+```python
+class MyAgent:
+    workspace = agent.vfs_mount("/workspace", agent.InMemoryFileSystem,
+                                description="Write your output here.")
+    files = agent.vfs_mount("/files", Bucket, description="The team's files.")
+
+    @agent.init
+    def __init__(self, config: AgentConfig, data: MyData) -> None:
+        ...
+        self._run_code = agent.code_mode_tool(tools, name="run_code", mounts=[
+            self.workspace.bind(seed=None),                     # or seed=<async fn>, required
+            self.files.bind(BucketConfig(prefix=data.team)),    # the filesystem's own config type
+        ])
+```
+
+An `ActivityFileSystem` is a config model plus async methods that run on a worker. Treat the
+config as untrusted input and validate it in `__init__`: the console's file viewer sends it back.
+
+```python
+class BucketConfig(BaseModel):
+    prefix: PurePosixPath
+
+class Bucket(agent.ActivityFileSystem[BucketConfig], name="bucket"):
+    def __init__(self, config: BucketConfig) -> None: ...   # refuse anything unsafe here
+    async def stat(self, path: PurePosixPath) -> agent.FileStat | None: ...
+    async def read(self, path: PurePosixPath, offset: int = 0, length: int | None = None) -> bytes: ...
+    async def list(self, path: PurePosixPath) -> list[str]: ...
+    # write / mkdir / delete / rename, for a writable mount
+
+# workflow:  files = agent.vfs_mount("/files", Bucket, ...); self.files.bind(BucketConfig(...))
+# worker:    AgentHarnessPlugin(filesystems=[Bucket])   # registers vfs.bucket.stat, .read, ...
+```
+
+Viewing an `ActivityFileSystem` file in the console needs a Temporal server that runs
+standalone activities (the local dev server does; the time-skipping test server does not).
+
+#### OKF bundles
+
+Agent memory, notes or any other knowledge can be kept as an OKF bundle over any
+`ActivityFileSystem`:
+
+```python
+class MyAgent:
+    memory = agent.okf_bundle_vfs_mount("/memory", Bucket, description="Your long-term memory.")
+
+    @agent.init
+    def __init__(self, config: AgentConfig, data: MyData) -> None:
+        ...
+        self._run_code = agent.okf_code_mode_tool(
+            self.memory.bind(BucketConfig(prefix=data.team)),
+            name="run_code",
+            tools=tools,       # optional: code_mode_tool's other arguments all work
+            mounts=[...],
+        )
+```
+
+- **The tool** is `code_mode_tool` with the bundle mounted and an OKF section in its
+  description: concepts, frontmatter fields, `index.md` and `log.md`, and links.
+- **`okf_concepts(prefix="")`** returns every concept's frontmatter in one activity, instead of
+  a file read per concept. **`okf_links(id)`** gives a concept's links and backlinks.
+  **`okf_render(frontmatter, body)`** returns a concept's text with well-formed YAML and records
+  who wrote it (`generated`); scripts write it with `pathlib` like any file.
+- **Nothing is rejected.** A file with missing or broken frontmatter is still listed and drawn,
+  with the problem shown.
+- **The graph:** every `ActivityFileSystem` gets a generated `vfs.<name>.okf_graph` activity.
+  The console's **Graph** button on an OKF mount runs it as a standalone activity and draws the
+  whole bundle as it is now: concepts colored by type, links as edges, stale, deprecated and
+  human-confirmed concepts marked.
+
+The [memory example](examples/code_mode_memory/) keeps a user's memory this way.
+
+A worker that hosts a Code Mode agent needs the `code-mode` extra (which pulls in
+[`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in) and
+the durable bodies of any activity-backed host tools, which
+[`AgentHarnessPlugin`](#running-a-worker--one-plugin) registers. Code Mode has no activities of
+its own. A worker without the extra fails the workflow task that builds the tool, so Temporal
+retries it until a worker with the extra picks it up:
 
 ```python
 client = await Client.connect(..., plugins=[AgentHarnessPlugin(tools=my_tools)])
@@ -534,6 +682,8 @@ worker = Worker(client, task_queue=..., workflows=[MyAgent])
 
 See [`examples/monty`](examples/monty) for three agents all built on Code Mode: a no-model script
 runner, a conversational agent that writes its own scripts, and a subagent-driven variant.
+[`examples/code_mode_memory`](examples/code_mode_memory) shows a Code Mode tool working on a
+virtual filesystem: skills seeded into memory, and long-term memory on disk that sessions share.
 
 ## Accepted Messages
 
@@ -649,6 +799,163 @@ actions that are *not* messages stay first-class and separate: approve or deny a
 gated tool call (`tool_approval`, whose `remember` flag also relaxes the live
 policy), read state (`agent_status`), and stop the agent (the `close` signal).
 
+## Build a UI in React or Svelte
+
+A UI on a harness agent should be about the product, not the protocol. The client SDKs take care
+of the event stream, reconnects, JSON Patch state, pairing replies with messages, and the
+subagent tree, and they type all of it from the agent's Python class. The integration is one
+line:
+
+```ts
+const agent = useAgentSession<TicTacToeAgent>({ sessionId });                      // React
+const agent = new AgentSession<TicTacToeAgent>({ get sessionId() { return id; } }); // Svelte
+```
+
+| Package | What it is |
+| --- | --- |
+| [`@temporalio/agent-harness-react`](packages/react) | `useAgentSession`, a hook for React 18.2+ |
+| [`@temporalio/agent-harness-svelte`](packages/svelte) | `AgentSession`, a reactive class for Svelte 5 |
+| [`@temporalio/agent-harness-client`](packages/client) | the framework-free core both bindings share; re-exported by each |
+
+**1. Declare state on the agent.** `agent.state(...)` makes a model observable: every
+committed `mutate()` block is published on the event stream as JSON Patch ops. A tool reaches
+the state as an injected `StateRef`, which the workflow supplies and the model never sees, so
+the browser watches the board change as the model plays.
+
+```python
+from agents import Agent, Runner
+
+from temporal_agent_harness.ai_sdks.openai_agents_harness import as_openai_agent_tool
+from temporal_agent_harness.harness.state import HarnessState, StateRef
+
+
+class Board(HarnessState):
+    """Nine cells, read left to right, top to bottom."""
+
+    cells: list[Literal["X", "O"] | None] = [None] * 9
+
+
+class PlayMove(BaseModel):
+    """The player's move."""
+
+    cell: int
+
+
+# The model supplies `cell` and `mark`; the workflow injects `board`.
+@agent.tool_defn(inherently_safe=True)
+async def place_mark(
+    cell: int, mark: Literal["X", "O"], board: agent.Injected[StateRef[Board]]
+) -> str:
+    """Place a mark on an empty cell, 1-9."""
+    with board.mutate() as draft:
+        draft.cells[cell - 1] = mark
+    return f"{mark} is on cell {cell}."
+
+
+@agent.defn(name="TicTacToeAgent")
+class TicTacToeAgentWorkflow:
+    board = agent.state(Board)
+
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
+        )
+        self._sdk_agent = Agent(
+            name="TicTacToe",
+            instructions="You play O. Record the player's X with place_mark, then place your O.",
+            model="gpt-5.1",
+            tools=[as_openai_agent_tool(self._runner, place_mark, injections={"board": self.board})],
+        )
+
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
+    async def play(self, move: PlayMove) -> TextReply:
+        """Play X on a cell; the agent answers with its O."""
+        prompt = f"Board: {self.board.current.cells}. I play X on cell {move.cell}."
+        result = await Runner.run(self._sdk_agent, input=prompt)
+        return TextReply(text=str(result.final_output))
+```
+
+**2. Generate the types.** `temporal-agent-harness schema` prints an agent's handlers, state,
+and init data as JSON Schema, and [`harness-codegen`](packages/codegen) turns that into
+TypeScript. The generator runs from a checkout of this repo: build it once with
+`npm ci && npm run build` in `packages/codegen`, then from the repo root (the same steps as the
+`codegen-client-sdk` recipe in [`examples/tictactoe/justfile`](examples/tictactoe/justfile)):
+
+```bash
+uv run temporal-agent-harness schema examples.tictactoe.workflow:TicTacToeAgentWorkflow \
+  | node packages/codegen/dist/src/cli.js - -o client_sdk/TicTacToeAgent.ts
+```
+
+Commit the output and regenerate it in CI. Renaming a field on `Board` without regenerating then
+fails the type check, not production.
+
+**3. Render the session.**
+
+```bash
+npm install @temporalio/agent-harness-react    # or @temporalio/agent-harness-svelte
+```
+
+```tsx
+import { useAgentSession } from "@temporalio/agent-harness-react";
+import type { TicTacToeAgent } from "./client_sdk/TicTacToeAgent";
+
+function Game({ sessionId }: { sessionId: string }) {
+  const agent = useAgentSession<TicTacToeAgent>({ sessionId });
+  const board = agent.states.board; // typed as the Python `Board`
+
+  return (
+    <>
+      {board?.cells.map((cell, i) => (
+        // the handler name and its payload are both checked against the agent
+        <button key={i} onClick={() => agent.sendMessage("play", { cell: i + 1 })}>{cell ?? ""}</button>
+      ))}
+
+      {agent.messages.map((m) => (
+        <p key={m.id}>{m.handler} · {m.status} {m.output?.text}</p>
+      ))}
+
+      {agent.pendingApprovals.map(({ part }) => (
+        <div key={part.toolId}>
+          <strong>{part.toolName}</strong>
+          <button onClick={() => agent.respondToApproval(part.toolId, { approved: true })}>Approve</button>
+          <button onClick={() => agent.respondToApproval(part.toolId, { approved: false })}>Deny</button>
+        </div>
+      ))}
+    </>
+  );
+}
+```
+
+The Svelte binding has the same fields and actions; a component reads `agent.states.board` in a
+`$derived` and the connection stays open while anything reads it. Both packages' READMEs have the
+full example.
+
+**What the session gives you**
+
+- **Typed messages.** `agent.messages` narrows on `handler`, so `input` and `output` are that
+  handler's models. Each message's `parts` are its model calls, tool calls, and reply deltas, as
+  they stream.
+- **The whole agent tree.** Every subagent, at any depth, gets its own messages and state
+  through `agent.agents` and `agent.agent(id)`. `pendingApprovals` and `pendingCallbacks`
+  collect waiting tool calls from all of them and answer the right workflow.
+- **Callback tools in the browser.** Tools listed in `callbackTools` are answered by the page
+  itself (`get_timezone: () => Intl.DateTimeFormat().resolvedOptions().timeZone`); any other
+  callback, such as an `ask_user`, waits in `pendingCallbacks` for
+  `agent.provideToolOutput(toolId, output)`.
+- **Durable by default.** A reload returns the same session, two tabs both stay live, and after a
+  server restart the stream resumes where it left off.
+- **One connection per session.** Components following the same session share one connection
+  under a `<HarnessProvider>` (React) or `createHarnessContext()` (Svelte).
+- **Typed starts.** `startSession(transport, TicTacToeAgent, { data })` creates a session, with
+  `data` required, optional, or refused to match the agent's init data.
+
+[`examples/tictactoe/ui`](examples/tictactoe/ui) is a complete board in one Svelte component, and
+[`examples/agent_dag/ui`](examples/agent_dag/ui) is a larger studio. The design and its reasoning
+are in [`docs/design/typed-agent-sessions.md`](docs/design/typed-agent-sessions.md).
+
 ## Requirements
 
 To build with the harness:
@@ -681,8 +988,8 @@ cp .env.example .env.local
 ```
 
 Set the creds for whichever agents you'll run: `OPENAI_API_KEY` (react_agent, openai_hello,
-pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding). The default committed
-`temporal.local.toml` profile points at a local Temporal dev server.
+pydantic_ai_hello) and/or `GEMINI_API_KEY` (monty, wiki, coding, code_mode_memory).
+The default committed `temporal.local.toml` profile points at a local Temporal dev server.
 
 ### One example, standalone
 
@@ -711,7 +1018,7 @@ each in its own terminal:
 just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
 just session-manager   # shared session-manager worker
 just server            # serves the MERGED registry (all agents) on http://localhost:8000
-just workers           # co-launch all eight agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
+just workers           # co-launch all ten agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
 ```
 
 Then create a session for any agent in the UI. A few need extra setup or a client:
@@ -725,6 +1032,8 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
 | Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client --wiki-dir ./wiki`** — required, or its tool calls hang |
 | Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
+| Code Mode Memory | `GEMINI_API_KEY`; long-term memory on the worker's disk, shared by sessions given the same `memory_dir` ([readme](examples/code_mode_memory/README.md)); chat directly in the UI |
+| Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](examples/agent_dag/README.md)); best in its own UI, **`just studio`** from `examples/agent_dag` |
 
 **Gotcha — the session manager caches its registry.** The server seeds the `session-manager`
 workflow with the registry on first start and reuses the existing one after that. So when you switch

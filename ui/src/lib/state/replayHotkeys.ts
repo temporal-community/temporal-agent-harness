@@ -46,6 +46,7 @@ export type ReplayAction =
   | "railMoveNextTab"
   | "railToggleBleed"
   | "toggleDrawer"
+  | "toggleSessionManager"
   | `railFocusSlot${RailSlot}`;
 
 /**
@@ -179,6 +180,8 @@ export const REPLAY_BINDINGS: readonly ReplayBinding[] = [
      the transport's toggle was the only way in, which is a control a reader has to find before
      they can learn it exists. */
   { action: "toggleDrawer", scope: "rail", key: "d", shift: false, chord: "D", label: "Open the bottom drawer, and back" },
+  /* Bare for the same reason again: Cmd+S is the browser's save-page. */
+  { action: "toggleSessionManager", scope: "rail", key: "s", shift: false, chord: "S", label: "Open the Session Manager, and back" },
 
   /* The digits, one row each because the table matches on the key and the dispatcher is
      handed the action alone. Written out rather than hand-listed nine times over: the
@@ -452,6 +455,8 @@ export interface ReplaySurface {
    * drawer. Which box this opens is fixed, so it belongs to the shell alongside `helpOpen`.
    */
   toggleDrawer(): void;
+  /** Show the Session Manager on the left edge, or put it away. Fixed for the same reason. */
+  toggleSessionManager(): void;
 }
 
 /** Nine rows that differ only by a number, told apart from the rest before the switch. */
@@ -552,6 +557,9 @@ export function applyReplayAction(action: ReplayAction, surface: ReplaySurface):
       break;
     case "toggleDrawer":
       surface.toggleDrawer();
+      break;
+    case "toggleSessionManager":
+      surface.toggleSessionManager();
       break;
     default: {
       const unhandled: never = action;

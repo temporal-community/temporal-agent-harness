@@ -11,6 +11,7 @@
 [[agents]]
 key = "pydantic-ai-hello"
 workflow_type = "PydanticAIHelloAgent"
+agent = "examples.pydantic_ai_hello.workflow:PydanticAIHelloAgentWorkflow"
 task_queue = "pydantic-ai-hello"
 label = "Pydantic AI Hello"
 description = """

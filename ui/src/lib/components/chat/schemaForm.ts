@@ -109,18 +109,17 @@ function describeField(
   required: boolean
 ): SchemaField {
   const schema = unwrap(raw, root);
-  const title =
-    typeof schema["title"] === "string" && schema["title"].trim()
-      ? (schema["title"] as string)
-      : name;
-  const description =
-    typeof schema["description"] === "string" ? (schema["description"] as string) : undefined;
+  // Pydantic puts an optional field's title, description and default on the outer `anyOf`,
+  // not on the branch `unwrap` returns.
+  const annotation = (key: string): unknown => raw[key] ?? schema[key];
+  const text = (value: unknown): string | undefined =>
+    typeof value === "string" && value.trim() ? value : undefined;
   const base = {
     name,
-    title,
-    description,
+    title: text(annotation("title")) ?? name,
+    description: text(annotation("description")),
     required,
-    default: schema["default"],
+    default: annotation("default"),
     minimum: typeof schema["minimum"] === "number" ? (schema["minimum"] as number) : undefined,
     maximum: typeof schema["maximum"] === "number" ? (schema["maximum"] as number) : undefined
   };
@@ -196,6 +195,24 @@ export function singleStringField(schema: JsonRecord | Schema): string | null {
   return only.name;
 }
 
+/**
+ * The form for a callback tool's result, from its output schema. An object result renders
+ * field-by-field; anything else (`str`, `int`, a list) is wrapped as one `result` field, and
+ * `wrapped` says to unwrap it from the built payload before sending.
+ */
+export function resultForm(schema: JsonRecord): { fields: SchemaField[]; wrapped: boolean } {
+  const direct = describeSchema(schema);
+  if (direct.length > 0) return { fields: direct, wrapped: false };
+  const { $defs, ...rest } = schema;
+  const wrapper: Schema = {
+    type: "object",
+    properties: { result: { title: "Response", ...rest } },
+    required: ["result"],
+    $defs
+  };
+  return { fields: describeSchema(wrapper), wrapped: true };
+}
+
 /** A blank form value for a field — its schema default when it has one. */
 export function emptyValue(field: SchemaField): unknown {
   if (field.default !== undefined) return field.default;
@@ -226,8 +243,40 @@ function isBlank(value: unknown): boolean {
   );
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return (asSchema(value) ?? {}) as Record<string, unknown>;
+}
+
+function fieldProblem(field: SchemaField, value: unknown): string | null {
+  if (isBlank(value)) return field.required && field.kind !== "boolean" ? "Required." : null;
+  if (field.kind === "enum" && field.choices && !field.choices.includes(String(value))) {
+    return "Choose one of the listed options.";
+  }
+  if (field.kind === "integer" || field.kind === "number") {
+    const num = Number(value);
+    if (Number.isNaN(num)) return "Must be a number.";
+    if (field.kind === "integer" && !Number.isInteger(num)) return "Must be a whole number.";
+    if (field.minimum !== undefined && num < field.minimum) return `Must be at least ${field.minimum}.`;
+    if (field.maximum !== undefined && num > field.maximum) return `Must be at most ${field.maximum}.`;
+  }
+  if (field.kind === "json" && typeof value === "string") {
+    try {
+      JSON.parse(value);
+    } catch {
+      return "Must be valid JSON.";
+    }
+  }
+  return null;
+}
+
+/** A field's key in `validate`'s result: its name, under its parent's key. */
+export function fieldPath(path: string, name: string | number): string {
+  return path ? `${path}.${name}` : String(name);
+}
+
 /**
- * Human-readable problems with the current values, empty when the form is submittable.
+ * What is wrong with the current values, keyed by field path (`address.city`,
+ * `travellers.0.name`) so the form can mark each field; empty when the form is submittable.
  *
  * Client-side validation is a convenience only — the workflow's update validator checks the
  * payload against the handler's real input model and is the authority. This just avoids a
@@ -235,44 +284,33 @@ function isBlank(value: unknown): boolean {
  */
 export function validate(
   fields: SchemaField[],
-  values: Record<string, unknown>
-): string[] {
-  const problems: string[] = [];
+  values: Record<string, unknown>,
+  path = ""
+): Record<string, string> {
+  const problems: Record<string, string> = {};
   for (const field of fields) {
+    const key = fieldPath(path, field.name);
     const value = values[field.name];
-    if (field.required && isBlank(value) && field.kind !== "boolean") {
-      problems.push(`${field.title} is required.`);
-      continue;
-    }
-    if (isBlank(value)) continue;
-    if (field.kind === "enum" && field.choices && !field.choices.includes(String(value))) {
-      problems.push(`${field.title} must be one of: ${field.choices.join(", ")}.`);
-    }
-    if (field.kind === "integer" || field.kind === "number") {
-      const num = Number(value);
-      if (Number.isNaN(num)) problems.push(`${field.title} must be a number.`);
-      else if (field.kind === "integer" && !Number.isInteger(num)) {
-        problems.push(`${field.title} must be a whole number.`);
-      } else if (field.minimum !== undefined && num < field.minimum) {
-        problems.push(`${field.title} must be at least ${field.minimum}.`);
-      } else if (field.maximum !== undefined && num > field.maximum) {
-        problems.push(`${field.title} must be at most ${field.maximum}.`);
-      }
-    }
-    if (field.kind === "json" && typeof value === "string") {
-      try {
-        JSON.parse(value);
-      } catch {
-        problems.push(`${field.title} must be valid JSON.`);
-      }
-    }
+    const problem = fieldProblem(field, value);
+    if (problem) problems[key] = problem;
     if (field.kind === "object" && field.fields) {
-      problems.push(
-        ...validate(field.fields, (value ?? {}) as Record<string, unknown>)
+      Object.assign(problems, validate(field.fields, asRecord(value), key));
+    }
+    const itemFields = field.kind === "array" ? field.item?.fields : undefined;
+    if (itemFields && Array.isArray(value)) {
+      value.forEach((entry, index) =>
+        Object.assign(problems, validate(itemFields, asRecord(entry), fieldPath(key, index)))
       );
     }
   }
   return problems;
+}
+
+/** One line for the whole form, since each problem is shown beside its own field. */
+export function problemSummary(problems: Record<string, string>): string | null {
+  const count = Object.keys(problems).length;
+  if (count === 0) return null;
+  return count === 1 ? "Fix the marked field." : `Fix the ${count} marked fields.`;
 }
 
 /** Coerce form values into the JSON payload the handler's input model expects. */
@@ -288,7 +326,7 @@ export function buildPayload(
     if (!field.required && isBlank(value) && field.kind !== "boolean") continue;
     switch (field.kind) {
       case "boolean":
-        payload[field.name] = Boolean(value);
+        payload[field.name] = value === true;
         break;
       case "integer":
       case "number":
@@ -310,9 +348,11 @@ export function buildPayload(
         payload[field.name] = items
           .filter((entry) => !isBlank(entry))
           .map((entry) =>
-            item && (item.kind === "integer" || item.kind === "number")
-              ? Number(entry)
-              : entry
+            item?.kind === "object"
+              ? buildPayload(item.fields ?? [], asRecord(entry))
+              : item && (item.kind === "integer" || item.kind === "number")
+                ? Number(entry)
+                : entry
           ) as never;
         break;
       }

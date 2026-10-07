@@ -88,7 +88,7 @@ call `ask_user` again."""
 class ReactAgentWorkflow:
     """A ReAct agent (weather/geo/IP tools + F1 MCP) driven by the OpenAI Agents SDK."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -99,10 +99,6 @@ class ReactAgentWorkflow:
         )
         # OpenAI conversation state, threaded across turns as the SDK's input-item list.
         self._conversation: list[TResponseInputItem] = []
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:

@@ -12,7 +12,7 @@ import {
   type HarnessMessage,
   type SessionState,
   type UntypedAgent
-} from "@temporal-agent-harness/client";
+} from "@temporalio/agent-harness-client";
 
 export class SvelteSessionState<A extends AgentSchema = UntypedAgent> implements SessionState<A> {
   connection = $state<ConnectionStatus>("stopped");

@@ -25,7 +25,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 
 import pytest
-from temporalio import activity, workflow
+from temporalio import activity
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamClient
 from temporalio.exceptions import ApplicationError
@@ -529,7 +529,7 @@ _PROBE_CRITERIA = AutoApprovalCriteria(
 class JevApprovalProbeAgent:
     """Gates everything, with AUTO MODE on, so every gated call goes to the Jev approver."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -586,10 +586,6 @@ class JevApprovalProbeAgent:
         except agent.ToolApprovalDenied as e:
             result = f"denied:{e.reason}"
         return TextReply(text=result)
-
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None:
-        await self._runner.run(self)
 
 
 def _fake_jev(verdict: str, confidence: float, irreversible: float):

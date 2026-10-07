@@ -6,6 +6,7 @@
 [[agents]]
 key = "auto-mode-travel"
 workflow_type = "AutoModeTravelAgent"
+agent = "examples.auto_mode.workflow:AutoModeTravelAgentWorkflow"
 task_queue = "auto-mode-agent"
 label = "Travel agent (Jev Auto mode)"
 description = """

@@ -1,14 +1,16 @@
-import type {
-  AgentEventType,
-  AgentSseFrame,
-  FileCitationAnnotation,
-  JsonPatchOp,
-  JsonRecord,
-  ToolId
+import {
+  SYNTHESIZED,
+  type AgentEventType,
+  type AgentSseFrame,
+  type FileCitationAnnotation,
+  type JsonPatchOp,
+  type JsonRecord,
+  type ToolId
 } from "$lib/api/types";
 import { formatTokens, summarizeCost, type UsageTotals } from "$lib/cost/pricing";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
 import { HISTORY_GAP_NOTE, findHistoryGaps } from "$lib/state/historyGap";
+import { buildReplyRuns, type ReplyRun } from "$lib/state/replyRuns";
 import { thoughtDeltaText } from "$lib/state/thoughtSummary";
 
 export type ReplayActor =
@@ -38,13 +40,26 @@ export type ReplayMarkerTone = "approval" | "error" | "queue";
 export interface ReplayLogRow {
   id: string;
   index: number;
+  /**
+   * Set only on a row standing for a RUN of frames — a collapsed reply stream
+   * (see replyRuns.ts). It is where the run opens; `index` is its last frame, so
+   * the row is addressed at the state AFTER the whole run. `id` and `ordinal`
+   * stay at the opening frame, so a run still streaming keeps its identity while
+   * `index` and `body` grow with it.
+   */
+  runStartIndex?: number;
   ordinal: number;
   turnNumber: number;
   sourceTurnNumber: number;
   parentTurnNumber?: number;
   workflowId?: string;
+  /** A subagent's workflow: the one that published this row, or the one a subagent_* event is about. */
+  childWorkflowId?: string;
   sourceLabel?: string;
   turnId: string;
+  messageId?: string;
+  evaluationId?: string;
+  eventOffset?: number;
   timestamp: number;
   // An agent event's own type, or "stream_error" for the client-side frame /api/chat
   // synthesizes — which no agent published, so it is not an AgentEventType.
@@ -63,6 +78,8 @@ export interface ReplayLogRow {
    *  render differently — see formatLogValue in $lib/state/logValue. */
   input?: JsonRecord | null;
   output?: string;
+  /** JSON schema of the result a `callback_requested` row is waiting on. */
+  outputSchema?: JsonRecord;
   citations: FileCitationAnnotation[];
   usage?: UsageTotals;
   estimatedCostUsd?: number | null;
@@ -220,8 +237,17 @@ function rowFromFrame(
     sourceTurnNumber,
     parentTurnNumber: entry.role === "subagent" ? entry.parentTurnNumber : undefined,
     workflowId: entry.workflowId,
+    childWorkflowId:
+      ("workflow_id" in frame.data ? frame.data.workflow_id : undefined) ??
+      (entry.role === "subagent" ? entry.workflowId : undefined),
     sourceLabel: entry.label,
     turnId: frame.data.turn_id,
+    messageId: frame.data.message_id ?? undefined,
+    evaluationId: "evaluation_id" in frame.data ? frame.data.evaluation_id : undefined,
+    eventOffset:
+      frame.data.event_offset != null && frame.data.event_offset !== SYNTHESIZED
+        ? frame.data.event_offset
+        : undefined,
     timestamp: frame.data.timestamp,
     event: frame.data.type,
     citations: [] as FileCitationAnnotation[]
@@ -467,6 +493,37 @@ function rowFromFrame(
     };
   }
 
+  if (frame.event === "callback_requested") {
+    return {
+      ...base,
+      actor: "tool",
+      tone: "approval",
+      label: "Waiting on client",
+      body: frame.data.tool_name,
+      toolId: frame.data.tool_id,
+      toolName: frame.data.tool_name,
+      input: frame.data.tool_input,
+      outputSchema: frame.data.output_schema,
+      status: "awaiting",
+      marker: "approval",
+      markerLabel: "callback requested"
+    };
+  }
+
+  if (frame.event === "callback_resolved") {
+    const ok = frame.data.outcome === "ok";
+    return {
+      ...base,
+      actor: "tool",
+      tone: ok ? "done" : "error",
+      label: ok ? "Client responded" : `Callback ${frame.data.outcome}`,
+      body: frame.data.error ?? frame.data.tool_name,
+      toolId: frame.data.tool_id,
+      toolName: frame.data.tool_name,
+      status: frame.data.outcome
+    };
+  }
+
   if (frame.event === "subagent_started") {
     return {
       ...base,
@@ -650,15 +707,35 @@ function buildSummary(turnNumber: number, rows: ReplayLogRow[]): TurnLogSummary 
 
 export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): ReplayLog {
   const gapPositions = findHistoryGaps(input);
+  /* A run of reply chunks draws ONE row, carrying all of their text. A lone chunk
+     is left exactly as it was — it is already one event, and a row that announced
+     itself as a collapsed run of one would only be noise. */
+  const runStarts = new Map<number, ReplyRun>();
+  const withinRun = new Set<number>();
+  for (const run of buildReplyRuns(input)) {
+    if (run.frameCount < 2) continue;
+    runStarts.set(run.startIndex, run);
+    for (let index = run.startIndex + 1; index <= run.endIndex; index += 1) {
+      withinRun.add(index);
+    }
+  }
   /* Carried forward for the same reason the waterfall carries it: `rowFromFrame`
      answers null for an event kind this log does not render, and a seam attached to
-     a frame that draws no row would never be seen. */
+     a frame that draws no row would never be seen. A chunk folded into the row above
+     is the same case — the seam waits for the next row that can carry it. */
   let pendingGap = false;
   const rows: ReplayLogRow[] = [];
   input.forEach((item, index) => {
     if (gapPositions.has(index)) pendingGap = true;
+    if (withinRun.has(index + 1)) return;
     const row = rowFromFrame(normalizeReplayLogFrame(item), index);
     if (!row) return;
+    const run = runStarts.get(row.index);
+    if (run) {
+      row.runStartIndex = run.startIndex;
+      row.index = run.endIndex;
+      row.body = run.text;
+    }
     if (pendingGap) {
       row.gapBefore = HISTORY_GAP_NOTE;
       pendingGap = false;
@@ -683,6 +760,19 @@ export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): Re
     }));
 
   return { rows, groups };
+}
+
+/**
+ * Whether a row is the one standing for the frame at a 1-based index.
+ *
+ * Exact for an ordinary row. A collapsed run answers for every frame it folded,
+ * so a cursor parked anywhere inside a streamed reply — by scrubbing the lane,
+ * which is free-form where the step keys are not — still reads as that one event
+ * rather than as nothing at all.
+ */
+export function rowCovers(row: ReplayLogRow, index: number): boolean {
+  if (row.runStartIndex == null) return row.index === index;
+  return index >= row.runStartIndex && index <= row.index;
 }
 
 export function buildReplayMarkers(log: ReplayLog): ReplayMarker[] {
@@ -722,8 +812,60 @@ export function statusNote(row: ReplayLogRow): string | null {
   return status;
 }
 
+export interface RowIdentifier {
+  label: string;
+  value: string;
+}
+
+/**
+ * The IDs that tell this row apart, most useful first. The session's own workflow
+ * ID is left out on purpose: every row shares it, and the session anchor already
+ * shows it. A turn or message ID is only shown on the row that event is about,
+ * or it would repeat down the whole turn the same way.
+ */
+export function rowIdentifiers(row: ReplayLogRow): RowIdentifier[] {
+  const turnRow = row.event === "turn_started" || row.event === "turn_end";
+  const messageRow = row.event.startsWith("message_");
+  const candidates: Array<[string, string | undefined]> = [
+    ["tool call", row.toolId],
+    ["evaluation", row.evaluationId],
+    ["child workflow", row.childWorkflowId],
+    ["message", messageRow ? row.messageId : undefined],
+    ["turn", turnRow ? row.turnId : undefined],
+    ["offset", row.eventOffset?.toString()]
+  ];
+  return candidates.flatMap(([label, value]) => (value ? [{ label, value }] : []));
+}
+
 /* Minutes have to roll over into hours: a session left open for three hours read as
    "200m 05s", which is arithmetically right and useless to a reader. */
+const CLOCK_TIME: Intl.DateTimeFormatOptions = {
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit"
+};
+const timestampFormats = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * A frame timestamp (epoch seconds) as local wall-clock time.
+ *
+ * One formatter per option set, built once: `toLocaleTimeString` builds a new
+ * one on every call, and the chat and the log pane call it once per row.
+ */
+export function formatTimestamp(
+  seconds: number,
+  options: Intl.DateTimeFormatOptions = CLOCK_TIME
+): string {
+  if (!Number.isFinite(seconds)) return "";
+  const key = JSON.stringify(options);
+  let formatter = timestampFormats.get(key);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat(undefined, options);
+    timestampFormats.set(key, formatter);
+  }
+  return formatter.format(seconds * 1000);
+}
+
 export function formatDuration(seconds: number): string {
   const rounded = Math.max(0, Math.round(seconds));
   if (rounded < 60) return `${rounded}s`;

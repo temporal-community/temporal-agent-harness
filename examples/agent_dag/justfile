@@ -1,0 +1,78 @@
+# Scoped justfile for the agent DAG example (examples/agent_dag).
+# Run from this directory: `just <recipe>`.
+#
+# Self-contained local stack (each in its own terminal):
+#   just temporal          # 1. local Temporal dev server (or bring your own)
+#   just session-manager   # 2. packaged session-manager worker
+#   just server            # 3. FastAPI API on :8000
+#   just worker            # 4. this example's worker (both agents)
+#   just studio            # 5. the studio UI on http://127.0.0.1:5173
+#
+# uv installs the project's `examples` dependency group (the OpenAI Agents SDK, pydantic-monty) on
+# demand. First-time setup: `cp .env.example .env.local` from the repo root and fill it in
+# (Temporal connection + OPENAI_API_KEY). See README.md.
+
+# Shows a notice when running from an untagged commit (silent on a release archive).
+import '../../scripts/untagged-notice.just'
+
+# Read the single shared env file at the repo root (resolved relative to this justfile).
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Show the Temporal connection these recipes will use (read from the repo-root .env.local).
+config:
+    @echo "TEMPORAL_CONFIG_FILE = ${TEMPORAL_CONFIG_FILE:-<unset — set it in the repo-root .env.local>}"
+    @echo "TEMPORAL_PROFILE     = ${TEMPORAL_PROFILE:-default}"
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Run the packaged session-manager worker (`temporal-agent-harness session-manager`).
+session-manager:
+    cd "{{root}}" && uv run --group examples temporal-agent-harness session-manager
+
+# Serve the harness API (and the generic console) on http://localhost:8000 for this registry.
+server:
+    cd "{{root}}" && uv run --group examples temporal-agent-harness serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Run the worker for both agents: DagBuilderAgent and the DagStepAgent subagents it starts.
+worker:
+    cd "{{root}}" && uv run --group examples python -m examples.agent_dag.worker
+
+# The page has no build step (the browser compiles the components); Node only builds the harness
+# packages it imports. It needs `just server` + `just worker` running for it to talk to.
+# TODO: once @temporal-agent-harness/{client,svelte} are published to npm, drop the build and the
+# links below and point ui/index.html's import map at a CDN instead.
+#
+# Serve the studio (ui/) on http://127.0.0.1:5173.
+studio:
+    @cd "{{root}}/packages/client" && npm ci --prefer-offline --no-audit --no-fund --silent && npm run --silent build
+    @cd "{{root}}/packages/svelte" && npm ci --prefer-offline --no-audit --no-fund --silent && npm run --silent build >/dev/null
+    @ln -sfn "{{root}}/packages/client/dist" ui/harness-client
+    @ln -sfn "{{root}}/packages/svelte/dist" ui/harness-svelte
+    @echo "Agent DAG Studio: http://127.0.0.1:5173"
+    @cd ui && python3 -u -m http.server 5173 --bind 127.0.0.1 2>/dev/null
+
+# Needs packages/svelte installed, which `just studio` does.
+#
+# Type-check the studio against the generated client types.
+check-ui:
+    cd "{{justfile_directory()}}/ui" && "{{root}}/packages/svelte/node_modules/.bin/svelte-check" --tsconfig ./tsconfig.json
+
+# Generated from each agent's Python handler, init data and state models. Needs Node. CI fails
+# when the committed files are out of date.
+#
+# Regenerate both agents' TypeScript client types in client_sdk/.
+codegen-client-sdk:
+    cd "{{root}}/packages/codegen" && npm ci --prefer-offline --no-audit --no-fund && npm run --silent build
+    cd "{{root}}" && uv run --group examples temporal-agent-harness schema examples.agent_dag.workflow:DagBuilderAgentWorkflow \
+        | node packages/codegen/dist/src/cli.js - -o "{{justfile_directory()}}/client_sdk/DagBuilderAgent.ts"
+    cd "{{root}}" && uv run --group examples temporal-agent-harness schema examples.agent_dag.step_agent:DagStepAgentWorkflow \
+        | node packages/codegen/dist/src/cli.js - -o "{{justfile_directory()}}/client_sdk/DagStepAgent.ts"

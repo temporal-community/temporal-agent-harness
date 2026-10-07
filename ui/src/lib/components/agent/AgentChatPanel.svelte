@@ -9,34 +9,47 @@
     Cpu,
     History,
     MessageCircle,
-    Search,
+    RotateCw,
     ShieldCheck,
     Sparkles,
     XCircle,
     Wrench
   } from "@lucide/svelte";
   import { tick } from "svelte";
-  import { fade } from "svelte/transition";
   import type {
     AgentInboundMessage,
     AgentInterfaceFunction,
     FileCitationAnnotation,
+    MidTurn,
     Session
   } from "$lib/api/types";
+  import { approvalAlreadyResolved } from "$lib/api/httpClient";
   import { formatTokens } from "$lib/cost/pricing";
-  import Chip from "$lib/components/primitives/Chip.svelte";
+  import Chip, { type ChipTone } from "$lib/components/primitives/Chip.svelte";
+  import Copyable from "$lib/components/primitives/Copyable.svelte";
   import IconAgent from "$lib/components/primitives/IconAgent.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
+  import { codeModeHostsByRow } from "$lib/state/codeModeNesting";
   import { formatLogValue } from "$lib/state/logValue";
-  import { formatElapsedDuration, type ReplayLogRow } from "$lib/state/replayLog";
+  import { NO_THOUGHT_SUMMARY, foldTurnThought, type TurnThought } from "$lib/state/thoughtSummary";
+  import {
+    formatElapsedDuration,
+    formatTimestamp,
+    rowIdentifiers,
+    type ReplayLogRow
+  } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
+  import type { InterfaceStatus } from "$lib/state/agentRun.svelte";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
   import SchemaForm from "$lib/components/chat/SchemaForm.svelte";
+  import CallInput from "./CallInput.svelte";
+  import PendingCallbackCard, { type CallbackOutcome } from "./PendingCallbackCard.svelte";
   import {
     buildPayload,
     describeSchema,
     emptyValues,
+    problemSummary,
     singleStringField,
     validate
   } from "$lib/components/chat/schemaForm";
@@ -51,6 +64,8 @@
     role: MessageTargetRole;
     label: string;
     agentInterface: AgentInterfaceFunction[];
+    /** Absent means loaded: the caller handed the surface over directly. */
+    interfaceStatus?: InterfaceStatus;
     closed?: boolean;
   }
   /** A row in the `/` picker: either choose the target agent, or choose one of its handlers. */
@@ -59,8 +74,22 @@
     | { kind: "handler"; id: string; handler: AgentInterfaceFunction };
 
   interface Props {
+    /** The conversation as of the replay cursor. */
     items: TranscriptItem[];
     logs?: ReplayLogRow[];
+    /**
+     * The whole run, for what is live state rather than history: pending approvals, the
+     * composer's recall, and whether the session has anything in it at all. Default to the
+     * view, which is what they are at the live head.
+     */
+    liveItems?: TranscriptItem[];
+    liveLogs?: ReplayLogRow[];
+    /** The cursor is at the live head. */
+    live?: boolean;
+    /** The replay cursor and the run's length, as the transport counts them. */
+    viewIndex?: number;
+    total?: number;
+    onJumpToLive?: () => void;
     sessions?: Session[];
     agentLabel: string;
     sessionId: string;
@@ -82,11 +111,19 @@
     ) => void | Promise<void>;
     /** Stop an agent via the harness close signal — a control action, not a message. */
     onStopAgent?: (workflowId?: string | null) => void | Promise<void>;
+    /** Ask an agent for its accepted messages again, after the lookup failed. */
+    onRetryInterface?: (workflowId: string) => void | Promise<void>;
     onApproveTool?: (
       workflowId: string,
       toolId: string,
       approved: boolean,
       remember?: boolean
+    ) => void | Promise<void>;
+    /** Fulfill a pending callback tool call (e.g. answer an `ask_user` question). */
+    onCallbackResult?: (
+      workflowId: string,
+      toolId: string,
+      outcome: CallbackOutcome
     ) => void | Promise<void>;
   }
 
@@ -109,6 +146,12 @@
   let {
     items,
     logs = [],
+    liveItems,
+    liveLogs,
+    live = true,
+    viewIndex,
+    total,
+    onJumpToLive,
     sessions = [],
     agentLabel,
     sessionId,
@@ -124,7 +167,9 @@
     error = null,
     onSend,
     onStopAgent,
-    onApproveTool
+    onRetryInterface,
+    onApproveTool,
+    onCallbackResult
   }: Props = $props();
   let draft = $state("");
   let composerInput = $state<HTMLInputElement | null>(null);
@@ -134,10 +179,12 @@
   let observedSessionId = $state<string | null>(null);
   let expandedActivityTurns = $state<number[]>([]);
   let expandedLogRows = $state<string[]>([]);
-  let observedActivitySessionId = $state<string | null>(null);
-  let observedActivityOrdinals = $state<Record<number, number>>({});
+  /* By turn id rather than on the element: the list is unkeyed and re-renders as rows
+     arrive or the cursor moves, and a reader's open thought has to outlive both. */
+  let openThoughts = $state<string[]>([]);
   let resolvingApprovalIds = $state<string[]>([]);
   let approvalErrors = $state<Record<string, string>>({});
+  let decidedApprovalIds = $state<string[]>([]);
   let messageListElement = $state<HTMLDivElement | null>(null);
   let pickerSelectionIndex = $state(0);
   let pickerSignature = $state("");
@@ -148,17 +195,40 @@
   // Form values for a handler that is not single-string-shaped, keyed by field name.
   let handlerFormValues = $state<Record<string, unknown>>({});
   let handlerFormError = $state<string | null>(null);
+  let handlerFormAttempted = $state(false);
 
   const transcriptMessages = $derived(seedMessages(items));
   const messages = $derived([...transcriptMessages, ...localMessages]);
+  const liveMessages = $derived(
+    liveItems ? [...seedMessages(liveItems), ...localMessages] : messages
+  );
+  const runLogs = $derived(liveLogs ?? logs);
+  const viewRowIds = $derived(new Set(logs.map((row) => row.id)));
   const sentUserMessages = $derived(
-    messages
+    liveMessages
       .filter((message) => message.role === "user")
       .map((message) => message.text)
   );
   const logsByTurn = $derived(groupLogsByTurn(logs));
-  const resolvedApprovalKeys = $derived(resolvedApprovalIds(logs));
-  const pendingApprovalRows = $derived(logs.filter((row) => isApprovalPending(row)));
+  const codeModeHosts = $derived(codeModeHostsByRow(logs));
+  const resolvedApprovalKeys = $derived(resolvedApprovalIds(runLogs));
+  const pendingApprovalRows = $derived(runLogs.filter((row) => isApprovalPending(row)));
+  /* Cleared by `callback_resolved` whoever fulfilled it — this pane, another tab, or a CLI. */
+  const resolvedCallbackKeys = $derived(
+    new Set(
+      runLogs
+        .filter((row) => row.event === "callback_resolved")
+        .map((row) => approvalKey(row))
+    )
+  );
+  const pendingCallbackRows = $derived(
+    runLogs.filter(
+      (row) =>
+        row.event === "callback_requested" &&
+        approvalKey(row) != null &&
+        !resolvedCallbackKeys.has(approvalKey(row))
+    )
+  );
   const sources = $derived(uniqueCitations(messages.flatMap((message) => message.citations)));
   const activeSession = $derived(
     sessions.find((item) => item.workflow_id === sessionId) ?? null
@@ -215,7 +285,22 @@
   const composerPlaceholder = $derived.by(() => {
     if (closed) return `${agentLabel} is closed`;
     if (activeTarget?.closed) return `${activeTarget.label} is closed`;
-    if (handlers.length === 0) return "This agent declares no messages";
+    if (handlers.length === 0) {
+      const label = activeTarget?.label ?? agentLabel;
+      const status = activeTarget?.interfaceStatus ?? "loaded";
+      switch (status) {
+        case "loading":
+          return `Loading the messages ${label} accepts…`;
+        case "failed":
+          return `Couldn't load the messages ${label} accepts`;
+        case "loaded":
+          return "This agent declares no messages";
+        default: {
+          const unhandled: never = status;
+          return unhandled;
+        }
+      }
+    }
     if (!selectedHandler) return `Message ${agentLabel}`;
     // The field's own title is the best hint we have, and it comes from the schema — so the
     // prompt reads naturally for `text`, `script`, `prompt`, or anything else.
@@ -260,6 +345,10 @@
   const canSubmitForm = $derived(
     canSendToTarget && !composerBusy && textFieldName == null && handlerFields.length > 0
   );
+  const handlerProblems = $derived(
+    handlerFormAttempted ? validate(handlerFields, handlerFormValues) : {}
+  );
+  const handlerFormAlert = $derived(problemSummary(handlerProblems) ?? handlerFormError);
   const latestMessage = $derived(messages[messages.length - 1] ?? null);
   const latestLog = $derived(logs[logs.length - 1] ?? null);
   const chatScrollSignature = $derived(
@@ -275,7 +364,9 @@
       sending ? "sending" : "idle",
       connecting ? "connecting" : "connected",
       resolvingApprovalIds.length,
-      Object.keys(approvalErrors).length
+      pendingCallbackRows.length,
+      Object.keys(approvalErrors).length,
+      decidedApprovalIds.length
     ].join("|")
   );
   $effect(() => {
@@ -290,21 +381,9 @@
       historyIndex = -1;
       historyStash = "";
       localMessages = [];
-      observedActivitySessionId = null;
-      observedActivityOrdinals = {};
       expandedActivityTurns = [];
       expandedLogRows = [];
     }
-  });
-
-  $effect(() => {
-    const nextOrdinals: Record<number, number> = {};
-    for (const [turnNumber, rows] of logsByTurn) {
-      const active = rows[rows.length - 1];
-      if (active) nextOrdinals[turnNumber] = active.ordinal;
-    }
-    observedActivitySessionId = sessionId;
-    observedActivityOrdinals = nextOrdinals;
   });
 
   $effect(() => {
@@ -337,6 +416,7 @@
     if (resolved !== selectedHandlerName) {
       selectedHandlerName = resolved;
       handlerFormError = null;
+      handlerFormAttempted = false;
       handlerFormValues = resolved && textFieldName == null
         ? emptyValues(describeSchema(selectedHandler!.parameters))
         : {};
@@ -454,6 +534,11 @@
     return key ? approvalErrors[key] ?? null : null;
   }
 
+  function approvalDecidedElsewhere(row: ReplayLogRow): boolean {
+    const key = approvalKey(row);
+    return key != null && decidedApprovalIds.includes(key);
+  }
+
   function logsForTurn(turnNumber: number | undefined): ReplayLogRow[] {
     if (turnNumber == null) return [];
     return logsByTurn.get(turnNumber) ?? [];
@@ -501,16 +586,6 @@
     element.scrollTop = element.scrollHeight;
   }
 
-  function activeLogFadeDuration(
-    turnNumber: number | undefined,
-    activeLog: ReplayLogRow | null
-  ): number {
-    if (turnNumber == null || activeLog == null) return 0;
-    if (observedActivitySessionId !== sessionId) return 0;
-    const observedOrdinal = observedActivityOrdinals[turnNumber];
-    return observedOrdinal != null && observedOrdinal !== activeLog.ordinal ? 150 : 0;
-  }
-
   function activityExpanded(turnNumber: number | undefined): boolean {
     return turnNumber != null && expandedActivityTurns.includes(turnNumber);
   }
@@ -520,6 +595,19 @@
     expandedActivityTurns = activityExpanded(turnNumber)
       ? expandedActivityTurns.filter((item) => item !== turnNumber)
       : [...expandedActivityTurns, turnNumber];
+  }
+
+  function setThoughtOpen(turnId: string, open: boolean): void {
+    if (open === openThoughts.includes(turnId)) return;
+    openThoughts = open
+      ? [...openThoughts, turnId]
+      : openThoughts.filter((item) => item !== turnId);
+  }
+
+  function thoughtLabel(thought: TurnThought): string {
+    return thought.seconds > 0
+      ? `Thought ${formatElapsedDuration(thought.seconds * 1000)}`
+      : "Thought";
   }
 
   function logExpanded(row: ReplayLogRow): boolean {
@@ -737,21 +825,17 @@
     try {
       await onApproveTool(approvalWorkflowId(row), toolId, approved, remember);
     } catch (error) {
-      approvalErrors = {
-        ...approvalErrors,
-        [key]: error instanceof Error ? error.message : "Approval request failed."
-      };
+      if (approvalAlreadyResolved(error)) {
+        decidedApprovalIds = [...decidedApprovalIds, key];
+      } else {
+        approvalErrors = {
+          ...approvalErrors,
+          [key]: error instanceof Error ? error.message : "Approval request failed."
+        };
+      }
     } finally {
       resolvingApprovalIds = resolvingApprovalIds.filter((item) => item !== key);
     }
-  }
-
-  function time(value: number): string {
-    return new Date(value * 1000).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
   }
 
   function citationUrl(citation: FileCitationAnnotation): string {
@@ -876,6 +960,21 @@
     return "needs idle";
   }
 
+  function midTurnTone(mode: MidTurn): ChipTone {
+    switch (mode) {
+      case "enqueue":
+        return "neutral";
+      case "accept":
+        return "success";
+      case "reject":
+        return "retry";
+      default: {
+        const unhandled: never = mode;
+        return unhandled;
+      }
+    }
+  }
+
   function midTurnHint(mode: AgentInterfaceFunction["mid_turn"]): string {
     if (mode === "enqueue") return "Sent while busy: waits its turn behind the current work.";
     if (mode === "accept") return "Sent while busy: joins the running turn and applies now.";
@@ -892,6 +991,7 @@
   function selectHandler(handler: AgentInterfaceFunction): void {
     selectedHandlerName = handler.name;
     handlerFormError = null;
+    handlerFormAttempted = false;
     const single = singleStringField(handler.parameters);
     handlerFormValues = single ? {} : emptyValues(describeSchema(handler.parameters));
     // Clear the `/` draft: the handler is chosen now, so the box (or the form) takes over.
@@ -930,11 +1030,9 @@
   async function submitHandlerForm(): Promise<void> {
     const handler = selectedHandler;
     if (!handler || !canSubmitForm) return;
-    const problems = validate(handlerFields, handlerFormValues);
-    if (problems.length > 0) {
-      handlerFormError = problems.join(" ");
-      return;
-    }
+    handlerFormAttempted = true;
+    handlerFormError = null;
+    if (Object.keys(handlerProblems).length > 0) return;
     let payload;
     try {
       payload = buildPayload(handlerFields, handlerFormValues);
@@ -943,8 +1041,8 @@
         error instanceof Error ? error.message : "Could not build the payload.";
       return;
     }
-    handlerFormError = null;
     await dispatchMessage(handler, payload, summarizePayload(handler.name, payload));
+    handlerFormAttempted = false;
     handlerFormValues = emptyValues(handlerFields);
   }
 
@@ -1100,6 +1198,16 @@
     resetHistoryRecall();
   }
 
+  /* Only with more than one handler or target, so a single-handler chat agent still looks
+     like a plain chat box. */
+  const showTarget = $derived(
+    selectedHandler != null && (handlers.length > 1 || targetsSubagent || showTargetPicker)
+  );
+  const showStop = $derived(onStopAgent != null && activeTarget != null && !activeTarget.closed);
+  const showRetry = $derived(
+    onRetryInterface != null && activeTarget?.interfaceStatus === "failed" && !activeTarget.closed
+  );
+
   function handleSubmit(event: SubmitEvent): void {
     event.preventDefault();
     void sendMessage();
@@ -1116,22 +1224,43 @@
   aria-label={`${agentLabel} customer chat`}
 >
   <div class="chat-shell">
+    {#if !live}
+      <!-- The Decisions pane's rule: a view parked behind the run says so, and offers the
+           way back. Laid over the scroller rather than in the grid, so arriving and leaving
+           never resizes the message list under the reader. -->
+      <div class="replay-strip">
+        <span class="kicker">
+          Replay{#if viewIndex != null && total != null}&nbsp;· event {viewIndex} / {total}{/if}
+        </span>
+        {#if onJumpToLive}
+          <Chip
+            size="xs"
+            fill="quiet"
+            aria-label="Jump to latest step"
+            title="Jump to latest step"
+            onclick={onJumpToLive}
+          >
+            Latest
+          </Chip>
+        {/if}
+      </div>
+    {/if}
     <div class="message-list" bind:this={messageListElement}>
-      {#if connecting && messages.length === 0}
+      {#if connecting && liveMessages.length === 0}
         <div class="empty-chat">
           <Sparkles size={18} />
           <span>Connecting to {agentLabel}...</span>
         </div>
-      {:else if closed && messages.length === 0}
+      {:else if closed && liveMessages.length === 0}
         <div class="empty-chat closed-empty">
           <CheckCircle2 size={18} />
           <span>{agentLabel} is closed.</span>
         </div>
-      {:else if error && messages.length === 0}
+      {:else if error && liveMessages.length === 0}
         <div class="empty-chat error">
-          <span>{error}</span>
+          <Copyable value={error} label="Copy error"><span>{error}</span></Copyable>
         </div>
-      {:else if logs.length === 0 && messages.length === 0}
+      {:else if runLogs.length === 0 && liveMessages.length === 0}
         <!-- Attached, served, and carrying nothing: the case the three branches
              above left as a blank pane, which is what an operator returned to a
              session from a probe run sees. Said in the same place a missing
@@ -1165,93 +1294,135 @@
           {@const expanded = activityExpanded(message.turnNumber)}
           {#if activityLogs.length > 0 && activeLog}
             {@const turnSummary = turnActivitySummary(message.turnNumber, activityLogs)}
+            {@const thought = foldTurnThought(activityLogs)}
             <div class={`activity-feed ${expanded ? "expanded" : ""}`}>
-              {#key activeLog.ordinal}
-                <button
-                  type="button"
-                  class={`activity-summary ${expanded ? "expanded" : ""} activity-line turn-summary active`}
-                  aria-expanded={expanded}
-                  aria-label={expanded ? "Collapse activity logs" : "Expand activity logs"}
-                  onclick={() => toggleActivity(message.turnNumber)}
-                  in:fade={{ duration: activeLogFadeDuration(message.turnNumber, activeLog) }}
+              <button
+                type="button"
+                class={`activity-summary ${expanded ? "expanded" : ""} activity-line turn-summary active`}
+                aria-expanded={expanded}
+                aria-label={expanded ? "Collapse activity logs" : "Expand activity logs"}
+                onclick={() => toggleActivity(message.turnNumber)}
+              >
+                <span class="activity-icon" aria-hidden="true">
+                  <History size={14} />
+                </span>
+                <span class="activity-copy">
+                  <span class="activity-heading">
+                    <strong>{turnSummary.label}</strong>
+                    <span>{turnSummary.detail}</span>
+                  </span>
+                  <span class="activity-message">{turnMessagePreview(message.text)}</span>
+                </span>
+                <span
+                  class="activity-duration"
+                  aria-hidden={turnSummary.duration ? undefined : "true"}
                 >
-                  <span class="activity-icon" aria-hidden="true">
-                    <History size={14} />
-                  </span>
-                  <span class="activity-copy">
-                    <span class="activity-heading">
-                      <strong>{turnSummary.label}</strong>
-                      <span>{turnSummary.detail}</span>
-                    </span>
-                    <span class="activity-message">{turnMessagePreview(message.text)}</span>
-                  </span>
-                  <span
-                    class="activity-duration"
-                    aria-hidden={turnSummary.duration ? undefined : "true"}
-                  >
-                    {turnSummary.duration ?? ""}
-                  </span>
-                  <time>{time(turnSummary.endedAt)}</time>
-                  <ChevronDown class="activity-chevron" size={14} aria-hidden="true" />
-                </button>
-              {/key}
+                  {turnSummary.duration ?? ""}
+                </span>
+                <time>{formatTimestamp(turnSummary.endedAt)}</time>
+                <ChevronDown class="activity-chevron" size={14} aria-hidden="true" />
+              </button>
 
               {#if expanded}
                 <div class="activity-list">
-                  {#each activityLogs as log}
-                    {@const rowExpanded = logExpanded(log)}
-                    {@const fullDetail = logFullDetail(log)}
-                    {@const scriptDetail = logScript(log)}
-                    {@const rowDuration = logElapsedDuration(log, activityLogs)}
-                    <div class={`activity-row ${rowExpanded ? "expanded" : ""}`}>
-                      <button
-                        type="button"
-                        class={`${activityLineClass(log, log.ordinal === activeLog.ordinal)} activity-row-button`}
-                        aria-expanded={rowExpanded}
-                        onclick={() => toggleLog(log)}
-                      >
-                        <span class="activity-icon" aria-hidden="true">
-                          {#if log.actor === "model"}
-                            <Cpu size={14} />
-                          {:else if log.actor === "reasoning"}
-                            <BrainCircuit size={14} />
-                          {:else if log.actor === "tool"}
-                            <Wrench size={14} />
-                          {:else if log.actor === "approval"}
-                            <ShieldCheck size={14} />
-                          {:else if log.actor === "subagent"}
-                            <MessageCircle size={14} />
-                          {:else if logTone(log) === "error"}
-                            <AlertTriangle size={14} />
-                          {:else if logTone(log) === "done"}
-                            <CheckCircle2 size={14} />
-                          {:else}
-                            <Clock3 size={14} />
-                          {/if}
-                        </span>
-                        <span class="activity-copy">
-                          <strong>{log.label}</strong>
-                          {#if logDetail(log)}
-                            <span>{logDetail(log)}</span>
-                          {/if}
-                        </span>
-                        <span
-                          class="activity-duration"
-                          aria-hidden={rowDuration ? undefined : "true"}
+                  {#each activityLogs as log (log.id)}
+                    {#if log.actor === "reasoning" && thought}
+                      {#if log.id === thought.firstRowId}
+                        <details
+                          class="activity-row thought"
+                          open={openThoughts.includes(thought.turnId)}
+                          ontoggle={(event) => setThoughtOpen(thought.turnId, event.currentTarget.open)}
                         >
-                          {rowDuration ?? ""}
-                        </span>
-                        <time>{time(log.timestamp)}</time>
-                        <ChevronDown class="activity-row-chevron" size={13} aria-hidden="true" />
-                      </button>
-
-                      {#if rowExpanded}
-                        {#if scriptDetail}
-                          <div class="script-detail-wrap"><pre class="activity-script-detail" data-language="python"><code>{scriptDetail}</code></pre></div>
-                        {/if}
-                        <pre class="activity-detail">{fullDetail}</pre>
+                          <summary class="thought-summary">
+                            <span class="thought-label">{thoughtLabel(thought)}</span>
+                            {#if thought.thinking}
+                              <StatusChip label="thinking" kind="reasoning" active compact />
+                            {/if}
+                          </summary>
+                          <p class="thought-text">{thought.text.trim() || NO_THOUGHT_SUMMARY}</p>
+                        </details>
                       {/if}
-                    </div>
+                    {:else}
+                      {@const rowExpanded = logExpanded(log)}
+                      {@const fullDetail = logFullDetail(log)}
+                      {@const scriptDetail = logScript(log)}
+                      {@const rowDuration = logElapsedDuration(log, activityLogs)}
+                      {@const nested = codeModeHosts.has(log.id)}
+                      <div
+                        class={`activity-row ${rowExpanded ? "expanded" : ""} ${nested ? "nested" : ""}`}
+                      >
+                        <button
+                          type="button"
+                          class={`${activityLineClass(log, log.ordinal === activeLog.ordinal)} activity-row-button`}
+                          aria-expanded={rowExpanded}
+                          onclick={() => toggleLog(log)}
+                        >
+                          <span class="activity-icon" aria-hidden="true">
+                            {#if log.actor === "model"}
+                              <Cpu size={14} />
+                            {:else if log.actor === "reasoning"}
+                              <BrainCircuit size={14} />
+                            {:else if log.actor === "tool"}
+                              <Wrench size={14} />
+                            {:else if log.actor === "approval"}
+                              <ShieldCheck size={14} />
+                            {:else if log.actor === "subagent"}
+                              <MessageCircle size={14} />
+                            {:else if logTone(log) === "error"}
+                              <AlertTriangle size={14} />
+                            {:else if logTone(log) === "done"}
+                              <CheckCircle2 size={14} />
+                            {:else}
+                              <Clock3 size={14} />
+                            {/if}
+                          </span>
+                          <span class="activity-copy">
+                            <strong>{log.label}</strong>
+                            {#if nested}
+                              <StatusChip label="host call" kind="tool" compact />
+                            {/if}
+                            {#if logDetail(log)}
+                              <span>{logDetail(log)}</span>
+                            {/if}
+                          </span>
+                          <span
+                            class="activity-duration"
+                            aria-hidden={rowDuration ? undefined : "true"}
+                          >
+                            {rowDuration ?? ""}
+                          </span>
+                          <time>{formatTimestamp(log.timestamp)}</time>
+                          <ChevronDown class="activity-row-chevron" size={13} aria-hidden="true" />
+                        </button>
+
+                        {#if rowExpanded}
+                          {@const ids = rowIdentifiers(log)}
+                          {#if scriptDetail}
+                            <div class="script-detail-wrap"><pre class="activity-script-detail" data-language="python"><code>{scriptDetail}</code></pre></div>
+                          {/if}
+                          {#if ids.length}
+                            <dl class="row-ids">
+                              {#each ids as id (id.label)}
+                                <div>
+                                  <dt>{id.label}</dt>
+                                  <dd>
+                                    <Copyable value={id.value} label={`Copy ${id.label} ID`}>
+                                      <code title={id.value}>{id.value}</code>
+                                    </Copyable>
+                                  </dd>
+                                </div>
+                              {/each}
+                            </dl>
+                          {/if}
+                          <section class="activity-full" aria-label="Full details">
+                            <Copyable value={fullDetail} label="Copy full details">
+                              <span class="activity-full-label">Full details</span>
+                            </Copyable>
+                            <pre class="activity-detail">{fullDetail}</pre>
+                          </section>
+                        {/if}
+                      </div>
+                    {/if}
                   {/each}
                 </div>
               {/if}
@@ -1260,7 +1431,7 @@
         {/if}
       {/each}
 
-      {#if sending && !closed}
+      {#if sending && !closed && live}
         <article class="message assistant">
           <div class="assistant-avatar" aria-hidden="true">
             <IconAgent size={16} />
@@ -1272,8 +1443,10 @@
       {/if}
     </div>
 
-    {#if !closed && error && messages.length > 0}
-      <div class="error-banner">{error}</div>
+    {#if !closed && error && liveMessages.length > 0}
+      <div class="error-banner">
+        <Copyable value={error} label="Copy error"><span>{error}</span></Copyable>
+      </div>
     {/if}
 
     {#if closed}
@@ -1283,28 +1456,47 @@
       </div>
     {/if}
 
-    {#if pendingApprovalRows.length > 0}
-      <section class="pending-approvals" aria-label="Pending tool approvals">
-        <header class="pending-approvals-head">
-          <StatusChip
-            label={`${pendingApprovalRows.length} approval${
-              pendingApprovalRows.length === 1 ? "" : "s"
-            } needed`}
-            kind="approval"
-            detail="human gate"
-            active
-          />
-        </header>
+    {#if pendingApprovalRows.length > 0 || pendingCallbackRows.length > 0}
+      <div class="pending-stack">
+        {#if pendingApprovalRows.length > 0}
+          <!-- Chip, then a card per gated call: identity, the details, the answer.
+               That is the thing that scales — a second approval is another card, not
+               another kind of layout — and it is what the rest of the harness already
+               does with a tool that needs a decision. -->
+          <section class="pending-approvals" aria-label="Pending tool approvals">
+            <StatusChip
+              label={`${pendingApprovalRows.length} approval${
+                pendingApprovalRows.length === 1 ? "" : "s"
+              } needed`}
+              kind="approval"
+              active
+            />
 
-        <div class="pending-approval-list">
-          {#each pendingApprovalRows as approval}
-            <article class="pending-approval-card">
-              <div class="pending-approval-copy">
-                <strong>{approval.toolName ?? approval.body ?? "Tool approval"}</strong>
-                <span>Turn {approval.turnNumber} · {time(approval.timestamp)}</span>
-              </div>
-              <div class="approval-actions">
-                <div class="approval-buttons">
+            {#each pendingApprovalRows as approval (approvalKey(approval) ?? approval.ordinal)}
+              <article class="pending-approval-card">
+                <header class="pending-approval-head">
+                  <strong>{approval.toolName || approval.body || "Tool approval"}</strong>
+                  <span>Turn {approval.turnNumber} · {formatTimestamp(approval.timestamp)}</span>
+                </header>
+                {#if approval.toolId}
+                  <dl class="row-ids">
+                    <div>
+                      <dt>tool call</dt>
+                      <dd>
+                        <Copyable value={approval.toolId} label="Copy tool call ID">
+                          <code title={approval.toolId}>{approval.toolId}</code>
+                        </Copyable>
+                      </dd>
+                    </div>
+                  </dl>
+                {/if}
+                <CallInput input={approval.input} />
+                {#if !viewRowIds.has(approval.id)}
+                  <!-- Live state, not history: the agent is blocked on this now, so it stays
+                       answerable however far back the cursor is. -->
+                  <p class="approval-note">Requested ahead of the replay cursor · waiting on you now</p>
+                {/if}
+                <div class="approval-actions">
                   <Chip
                     class="approval-button"
                     tone="success"
@@ -1331,7 +1523,7 @@
                     {#snippet lead()}
                       <ShieldCheck size={13} />
                     {/snippet}
-                    Approve &amp; remember
+                    Always allow
                   </Chip>
                   <Chip
                     class="approval-button approval-reject"
@@ -1348,14 +1540,38 @@
                     Reject
                   </Chip>
                 </div>
-                {#if approvalError(approval)}
-                  <span class="approval-error">{approvalError(approval)}</span>
+                {#if approvalDecidedElsewhere(approval)}
+                  <p class="approval-note">Already decided</p>
+                {:else if approvalError(approval)}
+                  <p class="approval-error" role="alert">{approvalError(approval)}</p>
                 {/if}
-              </div>
-            </article>
-          {/each}
-        </div>
-      </section>
+              </article>
+            {/each}
+          </section>
+        {/if}
+
+        {#if pendingCallbackRows.length > 0}
+          <section class="pending-approvals" aria-label="Pending callback requests">
+            <StatusChip
+              label={`${pendingCallbackRows.length} response${
+                pendingCallbackRows.length === 1 ? "" : "s"
+              } needed`}
+              kind="approval"
+              active
+            />
+            {#each pendingCallbackRows as callback (approvalKey(callback))}
+              <PendingCallbackCard
+                row={callback}
+                ahead={!viewRowIds.has(callback.id)}
+                onSubmit={onCallbackResult && callback.toolId
+                  ? (outcome) =>
+                      onCallbackResult(approvalWorkflowId(callback), callback.toolId!, outcome)
+                  : undefined}
+              />
+            {/each}
+          </section>
+        {/if}
+      </div>
     {/if}
 
     <div class="composer-wrap">
@@ -1404,30 +1620,68 @@
         </section>
       {/if}
 
-      <!-- Which handler is being addressed, and what sending mid-turn will do. Shown whenever
-           there is more than one handler or more than one target, so a single-handler chat
-           agent still looks like a plain chat box. -->
-      {#if selectedHandler && (handlers.length > 1 || targetsSubagent || showTargetPicker)}
-        <div class="composer-target">
-          <button
-            type="button"
-            class="target-chip"
-            disabled={composerDisabled}
-            title="Choose which message to send (or type / in the box)"
-            onclick={() => {
-              draft = "/";
-              composerInput?.focus();
-            }}
-          >
-            <strong>{selectedHandler.name}</strong>
-            {#if targetsSubagent || showTargetPicker}
-              <span class="target-of">&rarr; {activeTarget?.label ?? agentLabel}</span>
-            {/if}
-            <ChevronDown size={12} aria-hidden="true" />
-          </button>
-          <span class="mid-turn {selectedHandler.mid_turn}" title={midTurnHint(selectedHandler.mid_turn)}>
-            {midTurnLabel(selectedHandler.mid_turn)}
-          </span>
+      <!-- Which handler is being addressed and what sending mid-turn will do, beside the stop
+           control. -->
+      {#if showTarget || showStop || showRetry}
+        <div class="composer-toolbar">
+          {#if showTarget && selectedHandler}
+            <Chip
+              class="target-chip"
+              tone="model"
+              fill="quiet"
+              toned
+              disabled={composerDisabled}
+              title="Choose which message to send (or type / in the box)"
+              onclick={() => {
+                draft = "/";
+                composerInput?.focus();
+              }}
+            >
+              <span class="target-name">
+                {selectedHandler.name}{#if targetsSubagent || showTargetPicker}&nbsp;&rarr;
+                  {activeTarget?.label ?? agentLabel}{/if}
+              </span>
+              <ChevronDown size={12} aria-hidden="true" />
+            </Chip>
+            <Chip
+              tone={midTurnTone(selectedHandler.mid_turn)}
+              fill="quiet"
+              toned={selectedHandler.mid_turn !== "enqueue"}
+              label={midTurnLabel(selectedHandler.mid_turn)}
+              title={midTurnHint(selectedHandler.mid_turn)}
+            />
+          {/if}
+          {#if showRetry}
+            <Chip
+              fill="quiet"
+              title="Ask the agent for the messages it accepts again"
+              onclick={() => activeTarget && void onRetryInterface?.(activeTarget.workflowId)}
+            >
+              {#snippet lead()}
+                <RotateCw size={13} />
+              {/snippet}
+              Retry
+            </Chip>
+          {/if}
+          {#if showStop}
+            <!-- Stopping is a control-plane action (the harness close signal), not a message —
+                 so it works whatever the agent happens to accept. -->
+            <Chip
+              class="stop-chip"
+              tone="error"
+              fill="quiet"
+              toned
+              disabled={creatingSession}
+              aria-label={`Stop ${activeTarget?.label ?? agentLabel}`}
+              title={`Stop ${activeTarget?.label ?? agentLabel}`}
+              onclick={() => void onStopAgent?.(activeTarget?.workflowId ?? null)}
+            >
+              {#snippet lead()}
+                <XCircle size={13} />
+              {/snippet}
+              Stop
+            </Chip>
+          {/if}
         </div>
       {/if}
 
@@ -1446,9 +1700,10 @@
             bind:values={handlerFormValues}
             disabled={composerDisabled}
             idPrefix={`handler-${selectedHandler.name}`}
+            errors={handlerProblems}
           />
-          {#if handlerFormError}
-            <p class="form-error">{handlerFormError}</p>
+          {#if handlerFormAlert}
+            <p class="form-error" role="alert">{handlerFormAlert}</p>
           {/if}
           <div class="form-actions">
             <button type="submit" class="form-send" disabled={!canSubmitForm}>
@@ -1458,7 +1713,6 @@
         </form>
       {:else}
         <form class="composer" class:closed={closed} onsubmit={handleSubmit}>
-          <Search size={17} />
           <input
             bind:this={composerInput}
             bind:value={draft}
@@ -1478,21 +1732,6 @@
         </form>
       {/if}
 
-      {#if onStopAgent && activeTarget && !activeTarget.closed}
-        <!-- Stopping is a control-plane action (the harness close signal), not a message — so
-             it works whatever the agent happens to accept. -->
-        <div class="composer-actions">
-          <button
-            type="button"
-            class="stop-agent"
-            disabled={creatingSession}
-            onclick={() => void onStopAgent?.(activeTarget?.workflowId ?? null)}
-          >
-            <XCircle size={13} aria-hidden="true" />
-            Stop {activeTarget.label}
-          </button>
-        </div>
-      {/if}
     </div>
   </div>
 
@@ -1500,6 +1739,7 @@
 
 <style>
   .agent-chat {
+    container: agent-chat / inline-size;
     width: 100%;
     height: 100%;
     min-height: 0;
@@ -1512,10 +1752,15 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* Every grid in the chat pins its one column to `minmax(0, 1fr)`. Left implicit it is
+     `auto`, which grows to its widest child's min-content — an approval card, a long tool
+     input — and carries everything else past the pane's edge with it. */
   .chat-shell {
+    position: relative;
     min-width: 0;
     min-height: 0;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) auto auto;
     border-right: 1px solid var(--border);
   }
@@ -1524,11 +1769,16 @@
     border-right: 0;
   }
 
+  /* Named rows, so an absent banner or pending stack never moves the composer into a row
+     sized for something else. The pane clips its bottom edge, so when it is short only the
+     pending stack gives way, scrolling inside its row while the transcript keeps a floor. */
   .agent-chat.headerless .chat-shell {
-    grid-template-rows: minmax(0, 1fr) auto auto;
+    grid-template-rows: minmax(min(96px, 25%), 1fr) auto minmax(0, auto) auto;
+    grid-template-areas: "messages" "banner" "pending" "composer";
   }
 
   .message-list {
+    grid-area: messages;
     min-height: 0;
     overflow-y: auto;
     overflow-anchor: none;
@@ -1536,6 +1786,8 @@
     flex-direction: column;
     gap: 16px;
     padding: 22px clamp(18px, 5vw, 72px);
+    /* Whatever a message stacks — a citation's tooltip — stays under the replay strip. */
+    isolation: isolate;
   }
 
   .agent-chat.embedded .message-list {
@@ -1640,6 +1892,7 @@
     position: relative;
     width: min(720px, 82%);
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     align-self: flex-start;
     margin-left: 40px;
     padding: 8px 10px;
@@ -1681,6 +1934,72 @@
     min-width: 0;
     display: grid;
     gap: 6px;
+  }
+
+  .thought-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--gap-sm);
+    width: max-content;
+    list-style: none;
+    cursor: pointer;
+  }
+
+  .thought-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .thought-summary:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    outline-offset: 2px;
+  }
+
+  .thought-label {
+    padding: 2px 6px;
+    border: 1px solid color-mix(in srgb, var(--reasoning) 40%, var(--border));
+    border-radius: var(--radius-sm);
+    background: var(--surface-1);
+    color: var(--reasoning);
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    letter-spacing: var(--label-tracking);
+    text-transform: uppercase;
+  }
+
+  .thought-text {
+    margin: 0 0 0 30px;
+    color: var(--text-3);
+    font-size: var(--font-sm);
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* A call a Code Mode script made, hung off the host's icon column. */
+  .activity-row.nested {
+    margin-left: 10px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border);
+  }
+
+  /* The chip names why the row is indented, so it keeps its words; the tool name after it
+     is what gives way. `Chip` allows itself to shrink, which suits a lone chip, not this. */
+  .activity-row-button .activity-copy > :global(.chip) {
+    flex-shrink: 0;
+  }
+
+  /* At the default chat width a label, the chip and a tool name do not fit on one line beside
+     the duration and time, so the name wraps below them rather than vanishing. */
+  @container agent-chat (max-width: 480px) {
+    .activity-row.nested {
+      margin-left: 4px;
+      padding-left: 6px;
+    }
+
+    .activity-row.nested .activity-copy {
+      flex-wrap: wrap;
+      row-gap: 2px;
+    }
   }
 
   .activity-summary,
@@ -1859,11 +2178,68 @@
     transform: rotate(180deg);
   }
 
+  .activity-full {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+    margin-left: 30px;
+  }
+
+  .activity-full-label {
+    color: var(--text-3);
+    font-size: var(--font-sm);
+    font-weight: 650;
+  }
+
+  /* Same look as the Logs pane's ID list: one label column as wide as its widest
+     label, so the values line up whichever IDs a row has. */
+  .row-ids {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 2px 6px;
+    min-width: 0;
+    margin: 0;
+  }
+
+  .activity-row .row-ids {
+    margin-left: 30px;
+  }
+
+  .row-ids div {
+    min-width: 0;
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    align-items: center;
+  }
+
+  .row-ids dt {
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    text-transform: uppercase;
+  }
+
+  .row-ids dd {
+    min-width: 0;
+    margin: 0;
+  }
+
+  .row-ids code {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: var(--font-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .activity-detail {
     min-width: 0;
     max-height: 320px;
     overflow: auto;
-    margin: 0 0 0 30px;
+    margin: 0;
     padding: 8px 10px;
     border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
     border-radius: var(--radius-md);
@@ -1917,18 +2293,13 @@
 
   .approval-actions {
     min-width: 0;
-    display: grid;
-    gap: var(--gap-xs);
-  }
-
-  .approval-buttons {
     display: flex;
     flex-wrap: wrap;
     gap: var(--gap-sm);
     align-items: center;
   }
 
-  .pending-approval-card .approval-actions .approval-buttons :global(.approval-button) {
+  .pending-approval-card .approval-actions :global(.approval-button) {
     border-color: var(--color-border-tertiary);
     border-radius: 4px;
     background: var(--color-interactive-tertiary);
@@ -1938,34 +2309,24 @@
     text-transform: none;
   }
 
-  .pending-approval-card
-    .approval-actions
-    .approval-buttons
-    :global(.approval-button:hover:not(:disabled)) {
+  .pending-approval-card .approval-actions :global(.approval-button:hover:not(:disabled)) {
     border-color: var(--color-border-tertiary);
     background: var(--color-interactive-tertiary-hover);
     color: var(--color-content-primary);
   }
 
-  .pending-approval-card
-    .approval-actions
-    .approval-buttons
-    :global(.approval-button:active:not(:disabled)) {
+  .pending-approval-card .approval-actions :global(.approval-button:active:not(:disabled)) {
     border-color: var(--color-border-tertiary);
     background: var(--color-interactive-tertiary-press);
   }
 
-  .pending-approval-card
-    .approval-actions
-    .approval-buttons
-    :global(.approval-button.approval-reject) {
+  .pending-approval-card .approval-actions :global(.approval-button.approval-reject) {
     border-color: var(--color-border-danger);
     background: var(--color-surface-overlay-danger);
   }
 
   .pending-approval-card
     .approval-actions
-    .approval-buttons
     :global(.approval-button.approval-reject:hover:not(:disabled)) {
     border-color: var(--color-border-danger);
     background: var(--color-surface-danger);
@@ -1973,44 +2334,78 @@
 
   .pending-approval-card
     .approval-actions
-    .approval-buttons
     :global(.approval-button.approval-reject:active:not(:disabled)) {
     border-color: var(--color-border-danger);
     background: var(--color-surface-danger);
   }
 
   .approval-error {
+    max-height: 6lh;
+    margin: 0;
     min-width: 0;
+    overflow-y: auto;
     color: var(--error);
     font-size: var(--font-sm);
+    overflow-wrap: anywhere;
   }
 
-  .pending-approvals {
-    display: grid;
-    gap: var(--gap-md);
-    margin: 0 clamp(18px, 5vw, 72px) var(--gap-lg);
-  }
-
-  .agent-chat.embedded .pending-approvals {
-    margin: 0 var(--gap-lg) var(--gap-lg);
-  }
-
-  .pending-approvals-head {
-    min-width: 0;
+  .replay-strip {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    z-index: 2;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 10px;
+    gap: var(--gap-sm);
+    padding: var(--gap-xs) 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-0);
   }
 
-  .pending-approval-list {
+  .replay-strip .kicker {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .approval-note {
+    margin: 0;
+    color: var(--text-3);
+    font-size: var(--font-sm);
+  }
+
+  .pending-stack {
+    grid-area: pending;
+    min-height: 0;
     display: grid;
-    gap: var(--gap-sm);
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 10px;
+    margin: 0 clamp(18px, 5vw, 72px) 10px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .agent-chat.embedded .pending-stack {
+    margin: 0 12px 10px;
+  }
+
+  /* No outer frame. The chip names the gate; each card is one call. A tinted
+     section around that mixed two objects into one box, which is what made a
+     single approval look like chrome stacked on chrome. */
+  .pending-approvals {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
   }
 
   .pending-approval-card {
     min-width: 0;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--gap-md);
     padding: var(--gutter-tight);
     border: 1px solid var(--color-border-primary);
@@ -2018,22 +2413,30 @@
     background: var(--color-surface-primary);
   }
 
-  .pending-approval-copy {
+  .pending-approval-head {
     min-width: 0;
     display: flex;
     flex-wrap: wrap;
-    gap: var(--gap-md);
+    gap: var(--gap-md) var(--gap-lg);
     align-items: baseline;
+    justify-content: space-between;
   }
 
-  .pending-approval-copy strong {
+  .pending-approval-head strong {
+    min-width: 0;
+    overflow: hidden;
     color: var(--color-content-primary);
-    font-size: var(--font-md);
+    font-size: var(--font-lg);
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .pending-approval-copy span {
+  .pending-approval-head span {
     color: var(--color-content-secondary);
-    font-size: var(--font-sm);
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    line-height: 1.4;
   }
 
   .thinking {
@@ -2067,6 +2470,10 @@
   }
 
   .error-banner {
+    grid-area: banner;
+    max-height: 6lh;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
     margin: 0 clamp(18px, 5vw, 72px) 10px;
     padding: 8px 10px;
     border: 1px solid color-mix(in srgb, var(--error) 35%, var(--border));
@@ -2081,6 +2488,7 @@
   }
 
   .closed-banner {
+    grid-area: banner;
     min-width: 0;
     display: flex;
     align-items: center;
@@ -2105,6 +2513,7 @@
   }
 
   .composer-wrap {
+    grid-area: composer;
     position: relative;
     margin: 0 clamp(18px, 5vw, 72px) 18px;
   }
@@ -2225,53 +2634,30 @@
     color: color-mix(in srgb, var(--warning) 82%, var(--text-1));
   }
 
-  .composer-target {
+  .composer-toolbar {
     display: flex;
-    gap: 7px;
+    gap: var(--gap-sm);
     align-items: center;
-    margin-bottom: 7px;
+    margin-bottom: var(--gap-sm);
   }
 
-  .target-chip {
-    min-width: 0;
-    display: inline-flex;
-    gap: 6px;
-    align-items: center;
-    padding: 5px 9px;
-    border: 1px solid color-mix(in srgb, var(--model) 36%, var(--border));
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--model) 13%, var(--surface-2));
-    color: var(--text-1);
-    font: inherit;
-    font-size: var(--font-sm);
-    cursor: pointer;
+  /* The handler chip gives way first, truncating its target; the rest keep their words. */
+  .composer-toolbar :global(.chip) {
+    flex-shrink: 0;
   }
 
-  @media (hover: hover) and (pointer: fine) {
-    .target-chip:hover:not(:disabled) {
-      border-color: color-mix(in srgb, var(--model) 58%, var(--border));
-    }
+  .composer-toolbar :global(.target-chip) {
+    flex-shrink: 1;
   }
 
-  .target-chip:disabled {
-    cursor: default;
-    opacity: var(--disabled-opacity);
+  .composer-toolbar :global(.stop-chip) {
+    margin-left: auto;
   }
 
-  .target-chip strong {
-    font-weight: 680;
-  }
-
-  .target-chip :global(svg) {
-    color: var(--text-3);
-  }
-
-  .target-of {
+  .target-name {
     min-width: 0;
     overflow: hidden;
-    color: var(--text-2);
     text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .handler-form {
@@ -2315,42 +2701,9 @@
     opacity: var(--disabled-opacity);
   }
 
-  .composer-actions {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 7px;
-  }
-
-  .stop-agent {
-    display: inline-flex;
-    gap: 5px;
-    align-items: center;
-    padding: 4px 9px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-chip);
-    background: var(--surface-2);
-    color: var(--text-3);
-    font: inherit;
-    font-size: var(--font-sm);
-    cursor: pointer;
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .stop-agent:hover:not(:disabled) {
-      border-color: color-mix(in srgb, var(--error) 45%, var(--border));
-      background: color-mix(in srgb, var(--error) 10%, var(--surface-2));
-      color: color-mix(in srgb, var(--error) 88%, var(--text-1));
-    }
-  }
-
-  .stop-agent:disabled {
-    cursor: default;
-    opacity: var(--disabled-opacity);
-  }
-
   .composer {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 10px;
     align-items: center;
     padding: 8px 8px 8px 12px;

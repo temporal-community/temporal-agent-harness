@@ -11,6 +11,7 @@
 [[agents]]
 key = "openai-hello"
 workflow_type = "OpenAIHelloAgent"
+agent = "examples.openai_hello.workflow:OpenAIHelloAgentWorkflow"
 task_queue = "openai-hello"
 label = "OpenAI Hello"
 description = """

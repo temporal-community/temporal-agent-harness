@@ -27,21 +27,29 @@
 # callback result (``provide_callback_result``), because neither is an ``@agent.accepts``
 # handler — so a child's gated tools still escalate to a human, and its approval policy
 # stays operator-owned even under ``dangerously_allow_all()``.
+#
+# Likewise a child's init data (its ``@agent.init`` ``data`` argument) never reaches the
+# parent model:
+# ``start_<key>`` takes no arguments, and the data comes only from the developer's
+# ``init_data`` callback.
 
 from __future__ import annotations
 
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar, overload
 
 from pydantic import BaseModel
 from temporalio import workflow
 
+from temporal_agent_harness.harness.agent_protocol import AgentConfig
 from temporal_agent_harness.harness.agent_workflow import (
+    AgentInitData,
     _AcceptedHandler,
     _current_runner,
     agent_handlers,
+    agent_init_data,
     tool_defn,
 )
 
@@ -121,12 +129,28 @@ def _handler_param_name(handler: _AcceptedHandler) -> str:
 
 
 def _make_start_tool(
-    *, key: str, workflow_type: str, task_queue: str
+    *,
+    key: str,
+    workflow_type: str,
+    task_queue: str,
+    spec: AgentInitData | None,
+    init_data: Callable[[], BaseModel | None] | None,
 ) -> Callable[..., Awaitable[str]]:
-    """Build the ``start_<key>`` tool: start a child instance and return its short handle."""
+    """Build the ``start_<key>`` tool: start a child instance and return its short handle.
+
+    The child's init data comes from ``init_data``, called afresh for every instance, or is
+    ``None`` without it. The model never supplies it, so the tool takes no arguments. The data
+    is checked here, in the parent, so a bad value fails this tool call rather than the child."""
 
     async def _start() -> str:
-        return await _current_runner().start_subagent(key, workflow_type, task_queue)
+        data = init_data() if init_data is not None else None
+        if spec is not None and data is not None:
+            data = spec.model.model_validate(data)
+        elif spec is not None and spec.required:
+            raise TypeError(f"init_data returned None, but the {key} subagent requires data.")
+        return await _current_runner().start_subagent(
+            key, workflow_type, task_queue, data=data
+        )
 
     _start.__name__ = f"start_{key}"
     _start.__qualname__ = _start.__name__
@@ -220,13 +244,50 @@ def _make_send_tool(
     return tool_defn()(_send)
 
 
+_D = TypeVar("_D", bound=BaseModel)
+
+
+# A class is a callable with its __init__'s signature, so these match on the child's
+# @agent.init: config only, config + optional data, or config + required data (which only the
+# last overload accepts, and it requires init_data).
+@overload
 def subagent_toolset(
-    agent_cls: type,
+    agent_cls: Callable[[AgentConfig], object],
     *,
     key: str,
     task_queue: str,
     workflow_type: str | None = None,
     tools: SubagentToolPolicy | None = None,
+    init_data: None = None,
+) -> list[Callable[..., Awaitable[Any]]]: ...
+@overload
+def subagent_toolset(
+    agent_cls: Callable[[AgentConfig, _D | None], object],
+    *,
+    key: str,
+    task_queue: str,
+    workflow_type: str | None = None,
+    tools: SubagentToolPolicy | None = None,
+    init_data: Callable[[], _D | None] | None = None,
+) -> list[Callable[..., Awaitable[Any]]]: ...
+@overload
+def subagent_toolset(
+    agent_cls: Callable[[AgentConfig, _D], object],
+    *,
+    key: str,
+    task_queue: str,
+    workflow_type: str | None = None,
+    tools: SubagentToolPolicy | None = None,
+    init_data: Callable[[], _D],
+) -> list[Callable[..., Awaitable[Any]]]: ...
+def subagent_toolset(
+    agent_cls: Any,
+    *,
+    key: str,
+    task_queue: str,
+    workflow_type: str | None = None,
+    tools: SubagentToolPolicy | None = None,
+    init_data: Callable[[], BaseModel | None] | None = None,
 ) -> list[Callable[..., Awaitable[Any]]]:
     """Convert a harness agent into a toolset a parent agent can use to drive it as a subagent.
 
@@ -246,8 +307,25 @@ def subagent_toolset(
             name.
         tools: the parent's authoritative :class:`SubagentToolPolicy` — which of the child's
             handlers become tools. Defaults to honoring the child's ``model_callable`` hints.
+        init_data: for a child whose ``@agent.init`` takes a ``data`` model, a callable
+            returning the data for each new instance. It is called in the parent workflow every
+            time ``start_<key>`` runs, so it must be deterministic, and it may read the parent's
+            current state. Omit it and each instance starts without data. Required, and checked
+            by the type checker, for a child whose ``data`` is required (``data: Model``, no
+            default). The parent model never supplies the data.
     """
     resolved_type = workflow_type or _resolve_workflow_type(agent_cls)
+    spec = agent_init_data(agent_cls)
+    if init_data is not None and spec is None:
+        raise TypeError(
+            f"init_data was given, but {agent_cls.__name__} takes no init data (its "
+            f"@agent.init has no `data` parameter)."
+        )
+    if init_data is None and spec is not None and spec.required:
+        raise TypeError(
+            f"{agent_cls.__name__} requires init data ({spec.model.__name__}), so "
+            f"subagent_toolset needs an init_data callback that supplies it."
+        )
     policy = tools if tools is not None else SubagentToolPolicy.allow_model_callable()
     declared = agent_handlers(agent_cls)
     handlers = {
@@ -264,7 +342,13 @@ def subagent_toolset(
         )
 
     tools: list[Callable[..., Awaitable[Any]]] = [
-        _make_start_tool(key=key, workflow_type=resolved_type, task_queue=task_queue)
+        _make_start_tool(
+            key=key,
+            workflow_type=resolved_type,
+            task_queue=task_queue,
+            spec=spec,
+            init_data=init_data,
+        )
     ]
     tools.extend(
         _make_send_tool(key=key, handler=handler) for handler in handlers.values()

@@ -4,6 +4,9 @@
   interface Props {
     text?: string | null;
     citations?: FileCitationAnnotation[];
+    /** Render ``text`` as one code block in this language (``"py"``, ``"json"``, ...) instead of
+     *  parsing it as Markdown, so a file's contents can't escape its fence. */
+    language?: string | null;
   }
 
   interface CitationLink {
@@ -19,9 +22,13 @@
     value: string;
   }
 
-  let { text, citations = [] }: Props = $props();
+  let { text, citations = [], language = null }: Props = $props();
 
-  const rendered = $derived(renderMarkdown(text, citations));
+  const rendered = $derived(
+    language === null
+      ? renderMarkdown(text, citations)
+      : codeBlock((text ?? "").replace(/\r\n?/g, "\n"), normalizeLanguage(language))
+  );
 
   const languageAliases: Record<string, string> = {
     bash: "shell",
@@ -905,9 +912,12 @@
     return { html: `<${tag}>${items.join("")}</${tag}>`, nextIndex: index };
   }
 
+  /* GFM: `\|` is a pipe inside a cell, not a column break. */
   function splitTableRow(line: string): string[] {
-    const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
-    return trimmed.split("|").map((cell) => moveLeadingCitationsToEnd(cell.trim()));
+    const trimmed = line.trim().replace(/^\|/, "").replace(/(?<!\\)\|$/, "");
+    return trimmed
+      .split(/(?<!\\)\|/)
+      .map((cell) => moveLeadingCitationsToEnd(cell.replaceAll("\\|", "|").trim()));
   }
 
   function isTableDivider(line: string): boolean {
@@ -973,6 +983,13 @@
     };
   }
 
+  function codeBlock(code: string, language: string): string {
+    const label = languageLabel(language);
+    const languageClass = language ? ` class="language-${escapeAttribute(language)}"` : "";
+    const languageAttribute = label ? ` data-language="${escapeAttribute(label)}"` : "";
+    return `<div class="md-code-wrap"><pre class="md-code-block"${languageAttribute}><code${languageClass}>${highlightCode(code, language)}</code></pre></div>`;
+  }
+
   function renderMarkdown(value: string | null | undefined, sourceCitations: FileCitationAnnotation[]): string {
     const normalized = typeof value === "string" ? value : "";
     const textWithCitations = withCitationMarkers(normalized.replace(/\r\n?/g, "\n"), sourceCitations);
@@ -1008,13 +1025,7 @@
           index += 1;
         }
         if (index < lines.length) index += 1;
-        const language = normalizeLanguage(fenceMatch[2]);
-        const label = languageLabel(language);
-        const languageClass = language ? ` class="language-${escapeAttribute(language)}"` : "";
-        const languageAttribute = label ? ` data-language="${escapeAttribute(label)}"` : "";
-        blocks.push(
-          `<div class="md-code-wrap"><pre class="md-code-block"${languageAttribute}><code${languageClass}>${highlightCode(codeLines.join("\n"), language)}</code></pre></div>`
-        );
+        blocks.push(codeBlock(codeLines.join("\n"), normalizeLanguage(fenceMatch[2])));
         continue;
       }
 
@@ -1091,9 +1102,11 @@
 </div>
 
 <style>
+  /* An implicit `auto` column would size to a wide table's min-content, not the bubble. */
   .markdown-message {
     min-width: 0;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--markdown-block-gap, 9px);
     font-family: var(--markdown-font-family, inherit);
     overflow-wrap: anywhere;
@@ -1245,6 +1258,9 @@
 
 	  .markdown-message :global(th),
 	  .markdown-message :global(td) {
+	    /* Not the `anywhere` inherited from the message: that sets a cell's min-content width to
+	       one character, so auto layout squeezes a column until every word breaks mid-letter. */
+	    overflow-wrap: break-word;
 	    padding: 7px 9px;
 	    border-bottom: 1px solid var(--border);
 	    border-right: 1px solid var(--border);

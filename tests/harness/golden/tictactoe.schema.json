@@ -1,6 +1,12 @@
 {
   "agent": "TicTacToeAgent",
   "source": "examples.tictactoe.workflow:TicTacToeAgentWorkflow",
+  "init_data": {
+    "data": {
+      "$ref": "#/$defs/MatchSettings"
+    },
+    "required": false
+  },
   "handlers": {
     "new_game": {
       "description": "Reset the board and start a new game. You are X and open unless\n`agent_goes_first` is set, in which case the agent plays X and opens.",
@@ -108,6 +114,23 @@
         "moves"
       ],
       "title": "Board",
+      "type": "object"
+    },
+    "MatchSettings": {
+      "description": "Who the agent is playing. Optional when starting a session.",
+      "properties": {
+        "player_name": {
+          "description": "Your name, used when the agent talks to you.",
+          "maxLength": 40,
+          "minLength": 1,
+          "title": "Player Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "player_name"
+      ],
+      "title": "MatchSettings",
       "type": "object"
     },
     "Move": {

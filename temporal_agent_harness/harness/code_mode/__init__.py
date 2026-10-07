@@ -6,25 +6,77 @@ code — with loops, conditionals, and ``asyncio.gather`` concurrency — to orc
 calls in one turn; every host call goes through the runner, keeping its approval policy and tool
 lifecycle events.
 
-The package splits cleanly along the Temporal workflow boundary, so importing it never requires
-the sandbox engine (the optional ``code-mode`` extra):
+Scripts run inside the workflow: the workflow steps the sandbox itself, and only the host calls
+are activities, so Code Mode needs no activities of its own (see :mod:`.monty_stepper`).
 
-  * Workflow-safe (this ``__init__`` and the ``batch_models`` / ``stubs`` / ``driver`` / ``tool``
-    modules): safe to import anywhere, including inside a workflow. ``code_mode_tool`` and
-    ``CodeModeStubError`` are the public surface, re-exported here.
-  * Worker-side (:mod:`.activities`): the two sandbox-stepping activities.
-    ``AgentHarnessPlugin`` registers them on every worker (a worker can also register
-    ``CODE_MODE_ACTIVITIES`` from that module by hand); nothing here imports that module, so
-    the workflow-safe surface stays free of it. It imports no Monty itself — it checks that
-    the ``code-mode`` extra is installed and then delegates — so it loads without the extra
-    and a misconfigured worker fails a Code Mode call with an actionable, non-retryable error
-    instead of leaving the activity names unregistered, which Temporal retries forever.
-  * Worker-side engine (:mod:`.monty_stepper`): the stepping logic, and the only module that
-    imports ``pydantic_monty``. Kept separate purely so it can import Monty normally and be
-    type-checked against it; import it only after that extra check.
+``mounts=`` gives scripts a virtual filesystem: ``VFSMount``\\ s of ``FileSystem`` backends such
+as ``InMemoryFileSystem``, read and written with ``open()`` and ``pathlib`` (see :mod:`.vfs`). An
+``ActivityFileSystem`` is a backend written as plain async methods that the harness runs as
+activities (see :mod:`.activity_fs`). ``vfs_mount(...)`` declares a mount on the agent class so
+the console can show it (see :mod:`.mount_decl`): a ``FileTree`` state holds an
+``InMemoryFileSystem``'s files, contents included, and a ``FileIndex`` state tracks an
+``ActivityFileSystem``'s tree.
+
+Importing the package never requires the sandbox engine (the optional ``code-mode`` extra):
+
+  * :mod:`.stubs`, :mod:`.vfs`, :mod:`.activity_fs`, :mod:`.mount_decl`, :mod:`.driver` and
+    :mod:`.tool` are safe to import anywhere, including inside a workflow. ``code_mode_tool``,
+    ``code_mode_type_check``, ``CodeModeStubError`` and the filesystem types are the public
+    surface, re-exported here.
+  * :mod:`.monty_stepper` is the stepping engine and the only module that imports
+    ``pydantic_monty``. ``code_mode_tool`` loads it, through the workflow sandbox's
+    pass-through, when it builds a tool.
 """
 
+from .activity_fs import ActivityFileSystem, FileChunk
+from .mount_decl import (
+    ActivityVFSMountDecl,
+    InMemoryVFSMountDecl,
+    UnboundActivityVFSMount,
+    UnboundInMemoryVFSMount,
+    okf_bundle_vfs_mount,
+    vfs_mount,
+)
+from .okf import OKFConcept, OKFGraph, OKFLink
+from .okf_tool import OKFLinks, okf_code_mode_tool
 from .stubs import CodeModeStubError
-from .tool import code_mode_tool
+from .tool import code_mode_tool, code_mode_type_check
+from .vfs import (
+    FileEntry,
+    FileIndex,
+    FileStat,
+    FileSystem,
+    FileTree,
+    InMemoryFileSystem,
+    IndexEntry,
+    IndexSource,
+    VFSMount,
+)
 
-__all__ = ["CodeModeStubError", "code_mode_tool"]
+__all__ = [
+    "ActivityFileSystem",
+    "ActivityVFSMountDecl",
+    "CodeModeStubError",
+    "FileChunk",
+    "FileEntry",
+    "FileIndex",
+    "FileStat",
+    "FileSystem",
+    "FileTree",
+    "InMemoryFileSystem",
+    "IndexEntry",
+    "InMemoryVFSMountDecl",
+    "IndexSource",
+    "OKFConcept",
+    "OKFGraph",
+    "OKFLink",
+    "OKFLinks",
+    "UnboundActivityVFSMount",
+    "UnboundInMemoryVFSMount",
+    "VFSMount",
+    "code_mode_tool",
+    "code_mode_type_check",
+    "okf_bundle_vfs_mount",
+    "okf_code_mode_tool",
+    "vfs_mount",
+]

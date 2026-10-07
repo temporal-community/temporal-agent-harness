@@ -1,17 +1,69 @@
-<script lang="ts">
-  import { CheckCircle2, GitBranch, ShieldAlert, XCircle } from "@lucide/svelte";
-  import Chip, { type ChipTone } from "$lib/components/primitives/Chip.svelte";
+<script lang="ts" module>
   import type {
     ApprovalDecision,
     ApprovalProbabilities,
     ApprovalVerdict
   } from "$lib/state/approvalDecisionTree";
 
-  interface Props {
-    decisions: ApprovalDecision[];
+  function percent(value: number): string {
+    const scaled = value * 100;
+    return `${Number.isInteger(scaled) ? scaled : scaled.toFixed(1)}%`;
   }
 
-  let { decisions }: Props = $props();
+  function outcomeLabel(verdict: ApprovalVerdict): string {
+    if (verdict === "approve") return "Auto-approved";
+    if (verdict === "deny") return "Call denied";
+    return "Human review";
+  }
+
+  function criteriaLabel(decision: ApprovalDecision): string | null {
+    if (!decision.criteriaSet) return null;
+    return decision.criteriaVersion === null
+      ? decision.criteriaSet
+      : `${decision.criteriaSet} · v${decision.criteriaVersion}`;
+  }
+
+  /** The trace as plain text, for pasting into a bug report or a policy review. */
+  export function traceText(decision: ApprovalDecision): string {
+    return [
+      `tool: ${decision.toolName}`,
+      `tool_id: ${decision.toolId}`,
+      `evaluator: ${decision.evaluator}`,
+      `evaluator_verdict: ${decision.evaluatorVerdict}`,
+      `outcome: ${outcomeLabel(decision.verdict)}`,
+      decision.confidence === null ? "" : `confidence: ${percent(decision.confidence)}`,
+      decision.reason ? `reason: ${decision.reason}` : "",
+      criteriaLabel(decision) ? `criteria: ${criteriaLabel(decision)}` : "",
+      decision.model ? `model: ${decision.model}` : "",
+      `evaluation_id: ${decision.evaluationId}`,
+      decision.requestId ? `request_id: ${decision.requestId}` : "",
+      `workflow_id: ${decision.workflowId}`,
+      `turn: ${decision.turnNumber}`
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+</script>
+
+<script lang="ts">
+  import { CheckCircle2, GitBranch, ShieldAlert, XCircle } from "@lucide/svelte";
+  import Chip, { type ChipTone } from "$lib/components/primitives/Chip.svelte";
+  import Copyable from "$lib/components/primitives/Copyable.svelte";
+
+  interface Props {
+    decisions: ApprovalDecision[];
+    /**
+     * Completed decisions further along the run than the replay cursor.
+     *
+     * This pane reads the run AT the cursor, so a reader parked behind the
+     * evaluations sees an empty panel beside a run that has them. That is what
+     * this counts, and the empty state says.
+     */
+    ahead?: number;
+    onJumpToLive?: () => void;
+  }
+
+  let { decisions, ahead = 0, onJumpToLive }: Props = $props();
   let chosenKey = $state<string | null>(null);
 
   const newestFirst = $derived([...decisions].reverse());
@@ -20,11 +72,6 @@
   const current = $derived(
     decisions.find((decision) => decision.key === chosenKey) ?? decisions.at(-1) ?? null
   );
-
-  function percent(value: number): string {
-    const scaled = value * 100;
-    return `${Number.isInteger(scaled) ? scaled : scaled.toFixed(1)}%`;
-  }
 
   function verdictLabel(verdict: ApprovalVerdict): string {
     if (verdict === "approve") return "Approve";
@@ -38,12 +85,6 @@
     return "live";
   }
 
-  function outcomeLabel(verdict: ApprovalVerdict): string {
-    if (verdict === "approve") return "Auto-approved";
-    if (verdict === "deny") return "Call denied";
-    return "Human review";
-  }
-
   function probability(
     probabilities: ApprovalProbabilities,
     verdict: ApprovalVerdict
@@ -54,24 +95,31 @@
   function approveDestination(decision: ApprovalDecision): string {
     return decision.irreversibleThreshold === null ? "Approve" : "Risk check";
   }
-
-  function criteriaLabel(decision: ApprovalDecision): string | null {
-    if (!decision.criteriaSet) return null;
-    return decision.criteriaVersion === null
-      ? decision.criteriaSet
-      : `${decision.criteriaSet} · v${decision.criteriaVersion}`;
-  }
 </script>
 
 <section class="approval-decisions" aria-label="Automatic approval decisions">
   {#if !current}
     <div class="empty">
       <GitBranch size={22} aria-hidden="true" />
-      <h3>No completed approval decisions</h3>
-      <p>
-        Completed <code>auto_approval_evaluation_ended</code> events will appear here as
-        the replay cursor reaches them.
-      </p>
+      {#if ahead > 0}
+        <h3>
+          {ahead} approval {ahead === 1 ? "decision" : "decisions"} ahead of the replay cursor
+        </h3>
+        <p>
+          This run has judged {ahead === 1 ? "a gated call" : "gated calls"}, but the cursor
+          is parked before {ahead === 1 ? "it" : "them"} — so there is nothing to show
+          <em>yet</em>.
+        </p>
+        <button type="button" class="jump" onclick={onJumpToLive}>
+          Jump to latest step
+        </button>
+      {:else}
+        <h3>No completed approval decisions</h3>
+        <p>
+          Completed <code>auto_approval_evaluation_ended</code> events will appear here as
+          the replay cursor reaches them.
+        </p>
+      {/if}
     </div>
   {:else}
     <div class="decision-layout">
@@ -113,7 +161,9 @@
       <article class="trace" aria-label={`Decision path for ${current.toolName}`}>
         <header class="trace-head">
           <div class="trace-title">
-            <p class="kicker">Decision trace</p>
+            <Copyable value={traceText(current)} label="Copy decision trace" data-tip-below>
+              <span class="kicker">Decision trace</span>
+            </Copyable>
             <h3>{current.toolName}</h3>
             <p class="trace-meta">
               {current.evaluator}, turn {current.turnNumber}{#if current.role === "subagent"}
@@ -129,7 +179,7 @@
         </header>
 
         <ol class="decision-tree" aria-label="Decision stages">
-          {#each current.stages as stage}
+          {#each current.stages as stage (stage.kind)}
             <li class={`stage ${stage.kind}`}>
               <span class="stage-marker" aria-hidden="true"></span>
 
@@ -202,7 +252,7 @@
                   </div>
 
                   <div class="branch-grid three">
-                    {#each ["approve", "deny", "escalate"] as branchVerdict}
+                    {#each ["approve", "deny", "escalate"] as branchVerdict (branchVerdict)}
                       {@const typedVerdict = branchVerdict as ApprovalVerdict}
                       {@const branchProbability = probability(stage.probabilities, typedVerdict)}
                       <div
@@ -307,13 +357,27 @@
             </div>
           {/if}
           <div>
+            <dt class="kicker">Tool call</dt>
+            <dd>
+              <Copyable value={current.toolId} label="Copy tool call ID">{current.toolId}</Copyable>
+            </dd>
+          </div>
+          <div>
             <dt class="kicker">Evaluation</dt>
-            <dd>{current.evaluationId}</dd>
+            <dd>
+              <Copyable value={current.evaluationId} label="Copy evaluation ID">
+                {current.evaluationId}
+              </Copyable>
+            </dd>
           </div>
           {#if current.requestId}
             <div>
               <dt class="kicker">Request</dt>
-              <dd>{current.requestId}</dd>
+              <dd>
+                <Copyable value={current.requestId} label="Copy request ID">
+                  {current.requestId}
+                </Copyable>
+              </dd>
             </div>
           {/if}
         </dl>
@@ -805,6 +869,23 @@
     font-family: var(--font-mono);
     font-size: inherit;
     overflow-wrap: anywhere;
+  }
+
+  .jump {
+    padding: 6px 12px;
+    border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+    border-radius: var(--radius-chip);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--text-1);
+    font-size: var(--font-sm);
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .jump:hover {
+      background: color-mix(in srgb, var(--accent) 20%, transparent);
+    }
   }
 
   @media (hover: hover) and (pointer: fine) {

@@ -1,0 +1,75 @@
+name: Prepare npm release
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package to release
+        type: choice
+        options: [client, react, svelte]
+        required: true
+      bump:
+        description: Version increment
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+        required: true
+      client_version:
+        description: 'Optional published client version for a binding (e.g. 0.1.1)'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-npm-${{ inputs.package }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --global npm@11
+
+      - name: Prepare version and dependency changes
+        id: release
+        env:
+          RELEASE_PACKAGE: ${{ inputs.package }}
+          RELEASE_BUMP: ${{ inputs.bump }}
+          CLIENT_VERSION: ${{ inputs.client_version }}
+        run: node scripts/npm-release.mjs prepare
+
+      - name: Check, test, and build the proposed release
+        working-directory: ${{ steps.release.outputs.directory }}
+        run: |
+          npm ci
+          npm run check --if-present
+          npm test
+          npm run build
+
+      - name: Push release branch and show PR creation link
+        env:
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          PACKAGE_DIRECTORY: ${{ steps.release.outputs.directory }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$RELEASE_BRANCH"
+          git add "$PACKAGE_DIRECTORY/package.json" "$PACKAGE_DIRECTORY/package-lock.json"
+          git commit -m "Release $RELEASE_TAG"
+          git push origin "$RELEASE_BRANCH"
+          node scripts/npm-release.mjs summary

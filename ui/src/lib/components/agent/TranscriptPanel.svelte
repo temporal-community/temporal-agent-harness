@@ -61,9 +61,16 @@
   import Chip from "$lib/components/primitives/Chip.svelte";
   import IconAgent from "$lib/components/primitives/IconAgent.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
+  import Copyable from "$lib/components/primitives/Copyable.svelte";
   import { scrollFollower } from "$lib/state/followScroll";
   import { formatLogValue } from "$lib/state/logValue";
-  import { formatDuration, statusNote, type TurnLogGroup } from "$lib/state/replayLog";
+  import {
+    formatDuration,
+    formatTimestamp,
+    rowIdentifiers,
+    statusNote,
+    type TurnLogGroup
+  } from "$lib/state/replayLog";
   import { formatTokens } from "$lib/cost/pricing";
 
   export type TranscriptFilter = "all" | "model" | "tool" | "approval" | "error";
@@ -148,7 +155,7 @@
       row.toolName ? `tool: ${row.toolName}` : "",
       row.toolId ? `tool_id: ${row.toolId}` : "",
       row.model ? `model: ${row.model}` : "",
-      `timestamp: ${time(row.timestamp)}`
+      `timestamp: ${formatTimestamp(row.timestamp)}`
     ].filter(Boolean);
 
     if (output) sections.push(`output:\n${output}`);
@@ -206,23 +213,18 @@
   let itemsElement = $state<HTMLElement | null>(null);
   const follower = scrollFollower(() => itemsElement);
 
+  /* Follow the cursor's row; do not open it. Opening it is what made a scrub look
+     broken: every tick closed one detail block and opened another, and those blocks are
+     tall — on the mock run alone the cursor's `Full details` measures 130..350px, so a
+     single tick moved up to 700px of content past the reader while the follower chased a
+     row whose position had just changed under it. The cursor's row is already marked, by
+     `.active-row`, by its active StatusChip, and by the turn group's border; it does not
+     also have to be the one row the reader is allowed to have open. LatencyWaterfall
+     follows the same playhead and has only ever followed. */
   $effect(() => {
-    const rowId = activeRowId;
-    if (rowId == null) {
-      expandedRows = {};
-      return;
-    }
-    expandedRows = { [rowId]: true };
-    follower.to(`log-row-${rowId}`);
+    if (activeRowId == null) return;
+    follower.to(`log-row-${activeRowId}`);
   });
-
-  function time(value: number): string {
-    return new Date(value * 1000).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
-  }
 
   function isRowExpanded(rowId: string): boolean {
     return expandedRows[rowId] ?? false;
@@ -242,7 +244,7 @@
     if (row.actor === "user") return "User";
     if (row.actor === "agent") return "Agent";
     if (row.actor === "model") return `${prefix}Model`;
-    if (row.actor === "tool") return `${prefix}${row.toolName ?? "Tool"}`;
+    if (row.actor === "tool") return `${prefix}${row.toolName || "Tool"}`;
     if (row.actor === "approval") return `${prefix}Approval`;
     if (row.actor === "subagent") return "Subagent";
     if (row.actor === "queue") return `${prefix}Queue`;
@@ -270,7 +272,7 @@
 
   <div class="transcript-controls">
     <div class="filter-chips" role="group" aria-label="Filter logs">
-      {#each filters as item}
+      {#each filters as item (item.key)}
         <Chip
           label={item.label}
           tone="accent"
@@ -304,7 +306,13 @@
     {:else if visibleGroups.length === 0}
       <p class="empty">No events match this filter.</p>
     {:else}
-      {#each visibleGroups as group}
+      <!-- Keyed, because a scrub inserts into the MIDDLE of this list rather than only
+           appending to it. Rows arrive in frame order but render grouped by turn, and
+           the two orders disagree: a queued message is accepted for a turn that has not
+           started, so its row sits here while the turn before it is still filling in
+           above. On the mock run 23 of 162 ticks move a row that is already on screen,
+           63 of them at once. Unkeyed, Svelte rewrites all 63 in place. -->
+      {#each visibleGroups as group (group.turnNumber)}
         <section
           class={`turn-group ${activeTurnNumber === group.turnNumber ? "active-turn" : ""}`}
           aria-label={`Turn ${group.turnNumber}`}
@@ -316,7 +324,7 @@
                 <span class="turn-preview">{group.summary.preview}</span>
               </span>
               <span class="turn-meta">
-                <time>{time(group.startedAt)}</time>
+                <time>{formatTimestamp(group.startedAt)}</time>
               </span>
             </div>
 
@@ -342,7 +350,7 @@
           </header>
 
           <div class="log-lines" id={`turn-${group.turnNumber}-logs`}>
-            {#each group.rows as row}
+            {#each group.rows as row (row.id)}
               <!-- A seam, drawn where it is rather than as a badge on the rows around
                    it: the log's whole claim is that consecutive lines are consecutive
                    events, and this is the one place that is untrue. -->
@@ -421,7 +429,7 @@
                             subagent turn {row.sourceTurnNumber}
                           </span>
                         {/if}
-                        <time>{time(row.timestamp)}</time>
+                        <time>{formatTimestamp(row.timestamp)}</time>
                       </span>
                     </span>
                     <span class="row-toggle-icon" aria-hidden="true">
@@ -436,10 +444,13 @@
                   {#if expanded}
                     {@const primary = primaryPayload(row)}
                     {@const fullDetail = fullLogDetail(row)}
+                    {@const ids = rowIdentifiers(row)}
                     <div class="line-details" id={`log-row-${row.id}-details`}>
                       {#if primary}
                         <section class="primary-payload" aria-label={`${primary.label} preview`}>
-                          <span class="payload-label">{primary.label}</span>
+                          <Copyable value={primary.text} label={`Copy ${primary.label}`}>
+                            <span class="payload-label">{primary.label}</span>
+                          </Copyable>
                           {#if primary.kind === "text"}
                             <p>{primary.text}</p>
                           {:else}
@@ -449,7 +460,7 @@
                       {/if}
                       {#if row.citations.length}
                         <div class="citations">
-                          {#each row.citations as citation}
+                          {#each row.citations as citation, i (i)}
                             <a
                               href={citation.custom_metadata?.deep_url ?? citation.document_uri ?? "#"}
                               target="_blank"
@@ -460,8 +471,24 @@
                           {/each}
                         </div>
                       {/if}
+                      {#if ids.length}
+                        <dl class="row-ids">
+                          {#each ids as id (id.label)}
+                            <div>
+                              <dt>{id.label}</dt>
+                              <dd>
+                                <Copyable value={id.value} label={`Copy ${id.label} ID`}>
+                                  <code title={id.value}>{id.value}</code>
+                                </Copyable>
+                              </dd>
+                            </div>
+                          {/each}
+                        </dl>
+                      {/if}
                       <section class="full-details" aria-label="Full details">
-                        <span class="payload-label">Full details</span>
+                        <Copyable value={fullDetail} label="Copy full details">
+                          <span class="payload-label">Full details</span>
+                        </Copyable>
                         <pre>{fullDetail}</pre>
                       </section>
                     </div>
@@ -817,6 +844,11 @@
     flex-wrap: wrap;
   }
 
+  /* The kind and status chips keep their words; only the tool name gives way. */
+  .line-meta > :global(.chip) {
+    flex-shrink: 0;
+  }
+
   /* An identifier, so it stays mono and unshouted, as tool names are elsewhere.
      It shrinks before the label does: `reprice_ro…` still reads as the tool it
      names, which a truncated label does not. */
@@ -879,11 +911,14 @@
     font-weight: 650;
   }
 
+  /* Capped like CallInput's full input, so a traceback scrolls inside its block instead of
+     filling the pane. */
   pre {
+    max-height: 320px;
     margin: 0;
     padding: 8px;
     border-radius: var(--radius-sm);
-    overflow-x: auto;
+    overflow: auto;
     background: var(--surface-0);
     color: var(--text-2);
     font-size: var(--font-sm);
@@ -891,6 +926,45 @@
 
   .primary-pre {
     color: var(--text-1);
+  }
+
+  /* One label column for the whole list, as wide as its widest label, so the
+     values line up whichever IDs a row happens to have. */
+  .row-ids {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 2px 6px;
+    margin: 0;
+  }
+
+  .row-ids div {
+    min-width: 0;
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    align-items: center;
+  }
+
+  .row-ids dt {
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: var(--font-2xs);
+    text-transform: uppercase;
+  }
+
+  .row-ids dd {
+    min-width: 0;
+    margin: 0;
+  }
+
+  .row-ids code {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: var(--font-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .full-details pre {

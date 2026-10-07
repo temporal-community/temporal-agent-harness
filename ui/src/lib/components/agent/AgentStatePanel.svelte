@@ -5,6 +5,7 @@
   import type { JsonValue } from "$lib/api/types";
   import type { AgentStateDoc, StateChange } from "$lib/state/agentState";
   import { escapeToken } from "$lib/state/jsonPatch";
+  import { scrollFollower } from "$lib/state/followScroll";
 
   /**
    * What an agent's own working state holds, as of the playhead.
@@ -26,6 +27,8 @@
   }
 
   let { states }: Props = $props();
+
+  const FIRST_CHANGE_ID = "agent-state-first-change";
 
   let chosenKey = $state<string | null>(null);
   let docElement = $state<HTMLElement | null>(null);
@@ -95,19 +98,18 @@
       : Object.entries(value);
   }
 
+  const firstChanged = $derived(current?.changed[0]?.path ?? null);
+  const follower = scrollFollower(() => docElement);
+
   /**
-   * Bring the first changed value into view when the commit at the cursor moves.
-   *
-   * `block: "nearest"` so a mark already on screen does not drag the document
-   * under the reader — the panel follows the state, it does not chase it.
+   * Bring the first changed value into view when the commit at the cursor moves,
+   * inside the document's own scroller — see followScroll.ts for why not
+   * `scrollIntoView`. A mark already on screen is left where it is.
    */
   $effect(() => {
-    const first = current?.changed[0]?.path;
     /* Read so the effect re-runs on a commit that touched the same path twice. */
     void current?.version;
-    if (!docElement || first == null || typeof CSS === "undefined") return;
-    const target = docElement.querySelector(`[data-path="${CSS.escape(first)}"]`);
-    target?.scrollIntoView({ block: "nearest" });
+    if (firstChanged != null) follower.to(FIRST_CHANGE_ID);
   });
 </script>
 
@@ -120,8 +122,11 @@
     {@const array = Array.isArray(value)}
     {#if entries.length === 0}
       <div class="line">
-        {@render key()}<span class="node hollow" data-path={pointer} data-change={marks.get(pointer)}
-          >{array ? "[]" : "{}"}</span
+        {@render key()}<span
+          class="node hollow"
+          id={pointer === firstChanged ? FIRST_CHANGE_ID : undefined}
+          data-path={pointer}
+          data-change={marks.get(pointer)}>{array ? "[]" : "{}"}</span
         >{#if !last}<span class="punc">,</span>{/if}
       </div>
     {:else}
@@ -129,7 +134,12 @@
            the container being an inline-block that wraps whole the moment its subtree is wider
            than what is left of the row. That wrapping is what put `[` under its key with the
            trailing comma stranded at the far right of an otherwise empty line. -->
-      <div class="node" data-path={pointer} data-change={marks.get(pointer)}>
+      <div
+        class="node"
+        id={pointer === firstChanged ? FIRST_CHANGE_ID : undefined}
+        data-path={pointer}
+        data-change={marks.get(pointer)}
+      >
         <div class="line">{@render key()}<span class="punc">{array ? "[" : "{"}</span></div>
         <div class="children">
           {#each entries as [childKey, child], index (childKey)}
@@ -150,6 +160,7 @@
     <div class="line">
       {@render key()}<span
         class={`node leaf ${leafKind(value)}`}
+        id={pointer === firstChanged ? FIRST_CHANGE_ID : undefined}
         data-path={pointer}
         data-change={marks.get(pointer)}>{JSON.stringify(value)}</span
       >{#if !last}<span class="punc">,</span>{/if}
@@ -229,7 +240,7 @@
     {/if}
 
     {#if current.value !== null}
-      <div class="doc" bind:this={docElement}>
+      <div class="doc" bind:this={docElement} onscroll={follower.handleScroll}>
         {@render jsonNode(current.value, "", null, true)}
       </div>
     {/if}

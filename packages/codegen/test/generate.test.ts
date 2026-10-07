@@ -56,6 +56,26 @@ test("an input/output pair of one model becomes two interfaces", async () => {
   assert.match(out, /echo: \{ input: EchoInput; output: EchoOutput \};/);
 });
 
+test("an agent without init data has null initData", async () => {
+  assert.match(await generateAgentTypes(doc()), /initData: null;/);
+  assert.match(await generateAgentTypes(doc({ init_data: null })), /initData: null;/);
+});
+
+test("required init data names its model and says so", async () => {
+  const out = await generateAgentTypes(
+    doc({ init_data: { data: { $ref: "#/$defs/Echo-Input" }, required: true } })
+  );
+  assert.match(out, /initData: \{ data: EchoInput; required: true \};/);
+});
+
+test("a definition value named like the mapping type carries the workflow type", async () => {
+  const out = await generateAgentTypes(doc(), { typeName: "Echo" });
+  assert.match(
+    out,
+    /export const Echo: \{ readonly workflowType: "EchoAgent"; readonly schema\?: Echo \} = \{\n {2}workflowType: "EchoAgent"\n\};/
+  );
+});
+
 test("an agent with no declared state has an empty states map", async () => {
   assert.match(await generateAgentTypes(doc()), /states: Record<never, never>;/);
 });

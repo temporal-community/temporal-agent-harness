@@ -1,4 +1,6 @@
 import type {
+  CallbackResultRequest,
+  CallbackResultResponse,
   AgentInterfaceFunction,
   AgentStatusResponse,
   AgentRegistryResponse,
@@ -6,6 +8,10 @@ import type {
   ChatRequest,
   CreateSessionRequest,
   CreateSessionResponse,
+  FileChunk,
+  FileViewRequest,
+  OKFGraph,
+  OKFGraphRequest,
   Session,
   SubmitMessageResponse,
   ToolApprovalRequest,
@@ -19,25 +25,78 @@ function apiPath(path: string): string {
   return `api/${path.replace(/^\/+/, "")}`;
 }
 
+/** A failed request, carrying the server's `error` code alongside its message. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly code: string | null
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * The approval was answered before this request landed — by another tab, or by an
+ * "Always allow" rule. The decision stands; this one simply arrived second.
+ */
+export function approvalAlreadyResolved(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "ToolApprovalAlreadyResolved";
+}
+
+/** The callback was fulfilled (or timed out) before this result landed — e.g. by a CLI client. */
+export function callbackAlreadyResolved(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.code === "CallbackAlreadyResolved" || error.code === "UnknownCallback")
+  );
+}
+
 async function json<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
   if (!response.ok) {
-    throw new Error(await responseErrorMessage(response, `Request failed (${response.status})`));
+    throw await responseError(response, `Request failed (${response.status})`);
   }
   return response.json() as Promise<T>;
 }
 
-async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
-  const body = await response.text();
-  if (!body) return fallback;
+const MAX_ERROR_LENGTH = 500;
+
+/** FastAPI's `detail`: a string from `HTTPException`, or a 422's list of `{loc, msg}`. */
+function detailText(detail: unknown): string | null {
+  if (typeof detail === "string") return detail;
+  if (!Array.isArray(detail)) return null;
+  const messages = detail
+    .map((item) => (typeof item === "string" ? item : item?.msg))
+    .filter((msg): msg is string => typeof msg === "string" && msg.trim() !== "");
+  return messages.length > 0 ? messages.join("; ") : null;
+}
+
+/**
+ * The readable part of a failed response: the harness's `message`, FastAPI's `detail`, or a
+ * plain-text body, cut to a length a card can hold. A proxy's HTML error page is markup, not
+ * a message, so it falls back to the status line.
+ */
+export function errorFromBody(body: string, fallback: string): ApiError {
+  let message: string | null = null;
+  let code: string | null = null;
   try {
-    const parsed = JSON.parse(body) as { message?: unknown };
-    return typeof parsed.message === "string" && parsed.message.trim()
-      ? parsed.message
-      : body;
+    const parsed = JSON.parse(body) as { message?: unknown; error?: unknown; detail?: unknown };
+    code = typeof parsed?.error === "string" ? parsed.error : null;
+    message =
+      typeof parsed?.message === "string" && parsed.message.trim()
+        ? parsed.message
+        : detailText(parsed?.detail);
   } catch {
-    return body;
+    message = /^\s*</.test(body) ? null : body;
   }
+  message = message?.trim() || fallback;
+  const chars = Array.from(message);
+  if (chars.length > MAX_ERROR_LENGTH) message = `${chars.slice(0, MAX_ERROR_LENGTH).join("")}…`;
+  return new ApiError(message, code);
+}
+
+async function responseError(response: Response, fallback: string): Promise<ApiError> {
+  return errorFromBody(await response.text(), fallback);
 }
 
 async function* readSse(response: Response): AsyncIterable<AgentSseFrame> {
@@ -115,7 +174,7 @@ export class HttpAgentApi implements AgentApi {
       { signal }
     );
     if (!response.ok) {
-      throw new Error(await responseErrorMessage(response, `Attach failed (${response.status})`));
+      throw await responseError(response, `Attach failed (${response.status})`);
     }
     yield* readSse(response);
   }
@@ -140,13 +199,39 @@ export class HttpAgentApi implements AgentApi {
       signal
     });
     if (!response.ok) {
-      throw new Error(await responseErrorMessage(response, `Chat failed (${response.status})`));
+      throw await responseError(response, `Chat failed (${response.status})`);
     }
     yield* readSse(response);
   }
 
   async approve(request: ToolApprovalRequest): Promise<ToolApprovalResponse> {
     return json<ToolApprovalResponse>(apiPath("approve"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request)
+    });
+  }
+
+  async provideCallbackResult(
+    request: CallbackResultRequest
+  ): Promise<CallbackResultResponse> {
+    return json<CallbackResultResponse>(apiPath("callback-result"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request)
+    });
+  }
+
+  async viewFile(request: FileViewRequest): Promise<FileChunk> {
+    return json<FileChunk>(apiPath("files/view"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request)
+    });
+  }
+
+  async okfGraph(request: OKFGraphRequest): Promise<OKFGraph> {
+    return json<OKFGraph>(apiPath("files/okf-graph"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request)

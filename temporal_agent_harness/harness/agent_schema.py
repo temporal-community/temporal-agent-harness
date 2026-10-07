@@ -1,6 +1,6 @@
-# ABOUTME: agent_schema(cls) — one JSON document describing an agent's typed surface: every
-# @agent.accepts handler's input and output model and every agent.state(...) declaration,
-# with all their models in one shared $defs. Pure reflection over the class (no workflow is
+# ABOUTME: agent_schema(cls) — one JSON document describing an agent's typed surface: the init
+# data its @agent.init takes, every @agent.accepts handler's input and output model, and every
+# agent.state(...) declaration, with all their models in one shared $defs. Pure reflection over the class (no workflow is
 # started), so it is what client codegen reads. protocol_schema() is the same for the event
 # stream every agent publishes.
 
@@ -20,10 +20,11 @@ from pydantic_core import core_schema
 from temporalio import workflow
 
 from temporal_agent_harness.harness.agent_protocol.events import AgentEvent
-from temporal_agent_harness.harness.agent_workflow import agent_handlers
+from temporal_agent_harness.harness.agent_workflow import agent_handlers, agent_init_data
 from temporal_agent_harness.harness.state import declared_states
 
 __all__ = [
+    "agent_init_data_schema",
     "agent_schema",
     "dump_agent_schema",
     "dump_protocol_schema",
@@ -59,13 +60,17 @@ def agent_schema(cls: type) -> dict[str, Any]:
         {
           "agent": "TicTacToeAgent",                    # the workflow type name
           "source": "examples.tictactoe.workflow:TicTacToeAgentWorkflow",
+          "init_data": {"data": {"$ref": "#/$defs/Settings"}, "required": false},  # or null
           "handlers": {"play": {"description", "mid_turn", "input", "output"}, ...},
           "states": {"board": {"$ref": "#/$defs/Board"}},
           "$defs": {...},
         }
 
-    Handler inputs are generated in pydantic's validation mode (a field with a default may be
-    omitted by a sender); handler outputs and states in serialization mode (what arrives on
+    ``init_data`` is the model the agent's ``@agent.init`` takes after its ``AgentConfig`` and
+    whether a caller must send it, or ``null`` for an agent that takes none.
+
+    Init data and handler inputs are generated in pydantic's validation mode (a field with a
+    default may be omitted by a sender); handler outputs and states in serialization mode (what arrives on
     the wire, where every field is present). A model used both ways whose two schemas differ
     appears twice in ``$defs``, as ``Name-Input`` and ``Name-Output``.
 
@@ -74,8 +79,11 @@ def agent_schema(cls: type) -> dict[str, Any]:
     """
     handlers = agent_handlers(cls)
     states = declared_states(cls)
+    init_data = agent_init_data(cls)
 
     models: list[tuple[type[BaseModel], JsonSchemaMode]] = []
+    if init_data is not None:
+        models.append((init_data.model, "validation"))
     for handler in handlers.values():
         models.append((handler.input_type, "validation"))
         models.append((handler.output_type, "serialization"))
@@ -94,6 +102,14 @@ def agent_schema(cls: type) -> dict[str, Any]:
     return {
         "agent": definition.name if definition is not None else cls.__name__,
         "source": f"{cls.__module__}:{cls.__qualname__}",
+        "init_data": (
+            None
+            if init_data is None
+            else {
+                "data": refs[(init_data.model, "validation")],
+                "required": init_data.required,
+            }
+        ),
         "handlers": {
             name: {
                 "description": handler.description,
@@ -108,6 +124,23 @@ def agent_schema(cls: type) -> dict[str, Any]:
             for state_id, decl in states.items()
         },
         "$defs": dict(sorted(defs.items())),
+    }
+
+
+def agent_init_data_schema(cls: type) -> dict[str, Any] | None:
+    """The init data the agent class ``cls`` takes, as a self-contained document, or ``None``
+    if it takes none::
+
+        {"required": false, "schema": {...}}   # the model's JSON Schema, with its own $defs
+
+    What a caller that renders a form for it needs, without the rest of :func:`agent_schema`.
+    """
+    init_data = agent_init_data(cls)
+    if init_data is None:
+        return None
+    return {
+        "required": init_data.required,
+        "schema": init_data.model.model_json_schema(mode="validation"),
     }
 
 

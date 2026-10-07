@@ -1,0 +1,81 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - npm-client-v*
+      - npm-svelte-v*
+      - npm-react-v*
+  # Retry against an existing npm release tag, never a branch.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate the release tag and package
+        id: package
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import assert from 'node:assert/strict';
+          const match = /^npm-(client|svelte|react)-v(\d+\.\d+\.\d+)$/.exec(process.env.GITHUB_REF_NAME);
+          assert(process.env.GITHUB_REF_TYPE === 'tag' && match,
+            'Select a stable release tag such as npm-client-v0.1.1.');
+          const [, pkg, version] = match;
+          const directory = `packages/${pkg}`;
+          const manifest = JSON.parse(readFileSync(`${directory}/package.json`, 'utf8'));
+          const lock = JSON.parse(readFileSync(`${directory}/package-lock.json`, 'utf8'));
+          assert.equal(manifest.name, `@temporalio/agent-harness-${pkg}`);
+          assert.equal(manifest.version, version, 'Tag must match package.json version');
+          assert.equal(lock.packages[''].version, version, 'Update the lockfile version');
+          assert(!manifest.private, 'Package must be publishable');
+          assert.equal(manifest.publishConfig.access, 'public');
+          assert.equal(manifest.publishConfig.registry, 'https://registry.npmjs.org/');
+          assert.equal(manifest.repository.url,
+            `git+https://github.com/${process.env.GITHUB_REPOSITORY}.git`);
+          for (const value of Object.values(manifest.dependencies ?? {})) {
+            assert(!/^(file:|link:|workspace:)/.test(value), 'Publish registry dependencies only');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `directory=${directory}\n`);
+          JS
+
+      # OIDC requires npm >=11.5.1; Node 22's bundled npm may be older.
+      - name: Install npm with trusted publishing support
+        run: npm install --global npm@11
+
+      - name: Install dependencies
+        working-directory: ${{ steps.package.outputs.directory }}
+        run: npm ci
+
+      - name: Check, test, and build
+        working-directory: ${{ steps.package.outputs.directory }}
+        run: |
+          npm run check --if-present
+          npm test
+          npm run build
+
+      - name: Inspect package contents
+        working-directory: ${{ steps.package.outputs.directory }}
+        run: npm pack --dry-run
+
+      - name: Publish with OIDC
+        working-directory: ${{ steps.package.outputs.directory }}
+        run: npm publish --access public --provenance

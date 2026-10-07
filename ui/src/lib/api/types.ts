@@ -64,12 +64,25 @@ export interface AgentWorker {
   error: string | null;
 }
 
+/** The init data an agent's `@agent.init` takes, as `GET /api/agents` describes it. */
+export interface AgentInitData {
+  /** Whether a session cannot start without it. */
+  required: boolean;
+  /** The data model's JSON Schema, self-contained (its own `$defs`). */
+  schema: JsonRecord;
+}
+
 export interface AgentDescriptor {
   key: string;
   workflow_type: AgentWorkflowType;
   task_queue: string;
   label: string;
   description: string;
+  /** Where the agent's class is defined, from its registry entry. */
+  agent?: string | null;
+  /** `null` when the agent takes none, or its registry entry does not name its class. Absent
+   *  from older servers. */
+  init_data?: AgentInitData | null;
   /** Absent from older servers, and from fixtures that predate worker readiness. */
   worker?: AgentWorker;
 }
@@ -99,6 +112,8 @@ export interface WorkflowExecutionState {
 
 export interface CreateSessionRequest {
   agent_workflow_type: AgentWorkflowType;
+  /** The agent's init data; the server rejects it (422) if it does not fit. */
+  data?: JsonRecord;
 }
 
 export type CreateSessionResponse = Session;
@@ -188,6 +203,79 @@ export interface ToolApprovalRequest {
 export interface ToolApprovalResponse {
   tool_id: ToolId;
   accepted: true;
+}
+
+/** Exactly one of `result` / `error` is meaningful; the server validates `result` against the
+ *  callback tool's declared output type. */
+export interface CallbackResultRequest {
+  session_id: WorkflowId;
+  tool_id: ToolId;
+  result?: unknown;
+  error?: string | null;
+}
+
+export interface CallbackResultResponse {
+  tool_id: ToolId;
+  accepted: true;
+}
+
+/** Where an activity-backed mount's files can be read: its `FileIndex.source`. */
+export interface FileSource {
+  filesystem: string;
+  /** The filesystem's config, sent back as is. */
+  config: Record<string, JsonValue>;
+  task_queue: string;
+}
+
+export interface FileViewRequest {
+  source: FileSource;
+  path: string;
+  offset?: number;
+}
+
+/** One page of a file, as it is in its store right now. */
+export interface FileChunk {
+  content: string;
+  encoding: "utf-8" | "base64";
+  offset: number;
+  /** The whole file's size in bytes. */
+  size: number;
+  mtime: number;
+}
+
+export interface OKFGraphRequest {
+  source: FileSource;
+}
+
+/** One OKF concept, from its frontmatter. `problem` explains missing or broken frontmatter. */
+export interface OKFConcept {
+  id: string;
+  /** Mount-relative path of the concept's file. */
+  path: string;
+  type: string;
+  title: string;
+  description: string;
+  tags: string[];
+  status: string;
+  trust_tier: "unverified" | "machine-confirmed" | "human-reviewed";
+  stale: boolean;
+  size: number;
+  problem: string | null;
+}
+
+export interface OKFLink {
+  source: string;
+  target: string;
+  /** No concept in the bundle has the target id. */
+  dangling: boolean;
+}
+
+/** An OKF bundle's concepts and links, walked from its store right now. */
+export interface OKFGraph {
+  concepts: OKFConcept[];
+  links: OKFLink[];
+  truncated: boolean;
+  walked_at: number;
 }
 
 export interface PendingTurn {

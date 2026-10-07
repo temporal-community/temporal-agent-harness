@@ -307,13 +307,17 @@ export class PaneStack {
    * A column's width. Tabs share it, so a width set by dragging the gutter holds
    * whichever tab is in front — the column is the thing being sized, not the
    * pane. Failing an explicit width, a flexible tab makes the whole column
-   * flexible, and otherwise the frontmost tab's default decides.
+   * flexible, and otherwise the frontmost tab's default decides. A split column
+   * has every pane in front, so the widest default decides there: following
+   * focus would reflow the column under a click on a pane's header, between the
+   * press that focuses it and the release that lands on its buttons.
    */
   sizeOfGroup(group: Pane[]): number {
     const explicit = group.find((pane) => pane.size != null);
     if (explicit) return this.sizeOf(explicit);
     const flexible = group.find((pane) => PANE_META[pane.kind].flexible);
     if (flexible) return this.sizeOf(flexible);
+    if (isSplit(group)) return Math.max(...group.map((pane) => this.sizeOf(pane)));
     return this.sizeOf(activeIn(group));
   }
 
@@ -464,9 +468,15 @@ export class PaneStack {
     return id;
   }
 
+  /** The one close rule: a pinned pane stays until it is unpinned. */
+  canClose(id: string): boolean {
+    const loc = this.locate(id);
+    return loc != null && !this.groups[loc.group][loc.index].pinned;
+  }
+
   closePane(id: string): void {
     const loc = this.locate(id);
-    if (!loc || this.groups[loc.group][loc.index].pinned) return;
+    if (!loc || !this.canClose(id)) return;
     const next = this.groups.map((group) => [...group]);
     next[loc.group] = next[loc.group].filter((pane) => pane.id !== id);
     const sibling = next[loc.group][Math.min(loc.index, next[loc.group].length - 1)];
@@ -574,6 +584,25 @@ export class PaneStack {
     /* Alone in its column, a pane is already where these would put it. */
     if (id === targetId && this.groups[from.group].length === 1) return;
 
+    /* A stacked column is moved by any of its headers, because it has no handle
+       of its own: beside another column, the whole stack goes, as it stands.
+       Dropped on its own column's edge, or into another column, one pane leaves. */
+    const landing = this.locate(targetId);
+    if (
+      isSplit(this.groups[from.group]) &&
+      !edgeShares(edge) &&
+      landing &&
+      landing.group !== from.group
+    ) {
+      const next = [...this.groups];
+      const [column] = next.splice(from.group, 1);
+      const target = this.locateIn(next, targetId)!;
+      next.splice(target.group + (edge === "after" ? 1 : 0), 0, column);
+      this.groups = next;
+      this.focusPane(id);
+      return;
+    }
+
     const next = this.groups.map((group) => [...group]);
     const [moving] = next[from.group].splice(from.index, 1);
     if (next[from.group].length === 0) next.splice(from.group, 1);
@@ -651,12 +680,19 @@ export class PaneStack {
 
   /**
    * Move a pane by a signed number of columns. A tab leaves its column first,
-   * landing beside it, which is also how the keyboard un-tabs a pane.
+   * landing beside it, which is also how the keyboard un-tabs a pane. A stacked
+   * column moves whole, as it does when dragged.
    */
   movePane(id: string, delta: number): void {
     const loc = this.locate(id);
     if (!loc) return;
     const group = this.groups[loc.group];
+    if (isSplit(group)) {
+      const to = Math.min(Math.max(loc.group + delta, 0), this.groups.length - 1);
+      if (to === loc.group) return;
+      this.placePane(id, this.groups[to][0].id, delta < 0 ? "before" : "after");
+      return;
+    }
     if (group.length > 1) {
       this.placePane(id, group[0].id, delta < 0 ? "before" : "after");
       return;

@@ -8,6 +8,7 @@
 [[agents]]
 key = "nexus-hello"
 workflow_type = "NexusHelloAgent"
+agent = "examples.nexus_hello.workflow:NexusHelloAgentWorkflow"
 task_queue = "nexus-hello"
 label = "Nexus Hello"
 description = """

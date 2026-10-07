@@ -7,6 +7,7 @@
 [[agents]]
 key = "coding"
 workflow_type = "CodingAgent"
+agent = "examples.callback_tools.coding_agent.workflow:CodingAgentWorkflow"
 task_queue = "coding-agent"
 label = "Coding Agent (Callback Tools)"
 description = """

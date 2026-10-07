@@ -16,7 +16,6 @@
 #         workflows=[MyAgent],
 #         activities=[
 #             *(agent.tool_activity(t) for t in MY_TOOLS),
-#             *CODE_MODE_ACTIVITIES,
 #             subagents.run_subagent_turn,
 #         ],
 #     )
@@ -56,21 +55,47 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from temporalio.contrib.pydantic import PydanticPayloadConverter
 from temporalio.converter import DataConverter, DefaultPayloadConverter, ExternalStorage
 from temporalio.plugin import SimplePlugin
 from temporalio.worker import WorkerConfig
 
-from temporal_agent_harness.harness.code_mode.activities import CODE_MODE_ACTIVITIES
 from temporal_agent_harness.harness.jev_approvals.activity import JEV_APPROVAL_ACTIVITIES
 from temporal_agent_harness.utils.large_payload import DEFAULT_PAYLOAD_STORAGE
+
+if TYPE_CHECKING:
+    from temporal_agent_harness.harness.code_mode.activity_fs import AnyFileSystem
 
 
 def _activity_name(fn: Callable[..., Any]) -> str | None:
     """The registered Temporal activity name of ``fn``, or ``None`` if it isn't an activity."""
     return getattr(getattr(fn, "__temporal_activity_definition", None), "name", None)
+
+
+def _filesystem_activities(
+    filesystems: Sequence[type[AnyFileSystem]],
+) -> list[Callable[..., Any]]:
+    """The ``vfs.<name>.*`` activities of each :class:`ActivityFileSystem` subclass in
+    ``filesystems``, refusing anything else and two filesystems with the same name."""
+    from temporal_agent_harness.harness.code_mode import ActivityFileSystem
+
+    names: set[str] = set()
+    activities: list[Callable[..., Any]] = []
+    for fs in filesystems:
+        if not (isinstance(fs, type) and issubclass(fs, ActivityFileSystem)):
+            raise TypeError(
+                f"AgentHarnessPlugin(filesystems=...) got {fs!r}, which is not an "
+                "ActivityFileSystem subclass"
+            )
+        if fs.name in names:
+            raise ValueError(
+                f"AgentHarnessPlugin(filesystems=...) has two filesystems named {fs.name!r}"
+            )
+        names.add(fs.name)
+        activities.extend(fs.activities)
+    return activities
 
 
 def _tool_activities(
@@ -122,8 +147,8 @@ class AgentHarnessPlugin(SimplePlugin):
 
     What it configures:
 
-    * **Data converter** — a Pydantic payload converter (the harness's events, tool payloads,
-      and Code Mode batch models are Pydantic models with discriminated unions) plus
+    * **Data converter** — a Pydantic payload converter (the harness's events and tool
+      payloads are Pydantic models with discriminated unions) plus
       large-payload offload to external storage. The offload matters across processes, not just
       within one: every client, worker, and server that reads a harness payload must use the
       same converter or an offloaded payload can't be read back, and this plugin is how they
@@ -131,28 +156,26 @@ class AgentHarnessPlugin(SimplePlugin):
       hand-passed ``data_converter=`` both survive.
     * **Subagent activity** — ``run_subagent_turn``, bound to the worker's own ``Client`` so it
       can drive child agents. Every agent built with ``agent.subagent_toolset(...)`` needs it.
-    * **Code Mode activities** — the two sandbox-stepping activities, registered
-      unconditionally. Whether the optional ``code-mode`` extra is installed is checked per
-      call, inside the activity, so a worker without it fails a Code Mode call with an
-      actionable non-retryable error rather than leaving the activity names unregistered —
-      which Temporal answers with a *retryable* error, hanging the turn (see
-      :func:`temporal_agent_harness.harness.code_mode.activities._require_code_mode_extra`).
     * **Jev approval activity** — the model call behind
       :func:`~temporal_agent_harness.harness.jev_approvals.jev_evaluator`, registered
-      unconditionally for the same reason as the Code Mode activities: the workflow
-      dispatches it by name, so leaving the name unregistered on a worker without the
+      unconditionally: the workflow dispatches it by name, so leaving the name unregistered on a worker without the
       optional ``jev`` extra would make Temporal retry forever and stall every gated tool
       call mid-approval. The extra is checked per call instead, and a worker without it
       fails the check once and escalates the call to a human.
     * **Tool activities** — the durable body of each ``@agent.activity_tool_defn`` tool in
       ``tools``.
+    * **Filesystem activities** — the ``vfs.<name>.*`` activities of each
+      :class:`~temporal_agent_harness.harness.code_mode.ActivityFileSystem` in ``filesystems``.
 
     Args:
         tools: The agent's tools. The activity-backed ones get their durable bodies
             registered; inline and callback tools are skipped (they have no worker-side
             body), so an agent's whole toolset can be passed as-is.
+        filesystems: The ``ActivityFileSystem`` subclasses the worker's agents mount. Register
+            them on every worker of the agents' task queues: a mount runs its operations, and
+            the console reads its files, on the workflow's task queue.
         large_payload_offload: Where the data converter offloads oversized payloads —
-            Code Mode snapshots and large tool results routinely exceed Temporal's ~2 MB
+            large tool results routinely exceed Temporal's ~2 MB
             limit. Defaults to :func:`~temporal_agent_harness.utils.large_payload.local_payload_storage`,
             which is single-host only; pass
             :func:`~temporal_agent_harness.utils.large_payload.s3_payload_storage` (or any
@@ -166,6 +189,7 @@ class AgentHarnessPlugin(SimplePlugin):
         self,
         *,
         tools: Sequence[Callable[..., Any]] = (),
+        filesystems: Sequence[type[AnyFileSystem]] = (),
         # Defaulting to the shared local storage rather than to ``None`` keeps ``None`` free
         # to mean the one other thing a caller might want: no offloading at all.
         large_payload_offload: ExternalStorage | None = DEFAULT_PAYLOAD_STORAGE,
@@ -175,7 +199,7 @@ class AgentHarnessPlugin(SimplePlugin):
         # SDK internals.
         self._worker_activities: list[Callable[..., Any]] = [
             *_tool_activities(tools),
-            *CODE_MODE_ACTIVITIES,
+            *_filesystem_activities(filesystems),
             *JEV_APPROVAL_ACTIVITIES,
         ]
 
@@ -226,7 +250,7 @@ def _merge_activities(
 
     Temporal rejects a worker with two activities of the same name, and the harness's
     activities are exactly the ones a worker written before this plugin registered by hand —
-    so a half-migrated worker (or one that passes ``CODE_MODE_ACTIVITIES`` explicitly) keeps
+    so a half-migrated worker (or one that passes ``JEV_APPROVAL_ACTIVITIES`` explicitly) keeps
     working instead of failing at startup. Registration is first-one-wins: an explicitly
     passed activity is never displaced by the plugin's copy of it.
     """

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import uuid
 from typing import Any
 from unittest.mock import MagicMock
@@ -28,6 +29,7 @@ from temporalio import workflow
 from temporalio.client import (
     Client,
     WorkflowExecutionStatus,
+    WorkflowFailureError,
     WorkflowHandle,
     WorkflowUpdateFailedError,
 )
@@ -71,6 +73,8 @@ from temporal_agent_harness.harness.agent_workflow import (
     _Admission,
     _discover_handlers,
     _evaluator_label,
+    AgentInitData,
+    agent_init_data,
 )
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 
@@ -135,13 +139,19 @@ class Picked(BaseModel):
     model: str
 
 
+class TripData(BaseModel):
+    """A trip to plan."""
+
+    traveler: str
+
+
 @agent.defn
 class TypedProbeAgent:
     """Two handlers — greet(Greeting)->Greeted and pick(ModelPick)->Picked — plus a
     failing handler. Records each handled message so a test can confirm the runner routed
     + reconstructed the concrete input model (not a dict)."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -149,10 +159,6 @@ class TypedProbeAgent:
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
         self._seen: list[str] = []
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts(mid_turn=MidTurn.ENQUEUE)
     async def greet(self, message: Greeting) -> Greeted:
@@ -182,7 +188,7 @@ class NoEvaluatorProbeAgent:
     """No ``auto_mode_evaluator`` wired, and a handler that tries to switch auto mode on
     anyway — to prove the rejection fails that ONE message, not the session."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -190,10 +196,6 @@ class NoEvaluatorProbeAgent:
             approval_policy_default=ToolApprovalPolicy.allow_tools(["get_order"]),
         )
         self._seen: list[str] = []
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @agent.accepts(mid_turn=MidTurn.ENQUEUE, model_callable=False)
     async def enable_auto_mode(self, message: TextMessage) -> TextReply:
@@ -219,7 +221,7 @@ class MidTurnProbeAgent:
     ``work`` blocks until signalled, so a test can hold a turn open and observe what happens
     to a message that arrives while it is running."""
 
-    @workflow.init
+    @agent.init
     def __init__(self, config: AgentConfig) -> None:
         self._runner = AgentWorkflowRunner(
             config,
@@ -229,10 +231,6 @@ class MidTurnProbeAgent:
         self._released: set[str] = set()
         self._joined: list[bool] = []
         self._published_after_sibling = False
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     @workflow.signal
     def release(self, which: str) -> None:
@@ -279,6 +277,41 @@ class MidTurnProbeAgent:
         return self._published_after_sibling
 
 
+@agent.defn
+class LifecycleProbeAgent:
+    """Records its lifecycle hooks, and reads its typed init data."""
+
+    @agent.init
+    def __init__(self, config: AgentConfig, data: TripData | None = None) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+        )
+        self._data = data
+        self._events: list[str] = []
+
+    @agent.setup
+    async def setup(self) -> None:
+        await workflow.sleep(1)
+        self._events.append("setup")
+
+    @agent.teardown
+    async def teardown(self) -> None:
+        self._events.append("teardown")
+
+    @agent.accepts(mid_turn=MidTurn.ENQUEUE)
+    async def whoami(self, message: TextMessage) -> TextReply:
+        """Report the traveler this instance was started for."""
+        traveler = self._data.traveler if self._data is not None else "nobody"
+        self._events.append(f"whoami:{traveler}")
+        return TextReply(text=traveler)
+
+    @workflow.query
+    def events(self) -> list[str]:
+        return self._events
+
+
 @pytest_asyncio.fixture
 async def client_and_queue():
     """A time-skipping env (pydantic converter) with a worker hosting the probe."""
@@ -289,7 +322,12 @@ async def client_and_queue():
     async with Worker(
         env.client,
         task_queue=task_queue,
-        workflows=[TypedProbeAgent, MidTurnProbeAgent, NoEvaluatorProbeAgent],
+        workflows=[
+            TypedProbeAgent,
+            MidTurnProbeAgent,
+            NoEvaluatorProbeAgent,
+            LifecycleProbeAgent,
+        ],
         # Unsandboxed so the test module's imports (pydantic, harness, pytest) don't
         # trip the workflow sandbox; the runner logic under test is unaffected.
         workflow_runner=UnsandboxedWorkflowRunner(),
@@ -561,37 +599,123 @@ def test_discover_rejects_wrong_arity():
 
 
 class _ValidAgentShape:
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None: ...
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None: ...
+
+
+class _OptionalDataShape:
+    @agent.init
+    def __init__(self, config: AgentConfig, data: TripData | None = None) -> None: ...
+
+
+class _RequiredDataShape:
+    @agent.init
+    def __init__(self, config: AgentConfig, data: TripData) -> None: ...
 
 
 class _NamedShape:
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None: ...
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None: ...
 
 
 class _BareShape:
-    @workflow.run
-    async def run(self, config: AgentConfig) -> None: ...
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None: ...
 
 
 class _StackedShape:
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None: ...
+
+
+class _MissingConfigShape:
+    @agent.init
+    def __init__(self) -> None: ...
+
+
+class _WrongInputShape:
+    @agent.init
+    def __init__(self, value: int) -> None: ...
+
+
+class _ExtendedConfig(AgentConfig):
+    extra: str = ""
+
+
+class _SubclassedConfigShape:
+    @agent.init
+    def __init__(self, config: _ExtendedConfig) -> None: ...
+
+
+class _NonModelDataShape:
+    @agent.init
+    def __init__(self, config: AgentConfig, data: int) -> None: ...
+
+
+class _NullableWithoutDefaultShape:
+    @agent.init
+    def __init__(self, config: AgentConfig, data: TripData | None) -> None: ...
+
+
+class _RequiredWithDefaultShape:
+    @agent.init
+    def __init__(self, config: AgentConfig, data: TripData = TripData(traveler="x")) -> None: ...
+
+
+class _ThreeParamsShape:
+    @agent.init
+    def __init__(self, config: AgentConfig, data: TripData, more: TripData) -> None: ...
+
+
+class _UnmarkedInitShape:
+    def __init__(self, config: AgentConfig) -> None: ...
+
+
+class _AuthoredRunShape:
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None: ...
+
     @workflow.run
     async def run(self, config: AgentConfig) -> None: ...
 
 
-class _MissingConfigShape:
-    @workflow.run
-    async def run(self) -> None: ...
+class _SyncSetupShape:
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None: ...
+
+    @agent.setup  # type: ignore[arg-type]
+    def setup(self) -> None: ...
 
 
-class _WrongInputShape:
-    @workflow.run
-    async def run(self, value: int) -> None: ...
+class _SetupWithArgsShape:
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None: ...
+
+    @agent.setup  # type: ignore[arg-type]
+    async def setup(self, extra: int) -> None: ...
+
+
+class _TwoTeardownsShape:
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None: ...
+
+    @agent.teardown
+    async def first(self) -> None: ...
+
+    @agent.teardown
+    async def second(self) -> None: ...
 
 
 def test_agent_defn_accepts_single_agentconfig():
     assert agent.defn(_ValidAgentShape) is _ValidAgentShape
+    assert agent_init_data(_ValidAgentShape) is None
+
+
+def test_agent_defn_records_optional_and_required_init_data():
+    agent.defn(_OptionalDataShape)
+    agent.defn(_RequiredDataShape)
+    assert agent_init_data(_OptionalDataShape) == AgentInitData(model=TripData, required=False)
+    assert agent_init_data(_RequiredDataShape) == AgentInitData(model=TripData, required=True)
 
 
 def test_agent_defn_registers_the_workflow_with_forwarded_options():
@@ -614,14 +738,125 @@ def test_agent_defn_cannot_be_stacked_with_workflow_defn():
         workflow.defn(agent.defn(_StackedShape))
 
 
-def test_agent_defn_rejects_missing_config_at_definition_time():
-    with pytest.raises(TypeError, match="must accept exactly one AgentConfig"):
-        agent.defn(_MissingConfigShape)
+@pytest.mark.parametrize(
+    ("shape", "detail"),
+    [
+        (_MissingConfigShape, "It takes"),
+        (_ThreeParamsShape, "It takes"),
+        (_WrongInputShape, "first parameter"),
+        (_SubclassedConfigShape, "first parameter"),
+        (_NonModelDataShape, "`data` is annotated"),
+        (_NullableWithoutDefaultShape, "must default to None"),
+        (_RequiredWithDefaultShape, "cannot have a default"),
+    ],
+)
+def test_agent_defn_rejects_a_malformed_init_at_definition_time(shape, detail):
+    with pytest.raises(TypeError, match="violates the harness contract") as excinfo:
+        agent.defn(shape)
+    assert detail in str(excinfo.value)
 
 
-def test_agent_defn_rejects_bespoke_input_at_definition_time():
-    with pytest.raises(TypeError, match="must accept exactly one AgentConfig"):
-        agent.defn(_WrongInputShape)
+def test_agent_defn_requires_agent_init():
+    with pytest.raises(TypeError, match="decorated with @agent.init"):
+        agent.defn(_UnmarkedInitShape)
+
+
+def test_agent_defn_rejects_an_authored_run():
+    with pytest.raises(TypeError, match="@agent.defn provides the workflow's run"):
+        agent.defn(_AuthoredRunShape)
+
+
+@pytest.mark.parametrize(
+    ("shape", "match"),
+    [
+        (_SyncSetupShape, "must be `async def setup"),
+        (_SetupWithArgsShape, "must be `async def setup"),
+        (_TwoTeardownsShape, "more than one @agent.teardown"),
+    ],
+)
+def test_agent_defn_validates_lifecycle_hooks(shape, match):
+    with pytest.raises(TypeError, match=match):
+        agent.defn(shape)
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle hooks + init data (end-to-end)
+# ---------------------------------------------------------------------------
+
+
+async def _wait_for_events(handle: WorkflowHandle, *expected: str) -> list[str]:
+    events: list[str] = []
+    for _ in range(200):
+        events = await handle.query(LifecycleProbeAgent.events)
+        if events[: len(expected)] == list(expected):
+            return events
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"timed out waiting for {expected}; got {events}")
+
+
+async def _start_lifecycle(client: Client, task_queue: str, *args: Any) -> WorkflowHandle:
+    return await client.start_workflow(
+        "LifecycleProbeAgent", args=list(args), id=f"lifecycle-{uuid.uuid4()}", task_queue=task_queue
+    )
+
+
+async def test_setup_runs_before_the_first_message_and_teardown_after_close(
+    client_and_queue,
+):
+    client, task_queue = client_and_queue
+    handle = await _start_lifecycle(client, task_queue, AgentConfig(), TripData(traveler="Ada"))
+    # Sent while setup is still sleeping: admitted, and handled only once setup is done.
+    await _send(handle, "whoami", {"text": ""})
+    await _wait_for_events(handle, "setup", "whoami:Ada")
+
+    await handle.signal("close")
+    await handle.result()
+    assert await handle.query(LifecycleProbeAgent.events) == [
+        "setup",
+        "whoami:Ada",
+        "teardown",
+    ]
+
+
+async def test_a_caller_that_knows_only_agentconfig_can_start_an_agent_with_optional_data(
+    client_and_queue,
+):
+    client, task_queue = client_and_queue
+    handle = await _start_lifecycle(client, task_queue, AgentConfig())
+    await _send(handle, "whoami", {"text": ""})
+    await _wait_for_events(handle, "setup", "whoami:nobody")
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        ([AgentConfig(), {"wrong": 1}], "invalid TripData"),
+        ([{"agent_id": "not a valid id!"}], "invalid AgentConfig"),
+        ([AgentConfig(), TripData(traveler="Ada"), TripData(traveler="Bo")], "3 argument(s)"),
+    ],
+)
+async def test_invalid_input_fails_the_workflow_instead_of_retrying_forever(
+    client_and_queue, args, message
+):
+    client, task_queue = client_and_queue
+    handle = await _start_lifecycle(client, task_queue, *args)
+    with pytest.raises(WorkflowFailureError) as excinfo:
+        await asyncio.wait_for(handle.result(), timeout=30)
+    cause = excinfo.value.cause
+    assert isinstance(cause, ApplicationError) and cause.type == "InvalidAgentInput"
+    assert message in str(cause)
+
+
+async def test_teardown_runs_when_the_workflow_is_cancelled(client_and_queue):
+    client, task_queue = client_and_queue
+    handle = await _start_lifecycle(client, task_queue, AgentConfig(), TripData(traveler="Ada"))
+    await _send(handle, "whoami", {"text": ""})
+    await _wait_for_events(handle, "setup", "whoami:Ada")
+
+    await handle.cancel()
+    with pytest.raises(WorkflowFailureError):
+        await handle.result()
+    assert (await handle.query(LifecycleProbeAgent.events))[-1] == "teardown"
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +867,23 @@ def test_agent_defn_rejects_bespoke_input_at_definition_time():
 # ---------------------------------------------------------------------------
 # Config resolution + required values (offline unit tests)
 # ---------------------------------------------------------------------------
+
+
+def test_a_tool_call_closed_after_eviction_unwinds_quietly():
+    """After an eviction, a parked run_tool coroutine is closed later, from another context.
+    Its unwind must stay a plain GeneratorExit: resetting its context vars there would raise
+    ValueError, which the participant would then try to publish outside the workflow loop."""
+
+    class _Park:
+        def __await__(self):
+            yield
+
+    async def parked_tool() -> None:
+        await _Park()
+
+    call = AgentWorkflowRunner.run_tool(MagicMock(), "t1", parked_tool)
+    contextvars.copy_context().run(call.send, None)  # started inside the workflow's context
+    call.close()  # closed from this one; raises if the unwind does anything but exit
 
 
 def test_stream_and_approval_policy_default_are_required():
@@ -690,7 +942,7 @@ def test_set_approval_policy_resolves_matching_pending(offline_build_policy):
 
 
 def test_an_auto_mode_evaluator_must_be_async(offline_build_policy):
-    """Rejected at CONSTRUCTION — inside the agent's @workflow.init — so the error lands
+    """Rejected at CONSTRUCTION — inside the agent's @agent.init — so the error lands
     next to the developer's own wiring instead of inside the first gated tool call, which
     in a real agent might not happen until production.
 

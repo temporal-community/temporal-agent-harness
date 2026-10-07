@@ -12,6 +12,7 @@
   } from "$lib/panes/paneDrop";
   import PaneShell from "$lib/panes/PaneShell.svelte";
   import { PANE_KINDS, PANE_META, SPINE_SIZE } from "$lib/panes/registry";
+  import { keepScrollPositions } from "$lib/state/followScroll";
   import {
     activeIn,
     isSplit,
@@ -54,6 +55,18 @@
      play the open animation as if it had just been opened. The gate has to
      outlive the drop's own render, so it lifts a frame later. */
   let settling = $state(false);
+
+  /* Moving a column re-inserts its nodes, which resets every scroller inside it. */
+  let restoreScroll: (() => void) | null = null;
+  $effect.pre(() => {
+    void stack.groups;
+    if (railElement) restoreScroll = keepScrollPositions(railElement);
+  });
+  $effect(() => {
+    void stack.groups;
+    restoreScroll?.();
+    restoreScroll = null;
+  });
 
   function reducedMotion(): boolean {
     if (typeof window === "undefined") return false;
@@ -346,11 +359,10 @@
     {#each stack.groups as group, groupIndex (slotKey(group))}
       {@const collapsed = groupCollapsed(group)}
       {@const split = isSplit(group)}
-      {@const tabbed = group.length > 1 && !split}
+      <!-- Folded down, every pane in the column is a spine of its own, stacked, so
+           each keeps its name and kind rather than the front one speaking for all. -->
+      {@const tabbed = group.length > 1 && !split && !collapsed}
       {@const front = activeIn(group)}
-      <!-- Folded down, a column is a spine. Tabs behind the front one still have
-           nothing to show, so a folded column is one surface. -->
-      {@const shown = collapsed ? [front] : group}
       <div
         class="rail-slot"
         class:collapsed
@@ -364,7 +376,7 @@
         data-group={groupIndex}
         animate:flip={{ duration: reducedMotion() ? 0 : SETTLE_MS, easing: cubicOut }}
       >
-        {#if tabbed && !collapsed}
+        {#if tabbed}
           <div class="tab-strip" role="tablist" aria-label="Panes in this column">
             {#each group as pane, tabIndex (pane.id)}
               {@const description = describe(pane)}
@@ -398,14 +410,14 @@
         {/if}
 
         <div class="slot-body">
-          {#each shown as pane, paneIndex (pane.id)}
+          {#each group as pane, paneIndex (pane.id)}
             {@const description = describe(pane)}
             {@const isFront = pane.id === front.id}
             <!-- In a split every pane is on screen; behind a tab strip only the
                  front one is, and the rest stay mounted at their full size —
                  hiding them by display would make the graph remeasure at zero and
                  lose its zoom every time a reader flicked between tabs. -->
-            {@const visible = split || isFront}
+            {@const visible = split || collapsed || isFront}
             <div
               class="pane-slot"
               class:front={visible}
@@ -428,7 +440,7 @@
                 statusTone={description.statusTone ?? null}
                 statusLabel={description.statusLabel ?? null}
                 focused={stack.focusedId === pane.id}
-                canClose={!pane.pinned}
+                canClose={stack.canClose(pane.id)}
                 canResize={!split && isFront && !pane.collapsed}
                 onFocus={() => stack.focusPane(pane.id)}
                 onToggleCollapse={() => stack.toggleCollapse(pane.id)}
@@ -444,7 +456,7 @@
                 {/snippet}
               </PaneShell>
 
-              {#if split && paneIndex < shown.length - 1}
+              {#if split && !collapsed && paneIndex < group.length - 1}
                 <button
                   type="button"
                   class="share-gutter"
@@ -616,7 +628,8 @@
 
   /* The seam between panes in a split. The pane above it draws it, so the last
      pane in the column leaves the column's own bottom edge alone. */
-  .rail-slot.split .pane-slot:not(:last-child) {
+  .rail-slot.split .pane-slot:not(:last-child),
+  .rail-slot.collapsed .pane-slot:not(:last-child) {
     border-bottom: 1px solid var(--border);
   }
 

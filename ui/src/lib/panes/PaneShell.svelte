@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import { ChevronsLeft, Pin, Rows2, SquareStack, X } from "@lucide/svelte";
+  import { resizeKeyIntent } from "$lib/components/primitives/resizeKeys";
   import { PANE_META, titleBelongsInHead } from "$lib/panes/registry";
   import type { Pane } from "$lib/state/paneStack.svelte";
 
@@ -50,8 +51,6 @@
     content
   }: Props = $props();
 
-  const RESIZE_STEP = 24;
-
   let element = $state<HTMLElement | null>(null);
   let resizing = $state(false);
 
@@ -95,19 +94,10 @@
   }
 
   function handleResizeKeydown(event: KeyboardEvent): void {
-    /* Modified arrows belong to the rail: they walk and reorder panes. */
-    if (event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return;
-    if (event.key === "Home") {
-      event.preventDefault();
-      onResize(null);
-      return;
-    }
-    let next = currentSize();
-    if (event.key === "ArrowLeft") next -= RESIZE_STEP;
-    else if (event.key === "ArrowRight") next += RESIZE_STEP;
-    else return;
+    const intent = resizeKeyIntent(event, "left-right");
+    if (intent == null) return;
     event.preventDefault();
-    onResize(Math.max(meta.minSize, next));
+    onResize(intent === "reset" ? null : Math.max(meta.minSize, currentSize() + intent));
   }
 </script>
 
@@ -408,6 +398,11 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    /* Whatever a pane stacks inside itself — tip layers, canvas panels — stays
+       under the sticky spines (z-index 4) sliding over it. Isolated here rather
+       than on the rail slot: the width gutters overhang the slot's edge by half
+       their width, and an isolated slot lets the next column cover that half. */
+    isolation: isolate;
     /* Panes size their own type: a 380px pane and an 800px pane are different
        rooms, and the viewport cannot tell them apart. */
     container: pane / inline-size;

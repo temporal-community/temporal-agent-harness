@@ -8,11 +8,14 @@
   import StepController from "$lib/components/flow/StepController.svelte";
   import HotkeyHelp from "$lib/components/flow/HotkeyHelp.svelte";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
+  import DockedDrawer from "$lib/components/primitives/DockedDrawer.svelte";
+  import { restoredDrawerSize } from "$lib/components/primitives/resizeKeys";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
-  import { Keyboard } from "@lucide/svelte";
+  import { Keyboard, PanelLeft } from "@lucide/svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
   import ApprovalDecisionPanel from "$lib/components/agent/ApprovalDecisionPanel.svelte";
   import AgentStatePanel from "$lib/components/agent/AgentStatePanel.svelte";
+  import FilesPanel from "$lib/components/agent/FilesPanel.svelte";
   import PaneRail, { type PaneDescription } from "$lib/panes/PaneRail.svelte";
   import PaneMinimap from "$lib/panes/PaneMinimap.svelte";
   import PaneLinkNotice from "$lib/panes/PaneLinkNotice.svelte";
@@ -30,6 +33,8 @@
     type ReplaySurface
   } from "$lib/state/replayHotkeys";
   import { setFaviconTone } from "$lib/state/favicon";
+  import { countPendingRequests, pendingRequestLabel } from "$lib/state/pendingRequests";
+  import { focusReturnTarget } from "$lib/state/quickSwitch";
 
   const savedPrefs = readOperatorPrefs();
 
@@ -67,14 +72,25 @@
      without being asked for should be able to take three fifths of the window; the
      reader who wants that drags for it, and the gutter goes all the way to 60vh. */
   const DRAWER_FIT_MAX_FRACTION = 0.5;
+  /* The ceilings the layout already applies — `min(60vw, …)` and `min(60vh, …)` on the
+     grid — so a drawer is never set larger than it can be drawn. */
+  const DRAWER_MAX_FRACTION = 0.6;
 
   let rail = $state<PaneRail | null>(null);
   let drawerRail = $state<PaneRail | null>(null);
   let drawerElement = $state<HTMLElement | null>(null);
-  let drawerHeight = $state(
-    typeof savedPrefs.drawerHeight === "number" ? savedPrefs.drawerHeight : DRAWER_DEFAULT_H
-  );
-  let resizingDrawer = $state(false);
+  /* The height the reader last dragged or stepped the drawer to, which outranks every
+     fit until they ask for one back with double-click or Home. Only a choice is saved:
+     a fit is recomputed on open, so saving it would pass it off as one. */
+  let chosenDrawerHeight = savedPrefs.drawerHeight;
+  function chosenDrawerHeightNow(): number | null {
+    return restoredDrawerSize(
+      chosenDrawerHeight,
+      DRAWER_MIN_H,
+      window.innerHeight * DRAWER_MAX_FRACTION
+    );
+  }
+  let drawerHeight = $state(chosenDrawerHeightNow() ?? DRAWER_DEFAULT_H);
   /* Which of the two rails the arrows, F and Escape act on: the last one touched,
      because both are on screen at once and neither is "the" rail any more. */
   let drawerActive = $state(false);
@@ -87,6 +103,17 @@
       : "all"
   );
   let hotkeyHelpOpen = $state(false);
+  let sessionManagerTab = $state<"sessions" | "new">("sessions");
+  const SESSION_DRAWER_DEFAULT_W = 420;
+  const SESSION_DRAWER_MIN_W = 240;
+  let sessionManagerHeld = $state(
+    new URLSearchParams(window.location.search).get("sm") === "1"
+  );
+  let sessionDrawerWidth = $state(
+    typeof savedPrefs.sessionDrawerWidth === "number"
+      ? savedPrefs.sessionDrawerWidth
+      : SESSION_DRAWER_DEFAULT_W
+  );
 
   if (savedPrefs.followDefault === false) {
     run.following = false;
@@ -141,7 +168,7 @@
   $effect(() => {
     writeOperatorPrefs({
       transcriptFilter,
-      drawerHeight,
+      sessionDrawerWidth,
       followDefault: run.following
     });
   });
@@ -179,20 +206,7 @@
     stack.pendingCursor = null;
   });
 
-  const pendingApprovalCount = $derived.by(() => {
-    const resolvedToolIds = new Set<string>();
-    for (const row of run.fullReplayLog.rows) {
-      if (row.event === "tool_approval_resolved" && row.toolId) {
-        resolvedToolIds.add(row.toolId);
-      }
-    }
-    return run.fullReplayLog.rows.filter(
-      (row) =>
-        row.event === "tool_approval_requested" &&
-        row.toolId != null &&
-        !resolvedToolIds.has(row.toolId)
-    ).length;
-  });
+  const pendingLabel = $derived(pendingRequestLabel(countPendingRequests(run.fullReplayLog.rows)));
 
   function selectNode(nodeId: string): void {
     const localNodeId = nodeId.split("::").at(-1) ?? nodeId;
@@ -220,8 +234,8 @@
       case "chat":
         return {
           title: (run.session ? run.runInfo.agentLabel : "") || "Agent chat",
-          statusTone: pendingApprovalCount > 0 ? "--live" : null,
-          statusLabel: pendingApprovalCount > 0 ? "needs you" : null
+          statusTone: pendingLabel ? "--live" : null,
+          statusLabel: pendingLabel ? "needs you" : null
         };
       case "graph":
         return {
@@ -259,7 +273,16 @@
         return {
           title: PANE_META.state.kindLabel,
           statusLabel:
-            run.agentStates.length > 0 ? `${run.agentStates.length} declared` : null,
+            run.declaredStates.length > 0 ? `${run.declaredStates.length} declared` : null,
+          statusTone: null
+        };
+      case "files":
+        return {
+          title: PANE_META.files.kindLabel,
+          statusLabel:
+            run.fileMounts.length > 0
+              ? `${run.fileMounts.length} ${run.fileMounts.length === 1 ? "mount" : "mounts"}`
+              : null,
           statusTone: null
         };
       default: {
@@ -324,7 +347,8 @@
     },
     /* The same box the transport's switch opens, so the key and the control cannot
        drift: both call this one function. */
-    toggleDrawer: () => toggleDrawer()
+    toggleDrawer: () => toggleDrawer(),
+    toggleSessionManager: () => toggleSessionManager()
   };
 
   /* Same reason: whether Escape has anything to do is asked of the desk, not of
@@ -352,22 +376,6 @@
     const node = event.target;
     if (!(node instanceof Element)) return;
     drawerActive = node.closest(".drawer") != null;
-  }
-
-  /* Same pointer-capture shape as the rail's own column gutter, on the other axis.
-     The drawer is the last row, so its bottom is pinned to the floor of the window
-     and its height is the distance from the pointer down to it — the same arithmetic
-     as when it sat above the transport, for a different reason. */
-  function resizeDrawerFrom(event: PointerEvent): void {
-    const rect = drawerElement?.getBoundingClientRect();
-    if (!rect) return;
-    const height = Math.round(rect.bottom - event.clientY);
-    /* Snap shut rather than bottoming out on a strip of leftover chrome: a drawer too
-       short for a trace has nothing in it worth the header telling you so. Zero is
-       the whole signal — the row collapses out of the grid on its own. */
-    drawerHeight = height < DRAWER_MIN_H ? 0 : height;
-    /* From here the height is the reader's, and fitting stops second-guessing it. */
-    drawerSized = true;
   }
 
   /**
@@ -409,26 +417,6 @@
     return drawerHeight;
   }
 
-  function startDrawerResize(event: PointerEvent): void {
-    if (event.button !== 0 && event.pointerType !== "touch") return;
-    event.preventDefault();
-    resizingDrawer = true;
-    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    resizeDrawerFrom(event);
-  }
-
-  function moveDrawerResize(event: PointerEvent): void {
-    if (resizingDrawer) resizeDrawerFrom(event);
-  }
-
-  function stopDrawerResize(event: PointerEvent): void {
-    resizingDrawer = false;
-    const handle = event.currentTarget as HTMLElement;
-    if (handle.hasPointerCapture(event.pointerId)) {
-      handle.releasePointerCapture(event.pointerId);
-    }
-  }
-
   /**
    * Showing something, which is not the same as holding something: dragged to the
    * floor the drawer keeps its panes at zero height. The control on the transport
@@ -439,7 +427,7 @@
 
   /* A plain field, not `$state`: bookkeeping about whether a fit is owed, which
      nothing on screen reads and no fit should re-trigger. */
-  let drawerSized = false;
+  let drawerSized = chosenDrawerHeightNow() != null;
 
   /**
    * Fit when the drawer opens, and then leave it alone.
@@ -464,9 +452,9 @@
     void run.session?.workflow_id;
 
     if (!holding) {
-      /* An emptied drawer has no height anyone chose. The next open is a fresh
-         one, and fresh means fitted. */
-      drawerSized = false;
+      /* The next open is a fresh one: fitted, unless the reader has a height of
+         their own for it. */
+      drawerSized = chosenDrawerHeightNow() != null;
       return;
     }
     if (drawerSized) return;
@@ -526,18 +514,96 @@
     }
     if (drawerHeight === 0) {
       /* Dragging to the floor asks for the drawer to be gone, not for it to be
-         that tall next time, so reopening is a fresh open and gets a fresh fit.
-         The fixed height is what it opens at while the fit has nothing to measure,
-         and what it keeps if it never does. */
-      drawerHeight = DRAWER_DEFAULT_H;
-      drawerSized = false;
-      requestAnimationFrame(() => fitDrawerToContent());
+         that tall next time, so reopening is a fresh open: the reader's own height
+         if they have one, or else a fresh fit. The fixed height is what it opens at
+         while the fit has nothing to measure, and what it keeps if it never does. */
+      const chosen = chosenDrawerHeightNow();
+      drawerHeight = chosen ?? DRAWER_DEFAULT_H;
+      drawerSized = chosen != null;
+      if (chosen == null) requestAnimationFrame(() => fitDrawerToContent());
     }
     if (drawer.groups.length === 0) drawer.openPane({ kind: "latency" });
+  }
+
+  const sessionDrawerOpen = $derived(sessionManagerHeld && sessionDrawerWidth > 0);
+
+  function persistSessionManager(open: boolean): void {
+    const url = new URL(window.location.href);
+    if (open) url.searchParams.set("sm", "1");
+    else url.searchParams.delete("sm");
+    history.replaceState(history.state, "", url);
+  }
+
+  /* A plain field, like `drawerSized`: nothing on screen reads it. */
+  let focusBeforeSessionManager: HTMLElement | null = null;
+
+  function holdSessionManager(open: boolean): void {
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const drawerNode = document.getElementById("session-manager-drawer");
+    /* Body means nothing was focused — Safari does not focus a clicked button — which the
+       return below reads as "the icon". */
+    if (open && !sessionDrawerOpen) focusBeforeSessionManager = active === document.body ? null : active;
+    /* Only when the drawer is holding focus, because closing it would drop focus on the body. A
+       close from the icon or from the rail leaves focus where the reader already has it. */
+    const returnFocus = !open && active != null && drawerNode?.contains(active) === true;
+
+    sessionManagerHeld = open;
+    /* Dragged shut and then asked for again: the width it opens at, like the
+       bottom drawer's own height. */
+    if (open && sessionDrawerWidth === 0) sessionDrawerWidth = SESSION_DRAWER_DEFAULT_W;
+    persistSessionManager(open);
+
+    if (returnFocus) {
+      /* `preventScroll`, because the rail scrolls sideways and focus() would slide it. */
+      focusReturnTarget(
+        focusBeforeSessionManager,
+        drawerNode,
+        document.querySelector<HTMLElement>(".session-drawer-trigger")
+      )?.focus({ preventScroll: true });
+    }
+  }
+
+  function toggleSessionManager(): void {
+    holdSessionManager(!sessionDrawerOpen);
+  }
+
+  /* The name chip names the sessions view, so pressing it while that view is
+     already on screen shuts the drawer — the same press-to-close the icon has. */
+  function openSessionManager(tab: "sessions" | "new"): void {
+    if (sessionDrawerOpen && sessionManagerTab === tab) {
+      holdSessionManager(false);
+      return;
+    }
+    sessionManagerTab = tab;
+    holdSessionManager(true);
+  }
+
+  let windowWidth = $state(window.innerWidth);
+  let windowHeight = $state(window.innerHeight);
+
+  $effect(() => {
+    if (sessionManagerHeld) void run.ensureSessionsEnriched();
+  });
+
+  function fitBottomDrawer(): void {
+    chosenDrawerHeight = undefined;
+    writeOperatorPrefs({ drawerHeight: undefined });
+    drawerSized = false;
+    if (fitDrawerToContent() == null) drawerHeight = DRAWER_DEFAULT_H;
+  }
+
+  /* Written when a drag or key step ends, not on every move. Dragged to the floor is
+     not a height to reopen at, so that leaves the last real one standing. */
+  function keepDrawerHeight(): void {
+    if (drawerHeight < DRAWER_MIN_H) return;
+    chosenDrawerHeight = drawerHeight;
+    writeOperatorPrefs({ drawerHeight });
   }
 </script>
 
 <svelte:window
+  bind:innerWidth={windowWidth}
+  bind:innerHeight={windowHeight}
   onkeydown={handleWindowKeydown}
   onfocusin={noteRail}
   onpointerdown={noteRail}
@@ -548,9 +614,10 @@
   class:bleed={bleeding}
   class:bleed-drawer={drawer.bleedingPane != null}
   class:has-drawer={drawer.groups.length > 0}
+  class:has-session-drawer={sessionManagerHeld}
   class:drawer-shut={drawerHeight === 0}
   class:drawer-solo={drawer.groups.length === 1 && drawer.groups[0].length === 1}
-  style={`--drawer-h: ${drawerHeight}px`}
+  style={`--drawer-h: ${drawerHeight}px; --session-drawer-w: ${sessionDrawerWidth}px`}
 >
   <!-- Two strips, and each answers one question: this one what you are looking
        at, the transport under the rail where in the run you are looking from.
@@ -558,29 +625,40 @@
        it is a note on the arrangement that row describes, and it is only on
        screen while the link that opened the desk asked for something missing. -->
   <div class="chrome">
-    <PaneMinimap {stack} describe={describePane}>
+    <PaneMinimap {stack} {drawer} describe={describePane}>
       {#snippet lead()}
+        <IconButton
+          class="rail-icon session-drawer-trigger"
+          label={sessionDrawerOpen ? "Close Session Manager" : "Open Session Manager"}
+          tip={sessionDrawerOpen ? "Close Session Manager\nS" : "Open Session Manager\nS"}
+          pressed={sessionDrawerOpen}
+          aria-expanded={sessionDrawerOpen}
+          aria-controls="session-manager-drawer"
+          data-tip-below
+          data-tip-align="start"
+          onclick={toggleSessionManager}
+        >
+          <PanelLeft size={13} />
+        </IconButton>
+
+        <!-- Which session you are in, beside the switch that changes it. The icon
+             opens the drawer on whichever view was last read; this names the session
+             and opens the sessions list. New sessions start from the drawer's tab. -->
         <SessionControls
+          display="launcher"
+          tab={sessionManagerTab}
+          paneOpen={sessionDrawerOpen}
           sessions={run.sessions}
           agents={run.agents}
           sessionId={run.runInfo.sessionId}
           connecting={run.connecting}
           sending={run.sending}
           creatingSession={run.creatingSession}
-          refreshingSessions={run.refreshingSessions}
           closed={run.sessionClosed}
-          closedWorkflowIds={run.closedWorkflowIds}
           error={run.connectionError}
-          sessionsError={run.sessionsError}
-          {pendingApprovalCount}
-          onNewSession={(workflowType) => run.startNewSession(workflowType)}
-          onSelectSession={(sessionId) => run.selectSession(sessionId)}
-          onRefreshSessions={() => run.refreshSessions()}
+          {pendingLabel}
           onEnsureSessions={() => run.ensureSessionsEnriched()}
-          onEnsureAgents={() => run.ensureAgents()}
-          onRefreshAgents={() => run.refreshAgents()}
-          refreshingAgents={run.refreshingAgents}
-          agentsError={run.agentsError}
+          onTabChange={openSessionManager}
         />
       {/snippet}
 
@@ -613,7 +691,49 @@
         onDismiss={() => stack.dismissUnknownPanes()}
       />
     {/if}
+
   </div>
+
+  {#if sessionManagerHeld}
+    <aside class="session-drawer" id="session-manager-drawer">
+      <DockedDrawer
+        edge="left"
+        label="Session Manager"
+        size={sessionDrawerWidth}
+        minSize={SESSION_DRAWER_MIN_W}
+        maxSize={windowWidth * DRAWER_MAX_FRACTION}
+        onResize={(width) => (sessionDrawerWidth = width)}
+        onFit={() => (sessionDrawerWidth = SESSION_DRAWER_DEFAULT_W)}
+      >
+        <SessionControls
+          display="pane"
+          tab={sessionManagerTab}
+          sessions={run.sessions}
+          agents={run.agents}
+          sessionId={run.runInfo.sessionId}
+          connecting={run.connecting}
+          sending={run.sending}
+          creatingSession={run.creatingSession}
+          refreshingSessions={run.refreshingSessions}
+          closed={run.sessionClosed}
+          closedWorkflowIds={run.closedWorkflowIds}
+          error={run.connectionError}
+          sessionsError={run.sessionsError}
+          {pendingLabel}
+          onNewSession={(workflowType, data) => run.startNewSession(workflowType, data)}
+          onSelectSession={(sessionId) => run.selectSession(sessionId)}
+          onRefreshSessions={() => run.refreshSessions()}
+          onEnsureSessions={() => run.ensureSessionsEnriched()}
+          onEnsureAgents={() => run.ensureAgents()}
+          onRefreshAgents={() => run.refreshAgents()}
+          refreshingAgents={run.refreshingAgents}
+          agentsError={run.agentsError}
+          onTabChange={(tab) => (sessionManagerTab = tab)}
+          onClose={() => holdSessionManager(false)}
+        />
+      </DockedDrawer>
+    </aside>
+  {/if}
 
   <PaneRail
     bind:this={rail}
@@ -641,8 +761,8 @@
              listing sessions, so the panel is handed the one it is showing and
              nothing about the rest. -->
         <AgentChatPanel
-          items={run.chatTranscript}
-          logs={run.fullReplayLog.rows}
+          {...run.chatView}
+          onJumpToLive={() => run.jumpToLive()}
           sessions={run.sessions}
           agentLabel={run.runInfo.agentLabel}
           sessionId={run.runInfo.sessionId}
@@ -655,8 +775,11 @@
           error={run.connectionError}
           onSend={(message, workflowId) => run.sendMessage(message, workflowId)}
           onStopAgent={(workflowId) => run.stopAgent(workflowId)}
+          onRetryInterface={(workflowId) => run.retryAgentInterface(workflowId)}
           onApproveTool={(workflowId, toolId, approved, remember) =>
             run.approveTool(workflowId, toolId, approved, remember)}
+          onCallbackResult={(workflowId, toolId, outcome) =>
+            run.provideCallbackResult(workflowId, toolId, outcome)}
         />
       {:else if pane.kind === "latency"}
         <LatencyWaterfall
@@ -678,11 +801,27 @@
         <!-- Handed the fold, not the frames: what an agent's state holds at the
              playhead is a projection like every other reading in the console, so
              scrubbing moves it and nothing here subscribes to anything. -->
-        <AgentStatePanel states={run.agentStates} />
+        <AgentStatePanel states={run.declaredStates} />
+      {:else if pane.kind === "files"}
+        <!-- Trees and in-memory contents are folds to the playhead like the state pane;
+             an indexed mount's contents are read from its store now, and the pane says so. -->
+        <FilesPanel
+          mounts={run.fileMounts}
+          live={run.viewIndex >= run.replayTimeline.length}
+          onViewFile={(request) => run.viewFile(request)}
+          onOkfGraph={(request) => run.okfGraph(request)}
+          onJumpToLive={() => run.jumpToLive()}
+        />
       {:else if pane.kind === "decisions"}
         <!-- The projection is already clipped to the playhead, so this pane
-             rewinds with the graph and logs instead of leaking future verdicts. -->
-        <ApprovalDecisionPanel decisions={run.approvalDecisions} />
+             rewinds with the graph and logs instead of leaking future verdicts.
+             `ahead` is what keeps that from reading as "nothing happened" when the
+             cursor is simply behind the evaluations. -->
+        <ApprovalDecisionPanel
+          decisions={run.approvalDecisions}
+          ahead={run.approvalDecisionsAhead}
+          onJumpToLive={() => run.jumpToLive()}
+        />
       {:else if pane.kind === "logs"}
         <TranscriptPanel
           groups={run.replayLog.groups}
@@ -727,30 +866,25 @@
        rail the moment the last drawer pane is closed. -->
   {#if drawer.groups.length > 0}
     <section class="drawer" bind:this={drawerElement} aria-label="Bottom drawer">
-      <button
-        type="button"
-        class="drawer-gutter"
-        aria-label="Resize the bottom drawer"
-        title="Drag to set the drawer height — double-click to fit it to the trace"
-        onpointerdown={startDrawerResize}
-        onpointermove={moveDrawerResize}
-        onpointerup={stopDrawerResize}
-        onpointercancel={stopDrawerResize}
-        ondblclick={() => {
-          /* The way back from a height you chose and no longer want, and the only way
-             to ask the question again once it has settled. */
-          drawerSized = false;
-          if (fitDrawerToContent() == null) drawerHeight = DRAWER_DEFAULT_H;
-        }}
-      ></button>
-
-      <PaneRail
-        bind:this={drawerRail}
-        stack={drawer}
-        describe={describePane}
-        bleedingId={drawer.bleedingPane?.id ?? null}
-        {paneContent}
-      />
+      <DockedDrawer
+        edge="bottom"
+        label="Bottom drawer"
+        size={drawerHeight}
+        minSize={DRAWER_MIN_H}
+        maxSize={windowHeight * DRAWER_MAX_FRACTION}
+        onResize={(height) => (drawerHeight = height)}
+        onResizeStart={() => (drawerSized = true)}
+        onResizeEnd={keepDrawerHeight}
+        onFit={fitBottomDrawer}
+      >
+        <PaneRail
+          bind:this={drawerRail}
+          stack={drawer}
+          describe={describePane}
+          bleedingId={drawer.bleedingPane?.id ?? null}
+          {paneContent}
+        />
+      </DockedDrawer>
     </section>
   {/if}
 </main>
@@ -762,9 +896,29 @@
     height: 100vh;
     min-height: 0;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr) auto;
     background: var(--surface-0);
     color: var(--text-1);
+  }
+
+  .app.has-session-drawer {
+    grid-template-columns: min(60vw, var(--session-drawer-w)) minmax(0, 1fr);
+  }
+
+  .app.has-session-drawer .chrome {
+    grid-column: 1 / -1;
+  }
+
+  .app.has-session-drawer .session-drawer {
+    grid-column: 1;
+    grid-row: 2 / -1;
+  }
+
+  .app.has-session-drawer > :global(.rail),
+  .app.has-session-drawer > :global(.step-controller),
+  .app.has-session-drawer > .drawer {
+    grid-column: 2;
   }
 
   /* The drawer opens under the transport and takes its height off the RAIL, which is
@@ -795,11 +949,11 @@
   }
 
   /* The drawer is the 1fr row now, not a strip pinned above the transport. */
-  .app.bleed-drawer .drawer {
+  .app.bleed-drawer .drawer :global(.docked-drawer) {
     border-top: 0;
   }
 
-  .app.bleed-drawer .drawer-gutter {
+  .app.bleed-drawer .drawer :global(.drawer-gutter) {
     display: none;
   }
 
@@ -813,7 +967,6 @@
     display: grid;
     grid-template-rows: minmax(0, 1fr);
     min-height: 0;
-    border-top: 1px solid var(--border);
   }
 
   /* A drawer is one wide box, not a rail that carries on off to the right, so the
@@ -925,46 +1078,6 @@
     overflow: hidden;
   }
 
-  /* The handle is the only way back, and half its usual reach is now below the floor
-     of the window. Give it the pixels above the seam, where the drawer used to be.
-     It ties the transport on `z-index` and wins on tree order. */
-  .app.drawer-shut .drawer-gutter {
-    inset: -11px 0 auto 0;
-  }
-
-  /* Same handle as a column's width gutter, a quarter turn round: invisible until
-     pointed at, sitting astride the seam it moves. */
-  .drawer-gutter {
-    position: absolute;
-    inset: -6px 0 auto 0;
-    z-index: 5;
-    height: 12px;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    cursor: row-resize;
-    touch-action: none;
-    transition: background var(--duration-fast) var(--ease-out);
-  }
-
-  .drawer-gutter:focus-visible {
-    background: color-mix(in srgb, var(--accent) 30%, transparent);
-    outline: 2px solid var(--focus-ring);
-    outline-offset: -4px;
-  }
-
-  @media (hover: hover) and (pointer: fine) {
-    .drawer-gutter:hover {
-      background: color-mix(in srgb, var(--accent) 30%, transparent);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .drawer-gutter {
-      transition: none;
-    }
-  }
-
   /* One canvas, edge to edge — but the transport stays.
 
      The strip that says WHAT you are looking at can go: full screen is the
@@ -978,6 +1091,14 @@
      its zoom, because it is the same element throughout. */
   .app.bleed {
     grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .app.bleed.has-session-drawer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app.bleed .session-drawer {
+    display: none;
   }
 
   .app.bleed .chrome {
@@ -995,8 +1116,19 @@
   /* One grid row, however many rows of chrome are in it, so the rail keeps the
      whole of what is left whether or not the notice is up. */
   .chrome {
+    position: relative;
     display: flex;
     flex-direction: column;
+    min-width: 0;
+  }
+
+  /* A meta-control over the desk, docked beside it rather than participating in
+     either pane rail. Its grid track is the left-edge counterpart to the bottom
+     drawer's final row. */
+  .session-drawer {
+    position: relative;
+    display: grid;
+    min-height: 0;
     min-width: 0;
   }
 
@@ -1058,4 +1190,5 @@
   .pane-content :global(.roll) {
     flex: 1 1 120px;
   }
+
 </style>

@@ -40,7 +40,7 @@ with workflow.unsafe.imports_passed_through():
 
     from . import activities
     from . import board as game
-    from .models import NewGame, PlayMove, SystemOneRequest, SystemOneResult
+    from .models import MatchSettings, NewGame, PlayMove, SystemOneRequest, SystemOneResult
 
 
 TASK_QUEUE = "tictactoe-agent"
@@ -56,8 +56,9 @@ OUTLOOK_LEVELS = ("losing", "even", "winning")
 class TicTacToeAgentWorkflow:
     board = agent.state(game.Board)
 
-    @workflow.init
-    def __init__(self, config: AgentConfig) -> None:
+    @agent.init
+    def __init__(self, config: AgentConfig, settings: MatchSettings | None = None) -> None:
+        self._player_name = settings.player_name if settings is not None else None
         self._runner = AgentWorkflowRunner(
             config,
             stream=WorkflowStream(),
@@ -66,10 +67,6 @@ class TicTacToeAgentWorkflow:
             # AgentConfig.approval_policy to approve each judgment and move by hand.
             approval_policy_default=ToolApprovalPolicy.allow_inherently_safe(),
         )
-
-    @workflow.run
-    async def run(self, _config: AgentConfig) -> None:
-        await self._runner.run(self)
 
     # ------------------------------------------------------------------ handlers
 
@@ -84,10 +81,13 @@ class TicTacToeAgentWorkflow:
             draft.status = "playing"
             draft.to_move = "X"
             draft.agent_mark = agent_mark
+        greeting = f"New game, {self._player_name}" if self._player_name else "New game"
         if message.agent_goes_first:
-            return TextReply(text=await self._agent_turn(prefix="New game — I'm X and I open."))
+            return TextReply(
+                text=await self._agent_turn(prefix=f"{greeting} — I'm X and I open.")
+            )
         return TextReply(
-            text=f"New game — you're X, I'm O. Your move.\n\n{self._board_block()}"
+            text=f"{greeting} — you're X, I'm O. Your move.\n\n{self._board_block()}"
         )
 
     @agent.accepts(mid_turn=MidTurn.ENQUEUE)

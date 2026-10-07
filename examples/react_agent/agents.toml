@@ -11,6 +11,7 @@
 [[agents]]
 key = "react-agent"
 workflow_type = "ReactAgent"
+agent = "examples.react_agent.workflow:ReactAgentWorkflow"
 task_queue = "react-agent"
 label = "ReAct Agent"
 description = """

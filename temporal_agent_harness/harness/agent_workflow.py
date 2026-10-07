@@ -6,7 +6,7 @@
 # Usage: declare accepted messages as ``@agent.accepts`` handler methods
 # (``async def name(self, msg: InputModel) -> OutputModel``); construct an
 # AgentWorkflowRunner(config, stream=..., approval_policy_default=...) in your
-# @workflow.init; and in @workflow.run drive the turn loop with ``await runner.run(self)``.
+# @agent.init; the @workflow.run that @agent.defn generates drives the turn loop.
 # The runner discovers the handlers, routes
 # each inbound ``send_agent_message`` envelope to the one its ``type`` names, validates the
 # payload into that handler's input model, publishes the handler's return value as the
@@ -17,6 +17,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import contextvars
+import functools
 import inspect
 import textwrap
 import time
@@ -32,6 +33,7 @@ from typing import (
     ParamSpec,
     TypeVar,
     cast,
+    get_args,
     get_type_hints,
     overload,
 )
@@ -218,7 +220,7 @@ def _assert_async_auto_mode_evaluator(
 ) -> None:
     """Raise unless ``evaluator`` is a coroutine function.
 
-    Checked at runner construction — inside the agent's ``@workflow.init`` — so the error
+    Checked at runner construction — inside the agent's ``@agent.init`` — so the error
     lands next to the developer's own wiring rather than deep inside the first gated tool
     call, which might not happen until production.
 
@@ -257,7 +259,7 @@ def _assert_auto_mode_has_an_evaluator(
     installed, not only at construction.
 
     An :class:`ApplicationError`, non-retryable, because that is how a bad input fails
-    cleanly on both paths: raised from ``@workflow.init`` it fails the workflow with this
+    cleanly on both paths: raised from ``@agent.init`` it fails the workflow with this
     message instead of retrying the workflow task forever, and raised from a message
     handler it fails that one message and leaves the live policy untouched.
 
@@ -641,35 +643,38 @@ def _render_message(message: AgentMessage) -> str:
 # Standardized agent-input contract enforcement
 # ---------------------------------------------------------------------------
 #
-# Every agent that builds an AgentWorkflowRunner must declare its run/__init__ to take
-# either nothing or a single AgentConfig. Standardizing the input is what lets harness
-# agents be composed/substituted (top-level or sub-agent) knowing only AgentConfig. The
-# check runs at runner construction time (inside the workflow's @workflow.init).
+# Every agent that builds an AgentWorkflowRunner takes a single AgentConfig, plus optionally one
+# agent-specific data model. Standardizing the input is what lets harness agents be
+# composed/substituted (top-level or sub-agent) knowing only AgentConfig. @agent.defn checks it
+# at import; the runner re-checks it at construction as a backstop for a bare @workflow.defn.
+
+_CONTRACT = (
+    "__init__(self, config: AgentConfig), optionally with a second `data` parameter typed to "
+    "a pydantic model: `data: YourModel` if required, `data: YourModel | None = None` if not"
+)
 
 
 def _validate_agent_arg_types(workflow_name: str, arg_types: list[type] | None) -> None:
-    """Raise ``TypeError`` unless ``arg_types`` is exactly ``[AgentConfig]``.
+    """Raise ``TypeError`` unless ``arg_types`` is an ``AgentConfig``, optionally followed by
+    one more argument (the agent's data).
 
-    Every agent must accept the single standardized config — no more, and not nothing.
     Pure (no introspection) so the wiring that finds the workflow's resolved argument
     types lives in :func:`_assert_standardized_agent_signature`.
     """
     types = list(arg_types or [])
-    if types != [AgentConfig]:
+    if not 1 <= len(types) <= 2 or types[0] is not AgentConfig:
         got = ", ".join(getattr(t, "__name__", repr(t)) for t in types) or "no arguments"
         raise TypeError(
-            f"Agent workflow {workflow_name!r} violates the harness contract: its "
-            f"run/__init__ must accept exactly one {AgentConfig.__name__} argument, but "
-            f"accepts ({got}). A uniform input is what lets harness agents be substituted "
-            f"as parent or sub-agents — configure agent-specific behavior at runtime "
-            f"(e.g. slash commands) rather than via a custom input type."
+            f"Agent workflow {workflow_name!r} violates the harness contract: it must take "
+            f"{_CONTRACT}; it takes ({got}). A uniform input is what lets harness agents be "
+            f"substituted as parent or sub-agents."
         )
 
 
 def _enclosing_workflow_instance() -> object | None:
     """Walk the call stack for the nearest ``self`` that is a ``@workflow.defn`` instance.
 
-    Runner construction happens inside the workflow's ``@workflow.init``, so the
+    Runner construction happens inside the workflow's ``@agent.init``, so the
     workflow instance is an enclosing frame's ``self``; the runner reads its class to
     validate the construction signature and discover handlers, and the instance itself to
     attach its declared state. Returns ``None`` if none is found.
@@ -708,41 +713,92 @@ def _assert_standardized_agent_signature() -> None:
     if cls is None:
         raise RuntimeError(
             "AgentWorkflowRunner must be built inside an @workflow.defn class's "
-            "@workflow.init; no enclosing workflow was found on the call stack."
+            "@agent.init; no enclosing workflow was found on the call stack."
         )
+    if getattr(cls, _INIT_DATA_ATTR, _UNSET) is not _UNSET:
+        return  # @agent.defn already checked __init__, and its run takes untyped input
     defn = workflow._Definition.from_class(cls)
     assert defn is not None  # guaranteed by _enclosing_workflow_class's own check
     _validate_agent_arg_types(cls.__name__, defn.arg_types)
 
 
-def _workflow_run_arg_types(cls: type) -> list[type]:
-    """The positional argument types of the class's ``@workflow.run`` method (after
-    ``self``). Resolves string annotations via the method's own globals, so it works
-    under ``from __future__ import annotations``. Raises ``TypeError`` if the class has
-    no ``@workflow.run`` method to inspect."""
-    run_fn = next(
-        (
-            member
-            for _, member in inspect.getmembers(cls, inspect.isfunction)
-            if getattr(member, "__temporal_workflow_run", False)
-        ),
-        None,
-    )
-    if run_fn is None:
+@dataclass(frozen=True)
+class AgentInitData:
+    """The data model an agent's ``@agent.init`` takes after its ``AgentConfig``, and whether a
+    caller must supply it (``data: Model``) or may omit it (``data: Model | None = None``)."""
+
+    model: type[BaseModel]
+    required: bool
+
+
+def _data_model(annotation: Any) -> tuple[type[BaseModel], bool] | None:
+    """``(model, nullable)`` for an annotation of ``Model`` or ``Model | None``, else ``None``."""
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation, False
+    args = get_args(annotation)
+    rest = [a for a in args if a is not type(None)]
+    if len(rest) == 1 and len(args) == 2 and isinstance(rest[0], type) and issubclass(rest[0], BaseModel):
+        return rest[0], True
+    return None
+
+
+def _agent_init_spec(cls: type) -> AgentInitData | None:
+    """Validate the class's ``@agent.init`` ``__init__`` against the agent contract and return
+    its data parameter's spec (``None`` if it takes only the config).
+
+    Resolves string annotations via the method's own globals, so it works under
+    ``from __future__ import annotations``."""
+    init_fn = cls.__init__
+    if not getattr(init_fn, "__temporal_workflow_init", False):
         raise TypeError(
-            f"@agent.defn requires {cls.__name__!r} to define a @workflow.run method "
-            f"(on an agent workflow class)."
+            f"@agent.defn requires {cls.__name__!r} to define an __init__(self, config: "
+            f"AgentConfig) decorated with @agent.init — that is where the agent builds its "
+            f"AgentWorkflowRunner."
         )
-    hints = get_type_hints(run_fn)
-    positional = (
-        inspect.Parameter.POSITIONAL_ONLY,
-        inspect.Parameter.POSITIONAL_OR_KEYWORD,
-    )
-    return [
-        hints.get(p.name)
-        for p in inspect.signature(run_fn).parameters.values()
-        if p.name != "self" and p.kind in positional
-    ]
+    hints = get_type_hints(init_fn)
+    params = [p for p in inspect.signature(init_fn).parameters.values() if p.name != "self"]
+    positional = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+
+    def violation(detail: str) -> TypeError:
+        return TypeError(
+            f"Agent workflow {cls.__name__!r} violates the harness contract: its @agent.init "
+            f"must be {_CONTRACT}. {detail}"
+        )
+
+    if not 1 <= len(params) <= 2 or any(p.kind not in positional for p in params):
+        raise violation(f"It takes ({', '.join(p.name for p in params) or 'no arguments'}).")
+    if hints.get(params[0].name) is not AgentConfig:
+        raise violation(f"Its first parameter is annotated {hints.get(params[0].name)!r}.")
+    if len(params) == 1:
+        return None
+    data_param = params[1]
+    found = _data_model(hints.get(data_param.name))
+    if found is None:
+        raise violation(f"`{data_param.name}` is annotated {hints.get(data_param.name)!r}.")
+    model, nullable = found
+    has_default = data_param.default is not inspect.Parameter.empty
+    if nullable and not (has_default and data_param.default is None):
+        raise violation(f"`{data_param.name}` accepts None, so it must default to None.")
+    if not nullable and has_default:
+        raise violation(f"`{data_param.name}` is required, so it cannot have a default.")
+    return AgentInitData(model=model, required=not nullable)
+
+
+_INIT_DATA_ATTR = "__agent_init_data__"
+_UNSET: Any = object()
+
+
+def agent_init_data(cls: type) -> AgentInitData | None:
+    """The data an agent class's ``@agent.init`` takes after its config, or ``None`` if it
+    takes none. Read from the attribute :func:`defn` stamps at import; falls back to
+    inspecting an ``@agent.init`` ``__init__``, and to ``None`` for a class with neither
+    (e.g. an offline test class)."""
+    stamped = getattr(cls, _INIT_DATA_ATTR, _UNSET)
+    if stamped is not _UNSET:
+        return stamped
+    if getattr(cls.__init__, "__temporal_workflow_init", False):
+        return _agent_init_spec(cls)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -918,6 +974,171 @@ def agent_handlers(cls: type) -> dict[str, _AcceptedHandler]:
     return discovered
 
 
+# ---------------------------------------------------------------------------
+# Agent lifecycle — @agent.init, the optional @agent.setup / @agent.teardown hooks, and the
+# @workflow.run that @agent.defn generates around them
+# ---------------------------------------------------------------------------
+
+init = workflow.init
+"""Mark an agent's ``__init__(self, config: AgentConfig)``, where it builds its
+``AgentWorkflowRunner``. The same decorator as ``@workflow.init``, re-exported so an agent is
+written in ``agent.*`` decorators throughout."""
+
+_SETUP_MARKER = "__agent_setup__"
+_TEARDOWN_MARKER = "__agent_teardown__"
+_GENERATED_RUN_MARKER = "__agent_generated_run__"
+_RUNNER_ATTR = "__agent_runner__"
+
+
+def setup(fn: Callable[[Any], Awaitable[None]], /) -> Callable[[Any], Awaitable[None]]:
+    """Mark an ``async def (self) -> None`` method to run once, after ``@agent.init`` and
+    before the agent handles its first message. Optional; at most one per agent.
+
+    Use it for setup that must await (an activity, a child workflow) or that should not run
+    in ``__init__``. Messages that arrive while it runs are admitted and wait for it. If it
+    raises, the agent never opens a turn and the workflow fails as any workflow would."""
+    setattr(fn, _SETUP_MARKER, True)
+    return fn
+
+
+def teardown(fn: Callable[[Any], Awaitable[None]], /) -> Callable[[Any], Awaitable[None]]:
+    """Mark an ``async def (self) -> None`` method to run once when the agent stops: after
+    ``close`` has drained every in-flight message, or when the workflow is cancelled. Optional;
+    at most one per agent.
+
+    It runs only if setup completed, and not when the workflow fails."""
+    setattr(fn, _TEARDOWN_MARKER, True)
+    return fn
+
+
+def _lifecycle_hook(cls: type, marker: str, decorator: str) -> str | None:
+    """The name of the class's method marked ``marker``, validated, or ``None`` if it has
+    none. Returned by name so the generated ``run`` calls it bound, honoring overrides."""
+    marked = [
+        (name, fn)
+        for name, fn in inspect.getmembers(cls, inspect.isfunction)
+        if getattr(fn, marker, False)
+    ]
+    if not marked:
+        return None
+    if len(marked) > 1:
+        raise TypeError(
+            f"{cls.__name__!r} declares more than one @agent.{decorator} method: "
+            f"{sorted(name for name, _ in marked)}."
+        )
+    name, fn = marked[0]
+    if getattr(fn, _ACCEPTS_MARKER, False):
+        raise TypeError(f"@agent.{decorator} {name!r} cannot also be an @agent.accepts handler.")
+    params = [p for p in inspect.signature(fn).parameters if p != "self"]
+    if not inspect.iscoroutinefunction(fn) or params:
+        raise TypeError(
+            f"@agent.{decorator} {name!r} must be `async def {name}(self) -> None`."
+        )
+    return name
+
+
+def _runner_of(instance: object) -> AgentWorkflowRunner:
+    """The runner an agent built in its ``@agent.init`` (it registers itself on the instance)."""
+    runner = getattr(instance, _RUNNER_ATTR, None)
+    if runner is None:
+        raise RuntimeError(
+            f"{type(instance).__name__} built no AgentWorkflowRunner in its @agent.init; an "
+            f"agent must construct one there for @agent.defn's run to drive."
+        )
+    return runner
+
+
+def _invalid_input(message: str, type_: str = "InvalidAgentInput") -> ApplicationError:
+    """Non-retryable, so bad input fails the workflow instead of failing its task forever."""
+    return ApplicationError(message, type=type_, non_retryable=True)
+
+
+def _validated(cls: type, model: type[BaseModel], value: Any, what: str) -> BaseModel:
+    try:
+        return model.model_validate(value)
+    except ValidationError as e:
+        raise _invalid_input(f"{cls.__name__} was started with an invalid {what}: {e}") from None
+
+
+def _validating_init(cls: type, spec: AgentInitData | None) -> Callable[..., None]:
+    """Wrap the agent's ``__init__`` so it receives validated input.
+
+    The generated ``run`` declares its inputs untyped, so Temporal always decodes them to plain
+    JSON values; validation happens here instead, where a failure can be raised as a
+    non-retryable error. Decoding against the models would fail the workflow TASK on bad input,
+    which Temporal retries forever. A missing required ``data`` fails the same way."""
+    init_fn = cls.__init__
+    max_args = 1 if spec is None else 2
+
+    @functools.wraps(init_fn)
+    def __init__(self: Any, *args: Any) -> None:
+        if not 1 <= len(args) <= max_args:
+            raise _invalid_input(
+                f"{cls.__name__} takes an AgentConfig"
+                f"{'' if spec is None else ' and its data'}; it was started with {len(args)} "
+                f"argument(s)."
+            )
+        config = _validated(cls, AgentConfig, args[0], "AgentConfig")
+        if spec is None:
+            return init_fn(self, config)
+        data = args[1] if len(args) == 2 else None
+        if data is None:
+            if spec.required:
+                raise _invalid_input(
+                    f"{cls.__name__} requires init data ({spec.model.__name__}), and none was "
+                    f"given.",
+                    type_="InitDataRequired",
+                )
+            return init_fn(self, config, None)
+        return init_fn(self, config, _validated(cls, spec.model, data, spec.model.__name__))
+
+    return __init__
+
+
+def _generated_run(
+    cls: type, setup_name: str | None, teardown_name: str | None
+) -> Callable[..., Awaitable[None]]:
+    """Build the ``@workflow.run`` for an agent class: setup, the turn loop, teardown.
+
+    Temporal requires ``run`` and ``__init__`` to have identical parameters, comparing the raw
+    ``inspect.signature``, so the method copies ``__init__``'s signature verbatim. Temporal
+    decodes the input from ``run``'s type hints, which are ``Any`` here so that bad input
+    reaches :func:`_validating_init` instead of failing the decode."""
+
+    async def run(self: Any, *args: Any) -> None:
+        runner = _runner_of(self)
+        if setup_name is not None:
+            await getattr(self, setup_name)()
+        try:
+            await runner.run(self)
+        except asyncio.CancelledError:
+            if teardown_name is not None:
+                await getattr(self, teardown_name)()
+            raise
+        if teardown_name is not None:
+            await getattr(self, teardown_name)()
+
+    init_params = [p for p in inspect.signature(cls.__init__).parameters if p != "self"]
+    run.__qualname__ = f"{cls.__qualname__}.run"
+    run.__module__ = cls.__module__
+    run.__signature__ = inspect.signature(cls.__init__)  # type: ignore[attr-defined]
+    run.__annotations__ = {name: Any for name in init_params} | {"return": None}
+    setattr(run, _GENERATED_RUN_MARKER, True)
+    return workflow.run(run)
+
+
+def _reject_authored_run(cls: type) -> None:
+    """``run`` belongs to the harness: an agent declares ``@agent.setup`` / ``@agent.teardown``
+    instead. A ``run`` generated for a decorated base class is fine — it is regenerated."""
+    existing = getattr(cls, "run", None)
+    if existing is not None and not getattr(existing, _GENERATED_RUN_MARKER, False):
+        raise TypeError(
+            f"{cls.__name__!r} defines `run`, but @agent.defn provides the workflow's run "
+            f"method. Put one-time setup in an `@agent.setup` method and cleanup in an "
+            f"`@agent.teardown` method (both optional) instead."
+        )
+
+
 @dataclass(frozen=True)
 class WorkflowDefnOptions:
     """Options :func:`defn` forwards to the ``@workflow.defn`` it applies.
@@ -950,26 +1171,42 @@ def defn(
     workflow_options: WorkflowDefnOptions = WorkflowDefnOptions(),
 ) -> Any:
     """Declare an agent workflow class: validate that it honors the standardized agent
-    contract, then register it as a Temporal workflow via ``@workflow.defn``. Use it IN
-    PLACE of ``@workflow.defn`` — stacking both raises, since Temporal refuses to define a
-    class twice::
+    contract, generate its ``@workflow.run``, then register it as a Temporal workflow via
+    ``@workflow.defn``. Use it IN PLACE of ``@workflow.defn`` — stacking both raises, since
+    Temporal refuses to define a class twice::
 
         @agent.defn(name="MyAgent")
         class MyAgent:
-            @workflow.run
-            async def run(self, config: AgentConfig) -> None: ...
+            @agent.init
+            def __init__(self, config: AgentConfig) -> None:
+                self._runner = AgentWorkflowRunner(config, stream=WorkflowStream(), ...)
+
+            @agent.setup       # optional
+            async def setup(self) -> None: ...
+
+            @agent.teardown    # optional
+            async def teardown(self) -> None: ...
+
+    The agent does not write ``run``: the generated one awaits the ``@agent.setup`` method (if
+    any), drives the runner's turn loop until ``close`` drains, then awaits the
+    ``@agent.teardown`` method (if any). Defining ``run`` yourself raises.
 
     ``name`` is the workflow type name (defaults to the class name). Any other
     ``@workflow.defn`` setting goes in ``workflow_options`` (see
     :class:`WorkflowDefnOptions`).
 
-    The check runs at definition (import) time: it inspects the ``@workflow.run`` method
-    and requires its arguments to be exactly one :class:`AgentConfig`. A misconfigured
+    The checks run at definition (import) time: ``__init__`` must be ``@agent.init`` and take
+    one :class:`AgentConfig`, plus optionally one ``data`` model — ``data: YourModel`` if
+    required, ``data: YourModel | None = None`` if not. A misconfigured
     agent therefore raises :class:`TypeError` the moment its module is imported (e.g. at
     worker startup), with a clear message — instead of starting and then hanging by
     repeatedly failing its first workflow task at execution time (where the caller would
     only ever see a timeout). The contract is checked before ``@workflow.defn`` runs, so
     Temporal's own definition errors only surface for a class that is a valid agent.
+
+    At start, ``config`` and ``data`` are validated against their models before ``__init__``
+    runs. Invalid input, or a missing required ``data``, fails the workflow with a
+    non-retryable ``ApplicationError`` (type ``InvalidAgentInput`` / ``InitDataRequired``).
 
     The same contract is re-checked when the runner is built
     (:func:`_assert_standardized_agent_signature`), as a backstop for any agent declared
@@ -977,11 +1214,19 @@ def defn(
     """
 
     def decorate(c: type) -> type:
-        _validate_agent_arg_types(c.__name__, _workflow_run_arg_types(c))
+        _reject_authored_run(c)
+        init_data = _agent_init_spec(c)
         # Discover + validate the @agent.accepts handlers now (import time), and stamp them
         # so the runner / agent_interface query / subagent generator read them without
         # re-introspecting (and a malformed handler fails fast at import).
         setattr(c, _HANDLERS_ATTR, _discover_handlers(c))
+        setattr(c, _INIT_DATA_ATTR, init_data)
+        c.run = _generated_run(  # type: ignore[attr-defined]
+            c,
+            _lifecycle_hook(c, _SETUP_MARKER, "setup"),
+            _lifecycle_hook(c, _TEARDOWN_MARKER, "teardown"),
+        )
+        c.__init__ = _validating_init(c, init_data)  # type: ignore[misc]
         return workflow.defn(
             name=name,
             sandboxed=workflow_options.sandboxed,
@@ -1694,7 +1939,7 @@ class _WorkflowStatus:
 class AgentWorkflowRunner:
     """Workflow-side agent runtime: discovers ``@agent.accepts`` handlers and dispatches.
 
-    Construct it directly inside ``@workflow.init`` with the agent's :class:`AgentConfig`
+    Construct it directly inside ``@agent.init`` with the agent's :class:`AgentConfig`
     plus the agent's defaults (``stream`` and ``approval_policy_default`` are required); see
     :meth:`__init__`.
 
@@ -1714,7 +1959,7 @@ class AgentWorkflowRunner:
         auto_approval_criteria_default: AutoApprovalCriteria | None = None,
         auto_mode_evaluator: AutoModeEvaluator | None = None,
     ) -> None:
-        """Construct the runner inside the agent's ``@workflow.init``::
+        """Construct the runner inside the agent's ``@agent.init``::
 
             self._runner = AgentWorkflowRunner(
                 config,
@@ -1742,7 +1987,7 @@ class AgentWorkflowRunner:
         their own mid-turn behavior, so there is no agent-level queuing knob. Registers the
         workflow's update/query/signal handlers.
         """
-        # The runner is built inside the agent's @workflow.init; enforce here that the
+        # The runner is built inside the agent's @agent.init; enforce here that the
         # enclosing workflow honors the standardized agent-input contract (run/__init__
         # takes a single AgentConfig) so it stays substitutable as a parent or sub-agent.
         _assert_standardized_agent_signature()
@@ -1751,6 +1996,8 @@ class AgentWorkflowRunner:
         # enclosing agent class, so there are simply no handlers.
         instance = _enclosing_workflow_instance()
         cls = type(instance) if instance is not None else None
+        if instance is not None:
+            setattr(instance, _RUNNER_ATTR, self)
         self._handlers: dict[str, _AcceptedHandler] = agent_handlers(cls) if cls is not None else {}
         # Resolve each knob: the caller's config value wins when given; otherwise fall back
         # to the agent's default. The caller can never be overridden — the agent only fills
@@ -2684,7 +2931,7 @@ class AgentWorkflowRunner:
         """Translate a state-layer event into a stream payload and publish it.
 
         The state layer never imports the protocol (it is a leaf package), so the
-        translation lives here. Outside a turn — registration in ``@workflow.init``, or any
+        translation lives here. Outside a turn — registration in ``@agent.init``, or any
         other mutation made while the agent is idle — the event is stamped
         ``turn_number=0``, so a consumer can replay these durably without folding them
         into an agent-turn summary.
@@ -2729,11 +2976,9 @@ class AgentWorkflowRunner:
     # -- Turn loop ----------------------------------------------------------
 
     async def run(self, agent: object) -> None:
-        """Drive the agent's turn loop to completion — the agent's ``@workflow.run`` body::
-
-            @workflow.run
-            async def run(self, config: AgentConfig) -> None:
-                await self._runner.run(self)
+        """Drive the agent's turn loop to completion. The ``run`` that :func:`defn` generates
+        calls it between the agent's ``@agent.setup`` and ``@agent.teardown`` hooks; only an
+        agent declared with a bare ``@workflow.defn`` calls it directly.
 
         This is the EXECUTION half of dispatch; admission is
         :meth:`_handle_send_agent_message`, which only records intent and returns. This loop
@@ -2917,6 +3162,7 @@ class AgentWorkflowRunner:
         workflow_type: str,
         task_queue: str,
         config: AgentConfig | None = None,
+        data: BaseModel | None = None,
     ) -> str:
         """Start a child agent workflow as a subagent and register it; return its short handle.
 
@@ -2925,7 +3171,10 @@ class AgentWorkflowRunner:
         this runner's subagent registry instead. Returns a short ``handle`` (not the long child
         ``workflow_id``) for the model to address THIS instance in later ``send_<function>`` /
         ``stop_<key>`` calls (a parent may run several instances of one ``agent_key``); the
-        workflow-side resolves ``handle`` → ``workflow_id`` internally."""
+        workflow-side resolves ``handle`` → ``workflow_id`` internally.
+
+        ``data`` is the child's init data, passed as its second workflow argument; ``None``
+        starts the child with its config alone."""
         handle = self._fresh_subagent_handle()
         workflow_id = f"{agent_key}-subagent-{workflow.uuid4()}"
         # Push the handle down as the child's own agent_id so the child stamps it on every event
@@ -2939,7 +3188,7 @@ class AgentWorkflowRunner:
         )
         await workflow.start_child_workflow(
             workflow_type,
-            child_config,
+            args=[child_config] if data is None else [child_config, data],
             id=workflow_id,
             task_queue=task_queue,
             # EXPLICIT: a subagent is owned by its parent and must never outlive it. If the
@@ -3235,12 +3484,21 @@ class AgentWorkflowRunner:
         runner_token = _CURRENT_RUNNER.set(self)
         tool_id_token = _CURRENT_TOOL_ID.set(call_id)
         injections_token = _CURRENT_TOOL_INJECTIONS.set(injections)
+        closing = False
         try:
             return await tool_callable(*args, **kwargs)
+        except GeneratorExit:
+            # The coroutine is being closed after the workflow was evicted mid-call, from
+            # another context: the tokens cannot be reset there (it raises ValueError, which
+            # would turn the teardown into an ordinary handler error), and the context they
+            # belong to is being discarded anyway.
+            closing = True
+            raise
         finally:
-            _CURRENT_TOOL_INJECTIONS.reset(injections_token)
-            _CURRENT_TOOL_ID.reset(tool_id_token)
-            _CURRENT_RUNNER.reset(runner_token)
+            if not closing:
+                _CURRENT_TOOL_INJECTIONS.reset(injections_token)
+                _CURRENT_TOOL_ID.reset(tool_id_token)
+                _CURRENT_RUNNER.reset(runner_token)
 
     # -- Internal -----------------------------------------------------------
 
