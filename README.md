@@ -102,6 +102,7 @@ dependencies = [
     #   genai           the Google Gemini integration
     #   jev             Jev-backed auto mode for tool approvals (worker only)
     #   openai-agents   the OpenAI Agents SDK integration
+    #   codex           the OpenAI Codex integration (ships the Codex binary)
     #   pydantic-ai     the Pydantic AI integration
     #   s3              S3-backed offload for large payloads
     #
@@ -188,6 +189,7 @@ opt-in:
 | `jev` | run a worker whose agents use **`agent.jev_evaluator`**, the builtin AI auto mode evaluator; pulls in [`typesafe-sdk`](https://pypi.org/project/typesafe-sdk/). Worker-side only — the workflow-side factory needs nothing extra. |
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
+| `codex` | use the **OpenAI Codex** integration (`ai_sdks.codex_harness`); pulls in the exact-pinned `openai-codex-cli-bin` (the Codex binary, ~120–160 MB per platform). |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 
 Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.6.0'`.
@@ -263,6 +265,7 @@ Support is growing across the Python AI SDKs and agent frameworks Temporal integ
 | [Google Gemini](temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
 | [OpenAI Agents SDK](temporal_agent_harness/ai_sdks/openai_agents) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
 | [Pydantic AI](temporal_agent_harness/ai_sdks/pydantic_ai_harness.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
+| [OpenAI Codex](temporal_agent_harness/ai_sdks/codex_harness.py) | 🧪 Experimental | Wraps the `codex app-server` process rather than model calls: the conversation lives in the workflow and every tool the model calls is a harness tool ([example](examples/codex_hello/README.md)). Relies on experimental Codex app-server APIs. |
 | [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | - |
 | [Strands Agents](https://docs.temporal.io/develop/python/integrations/strands-agents) | 🟡 Planned | - |
 | [LangGraph](https://docs.temporal.io/develop/python/integrations/langgraph) | 🟡 Planned | - |
@@ -1026,6 +1029,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | Agent | Needs |
 |---|---|
 | OpenAI Hello · Pydantic AI Hello | `OPENAI_API_KEY`; chat directly in the UI |
+| Codex Hello | `OPENAI_API_KEY`, or `just worker-fake` in `examples/codex_hello` for a scripted fake model with no credentials ([readme](examples/codex_hello/README.md)); chat directly in the UI |
 | Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
 | Travel agent (Jev Auto mode) | `GEMINI_API_KEY` **and** `TYPESAFE_API_KEY`; Monty with [auto mode](#auto-mode--letting-code-or-a-model-decide) judging its gated calls ([readme](examples/auto_mode/README.md)); chat directly in the UI |
 | Tic-Tac-Toe (TypeSafe) | `TYPESAFE_API_KEY`; no LLM — every move is a [TypeSafe](https://docs.typesafe.ai) System One judgment ([readme](examples/tictactoe/README.md)); send `new_game` then `play` in the UI |

@@ -73,6 +73,13 @@ openai-agents = [
 pydantic-ai = [
     "pydantic-ai-slim[temporal]>=2.13",
 ]
+# The OpenAI Codex integration: temporal_agent_harness.ai_sdks.codex_harness. Codex's agent loop runs
+# in an external `codex app-server` process; this extra ships the Codex binary the adapter drives
+# (exact-pinned: the adapter relies on experimental app-server APIs and the rollout file format,
+# so the Codex version is part of the contract). The binary wheel is ~120-160 MB per platform.
+codex = [
+    "openai-codex-cli-bin==0.161.0",
+]
 # Packaged FastAPI server and browser UI assets.
 ui = [
     "fastapi[standard]>=0.136.3",
@@ -120,6 +127,7 @@ examples = [
     "pydantic-ai-slim[temporal]>=2.13",  # the Pydantic AI example (examples/pydantic_ai_hello)
     "httpx>=0.27",  # the react_agent example's tools call real weather / geo / IP APIs
     "typesafe-sdk>=0.6.0",
+    "openai-codex-cli-bin==0.161.0",  # the Codex example (examples/codex_hello); mirrors the `codex` extra
 ]
 # Test + lint tooling. The full tests/ suite imports both the Gemini SDK (the ai_sdks plugin
 # tests) and pydantic-monty (the monty example tests), which live in the `examples` group —

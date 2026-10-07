@@ -1,0 +1,20 @@
+# Registry of agents the Codex hello-world example UI can launch.
+#
+# The packaged FastAPI server (`temporal-agent-harness serve`) reads this file and passes the parsed
+# registry into the packaged SessionManagerWorkflow as its workflow init arg. The manager then serves
+# it back over the `available_agents` query, so the app server can expose it at /api/agents without
+# hardcoding the agent list.
+#
+# To expose a new agent: register its @workflow.defn on a worker, then add a [[agents]] entry here.
+
+[[agents]]
+key = "codex-hello"
+workflow_type = "CodexHelloAgent"
+agent = "examples.codex_hello.workflow:CodexHelloAgentWorkflow"
+task_queue = "codex-hello"
+label = "Codex Hello"
+description = """
+A hello-world OpenAI Codex agent. Chat in plain text; it replies in prose and can call one tool
+(get_weather) for a city's weather. Codex's agent loop runs in a `codex app-server` process; every
+tool call goes through the harness (approvals, tool events), and the conversation lives in the
+workflow, so a crash mid-turn resumes where it left off."""

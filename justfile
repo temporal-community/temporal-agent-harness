@@ -189,6 +189,7 @@ server:
     uv run --group examples temporal-agent-harness serve \
         examples/openai_hello/agents.toml \
         examples/pydantic_ai_hello/agents.toml \
+        examples/codex_hello/agents.toml \
         examples/react_agent/agents.toml \
         examples/monty/agents.toml \
         examples/tictactoe/agents.toml \
@@ -212,6 +213,9 @@ worker-openai-hello:
 
 worker-pydantic:
     cd "{{justfile_directory()}}/examples/pydantic_ai_hello" && just worker
+
+worker-codex-hello:
+    cd "{{justfile_directory()}}/examples/codex_hello" && just worker
 
 worker-react:
     cd "{{justfile_directory()}}/examples/react_agent" && just worker
