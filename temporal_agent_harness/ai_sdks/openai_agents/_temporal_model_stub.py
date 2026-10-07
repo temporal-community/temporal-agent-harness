@@ -299,9 +299,13 @@ class _TemporalModelStub(Model):  # type:ignore[reportUnusedClass]
             "streaming_batch_interval": self.model_params.streaming_batch_interval,
         }
 
-        events = await workflow.execute_activity_method(
-            ModelActivity.invoke_model_activity_streaming,
+        # Dispatched by name, not by method: only an explicit result_type carries
+        # TResponseStreamEvent's Annotated discriminator, without which the events'
+        # lenient reconstruction picks the wrong union variant.
+        events = await workflow.execute_activity(
+            "invoke_model_activity_streaming",
             streaming_input,
+            result_type=list[TResponseStreamEvent],
             summary=summary,
             task_queue=self.model_params.task_queue,
             schedule_to_close_timeout=self.model_params.schedule_to_close_timeout,
