@@ -502,6 +502,26 @@ function rowTops(heights: readonly number[], columns: number, gap: number): numb
   return tops;
 }
 
+/**
+ * Where each column of a grid starts: past the widest box in the columns to its
+ * left, not past a nominal one. One width per column across every row, so the
+ * columns stay aligned and a wrap edge still drops straight down.
+ */
+function columnLefts(widths: readonly number[], columns: number, gap: number): number[] {
+  const columnWidths: number[] = [];
+  widths.forEach((width, index) => {
+    const col = index % columns;
+    columnWidths[col] = Math.max(columnWidths[col] ?? 0, width);
+  });
+  const lefts: number[] = [];
+  let x = 0;
+  for (const width of columnWidths) {
+    lefts.push(x);
+    x += width + gap;
+  }
+  return lefts;
+}
+
 function runtimeLayoutFor(
   order: RuntimeNodeId[],
   dataById: Map<RuntimeNodeId, AgentNodeData>
@@ -531,6 +551,11 @@ function runtimeLayoutFor(
     layout.columns,
     runtimeRowGap
   );
+  const lefts = columnLefts(
+    sizes.map((size) => size.width),
+    layout.columns,
+    runtimeColumnGap
+  );
   let contentWidth = stateNodeWidth;
   let contentHeight = stateNodeHeight;
 
@@ -538,7 +563,7 @@ function runtimeLayoutFor(
     const dimensions = sizes[slot];
     const col = slot % layout.columns;
     const row = Math.floor(slot / layout.columns);
-    const x = layout.gridStartX + col * (stateNodeWidth + runtimeColumnGap);
+    const x = layout.gridStartX + lefts[col];
     const y = layout.gridStartY + tops[row];
     positions.set(flowOrder[slot], { x, y });
     contentWidth = Math.max(contentWidth, x - layout.gridStartX + dimensions.width);
