@@ -47,7 +47,7 @@ just dev --fresh                  # discard the saved local Temporal database
 just dev --no-watch               # run without restarting workers on file changes
 ```
 
-Example startup with all eight example workers:
+Example startup with eight workers enabled:
 
 ![just dev starting Temporal, the session manager, the web server, and eight workers](images/dev-hot-reload.png)
 
@@ -56,6 +56,13 @@ without overriding exported variables and skips workers whose required keys are 
 Editing a watched path restarts only the workers watching it; editing an agent registry reloads
 the web server and updates the session manager's agent list without terminating sessions.
 Changes to worker definitions in `harness.toml` require restarting `just dev`.
+
+The manifest includes all eleven example agent workers, including Agent DAG, Code Mode Memory,
+and Nexus Hello. Workers start when their required API keys are available. Nexus Hello also
+needs a Nexus-enabled Temporal server, configured endpoints, the durable tools gateway, and
+its tool services; follow its [setup instructions](../../examples/nexus_hello/README.md#run-the-example)
+before using its tools. `just dev` supervises the Nexus Hello agent worker; it does not provision
+those resources or launch the supporting services.
 
 The runner reuses a reachable Temporal server and leaves it running on exit. Otherwise, it starts
 a local server and stores its database in `.harness/`, so sessions survive restarts. `--fresh`

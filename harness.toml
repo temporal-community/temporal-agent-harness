@@ -18,6 +18,9 @@ registries = [
     "examples/auto_mode/agents.toml",
     "examples/callback_tools/wiki_agent/agents.toml",
     "examples/callback_tools/coding_agent/agents.toml",
+    "examples/agent_dag/agents.toml",
+    "examples/code_mode_memory/agents.toml",
+    "examples/nexus_hello/agents.toml",
 ]
 
 [dev]
@@ -79,3 +82,23 @@ name = "coding"
 command = ["python", "-m", "examples.callback_tools.coding_agent.worker"]
 requires = ["GEMINI_API_KEY"]
 watch = ["examples/callback_tools/coding_agent"]
+
+[[workers]]
+name = "agent-dag"
+command = ["python", "-m", "examples.agent_dag.worker"]
+requires = ["OPENAI_API_KEY"]
+watch = ["examples/agent_dag", "examples/monty", "examples/openai_hello"]
+
+[[workers]]
+name = "code-mode-memory"
+command = ["python", "-m", "examples.code_mode_memory.worker"]
+requires = ["GEMINI_API_KEY"]
+watch = ["examples/code_mode_memory"]
+
+[[workers]]
+# Agent worker only: its Nexus endpoints, gateway, and tool services must already be set up.
+# See examples/nexus_hello/README.md; the repo's default dev dependencies include nexus-mcp.
+name = "nexus-hello"
+command = ["python", "-m", "examples.nexus_hello.worker"]
+requires = ["OPENAI_API_KEY"]
+watch = ["examples/nexus_hello", "nexus/mcp/nexus_mcp"]

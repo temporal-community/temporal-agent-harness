@@ -91,6 +91,14 @@ def test_env_file_parsing():
 def test_this_repositorys_manifest_loads():
     repo = Path(__file__).resolve().parents[2]
     manifest = load_manifest(repo / "harness.toml")
+    # New examples must be available in the shared UI and have a supervised worker.
+    registries = set((repo / "examples").rglob("agents.toml"))
+    assert set(manifest.registry_paths()) == registries
+    worker_modules = {worker.command[2] for worker in manifest.workers}
+    for registry in registries:
+        worker = registry.parent / "worker.py"
+        assert worker.is_file()
+        assert ".".join(worker.relative_to(repo).with_suffix("").parts) in worker_modules
     assert {"openai-hello", "monty-chat", "tictactoe"} <= {
         a.key for a in manifest.registry().agents
     }

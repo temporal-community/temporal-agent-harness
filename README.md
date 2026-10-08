@@ -71,7 +71,7 @@ just worker            # 4. this example's agent worker
 
 Open <http://localhost:8000> and start a session. There's no install step — `uv` fetches
 dependencies on demand. Every example follows the same four recipes; see
-[Run the examples](#run-the-examples) for the rest of them, including running all ten behind
+[Run the examples](#run-the-examples) for the rest of them, including running all eleven behind
 one UI.
 
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
@@ -1048,6 +1048,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
 | Code Mode Memory | `GEMINI_API_KEY`; long-term memory on the worker's disk, shared by sessions given the same `memory_dir` ([readme](examples/code_mode_memory/README.md)); chat directly in the UI |
 | Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](examples/agent_dag/README.md)); best in its own UI, **`just studio`** from `examples/agent_dag` |
+| Nexus Hello | `OPENAI_API_KEY`; a Nexus-enabled Temporal server, endpoints, gateway, and tool services ([setup](examples/nexus_hello/README.md#run-the-example)); `just dev` starts its agent worker, while those supporting services are managed separately |
 
 **The agent list follows the server.** Each server startup refreshes the running session manager's
 registry, so switching examples or adding agents takes effect without resetting sessions. Also: an
