@@ -50,6 +50,13 @@ from temporal_agent_harness.web.agent_starts import (
     resolve_agent_starts,
     validated_start_data,
 )
+from temporal_agent_harness.web.file_view import (
+    FileViewError,
+    FileViewRequest,
+    OKFGraphRequest,
+    okf_graph,
+    view_file,
+)
 from temporal_agent_harness.web.registry import load_agent_registry
 from temporal_agent_harness.web.session_manager import (
     SESSION_MANAGER_ID,
@@ -326,6 +333,25 @@ def create_agent_harness_app(
         )
         return JSONResponse(content=asdict(result), headers={"Cache-Control": "no-store"})
 
+    @app.post("/api/files/view")
+    async def view_mounted_file(req: FileViewRequest):
+        """One page of a file in an activity-backed Code Mode mount, read from its store as it
+        is now (not as it was at any point in the agent's history). The request carries the
+        mount's ``FileIndex.source``; nothing about the agent's workflow is touched."""
+        chunk = await view_file(app.state.temporal, req)
+        return JSONResponse(
+            content=chunk.model_dump(mode="json"), headers={"Cache-Control": "no-store"}
+        )
+
+    @app.post("/api/files/okf-graph")
+    async def okf_bundle_graph(req: OKFGraphRequest):
+        """An OKF bundle mount's concepts and the links between them, walked from its store as
+        it is now. Like ``/api/files/view``, nothing about the agent's workflow is touched."""
+        graph = await okf_graph(app.state.temporal, req)
+        return JSONResponse(
+            content=graph.model_dump(mode="json"), headers={"Cache-Control": "no-store"}
+        )
+
     @app.post("/api/messages")
     async def submit_message(req: ChatRequestBody):
         client = AgentClient(temporal=app.state.temporal, workflow_id=req.session_id)
@@ -411,6 +437,14 @@ def create_agent_harness_app(
                 "error": exc.error_type or "tool_approval_error",
                 "message": str(exc),
             },
+        )
+
+    @app.exception_handler(FileViewError)
+    async def file_view_handler(request, exc: FileViewError):
+        return JSONResponse(
+            status_code=exc.status,
+            content={"error": exc.error, "message": str(exc)},
+            headers={"Cache-Control": "no-store"},
         )
 
     @app.exception_handler(CallbackResultError)

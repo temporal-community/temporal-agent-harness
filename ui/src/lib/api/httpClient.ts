@@ -8,6 +8,10 @@ import type {
   ChatRequest,
   CreateSessionRequest,
   CreateSessionResponse,
+  FileChunk,
+  FileViewRequest,
+  OKFGraph,
+  OKFGraphRequest,
   Session,
   SubmitMessageResponse,
   ToolApprovalRequest,
@@ -212,6 +216,22 @@ export class HttpAgentApi implements AgentApi {
     request: CallbackResultRequest
   ): Promise<CallbackResultResponse> {
     return json<CallbackResultResponse>(apiPath("callback-result"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request)
+    });
+  }
+
+  async viewFile(request: FileViewRequest): Promise<FileChunk> {
+    return json<FileChunk>(apiPath("files/view"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request)
+    });
+  }
+
+  async okfGraph(request: OKFGraphRequest): Promise<OKFGraph> {
+    return json<OKFGraph>(apiPath("files/okf-graph"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request)

@@ -61,6 +61,7 @@ from temporal_agent_harness.harness.agent_workflow import (
 from temporal_agent_harness.harness.stream_context import TurnStreamContext
 from temporalio import activity
 
+from ._errors import translate_gemini_errors
 from ._interactions_models import _InteractionResult
 
 
@@ -81,6 +82,9 @@ def make_gemini_interactions_create_streamed(client: GeminiClient):
         dict), and republishes streaming text content as ``reply_delta``
         events on the parent workflow's stream when a ``stream_context``
         was provided.
+
+        A Gemini client error (4xx other than 408/429) fails the activity
+        non-retryably; every other failure stays retryable.
         """
         collected: list[dict[str, Any]] = []
 
@@ -107,15 +111,18 @@ def make_gemini_interactions_create_streamed(client: GeminiClient):
             if publisher is not None:
                 publisher.publish(ModelInteractionStarted(model=model))
             try:
-                stream: AsyncStream[
-                    InteractionSSEEvent
-                ] = await client.aio.interactions.create(**kwargs)
-                async for event in stream:
-                    if event_publisher is not None:
-                        event_publisher.handle(event)
-                    if isinstance(event, InteractionCompletedEvent):
-                        usage = _to_token_usage(event.interaction.usage)
-                    collected.append(event.model_dump(exclude_none=True, mode="json"))
+                with translate_gemini_errors():
+                    stream: AsyncStream[
+                        InteractionSSEEvent
+                    ] = await client.aio.interactions.create(**kwargs)
+                    async for event in stream:
+                        if event_publisher is not None:
+                            event_publisher.handle(event)
+                        if isinstance(event, InteractionCompletedEvent):
+                            usage = _to_token_usage(event.interaction.usage)
+                        collected.append(
+                            event.model_dump(exclude_none=True, mode="json")
+                        )
             finally:
                 if publisher is not None:
                     publisher.publish(ModelInteractionEnded(model=model, usage=usage))

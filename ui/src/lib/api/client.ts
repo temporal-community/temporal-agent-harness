@@ -8,6 +8,10 @@ import type {
   ChatRequest,
   CreateSessionRequest,
   CreateSessionResponse,
+  FileChunk,
+  FileViewRequest,
+  OKFGraph,
+  OKFGraphRequest,
   Session,
   SubmitMessageResponse,
   ToolApprovalRequest,
@@ -35,4 +39,11 @@ export interface AgentApi {
   chat(request: ChatRequest, signal?: AbortSignal): AsyncIterable<AgentSseFrame>;
   approve(request: ToolApprovalRequest): Promise<ToolApprovalResponse>;
   provideCallbackResult(request: CallbackResultRequest): Promise<CallbackResultResponse>;
+  /**
+   * One page of a file in an activity-backed Code Mode mount, read from its store as it is
+   * NOW: not as it was at any point in the session. Runs outside the agent's workflow.
+   */
+  viewFile(request: FileViewRequest): Promise<FileChunk>;
+  /** An OKF bundle mount's whole graph, walked from its store as it is now. */
+  okfGraph(request: OKFGraphRequest): Promise<OKFGraph>;
 }

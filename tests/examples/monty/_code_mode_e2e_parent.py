@@ -7,8 +7,8 @@ argument coercion and result marshalling, and the tool lifecycle events) against
 with no model in the loop.
 
 Kept in its own module (not the test file) because the Temporal workflow sandbox re-imports a
-workflow's defining module; the test module imports ``Worker`` / ``Client`` / the Code Mode
-activities at top level, which the sandbox would reject. The imports here are the sandbox-safe set.
+workflow's defining module; the test module imports ``Worker`` / ``Client`` / ``Replayer`` at top
+level, which the sandbox would reject. The imports here are the sandbox-safe set.
 
 No ``from __future__ import annotations`` — this module defines activity tools whose request/
 response models cross Temporal's pydantic converter, and stringized annotations trip its type-hint
@@ -19,6 +19,7 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.contrib.workflow_streams import WorkflowStream
+from temporalio.exceptions import ApplicationError
 from temporalio.workflow import ActivityConfig
 
 with workflow.unsafe.imports_passed_through():
@@ -86,8 +87,14 @@ async def echo_tool(secret: agent.Injected[str], label: str) -> EchoResponse:
     return EchoResponse(value=f"{label}:{secret}")
 
 
+@agent.activity_tool_defn(name="explode", activity_config=_ACTIVITY_CONFIG)
+async def explode_tool(reason: str) -> str:
+    """Always fail, with ``reason`` as the error message."""
+    raise ApplicationError(reason, non_retryable=True)
+
+
 # The tool set exposed through Code Mode — also what the test worker registers activities for.
-CODE_MODE_TOOLS = [add_tool, greet_tool, echo_tool]
+CODE_MODE_TOOLS = [add_tool, greet_tool, echo_tool, explode_tool]
 
 # The value the harness injects for echo_tool's Injected[str] `secret` — the script never sees it.
 INJECTED_SECRET = "s3cr3t"

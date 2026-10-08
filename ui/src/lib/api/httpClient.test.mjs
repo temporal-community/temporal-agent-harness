@@ -98,3 +98,28 @@ describe("errorFromBody", () => {
     assert.ok(message.endsWith("…"));
   });
 });
+
+describe("viewing a mounted file", () => {
+  it("posts the mount's source and path, and keeps the server's error code", async () => {
+    let sent = null;
+    globalThis.fetch = async (url, init) => {
+      sent = { url: String(url), body: JSON.parse(init.body) };
+      return new Response(
+        JSON.stringify({ content: "hi", encoding: "utf-8", offset: 0, size: 2, mtime: 1 }),
+        { status: 200 }
+      );
+    };
+    const source = { filesystem: "local-disk", config: { directory: "alice" }, task_queue: "q" };
+    const chunk = await new HttpAgentApi().viewFile({ source, path: "a.md", offset: 0 });
+    assert.equal(sent.url, "api/files/view");
+    assert.deepEqual(sent.body, { source, path: "a.md", offset: 0 });
+    assert.equal(chunk.content, "hi");
+
+    respondWith(501, { error: "file_view_unavailable", message: "no standalone activities" });
+    const error = await new HttpAgentApi()
+      .viewFile({ source, path: "a.md" })
+      .catch((caught) => caught);
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.code, "file_view_unavailable");
+  });
+});

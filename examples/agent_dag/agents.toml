@@ -1,0 +1,19 @@
+# Registry of agents the agent DAG example can launch.
+#
+# `temporal-agent-harness serve` reads this file and passes the parsed registry into the
+# packaged SessionManagerWorkflow, which serves it back over the `available_agents` query.
+# Only the builder is listed: step agents are started by a running flow, as its subagents, never
+# as sessions of their own.
+
+[[agents]]
+key = "agent-dag"
+workflow_type = "DagBuilderAgent"
+agent = "examples.agent_dag.workflow:DagBuilderAgentWorkflow"
+task_queue = "agent-dag"
+label = "Agent DAG Studio"
+description = """
+Describe a job and an OpenAI agent writes a *flow*: a Python script wiring fresh agents into a
+DAG, each set up by the script with its own name, system prompt, tools and model. The script
+lives in your editor, which the agent changes through callback tools. `execute` runs it in Code
+Mode, where each `run_agent` call starts a DagStepAgent subagent. Best driven from the studio UI
+(`just studio`)."""

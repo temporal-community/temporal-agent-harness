@@ -506,11 +506,9 @@ def _live_draft_classes() -> int:
     Counted out of the garbage collector rather than out of a cache, because the fix for
     the leak was to stop having a cache: `Draft[C]` hangs off `C`, so the only honest
     question is whether the class objects survive. `C` and `Draft[C]` refer to each
-    other, so collecting them is a cycle collection, not a refcount drop — hence the
-    explicit passes.
+    other, so collecting them takes a cycle collection, not a refcount drop.
     """
-    for _ in range(3):
-        gc.collect()
+    gc.collect()
     return sum(
         1
         for obj in gc.get_objects()
@@ -518,7 +516,7 @@ def _live_draft_classes() -> int:
     )
 
 
-async def test_the_draft_class_cache_does_not_grow_per_workflow_instance(sandboxed_queue):
+async def test_the_draft_class_cache_does_not_grow_per_workflow_instance():
     """`Draft[C]` costs per state CLASS; a worker must not pay per workflow RUN.
 
     `SandboxPlan` is declared in the workflow's own module, so the sandbox builds a
@@ -527,32 +525,34 @@ async def test_the_draft_class_cache_does_not_grow_per_workflow_instance(sandbox
     classes (a module-level `dict[type, type]` keyed on them, say) turns one run's
     garbage into a permanent ~107 kB of RSS and never evicts it: an OOM, not a plateau.
 
-    Measured as a plateau rather than an absolute count, because the sandbox does hold
-    onto one module copy of its own; the claim under test is that traffic adds nothing
-    on top of it. Two equal batches, and the second must add nothing.
-
-    Asserted as `<= 0` and not `== 0`. A DECREASE is not a failure — it means classes
-    the first batch still had alive when `warm` was sampled were reclaimed later, so
-    `warm` was simply an over-count. Whether a given `C`/`Draft[C]` cycle is reclaimed
-    on the third `gc.collect()` or a little after it depends on when the last frame
-    referencing it goes away, and 3.13/3.14 answer that differently from 3.11/3.12 —
-    `== 0` failed intermittently there with growth of -3 for exactly that reason. The
-    leak this guards against is unbounded GROWTH: a retained class per run shows up as
-    roughly +`runs`, which this still catches.
+    Sampled only when no worker is running: once before it starts and once after it
+    has shut down. While a worker is running, the count depends on timing:
+    `execute_workflow` returns when the server records the result, before the worker
+    has evicted the completed instance, so the last run's classes may still be
+    legitimately reachable. Counting then made this test flaky in both directions (+3
+    and -3). Worker shutdown evicts every cached instance before it returns, so
+    afterwards the only classes left alive are ones something retained. A retained
+    class per run shows up as `runs` times the drafts per instance.
     """
-    client, task_queue = sandboxed_queue
+    env = await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter
+    )
+    try:
+        before = _live_draft_classes()
 
-    runs = 5
-    for _ in range(runs):
-        await _run_sandboxed(client, task_queue, "warm the process")
-    warm = _live_draft_classes()
+        runs = 10
+        task_queue = f"sandboxed-state-test-{uuid.uuid4()}"
+        async with Worker(env.client, task_queue=task_queue, workflows=[SandboxStateProbe]):
+            for _ in range(runs):
+                await _run_sandboxed(env.client, task_queue, "again")
 
-    for _ in range(runs):
-        await _run_sandboxed(client, task_queue, "again")
+        growth = _live_draft_classes() - before
+    finally:
+        await env.shutdown()
 
-    growth = _live_draft_classes() - warm
-    assert growth <= 0, (
-        f"{runs} more workflow instances left {growth} more Draft[...] classes alive "
-        f"({growth / runs:.1f} per instance): generated classes are accumulating with "
-        f"traffic rather than with the number of declared state classes"
+    assert growth == 0, (
+        f"{runs} workflow instances left {growth} more Draft[...] classes alive after "
+        f"their worker shut down ({growth / runs:.1f} per instance): generated classes "
+        f"are accumulating with traffic rather than with the number of declared state "
+        f"classes"
     )

@@ -70,13 +70,11 @@ async def main() -> None:
     # Two plugins, harness LAST so the Gemini plugin's payload converter wins:
     #   * GoogleGenAIPlugin  — the Gemini interactions activity.
     #   * AgentHarnessPlugin — everything the harness itself needs on this worker: the
-    #     large-payload offload converter (Monty snapshot bytes cross the activity boundary
-    #     and land in workflow history, so they can exceed Temporal's payload limit — and
-    #     every process reading them must use the SAME converter, which is exactly what
-    #     adding this plugin everywhere guarantees), the Code Mode sandbox-stepping
-    #     activities (all three agents run their scripts through Code Mode), the
+    #     large-payload offload converter (every process reading a payload must use the SAME
+    #     converter, which is exactly what adding this plugin everywhere guarantees), the
     #     subagent-turn activity (drives the script-runner child for MontyChatSubagentAgent),
-    #     and the durable activity body of every travel tool in ALL_TOOLS.
+    #     and the durable activity body of every travel tool in ALL_TOOLS. Code Mode needs no
+    #     activities of its own: the workflow steps the sandbox, using the `code-mode` extra.
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
         **connect_config,

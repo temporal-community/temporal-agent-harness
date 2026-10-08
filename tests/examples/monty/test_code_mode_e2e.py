@@ -2,20 +2,32 @@
 # model-free parent (CodeModeE2EParentWorkflow) builds a code_mode_tool over two deterministic
 # activity tools and runs scripts through it, so the full stack — stub generation, the sandbox
 # batch loop, host-call dispatch via run_tool (coercion + result marshalling + tool lifecycle),
-# and pre-run type checking — is exercised against real activities under a WorkflowEnvironment.
+# pre-run type checking, and replay — is exercised against real activities under a WorkflowEnvironment.
 #
 # Run with: uv run pytest tests/examples/monty/test_code_mode_e2e.py -v
 
 from __future__ import annotations
 
+import time
 import uuid
+from collections import defaultdict
+from typing import Any
 
 import pytest_asyncio
-from temporalio.client import Client
+from temporalio import workflow
+from temporalio.client import Client, WorkflowHandle
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Worker
+from temporalio.worker import (
+    Interceptor,
+    Replayer,
+    StartActivityInput,
+    Worker,
+    WorkflowInboundInterceptor,
+    WorkflowInterceptorClassInput,
+    WorkflowOutboundInterceptor,
+)
 
 from temporal_agent_harness.harness.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
@@ -31,6 +43,31 @@ from temporal_agent_harness.plugin import AgentHarnessPlugin
 from ._code_mode_e2e_parent import CODE_MODE_TOOLS, CodeModeE2EParentWorkflow
 
 
+# Every activity each workflow scheduled, with its arguments, keyed by (workflow id, replaying):
+# what a replay must reproduce exactly. Temporal's own replay check compares activity types and
+# order but not arguments, so this is what catches a script whose values drift on replay.
+_SCHEDULED: dict[tuple[str, bool], list[str]] = defaultdict(list)
+
+
+class _RecordScheduledActivities(Interceptor):
+    def workflow_interceptor_class(
+        self, input: WorkflowInterceptorClassInput
+    ) -> type[WorkflowInboundInterceptor]:
+        return _RecordingInbound
+
+
+class _RecordingInbound(WorkflowInboundInterceptor):
+    def init(self, outbound: WorkflowOutboundInterceptor) -> None:
+        super().init(_RecordingOutbound(outbound))
+
+
+class _RecordingOutbound(WorkflowOutboundInterceptor):
+    def start_activity(self, input: StartActivityInput) -> Any:
+        key = (workflow.info().workflow_id, workflow.unsafe.is_replaying())
+        _SCHEDULED[key].append(f"{input.activity}{input.args!r}")
+        return super().start_activity(input)
+
+
 @pytest_asyncio.fixture
 async def client_and_queue():
     env = await WorkflowEnvironment.start_time_skipping(
@@ -41,9 +78,10 @@ async def client_and_queue():
         env.client,
         task_queue=task_queue,
         workflows=[CodeModeE2EParentWorkflow],
-        # One plugin supplies both the generic Code Mode stepping activities and the durable
-        # bodies of the host tools.
+        # The plugin supplies the durable bodies of the host tools; Code Mode needs no
+        # activities of its own.
         plugins=[AgentHarnessPlugin(tools=CODE_MODE_TOOLS)],
+        interceptors=[_RecordScheduledActivities()],
     ):
         try:
             yield env.client, task_queue
@@ -56,6 +94,28 @@ async def _run(
 ) -> tuple[str, list[AgentEvent]]:
     """Start the parent, run one script through Code Mode, and return the reply text plus every
     event published on the parent's stream (so callers can assert on the tool lifecycle too)."""
+    reply, events, _handle = await _run_with_handle(client, task_queue, script)
+    return reply, events
+
+
+async def _replay(handle: WorkflowHandle[Any, Any]) -> None:
+    """Replay the workflow's history from scratch, as a worker that lost it from its cache
+    would, and require the replay to schedule exactly the activities the original run did,
+    arguments included."""
+    history = await handle.fetch_history()
+    await Replayer(
+        workflows=[CodeModeE2EParentWorkflow],
+        data_converter=pydantic_data_converter,
+        interceptors=[_RecordScheduledActivities()],
+    ).replay_workflow(history)
+    original = _SCHEDULED[(handle.id, False)]
+    assert original, "the original run scheduled no activities"
+    assert _SCHEDULED[(handle.id, True)] == original
+
+
+async def _run_with_handle(
+    client: Client, task_queue: str, script: str
+) -> tuple[str, list[AgentEvent], WorkflowHandle[Any, Any]]:
     handle = await client.start_workflow(
         CodeModeE2EParentWorkflow.run,
         AgentConfig(),
@@ -81,7 +141,7 @@ async def _run(
         if envelope.event.type == AgentEventType.TURN_END:
             break
     assert reply is not None, "turn ended without a reply"
-    return reply, events
+    return reply, events, handle
 
 
 def _tool_starts(events: list[AgentEvent], tool_name: str) -> list[AgentEvent]:
@@ -172,3 +232,99 @@ async def test_runtime_error_is_reported_as_text(client_and_queue):
     )
     reply, _events = await _run(client, task_queue, script)
     assert "Script error" in reply
+
+
+async def test_a_failed_host_call_raises_inside_the_script(client_and_queue):
+    """A host call that fails raises at its await, so the script can handle it and go on; the
+    other calls in its batch still complete, and the replay sees the same failure."""
+    client, task_queue = client_and_queue
+    script = (
+        "import asyncio\n"
+        "async def main():\n"
+        "    async def safely(call):\n"
+        "        try:\n"
+        "            return await call\n"
+        "        except Exception as e:\n"
+        "            return str(e)\n"
+        "    failed, added = await asyncio.gather(\n"
+        '        safely(explode("no fuel")), safely(add({"a": 1, "b": 2}))\n'
+        "    )\n"
+        '    return [failed, added["total"]]\n'
+        "asyncio.run(main())"
+    )
+    reply, _events, handle = await _run_with_handle(client, task_queue, script)
+    assert "result: ['ApplicationError: no fuel', 3]" in reply, reply
+
+    await _replay(handle)
+
+
+async def test_an_uncaught_host_failure_ends_the_script_with_its_message(client_and_queue):
+    client, task_queue = client_and_queue
+    script = (
+        "import asyncio\n"
+        "async def main():\n"
+        '    return await explode("no fuel")\n'
+        "asyncio.run(main())"
+    )
+    reply, _events = await _run(client, task_queue, script)
+    assert reply.startswith("Script error ("), reply
+    assert "ApplicationError: no fuel" in reply
+
+
+# ---------------------------------------------------------------- durability
+
+
+async def test_a_script_replays_to_the_same_host_calls(client_and_queue):
+    """The script steps inside the workflow, so a replay re-runs it against the recorded host
+    results. Everything it could observe from the worker comes from the workflow instead, so the
+    replay makes the same host calls with the same arguments: randomness, the clock, set order, a
+    durable sleep, a gathered batch, and a call made in one batch but awaited in a later one."""
+    client, task_queue = client_and_queue
+    script = (
+        "import asyncio, datetime, random\n"
+        "async def main():\n"
+        '    later = greet({"name": "later"})\n'
+        "    a, b = await asyncio.gather(\n"
+        '        add({"a": random.randint(0, 10**6), "b": 1}), add({"a": 2, "b": 3})\n'
+        "    )\n"
+        "    await asyncio.sleep(1)\n"
+        "    stamp = datetime.datetime.now().isoformat()\n"
+        "    e = await echo(f\"{stamp}|{list({'z', 'y', 'x'})}|{random.random()}\")\n"
+        "    g = await later\n"
+        '    return [b["total"], g["message"], e["value"].endswith("s3cr3t")]\n'
+        "asyncio.run(main())"
+    )
+    reply, events, handle = await _run_with_handle(client, task_queue, script)
+    assert "result: [5, 'hi later', True]" in reply, reply
+    assert len(_tool_starts(events, "add")) == 2
+
+    await _replay(handle)
+
+
+async def test_a_runaway_script_is_stopped_and_replays_without_running_again(client_and_queue):
+    """A script that never awaits again is stopped at the step time limit, and the stop is
+    recorded: a replay returns the same error without re-running the loop, which would otherwise
+    decide afresh, on a different machine, whether it overran."""
+    client, task_queue = client_and_queue
+    script = (
+        "import asyncio\n"
+        "async def main():\n"
+        '    await add({"a": 1, "b": 2})\n'
+        "    while True:\n"
+        "        pass\n"
+        "asyncio.run(main())"
+    )
+    reply, _events, handle = await _run_with_handle(client, task_queue, script)
+    assert reply.startswith("Script error (TimeoutError: the script ran for more than 1s"), reply
+
+    history = await handle.fetch_history()
+    markers = [
+        e.marker_recorded_event_attributes
+        for e in history.events
+        if e.HasField("marker_recorded_event_attributes")
+    ]
+    assert len(markers) == 1
+
+    started = time.monotonic()
+    await _replay(handle)
+    assert time.monotonic() - started < 1, "the replay re-ran the runaway step"

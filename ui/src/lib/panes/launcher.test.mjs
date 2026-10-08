@@ -26,7 +26,7 @@ describe("launcher rows", () => {
     const items = launcherItems([rail, drawer]);
     assert.deepEqual(
       items.map((item) => item.kind),
-      ["chat", "graph", "decisions", "logs", "latency", "usage", "state"],
+      ["chat", "graph", "decisions", "logs", "latency", "usage", "state", "files"],
       "an open view must stay in the list so it can be switched off"
     );
     assert.deepEqual(openKinds([rail, drawer]), ["chat", "graph"]);

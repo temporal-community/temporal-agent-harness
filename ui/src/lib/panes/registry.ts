@@ -5,7 +5,8 @@ export type PaneKind =
   | "logs"
   | "latency"
   | "usage"
-  | "state";
+  | "state"
+  | "files";
 
 export interface PaneMeta {
   /** Uppercase eyebrow shown in the pane header and on the collapsed spine. */
@@ -111,6 +112,17 @@ export const PANE_META: Record<PaneKind, PaneMeta> = {
        and scrolls itself rather than growing the rail. */
     content: "viewport",
     titleNames: "kind"
+  },
+  files: {
+    kindLabel: "VFS File Mounts",
+    /* --accent, like agent state: the mounts are state an author opted into, and --tool
+       is kept for tool calls themselves. */
+    accent: "--accent",
+    defaultSize: 440,
+    minSize: 320,
+    /* A tree above a file's contents, each scrolling itself. */
+    content: "viewport",
+    titleNames: "kind"
   }
 };
 
@@ -138,7 +150,8 @@ const SINGLETON_KINDS = new Set<PaneKind>([
   "graph",
   "decisions",
   "usage",
-  "state"
+  "state",
+  "files"
 ]);
 
 export function isSingletonKind(kind: PaneKind): boolean {

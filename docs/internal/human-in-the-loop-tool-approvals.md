@@ -301,7 +301,7 @@
 > - **Not reachable by the agent.** Dispatched as a bare `workflow.execute_activity` by name,
 >   never through `run_tool` — so it is not a tool, the model cannot call it or influence what
 >   is asked about its own call, and the gate does not recurse into itself.
-> - **Registered unconditionally by `AgentHarnessPlugin`**, like the Code Mode activities, with
+> - **Registered unconditionally by `AgentHarnessPlugin`**, with
 >   the extra checked per call: an unregistered activity name is a *retryable* Temporal error,
 >   which would hang every gated call mid-approval instead of failing once.
 > - Splits along the workflow boundary: `approver.py`/`models.py` are workflow-safe (plain

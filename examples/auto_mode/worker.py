@@ -75,8 +75,8 @@ async def main() -> None:
 
     # Two plugins, harness LAST so the Gemini plugin's payload converter wins:
     #   * GoogleGenAIPlugin  — the Gemini interactions activity.
-    #   * AgentHarnessPlugin — the large-payload offload converter, the Code Mode
-    #     sandbox-stepping activities, the durable body of every travel tool in ALL_TOOLS,
+    #   * AgentHarnessPlugin — the large-payload offload converter, the durable body of
+    #     every travel tool in ALL_TOOLS,
     #     and the Jev approval activity that `agent.jev_evaluator()` dispatches by name.
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
