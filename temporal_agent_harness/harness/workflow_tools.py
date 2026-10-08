@@ -7,6 +7,7 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.exceptions import ApplicationError
 
+from temporal_agent_harness.harness.agent_protocol.events import AgentMessageSent
 from temporal_agent_harness.harness.agent_workflow import _current_runner, tool_defn
 
 _AGENT_MESSAGE_SIGNAL = "temporal_agent_harness.receive_message"
@@ -115,6 +116,16 @@ def send_message_tool(
         await workflow.get_external_workflow_handle(target).signal(
             signal_name, envelope
         )
+        if workflow.patched("agent-message-delivery-events-v1"):
+            _current_runner().publish(
+                AgentMessageSent(
+                    message_id=envelope.id,
+                    sender_workflow_id=info.workflow_id,
+                    recipient_workflow_id=target,
+                    recipient=recipient,
+                    body=message,
+                )
+            )
         return f"Message sent to {recipient}."
 
     send_message.__name__ = tool_name

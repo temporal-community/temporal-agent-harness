@@ -275,6 +275,7 @@ export type AgentEventType =
   | "tool_progress_delta"
   | "tool_end"
   | "tool_error"
+  | "agent_message_sent"
   | "subagent_started"
   | "subagent_stopped"
   | "subagent_message_sent"
@@ -412,6 +413,14 @@ export interface ToolEndEvent extends ToolEventDataBase<"tool_end"> {
 
 export interface ToolErrorEvent extends ToolEventDataBase<"tool_error"> {
   message: string;
+}
+
+export interface AgentMessageSentEvent extends AgentEventDataBase<"agent_message_sent"> {
+  message_id: string;
+  sender_workflow_id: string;
+  recipient_workflow_id: string;
+  recipient: string;
+  body: string;
 }
 
 export interface SubagentStartedEvent
@@ -579,6 +588,7 @@ export interface AgentSseEventMap {
   tool_progress_delta: ToolProgressDeltaEvent;
   tool_end: ToolEndEvent;
   tool_error: ToolErrorEvent;
+  agent_message_sent: AgentMessageSentEvent;
   subagent_started: SubagentStartedEvent;
   subagent_stopped: SubagentStoppedEvent;
   subagent_message_sent: SubagentMessageSentEvent;

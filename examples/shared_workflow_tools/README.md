@@ -36,7 +36,14 @@ TEMPORAL_NAMESPACE=shared-tools-demo .venv/bin/python -m temporal_agent_harness.
 TEMPORAL_NAMESPACE=shared-tools-demo .venv/bin/python -m temporal_agent_harness.web.cli serve examples/shared_workflow_tools/agents.toml --host 127.0.0.1 --port 8001
 ```
 
-Open http://localhost:8001 and ask "Why is the sky blue?". The fixed local model
+Open http://localhost:8001 and ask "Why is the sky blue?". The chat's **Agent
+communication** panel shows the parent, its subagent, Active/Stopped status, and
+an exchange timeline with sender, recipient, timestamp, and full message text.
+Signal deliveries are distinguished from delegated turn requests and replies.
+Delivery means the Signal arrived, not that the recipient has read it. Start a
+new run to see delivery events; older runs retain their existing tool logs.
+
+The fixed local model
 chooses the same sequence for every prompt. Signals queue messages without
 automatically starting an agent turn; here the child consumes each message during
 its next typed turn. The shared tools also support Pydantic AI and Gemini adapters,

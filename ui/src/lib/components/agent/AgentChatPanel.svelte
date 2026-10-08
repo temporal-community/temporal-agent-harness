@@ -32,6 +32,7 @@
   import { formatLogValue } from "$lib/state/logValue";
   import { formatElapsedDuration, type ReplayLogRow } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
+  import AgentMessagingPanel from "$lib/components/agent/AgentMessagingPanel.svelte";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
 
   type OperatorTargetRole = "parent" | "subagent";
@@ -1302,6 +1303,7 @@
   aria-label={`${agentLabel} customer chat`}
 >
   <div class="chat-shell">
+    <AgentMessagingPanel {logs} {agentLabel} {sessionId} {closed} />
     <div class="message-list" bind:this={messageListElement}>
       {#if connecting && messages.length === 0}
         <div class="empty-chat">

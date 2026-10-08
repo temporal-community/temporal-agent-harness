@@ -27,6 +27,8 @@ def tool_context(monkeypatch):
         _auto_approves=lambda *args, **kwargs: True,
         _pub=lambda *args: events.append(args[-1]),
     )
+    runner.publish = lambda event: events.append(event)
+    monkeypatch.setattr(workflow, "patched", lambda _: True)
     runner.subagent_workflow_id = (
         lambda handle: aw.AgentWorkflowRunner.subagent_workflow_id(runner, handle)
     )
@@ -69,7 +71,11 @@ async def test_parent_routes_to_owned_child_handle(monkeypatch, tool_context):
     assert message == agent.WorkflowMessage(
         str(UUID(int=1)), "parent-id", "parent-run", "instructions"
     )
-    assert [type(e).__name__ for e in events] == ["ToolStartEvent", "ToolEndEvent"]
+    assert [type(e).__name__ for e in events] == [
+        "ToolStartEvent",
+        "AgentMessageSent",
+        "ToolEndEvent",
+    ]
 
 
 async def test_unknown_workflow_ids_and_stopped_handles_rejected(

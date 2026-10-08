@@ -163,6 +163,9 @@ class AgentEventType(StrEnum):
     fails and TOOL_ERROR follows (the model receives an error result). See
     :class:`CallbackResolved`."""
 
+    AGENT_MESSAGE_SENT = "agent_message_sent"
+    """A Temporal Signal message was delivered to another agent workflow."""
+
     SUBAGENT_STARTED = "subagent_started"
     """This agent started a subagent (a child agent it drives), carrying the subagent's
     short ``subagent_id`` and its real ``workflow_id``. Analogous to TOOL_START but for a
@@ -636,6 +639,20 @@ class CallbackResolved(ToolEvent[Literal[AgentEventType.CALLBACK_RESOLVED]]):
     )
 
 
+class AgentMessageSent(StreamEvent[Literal[AgentEventType.AGENT_MESSAGE_SENT]]):
+    """A Signal message delivered to an agent, without starting a turn.
+
+    Delivery does not imply the recipient has consumed or replied to it.
+    """
+
+    type: Literal[AgentEventType.AGENT_MESSAGE_SENT] = AgentEventType.AGENT_MESSAGE_SENT
+    message_id: str
+    sender_workflow_id: str
+    recipient_workflow_id: str
+    recipient: str
+    body: str
+
+
 class SubagentStarted(StreamEvent[Literal[AgentEventType.SUBAGENT_STARTED]]):
     """This agent started a subagent (a child agent it drives)."""
 
@@ -893,6 +910,7 @@ AgentStreamItem = Annotated[
     | ToolErrorEvent
     | CallbackRequested
     | CallbackResolved
+    | AgentMessageSent
     | SubagentStarted
     | SubagentStopped
     | SubagentMessageSent

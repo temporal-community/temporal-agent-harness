@@ -42,6 +42,7 @@ from temporal_agent_harness.harness.agent_protocol.agent_interface import (
 from temporal_agent_harness.harness.agent_protocol.events import (
     TURN_EVENTS_TOPIC,
     AgentError,
+    AgentMessageSent,
     AgentStatePatch,
     AgentStateSnapshot,
     AgentEvent,
@@ -156,6 +157,7 @@ __all__ = [
     "TokenUsage",
     "AgentReply",
     "AgentError",
+    "AgentMessageSent",
     "AgentStatePatch",
     "AgentStateSnapshot",
     "AgentStreamItem",

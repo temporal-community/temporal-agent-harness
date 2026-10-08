@@ -45,6 +45,10 @@ export interface ReplayLogRow {
   parentTurnNumber?: number;
   workflowId?: string;
   sourceLabel?: string;
+  messageId?: string;
+  senderWorkflowId?: string;
+  recipientWorkflowId?: string;
+  subagentWorkflowId?: string;
   turnId: string;
   timestamp: number;
   event: AgentEventType;
@@ -423,12 +427,27 @@ function rowFromFrame(
     };
   }
 
+  if (frame.event === "agent_message_sent") {
+    return {
+      ...base,
+      actor: "subagent",
+      tone: "agent",
+      label: "Agent message delivered",
+      body: frame.data.body,
+      messageId: frame.data.message_id,
+      senderWorkflowId: frame.data.sender_workflow_id,
+      recipientWorkflowId: frame.data.recipient_workflow_id,
+      status: "delivered"
+    };
+  }
+
   if (frame.event === "subagent_started") {
     return {
       ...base,
       actor: "subagent",
       tone: "agent",
       label: "Subagent started",
+      subagentWorkflowId: frame.data.workflow_id,
       body: `${frame.data.agent_key} · ${frame.data.subagent_id}`,
       detail: frame.data.workflow_id,
       status: "running"
@@ -465,6 +484,7 @@ function rowFromFrame(
       actor: "subagent",
       tone: "done",
       label: "Subagent stopped",
+      subagentWorkflowId: frame.data.workflow_id,
       body: `${frame.data.agent_key} · ${frame.data.subagent_id}`,
       detail: frame.data.workflow_id,
       status: "stopped"
