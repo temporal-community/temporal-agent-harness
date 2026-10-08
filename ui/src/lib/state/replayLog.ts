@@ -642,6 +642,25 @@ export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): Re
     rows.push(row);
   });
 
+  // Give message rows the same explicit direction in the activity and transcript panes.
+  const children = new Map(rows
+    .filter((row) => row.event === "subagent_started" && row.subagentWorkflowId)
+    .map((row) => [row.subagentWorkflowId!, row.body ?? "Subagent"]));
+  const parents = new Set(rows
+    .filter((row) => row.event === "subagent_started" && row.workflowId)
+    .map((row) => row.workflowId!));
+  function endpoint(id?: string): string {
+    if (!id) return "Unknown agent";
+    const child = children.get(id);
+    if (child) return `Subagent: ${child}`;
+    return parents.has(id) ? "Parent agent" : id;
+  }
+  for (const row of rows) {
+    if (row.event !== "agent_message_sent") continue;
+    row.label = `${endpoint(row.senderWorkflowId)} → ${endpoint(row.recipientWorkflowId)}`;
+    row.detail = `From: ${endpoint(row.senderWorkflowId)}\nTo: ${endpoint(row.recipientWorkflowId)}`;
+  }
+
   const groupedRows = new Map<number, ReplayLogRow[]>();
   for (const row of rows) {
     const current = groupedRows.get(row.turnNumber) ?? [];
