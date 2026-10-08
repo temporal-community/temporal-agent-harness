@@ -1,6 +1,0 @@
-[[agents]]
-key = "parent-child-messaging"
-workflow_type = "MessagingParentAgent"
-task_queue = "shared-tools-openai"
-label = "Parent and subagent messaging"
-description = "Start a persistent research subagent, exchange messages in both directions, and drive two turns on the same child. Local OpenAI model fixtures; real harness and Temporal execution."

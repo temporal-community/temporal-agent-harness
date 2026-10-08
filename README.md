@@ -279,10 +279,9 @@ Signal name, defaulting to `temporal_agent_harness.receive_message`. Construct
 only one inbox per Signal name; carry pending messages explicitly across Continue
 As New when needed.
 
-See [`examples/shared_workflow_tools`](examples/shared_workflow_tools) for one
-runnable OpenAI example: the parent starts a researcher, sends it instructions,
-drives two turns on that same child, and receives messages back. The model uses
-local fixtures; the agents, tools, and Temporal execution are real.
+See [`examples/code_review`](examples/code_review) for a multi-harness diff review:
+the coordinator starts OpenAI Agents and Pydantic AI reviewers, sends them guidance,
+and receives their progress and findings through harness messages.
 
 ### 📞 Callback tools — let the client run the tool
 An agent running on a Temporal worker often needs to act somewhere it can't reach — a file on the

@@ -93,5 +93,4 @@ Reviewers are closed in a `finally` block after synthesis.
 
 The sample intentionally contains authorization, injection, and empty-result
 bugs. Findings are model-generated, so exact wording and coverage will vary.
-The earlier `shared_workflow_tools` fixture demo remains separate; use this
-example's registry and namespace to run actual code reviews.
+Use this example's registry and namespace to run code reviews.
