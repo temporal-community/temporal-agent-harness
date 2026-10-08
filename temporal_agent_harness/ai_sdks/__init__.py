@@ -8,6 +8,6 @@ observability. One subpackage per SDK; more are expected over time.
   * :mod:`temporal_agent_harness.ai_sdks.openai_agents` — the OpenAI Agents SDK.
   * :mod:`temporal_agent_harness.ai_sdks.pydantic_ai_harness` — Pydantic AI (glue for the
     unmodified upstream ``pydantic_ai.durable_exec.temporal`` plugin).
-  * :mod:`temporal_agent_harness.ai_sdks.codex_harness` — OpenAI Codex (wraps the external
-    ``codex app-server`` process; ``codex_testing`` has a credential-free fake model).
+  * :mod:`temporal_agent_harness.ai_sdks.codex_harness` — OpenAI Codex (glue over the standalone
+    ``temporalio.openai_codex`` plugin, which makes the external ``codex app-server`` process durable).
 """

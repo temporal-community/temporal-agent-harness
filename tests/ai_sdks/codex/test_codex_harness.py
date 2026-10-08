@@ -28,12 +28,14 @@ from temporalio.contrib.workflow_streams import WorkflowStreamClient
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-from temporal_agent_harness.ai_sdks import codex_harness
+from temporalio.openai_codex import CODEX_RUN_SEGMENT_ACTIVITY
+from temporalio.openai_codex._app_server import AppServer
+from temporalio.openai_codex.testing import FakeResponsesServer
+
 from temporal_agent_harness.ai_sdks.codex_harness import (
     CodexHarnessPlugin,
     as_codex_tool,
 )
-from temporal_agent_harness.ai_sdks.codex_testing import FakeResponsesServer
 from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
@@ -69,7 +71,7 @@ requires_codex_binary = pytest.mark.skipif(
 
 
 def test_as_codex_tool_derives_the_dynamic_tool_spec():
-    tool = as_codex_tool(lookup)
+    tool = as_codex_tool(None, lookup)  # type: ignore[arg-type]  # the runner is only used on a call
     assert tool.spec.name == "lookup"
     assert tool.spec.description == "Look up a ticket by id."
     assert tool.spec.input_schema["type"] == "object"
@@ -82,7 +84,7 @@ def test_as_codex_tool_rejects_a_plain_function():
         return q
 
     with pytest.raises(TypeError, match="not a harness tool"):
-        as_codex_tool(not_a_harness_tool)
+        as_codex_tool(None, not_a_harness_tool)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +271,7 @@ async def test_crash_after_a_tool_ran_does_not_run_it_again(
     stack, monkeypatch: pytest.MonkeyPatch
 ):
     client, task_queue, fake, ledger = stack
-    original_call = codex_harness._AppServer.call
+    original_call = AppServer.call
 
     async def crashing_call(self, method, params=None):
         result = await original_call(self, method, params)
@@ -283,7 +285,7 @@ async def test_crash_after_a_tool_ran_does_not_run_it_again(
             self.kill()
         return result
 
-    monkeypatch.setattr(codex_harness._AppServer, "call", crashing_call)
+    monkeypatch.setattr(AppServer, "call", crashing_call)
 
     handle = await _start(client, task_queue, CodexAgent)
     _events, reply = await _turn(client, handle, 'Record it.\nCALL:record|{"note":"once"}')
@@ -303,7 +305,7 @@ async def test_crash_after_a_tool_ran_does_not_run_it_again(
             attrs = event.activity_task_started_event_attributes
             if attrs.attempt > 1:
                 retried.append(scheduled[attrs.scheduled_event_id])
-    assert retried == [codex_harness.CODEX_RUN_SEGMENT_ACTIVITY]
+    assert retried == [CODEX_RUN_SEGMENT_ACTIVITY]
 
     # The model saw the real tool output exactly once, never Codex's synthetic "aborted".
     final_input = fake.requests[-1]["input"]

@@ -1879,17 +1879,17 @@ wheels = [
 
 [[package]]
 name = "openai-codex-cli-bin"
-version = "0.161.0"
+version = "0.156.0"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d9/01/4d15de5fed736d5faf417fc4ddabd86cf46ee7e3599de0a21a151a0f5194/openai_codex_cli_bin-0.161.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:a0d046263927595bd0f98e18047dc2641bed388d449472151ebc5f8d0352868b", size = 134290593, upload-time = "2026-10-07T16:10:18.42Z" },
-    { url = "https://files.pythonhosted.org/packages/d4/44/878b1f0d0f8fbc5ccf732d5dd82ed3cc3ff2b8c0afba0752e355407cf877/openai_codex_cli_bin-0.161.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:aacd171c64015ee5b0ed8ac7f441ecf8bff78539a3a3dfb85c3fb27caaaf3ce8", size = 123456946, upload-time = "2026-10-07T16:10:25.367Z" },
-    { url = "https://files.pythonhosted.org/packages/4e/2d/5dd0d722d1c6be7f7d202162ca8c40e1762d00cb13487bb8b0ff1bb2244e/openai_codex_cli_bin-0.161.0-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:f3099cf840ac9ac052d15c45e590a4fb8f54f093093340cba6b9428aa8b41bfc", size = 131213946, upload-time = "2026-10-07T16:10:32.667Z" },
-    { url = "https://files.pythonhosted.org/packages/02/4d/74c99f4cad9dde4e7d1c9aa2d3c332e95a54a63b8d1ffc4fdf2f3f070eef/openai_codex_cli_bin-0.161.0-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:c81b8d4ce997d947d2f558d81934a6a199e24471162648e5021677b6ee593030", size = 140735531, upload-time = "2026-10-07T16:10:39.833Z" },
-    { url = "https://files.pythonhosted.org/packages/78/9f/b2754568ccf628eb06be80dffb7d758da8fd4097b8c730bf832013c32452/openai_codex_cli_bin-0.161.0-py3-none-musllinux_1_1_aarch64.whl", hash = "sha256:4e545ba731de3198b040087576f7ded0e3c9c2b6758a55962b026ff289f58cbb", size = 152354279, upload-time = "2026-10-07T16:10:47.551Z" },
-    { url = "https://files.pythonhosted.org/packages/88/7d/96e7deb658cc80e27b321f488f992d3ed39e8c0f4257f28f3895123a6a50/openai_codex_cli_bin-0.161.0-py3-none-musllinux_1_1_x86_64.whl", hash = "sha256:7b4665f72183e4860debc05f46ba9f2fa0f9f2564b0e41422d02b2a374f409f2", size = 162147990, upload-time = "2026-10-07T16:10:55.225Z" },
-    { url = "https://files.pythonhosted.org/packages/45/d0/f7336ef5d284a9de6049204bbfc0d1833d00ddb5066bf92e0d3634813ca5/openai_codex_cli_bin-0.161.0-py3-none-win_amd64.whl", hash = "sha256:555544af2cb833a69a501906c6e3f79b613b7b909281202f7f4a52d316e342bd", size = 151107195, upload-time = "2026-10-07T16:11:02.776Z" },
-    { url = "https://files.pythonhosted.org/packages/19/bd/1c5748e8c6b482d37c402fb4e24de2bef933765e55d7d8e8d62bfb670a18/openai_codex_cli_bin-0.161.0-py3-none-win_arm64.whl", hash = "sha256:2c2a043c1fc67c4f6bf7d14f4dfb7998cc08c45d1f49a4bf1babd627e0c74c14", size = 139878792, upload-time = "2026-10-07T16:11:11.302Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/5a/6ab804125153352a6d7d39518d893c6252cf1682013b0b3e78abc08ac1bc/openai_codex_cli_bin-0.156.0-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:af36bbb750a808351020c29519d16e421625ed29c800a087d182cba4b87ee616", size = 130007766, upload-time = "2026-09-22T20:01:25.593Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/42/734e6fd84cb149a33b8982da52b3e6a820c4e3e7694ba6b176ce3993759f/openai_codex_cli_bin-0.156.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:b0fe3f27224ea22454f78d92d3022560f3126c25e8b063c53a85cba9ca5fd2f8", size = 119159163, upload-time = "2026-09-22T20:01:34.139Z" },
+    { url = "https://files.pythonhosted.org/packages/30/49/e93dbdf994988b0defd5f4124d9aba3895ecc31fc4597adbdc4819b22a48/openai_codex_cli_bin-0.156.0-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:7b7b0c436e8af55aad9a619849ab5d78e92e8b6d2649109a1255350e0869c429", size = 127264576, upload-time = "2026-09-22T20:01:42.59Z" },
+    { url = "https://files.pythonhosted.org/packages/73/a9/da942602042b9942727ce22691e2bc6237888adf938fddc246a35ed30f8d/openai_codex_cli_bin-0.156.0-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:f299e5b5ef595108333f86ea9f1b9fa03beeaf25266d50e29ef21c7b6f50ded0", size = 136206270, upload-time = "2026-09-22T20:01:53.22Z" },
+    { url = "https://files.pythonhosted.org/packages/04/59/afb7a7114b70a827985c5fa13f917ec8dcce5eb56550b207a5970226002a/openai_codex_cli_bin-0.156.0-py3-none-musllinux_1_1_aarch64.whl", hash = "sha256:1363e1972a80e1b51a89ef37d1a36edce21492dcd569d4427b34b73a96ae2489", size = 136890375, upload-time = "2026-09-22T20:02:07.27Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/42/4a63ef1c381614f99540c2ac6f25c373f2fdbacd7e77ff4d4cb7bdee77e9/openai_codex_cli_bin-0.156.0-py3-none-musllinux_1_1_x86_64.whl", hash = "sha256:331910a4d991d1e8819705cf9deb4504bd8aa8bd38e1dcd777289742c090af80", size = 145971890, upload-time = "2026-09-22T20:02:17.877Z" },
+    { url = "https://files.pythonhosted.org/packages/38/d9/6fae394b013049f475bbb34a87579ec6c950b7646adac007691c6695aa9b/openai_codex_cli_bin-0.156.0-py3-none-win_amd64.whl", hash = "sha256:f2e0dad06bbb212b8a8a02c09a402d1e4074d6e082a43c43ba45941e55056a84", size = 145787414, upload-time = "2026-09-22T20:02:28.31Z" },
+    { url = "https://files.pythonhosted.org/packages/37/92/7c04977dd1a45a446c70f88d26a1c64cca6c433056a6989c04f25a9aa015/openai_codex_cli_bin-0.156.0-py3-none-win_arm64.whl", hash = "sha256:81a70445465572e7bd5fd0b7743f50fe2b2e0768b090c265c23fd869978eae7e", size = 134742526, upload-time = "2026-09-22T20:02:39.276Z" },
 ]
 
 [[package]]
@@ -3178,7 +3178,7 @@ code-mode = [
     { name = "pydantic-monty" },
 ]
 codex = [
-    { name = "openai-codex-cli-bin" },
+    { name = "temporalio-openai-codex", extra = ["bundled-codex"] },
 ]
 genai = [
     { name = "google-auth" },
@@ -3219,7 +3219,6 @@ dev = [
     { name = "mcp" },
     { name = "moto", extra = ["server"] },
     { name = "openai-agents" },
-    { name = "openai-codex-cli-bin" },
     { name = "pydantic-ai-slim", extra = ["temporal"] },
     { name = "pydantic-monty" },
     { name = "pytest" },
@@ -3228,6 +3227,7 @@ dev = [
     { name = "setuptools" },
     { name = "temporal-nexus-mcp" },
     { name = "temporalio", extra = ["aioboto3", "opentelemetry"] },
+    { name = "temporalio-openai-codex", extra = ["bundled-codex"] },
     { name = "typesafe-sdk" },
 ]
 examples = [
@@ -3236,9 +3236,9 @@ examples = [
     { name = "google-genai" },
     { name = "httpx" },
     { name = "openai-agents" },
-    { name = "openai-codex-cli-bin" },
     { name = "pydantic-ai-slim", extra = ["temporal"] },
     { name = "pydantic-monty" },
+    { name = "temporalio-openai-codex", extra = ["bundled-codex"] },
     { name = "typesafe-sdk" },
 ]
 
@@ -3251,7 +3251,6 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'openai-agents'", specifier = ">=2.1.1,<3" },
     { name = "openai-agents", marker = "extra == 'nexus-mcp'", specifier = ">=0.22.0" },
     { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.22.0" },
-    { name = "openai-codex-cli-bin", marker = "extra == 'codex'", specifier = "==0.161.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], marker = "extra == 'pydantic-ai'", specifier = ">=2.13" },
     { name = "pydantic-monty", marker = "extra == 'code-mode'", specifier = "==1.0.0" },
@@ -3261,6 +3260,7 @@ requires-dist = [
     { name = "temporalio", extras = ["aioboto3"], marker = "extra == 's3'", specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'nexus-mcp'", specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'openai-agents'", specifier = ">=1.31.0" },
+    { name = "temporalio-openai-codex", extras = ["bundled-codex"], marker = "extra == 'codex'", git = "https://github.com/temporalio/ai-integrations?subdirectory=python%2Fopenai_codex&branch=feat%2Fopenai-codex-plugin" },
     { name = "typesafe-sdk", marker = "extra == 'jev'", specifier = ">=0.6.0" },
 ]
 provides-extras = ["genai", "s3", "openai-agents", "pydantic-ai", "codex", "ui", "code-mode", "jev", "nexus-mcp"]
@@ -3276,7 +3276,6 @@ dev = [
     { name = "mcp", specifier = ">=2.1.1,<3" },
     { name = "moto", extras = ["server"], specifier = ">=5.2.1" },
     { name = "openai-agents", specifier = ">=0.22.0" },
-    { name = "openai-codex-cli-bin", specifier = "==0.161.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
     { name = "pydantic-monty", specifier = "==1.0.0" },
     { name = "pytest", specifier = ">=9.0.3" },
@@ -3286,6 +3285,7 @@ dev = [
     { name = "temporal-nexus-mcp", editable = "nexus/mcp" },
     { name = "temporalio", extras = ["aioboto3"], specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], specifier = ">=1.31.0" },
+    { name = "temporalio-openai-codex", extras = ["bundled-codex"], git = "https://github.com/temporalio/ai-integrations?subdirectory=python%2Fopenai_codex&branch=feat%2Fopenai-codex-plugin" },
     { name = "typesafe-sdk", specifier = ">=0.6.0" },
 ]
 examples = [
@@ -3294,9 +3294,9 @@ examples = [
     { name = "google-genai", specifier = ">=2.0.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "openai-agents", specifier = ">=0.22.0" },
-    { name = "openai-codex-cli-bin", specifier = "==0.161.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
     { name = "pydantic-monty", specifier = "==1.0.0" },
+    { name = "temporalio-openai-codex", extras = ["bundled-codex"], git = "https://github.com/temporalio/ai-integrations?subdirectory=python%2Fopenai_codex&branch=feat%2Fopenai-codex-plugin" },
     { name = "typesafe-sdk", specifier = ">=0.6.0" },
 ]
 
@@ -3363,6 +3363,20 @@ aioboto3 = [
 opentelemetry = [
     { name = "opentelemetry-api" },
     { name = "opentelemetry-sdk" },
+]
+
+[[package]]
+name = "temporalio-openai-codex"
+version = "0.0.0"
+source = { git = "https://github.com/temporalio/ai-integrations?subdirectory=python%2Fopenai_codex&branch=feat%2Fopenai-codex-plugin#41b8d1bd68c537fc6be6b90587938eb75d1f6cf6" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "temporalio" },
+]
+
+[package.optional-dependencies]
+bundled-codex = [
+    { name = "openai-codex-cli-bin" },
 ]
 
 [[package]]

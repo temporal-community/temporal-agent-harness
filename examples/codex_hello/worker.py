@@ -31,7 +31,7 @@ from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
 from temporal_agent_harness.ai_sdks.codex_harness import CodexHarnessPlugin
-from temporal_agent_harness.ai_sdks.codex_testing import FakeResponsesServer
+from temporalio.openai_codex.testing import FakeResponsesServer
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 
 from .workflow import TASK_QUEUE, CodexHelloAgentWorkflow
