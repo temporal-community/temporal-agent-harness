@@ -71,7 +71,7 @@ just worker            # 4. this example's agent worker
 
 Open <http://localhost:8000> and start a session. There's no install step — `uv` fetches
 dependencies on demand. Every example follows the same four recipes; see
-[Run the examples](#run-the-examples) for the rest of them, including running all ten behind
+[Run the examples](#run-the-examples) for the rest of them, including running all eleven behind
 one UI.
 
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
@@ -1011,15 +1011,29 @@ changing the UI, use `just dev-server` (rebuild + serve) instead.
 
 ### All examples behind one UI
 
-The **root** justfile runs every example agent at once so the UI lists them all. From the project root,
-each in its own terminal:
+The **root** justfile runs the local stack in one terminal. From the project root:
 
 ```bash
-just temporal          # start FRESH (or `just reset-manager` first — see the gotcha)
-just session-manager   # shared session-manager worker
-just server            # serves the MERGED registry (all agents) on http://localhost:8000
-just workers           # co-launch all ten agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
+just dev
 ```
+
+This starts Temporal, the session manager, the web UI at <http://localhost:8000>, and every
+worker whose required keys are set in `.env.local`. It restarts affected workers when their
+watched files change and refreshes the agent list when a registry changes. One Ctrl-C stops
+the services it started and their process groups, including during startup or a reload. Services
+get up to six seconds to exit gracefully before remaining processes are killed automatically.
+A Temporal server that was already running is left running. Worker commands should stay in the
+foreground; daemons that detach into their own process groups are outside the runner's control.
+Temporal keeps sessions in `.harness/` across restarts; `just dev --fresh`
+starts with an empty database when launching its own Temporal server.
+
+Use `just dev --only monty,tictactoe` to select workers, or `just dev --no-watch` to disable
+automatic restarts. [`harness.toml`](harness.toml) defines the registries, worker commands,
+required environment variables, and watch paths. See the [development guide](docs/internal/development.md)
+for using the same command in your own project.
+
+The individual recipes still work in separate terminals: `just temporal`, `just session-manager`,
+`just server`, and `just workers`.
 
 Then create a session for any agent in the UI. A few need extra setup or a client:
 
@@ -1034,11 +1048,10 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
 | Code Mode Memory | `GEMINI_API_KEY`; long-term memory on the worker's disk, shared by sessions given the same `memory_dir` ([readme](examples/code_mode_memory/README.md)); chat directly in the UI |
 | Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](examples/agent_dag/README.md)); best in its own UI, **`just studio`** from `examples/agent_dag` |
+| Nexus Hello | `OPENAI_API_KEY`; a Nexus-enabled Temporal server, endpoints, gateway, and tool services ([setup](examples/nexus_hello/README.md#run-the-example)); `just dev` starts its agent worker, while those supporting services are managed separately |
 
-**Gotcha — the session manager caches its registry.** The server seeds the `session-manager`
-workflow with the registry on first start and reuses the existing one after that. So when you switch
-between a single-example server and the all-agents server (or change the set), run
-`just reset-manager` before the next `just server`, or start a fresh Temporal dev server. Also: an
+**The agent list follows the server.** Each server startup refreshes the running session manager's
+registry, so switching examples or adding agents takes effect without resetting sessions. Also: an
 agent whose worker isn't running will accept a created session but never progress (it parks) — start
 its worker.
 
