@@ -18,9 +18,6 @@ from temporal_agent_harness.harness.sandbox._session import DEFAULT_AFFINITY_TIM
 
 IdleAction = Literal["keep", "persist", "persist_and_shutdown", "pause"]
 
-# The capabilities ``runner.sandbox_tools()`` can turn into harness tools.
-SUPPORTED_CAPABILITY_TYPES = frozenset({"shell", "filesystem"})
-
 # Bounded retries, unlike Temporal's default, so a sandbox the backend refuses to delete
 # cannot hold the agent's close open forever.
 DEFAULT_SANDBOX_ACTIVITY_CONFIG = ActivityConfig(
@@ -54,8 +51,9 @@ class SandboxConfig:
 
     ``client`` names a ``SandboxClientProvider`` registered on the worker; ``options``,
     ``manifest`` and ``snapshot`` are what that provider's client creates the sandbox
-    with. ``capabilities`` are the OpenAI capabilities ``runner.sandbox_tools()`` turns
-    into model-facing tools.
+    with. ``capabilities`` are OpenAI capabilities, built-in or your own:
+    ``runner.sandbox_tools()`` turns their tools into harness tools, and each one's
+    ``process_manifest`` applies to the sandbox's manifest.
 
     The sandbox is created lazily, on its first use. It is closed when the agent's run
     loop ends: stopped (a final persist) if ``keep_snapshot``, shut down, deleted, and,
@@ -95,11 +93,11 @@ class SandboxConfig:
                 "this backend or these options do not pause natively. Use "
                 "'persist_and_shutdown' instead."
             )
-        unsupported = [
-            c.type for c in self.capabilities if c.type not in SUPPORTED_CAPABILITY_TYPES
-        ]
-        if unsupported:
-            raise ValueError(
-                f"capabilities {unsupported} are not supported as harness sandbox tools yet; "
-                f"supported: {sorted(SUPPORTED_CAPABILITY_TYPES)}"
-            )
+        present = {c.type for c in self.capabilities}
+        for capability in self.capabilities:
+            missing = capability.required_capability_types() - present
+            if missing:
+                raise ValueError(
+                    f"{type(capability).__name__} requires missing capabilities: "
+                    f"{', '.join(sorted(missing))}"
+                )

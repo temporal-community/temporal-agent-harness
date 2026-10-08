@@ -5,12 +5,10 @@ from __future__ import annotations
 import inspect
 import io
 from collections import OrderedDict
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from agents.sandbox.errors import SandboxError
 from agents.sandbox.session.sandbox_session_state import SandboxSessionState
 from agents.sandbox.snapshot import LocalSnapshot, RemoteSnapshot
 from agents.sandbox.session.sandbox_client import BaseSandboxClient
@@ -44,20 +42,7 @@ from temporal_agent_harness.harness.sandbox._activity_models import (
 )
 from temporalio.exceptions import ApplicationError
 
-
-@contextmanager
-def _translate_sandbox_errors() -> Iterator[None]:
-    # Temporal retries every activity exception by default, so only a SandboxError
-    # the library has classified as terminal (retryable is False) is turned into a
-    # non-retryable ApplicationError.
-    try:
-        yield
-    except SandboxError as e:
-        if e.retryable is False:
-            raise ApplicationError(
-                str(e), type=str(e.error_code), non_retryable=True
-            ) from e
-        raise
+from temporal_agent_harness.harness.sandbox._errors import translate_sandbox_errors
 
 
 # Providers whose activities this worker process registered, by name. Activity tools that take
@@ -111,7 +96,8 @@ class SandboxClientProvider:
             session needs, such as a ``RemoteSnapshot`` store, are the client's own
             ``dependencies``.
         affinity_task_queue: A task queue only this worker process polls, with the
-            same sandbox activities (and sandbox tool activities) registered on it.
+            same sandbox activities (and ``Injected[SandboxSession]`` tool activities)
+            registered on it.
             When set, a session this worker creates or resumes is pinned to it, so
             later calls reach the worker that holds the live session and its PTY
             processes. Without it, any worker may serve any call; sessions are
@@ -184,7 +170,7 @@ class SandboxClientProvider:
 
         @activity.defn(name=f"{prefix}-sandbox_client_create")
         async def create_session(args: CreateSessionArgs) -> SessionResult:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._client.create(
                     snapshot=args.snapshot_spec,
                     manifest=args.manifest,
@@ -195,14 +181,14 @@ class SandboxClientProvider:
 
         @activity.defn(name=f"{prefix}-sandbox_client_resume")
         async def resume_session(args: ResumeSessionArgs) -> SessionResult:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._client.resume(args.state)
                 self._cache(session)
                 return self._session_result(session)
 
         @activity.defn(name=f"{prefix}-sandbox_client_delete")
         async def delete_session(args: StopArgs) -> None:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._session(args)
                 await self._client.delete(session)
                 self._sessions.pop(str(args.state.session_id), None)
@@ -212,7 +198,7 @@ class SandboxClientProvider:
 
         @activity.defn(name=f"{prefix}-sandbox_session_exec")
         async def exec_(args: ExecArgs) -> ExecResultModel:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._session(args)
                 result = await session.exec(
                     *args.command,
@@ -228,21 +214,21 @@ class SandboxClientProvider:
 
         @activity.defn(name=f"{prefix}-sandbox_session_read")
         async def read(args: ReadArgs) -> ReadResult:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._session(args)
                 handle = await session.read(Path(args.path))
                 return ReadResult(data=handle.read())
 
         @activity.defn(name=f"{prefix}-sandbox_session_write")
         async def write(args: WriteArgs) -> None:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._session(args)
                 await session.write(Path(args.path), io.BytesIO(args.data))
                 return None
 
         @activity.defn(name=f"{prefix}-sandbox_session_running")
         async def running(args: RunningArgs) -> RunningResult:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._session(args)
                 return RunningResult(is_running=await session.running())
 
@@ -250,21 +236,21 @@ class SandboxClientProvider:
         async def persist_workspace(
             args: PersistWorkspaceArgs,
         ) -> PersistWorkspaceResult:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._session(args)
                 stream = await session.persist_workspace()
                 return PersistWorkspaceResult(data=stream.read())
 
         @activity.defn(name=f"{prefix}-sandbox_session_hydrate_workspace")
         async def hydrate_workspace(args: HydrateWorkspaceArgs) -> None:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._session(args)
                 await session.hydrate_workspace(io.BytesIO(args.data))
                 return None
 
         @activity.defn(name=f"{prefix}-sandbox_session_pty_exec_start")
         async def pty_exec_start(args: PtyExecStartArgs) -> PtyExecUpdateResult:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._session(args)
                 update = await session.pty_exec_start(
                     *args.command,
@@ -284,7 +270,7 @@ class SandboxClientProvider:
 
         @activity.defn(name=f"{prefix}-sandbox_session_pty_write_stdin")
         async def pty_write_stdin(args: PtyWriteStdinArgs) -> PtyExecUpdateResult:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._session(args)
                 update = await session.pty_write_stdin(
                     session_id=args.session_id,
@@ -301,14 +287,14 @@ class SandboxClientProvider:
 
         @activity.defn(name=f"{prefix}-sandbox_session_start")
         async def start(args: StartArgs) -> StateResult:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._session(args)
                 await session.start()
                 return StateResult(state=session.state)
 
         @activity.defn(name=f"{prefix}-sandbox_session_stop")
         async def session_stop(args: StopArgs) -> StateResult:
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 session = await self._session(args)
                 await session.stop()
                 return StateResult(state=session.state)
@@ -320,7 +306,7 @@ class SandboxClientProvider:
             session = self._sessions.get(str(args.state.session_id))
             if session is None:
                 return StateResult(state=args.state)
-            with _translate_sandbox_errors():
+            with translate_sandbox_errors():
                 await session.shutdown()
             return StateResult(state=session.state)
 
@@ -379,14 +365,13 @@ def sandbox_activities(
 ) -> list[Callable[..., Any]]:
     """The activities a worker registers to serve agent sandboxes from ``providers``.
 
-    Workers running the OpenAI Agents plugin can pass the same providers to its
-    ``sandbox_clients=`` instead. Register the sandbox tool activities too
-    (``tool_activity`` of each tool, e.g. :data:`SANDBOX_TOOL_ACTIVITIES`)::
+    ``AgentHarnessPlugin(sandbox_clients=providers)`` registers these for you. The sandbox
+    tools from ``runner.sandbox_tools()`` run in the workflow on these, so they need no
+    activities of their own::
 
-        Worker(..., activities=[
-            *sandbox_activities([SandboxClientProvider("local", UnixLocalSandboxClient())]),
-            *SANDBOX_TOOL_ACTIVITIES,
-        ])
+        Worker(..., activities=sandbox_activities(
+            [SandboxClientProvider("local", UnixLocalSandboxClient())]
+        ))
     """
     names = [p.name for p in providers]
     if len(names) != len(set(names)):
@@ -401,10 +386,10 @@ async def resolve_session(provider_name: str, state: Mapping[str, Any]) -> Sandb
     if provider is None:
         raise ApplicationError(
             f"no sandbox provider named {provider_name!r} is registered on this worker; "
-            "register it with sandbox_activities([...]) (or the OpenAI Agents plugin's "
-            "sandbox_clients=)",
+            "pass it to AgentHarnessPlugin(sandbox_clients=[...]) (or the OpenAI Agents "
+            "plugin's sandbox_clients=)",
             type="SandboxNotRegistered",
             non_retryable=True,
         )
-    with _translate_sandbox_errors():
+    with translate_sandbox_errors():
         return await provider.session_for(SandboxSessionState.parse(dict(state)))

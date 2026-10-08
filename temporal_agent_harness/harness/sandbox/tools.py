@@ -1,195 +1,128 @@
-"""Model-facing sandbox tools, built from the OpenAI sandbox capabilities.
+"""Model-facing sandbox tools: any OpenAI capability's own tools, as harness tools.
 
-Each is an ordinary activity tool with an ``Injected[SandboxSession]`` parameter, so any
-model SDK (and Code Mode) can use it. Its name, description and parameters come from the
-OpenAI tool it wraps, and its body runs that tool against the agent's real session.
+The capabilities run in the workflow, bound to the agent's :class:`CapabilitySession`, where
+each sandbox operation (exec, read, write, PTY) is an activity, the same way the OpenAI Agents
+Temporal plugin runs them. So any capability works, built-in or a developer's own, and no
+tool needs an activity of its own. Each tool becomes an inline harness tool that any model
+SDK (and Code Mode) can use, with the name, description and parameters the capability gives
+it.
 """
 
 from __future__ import annotations
 
 import inspect
-from collections.abc import Awaitable, Callable, Coroutine, Sequence
-from datetime import timedelta
-from typing import Annotated, Any
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
+from typing import Annotated, Any, Literal, Union
 
 from agents.sandbox import Manifest
 from agents.sandbox.capabilities import Capability
-from agents.sandbox.capabilities.tools import (
-    ExecCommandTool,
-    SandboxApplyPatchTool,
-    ViewImageTool,
-    WriteStdinTool,
-)
-from agents.sandbox.capabilities.tools.apply_patch_tool import (
-    _APPLY_PATCH_CUSTOM_TOOL_DESCRIPTION,
-)
-from agents.sandbox.capabilities.tools.shell_tool import ExecCommandArgs, WriteStdinArgs
-from agents.sandbox.capabilities.tools.view_image import ViewImageArgs
-from agents.sandbox.session.sandbox_session import SandboxSession
-from agents.tool import ToolOutputImage
-from pydantic import BaseModel, Field
-from temporalio.common import RetryPolicy
-from temporalio.exceptions import ApplicationError
-from temporalio.workflow import ActivityConfig
+from agents.tool import CustomTool, FunctionTool, ToolOutputImage, ToolOutputText
+from agents.tool_context import ToolContext
+from pydantic import Field, create_model
+from pydantic_core import to_json
+from temporalio import workflow
+from temporalio.exceptions import ApplicationError, TemporalError
 
-from temporal_agent_harness.harness.agent_workflow import Injected, activity_tool_defn, tool_activity
-from temporal_agent_harness.harness.sandbox._provider import _translate_sandbox_errors
+from temporal_agent_harness.harness.agent_workflow import _CURRENT_TOOL_ID, tool_defn
 from temporal_agent_harness.harness.sandbox_image import SandboxImage
 
-# A tool call blocks for at most the model's ``yield_time_ms`` (exec_command's own default is
-# 10s) plus the time to reach the sandbox; this leaves room for slow backends. Failures the
-# model caused are not retried at all (see ``_session_tool``); the rest get a few attempts, so a
-# sandbox that keeps failing reaches the model as an error instead of retrying forever.
-_TOOL_ACTIVITY_CONFIG = ActivityConfig(
-    start_to_close_timeout=timedelta(minutes=10),
-    retry_policy=RetryPolicy(maximum_attempts=3),
-)
-
-# OpenAI offers apply_patch as a freeform (grammar) tool; here it is a function taking the
-# patch text, so the one sentence about the freeform format is reworded.
-_APPLY_PATCH_DESCRIPTION = _APPLY_PATCH_CUSTOM_TOOL_DESCRIPTION.strip().replace(
-    "This is a FREEFORM tool, so do not wrap the patch in JSON.",
-    "Pass the whole patch text as `patch`.",
-)
-
-
-class _ApplyPatchArgs(BaseModel):
-    patch: str = Field(
-        description=(
-            "The patch, from `*** Begin Patch` to `*** End Patch`. Those two marker lines are "
-            "never prefixed with `+`, even after an `*** Add File` section."
-        )
-    )
-
-
-def _session_tool(
-    name: str,
-    description: str,
-    args_model: type[BaseModel],
-    returns: Any,
-    run: Callable[[SandboxSession, Any], Awaitable[Any]],
-) -> Callable[..., Awaitable[Any]]:
-    """An activity tool named ``name`` whose model-facing parameters are ``args_model``'s
-    fields, and whose body validates them into ``args_model`` and calls ``run``."""
-    params = [
-        inspect.Parameter(
-            "session",
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            annotation=Injected[SandboxSession],
-        )
-    ]
-    annotations: dict[str, Any] = {"session": Injected[SandboxSession]}
-    for field_name, info in args_model.model_fields.items():
-        annotation = Annotated[  # type: ignore[valid-type]
-            (info.annotation, *info.metadata, Field(description=info.description))
-        ]
-        params.append(
-            inspect.Parameter(
-                field_name,
-                inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                default=inspect.Parameter.empty if info.is_required() else info.get_default(),
-                annotation=annotation,
-            )
-        )
-        annotations[field_name] = annotation
-    field_names = list(args_model.model_fields)
-
-    async def body(session: SandboxSession, *values: Any) -> Any:
-        # A malformed argument (ValueError/TypeError, pydantic's ValidationError included) or a
-        # SandboxError OpenAI marks non-retryable (an unknown session id, a path outside the
-        # workspace) fails the same way every time, so it goes straight back to the model.
-        try:
-            with _translate_sandbox_errors():
-                return await run(
-                    session, args_model(**dict(zip(field_names, values, strict=True)))
-                )
-        except (ValueError, TypeError) as e:
-            raise ApplicationError(str(e), type=type(e).__name__, non_retryable=True) from e
-
-    body.__name__ = body.__qualname__ = name
-    body.__doc__ = description
-    body.__signature__ = inspect.Signature(params, return_annotation=returns)  # type: ignore[attr-defined]
-    body.__annotations__ = {**annotations, "return": returns}
-    return activity_tool_defn(name=name, activity_config=_TOOL_ACTIVITY_CONFIG)(body)
-
-
-async def _exec_command(session: SandboxSession, args: ExecCommandArgs) -> str:
-    return await ExecCommandTool(session=session).run(args)
-
-
-async def _write_stdin(session: SandboxSession, args: WriteStdinArgs) -> str:
-    return await WriteStdinTool(session=session).run(args)
-
-
-async def _view_image(session: SandboxSession, args: ViewImageArgs) -> SandboxImage | str:
-    result = await ViewImageTool(session=session).run(args)
-    if isinstance(result, ToolOutputImage) and result.image_url:
-        header, _, data = result.image_url.partition(",")
-        return SandboxImage(mime_type=header.removeprefix("data:").split(";")[0], data=data)
-    return str(result)
-
-
-async def _apply_patch(session: SandboxSession, args: _ApplyPatchArgs) -> str:
-    # Models writing an `*** Add File` section often prefix the closing marker with `+` too.
-    # OpenAI's parser then only says the patch must end with the marker, which models tend to
-    # misread and repeat, so name the actual mistake.
-    last_line = args.patch.rstrip("\n").rsplit("\n", 1)[-1]
-    if last_line != "*** End Patch" and last_line.lstrip("+ ") == "*** End Patch":
-        raise ValueError(
-            "the patch's last line is `+*** End Patch`. It must be exactly `*** End Patch`, "
-            "with no `+`: it ends the patch and is not a line of the file. Nothing was "
-            "applied; resend the patch with that line fixed."
-        )
-    tool = SandboxApplyPatchTool(session=session)
-    return await tool.on_invoke_tool(None, args.patch)  # type: ignore[arg-type]
-
-
-exec_command = _session_tool(
-    ExecCommandTool.tool_name,
-    ExecCommandTool.tool_description,
-    ExecCommandArgs,
-    str,
-    _exec_command,
-)
-write_stdin = _session_tool(
-    WriteStdinTool.tool_name,
-    WriteStdinTool.tool_description,
-    WriteStdinArgs,
-    str,
-    _write_stdin,
-)
-view_image = _session_tool(
-    ViewImageTool.tool_name,
-    ViewImageTool.tool_description,
-    ViewImageArgs,
-    SandboxImage | str,
-    _view_image,
-)
-apply_patch = _session_tool(
-    "apply_patch", _APPLY_PATCH_DESCRIPTION, _ApplyPatchArgs, str, _apply_patch
-)
-
-_TOOLS_BY_CAPABILITY: dict[str, list[Callable[..., Awaitable[Any]]]] = {
-    "shell": [exec_command, write_stdin],
-    "filesystem": [view_image, apply_patch],
+_JSON_TYPES: dict[str, Any] = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+    "null": type(None),
 }
 
-SANDBOX_TOOL_ACTIVITIES: list[Callable[..., Any]] = [
-    tool_activity(t) for tools in _TOOLS_BY_CAPABILITY.values() for t in tools
-]
-"""The activities behind every sandbox tool, for worker registration."""
+# A custom (freeform) tool takes one raw string rather than JSON arguments; as a harness
+# tool, that string is its one parameter.
+_CUSTOM_INPUT = "input"
+_CUSTOM_INPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        _CUSTOM_INPUT: {
+            "type": "string",
+            "description": "The tool's input, written as its description says.",
+        }
+    },
+    "required": [_CUSTOM_INPUT],
+}
 
 
-def tools_for(capabilities: Sequence[Capability]) -> list[Callable[..., Awaitable[Any]]]:
-    """The harness tools the given capabilities expose to the model."""
-    return [tool for c in capabilities for tool in _TOOLS_BY_CAPABILITY[c.type]]
+def tools_for(
+    capabilities: Sequence[Capability], ensure_running: Callable[[], Awaitable[object]]
+) -> list[Callable[..., Awaitable[Any]]]:
+    """The harness tools for bound ``capabilities``. Each call runs ``ensure_running``
+    first, so the session's state (its manifest, for path checks) is there."""
+    return [as_harness_tool(t, ensure_running) for c in capabilities for t in c.tools()]
+
+
+def as_harness_tool(
+    tool: Any, ensure_running: Callable[[], Awaitable[object]]
+) -> Callable[..., Awaitable[Any]]:
+    """An inline harness tool that runs an OpenAI ``FunctionTool`` or ``CustomTool``.
+
+    Its parameters are built from the tool's JSON schema. An exception other than a Temporal
+    one comes back to the caller as a non-retryable ``ApplicationError``, rather than
+    failing the workflow task. An image result becomes a :class:`SandboxImage`.
+    """
+    if isinstance(tool, FunctionTool):
+        schema: Mapping[str, Any] = tool.params_json_schema
+    elif isinstance(tool, CustomTool):
+        schema = _CUSTOM_INPUT_SCHEMA
+    else:
+        raise TypeError(
+            f"capability tool {getattr(tool, 'name', tool)!r} is a {type(tool).__name__}; "
+            "only FunctionTool and CustomTool tools can run as harness tools"
+        )
+    defs: Mapping[str, Any] = schema.get("$defs", {})
+    required = set(schema.get("required", ()))
+    params: list[inspect.Parameter] = []
+    annotations: dict[str, Any] = {}
+    for name, prop in schema.get("properties", {}).items():
+        annotation, default = _field(name, prop, name in required, defs)
+        annotation = Annotated[annotation, Field(description=prop.get("description"))]
+        params.append(
+            inspect.Parameter(
+                name, inspect.Parameter.POSITIONAL_OR_KEYWORD, default=default, annotation=annotation
+            )
+        )
+        annotations[name] = annotation
+    # Parameters without a default come first, as Python requires.
+    params.sort(key=lambda p: p.default is not inspect.Parameter.empty)
+    signature = inspect.Signature(params, return_annotation=Any)
+
+    async def body(*args: Any, **kwargs: Any) -> Any:
+        # Only what the caller passed: the tool applies its own defaults.
+        arguments = signature.bind(*args, **kwargs).arguments
+        raw = arguments[_CUSTOM_INPUT] if isinstance(tool, CustomTool) else to_json(arguments).decode()
+        await ensure_running()
+        context = ToolContext(
+            context=None,
+            tool_name=tool.name,
+            tool_call_id=_CURRENT_TOOL_ID.get() or str(workflow.uuid4()),
+            tool_arguments=raw,
+        )
+        try:
+            result = await tool.on_invoke_tool(context, raw)
+        except TemporalError:
+            raise
+        except Exception as e:
+            raise ApplicationError(str(e), type=type(e).__name__, non_retryable=True) from e
+        return _model_facing(result)
+
+    body.__name__ = body.__qualname__ = tool.name
+    body.__doc__ = tool.description
+    body.__signature__ = signature  # type: ignore[attr-defined]
+    body.__annotations__ = {**annotations, "return": Any}
+    return tool_defn()(body)
 
 
 def instructions_for(capabilities: Sequence[Capability], manifest: Manifest | None) -> str:
     """The capabilities' own prompt fragments, joined.
 
-    ``Capability.instructions`` is async but, for the supported capabilities, never awaits
-    anything, so it is driven to completion here without an event loop.
+    ``Capability.instructions`` is async but, for most capabilities, never awaits anything,
+    so it is driven to completion here without an event loop.
     """
     resolved = manifest if manifest is not None else Manifest()
     fragments = [_run_without_awaiting(c.instructions(resolved)) for c in capabilities]
@@ -203,3 +136,62 @@ def _run_without_awaiting(coro: Coroutine[Any, Any, str | None]) -> str | None:
         return done.value
     coro.close()
     raise RuntimeError("capability instructions awaited I/O; they must be computed statically")
+
+
+def _model_facing(result: Any) -> Any:
+    if isinstance(result, ToolOutputImage) and result.image_url:
+        header, _, data = result.image_url.partition(",")
+        return SandboxImage(mime_type=header.removeprefix("data:").split(";")[0], data=data)
+    if isinstance(result, ToolOutputText):
+        return result.text
+    return result
+
+
+def _field(
+    name: str, schema: Mapping[str, Any], required: bool, defs: Mapping[str, Any]
+) -> tuple[Any, Any]:
+    """The annotation and default for one JSON schema property. An optional property with no
+    default may be left out, so it defaults to ``None``."""
+    annotation = _annotation(schema, defs, name)
+    if required:
+        return annotation, inspect.Parameter.empty
+    if "default" in schema:
+        return annotation, schema["default"]
+    return annotation | None, None
+
+
+def _annotation(schema: Mapping[str, Any], defs: Mapping[str, Any], name: str) -> Any:
+    """A Python type for a JSON schema, close enough for each model SDK to rebuild the
+    schema from it. The tool validates its own arguments, so constraints are left out."""
+    if ref := schema.get("$ref"):
+        ref_name = ref.rsplit("/", 1)[-1]
+        return _annotation(defs[ref_name], defs, ref_name)
+    if "enum" in schema:
+        return Literal[tuple(schema["enum"])]
+    if "const" in schema:
+        return Literal[schema["const"]]
+    if variants := schema.get("anyOf") or schema.get("oneOf"):
+        return Union[tuple(_annotation(v, defs, name) for v in variants)]
+    kind = schema.get("type")
+    if isinstance(kind, list):
+        return Union[tuple(_annotation({**schema, "type": k}, defs, name) for k in kind)]
+    if kind == "array":
+        return list[_annotation(schema.get("items", {}), defs, name)]  # type: ignore[misc]
+    if kind == "object":
+        properties: Mapping[str, Any] = schema.get("properties", {})
+        if properties:
+            required = set(schema.get("required", ()))
+            fields: dict[str, Any] = {}
+            for field_name, prop in properties.items():
+                annotation, default = _field(field_name, prop, field_name in required, defs)
+                fields[field_name] = (
+                    annotation,
+                    Field(
+                        ... if default is inspect.Parameter.empty else default,
+                        description=prop.get("description"),
+                    ),
+                )
+            return create_model(schema.get("title") or name.title().replace("_", ""), **fields)
+        extra = schema.get("additionalProperties")
+        return dict[str, _annotation(extra, defs, name) if isinstance(extra, Mapping) else Any]  # type: ignore[misc]
+    return _JSON_TYPES.get(kind, Any) if isinstance(kind, str) else Any

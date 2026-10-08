@@ -28,6 +28,11 @@
 #     )
 #     Worker(client, task_queue=..., workflows=[MyAgent])
 #
+# An agent with a sandbox also passes the sandbox backends it uses, and the plugin registers
+# their activities (lifecycle and sandbox operations)::
+#
+#     AgentHarnessPlugin(sandbox_clients=[SandboxClientProvider("modal", ModalSandboxClient())])
+#
 # DESIGN — why a plugin and not a ``create_agent_worker(...)`` helper: Temporal's plugin
 # protocol is the composition seam the AI-SDK integrations already use
 # (``GoogleGenAIPlugin``, ``OpenAIAgentsPlugin``, Pydantic AI's ``AgentPlugin``). A plugin
@@ -55,7 +60,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from temporalio.contrib.pydantic import PydanticPayloadConverter
 from temporalio.converter import DataConverter, DefaultPayloadConverter, ExternalStorage
@@ -64,6 +69,9 @@ from temporalio.worker import WorkerConfig
 
 from temporal_agent_harness.harness.jev_approvals.activity import JEV_APPROVAL_ACTIVITIES
 from temporal_agent_harness.utils.large_payload import DEFAULT_PAYLOAD_STORAGE
+
+if TYPE_CHECKING:
+    from temporal_agent_harness.harness.sandbox import SandboxClientProvider
 
 
 def _activity_name(fn: Callable[..., Any]) -> str | None:
@@ -102,6 +110,21 @@ def _tool_activities(
     return bodies
 
 
+def _sandbox_activities(
+    providers: Sequence[SandboxClientProvider],
+) -> list[Callable[..., Any]]:
+    """The activities of each sandbox provider: its lifecycle and each sandbox operation.
+
+    Imported only when there are providers: the sandbox package needs the ``sandbox`` extra,
+    which an agent without a sandbox doesn't install.
+    """
+    if not providers:
+        return []
+    from temporal_agent_harness.harness.sandbox import sandbox_activities
+
+    return sandbox_activities(providers)
+
+
 class AgentHarnessPlugin(SimplePlugin):
     """One plugin that gives a client + worker every agent-harness capability.
 
@@ -137,11 +160,17 @@ class AgentHarnessPlugin(SimplePlugin):
       fails the check once and escalates the call to a human.
     * **Tool activities** — the durable body of each ``@agent.activity_tool_defn`` tool in
       ``tools``.
+    * **Sandbox activities** — for each provider in ``sandbox_clients``, its sandbox lifecycle
+      activities (create, resume, start, stop, snapshot, ...) and one per sandbox operation
+      (exec, read, write, PTY). The sandbox tools run in the workflow on those, so they need
+      no activities of their own.
 
     Args:
         tools: The agent's tools. The activity-backed ones get their durable bodies
             registered; inline and callback tools are skipped (they have no worker-side
             body), so an agent's whole toolset can be passed as-is.
+        sandbox_clients: The sandbox backends the worker's agents use, each named as their
+            ``SandboxConfig(client=...)`` names it. Needs the ``sandbox`` extra.
         large_payload_offload: Where the data converter offloads oversized payloads —
             large tool results routinely exceed Temporal's ~2 MB
             limit. Defaults to :func:`~temporal_agent_harness.utils.large_payload.local_payload_storage`,
@@ -157,6 +186,7 @@ class AgentHarnessPlugin(SimplePlugin):
         self,
         *,
         tools: Sequence[Callable[..., Any]] = (),
+        sandbox_clients: Sequence[SandboxClientProvider] = (),
         # Defaulting to the shared local storage rather than to ``None`` keeps ``None`` free
         # to mean the one other thing a caller might want: no offloading at all.
         large_payload_offload: ExternalStorage | None = DEFAULT_PAYLOAD_STORAGE,
@@ -166,13 +196,12 @@ class AgentHarnessPlugin(SimplePlugin):
         # SDK internals.
         self._worker_activities: list[Callable[..., Any]] = [
             *_tool_activities(tools),
+            *_sandbox_activities(sandbox_clients),
             *JEV_APPROVAL_ACTIVITIES,
         ]
 
         def data_converter(converter: DataConverter | None) -> DataConverter:
             return _data_converter(converter, offload=large_payload_offload)
-
-
 
         super().__init__(
             name="AgentHarnessPlugin",

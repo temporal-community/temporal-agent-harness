@@ -2129,6 +2129,7 @@ class AgentWorkflowRunner:
         # garbage-collected mid-flight; turn accounting lives in the refcount, not here.
         self._participant_tasks: set[asyncio.Future[None]] = set()
         self._sandbox: SandboxLifecycle | None = None
+        self._sandbox_tools: list[Callable[..., Awaitable[Any]]] | None = None
         if sandbox is not None:
             with workflow.unsafe.imports_passed_through():
                 from temporal_agent_harness.harness.sandbox._lifecycle import SandboxLifecycle
@@ -3546,20 +3547,26 @@ class AgentWorkflowRunner:
         return await self._require_sandbox("runner.sandbox()").ensure_running()
 
     def sandbox_tools(self) -> list[Callable[..., Awaitable[Any]]]:
-        """The model-facing tools for the sandbox's capabilities (``exec_command``,
-        ``write_stdin``, ``view_image``, ``apply_patch``), as harness activity tools any
-        model SDK can use. Register their activities with ``SANDBOX_TOOL_ACTIVITIES``."""
+        """The model-facing tools of the sandbox's capabilities, as inline harness tools any
+        model SDK can use.
+
+        The capabilities run in the workflow against the agent's sandbox, each sandbox
+        operation an activity, so any capability works, your own included. Asking for the
+        tools creates nothing; the first call of one creates (or resumes) the sandbox.
+        """
         lifecycle = self._require_sandbox("runner.sandbox_tools()")
-        with workflow.unsafe.imports_passed_through():
-            from temporal_agent_harness.harness.sandbox.tools import tools_for
-        return tools_for(lifecycle.config.capabilities)
+        if self._sandbox_tools is None:
+            with workflow.unsafe.imports_passed_through():
+                from temporal_agent_harness.harness.sandbox.tools import tools_for
+            self._sandbox_tools = tools_for(lifecycle.capabilities, lifecycle.ensure_running)
+        return list(self._sandbox_tools)
 
     def sandbox_instructions(self) -> str:
         """The sandbox capabilities' own prompt fragments, to append to the system prompt."""
         lifecycle = self._require_sandbox("runner.sandbox_instructions()")
         with workflow.unsafe.imports_passed_through():
             from temporal_agent_harness.harness.sandbox.tools import instructions_for
-        return instructions_for(lifecycle.config.capabilities, lifecycle.config.manifest)
+        return instructions_for(lifecycle.capabilities, lifecycle.manifest)
 
     async def sandbox_run_config(self, **kwargs: Any) -> SandboxRunConfig:
         """A ``SandboxRunConfig`` that runs an OpenAI ``SandboxAgent`` on this agent's sandbox.

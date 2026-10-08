@@ -11,7 +11,8 @@ remains.
   the backends that ship with it, manifests, snapshots, and capabilities.
 - Expose that layer at full strength rather than behind a narrow handle. Agents get four surfaces over **one
   workflow-owned sandbox**:
-  1. **Model-facing tools** generated from OpenAI capabilities (`Shell`, `Filesystem`, …).
+  1. **Model-facing tools** from any OpenAI capability (`Shell`, `Filesystem`, `Skills`, … or your own), run the
+     way the OpenAI Agents Temporal plugin runs them.
   2. **The real `SandboxSession`** passed to custom activity tools that declare an `Injected[SandboxSession]` parameter.
   3. **A workflow-side session** (`await runner.sandbox()`) for scripted setup and teardown.
   4. **The same session handed to OpenAI `SandboxAgent` runs**, so they stop creating and deleting a box every turn.
@@ -105,7 +106,7 @@ key. Contain that cost:
  │     lazy create · idle policy · close         │          │   create/resume/stop/shutdown/delete         │
  │                                               │          │   session cache keyed by session_id          │
  │ runner.sandbox()  → TemporalSandboxSession    │─ acts ──▶│   exec/read/write/pty/... (existing adapter) │
- │ sandbox tools (from capabilities)             │─ acts ──▶│   capability tool .run(args) on real session │
+ │ sandbox tools (capabilities, run here)        │─ acts ──▶│   (their exec/read/write/pty calls, above)   │
  │ tool with `session: Injected[SandboxSession]` │─ acts ──▶│   real SandboxSession passed to tool body    │
  │ OpenAI SandboxAgent turn                      │          │                                              │
  │   SandboxRunConfig(session=<runner-owned>)    │          │                                              │
@@ -123,12 +124,13 @@ that state. That is the existing `SandboxClientProvider._session()` pattern.
 # workflow module — OpenAI SDK types are imported pass-through, like any I/O-capable library
 with workflow.unsafe.imports_passed_through():
     from agents.sandbox import Manifest, RemoteSnapshotSpec
-    from agents.sandbox.capabilities import Filesystem, Shell
     from agents.sandbox.entries import GitRepo
     from agents.extensions.sandbox.e2b import E2BSandboxClientOptions
     from temporal_agent_harness.harness import AgentWorkflowRunner, agent
     from temporal_agent_harness.harness.agent import Injected
-    from temporal_agent_harness.harness.sandbox import IdlePolicy, SandboxConfig, SandboxSession
+    from temporal_agent_harness.harness.sandbox import (
+        Filesystem, IdlePolicy, SandboxConfig, SandboxSession, Shell,  # OpenAI's Shell/Filesystem, tuned
+    )
 
 SANDBOX = SandboxConfig(
     client="e2b",                                             # a SandboxClientProvider registered on the worker
@@ -142,7 +144,7 @@ SANDBOX = SandboxConfig(
 @agent.init
 def __init__(self, config: AgentConfig) -> None:
     self._runner = AgentWorkflowRunner(config, stream=WorkflowStream(), approval_policy_default=..., sandbox=SANDBOX)
-    # exec_command / write_stdin / view_image / apply_patch, as harness activity tools any model SDK can use
+    # exec_command / write_stdin / view_image / apply_patch, as inline harness tools any model SDK can use
     self._tools = [*self._runner.sandbox_tools(), run_tests]
     # appended to the system prompt: the capabilities' own instruction fragments
     self._instructions = BASE_PROMPT + self._runner.sandbox_instructions()
@@ -164,17 +166,17 @@ await sb.exec("git fetch && git checkout -B agent origin/main")
 ```
 
 ```python
-# worker — the snapshot store is the client's own dependency, as in plain OpenAI usage
-Worker(..., activities=[
-    *sandbox_activities([
+# worker — the snapshot store is the client's own dependency, as in plain OpenAI usage. The plugin
+# registers each provider's activities (lifecycle and sandbox operations) and run_tests.
+AgentHarnessPlugin(
+    tools=[run_tests],
+    sandbox_clients=[
         SandboxClientProvider(
             "e2b",
             E2BSandboxClient(dependencies=Dependencies.with_values({"snapshots": S3SnapshotStore(...)})),
         ),
-    ]),
-    *SANDBOX_TOOL_ACTIVITIES,   # the capability tools' activities
-    agent.tool_activity(run_tests),
-])
+    ],
+)
 ```
 
 How the pieces fit the harness:
@@ -189,21 +191,52 @@ How the pieces fit the harness:
   - Inline `@agent.tool_defn` tools get the workflow-side session (`runner.sandbox()`), where every call is an activity.
   - A tool that asks for a sandbox on an agent without one fails with a non-retryable `SandboxNotConfigured`. A tool may
     declare at most one `Injected[SandboxSession]` parameter.
-- **Capability tools.** One activity tool per OpenAI tool kind (`exec_command`, `write_stdin`, `view_image`,
-  `apply_patch`), each itself an `Injected[SandboxSession]` tool. The body builds the OpenAI tool on the session and
-  calls its `run(args)`. Tool names, descriptions and parameters (with per-field descriptions) are generated from the
-  OpenAI tool classes and their args models, so the model sees what OpenAI tunes.
-  - `Shell` and `Filesystem` carry no serializable configuration, so nothing but the tool kind needs to cross into the
-    activity. `SandboxConfig` rejects other capabilities. Not yet built: `configure_tools` customization (callables
-    don't serialize) and the other capabilities.
-  - `apply_patch` is a freeform grammar tool in OpenAI. Here it is a function taking `patch: str`, with the one
-    sentence of its description about the freeform format reworded.
+- **Capability tools.** The same model as the OpenAI Agents Temporal plugin: the Temporal boundary is the session's
+  operations (exec, read, write, PTY, persist/hydrate, lifecycle), each an activity, and the capabilities run in the
+  workflow. So any capability works, OpenAI's or a developer's own, with nothing registered per tool.
+  - `SandboxLifecycle` clones the configured capabilities and binds each to one `CapabilitySession`, a
+    `BaseSandboxSession` that sends every call to the lifecycle's current `TemporalSandboxSession`, creating or
+    resuming the sandbox first. So `runner.sandbox_tools()` can build the tools before the sandbox exists (asking
+    creates nothing), and they keep working across idle shutdowns. Before creation it reports PTY support, so `Shell`
+    offers `write_stdin`; on a backend without PTYs that tool then fails when called.
+  - `runner.sandbox_tools()` calls each capability's `tools()` and wraps each `FunctionTool` (or `CustomTool`, whose one
+    raw string becomes an `input` parameter) as an inline `@agent.tool_defn` tool. Its signature is built from the
+    tool's JSON schema, so every model SDK and Code Mode's stubs see the name, description and parameters OpenAI
+    tunes. A call ensures the sandbox is running, then calls `on_invoke_tool`. A non-Temporal exception (a malformed
+    patch's `ValueError`) becomes a non-retryable `ApplicationError` for the caller instead of failing the workflow
+    task. A `ToolOutputImage` result becomes a harness `SandboxImage`.
+  - A `SandboxError` raised on the worker crosses the activity boundary with its fields in the `ApplicationError`'s
+    details, and `CapabilitySession` raises it again as its own class, so a tool's own handling works (`write_stdin` to
+    an exited process answers "PTY session not found" rather than failing). `runner.sandbox()` keeps raising
+    `ActivityError`, which fails a handler cleanly where a plain exception in workflow code would fail the task.
+  - Each capability's `process_manifest` applies to the manifest the sandbox is created with, and `SandboxConfig`
+    checks `required_capability_types()`, both as OpenAI's runtime does. `sampling_params` and `process_context`
+    shape an OpenAI Responses request, so they don't apply to harness tools.
+  - Capability code runs in the workflow, so it must be deterministic and do its I/O through the session, the same
+    contract as under the OpenAI plugin.
   - Harness approval policy replaces OpenAI's `needs_approval`.
-  - `view_image` returns a harness `SandboxImage` (mime type plus base64), whose `str()` is a short placeholder, so
-    tool events and adapters without image support never carry the payload. The Gemini adapter's
-    `function_result_value(result)` turns it into an image block for the `function_result` step. Other adapters are
-    not yet built.
-- **Code Mode / Monty.** The sandbox tools are ordinary activity tools, so a Monty script can loop over
+- **The harness's `Shell` and `Filesystem`.** Drop-in subclasses of OpenAI's (same type, configuration and
+  `configure_tools` hook) that swap OpenAI's own bundled tools, and only those, so a tool `configure_tools` put in
+  their place is kept:
+  - Shell output is cut inside the sandbox, so a large output never crosses to the worker, the model or history.
+    `exec_command` wraps a non-TTY command in a POSIX `sh` script: the command runs in a subshell with its output
+    in `/tmp/tool-output/<id>.log` (outside the workspace, so snapshots don't carry it); when it exits, the script
+    strips ANSI codes and prints the whole log if it fits in `OUTPUT_BYTES` (12,000, or the model's
+    `max_output_tokens` × 4) and deletes it, or else a header naming the log, the first third and the last half of
+    the budget (errors and summaries come last). It exits with the command's code. The wrapper still runs on OpenAI's
+    PTY, so a server keeps running as a session: the result then names the log for the model to `tail`, and a
+    `write_stdin` check after it exits gets the summary. A `tty=true` command needs the terminal itself, so it and
+    `write_stdin` keep OpenAI's worker-side `max_output_tokens` cap instead (default `OUTPUT_BYTES / 4`).
+  - `apply_patch` is a freeform grammar tool in OpenAI. Here it is a function taking `patch: str`, with the one
+    sentence of its description about the freeform format reworded. Two `*** Add File` mistakes whose intent is
+    clear are repaired before OpenAI parses the patch, because models (Gemini especially) resend the same patch
+    when told about them: a closing `+*** End Patch`, and a section with no `+` lines (an empty file such as an
+    `__init__.py`), which gets one empty `+` line and so creates an empty file.
+- **Images.** `view_image` (any tool returning a `ToolOutputImage`) gives a harness `SandboxImage` (mime type plus
+  base64), whose `str()` is a short placeholder, so tool events and adapters without image support never carry the
+  payload. The Gemini adapter's `function_result_value(result)` turns it into an image block for the
+  `function_result` step. Other adapters are not yet built.
+- **Code Mode / Monty.** The sandbox tools are ordinary inline harness tools, so a Monty script can loop over
   `exec_command(...)` with no extra work.
 - **OpenAI `SandboxAgent`.** The runner passes its live session as `SandboxRunConfig(session=...)`. OpenAI's
   runtime treats an injected session as caller-owned (`runtime_session_manager.py`, `owns_session`) and never cleans it
@@ -286,15 +319,17 @@ States: `absent → running ⇄ idle → closed`. `SandboxLifecycle` is a small 
    serializes `SandboxSessionState` with plain pydantic, not the client's `serialize_session_state` (which redacts mount
    credentials), so a manifest with credentialed mounts may put them in history. Check this before enabling such
    mounts.
-7. **Determinism.** OpenAI sandbox types are imported pass-through in workflow modules. Workflow code only constructs
-   pydantic config and calls activities. No `agents.sandbox` I/O runs in the workflow.
+7. **Determinism.** OpenAI sandbox types are imported pass-through in workflow modules. Capability and tool code runs
+   in the workflow, but every sandbox operation it makes is an activity, so no `agents.sandbox` I/O runs there. A
+   capability that does other I/O or anything nondeterministic breaks replay, as it would under the OpenAI plugin.
 
 ## Relation to existing work
 
 - `ai_sdks/openai_agents/sandbox/`: `SandboxClientProvider`, `TemporalSandboxClient`, `TemporalSandboxSession` and the
   activity models moved to `harness/sandbox/` as the shared base. The public names are re-exported at the old package
   path. The OpenAI Agents integration is now one consumer: its plugin's `sandbox_clients=` registers the same
-  activities as `sandbox_activities([...])`.
+  activities as `AgentHarnessPlugin(sandbox_clients=...)`, and both run capabilities in the workflow on them.
+  Passing the same providers to both is fine: activities are merged by name.
 - `sandbox-tools` branch (remote-box): a different model, where *your Python runs in the box* versus *your tools act
   on a box*. This design takes over its plumbing ideas: by-name worker registration, `SandboxNotConfigured`, the
   run-loop lifecycle hooks, core never importing the optional dependency, and the `imports_passed_through` rule. It also
@@ -308,12 +343,13 @@ States: `absent → running ⇄ idle → closed`. `SandboxLifecycle` is a small 
    and it exercises a real backend.
 2. **Runner lifecycle** (done): `SandboxConfig`, `SandboxLifecycle` (lazy create, idle policy, close, snapshot
    retention), `runner.sandbox()`, and the snapshot-storage validation.
-3. **Tool surfaces** (done): the `Injected[SandboxSession]` tool parameter, the capability-tool activities with
-   `runner.sandbox_tools()`/`sandbox_instructions()`, and `view_image` mapping for the Gemini adapter first.
+3. **Tool surfaces** (done): the `Injected[SandboxSession]` tool parameter, any capability's tools in the workflow
+   with `runner.sandbox_tools()`/`sandbox_instructions()`, and `view_image` mapping for the Gemini adapter first.
 4. **OpenAI `SandboxAgent` on the runner-owned session** (done: `await runner.sandbox_run_config()`). Not yet built:
    porting the sandboxed coding-agent example.
-5. **Later:** lost-box recovery tuning, sharing a sandbox with subagents (likely a child-workflow owner), Memory and
-   Skills capabilities, and streaming exec output to the UI.
+5. **Later:** lost-box recovery tuning, sharing a sandbox with subagents (likely a child-workflow owner), capabilities
+   whose `instructions()` await the session (`sandbox_instructions()` is synchronous), and streaming exec output to
+   the UI.
 
 ## Open questions
 

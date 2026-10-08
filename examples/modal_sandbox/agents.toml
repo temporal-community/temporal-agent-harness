@@ -10,6 +10,6 @@ label = "Modal Coding Agent"
 description = """
 A Gemini coding agent with its own durable Modal sandbox and the full sandbox tool suite:
 exec_command and write_stdin (commands on a PTY, including servers and long jobs it leaves
-running and checks back on, across turns), apply_patch to edit files, and view_image to look at
-images it produces. The sandbox is saved and shut down after 10 idle minutes and restored on the
+running and checks back on, across turns), apply_patch to edit files, view_image to look at
+images it produces, and preview_url to give you a public link to a site it serves on port 8080. The sandbox is saved and shut down after 10 idle minutes and restored on the
 next message."""

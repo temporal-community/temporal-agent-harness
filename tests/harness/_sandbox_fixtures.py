@@ -4,6 +4,7 @@ run under the real sandboxed workflow runner the way an agent author's would."""
 from __future__ import annotations
 
 import dataclasses
+import json
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -14,9 +15,12 @@ from temporalio.contrib.workflow_streams import WorkflowStream
 
 with workflow.unsafe.imports_passed_through():
     from agents import RunConfig, Runner
-    from agents.sandbox import LocalSnapshotSpec, SandboxAgent
-    from agents.sandbox.capabilities import Filesystem, Shell
+    from agents.sandbox import LocalSnapshotSpec, Manifest, SandboxAgent
+    from agents.sandbox.capabilities import Capability
+    from agents.sandbox.capabilities import Shell as OpenAIShell
+    from agents.sandbox.entries import File
     from agents.sandbox.session.base_sandbox_session import BaseSandboxSession
+    from agents.tool import FunctionTool, Tool
 
     from temporal_agent_harness.harness import AgentWorkflowRunner, agent
     from temporal_agent_harness.harness.agent import Injected
@@ -26,11 +30,12 @@ with workflow.unsafe.imports_passed_through():
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.sandbox import IdlePolicy, SandboxConfig, SandboxSession
-    from temporal_agent_harness.harness.sandbox.tools import (
-        apply_patch,
-        exec_command,
-        view_image,
+    from temporal_agent_harness.harness.sandbox import (
+        Filesystem,
+        IdlePolicy,
+        SandboxConfig,
+        SandboxSession,
+        Shell,
     )
 
 PROVIDER = "local"
@@ -45,6 +50,44 @@ SANDBOX = SandboxConfig(
     capabilities=[Shell(), Filesystem()],
     idle=IdlePolicy(after=IDLE_AFTER, action="persist_and_shutdown"),
 )
+
+
+class Notes(Capability):
+    """A developer's own capability: it puts a notes file in the manifest, and its tool counts
+    the lines of a workspace file through the bound session."""
+
+    type: str = "notes"
+
+    def process_manifest(self, manifest: Manifest) -> Manifest:
+        return manifest.model_copy(
+            update={"entries": {**manifest.entries, "NOTES.md": File(content=b"one\ntwo\n")}}
+        )
+
+    def tools(self) -> list[Tool]:
+        session = self.session
+        assert session is not None
+
+        async def count_lines(_: Any, raw: str) -> str:
+            path = json.loads(raw)["path"]
+            lines = (await session.read(Path(path))).read().count(b"\n")
+            return f"{path}: {lines} lines"
+
+        return [
+            FunctionTool(
+                name="count_lines",
+                description="Count the lines of a workspace file.",
+                params_json_schema={
+                    "type": "object",
+                    "properties": {"path": {"type": "string", "description": "The file."}},
+                    "required": ["path"],
+                },
+                on_invoke_tool=count_lines,
+                strict_json_schema=False,
+            )
+        ]
+
+    async def instructions(self, manifest: Manifest) -> str | None:
+        return "Count lines with count_lines."
 
 
 @agent.activity_tool_defn()
@@ -86,11 +129,15 @@ class SandboxProbeAgent:
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
             sandbox=SANDBOX,
         )
+        self._tools = {t.__name__: t for t in self._runner.sandbox_tools()}
 
     @agent.accepts
     async def write_files(self, message: TextMessage) -> TextReply:
         """Exercise every way a tool reaches the sandbox."""
         r = self._runner
+        exec_command = self._tools["exec_command"]
+        apply_patch = self._tools["apply_patch"]
+        view_image = self._tools["view_image"]
         results = {
             "custom": await _call(
                 r, run_in_sandbox, command=f"printf '{message.text}' > a.txt && cat a.txt"
@@ -110,6 +157,14 @@ class SandboxProbeAgent:
         return TextReply(text=repr(results))
 
     @agent.accepts
+    async def shell(self, message: TextMessage) -> TextReply:
+        """Call exec_command, or write_stdin when the arguments name a session, with the
+        message's JSON as the arguments."""
+        args = json.loads(message.text)
+        tool = self._tools["write_stdin" if "session_id" in args else "exec_command"]
+        return TextReply(text=await _call(self._runner, tool, **args))
+
+    @agent.accepts
     async def read_file(self, message: TextMessage) -> TextReply:
         """Read a workspace file back through a custom tool."""
         return TextReply(text=await _call(self._runner, run_in_sandbox, command=f"cat {message.text}"))
@@ -117,14 +172,42 @@ class SandboxProbeAgent:
     @agent.accepts
     async def bad_patches(self, message: TextMessage) -> TextReply:
         """Send apply_patch two malformed patches the model could plausibly write."""
+        apply_patch = self._tools["apply_patch"]
         results = {
-            "plus_end_marker": await _call(
+            "unprefixed_line": await _call(
                 self._runner,
                 apply_patch,
-                patch="*** Begin Patch\n*** Add File: c.txt\n+sea\n+*** End Patch",
+                patch="*** Begin Patch\n*** Add File: c.txt\nsea\n*** End Patch",
             ),
             "no_begin_marker": await _call(
                 self._runner, apply_patch, patch="*** Add File: c.txt\n+sea\n*** End Patch"
+            ),
+        }
+        return TextReply(text=repr(results))
+
+    @agent.accepts
+    async def repairable_patches(self, message: TextMessage) -> TextReply:
+        """Send apply_patch the Add File mistakes it repairs, and read back what they made."""
+        r = self._runner
+        apply_patch = self._tools["apply_patch"]
+        results = {
+            "plus_end_marker": await _call(
+                r,
+                apply_patch,
+                patch="*** Begin Patch\n*** Add File: c.txt\n+sea\n+*** End Patch",
+            ),
+            "empty_files": await _call(
+                r,
+                apply_patch,
+                patch=(
+                    "*** Begin Patch\n*** Add File: pkg/__init__.py\n"
+                    "*** Add File: pkg/mod.py\n+x = 1\n*** Add File: empty.txt\n*** End Patch"
+                ),
+            ),
+            "contents": await _call(
+                r,
+                run_in_sandbox,
+                command="wc -c < pkg/__init__.py; wc -c < empty.txt; cat c.txt; echo; cat pkg/mod.py",
             ),
         }
         return TextReply(text=repr(results))
@@ -193,7 +276,9 @@ class OpenAISandboxAgent:
     async def run_agent(self, message: TextMessage) -> TextReply:
         """One SandboxAgent run."""
         result = await Runner.run(
-            SandboxAgent(name="coder", instructions="Use the shell.", capabilities=[Shell()]),
+            SandboxAgent(
+                name="coder", instructions="Use the shell.", capabilities=[OpenAIShell()]
+            ),
             message.text,
             run_config=RunConfig(sandbox=await self._runner.sandbox_run_config()),
         )
@@ -203,3 +288,32 @@ class OpenAISandboxAgent:
     async def read_file(self, message: TextMessage) -> TextReply:
         """Read a workspace file back through a custom tool."""
         return TextReply(text=await _call(self._runner, run_in_sandbox, command=f"cat {message.text}"))
+
+
+@agent.defn
+class NotesAgent:
+    """An agent whose sandbox has only a developer's own capability."""
+
+    @agent.init
+    def __init__(self, config: AgentConfig) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+            sandbox=dataclasses.replace(SANDBOX, capabilities=[Notes()]),
+        )
+
+    @agent.accepts
+    async def count(self, message: TextMessage) -> TextReply:
+        """The runner's tool names and instructions, then count_lines on the message's path."""
+        tools = {t.__name__: t for t in self._runner.sandbox_tools()}
+        counted = await _call(self._runner, tools["count_lines"], path=message.text)
+        return TextReply(
+            text=repr(
+                {
+                    "names": sorted(tools),
+                    "instructions": self._runner.sandbox_instructions(),
+                    "counted": counted,
+                }
+            )
+        )

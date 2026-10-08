@@ -13,17 +13,18 @@ from temporal_agent_harness.harness.sandbox._provider import (
     sandbox_activities,
 )
 from temporal_agent_harness.harness.sandbox._session import TemporalSandboxSession
+from temporal_agent_harness.harness.sandbox.capabilities import Filesystem, Shell
 from temporal_agent_harness.harness.sandbox.config import IdlePolicy, SandboxConfig
-from temporal_agent_harness.harness.sandbox.tools import SANDBOX_TOOL_ACTIVITIES
 from temporal_agent_harness.harness.sandbox_image import SandboxImage
 
 __all__ = [
+    "Filesystem",
     "IdlePolicy",
-    "SANDBOX_TOOL_ACTIVITIES",
     "SandboxClientProvider",
     "SandboxConfig",
     "SandboxImage",
     "SandboxSession",
+    "Shell",
     "TemporalSandboxClient",
     "TemporalSandboxSession",
     "sandbox_activities",

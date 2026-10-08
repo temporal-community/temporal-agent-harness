@@ -6,6 +6,9 @@ check back on, or type into, later) and ``view_image`` and ``apply_patch`` (the 
 capability). Their descriptions, and the capabilities' own prompt fragments
 (``runner.sandbox_instructions()``), come from the OpenAI sandbox layer.
 
+Port ``PREVIEW_PORT`` is exposed through a Modal tunnel, and the ``preview_url`` tool returns its
+public URL, so a server the agent starts there (a website it built) opens in the user's browser.
+
 The sandbox is created on the first tool call, persisted and shut down after ``IDLE_AFTER``
 without a message, resumed with its workspace restored on the next one, and deleted when the
 session closes. Running processes do not survive an idle shutdown; files do.
@@ -19,6 +22,7 @@ from datetime import timedelta
 from pathlib import Path
 
 from temporalio import workflow
+from temporalio.common import RetryPolicy
 from temporalio.contrib.workflow_streams import WorkflowStream
 from temporalio.exceptions import ActivityError
 from temporalio.workflow import ActivityConfig
@@ -26,12 +30,12 @@ from temporalio.workflow import ActivityConfig
 with workflow.unsafe.imports_passed_through():
     from agents.extensions.sandbox.modal import ModalSandboxClientOptions
     from agents.sandbox import LocalSnapshotSpec
-    from agents.sandbox.capabilities import Filesystem, Shell
     from google.genai._interactions.types import FunctionCallStep
     from google.genai._interactions.types.function_result_step_param import (
         FunctionResultStepParam,
     )
 
+    from temporal_agent_harness.harness.sandbox import Filesystem, Shell
     from temporal_agent_harness.ai_sdks.google_genai_plugin import (
         InteractionConversation,
         function_param,
@@ -45,12 +49,16 @@ with workflow.unsafe.imports_passed_through():
         TextReply,
         ToolApprovalPolicy,
     )
-    from temporal_agent_harness.harness.sandbox import IdlePolicy, SandboxConfig
+    from temporal_agent_harness.harness.sandbox import (
+        IdlePolicy,
+        SandboxConfig,
+        SandboxSession,
+    )
 
 TASK_QUEUE = "modal-sandbox"
 # The name the worker registers its SandboxClientProvider under.
 PROVIDER = "modal"
-DEFAULT_MODEL = "gemini-3.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 # How long the agent sits idle before its sandbox is persisted and shut down. Long enough that a
 # server started in one turn is still running when the user comes back to ask about it.
@@ -60,12 +68,15 @@ IDLE_AFTER = timedelta(minutes=10)
 MODAL_SANDBOX_TIMEOUT = timedelta(hours=1)
 # Snapshots live on the worker's disk, so this needs a single worker (hence ``dev_mode``).
 SNAPSHOT_DIR = Path("/tmp/harness-modal-sandbox-snapshots")
+# The sandbox port Modal tunnels to a public HTTPS URL, for servers the user opens in a browser.
+PREVIEW_PORT = 8080
 
 SANDBOX = SandboxConfig(
     client=PROVIDER,
     options=ModalSandboxClientOptions(
         app_name="temporal-agent-harness-sandbox",
         timeout=int(MODAL_SANDBOX_TIMEOUT.total_seconds()),
+        exposed_ports=(PREVIEW_PORT,),
     ),
     snapshot=LocalSnapshotSpec(base_path=SNAPSHOT_DIR),
     dev_mode=True,
@@ -79,16 +90,40 @@ language runtimes preinstalled; you can install packages with pip or apt-get). D
 in the sandbox with your tools, then tell them briefly what you did and what you found.
 
 - Run commands with `exec_command`. If a command is still running when it returns (a server, a
-  watcher, a long build), you get a session id: check back on it with `write_stdin` and empty
-  `chars` to read new output, or type into it (pass `tty: true` to `exec_command` for an
-  interactive program). Its output is only what arrived since your last check.
+  watcher, a long build), you get a session id and the path of the log its output goes to: read
+  the log with `tail` or `grep` to see how it is doing, and check the session with `write_stdin`
+  and empty `chars` to learn whether it has exited (then you get its output). For an interactive
+  program you type into, pass `tty: true`; its output comes back through `write_stdin` instead
+  of a log, only what arrived since your last check.
 - A process you started in an earlier turn may still be running; check its session before
   starting another.
 - After {int(IDLE_AFTER.total_seconds() // 60)} minutes with no message from the user the
   sandbox is saved and shut down. Files in the workspace survive that; running processes do
   not, so if a session id no longer works, start the process again.
+- Keep command output small: pipe through `head`/`tail`, count with `wc -l` or search with `grep`
+  before printing a whole file, and prefer quiet or summary flags (`pip install -q`, `pytest -q`,
+  `git log --oneline -20`). Long output comes back as its first and last lines plus the path of a
+  log holding all of it; search that log instead of running the command again.
 - Edit files with `apply_patch`. Look at images (plots, screenshots) with `view_image`.
+- To show the user something in their browser (a website, a web app, a dashboard), serve it on
+  0.0.0.0:{PREVIEW_PORT}, leave the server running, and give them the URL from `preview_url`.
+  The URL changes when the sandbox is restored after an idle shutdown, so call `preview_url`
+  again rather than reusing an old one.
 """
+
+
+@agent.activity_tool_defn(
+    inherently_safe=True,
+    activity_config=ActivityConfig(
+        start_to_close_timeout=timedelta(minutes=1),
+        retry_policy=RetryPolicy(maximum_attempts=3),
+    ),
+)
+async def preview_url(session: agent.Injected[SandboxSession]) -> str:
+    """The public HTTPS URL of the sandbox's preview port. Give it to the user to open a server
+    you run on that port in their browser."""
+    endpoint = await session.resolve_exposed_port(PREVIEW_PORT)
+    return endpoint.url_for("http")
 
 
 @agent.defn(name="ModalCodingAgent")
@@ -105,7 +140,7 @@ class ModalCodingAgentWorkflow:
             sandbox=SANDBOX,
         )
         self._conversation = InteractionConversation()
-        self._tools = self._runner.sandbox_tools()
+        self._tools = [*self._runner.sandbox_tools(), preview_url]
         self._tools_by_name = {tool.__name__: tool for tool in self._tools}
         self._system_instruction = (
             f"{SYSTEM_INSTRUCTION}\n{self._runner.sandbox_instructions()}"

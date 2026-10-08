@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 import pytest
 from temporalio import activity, workflow
@@ -34,6 +35,9 @@ from temporal_agent_harness.utils.large_payload import (
     DEFAULT_PAYLOAD_STORAGE,
     local_payload_storage,
 )
+
+if TYPE_CHECKING:
+    from temporal_agent_harness.harness.sandbox import SandboxClientProvider
 
 # Every activity the plugin registers on a worker regardless of configuration — the ones
 # their callers dispatch BY NAME, so an unregistered name would be a retryable Temporal
@@ -264,6 +268,61 @@ async def test_unrelated_worker_activities_survive():
             RUN_SUBAGENT_TURN_ACTIVITY,
             *_ALWAYS_ON_NAMES,
         }
+
+
+# ---------------------------------------------------------------- sandbox
+
+
+def _local_sandbox(name: str) -> SandboxClientProvider:
+    # Imported here: this module defines workflows, and the workflow sandbox rejects a module
+    # that imports the OpenAI Agents SDK.
+    from agents.sandbox.sandboxes.unix_local import UnixLocalSandboxClient
+
+    from temporal_agent_harness.harness.sandbox import SandboxClientProvider
+
+    return SandboxClientProvider(name, UnixLocalSandboxClient())
+
+
+async def test_sandbox_clients_register_lifecycle_and_sandbox_tool_activities():
+    async with await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter
+    ) as env:
+        worker = Worker(
+            env.client,
+            task_queue="plugin-test",
+            workflows=[_StubWorkflow],
+            plugins=[AgentHarnessPlugin(sandbox_clients=[_local_sandbox("box")])],
+        )
+        names = _registered_activity_names(worker)
+        assert {"box-sandbox_client_create", "box-sandbox_session_start"} <= names
+        # The sandbox tools run in the workflow, on the session activities.
+        assert {"box-sandbox_session_exec", "box-sandbox_session_pty_exec_start"} <= names
+        assert "exec_command" not in names
+
+
+async def test_sandbox_clients_shared_with_the_openai_plugin_register_once():
+    """An OpenAI Agents worker may pass the same providers to both plugins; Temporal rejects a
+    worker with two activities of one name, so the harness plugin skips the ones present."""
+    from temporal_agent_harness.ai_sdks.openai_agents import OpenAIAgentsPlugin
+    from temporal_agent_harness.ai_sdks.openai_agents.testing import TestModel, TestModelProvider
+
+    provider = _local_sandbox("box")
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        worker = Worker(
+            env.client,
+            task_queue="plugin-test",
+            workflows=[_StubWorkflow],
+            plugins=[
+                OpenAIAgentsPlugin(
+                    model_provider=TestModelProvider(TestModel.returning_responses([])),
+                    sandbox_clients=[provider],
+                ),
+                AgentHarnessPlugin(sandbox_clients=[provider]),
+            ],
+        )
+        activities = worker.config(active_config=True)["activities"]
+        assert len(activities) == len(_registered_activity_names(worker))
+        assert "box-sandbox_session_exec" in _registered_activity_names(worker)
 
 
 # ---------------------------------------------------------------- end to end
