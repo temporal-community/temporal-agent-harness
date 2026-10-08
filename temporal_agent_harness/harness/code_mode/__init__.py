@@ -19,16 +19,18 @@ the console can show it (see :mod:`.mount_decl`): a ``FileTree`` state holds an
 
 Importing the package never requires the sandbox engine (the optional ``code-mode`` extra):
 
-  * :mod:`.stubs`, :mod:`.vfs`, :mod:`.activity_fs`, :mod:`.mount_decl`, :mod:`.driver` and
-    :mod:`.tool` are safe to import anywhere, including inside a workflow. ``code_mode_tool``,
-    ``code_mode_type_check``, ``CodeModeStubError`` and the filesystem types are the public
-    surface, re-exported here.
+  * :mod:`.analysis`, :mod:`.stubs`, :mod:`.vfs`, :mod:`.activity_fs`, :mod:`.mount_decl`,
+    :mod:`.driver` and :mod:`.tool` are safe to import anywhere, including inside a workflow.
+    ``code_mode_tool``, ``code_mode_type_check``, ``code_mode_host_functions``,
+    ``analyze_script``, ``CodeModeStubError`` and the filesystem types are the public surface,
+    re-exported here.
   * :mod:`.monty_stepper` is the stepping engine and the only module that imports
     ``pydantic_monty``. ``code_mode_tool`` loads it, through the workflow sandbox's
     pass-through, when it builds a tool.
 """
 
 from .activity_fs import ActivityFileSystem, FileChunk
+from .analysis import HostFunctionUse, ScriptClassifier, ScriptFacts, analyze_script
 from .mount_decl import (
     ActivityVFSMountDecl,
     InMemoryVFSMountDecl,
@@ -40,7 +42,7 @@ from .mount_decl import (
 from .okf import OKFConcept, OKFGraph, OKFLink
 from .okf_tool import OKFLinks, okf_code_mode_tool
 from .stubs import CodeModeStubError
-from .tool import code_mode_tool, code_mode_type_check
+from .tool import code_mode_host_functions, code_mode_tool, code_mode_type_check
 from .vfs import (
     FileEntry,
     FileIndex,
@@ -63,6 +65,7 @@ __all__ = [
     "FileStat",
     "FileSystem",
     "FileTree",
+    "HostFunctionUse",
     "InMemoryFileSystem",
     "IndexEntry",
     "InMemoryVFSMountDecl",
@@ -71,9 +74,13 @@ __all__ = [
     "OKFGraph",
     "OKFLink",
     "OKFLinks",
+    "ScriptClassifier",
+    "ScriptFacts",
     "UnboundActivityVFSMount",
     "UnboundInMemoryVFSMount",
     "VFSMount",
+    "analyze_script",
+    "code_mode_host_functions",
     "code_mode_tool",
     "code_mode_type_check",
     "okf_bundle_vfs_mount",

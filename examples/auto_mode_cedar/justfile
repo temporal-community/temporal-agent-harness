@@ -1,0 +1,64 @@
+# Scoped justfile for the Cedar auto-mode example (examples/auto_mode_cedar).
+# Run from this directory: `just <recipe>`.
+#
+# Local stack (each in its own terminal):
+#   just temporal          # 1. local Temporal dev server (or bring your own)
+#   just endpoint          # 2. once per server: the tool-verifier Nexus endpoint
+#   just verifier          # 3. the Cedar verifier, serving policies/travel.cedar
+#   just session-manager   # 4. packaged session-manager worker
+#   just server            # 5. FastAPI API + UI on :8000
+#   just worker            # 6. this example's agent worker
+#
+# First-time setup: `cp .env.example .env.local` from the repo root and fill it in (Temporal
+# connection + GEMINI_API_KEY + TYPESAFE_API_KEY), and set CEDAR_VERIFIER_DIR to a checkout of
+# temporal-untrusted-workers' verifiers/cedar. See README.md.
+
+import '../../scripts/untagged-notice.just'
+
+set dotenv-path := "../../.env.local"
+set dotenv-load := true
+
+root := justfile_directory() / ".." / ".."
+policies := justfile_directory() / "policies"
+
+# List available recipes (bare `just`).
+default:
+    @just --list
+
+# Start a local Temporal dev server (Web UI: http://localhost:8233; needs the `temporal` CLI).
+temporal:
+    temporal server start-dev
+
+# Create the Nexus endpoint the agent asks for verdicts, routed to the verifier's task queue.
+endpoint:
+    temporal operator nexus endpoint create --name tool-verifier \
+        --target-namespace default --target-task-queue tool-verifier
+
+# Run the Cedar verifier on this example's policy (needs cargo and CEDAR_VERIFIER_DIR).
+verifier:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${CEDAR_VERIFIER_DIR:-}" ]; then
+        echo "error: set CEDAR_VERIFIER_DIR to temporal-untrusted-workers/verifiers/cedar" >&2
+        exit 1
+    fi
+    cd "$CEDAR_VERIFIER_DIR"
+    CEDAR_POLICY_FILE="{{policies}}/travel.cedar" \
+    CEDAR_SCHEMA_FILE="{{policies}}/schema.cedarschema" \
+        cargo run --release
+
+# Regenerate policies/schema.cedarschema after changing the agent's tools.
+schema:
+    cd "{{root}}" && uv run --group examples python -m examples.auto_mode_cedar.schema
+
+# Run the packaged session-manager worker (`temporal-agent-harness session-manager`).
+session-manager:
+    cd "{{root}}" && uv run --group examples temporal-agent-harness session-manager
+
+# Serve the Svelte UI + FastAPI API on http://localhost:8000, pointed at this example's registry.
+server:
+    cd "{{root}}" && uv run --group examples temporal-agent-harness serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+
+# Run the Cedar auto-mode agent worker (needs GEMINI_API_KEY and TYPESAFE_API_KEY).
+worker:
+    cd "{{root}}" && uv run --group examples python -m examples.auto_mode_cedar.worker

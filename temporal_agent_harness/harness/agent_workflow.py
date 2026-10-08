@@ -97,6 +97,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     SubagentTurnResult,
     AutoApprovalContext,
     AutoApprovalCriteria,
+    CodeModeCall,
     ToolApprovalDecision,
     AutoApprovalEvaluationEnded,
     AutoApprovalEvaluationError,
@@ -484,6 +485,7 @@ async def _apply_approval_policy(
     inherently_safe: bool,
     tool_description: str | None = None,
     auto_approval_criteria: str | None = None,
+    code_mode: CodeModeCall | None = None,
 ) -> None:
     """Enforce the agent's tool-approval policy for the in-flight tool call.
 
@@ -513,7 +515,8 @@ async def _apply_approval_policy(
     declared — its default, which a runtime assignment or the operator's config outranks.
     It rides the call because the runner keeps no tool registry to look it up from; the
     precedence between the three sources is applied once, in
-    :meth:`AutoApprovalCriteria.set_name_for`.
+    :meth:`AutoApprovalCriteria.set_name_for`. ``code_mode`` is set when the call is a Code Mode
+    script, and reaches the evaluator as :attr:`AutoApprovalContext.code_mode`.
 
     On any resolution :class:`ToolApprovalResolved` is published and, if denied (or
     auto-denied on close), :class:`ToolApprovalDenied` is raised.
@@ -592,6 +595,7 @@ async def _apply_approval_policy(
         inherently_safe=inherently_safe,
         tool_description=tool_description,
         declared_criteria_set=auto_approval_criteria,
+        code_mode=code_mode,
     )
     decision = (
         await runner._run_auto_mode_evaluator(auto_ctx, tool_id=tool_id, stream=ctx)
@@ -2417,6 +2421,7 @@ class AgentWorkflowRunner:
         inherently_safe: bool,
         tool_description: str | None,
         declared_criteria_set: str | None,
+        code_mode: CodeModeCall | None = None,
     ) -> AutoApprovalContext | None:
         """The context to put to the evaluator, or ``None`` if auto mode must not decide
         this call.
@@ -2463,6 +2468,7 @@ class AgentWorkflowRunner:
             # after set_name_for() returned a name that is registered and non-empty.
             criteria_set=criteria_set,
             criteria_set_name=name or "",
+            code_mode=code_mode,
         )
 
     def _warn_ungoverned_tool(
@@ -3870,6 +3876,23 @@ def tool_defn(
     :func:`activity_tool_defn` when the work must cross into an activity (I/O,
     nondeterminism, long-running).
     """
+    return _tool_defn(
+        inherently_safe=inherently_safe, auto_approval_criteria=auto_approval_criteria
+    )
+
+
+def _tool_defn(
+    *,
+    inherently_safe: bool,
+    auto_approval_criteria: str | None,
+    code_mode_host_functions: frozenset[str] | None = None,
+) -> Callable[[Callable[_P, Awaitable[_R]]], Callable[_P, Awaitable[_R]]]:
+    """:func:`tool_defn`, plus the host functions of a Code Mode tool.
+
+    ``code_mode_host_functions`` is set only by ``code_mode_tool``, whose tool takes a single
+    ``script`` argument. Each call then reaches the approval gate with a
+    :class:`CodeModeCall` of that script and these host functions.
+    """
 
     def decorator(user_fn: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:
         sig = _tool_signatures(user_fn)
@@ -3906,6 +3929,14 @@ def tool_defn(
                 inherently_safe=inherently_safe,
                 tool_description=tool_description,
                 auto_approval_criteria=auto_approval_criteria,
+                code_mode=(
+                    CodeModeCall(
+                        script=model_input["script"],
+                        host_functions=code_mode_host_functions,
+                    )
+                    if code_mode_host_functions is not None
+                    else None
+                ),
             )
 
             runner._pub(

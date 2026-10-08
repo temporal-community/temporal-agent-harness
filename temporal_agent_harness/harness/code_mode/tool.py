@@ -27,7 +27,7 @@ from pydantic import TypeAdapter
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
-    from temporal_agent_harness.harness.agent_workflow import _current_runner, tool_defn
+    from temporal_agent_harness.harness.agent_workflow import _current_runner, _tool_defn
 
     from .driver import CodeModeDriver, call_monty, load_stepper
     from .stubs import render_host_interface, render_type_check_stubs, resolve_hints
@@ -287,12 +287,30 @@ def _code_mode_tool(
         return_annotation=str,
     )
     _run_code.__annotations__ = {"script": str, "return": str}
-    tool = tool_defn(
-        inherently_safe=inherently_safe, auto_approval_criteria=auto_approval_criteria
+    host_functions = frozenset(tools_by_name)
+    tool = _tool_defn(
+        inherently_safe=inherently_safe,
+        auto_approval_criteria=auto_approval_criteria,
+        code_mode_host_functions=host_functions,
     )(_run_code)
     # Read back by code_mode_type_check, so a script can be checked against these exact stubs.
     tool.__code_mode_stubs__ = stubs  # type: ignore[attr-defined]
+    # Read back by code_mode_host_functions, for tooling that describes the tool outside a call.
+    tool.__code_mode_host_functions__ = host_functions  # type: ignore[attr-defined]
     return tool
+
+
+def code_mode_host_functions(code_tool: Callable[..., Awaitable[str]]) -> frozenset[str]:
+    """The host-function names of ``code_tool``, a tool :func:`code_mode_tool` returned.
+
+    The same names an auto mode evaluator receives as
+    :attr:`~temporal_agent_harness.harness.agent_protocol.CodeModeCall.host_functions`, for
+    tooling that describes the tool outside a call, like a policy schema generator.
+    """
+    host_functions = getattr(code_tool, "__code_mode_host_functions__", None)
+    if host_functions is None:
+        raise TypeError(f"{code_tool!r} is not a tool returned by code_mode_tool")
+    return host_functions
 
 
 async def code_mode_type_check(code_tool: Callable[..., Awaitable[str]], script: str) -> str | None:

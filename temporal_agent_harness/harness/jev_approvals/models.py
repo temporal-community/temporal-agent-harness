@@ -17,6 +17,9 @@ from pydantic import BaseModel, Field
 # never imports the activity module, which is worker-side), and ``AgentHarnessPlugin``
 # registers the body under it.
 JEV_TOOL_APPROVAL_ACTIVITY = "jev_tool_approval"
+# The classification activity: any set of yes/no questions about a state, answered as
+# probabilities. ``jev_script_classifier`` asks it about Code Mode scripts.
+JEV_CLASSIFY_ACTIVITY = "jev_classify"
 
 # The default model. TypeSafe resolves ``jev-latest`` to a concrete release; the answer's
 # ``model`` reports which one actually judged the call, so an audit of an approval decision
@@ -64,5 +67,23 @@ class JevApprovalAnswer(BaseModel):
     """The full distribution over the three verdicts, which sums to 1."""
     irreversible: float
     """Probability that the call's effect could not be undone if it turned out to be wrong."""
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
+class JevClassificationAnswer(BaseModel):
+    """Jev's answers to a set of yes/no questions, each the probability of "yes".
+
+    The answer to a :class:`JevApprovalRequest` whose questions are all ``noul`` (yes/no)
+    questions. Raw judgments, like :class:`JevApprovalAnswer`: what to make of them is up to
+    whoever asked.
+    """
+
+    model: str
+    """The model that actually answered."""
+    request_id: str
+    """TypeSafe's id for the call."""
+    answers: dict[str, float]
+    """Question id -> probability that the answer is yes (0-1)."""
     input_tokens: int | None = None
     output_tokens: int | None = None

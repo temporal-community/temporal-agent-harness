@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+// The answer of a VerifyToolCalls Nexus operation, as the temporal-untrusted-workers tool
+// verifiers (github.com/02strich/temporal-untrusted-workers, proto/toolpolicy/v1) return it.
+//
+// Only the response is declared: cedar_evaluator sends its request as plain JSON, and the
+// verifiers parse the payload bytes as JSON whatever its encoding. The response arrives as a
+// "json/protobuf" payload whose messageType names this message, and the Python SDK decodes it
+// only once a message of that name is registered. Package, message and field numbers match the
+// upstream contract for that reason.
+//
+// Regenerate toolpolicy_pb2.py / .pyi with `just generate-toolpolicy`.
+package temporal_untrusted_workers.toolpolicy.v1;
+
+message VerifyToolCallsResponse {
+  // Whether all tool calls may proceed. The zero value denies.
+  bool allowed = 1;
+  // Why the tool calls were rejected.
+  string reason = 2;
+}

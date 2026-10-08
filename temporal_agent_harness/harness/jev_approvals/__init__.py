@@ -14,14 +14,18 @@ operator switches on, not a fallback that activates because an evaluator was wir
 verdict comes back ``approve``, ``deny``, or ``escalate``, the last of which leaves the
 call in the human gate exactly where it would have been anyway.
 
+``jev_script_classifier()`` answers yes/no questions about Code Mode scripts for an evaluator
+that judges them by their characteristics (see :mod:`.classifier`).
+
 The package splits along the Temporal workflow boundary, so importing it never requires the
 optional ``jev`` extra:
 
-  * Workflow-safe (this ``__init__`` and the :mod:`.approver` / :mod:`.models` modules):
+  * Workflow-safe (this ``__init__`` and the :mod:`.approver`, :mod:`.classifier` and
+    :mod:`.models` modules):
     safe to import anywhere, including inside a workflow. It composes the question as plain
     dicts and dispatches the model call as an activity BY NAME.
-  * Worker-side (:mod:`.activity`): the one activity that actually talks to TypeSafe.
-    ``AgentHarnessPlugin`` registers it on every worker (a worker can also register
+  * Worker-side (:mod:`.activity`): the activities that actually talk to TypeSafe.
+    ``AgentHarnessPlugin`` registers them on every worker (a worker can also register
     ``JEV_APPROVAL_ACTIVITIES`` from that module by hand). Nothing here imports it, so the
     workflow-safe surface stays free of the SDK. It imports no ``typesafe_sdk`` itself
     either — it checks that the ``jev`` extra is installed and then delegates — so a worker
@@ -41,20 +45,34 @@ from .approver import (
     decide,
     jev_evaluator,
 )
+from .classifier import (
+    DEFAULT_SCRIPT_FEATURES,
+    ScriptFeature,
+    build_classification_request,
+    jev_script_classifier,
+)
 from .models import (
     DEFAULT_JEV_MODEL,
+    JEV_CLASSIFY_ACTIVITY,
     JEV_TOOL_APPROVAL_ACTIVITY,
     JevApprovalAnswer,
     JevApprovalRequest,
+    JevClassificationAnswer,
 )
 
 __all__ = [
     "DEFAULT_ACTIVITY_CONFIG",
     "DEFAULT_JEV_MODEL",
+    "DEFAULT_SCRIPT_FEATURES",
+    "JEV_CLASSIFY_ACTIVITY",
     "JEV_TOOL_APPROVAL_ACTIVITY",
     "JevApprovalAnswer",
     "JevApprovalRequest",
+    "JevClassificationAnswer",
+    "ScriptFeature",
+    "build_classification_request",
     "build_request",
     "decide",
     "jev_evaluator",
+    "jev_script_classifier",
 ]

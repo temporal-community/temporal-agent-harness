@@ -311,6 +311,23 @@ class AutoApprovalDecision:
     details: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class CodeModeCall:
+    """A gated call that is a Code Mode script: its source, and the host functions it can reach.
+
+    Set on :attr:`AutoApprovalContext.code_mode` for a tool built by ``code_mode_tool``. The
+    harness only reports these facts; it never analyzes the script. An evaluator that wants a
+    summary of what the script does calls
+    :func:`~temporal_agent_harness.harness.code_mode.analyze_script` itself.
+
+    ``host_functions`` are harness tool names, the same names those tools carry when the
+    script's host calls reach the approval gate one by one.
+    """
+
+    script: str
+    host_functions: frozenset[str]
+
+
 @dataclass
 class AutoApprovalContext:
     """The facts about a single tool call that an auto mode evaluator judges.
@@ -357,6 +374,9 @@ class AutoApprovalContext:
     (0 = still the ones the session started with). An evaluator should record it alongside
     its verdict: criteria change over the life of an agent, so "which rules decided this
     call" is only answerable if the decision names the generation it applied.
+
+    ``code_mode`` is set when the call is a Code Mode script (see :class:`CodeModeCall`), and
+    ``None`` for every other tool.
     """
 
     tool_name: str
@@ -369,6 +389,7 @@ class AutoApprovalContext:
     # Required is the point: see the guarantee in the class docstring.
     criteria_set: AutoApprovalCriteriaSet = field(kw_only=True)
     criteria_set_name: str = field(kw_only=True)
+    code_mode: CodeModeCall | None = field(default=None, kw_only=True)
 
     @property
     def thresholds(self) -> tuple[float, float | None]:

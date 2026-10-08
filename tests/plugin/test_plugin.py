@@ -27,6 +27,7 @@ from temporal_agent_harness.harness.jev_approvals.activity import (
     JEV_APPROVAL_ACTIVITIES,
 )
 from temporal_agent_harness.harness.jev_approvals.models import (
+    JEV_CLASSIFY_ACTIVITY,
     JEV_TOOL_APPROVAL_ACTIVITY,
 )
 from temporal_agent_harness.plugin import AgentHarnessPlugin
@@ -41,7 +42,7 @@ from temporal_agent_harness.utils.large_payload import (
 # checked per call, inside the activity, never at registration. (Code Mode registers none: its
 # scripts run in the workflow, and only their host calls are activities.)
 _ALWAYS_ON_ACTIVITIES = [*JEV_APPROVAL_ACTIVITIES]
-_ALWAYS_ON_NAMES = {JEV_TOOL_APPROVAL_ACTIVITY}
+_ALWAYS_ON_NAMES = {JEV_TOOL_APPROVAL_ACTIVITY, JEV_CLASSIFY_ACTIVITY}
 
 
 @agent.activity_tool_defn(

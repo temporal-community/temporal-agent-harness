@@ -1,8 +1,9 @@
-"""The worker-side activity that asks Jev about one gated tool call.
+"""The worker-side activities that ask Jev about one gated tool call, or classify a script.
 
 A thin Temporal wrapper: it checks that the optional ``jev`` extra is installed, then makes
 one TypeSafe System One call with the state and questions the workflow already composed
-(see :mod:`.approver`) and projects the answers into :class:`JevApprovalAnswer`.
+(see :mod:`.approver` and :mod:`.classifier`) and projects the answers into
+:class:`JevApprovalAnswer` or :class:`JevClassificationAnswer`.
 
 This module is WORKER-SIDE — never import it from workflow code or from ``harness.agent``.
 The workflow-side approver dispatches it by NAME (``JEV_TOOL_APPROVAL_ACTIVITY``), so
@@ -29,7 +30,13 @@ import os
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from .models import JEV_TOOL_APPROVAL_ACTIVITY, JevApprovalAnswer, JevApprovalRequest
+from .models import (
+    JEV_CLASSIFY_ACTIVITY,
+    JEV_TOOL_APPROVAL_ACTIVITY,
+    JevApprovalAnswer,
+    JevApprovalRequest,
+    JevClassificationAnswer,
+)
 
 # The error type an operator (or the approver's own error handling) can match on to tell a
 # worker missing the `jev` extra apart from TypeSafe genuinely refusing the call.
@@ -108,6 +115,28 @@ async def jev_tool_approval(request: JevApprovalRequest) -> JevApprovalAnswer:
     )
 
 
+@activity.defn(name=JEV_CLASSIFY_ACTIVITY)
+async def jev_classify(request: JevApprovalRequest) -> JevClassificationAnswer:
+    """Ask Jev the yes/no questions the workflow composed, in one request.
+
+    Every question must be a ``noul`` question; the answer maps each question id to the
+    probability of yes.
+    """
+    _require_jev_extra()
+    response = await _typesafe_client().system_one(
+        request.state,
+        request.questions,
+        model=request.model,
+    )
+    return JevClassificationAnswer(
+        model=response.model,
+        request_id=response.request_id,
+        answers={key: answer.noul for key, answer in response.nouls.items()},
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+    )
+
+
 # Registered unconditionally by ``AgentHarnessPlugin`` — the extra is checked per call by
 # _require_jev_extra(), not at registration, so a worker without it fails a Jev approval
 # once and escalates, instead of leaving the activity name unregistered (which Temporal
@@ -115,4 +144,4 @@ async def jev_tool_approval(request: JevApprovalRequest) -> JevApprovalAnswer:
 # hand::
 #
 #     Worker(client, task_queue=..., activities=[*JEV_APPROVAL_ACTIVITIES, ...])
-JEV_APPROVAL_ACTIVITIES = [jev_tool_approval]
+JEV_APPROVAL_ACTIVITIES = [jev_tool_approval, jev_classify]

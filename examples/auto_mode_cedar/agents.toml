@@ -1,0 +1,15 @@
+# Registry of agents the Cedar auto-mode example UI can launch.
+#
+# The packaged server (`just server`) reads this file and passes the parsed registry into the
+# packaged SessionManagerWorkflow, which serves it back over the `available_agents` query.
+
+[[agents]]
+key = "auto-mode-cedar-travel"
+workflow_type = "AutoModeCedarTravelAgent"
+agent = "examples.auto_mode_cedar.workflow:AutoModeCedarTravelAgentWorkflow"
+task_queue = "auto-mode-cedar-agent"
+label = "Travel agent (Cedar Auto mode)"
+description = """
+The Monty conversational travel agent under AUTO MODE, judged by a Cedar tool policy over
+Nexus: scripts run unless the policy forbids what they do (booking in a loop, say), searches
+run unattended, and every booking comes to you."""

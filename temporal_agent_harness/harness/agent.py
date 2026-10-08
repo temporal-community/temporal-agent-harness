@@ -85,6 +85,7 @@ from temporal_agent_harness.harness.agent_protocol import (
     MessageContext,
     MidTurn,
     AutoApprovalContext,
+    CodeModeCall,
     ToolApprovalPolicy,
 )
 from temporal_agent_harness.harness.agent_workflow import (
@@ -120,7 +121,8 @@ from temporal_agent_harness.harness.code_mode import (
     vfs_mount,
 )
 from temporal_agent_harness.harness.state.decl import StateDecl, state
-from temporal_agent_harness.harness.jev_approvals import jev_evaluator
+from temporal_agent_harness.harness.cedar_approvals import cedar_evaluator
+from temporal_agent_harness.harness.jev_approvals import jev_evaluator, jev_script_classifier
 from temporal_agent_harness.harness.subagent_toolset import (
     SubagentToolPolicy,
     subagent_toolset,
@@ -138,12 +140,14 @@ __all__ = [
     "MessageContext",
     "MidTurn",
     "AutoApprovalContext",
+    "CodeModeCall",
     "ToolApprovalDenied",
     "ToolApprovalPolicy",
     "WorkflowDefnOptions",
     "accepts",
     "activity_tool_defn",
     "callback_tool_defn",
+    "cedar_evaluator",
     "code_mode_tool",
     "code_mode_type_check",
     "ActivityFileSystem",
@@ -157,6 +161,7 @@ __all__ = [
     "defn",
     "init",
     "jev_evaluator",
+    "jev_script_classifier",
     "StateDecl",
     "SubagentToolPolicy",
     "state",
