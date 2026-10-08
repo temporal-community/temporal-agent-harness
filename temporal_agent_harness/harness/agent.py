@@ -121,6 +121,9 @@ from temporal_agent_harness.harness.code_mode import (
 )
 from temporal_agent_harness.harness.state.decl import StateDecl, state
 from temporal_agent_harness.harness.jev_approvals import jev_evaluator
+from temporal_agent_harness.harness.openai_decisions_approvals import (
+    openai_decisions_evaluator,
+)
 from temporal_agent_harness.harness.subagent_toolset import (
     SubagentToolPolicy,
     subagent_toolset,
@@ -157,6 +160,7 @@ __all__ = [
     "defn",
     "init",
     "jev_evaluator",
+    "openai_decisions_evaluator",
     "StateDecl",
     "SubagentToolPolicy",
     "state",

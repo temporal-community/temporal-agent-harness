@@ -63,6 +63,9 @@ from temporalio.plugin import SimplePlugin
 from temporalio.worker import WorkerConfig
 
 from temporal_agent_harness.harness.jev_approvals.activity import JEV_APPROVAL_ACTIVITIES
+from temporal_agent_harness.harness.openai_decisions_approvals.activity import (
+    OPENAI_DECISIONS_APPROVAL_ACTIVITIES,
+)
 from temporal_agent_harness.utils.large_payload import DEFAULT_PAYLOAD_STORAGE
 
 if TYPE_CHECKING:
@@ -156,12 +159,10 @@ class AgentHarnessPlugin(SimplePlugin):
       hand-passed ``data_converter=`` both survive.
     * **Subagent activity** — ``run_subagent_turn``, bound to the worker's own ``Client`` so it
       can drive child agents. Every agent built with ``agent.subagent_toolset(...)`` needs it.
-    * **Jev approval activity** — the model call behind
-      :func:`~temporal_agent_harness.harness.jev_approvals.jev_evaluator`, registered
-      unconditionally: the workflow dispatches it by name, so leaving the name unregistered on a worker without the
-      optional ``jev`` extra would make Temporal retry forever and stall every gated tool
-      call mid-approval. The extra is checked per call instead, and a worker without it
-      fails the check once and escalates the call to a human.
+    * **Approval evaluator activities** — the model calls behind the Jev and OpenAI
+      Decisions evaluators, registered unconditionally. Their optional extras are checked
+      per call, so a worker without one fails the check once and escalates to a human
+      rather than retrying an unregistered activity forever.
     * **Tool activities** — the durable body of each ``@agent.activity_tool_defn`` tool in
       ``tools``.
     * **Filesystem activities** — the ``vfs.<name>.*`` activities of each
@@ -201,6 +202,7 @@ class AgentHarnessPlugin(SimplePlugin):
             *_tool_activities(tools),
             *_filesystem_activities(filesystems),
             *JEV_APPROVAL_ACTIVITIES,
+            *OPENAI_DECISIONS_APPROVAL_ACTIVITIES,
         ]
 
         def data_converter(converter: DataConverter | None) -> DataConverter:
@@ -250,7 +252,7 @@ def _merge_activities(
 
     Temporal rejects a worker with two activities of the same name, and the harness's
     activities are exactly the ones a worker written before this plugin registered by hand —
-    so a half-migrated worker (or one that passes ``JEV_APPROVAL_ACTIVITIES`` explicitly) keeps
+    so a half-migrated worker (or one that passes an approval activity explicitly) keeps
     working instead of failing at startup. Registration is first-one-wins: an explicitly
     passed activity is never displaced by the plugin's copy of it.
     """

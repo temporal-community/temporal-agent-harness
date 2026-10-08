@@ -1,8 +1,8 @@
 # Auto mode example
 
 The [Monty travel agent](../monty/README.md), with **auto mode** switched on: before a gated
-tool call reaches you, Jev judges it against the operator's rules and approves it, denies it,
-or leaves it for you. Anything Jev doesn't approve comes to you exactly as it would in the
+tool call reaches you, the OpenAI Decisions API judges it against the operator's rules and
+approves it, denies it, or leaves it for you. Anything it doesn't approve comes to you exactly as it would in the
 Monty example, so auto mode only ever reduces how many approvals you see.
 
 It is the same agent, with the same tools, the same Code Mode script tool and the same trip
@@ -14,11 +14,12 @@ board. This directory adds only the workflow (`workflow.py`, a copy of Monty's
 `workflow.py` wires all three into the `AgentWorkflowRunner`:
 
 - **The switch** — `ToolApprovalPolicy.auto_mode(pre_approved_tools=BOARD_TOOL_NAMES)`. The
-  trip-board tools are pre-approved *above* auto mode, so Jev never spends a call on them.
+  trip-board tools are pre-approved *above* auto mode, so the Decisions API never spends a call on them.
 - **The rules** — `_AUTO_APPROVAL_CRITERIA`, named criteria sets (`read_only`,
   `books_travel`, `run_travel_code`, and a `cautious` catch-all), each written as plain-language
   `approve_when` / `deny_when` / `escalate_when` rules.
-- **The mechanism** — `agent.jev_evaluator()`.
+- **The mechanism** — `agent.openai_decisions_evaluator()`, using one typed Choice question
+  for the verdict and one Predicate question for irreversibility.
 
 Monty's travel tools are reused **unchanged**. They don't name a criteria set themselves, so
 the rulebook assigns each one by name in `AutoApprovalCriteria.tools`. This is the same
@@ -35,7 +36,7 @@ you *do* write can name its own default set instead, with
   outright a booking for a traveller the user never asked to book for.
 - **Every judgment is on the stream.** Each evaluation is bracketed by
   `auto_approval_evaluation_started` → `auto_approval_evaluation_ended` (or `_error` /
-  `_superseded` if you answer first). The ended event carries Jev's verdict, its confidence and
+  `_superseded` if you answer first). The ended event carries the Decisions API verdict, its confidence and
   full distribution, the irreversibility judgment, the thresholds applied, and which criteria
   set decided it.
 - **You can take it back.** `set_approval_policy` with the `human_approval_only` posture sends
@@ -50,10 +51,10 @@ cp .env.example .env.local     # run from the repo root
 ```
 
 - Set `GEMINI_API_KEY`, which the agent's conversation runs on.
-- Set `TYPESAFE_API_KEY` (from <https://console.typesafe.ai/>) for the Jev evaluator.
-  `TYPESAFE_AI_API_KEY` works too. The worker refuses to start without it. Without the key
-  the agent would still run, but auto mode would never approve anything, which is harder to
-  diagnose than a startup error. If you have no TypeSafe key, run the Monty example instead.
+- Set `OPENAI_API_KEY` for the OpenAI Decisions evaluator. The worker refuses to start
+  without it. Without the key the agent would still run, but auto mode would never approve
+  anything, which is harder to diagnose than a startup error. If you have no OpenAI key, run
+  the Monty example instead.
 - `TEMPORAL_CONFIG_FILE` defaults to the repo's committed `temporal.local.toml` (a local dev
   server).
 
@@ -68,4 +69,4 @@ just server            # 3. FastAPI API + built Svelte UI  ->  http://localhost:
 just worker            # 4. the auto-mode agent
 ```
 
-Open <http://localhost:8000>, start a **Travel agent (Jev Auto mode)** session, and plan a trip.
+Open <http://localhost:8000>, start a **Travel agent (OpenAI Auto mode)** session, and plan a trip.

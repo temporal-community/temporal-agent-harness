@@ -89,6 +89,11 @@ code-mode = [
 jev = [
     "typesafe-sdk>=0.6.0",
 ]
+# OpenAI Decisions API approval evaluator. Only required on workers whose agents use
+# `agent.openai_decisions_evaluator`; workflow code dispatches the request by activity name.
+openai-decisions = [
+    "openai>=3.26.0",
+]
 # Nexus-brokered MCP servers: temporal_agent_harness.ai_sdks.openai_agents.workflow.
 # nexus_brokered_mcp_server. Lets an Agent reach an MCP tool over a Temporal Nexus endpoint,
 # one server per Nexus service, passed directly via Agent(mcp_servers=[...]). Needs the
@@ -117,6 +122,7 @@ examples = [
     "pydantic-monty==1.0.0",  # Monty sandbox; pinned like the code-mode extra
     "fastapi[standard]>=0.136.3",  # packaged web app used by the examples; pulls in uvicorn
     "openai-agents>=0.22.0",  # the OpenAI Agents SDK example (examples/openai_hello, examples/react_agent)
+    "openai>=3.26.0",  # Decisions API for examples/auto_mode
     "pydantic-ai-slim[temporal]>=2.13",  # the Pydantic AI example (examples/pydantic_ai_hello)
     "httpx>=0.27",  # the react_agent example's tools call real weather / geo / IP APIs
     "typesafe-sdk>=0.6.0",

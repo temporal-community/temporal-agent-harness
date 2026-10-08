@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -1896,7 +1896,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "3.8.0"
+version = "3.26.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1906,9 +1906,9 @@ dependencies = [
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f2/b0/1100c93f93e1c174205ce8d15a049a446f0dc88e9262c1f1f223fe6b9493/openai-3.8.0.tar.gz", hash = "sha256:6138a5a1333a1be9e4d1edea2d160b311542787b029543f87de4961c66358d16", size = 1473819, upload-time = "2026-09-03T19:51:10.495Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/36/f5/c9accd2d4077b0e56ffb63e9a943a656797c715bbd7c80f13f401865a350/openai-3.26.1.tar.gz", hash = "sha256:4b64060155596aece83aa81d270f326ee081b83da70a0d4b50091a0c60e9151c", size = 1820349, upload-time = "2026-10-08T08:54:23.757Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/24/a4/c7e89d3bfb8b7c7ffa38ec9fe527bccf4df723f752fb11bdb3da6c750b76/openai-3.8.0-py3-none-any.whl", hash = "sha256:514736aa1e4ef1033c1209ad53897392845ccd4f2c4fae6413b2cf5f91c2c926", size = 1740349, upload-time = "2026-09-03T19:51:08.596Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/ee/f6042342ff42116ff8018849ef24a950ef367730ab0f9912c08c2f9b8aa0/openai-3.26.1-py3-none-any.whl", hash = "sha256:6a05a4615c678922aa16a1a560cfbe059cb20d5b7ab9753d0bf38b41fce1c67a", size = 2163859, upload-time = "2026-10-08T08:54:21.963Z" },
 ]
 
 [[package]]
@@ -3232,6 +3232,9 @@ openai-agents = [
     { name = "openai-agents" },
     { name = "temporalio", extra = ["opentelemetry"] },
 ]
+openai-decisions = [
+    { name = "openai" },
+]
 pydantic-ai = [
     { name = "pydantic-ai-slim", extra = ["temporal"] },
 ]
@@ -3252,6 +3255,7 @@ dev = [
     { name = "jsonpatch" },
     { name = "mcp" },
     { name = "moto", extra = ["server"] },
+    { name = "openai" },
     { name = "openai-agents" },
     { name = "pydantic-ai-slim", extra = ["temporal"] },
     { name = "pydantic-monty" },
@@ -3268,6 +3272,7 @@ examples = [
     { name = "google-auth" },
     { name = "google-genai" },
     { name = "httpx" },
+    { name = "openai" },
     { name = "openai-agents" },
     { name = "pydantic-ai-slim", extra = ["temporal"] },
     { name = "pydantic-monty" },
@@ -3281,6 +3286,7 @@ requires-dist = [
     { name = "google-genai", marker = "extra == 'genai'", specifier = ">=2.0.0" },
     { name = "mcp", marker = "extra == 'nexus-mcp'", specifier = ">=2.1.1,<3" },
     { name = "mcp", marker = "extra == 'openai-agents'", specifier = ">=2.1.1,<3" },
+    { name = "openai", marker = "extra == 'openai-decisions'", specifier = ">=3.26.0" },
     { name = "openai-agents", marker = "extra == 'nexus-mcp'", specifier = ">=0.22.0" },
     { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.22.0" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -3294,7 +3300,7 @@ requires-dist = [
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'openai-agents'", specifier = ">=1.31.0" },
     { name = "typesafe-sdk", marker = "extra == 'jev'", specifier = ">=0.6.0" },
 ]
-provides-extras = ["genai", "s3", "openai-agents", "pydantic-ai", "ui", "code-mode", "jev", "nexus-mcp"]
+provides-extras = ["genai", "s3", "openai-agents", "pydantic-ai", "ui", "code-mode", "jev", "openai-decisions", "nexus-mcp"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3306,6 +3312,7 @@ dev = [
     { name = "jsonpatch", specifier = ">=1.33" },
     { name = "mcp", specifier = ">=2.1.1,<3" },
     { name = "moto", extras = ["server"], specifier = ">=5.2.1" },
+    { name = "openai", specifier = ">=3.26.0" },
     { name = "openai-agents", specifier = ">=0.22.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
     { name = "pydantic-monty", specifier = "==1.0.0" },
@@ -3323,6 +3330,7 @@ examples = [
     { name = "google-auth", specifier = ">=2.53.0" },
     { name = "google-genai", specifier = ">=2.0.0" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "openai", specifier = ">=3.26.0" },
     { name = "openai-agents", specifier = ">=0.22.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
     { name = "pydantic-monty", specifier = "==1.0.0" },

@@ -1,5 +1,5 @@
 # ABOUTME: Tests for AgentHarnessPlugin — the one plugin that wires a client + worker for the
-# harness. Covers what it registers (subagent, Jev approval, and tool activities), what it
+# harness. Covers what it registers (subagent, approval evaluator, and tool activities), what it
 # refuses (a non-harness "tool"), how its data converter composes with an AI-SDK plugin's, and
 # that it never double-registers an activity a worker already passed by hand.
 #
@@ -29,6 +29,12 @@ from temporal_agent_harness.harness.jev_approvals.activity import (
 from temporal_agent_harness.harness.jev_approvals.models import (
     JEV_TOOL_APPROVAL_ACTIVITY,
 )
+from temporal_agent_harness.harness.openai_decisions_approvals.activity import (
+    OPENAI_DECISIONS_APPROVAL_ACTIVITIES,
+)
+from temporal_agent_harness.harness.openai_decisions_approvals.models import (
+    OPENAI_DECISIONS_APPROVAL_ACTIVITY,
+)
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporal_agent_harness.utils.large_payload import (
     DEFAULT_PAYLOAD_STORAGE,
@@ -40,8 +46,11 @@ from temporal_agent_harness.utils.large_payload import (
 # error and a hung turn rather than one actionable failure. Their optional extras are
 # checked per call, inside the activity, never at registration. (Code Mode registers none: its
 # scripts run in the workflow, and only their host calls are activities.)
-_ALWAYS_ON_ACTIVITIES = [*JEV_APPROVAL_ACTIVITIES]
-_ALWAYS_ON_NAMES = {JEV_TOOL_APPROVAL_ACTIVITY}
+_ALWAYS_ON_ACTIVITIES = [
+    *JEV_APPROVAL_ACTIVITIES,
+    *OPENAI_DECISIONS_APPROVAL_ACTIVITIES,
+]
+_ALWAYS_ON_NAMES = {JEV_TOOL_APPROVAL_ACTIVITY, OPENAI_DECISIONS_APPROVAL_ACTIVITY}
 
 
 @agent.activity_tool_defn(
@@ -184,9 +193,9 @@ def test_tools_rejects_a_non_harness_tool():
 def test_extra_backed_activities_are_registered_unconditionally():
     """Registration never branches on an extra — the check lives inside the activity.
 
-    Registering the NAMES is what matters: the Jev auto-approver is dispatched by name, and
-    leaving its name unregistered would make Temporal retry "not registered" forever — a hung
-    turn instead of one actionable failure.
+    Registering the NAMES is what matters: approval evaluators are dispatched by name, and
+    leaving one unregistered would make Temporal retry "not registered" forever — a hung turn
+    instead of one actionable failure.
     """
     plugin = AgentHarnessPlugin()
     assert set(plugin._worker_activities) == set(_ALWAYS_ON_ACTIVITIES)

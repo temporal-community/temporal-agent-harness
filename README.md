@@ -101,6 +101,7 @@ dependencies = [
     #   code-mode       the sandbox a worker runs Code Mode scripts in
     #   genai           the Google Gemini integration
     #   jev             Jev-backed auto mode for tool approvals (worker only)
+    #   openai-decisions OpenAI Decisions API auto mode (worker only)
     #   openai-agents   the OpenAI Agents SDK integration
     #   pydantic-ai     the Pydantic AI integration
     #   s3              S3-backed offload for large payloads
@@ -186,6 +187,7 @@ opt-in:
 | `code-mode` | run a worker that hosts **Code Mode** agents; pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in. Importing `agent` needs nothing extra; building a `code_mode_tool` does. |
 | `genai` | use the **Google Gemini** integration (`ai_sdks.google_genai_plugin`). |
 | `jev` | run a worker whose agents use **`agent.jev_evaluator`**, the builtin AI auto mode evaluator; pulls in [`typesafe-sdk`](https://pypi.org/project/typesafe-sdk/). Worker-side only — the workflow-side factory needs nothing extra. |
+| `openai-decisions` | run a worker whose agents use **`agent.openai_decisions_evaluator`**; installs `openai>=3.26.0` for the [Decisions API](https://developers.openai.com/api/docs/guides/decisions). Worker-side only — the workflow-side factory needs nothing extra. |
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
@@ -356,9 +358,9 @@ AgentWorkflowRunner(
         tools={"some_mcp_tool": "read_only"},   # by NAME, so it covers tools you didn't write
         default="read_only",                     # the catch-all
     ),
-    # THE MECHANISM — `agent.jev_evaluator` puts a model in the seat, via one fast typed
-    # judgment from Jev (https://docs.typesafe.ai) rather than a prompt to parse.
-    auto_mode_evaluator=agent.jev_evaluator(),
+    # THE MECHANISM — `agent.openai_decisions_evaluator` asks the OpenAI Decisions API
+    # for a typed verdict and irreversibility judgment.
+    auto_mode_evaluator=agent.openai_decisions_evaluator(),
 )
 ```
 
@@ -388,7 +390,7 @@ async def set_posture(self, msg: Posture) -> Ack:
     return Ack()
 ```
 
-It can't fail open: low confidence, an irreversible effect, a raise, or a TypeSafe outage all
+It can't fail open: low confidence, an irreversible effect, a refusal, an SDK error, or an API outage all
 land at the human gate rather than approving.
 
 And the harness won't even *ask* unless the call is governed. A tool with no criteria set
@@ -396,9 +398,11 @@ assigned, or one assigned to a name nobody registered, is escalated by the harne
 evaluator is invoked and no model call is spent, so an unconfigured auto mode costs nothing.
 That's enforced in the gate rather than left to each evaluator, which is why an evaluator
 receives its governing rules as a required, non-optional field and needs no defensive check of
-its own. Needs the `jev` extra **on the worker only**.
+its own. Needs the `openai-decisions` extra **on the worker only**. The Python OpenAI SDK
+documents `client.decisions.create`; the evaluator uses that SDK client directly from its
+Temporal activity while leaving the agent's own Agents SDK loop unchanged.
 
-Every evaluator — yours or Jev's — is bracketed on the event stream
+Every evaluator — yours, Jev's, or OpenAI's — is bracketed on the event stream
 (`auto_approval_evaluation_started` → `_ended` / `_superseded` / `_error`), so its verdict,
 reasoning and latency stay auditable even when it *escalates* and resolves nothing. A human who
 answers first **cancels** it, and the console gives the evaluation its own card and its own share
@@ -1027,7 +1031,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 |---|---|
 | OpenAI Hello · Pydantic AI Hello | `OPENAI_API_KEY`; chat directly in the UI |
 | Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
-| Travel agent (Jev Auto mode) | `GEMINI_API_KEY` **and** `TYPESAFE_API_KEY`; Monty with [auto mode](#auto-mode--letting-code-or-a-model-decide) judging its gated calls ([readme](examples/auto_mode/README.md)); chat directly in the UI |
+| Travel agent (OpenAI Auto mode) | `GEMINI_API_KEY` **and** `OPENAI_API_KEY`; Monty with [auto mode](#auto-mode--letting-code-or-a-model-decide) judging its gated calls ([readme](examples/auto_mode/README.md)); chat directly in the UI |
 | Tic-Tac-Toe (TypeSafe) | `TYPESAFE_API_KEY`; no LLM — every move is a [TypeSafe](https://docs.typesafe.ai) System One judgment ([readme](examples/tictactoe/README.md)); send `new_game` then `play` in the UI |
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
 | Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client --wiki-dir ./wiki`** — required, or its tool calls hang |

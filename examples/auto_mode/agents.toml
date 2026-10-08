@@ -8,8 +8,8 @@ key = "auto-mode-travel"
 workflow_type = "AutoModeTravelAgent"
 agent = "examples.auto_mode.workflow:AutoModeTravelAgentWorkflow"
 task_queue = "auto-mode-agent"
-label = "Travel agent (Jev Auto mode)"
+label = "Travel agent (OpenAI Auto mode)"
 description = """
 The Monty conversational travel agent under AUTO MODE: each gated tool call is first judged
-by Jev against named criteria sets — lookups are approved, bookings are escalated to you, and
-anything Jev isn't sure about comes to you exactly as it would without auto mode."""
+by OpenAI Decisions against named criteria sets — lookups are approved, bookings are escalated
+to you, and anything it isn't sure about comes to you exactly as it would without auto mode."""

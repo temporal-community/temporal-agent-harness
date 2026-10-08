@@ -607,8 +607,9 @@ class AutoApprovalEvaluationEvent(ToolEvent[EventTypeT], Generic[EventTypeT]):
         "indistinguishable without this."
     )
     evaluator: str = Field(
-        description="What is doing the judging — ``jev_evaluator`` for the builtin AI "
-        "approver, otherwise the evaluator callable's qualified name. Read off the CALLABLE "
+        description="What is doing the judging — for example ``jev_evaluator`` or "
+        "``openai_decisions_evaluator`` for a builtin approver, otherwise the evaluator "
+        "callable's qualified name. Read off the CALLABLE "
         "(its ``__auto_mode_evaluator__`` attribute) rather than off a returned decision, so "
         "the started event and the error event can both name it — neither has a decision to "
         "read it from."

@@ -1,11 +1,12 @@
-"""AUTO MODE: the Monty travel agent with its gated tool calls judged by Jev.
+"""AUTO MODE: the Monty travel agent with gated calls judged by OpenAI Decisions.
 
 The same conversational Code Mode agent as ``examples/monty`` — same tools, same trip board —
 but running under ``ToolApprovalPolicy.auto_mode(...)``, so each gated call is first put to
-``agent.jev_evaluator()`` against the rulebook in :data:`_AUTO_APPROVAL_CRITERIA`. Jev may
-approve it, deny it, or leave it to you; anything it does not approve comes to you exactly as
-it would in the Monty example. Needs a ``GEMINI_API_KEY`` (the conversation) AND a
-``TYPESAFE_API_KEY`` (the evaluator) — see ``worker.py``.
+``agent.openai_decisions_evaluator()`` against the rulebook in
+:data:`_AUTO_APPROVAL_CRITERIA`. The evaluator may approve it, deny it, or leave it to you;
+anything it does not approve comes to you exactly as it would in the Monty example. Needs a
+``GEMINI_API_KEY`` (the conversation) AND an ``OPENAI_API_KEY`` (the evaluator) — see
+``worker.py``.
 
 It reuses Monty's travel tools UNCHANGED: they declare no criteria set of their own, so the
 rulebook assigns each one by NAME in ``AutoApprovalCriteria.tools``. That is the same mechanism
@@ -198,7 +199,7 @@ class AutoModeTravelAgentWorkflow:
             # `run_travel_code` tool and each travel host call the script makes — and put to
             # the evaluator first. The trip-board tools are pre-approved by name, ABOVE auto
             # mode: they write to the agent's own notes, so there is nothing to judge, and
-            # sending them to Jev would spend a model call per board update for nothing.
+            # sending them to the Decisions API would spend a model call per board update.
             approval_policy_default=ToolApprovalPolicy.auto_mode(
                 pre_approved_tools=trip_board.BOARD_TOOL_NAMES
             ),
@@ -206,7 +207,7 @@ class AutoModeTravelAgentWorkflow:
             # human on every gated call by simply not enabling it — and a caller can impose
             # either posture per session via `AgentConfig.approval_policy`.
             auto_approval_criteria_default=_AUTO_APPROVAL_CRITERIA,
-            auto_mode_evaluator=agent.jev_evaluator(),
+            auto_mode_evaluator=agent.openai_decisions_evaluator(),
         )
         self._model: str = DEFAULT_MODEL
         # The whole conversation, sent as the input of every model call (see
@@ -262,7 +263,7 @@ class AutoModeTravelAgentWorkflow:
         `human_approval_only` allow-lists nothing — every call waits for you, and an auto mode
         evaluator is not consulted even though one is wired. `allow_safe` allow-lists tools
         that declared themselves inherently safe. `auto_mode` hands each remaining call to the
-        Jev evaluator, which may allow it, deny it, or leave it to you anyway.
+        OpenAI Decisions evaluator, which may allow it, deny it, or leave it to you anyway.
         `dangerously_skip_all` gates nothing at all.
 
         A posture REPLACES the policy, allow-list included — including anything an "approve and
@@ -289,7 +290,7 @@ class AutoModeTravelAgentWorkflow:
         if updated_policy.auto_mode_enabled:
             allow_listed = (
                 f"{allow_listed + ', plus ' if allow_listed else ''}"
-                "whatever `jev_evaluator` approves against its tool's criteria"
+                "whatever the approval evaluator approves against its tool's criteria"
             )
         return TextReply(
             text=(

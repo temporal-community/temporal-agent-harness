@@ -273,7 +273,8 @@ def _assert_auto_mode_has_an_evaluator(
         "ToolApprovalPolicy has auto_mode_enabled=True, but this agent has no "
         "auto_mode_evaluator wired, so nothing could ever judge a call while the policy "
         "reported auto mode on. Either pass auto_mode_evaluator= to the AgentWorkflowRunner "
-        "(agent.jev_evaluator() is the builtin), or use a policy with auto mode off.",
+        "(agent.jev_evaluator() and agent.openai_decisions_evaluator() are builtins), "
+        "or use a policy with auto mode off.",
         type="AutoModeWithoutEvaluator",
         non_retryable=True,
     )

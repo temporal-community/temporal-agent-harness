@@ -7,10 +7,10 @@
 #   just server            # 3. FastAPI API + UI on :8000
 #   just worker            # 4. this example's agent worker
 #
-# uv installs the project's `examples` dependency group (the Gemini SDK, pydantic-monty and the
-# TypeSafe SDK) on demand, so there's no separate install step. First-time setup:
+# uv installs the project's `examples` dependency group (Gemini, pydantic-monty and the OpenAI
+# SDK) on demand, so there's no separate install step. First-time setup:
 # `cp .env.example .env.local` from the repo root and fill it in (Temporal connection +
-# GEMINI_API_KEY + TYPESAFE_API_KEY). See README.md.
+# GEMINI_API_KEY + OPENAI_API_KEY). See README.md.
 
 # Shows a notice when running from an untagged commit (silent on a release archive).
 import '../../scripts/untagged-notice.just'
@@ -48,6 +48,6 @@ server:
 ui-dev:
     pnpm --dir "{{ui}}" run dev
 
-# Run the auto-mode agent worker (needs GEMINI_API_KEY and TYPESAFE_API_KEY).
+# Run the auto-mode agent worker (needs GEMINI_API_KEY and OPENAI_API_KEY).
 worker:
     cd "{{root}}" && uv run --group examples python -m examples.auto_mode.worker
