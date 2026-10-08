@@ -1019,8 +1019,12 @@ just dev
 
 This starts Temporal, the session manager, the web UI at <http://localhost:8000>, and every
 worker whose required keys are set in `.env.local`. It restarts affected workers when their
-watched files change and refreshes the agent list when a registry changes. Ctrl-C stops
-everything it started. Temporal keeps sessions in `.harness/` across restarts; `just dev --fresh`
+watched files change and refreshes the agent list when a registry changes. One Ctrl-C stops
+the services it started and their process groups, including during startup or a reload. Services
+get up to six seconds to exit gracefully before remaining processes are killed automatically.
+A Temporal server that was already running is left running. Worker commands should stay in the
+foreground; daemons that detach into their own process groups are outside the runner's control.
+Temporal keeps sessions in `.harness/` across restarts; `just dev --fresh`
 starts with an empty database when launching its own Temporal server.
 
 Use `just dev --only monty,tictactoe` to select workers, or `just dev --no-watch` to disable

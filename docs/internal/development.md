@@ -59,7 +59,15 @@ Changes to worker definitions in `harness.toml` require restarting `just dev`.
 
 The runner reuses a reachable Temporal server and leaves it running on exit. Otherwise, it starts
 a local server and stores its database in `.harness/`, so sessions survive restarts. `--fresh`
-discards that database only when starting its own server. Ctrl-C stops all processes it started.
+discards that database only when starting its own server.
+
+One Ctrl-C (or SIGTERM) interrupts startup or a reload and shuts down the services the runner
+started. It sends SIGTERM to all their process groups concurrently, then SIGKILL to groups still
+present after six seconds, even if the original parent process already exited. Output draining
+has a separate one-second timeout, so an inherited pipe cannot hold shutdown open indefinitely.
+Worker commands must stay in the foreground: descendants that deliberately create a new process
+group or session are outside this cleanup boundary. Existing Temporal servers and services
+started in other terminals are left running.
 
 The same runner works in other projects with `temporal-agent-harness[ui]` installed:
 

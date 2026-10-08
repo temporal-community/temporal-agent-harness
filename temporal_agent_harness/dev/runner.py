@@ -2,7 +2,7 @@
 
 Starts Temporal when needed, the session manager, the web server, and configured workers.
 File changes restart affected workers; registry changes reload the web server's agent list.
-Ctrl-C stops all processes started by the runner.
+Ctrl-C stops the services started by the runner and descendants in their process groups.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from .manifest import Manifest, WorkerSpec, load_manifest
 
 _COLORS = ["36", "35", "33", "32", "34", "91", "96", "95", "93", "92", "94"]
 _RESTART_GRACE = 6.0
+_DRAIN_GRACE = 1.0
 _TEMPORAL_READY_TIMEOUT = 60.0
 
 
@@ -79,6 +80,16 @@ class Proc:
     async def start(self) -> None:
         self._stopping = False
         self.console.register(self.name)
+        # Cancellation may arrive after fork but before create_subprocess_exec returns.
+        # Always record that child before allowing shutdown/reload cancellation through.
+        launch = asyncio.create_task(self._launch())
+        try:
+            await asyncio.shield(launch)
+        except asyncio.CancelledError:
+            await launch
+            raise
+
+    async def _launch(self) -> None:
         try:
             self._process = await asyncio.create_subprocess_exec(
                 *self.argv,
@@ -112,16 +123,32 @@ class Proc:
     async def stop(self) -> None:
         self._stopping = True
         process = self._process
-        if process is None or process.returncode is not None:
+        if process is None:
             return
+        # The group can outlive its leader, including when descendants close stdout.
         _signal_group(process.pid, signal.SIGTERM)
-        try:
-            await asyncio.wait_for(process.wait(), _RESTART_GRACE)
-        except TimeoutError:
-            _signal_group(process.pid, signal.SIGKILL)
-            await process.wait()
+        deadline = asyncio.get_running_loop().time() + _RESTART_GRACE
+        while _group_exists(process.pid):
+            if asyncio.get_running_loop().time() >= deadline:
+                self.console.line(self.name, "shutdown grace expired; killing remaining processes")
+                _signal_group(process.pid, signal.SIGKILL)
+                break
+            await asyncio.sleep(0.05)
+        # A descendant which deliberately detached can keep the output pipe open.
+        # Do not let that prevent the rest of the services from shutting down.
+        pending: list[asyncio.Task[int] | asyncio.Task[None]] = [asyncio.create_task(process.wait())]
         if self._reader is not None:
-            await asyncio.gather(self._reader, return_exceptions=True)
+            pending.append(self._reader)
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*pending, return_exceptions=True), _DRAIN_GRACE
+            )
+        except TimeoutError:
+            self.console.line(self.name, "timed out draining output after shutdown")
+        if process.returncode is None:
+            raise RuntimeError(f"{self.name}: process {process.pid} did not exit after SIGKILL")
+        self._process = None
+        self._reader = None
 
     async def restart(self, why: str) -> None:
         self.console.line(self.name, f"restarting ({why})")
@@ -132,11 +159,16 @@ class Proc:
 def _signal_group(pid: int, sig: signal.Signals) -> None:
     try:
         os.killpg(pid, sig)
-    except (ProcessLookupError, PermissionError):
-        try:
-            os.kill(pid, sig)
-        except ProcessLookupError:
-            pass
+    except ProcessLookupError:
+        pass
+
+
+def _group_exists(pid: int) -> bool:
+    try:
+        os.killpg(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def _reachable(host: str, port: int, timeout: float = 0.5) -> bool:
@@ -197,27 +229,51 @@ class DevRunner:
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
         stop = asyncio.Event()
+        previous_handlers = {}
         for sig in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[sig] = signal.getsignal(sig)
             loop.add_signal_handler(sig, stop.set)
         watcher: asyncio.Task[None] | None = None
+        startup = asyncio.create_task(self._start())
+        stopped = asyncio.create_task(stop.wait())
         try:
-            self.console.note(f"project {self.manifest.project.name} ({self.manifest.path})")
-            if not await self._start_temporal():
+            await asyncio.wait((startup, stopped), return_when=asyncio.FIRST_COMPLETED)
+            if stop.is_set() or not startup.result():
                 return
-            await self._start_platform()
-            await self._start_workers()
             self._summary()
             if self.watch_enabled:
                 watcher = asyncio.create_task(self._watch(stop))
             await stop.wait()
         finally:
-            self.console.note("stopping…")
-            if watcher is not None:
-                watcher.cancel()
-                await asyncio.gather(watcher, return_exceptions=True)
-            for proc in reversed(self.procs):
-                await proc.stop()
-            self.console.note("stopped")
+            try:
+                self.console.note("stopping…")
+                tasks = [startup, stopped]
+                if watcher is not None:
+                    tasks.append(watcher)
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                # Give every service its grace period at once. A cleanup error must
+                # not prevent attempts to stop the other process groups.
+                results = await asyncio.gather(
+                    *(proc.stop() for proc in reversed(self.procs)), return_exceptions=True
+                )
+                errors = [result for result in results if isinstance(result, BaseException)]
+                if errors:
+                    raise BaseExceptionGroup("dev process cleanup failed", errors)
+                self.console.note("stopped")
+            finally:
+                for sig, handler in previous_handlers.items():
+                    loop.remove_signal_handler(sig)
+                    signal.signal(sig, handler)
+
+    async def _start(self) -> bool:
+        self.console.note(f"project {self.manifest.project.name} ({self.manifest.path})")
+        if not await self._start_temporal():
+            return False
+        await self._start_platform()
+        await self._start_workers()
+        return True
 
     def _proc(
         self,
@@ -323,7 +379,7 @@ class DevRunner:
         self.console.note(
             f"{len(self.workers)} worker(s) running"
             + ("; watching for changes" if self.watch_enabled else "")
-            + ". Ctrl-C stops everything."
+            + ". Ctrl-C stops services started here."
         )
 
     # ------------------------------------------------------------------ watching
