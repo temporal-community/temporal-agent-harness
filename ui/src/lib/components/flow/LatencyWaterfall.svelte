@@ -589,7 +589,7 @@
 
   .roll.model .roll-icon { color: var(--model); }
   .roll.tool .roll-icon { color: var(--tool); }
-  .roll.approval .roll-icon { color: var(--queue); }
+  .roll.approval .roll-icon { color: var(--live); }
 
   .roll-text {
     display: grid;
@@ -647,7 +647,7 @@
 
   .lane-mark.model { color: var(--model); }
   .lane-mark.tool { color: var(--tool); }
-  .lane-mark.approval { color: var(--queue); }
+  .lane-mark.approval { color: var(--live); }
 
   .axis {
     position: relative;
@@ -768,7 +768,7 @@
      would cost more lines than repeating the triple the way the file already does. */
   .slice.model { background: var(--model); }
   .slice.tool { background: var(--tool); }
-  .slice.approval { background: var(--queue); }
+  .slice.approval { background: var(--live); }
 
   .track {
     position: relative;
@@ -935,7 +935,7 @@
   }
 
   .bar.tool { background: var(--tool); }
-  .bar.approval { background: var(--queue); }
+  .bar.approval { background: var(--live); }
   .bar.error { background: var(--error); }
 
   .bar.ongoing {

@@ -575,7 +575,10 @@
     transition: height var(--duration-fast) var(--ease-out);
   }
 
-  .cue.approval::before,
+  .cue.approval::before {
+    background: var(--live);
+  }
+
   .cue.queue::before {
     background: var(--queue);
   }
@@ -672,7 +675,10 @@
     background: var(--error);
   }
 
-  .dot.approval,
+  .dot.approval {
+    background: var(--live);
+  }
+
   .dot.queue {
     background: var(--queue);
   }

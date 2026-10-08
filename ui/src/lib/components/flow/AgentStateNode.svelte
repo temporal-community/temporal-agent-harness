@@ -294,7 +294,7 @@
   .model { --tone-color: var(--model); }
   .reasoning { --tone-color: var(--reasoning); }
   .tool { --tone-color: var(--tool); }
-  .approval,
+  .approval { --tone-color: var(--live); }
   .queue { --tone-color: var(--queue); }
   .done { --tone-color: var(--success); }
   .error { --tone-color: var(--error); }
@@ -350,7 +350,7 @@
   .title-dot.model { background: var(--model); }
   .title-dot.reasoning { background: var(--reasoning); }
   .title-dot.tool { background: var(--tool); }
-  .title-dot.approval { background: var(--queue); }
+  .title-dot.approval { background: var(--live); }
 
   :global(.node-handle) {
     width: 1px;
@@ -363,9 +363,9 @@
   :global(.node-handle.approval-port) {
     width: 9px;
     height: 9px;
-    border: 1px solid color-mix(in srgb, var(--queue) 76%, var(--text-1) 10%);
-    background: var(--queue);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--queue) 24%, transparent);
+    border: 1px solid color-mix(in srgb, var(--live) 76%, var(--text-1) 10%);
+    background: var(--live);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 24%, transparent);
     opacity: 1;
   }
 

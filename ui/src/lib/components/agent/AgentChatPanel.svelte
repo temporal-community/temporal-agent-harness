@@ -27,6 +27,7 @@
   import { formatTokens } from "$lib/cost/pricing";
   import Chip, { type ChipTone } from "$lib/components/primitives/Chip.svelte";
   import Copyable from "$lib/components/primitives/Copyable.svelte";
+  import IconAgent from "$lib/components/primitives/IconAgent.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
   import { codeModeHostsByRow } from "$lib/state/codeModeNesting";
@@ -1278,7 +1279,7 @@
         <article class={`message ${message.role}`}>
           {#if message.role === "assistant"}
             <div class="assistant-avatar" aria-hidden="true">
-              <Sparkles size={15} />
+              <IconAgent size={16} />
             </div>
           {/if}
 
@@ -1433,7 +1434,7 @@
       {#if sending && !closed && live}
         <article class="message assistant">
           <div class="assistant-avatar" aria-hidden="true">
-            <Sparkles size={15} />
+            <IconAgent size={16} />
           </div>
           <div class="bubble thinking">
             <span></span><span></span><span></span>
@@ -1497,7 +1498,10 @@
                 {/if}
                 <div class="approval-actions">
                   <Chip
+                    class="approval-button"
+                    tone="success"
                     fill="quiet"
+                    toned
                     disabled={!onApproveTool || isApprovalResolving(approval)}
                     onclick={(event) => void resolveApproval(event, approval, true)}
                     onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
@@ -1508,7 +1512,10 @@
                     Approve
                   </Chip>
                   <Chip
+                    class="approval-button"
+                    tone="queue"
                     fill="quiet"
+                    toned
                     disabled={!onApproveTool || isApprovalResolving(approval)}
                     onclick={(event) => void resolveApproval(event, approval, true, true)}
                     onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
@@ -1519,6 +1526,7 @@
                     Always allow
                   </Chip>
                   <Chip
+                    class="approval-button approval-reject"
                     tone="error"
                     fill="quiet"
                     toned
@@ -2081,7 +2089,7 @@
   .activity-line.model .activity-icon { color: var(--model); }
   .activity-line.reasoning .activity-icon { color: var(--reasoning); }
   .activity-line.tool .activity-icon { color: var(--tool); }
-  .activity-line.approval .activity-icon { color: var(--queue); }
+  .activity-line.approval .activity-icon { color: var(--live); }
   .activity-line.done .activity-icon { color: var(--success); }
   .activity-line.error .activity-icon { color: var(--error); }
   .activity-line.turn-summary .activity-icon { color: var(--accent); }
@@ -2284,10 +2292,51 @@
   }
 
   .approval-actions {
+    min-width: 0;
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
+    gap: var(--gap-sm);
     align-items: center;
+  }
+
+  .pending-approval-card .approval-actions :global(.approval-button) {
+    border-color: var(--color-border-tertiary);
+    border-radius: 4px;
+    background: var(--color-interactive-tertiary);
+    color: var(--color-content-primary);
+    font-size: var(--font-md);
+    letter-spacing: normal;
+    text-transform: none;
+  }
+
+  .pending-approval-card .approval-actions :global(.approval-button:hover:not(:disabled)) {
+    border-color: var(--color-border-tertiary);
+    background: var(--color-interactive-tertiary-hover);
+    color: var(--color-content-primary);
+  }
+
+  .pending-approval-card .approval-actions :global(.approval-button:active:not(:disabled)) {
+    border-color: var(--color-border-tertiary);
+    background: var(--color-interactive-tertiary-press);
+  }
+
+  .pending-approval-card .approval-actions :global(.approval-button.approval-reject) {
+    border-color: var(--color-border-danger);
+    background: var(--color-surface-overlay-danger);
+  }
+
+  .pending-approval-card
+    .approval-actions
+    :global(.approval-button.approval-reject:hover:not(:disabled)) {
+    border-color: var(--color-border-danger);
+    background: var(--color-surface-danger);
+  }
+
+  .pending-approval-card
+    .approval-actions
+    :global(.approval-button.approval-reject:active:not(:disabled)) {
+    border-color: var(--color-border-danger);
+    background: var(--color-surface-danger);
   }
 
   .approval-error {
@@ -2357,18 +2406,18 @@
     min-width: 0;
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    gap: 10px;
-    padding: 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--surface-0);
+    gap: var(--gap-md);
+    padding: var(--gutter-tight);
+    border: 1px solid var(--color-border-primary);
+    border-radius: 4px;
+    background: var(--color-surface-primary);
   }
 
   .pending-approval-head {
     min-width: 0;
     display: flex;
     flex-wrap: wrap;
-    gap: 8px 12px;
+    gap: var(--gap-md) var(--gap-lg);
     align-items: baseline;
     justify-content: space-between;
   }
@@ -2376,7 +2425,7 @@
   .pending-approval-head strong {
     min-width: 0;
     overflow: hidden;
-    color: var(--text-1);
+    color: var(--color-content-primary);
     font-size: var(--font-lg);
     font-weight: 600;
     text-overflow: ellipsis;
@@ -2384,7 +2433,7 @@
   }
 
   .pending-approval-head span {
-    color: var(--text-3);
+    color: var(--color-content-secondary);
     font-family: var(--font-mono);
     font-size: var(--font-2xs);
     line-height: 1.4;

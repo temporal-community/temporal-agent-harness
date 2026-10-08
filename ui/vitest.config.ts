@@ -15,7 +15,7 @@ export default defineConfig({
     }
   },
   test: {
-    include: ["src/**/*.test.mjs", "tests/**/*.test.mjs"],
+    include: ["src/**/*.test.mjs", "src/**/*.test.ts", "tests/**/*.test.mjs"],
     /* Several of these drive a real controller through catch-up windows and
        backoff ladders measured in whole seconds — the attach retry budget alone
        walks 31.5s by design. The default 5s would fail them for being what they

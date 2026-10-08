@@ -203,7 +203,8 @@
     if (tone === "error") return "var(--error)";
     if (tone === "model" || tone === "reasoning") return "var(--model)";
     if (tone === "tool") return "var(--tool)";
-    if (tone === "queue" || tone === "approval") return "var(--queue)";
+    if (tone === "approval") return "var(--live)";
+    if (tone === "queue") return "var(--queue)";
     return "var(--accent)";
   }
 
@@ -369,7 +370,7 @@
   .node-inspector.model { --tone-color: var(--model); }
   .node-inspector.reasoning { --tone-color: var(--reasoning); }
   .node-inspector.tool { --tone-color: var(--tool); }
-  .node-inspector.approval,
+  .node-inspector.approval { --tone-color: var(--live); }
   .node-inspector.queue { --tone-color: var(--queue); }
   .node-inspector.done { --tone-color: var(--success); }
   .node-inspector.error { --tone-color: var(--error); }
@@ -421,7 +422,7 @@
   .inspector-dot.model { background: var(--model); }
   .inspector-dot.reasoning { background: var(--reasoning); }
   .inspector-dot.tool { background: var(--tool); }
-  .inspector-dot.approval,
+  .inspector-dot.approval { background: var(--live); }
   .inspector-dot.queue { background: var(--queue); }
   .inspector-dot.done { background: var(--success); }
   .inspector-dot.error { background: var(--error); }
@@ -541,13 +542,13 @@
   }
 
   :global(.edge-approval .svelte-flow__edge-path) {
-    stroke: color-mix(in srgb, var(--queue) 78%, var(--text-1) 6%);
+    stroke: color-mix(in srgb, var(--live) 78%, var(--text-1) 6%);
     stroke-width: 2;
     stroke-dasharray: 6 5;
   }
 
   :global(.edge-approval .svelte-flow__edge-text) {
-    fill: color-mix(in srgb, var(--queue) 82%, var(--text-1) 8%);
+    fill: color-mix(in srgb, var(--live) 82%, var(--text-1) 8%);
   }
 
   :global(.edge-output .svelte-flow__edge-path) {

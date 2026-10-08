@@ -1,3 +1,5 @@
+@import "./lib/theme/io-tokens.css";
+
 :root {
   color-scheme: dark;
   /* Instrument, not terminal: sans carries content, mono is reserved for chrome
@@ -68,14 +70,15 @@
   --accent: #6173f3;
   --accent-soft: #a9aef5;
   /* Reserved for "this needs you" — never chrome, never decoration. */
-  --live: #fad000;
+  --color-attention: var(--color-amber-9);
+  --live: var(--color-attention);
   --model: #a9aef5;
   --reasoning: #53dfca;
   /* Identity, not outcome: --tool says a tool is what this is, the way --model and
      --reasoning do, and it answers a different question from --success/--warning/
      --error, which say how it went. The two maps overlay — a tool that warns is
      both — so they cannot be one token. */
-  --tool: #ff9d00;
+  --tool: var(--color-pink-9);
   --success: #6ee7b7;
   --warning: #fcd34d;
   /* Retrying. Deliberately between --warning and --error, because that is what
