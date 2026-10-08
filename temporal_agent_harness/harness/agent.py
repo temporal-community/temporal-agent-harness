@@ -42,7 +42,10 @@
 #     @agent.activity_tool_defn()
 #     async def read_page(store: Injected[str], page_url: str) -> str: ...
 
-from temporal_agent_harness.harness.agent_protocol import ToolApprovalContext, ToolApprovalPolicy
+from temporal_agent_harness.harness.agent_protocol import (
+    ToolApprovalContext,
+    ToolApprovalPolicy,
+)
 from temporal_agent_harness.harness.agent_workflow import (
     AgentToolContext,
     CallbackToolError,
@@ -58,8 +61,15 @@ from temporal_agent_harness.harness.agent_workflow import (
 )
 from temporal_agent_harness.harness.code_mode import code_mode_tool
 from temporal_agent_harness.harness.subagent_toolset import subagent_toolset
+from temporal_agent_harness.harness.workflow_tools import (
+    AgentMessageInbox,
+    WorkflowMessage,
+    child_workflow_as_tool,
+    send_message_tool,
+)
 
 __all__ = [
+    "AgentMessageInbox",
     "AgentToolContext",
     "CallbackToolError",
     "CustomApprovalFallback",
@@ -67,11 +77,14 @@ __all__ = [
     "ToolApprovalContext",
     "ToolApprovalDenied",
     "ToolApprovalPolicy",
+    "WorkflowMessage",
     "accepts",
     "activity_tool_defn",
     "callback_tool_defn",
+    "child_workflow_as_tool",
     "code_mode_tool",
     "defn",
+    "send_message_tool",
     "subagent_toolset",
     "tool_activity",
     "tool_defn",

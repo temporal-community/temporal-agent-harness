@@ -1,0 +1,6 @@
+[[agents]]
+key = "shared-tools-openai"
+workflow_type = "SharedToolsOpenAIAgent"
+task_queue = "shared-tools-openai"
+label = "Shared workflow tools"
+description = "Local model fixture; real OpenAI Agents SDK loop, child research workflow, progress inbox, and mailbox Signal. Ask: Why is the sky blue?"

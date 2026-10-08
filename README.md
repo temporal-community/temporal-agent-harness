@@ -249,6 +249,69 @@ that run as retried, observable Temporal activities, and inline workflow tools
 standardized event stream. (A third flavor — **callback tools** — runs on an attached client
 instead of the worker; see below.)
 
+### Child workflows and asynchronous agent messages
+
+See [`examples/shared_workflow_tools`](examples/shared_workflow_tools) for a runnable
+OpenAI Agents example using local model responses and real Temporal execution.
+
+`agent.child_workflow_as_tool()` and `agent.send_message_tool()` produce shared
+`@agent.tool_defn()` callables. They use the harness's approval policy and tool
+lifecycle events and require no OpenAI dependency. Use them through
+`runner.run_tool(...)`, or adapt them with `as_openai_agent_tools(runner, tools)`
+or `as_pydantic_ai_tools(tools)`; Gemini's `function_param` reads the same callable
+signatures. Tool invocation must remain inside the workflow.
+
+```python
+from temporalio import workflow
+from temporal_agent_harness.harness import agent
+
+
+@workflow.defn
+class ResearchWorkflow:
+    @workflow.run
+    async def run(self, question: str) -> str:
+        """Research a question with your chosen inner harness."""
+        # Construct and run the specialist here; external I/O belongs in activities.
+        return question
+
+tools = [
+    agent.child_workflow_as_tool(
+        ResearchWorkflow.run,
+        tool_name="research",
+        tool_description="Research a question with a specialist.",
+        task_queue="researchers",
+    ),
+    agent.send_message_tool({"reviewer": "reviewer-workflow-id"}),
+]
+```
+
+Register the child workflow on its worker. It can use any inner harness or be an
+ordinary Temporal workflow. The tool waits for completion and returns its typed
+result. Leave `id` unset for repeated invocations; Temporal generates a unique ID
+deterministically. Timeouts, retries, cancellation, parent close policy, and
+worker versioning options can be configured in the factory. Existing
+`agent.subagent_toolset()` remains the interface for persistent agents that
+accept successive turns using start/send/stop tools.
+
+For asynchronous progress or sibling messages, instantiate
+`agent.AgentMessageInbox()` in the recipient workflow's constructor, before it
+waits for messages. Consume `await inbox.receive(timeout=...)`, inspect
+`inbox.messages`, or call `inbox.drain()`. The immutable `agent.WorkflowMessage`
+envelope contains `id`, `sender_workflow_id`, `sender_run_id`, and `body`; it is
+distinct from the harness protocol's `AgentMessage` turn request. Both sender and
+recipient must use the same Signal name (default:
+`temporal_agent_harness.receive_message`).
+
+`agent.send_message_tool({}, include_parent=True)` lets a child address its parent
+as `parent`. The parent is resolved during invocation, so the factory can be built
+outside a workflow. Other recipients use an explicit alias to workflow ID map;
+the model cannot supply arbitrary workflow IDs. Signal delivery acknowledgement
+does not mean processing is complete and does not return a reply. Messages do not
+automatically trigger an inner harness turn: the recipient chooses how to consume
+them. Pending inbox contents are workflow state and must be explicitly carried
+forward if the recipient uses Continue As New. Register only one inbox per Signal
+name in a workflow, since constructing another replaces the handler.
+
 ### 📞 Callback tools — let the client run the tool
 An agent running on a Temporal worker often needs to act somewhere it can't reach — a file on the
 user's laptop, a photo from their phone, a device on a private network. A **callback tool**
