@@ -19,6 +19,67 @@ from temporal_agent_harness.dev.runner import Console, Proc
 from .test_runner import _runner, _until
 
 
+@pytest.mark.parametrize("sig", [0, signal.SIGTERM, signal.SIGKILL])
+@pytest.mark.parametrize("members", ["", "123 Z\n123 Z+\n456 S\n"])
+def test_macos_zombie_only_group_is_already_stopped(monkeypatch, sig, members):
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    def denied(*args):
+        raise PermissionError("group has no signalable members")
+
+    monkeypatch.setattr(os, "killpg", denied)
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 0, members)
+    )
+    if sig == 0:
+        assert not runner_module._group_exists(123)
+    else:
+        runner_module._signal_group(123, sig)
+
+
+@pytest.mark.parametrize("sig", [0, signal.SIGTERM, signal.SIGKILL])
+@pytest.mark.parametrize("inspection", [
+    "123 Z\n123 S\n",  # The leader exited, but a descendant is still alive.
+    "invalid output",
+    subprocess.CalledProcessError(1, "ps"),
+    subprocess.TimeoutExpired("ps", 1),
+    FileNotFoundError("ps"),
+])
+def test_macos_permission_errors_survive_live_or_unknown_group_state(monkeypatch, sig, inspection):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    error = PermissionError("cannot signal live group")
+
+    def denied(*args):
+        raise error
+
+    def inspect(*args, **kwargs):
+        if isinstance(inspection, Exception):
+            raise inspection
+        return subprocess.CompletedProcess(args, 0, inspection)
+
+    monkeypatch.setattr(os, "killpg", denied)
+    monkeypatch.setattr(subprocess, "run", inspect)
+    with pytest.raises(PermissionError) as exc:
+        if sig == 0:
+            runner_module._group_exists(123)
+        else:
+            runner_module._signal_group(123, sig)
+    assert exc.value is error
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin's zombie-only group behavior")
+async def test_real_macos_zombie_group_does_not_fail_cleanup():
+    # Keep the exited child unreaped so the group remains present with only a zombie.
+    process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    try:
+        await _until(lambda: not _alive(process.pid))
+        assert not runner_module._group_exists(process.pid)
+        runner_module._signal_group(process.pid, signal.SIGTERM)
+        runner_module._signal_group(process.pid, signal.SIGKILL)
+    finally:
+        process.wait(timeout=5)
+
+
 def _alive(pid: int) -> bool:
     # Orphans may briefly remain as zombies until init reaps them, especially in CI.
     result = subprocess.run(

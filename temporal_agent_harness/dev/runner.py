@@ -12,6 +12,7 @@ import os
 import shutil
 import signal
 import socket
+import subprocess
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -161,6 +162,9 @@ def _signal_group(pid: int, sig: signal.Signals) -> None:
         os.killpg(pid, sig)
     except ProcessLookupError:
         pass
+    except PermissionError:
+        if _group_may_have_live_members(pid):
+            raise
 
 
 def _group_exists(pid: int) -> bool:
@@ -168,7 +172,31 @@ def _group_exists(pid: int) -> bool:
         os.killpg(pid, 0)
     except ProcessLookupError:
         return False
+    except PermissionError:
+        if _group_may_have_live_members(pid):
+            raise
+        return False
     return True
+
+
+def _group_may_have_live_members(pid: int) -> bool:
+    # Darwin can return EPERM for a group containing only zombies. Check the
+    # whole group, not just its leader: workers may leave descendants behind.
+    # An inconclusive inspection must preserve the original permission error.
+    if sys.platform != "darwin":
+        return True
+    try:
+        result = subprocess.run(
+            ["ps", "-A", "-o", "pgid=,stat="],
+            capture_output=True, text=True, check=True, timeout=1,
+        )
+        for line in result.stdout.splitlines():
+            pgid, status = line.split()
+            if int(pgid) == pid and not status.startswith("Z"):
+                return True
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return True
+    return False
 
 
 def _reachable(host: str, port: int, timeout: float = 0.5) -> bool:
