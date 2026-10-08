@@ -121,7 +121,7 @@
     onApproveTool
   }: Props = $props();
   let draft = $state("");
-  let composerInput = $state<HTMLInputElement | null>(null);
+  let composerInput = $state<HTMLTextAreaElement | null>(null);
   let historyIndex = $state(-1);
   let historyStash = $state("");
   let localMessages = $state<ChatMessage[]>([]);
@@ -1038,6 +1038,7 @@
 
     draft = "";
     historyIndex = -1;
+    void tick().then(resizeComposer);
     if (operatorCommand != null) {
       const commandTarget = slashTarget;
       if (onOperatorCommand) {
@@ -1244,8 +1245,19 @@
     element.setSelectionRange(end, end);
   }
 
+  function resizeComposer(): void {
+    const element = composerInput;
+    if (!element) return;
+    element.style.height = "auto";
+    const styles = getComputedStyle(element);
+    const minHeight = Number.parseFloat(styles.minHeight) || 0;
+    const maxHeight = Number.parseFloat(styles.maxHeight) || 224;
+    element.style.height = `${Math.min(Math.max(element.scrollHeight, minHeight), maxHeight)}px`;
+    element.style.overflowY = element.scrollHeight > maxHeight ? "auto" : "hidden";
+  }
+
   function handleComposerKeydown(event: KeyboardEvent): void {
-    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    if (event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
 
     if (event.key === "ArrowDown" || event.key === "ArrowRight") {
       if (moveSlashSelection(1)) {
@@ -1275,10 +1287,26 @@
       return;
     }
 
-    if ((event.key === "Tab" && !event.shiftKey) || event.key === "Enter") {
-      if (!acceptSlashSelection()) return;
+    if (event.key === "Tab" && !event.shiftKey) {
+      if (acceptSlashSelection()) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      return;
+    }
+
+    if (event.key === "Enter") {
+      if (!event.shiftKey && acceptSlashSelection()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (event.shiftKey) {
+        resetHistoryRecall();
+        return;
+      }
       event.preventDefault();
-      event.stopPropagation();
+      void sendMessage();
       return;
     }
 
@@ -1679,14 +1707,16 @@
 
       <form class="composer" class:closed={closed} onsubmit={handleSubmit}>
         <Search size={17} />
-        <input
+        <textarea
           bind:this={composerInput}
           bind:value={draft}
+          rows="1"
           placeholder={composerPlaceholder}
           aria-label={`Message ${agentLabel}`}
           disabled={composerDisabled}
+          oninput={resizeComposer}
           onkeydown={handleComposerKeydown}
-        />
+        ></textarea>
         <IconButton
           type="submit"
           label="Send message"
@@ -2477,21 +2507,29 @@
      IconButton is --control-height, and this was left on a literal 32px when the
      button adopted it. The drift checker cannot catch this one — it only looks at
      heights near a `cursor: pointer`, and a text field has none. */
-  .composer input {
+  .composer textarea {
+    box-sizing: border-box;
     min-width: 0;
+    min-height: var(--control-height);
+    max-height: 224px;
     height: var(--control-height);
+    padding: 0;
+    resize: none;
+    overflow-y: hidden;
     border: 0;
     outline: none;
     background: transparent;
     color: var(--text-1);
+    font: inherit;
     font-size: var(--font-lg);
+    line-height: 1.4;
   }
 
-  .composer input::placeholder {
+  .composer textarea::placeholder {
     color: var(--text-3);
   }
 
-  .composer input:disabled {
+  .composer textarea:disabled {
     opacity: var(--disabled-opacity);
   }
 
