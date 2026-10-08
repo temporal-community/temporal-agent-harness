@@ -1,0 +1,19 @@
+diff --git a/app/orders.py b/app/orders.py
+index 432ab12..bc34567 100644
+--- a/app/orders.py
++++ b/app/orders.py
+@@ -1,7 +1,10 @@
+ def order_summary(request, db):
+     customer_id = request.args["customer_id"]
+-    require_customer_access(request.user, customer_id)
+-    rows = db.execute("SELECT amount FROM orders WHERE customer_id = ?", (customer_id,)).fetchall()
++    rows = db.execute(f"SELECT amount FROM orders WHERE customer_id = '{customer_id}'").fetchall()
+     amounts = [row[0] for row in rows]
+-    average = sum(amounts) / len(amounts) if amounts else 0
+-    return {"average": average}
++    average = sum(amounts) / len(amounts)
++    discount = float(request.args.get("discount", "0"))
++    return {
++        "average": average,
++        "discounted_total": sum(amounts) * (1 - discount),
++    }

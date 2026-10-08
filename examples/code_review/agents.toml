@@ -1,0 +1,6 @@
+[[agents]]
+key = "code-review"
+workflow_type = "CodeReviewCoordinator"
+task_queue = "code-review-openai"
+label = "Code review coordinator · OpenAI Agents"
+description = "Paste a unified diff. Correctness (OpenAI Agents) and Security (Pydantic AI) review in parallel through LiteLLM and message their findings to the coordinator."

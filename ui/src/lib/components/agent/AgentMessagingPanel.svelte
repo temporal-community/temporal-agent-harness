@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ArrowRight, Bot, MessageCircle } from "@lucide/svelte";
+  import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
   import type { ReplayLogRow } from "$lib/state/replayLog";
   let { logs, agentLabel, sessionId, closed }: {
     logs: ReplayLogRow[]; agentLabel: string; sessionId: string; closed: boolean;
@@ -22,7 +23,7 @@
   });
   let messages = $derived.by(() => logs.flatMap((row) => {
     if (row.event === "agent_message_sent") return [{
-      ...row, kind: "Signal", statusLabel: "Delivered"
+      ...row, kind: messageKind(row.body), statusLabel: "Delivered"
     }];
     const child = agents.find((agent) => agent.id === row.workflowId);
     if (!child || (row.event !== "turn_started" && row.event !== "reply")) return [];
@@ -37,6 +38,22 @@
   function label(id?: string): string {
     if (id === sessionId) return agentLabel;
     return agents.find((agent) => agent.id === id)?.label ?? id ?? "Agent";
+  }
+  function messageText(body?: string): string {
+    try {
+      const value = JSON.parse(body ?? "");
+      if (value && typeof value === "object" && typeof value.text === "string") return value.text;
+    } catch { /* Plain-text agent messages remain plain text. */ }
+    return body ?? "";
+  }
+  function messageKind(body?: string): string {
+    try {
+      const value = JSON.parse(body ?? "");
+      if (value?.type === "review_findings") return "Findings report";
+      if (value?.type === "review_progress") return "Review progress";
+      if (value?.type === "review_guidance") return "Review guidance";
+    } catch { /* The shared Signal protocol also accepts unstructured messages. */ }
+    return "Signal";
   }
   function role(id?: string): string {
     if (id === sessionId) return "Parent";
@@ -79,7 +96,7 @@
                 <strong>{label(message.recipientWorkflowId)}</strong>
               </div>
             </div>
-            <p>{message.body}</p>
+            <div class="message-body"><MarkdownMessage text={messageText(message.body)} /></div>
             <footer>{message.statusLabel} · {message.kind} · Turn {message.turnNumber}</footer>
           </article>
         {:else}
@@ -121,5 +138,6 @@
   time { margin-left: auto; opacity: .55; font-size: 10px; }
   p { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
   footer, .note, .empty { opacity: .6; font-size: 10px; }
+  .message-body { margin: 8px 0; overflow-wrap: anywhere; }
   .note { margin-bottom: 0; }
 </style>
