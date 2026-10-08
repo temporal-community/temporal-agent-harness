@@ -1,7 +1,6 @@
-"""Local model fixtures: no credentials or external model requests."""
+"""Local fixtures drive actual SDK loops for both parent and child agents."""
 
 import json
-
 
 from temporal_agent_harness.ai_sdks.openai_agents.testing import (
     ResponseBuilders,
@@ -12,7 +11,14 @@ QUESTION = "Why is the sky blue?"
 ANSWER = (
     "Blue wavelengths scatter more strongly in the atmosphere (Rayleigh scattering)."
 )
-NOTICE = "Research finished: " + ANSWER
+FIRST_INSTRUCTION = "Explain the physical cause briefly."
+FOLLOWUP_INSTRUCTION = "Now explain it for a five-year-old."
+
+
+def tool_response(name, arguments, call_id):
+    response = ResponseBuilders.tool_call(json.dumps(arguments), name)
+    response.output[0].call_id = call_id
+    return response
 
 
 class LocalOpenAIModel(TestModel):
@@ -35,18 +41,51 @@ class LocalOpenAIModel(TestModel):
             for item in input
             if isinstance(item, dict) and item.get("type") == "function_call_output"
         ]
-        if not outputs:
-            response = ResponseBuilders.tool_call(
-                json.dumps({"question": QUESTION}), "research"
+        if any(tool.name == "start_researcher" for tool in tools):
+            count = len(outputs)
+            if count == 0:
+                return tool_response("start_researcher", {}, "start")
+            handle = outputs[0]["output"]
+            steps = {
+                1: (
+                    "send_message",
+                    {"recipient": handle, "message": FIRST_INSTRUCTION},
+                ),
+                2: (
+                    "researcher_ask",
+                    {"subagent": handle, "message": {"text": QUESTION}},
+                ),
+                3: (
+                    "send_message",
+                    {"recipient": handle, "message": FOLLOWUP_INSTRUCTION},
+                ),
+                4: (
+                    "researcher_ask",
+                    {
+                        "subagent": handle,
+                        "message": {"text": "Explain that more simply."},
+                    },
+                ),
+                5: ("stop_researcher", {"subagent": handle}),
+            }
+            if count in steps:
+                name, arguments = steps[count]
+                return tool_response(name, arguments, f"parent-{count}")
+            return ResponseBuilders.output_message(
+                "Parent/child exchange completed. "
+                + str(outputs[2]["output"])
+                + "\nFollow-up: "
+                + str(outputs[4]["output"])
             )
-            response.output[0].call_id = "research-call"
-            return response
-        if len(outputs) == 1:
-            response = ResponseBuilders.tool_call(
-                json.dumps({"recipient": "mailbox", "message": NOTICE}), "send_message"
-            )
-            response.output[0].call_id = "message-call"
-            return response
-        return ResponseBuilders.output_message(
-            "OpenAI adapter completed: " + str(outputs[0]["output"])
+        prompt = next(
+            item["content"]
+            for item in input
+            if isinstance(item, dict) and item.get("role") == "user"
         )
+        if not outputs:
+            return tool_response(
+                "send_message",
+                {"recipient": "parent", "message": "Working on: " + prompt},
+                "child-progress",
+            )
+        return ResponseBuilders.output_message(ANSWER + "\nUsed " + prompt)

@@ -1,6 +1,6 @@
 [[agents]]
-key = "shared-tools-openai"
-workflow_type = "SharedToolsOpenAIAgent"
+key = "parent-child-messaging"
+workflow_type = "MessagingParentAgent"
 task_queue = "shared-tools-openai"
-label = "Shared workflow tools"
-description = "Local model fixture; real OpenAI Agents SDK loop, child research workflow, progress inbox, and mailbox Signal. Ask: Why is the sky blue?"
+label = "Parent and subagent messaging"
+description = "Start a persistent research subagent, exchange messages in both directions, and drive two turns on the same child. Local OpenAI model fixtures; real harness and Temporal execution."

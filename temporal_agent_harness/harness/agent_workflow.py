@@ -2157,6 +2157,14 @@ class AgentWorkflowRunner:
         )
         return handle
 
+    def subagent_workflow_id(self, handle: str) -> str:
+        """Resolve an active child handle owned by this agent to its workflow ID.
+
+        Unknown handles and children removed by ``stop_subagent`` are rejected,
+        matching the existing subagent turn and stop tools.
+        """
+        return self._status.subagent(handle).workflow_id
+
     async def stop_subagent(self, handle: str) -> None:
         """Signal a subagent to close and drop it from the registry.
 

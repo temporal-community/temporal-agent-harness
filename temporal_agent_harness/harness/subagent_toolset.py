@@ -120,9 +120,11 @@ def _make_send_tool(
     output_type = handler.output_type
     param_name = _handler_param_name(handler)
 
-    async def _send(subagent: str, **model_kwargs: Any) -> BaseModel:
-        # The model passes the input under ``param_name`` as a raw dict; coerce + validate.
-        payload = input_type.model_validate(model_kwargs.get(param_name, {}))
+    async def _send(subagent: str, *args: Any, **model_kwargs: Any) -> BaseModel:
+        # SDK adapters may invoke the advertised signature positionally or by
+        # keyword. Bind both forms against that same model-facing signature.
+        bound = inspect.signature(_send).bind(subagent, *args, **model_kwargs)
+        payload = input_type.model_validate(bound.arguments[param_name])
         output = await _current_runner().run_subagent_turn(
             subagent, fn_name, payload.model_dump(mode="json")
         )

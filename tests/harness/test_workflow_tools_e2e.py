@@ -1,5 +1,6 @@
-"""Exercise shared child execution and Signal inboxes on a real Temporal server."""
+"""Persistent agents use existing delegation and message each other both ways."""
 
+import asyncio
 import uuid
 from datetime import timedelta
 
@@ -18,30 +19,47 @@ from temporal_agent_harness.harness.agent_protocol import (
     TextMessage,
     TextReply,
 )
-
-
-@workflow.defn
-class IndependentChild:
-    @workflow.run
-    async def run(self, question: str) -> str:
-        """Answer without any inner agent SDK."""
-        parent = workflow.info().parent
-        assert parent is not None
-        await workflow.get_external_workflow_handle(parent.workflow_id).signal(
-            "temporal_agent_harness.receive_message",
-            agent.WorkflowMessage(
-                str(workflow.uuid4()),
-                workflow.info().workflow_id,
-                workflow.info().run_id,
-                "working",
-            ),
-        )
-        return "answer:" + question
+from temporal_agent_harness.plugin import AgentHarnessPlugin
 
 
 @workflow.defn
 @agent.defn
-class WorkflowToolProbe:
+class MessagingChild:
+    @workflow.init
+    def __init__(self, config: AgentConfig) -> None:
+        self.inbox = agent.AgentMessageInbox()
+        self.runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=agent.ToolApprovalPolicy.dangerously_skip_all(),
+        )
+        self.received: list[str] = []
+
+    @workflow.run
+    async def run(self, config: AgentConfig) -> None:
+        await self.runner.run(self)
+
+    @workflow.query
+    def messages(self) -> list[str]:
+        return self.received
+
+    @agent.accepts
+    async def ask(self, message: TextMessage) -> TextReply:
+        """Consume parent instructions and send progress back while running a turn."""
+        instruction = await self.inbox.receive(timeout=timedelta(seconds=5))
+        self.received.append(instruction.body)
+        await self.runner.run_tool(
+            "progress",
+            agent.send_message_tool(),
+            "parent",
+            "received:" + instruction.body,
+        )
+        return TextReply(text=message.text + ";" + instruction.body)
+
+
+@workflow.defn
+@agent.defn
+class MessagingParent:
     @workflow.init
     def __init__(self, config: AgentConfig) -> None:
         self.inbox = agent.AgentMessageInbox()
@@ -62,30 +80,40 @@ class WorkflowToolProbe:
 
     @agent.accepts
     async def ask(self, message: TextMessage) -> TextReply:
-        """Execute a child and consume its asynchronous progress message."""
-        answer = await self.runner.run_tool(
-            "research",
-            agent.child_workflow_as_tool(IndependentChild.run),
-            question=message.text,
+        """Start one subagent and drive repeated turns with bidirectional messages."""
+        start, ask, stop = agent.subagent_toolset(
+            MessagingChild, key="child", task_queue=workflow.info().task_queue
         )
-        progress = await self.inbox.receive(timeout=timedelta(seconds=5))
-        self.reply = answer + ";" + progress.body
+        handle = await self.runner.run_tool("start", start)
+        replies = []
+        for index, instruction in enumerate(["first", "followup"]):
+            await self.runner.run_tool(
+                f"send-{index}", agent.send_message_tool(), handle, instruction
+            )
+            answer = await self.runner.run_tool(
+                f"ask-{index}", ask, subagent=handle, message={"text": message.text}
+            )
+            progress = await self.inbox.receive(timeout=timedelta(seconds=5))
+            replies.append(answer.text + ";" + progress.body)
+        await self.runner.run_tool("stop", stop, handle)
+        self.reply = "|".join(replies)
         return TextReply(text=self.reply)
 
 
-async def test_shared_child_and_inbox_real_temporal():
+async def test_existing_subagent_toolset_with_bidirectional_messages():
     async with await WorkflowEnvironment.start_time_skipping(
-        data_converter=pydantic_data_converter,
+        data_converter=pydantic_data_converter
     ) as env:
-        queue = "workflow-tools-" + str(uuid.uuid4())
+        queue = "parent-child-messages-" + str(uuid.uuid4())
         async with Worker(
             env.client,
             task_queue=queue,
-            workflows=[WorkflowToolProbe, IndependentChild],
+            workflows=[MessagingParent, MessagingChild],
+            plugins=[AgentHarnessPlugin()],
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
             handle = await env.client.start_workflow(
-                WorkflowToolProbe.run,
+                MessagingParent.run,
                 AgentConfig(),
                 id=queue,
                 task_queue=queue,
@@ -97,25 +125,44 @@ async def test_shared_child_and_inbox_real_temporal():
                     AgentMessage(type="ask", payload={"text": "why?"}, expected_turn=1),
                     result_type=AgentMessageReply,
                 )
-                await workflow_result(handle)
+                async with asyncio.timeout(15):
+                    while not (result := await handle.query("result")):
+                        await asyncio.sleep(0.01)
+                assert (
+                    result
+                    == "why?;first;received:first|why?;followup;received:followup"
+                )
                 history = await handle.fetch_history()
-                assert any(
-                    e.HasField("child_workflow_execution_completed_event_attributes")
+                starts = [
+                    e
                     for e in history.events
-                )
-                assert any(
-                    e.HasField("workflow_execution_signaled_event_attributes")
+                    if e.HasField(
+                        "start_child_workflow_execution_initiated_event_attributes"
+                    )
+                ]
+                assert len(starts) == 1
+                child_id = starts[
+                    0
+                ].start_child_workflow_execution_initiated_event_attributes.workflow_id
+                child = env.client.get_workflow_handle(child_id)
+                await child.result()
+                assert await child.query("messages") == ["first", "followup"]
+                child_history = await child.fetch_history()
+                parent_messages = [
+                    e
                     for e in history.events
-                )
+                    if e.HasField("workflow_execution_signaled_event_attributes")
+                    and e.workflow_execution_signaled_event_attributes.signal_name
+                    == "temporal_agent_harness.receive_message"
+                ]
+                child_messages = [
+                    e
+                    for e in child_history.events
+                    if e.HasField("workflow_execution_signaled_event_attributes")
+                    and e.workflow_execution_signaled_event_attributes.signal_name
+                    == "temporal_agent_harness.receive_message"
+                ]
+                assert len(parent_messages) == len(child_messages) == 2
             finally:
                 await handle.signal("close")
                 await handle.result()
-
-
-async def workflow_result(handle):
-    # Poll through the external client while the harness completes the accepted turn.
-    import asyncio
-
-    async with asyncio.timeout(15):
-        while await handle.query(WorkflowToolProbe.result) != "answer:why?;working":
-            await asyncio.sleep(0.01)

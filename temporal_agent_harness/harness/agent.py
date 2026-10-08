@@ -64,7 +64,6 @@ from temporal_agent_harness.harness.subagent_toolset import subagent_toolset
 from temporal_agent_harness.harness.workflow_tools import (
     AgentMessageInbox,
     WorkflowMessage,
-    child_workflow_as_tool,
     send_message_tool,
 )
 
@@ -81,7 +80,6 @@ __all__ = [
     "accepts",
     "activity_tool_defn",
     "callback_tool_defn",
-    "child_workflow_as_tool",
     "code_mode_tool",
     "defn",
     "send_message_tool",

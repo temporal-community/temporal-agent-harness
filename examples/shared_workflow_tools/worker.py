@@ -1,4 +1,4 @@
-"""Worker for the shared workflow tools example; no provider credentials needed."""
+"""Run the parent and persistent subagent on the harness; no provider keys needed."""
 
 import asyncio
 from datetime import timedelta
@@ -14,7 +14,7 @@ from temporal_agent_harness.ai_sdks.openai_agents.testing import TestModelProvid
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 
 from .models import LocalOpenAIModel
-from .workflow import TASK_QUEUE, MailboxWorkflow, OpenAIDemo, ResearchWorkflow
+from .workflow import TASK_QUEUE, ParentAgent, ResearchAgent
 
 NAMESPACE = "shared-tools-demo"
 
@@ -35,9 +35,7 @@ async def main() -> None:
         ],
     )
     async with Worker(
-        client,
-        task_queue=TASK_QUEUE,
-        workflows=[OpenAIDemo, ResearchWorkflow, MailboxWorkflow],
+        client, task_queue=TASK_QUEUE, workflows=[ParentAgent, ResearchAgent]
     ):
         print(f"READY: namespace={NAMESPACE} queue={TASK_QUEUE}", flush=True)
         await asyncio.Event().wait()
