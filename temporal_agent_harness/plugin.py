@@ -62,7 +62,10 @@ from temporalio.converter import DataConverter, DefaultPayloadConverter, Externa
 from temporalio.plugin import SimplePlugin
 from temporalio.worker import WorkerConfig
 
-from temporal_agent_harness.harness.jev_approvals.activity import JEV_APPROVAL_ACTIVITIES
+from temporal_agent_harness.harness.jev_approvals.activity import (
+    JEV_APPROVAL_ACTIVITIES,
+    missing_typesafe_plugin,
+)
 from temporal_agent_harness.utils.large_payload import DEFAULT_PAYLOAD_STORAGE
 
 if TYPE_CHECKING:
@@ -156,12 +159,10 @@ class AgentHarnessPlugin(SimplePlugin):
       hand-passed ``data_converter=`` both survive.
     * **Subagent activity** — ``run_subagent_turn``, bound to the worker's own ``Client`` so it
       can drive child agents. Every agent built with ``agent.subagent_toolset(...)`` needs it.
-    * **Jev approval activity** — the model call behind
-      :func:`~temporal_agent_harness.harness.jev_approvals.jev_evaluator`, registered
-      unconditionally: the workflow dispatches it by name, so leaving the name unregistered on a worker without the
-      optional ``jev`` extra would make Temporal retry forever and stall every gated tool
-      call mid-approval. The extra is checked per call instead, and a worker without it
-      fails the check once and escalates the call to a human.
+    * **Jev approval compatibility** — the legacy activity remains registered for old
+      histories. New evaluations use the canonical ``TypeSafePlugin`` activity, registered
+      before this plugin. If it is absent, a fallback fails non-retryably with registration
+      guidance, so approvals reach the human gate.
     * **Tool activities** — the durable body of each ``@agent.activity_tool_defn`` tool in
       ``tools``.
     * **Filesystem activities** — the ``vfs.<name>.*`` activities of each
@@ -201,6 +202,7 @@ class AgentHarnessPlugin(SimplePlugin):
             *_tool_activities(tools),
             *_filesystem_activities(filesystems),
             *JEV_APPROVAL_ACTIVITIES,
+            missing_typesafe_plugin,
         ]
 
         def data_converter(converter: DataConverter | None) -> DataConverter:

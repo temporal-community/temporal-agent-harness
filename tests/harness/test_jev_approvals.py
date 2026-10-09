@@ -7,31 +7,35 @@
 #   * the COMPOSITION (decide): pure, so every threshold path is asserted exhaustively —
 #     and every one of them that is not a confident verdict lands on ESCALATE, which is
 #     the whole safety argument;
-# plus the worker-side wiring: the activity is registered by the plugin, and a worker
-# missing the optional `jev` extra fails it non-retryably (so the call escalates) rather
-# than leaving the name unregistered (which Temporal retries forever).
+# plus canonical provider wiring, bounded retries, human cancellation, missing-plugin
+# escalation, and replay of both current and pre-migration histories.
 #
-# Nothing here calls TypeSafe. The one place a live model would sit — the activity body —
-# is exercised against a fake client, because what needs testing is the projection of its
-# answers into JevApprovalAnswer, not the model's judgment.
+# Provider execution uses fake HTTP responses or stand-in activities; no live model is
+# called. The real plugin and sandboxed harness still exercise the approval lifecycle.
 #
 # Run with: uv run pytest tests/harness/test_jev_approvals.py -v
 
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from contextlib import asynccontextmanager
 from datetime import timedelta
 
-import pytest
-from temporalio import activity
+from temporalio import activity, workflow
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamClient
 from temporalio.exceptions import ApplicationError
-from temporalio.client import WorkflowUpdateStage
+from temporalio.client import Client, WorkflowUpdateStage
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
+
+with workflow.unsafe.imports_passed_through():
+    import pytest
+    import httpx2
+    from temporalio.typesafe import TypeSafePlugin
+    from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy as TypeSafeRetryPolicy
 
 from temporal_agent_harness.harness import AgentWorkflowRunner, agent
 from temporal_agent_harness.harness.agent_workflow import Injected
@@ -52,9 +56,11 @@ from temporal_agent_harness.harness.agent_protocol import (
     TextMessage,
     TextReply,
     AutoApprovalContext,
+    AutoApprovalDecision,
     ToolApprovalPolicy,
 )
 from temporal_agent_harness.harness.jev_approvals import (
+    DEFAULT_ACTIVITY_CONFIG,
     DEFAULT_JEV_MODEL,
     JEV_TOOL_APPROVAL_ACTIVITY,
     JevApprovalAnswer,
@@ -63,6 +69,7 @@ from temporal_agent_harness.harness.jev_approvals import (
     decide,
     jev_evaluator,
 )
+from temporal_agent_harness.harness.jev_approvals.models import TYPESAFE_SYSTEM_ONE_ACTIVITY
 
 
 def _criteria(**kwargs) -> AutoApprovalCriteria:
@@ -391,9 +398,7 @@ def test_an_unrecognized_verdict_escalates():
 
 
 def test_the_plugin_registers_the_approval_activity_unconditionally():
-    """Registered on every worker, extra or not: the workflow dispatches this activity by
-    NAME, and an unregistered name is a RETRYABLE Temporal error, which would hang every
-    gated tool call mid-approval instead of failing it once."""
+    """Keep the legacy activity and missing-provider fallback registered on every worker."""
     from temporal_agent_harness.plugin import AgentHarnessPlugin
 
     names = [
@@ -401,30 +406,7 @@ def test_the_plugin_registers_the_approval_activity_unconditionally():
         for a in AgentHarnessPlugin()._worker_activities
     ]
     assert JEV_TOOL_APPROVAL_ACTIVITY in names
-
-
-def test_a_worker_without_the_extra_fails_the_check_non_retryably(monkeypatch):
-    """So the approver turns it into an escalate and a human still resolves the gate."""
-    import builtins
-
-    from temporal_agent_harness.harness.jev_approvals.activity import (
-        JEV_MISSING_EXTRA_ERROR,
-        _require_jev_extra,
-    )
-
-    real_import = builtins.__import__
-
-    def missing(name, *args, **kwargs):
-        if name == "typesafe_sdk":
-            raise ImportError("no typesafe_sdk")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", missing)
-    with pytest.raises(ApplicationError) as excinfo:
-        _require_jev_extra()
-    assert excinfo.value.type == JEV_MISSING_EXTRA_ERROR
-    assert excinfo.value.non_retryable is True
-    assert "temporal-agent-harness[jev]" in str(excinfo.value)
+    assert TYPESAFE_SYSTEM_ONE_ACTIVITY in names
 
 
 async def test_the_activity_projects_typesafe_answers_into_the_typed_result(monkeypatch):
@@ -453,7 +435,6 @@ async def test_the_activity_projects_typesafe_answers_into_the_typed_result(monk
                 nouls={"irreversible": SimpleNamespace(noul=0.77)},
             )
 
-    monkeypatch.setattr(activity_mod, "_require_jev_extra", lambda: None)
     monkeypatch.setattr(activity_mod, "_typesafe_client", FakeClient)
 
     request = build_request(_ctx())
@@ -589,7 +570,7 @@ class JevApprovalProbeAgent:
 
 
 def _fake_jev(verdict: str, confidence: float, irreversible: float):
-    """A stand-in Jev activity, registered under the real activity name.
+    """A stand-in for the canonical provider activity.
 
     It also captures the request, so the test can assert the workflow really did compose
     the full question (policy, tool docstring, arguments, developer context) and hand it
@@ -598,17 +579,22 @@ def _fake_jev(verdict: str, confidence: float, irreversible: float):
     """
     seen: list[JevApprovalRequest] = []
 
-    @activity.defn(name=JEV_TOOL_APPROVAL_ACTIVITY)
-    async def fake(request: JevApprovalRequest) -> JevApprovalAnswer:
-        seen.append(request)
-        return JevApprovalAnswer(
-            model="jev-test",
-            request_id="req_e2e",
-            verdict=verdict,
-            verdict_confidence=confidence,
-            verdict_probabilities={verdict: confidence},
-            irreversible=irreversible,
+    @activity.defn(name=TYPESAFE_SYSTEM_ONE_ACTIVITY)
+    async def fake(payload: dict) -> dict:
+        request = JevApprovalRequest(
+            state=payload["state"], questions=payload["questions"], model=payload["model_name"]
         )
+        seen.append(request)
+        return {
+            "model": "jev-test",
+            "request_id": "req_e2e",
+            "usage": {"input_tokens": None, "output_tokens": None},
+            "answers": {
+                "verdict": {"type": "choice", "choice": verdict,
+                            "confidence": confidence, "probabilities": {verdict: confidence}},
+                "irreversible": {"type": "noul", "noul": irreversible},
+            },
+        }
 
     return fake, seen
 
@@ -828,8 +814,8 @@ async def test_end_to_end_a_failing_jev_call_escalates_rather_than_approving():
     closes on ``auto_approval_evaluation_error`` carrying the failure — and the harness
     substitutes an escalate, so a human still resolves the gate."""
 
-    @activity.defn(name=JEV_TOOL_APPROVAL_ACTIVITY)
-    async def broken(request: JevApprovalRequest) -> JevApprovalAnswer:
+    @activity.defn(name=TYPESAFE_SYSTEM_ONE_ACTIVITY)
+    async def broken(payload: dict) -> dict:
         raise ApplicationError("typesafe is down", non_retryable=True)
 
     async with _jev_env(broken) as (client, task_queue):
@@ -1058,3 +1044,241 @@ async def test_an_injected_parameter_never_reaches_the_evaluator_from_an_inline_
     assert INJECTED_SECRET not in serialized
     assert "api_token" not in serialized
     assert _reply(events) == "refunded:20"
+
+
+# Canonical provider execution: real plugin and sandboxed harness workflow, fake HTTP.
+
+def _native_approval(verdict="approve", confidence=0.95, irreversible=0.1):
+    probabilities = {
+        label: confidence if label == verdict else (1 - confidence) / 2
+        for label in ("approve", "deny", "escalate")
+    }
+    return {
+        "model": "jev-served",
+        "usage": {"input_tokens": 11, "output_tokens": 2},
+        "answers": {
+            "verdict": {"type": "choice", "choice": verdict,
+                        "confidence": confidence, "probabilities": probabilities},
+            "irreversible": {"type": "noul", "noul": irreversible},
+        },
+    }
+
+
+@asynccontextmanager
+async def _canonical_jev_env(transport, *, configured=True):
+    from temporal_agent_harness.plugin import AgentHarnessPlugin
+
+    async with AsyncTypeSafeClient(
+        api_key="fake", retry=TypeSafeRetryPolicy(max_retries=0),
+        transport=httpx2.MockTransport(transport),
+    ) as provider:
+        async with await WorkflowEnvironment.start_local() as env:
+            plugins = [TypeSafePlugin(provider)] if configured else []
+            plugins.append(AgentHarnessPlugin(
+                tools=[refund_customer, refund_with_credential], large_payload_offload=None,
+            ))
+            client = Client(env.client.service_client, plugins=plugins)
+            queue = str(uuid.uuid4())
+            async with Worker(client, task_queue=queue, workflows=[JevApprovalProbeAgent]):
+                yield client, queue
+
+
+async def _canonical_turn(client, queue, *, human_after=None, before_human=None):
+    handle = await client.start_workflow(
+        JevApprovalProbeAgent.run, AgentConfig(), id=str(uuid.uuid4()), task_queue=queue,
+    )
+    await handle.execute_update(
+        SEND_AGENT_MESSAGE_UPDATE, AgentMessage(type="act", payload={"text": "20"}),
+        result_type=AgentMessageReply,
+    )
+    events = []
+    stream = WorkflowStreamClient.create(client, handle.id)
+    async with asyncio.timeout(30):
+        async for item in stream.subscribe(
+            topics=[TURN_EVENTS_TOPIC], from_offset=0, result_type=AgentEvent,
+            poll_cooldown=timedelta(milliseconds=10),
+        ):
+            event = item.data.event
+            events.append(item.data)
+            if event.type == human_after:
+                if before_human is not None:
+                    await before_human()
+                await AgentClient(client, handle.id).approve_tool(
+                    "r1", approved=True, reason="human decision",
+                )
+            if event.type == AgentEventType.TURN_END:
+                break
+    await handle.signal("close")
+    await handle.result()
+    history = await handle.fetch_history()
+    return events, history
+
+
+@pytest.mark.parametrize("verdict,confidence,irreversible,expected", [
+    ("approve", 0.95, 0.1, AutoApprovalVerdict.APPROVE),
+    ("deny", 0.95, 0.9, AutoApprovalVerdict.DENY),
+    ("approve", 0.4, 0.1, AutoApprovalVerdict.ESCALATE),
+    ("approve", 0.95, 0.9, AutoApprovalVerdict.ESCALATE),
+])
+async def test_canonical_jev_preserves_thresholds_audit_and_replay(
+    verdict, confidence, irreversible, expected,
+):
+    requests = []
+    def transport(request):
+        requests.append(json.loads(request.content))
+        return httpx2.Response(200, json=_native_approval(verdict, confidence, irreversible),
+                              headers={"x-request-id": "req-canonical"}, request=request)
+
+    async with _canonical_jev_env(transport) as (client, queue):
+        events, history = await _canonical_turn(
+            client, queue, human_after=(AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED
+                if expected is AutoApprovalVerdict.ESCALATE else None),
+        )
+        await Replayer(workflows=[JevApprovalProbeAgent],
+                       data_converter=client.data_converter).replay_workflow(history)
+    ended = _one(events, AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED)
+    assert ended.verdict is expected
+    assert ended.details["model"] == "jev-served"
+    assert ended.details["request_id"] == "req-canonical"
+    assert ended.details["confidence"] == confidence
+    assert ended.details["irreversible"] == irreversible
+    assert ended.details["usage"] == {"input_tokens": 11, "output_tokens": 2}
+    assert len(requests) == 1
+    assert requests[0]["model"] == DEFAULT_JEV_MODEL
+    assert requests[0]["state"]["call_arguments"] == {"amount": 20}
+    assert set(requests[0]["questions"]) == {"verdict", "irreversible"}
+    scheduled = [event.activity_task_scheduled_event_attributes for event in history.events
+                 if event.HasField("activity_task_scheduled_event_attributes")]
+    approval = next(item for item in scheduled if item.activity_type.name == TYPESAFE_SYSTEM_ONE_ACTIVITY)
+    assert approval.retry_policy.maximum_attempts == 3
+    assert approval.start_to_close_timeout.seconds == 30
+    assert all(item.activity_type.name != JEV_TOOL_APPROVAL_ACTIVITY for item in scheduled)
+    assert not any(event.event.type == AgentEventType.MODEL_INTERACTION_STARTED for event in events)
+    if expected is AutoApprovalVerdict.DENY:
+        assert _reply(events).startswith("denied:")
+    else:
+        assert _reply(events) == "refunded:20"
+
+
+async def test_canonical_jev_accepts_absent_request_id_and_token_counts():
+    def transport(request):
+        body = _native_approval()
+        body["usage"] = {"input_tokens": None, "output_tokens": None}
+        return httpx2.Response(200, json=body, request=request)
+    async with _canonical_jev_env(transport) as (client, queue):
+        events, _ = await _canonical_turn(client, queue)
+    details = _one(events, AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED).details
+    assert details["request_id"] is None
+    assert details["usage"] == {"input_tokens": None, "output_tokens": None}
+    assert _reply(events) == "refunded:20"
+
+
+@pytest.mark.parametrize("status,attempts", [(401, 1), (503, 3)])
+async def test_canonical_jev_provider_failures_are_bounded_and_reach_the_human(status, attempts):
+    requests = []
+    def transport(request):
+        requests.append(request)
+        return httpx2.Response(status, json={"message": "unavailable"}, request=request)
+    async with _canonical_jev_env(transport) as (client, queue):
+        events, _ = await _canonical_turn(
+            client, queue, human_after=AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR,
+        )
+    assert len(requests) == attempts
+    assert _one(events, AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR).evaluator == "jev_evaluator"
+    assert _one(events, AgentEventType.TOOL_APPROVAL_RESOLVED).reason == "human decision"
+    assert _reply(events) == "refunded:20"
+
+
+async def test_missing_canonical_plugin_fails_once_and_reaches_the_human():
+    def transport(request):
+        pytest.fail("an unconfigured worker must not contact the provider")
+    async with _canonical_jev_env(transport, configured=False) as (client, queue):
+        events, history = await _canonical_turn(
+            client, queue, human_after=AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR,
+        )
+    failed = _one(events, AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR)
+    assert "TypeSafePlugin" in failed.message
+    assert "max_retries=0" in failed.message
+    failures = [event.activity_task_failed_event_attributes for event in history.events
+                if event.HasField("activity_task_failed_event_attributes")]
+    assert len(failures) == 1
+    assert failures[0].failure.application_failure_info.non_retryable
+    assert _one(events, AgentEventType.TOOL_APPROVAL_RESOLVED).reason == "human decision"
+
+
+@pytest.mark.parametrize("malformed", ["missing_verdict", "wrong_type"])
+async def test_canonical_jev_requires_the_expected_approval_answers(malformed):
+    def transport(request):
+        body = _native_approval()
+        if malformed == "missing_verdict":
+            body["answers"].pop("verdict")
+        else:
+            body["answers"]["verdict"] = {"type": "noul", "noul": 0.95}
+        return httpx2.Response(200, json=body, request=request)
+    async with _canonical_jev_env(transport) as (client, queue):
+        events, _ = await _canonical_turn(
+            client, queue, human_after=AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR,
+        )
+    assert _one(events, AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR).evaluator == "jev_evaluator"
+    assert _one(events, AgentEventType.TOOL_APPROVAL_RESOLVED).reason == "human decision"
+
+
+async def test_a_human_can_supersede_the_canonical_jev_call():
+    started = asyncio.Event()
+    release = asyncio.Event()
+    async def transport(request):
+        started.set()
+        await release.wait()
+        return httpx2.Response(200, json=_native_approval("deny"), request=request)
+    try:
+        async with _canonical_jev_env(transport) as (client, queue):
+            events, _ = await _canonical_turn(
+                client, queue, human_after=AgentEventType.TOOL_APPROVAL_REQUESTED,
+                before_human=started.wait,
+            )
+            release.set()
+    finally:
+        release.set()
+    assert _one(events, AgentEventType.AUTO_APPROVAL_EVALUATION_SUPERSEDED).evaluator == "jev_evaluator"
+    assert not any(event.event.type == AgentEventType.AUTO_APPROVAL_EVALUATION_ENDED for event in events)
+    assert _one(events, AgentEventType.TOOL_APPROVAL_RESOLVED).reason == "human decision"
+    assert _reply(events) == "refunded:20"
+
+
+@workflow.defn(name="JevApprovalMigrationProbe")
+class _LegacyApprovalWorkflow:
+    @workflow.run
+    async def run(self, ctx: AutoApprovalContext) -> AutoApprovalDecision:
+        # The actual pre-migration command sequence, with no patch marker.
+        answer = await workflow.execute_activity(
+            JEV_TOOL_APPROVAL_ACTIVITY, build_request(ctx), result_type=JevApprovalAnswer,
+            **DEFAULT_ACTIVITY_CONFIG,
+        )
+        return decide(answer, min_confidence=ctx.thresholds[0],
+                      escalate_if_irreversible_above=ctx.thresholds[1],
+                      criteria_set_name=ctx.criteria_set_name, criteria_version=ctx.criteria_version)
+
+
+@workflow.defn(name="JevApprovalMigrationProbe")
+class _MigratedApprovalWorkflow:
+    @workflow.run
+    async def run(self, ctx: AutoApprovalContext) -> AutoApprovalDecision:
+        return await jev_evaluator()(ctx)
+
+
+async def test_pre_migration_jev_history_replays_with_the_new_evaluator():
+    @activity.defn(name=JEV_TOOL_APPROVAL_ACTIVITY)
+    async def legacy(request: JevApprovalRequest) -> JevApprovalAnswer:
+        return _answer(verdict="approve", verdict_confidence=0.95, irreversible=0.1)
+
+    async with await WorkflowEnvironment.start_local(data_converter=pydantic_data_converter) as env:
+        queue = str(uuid.uuid4())
+        async with Worker(env.client, task_queue=queue, workflows=[_LegacyApprovalWorkflow],
+                          activities=[legacy]):
+            handle = await env.client.start_workflow(
+                _LegacyApprovalWorkflow.run, _ctx(), id=queue, task_queue=queue,
+            )
+            await handle.result()
+            history = await handle.fetch_history()
+        await Replayer(workflows=[_MigratedApprovalWorkflow],
+                       data_converter=pydantic_data_converter).replay_workflow(history)

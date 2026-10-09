@@ -100,7 +100,6 @@ dependencies = [
     #   ui              the browser UI and the `temporal-agent-harness` CLI
     #   code-mode       the sandbox a worker runs Code Mode scripts in
     #   genai           the Google Gemini integration
-    #   jev             Jev-backed auto mode for tool approvals (worker only)
     #   openai-agents   the OpenAI Agents SDK integration
     #   pydantic-ai     the Pydantic AI integration
     #   s3              S3-backed offload for large payloads
@@ -176,16 +175,16 @@ Need the API and UI mounted inside your own FastAPI service instead? See
 
 #### Extras
 
-Agent authors import the runtime from `temporal_agent_harness.harness`; the base install carries
-only `temporalio` and `pydantic`, so nothing drags in an AI SDK you don't use. Everything else is
-opt-in:
+Agent authors import the runtime from `temporal_agent_harness.harness`. The base install
+includes `temporalio-typesafe` for typed decisions and the builtin Jev approval evaluator.
+Other AI SDKs and storage integrations are opt-in:
 
 | Extra | Add it when you… |
 | --- | --- |
 | `ui` | want the browser UI and the `temporal-agent-harness` CLI (pulls in `fastapi[standard]`, including Uvicorn). The built Svelte assets are always in the wheel; only the server runtime is gated here, so agent-worker installs stay small. |
 | `code-mode` | run a worker that hosts **Code Mode** agents; pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in. Importing `agent` needs nothing extra; building a `code_mode_tool` does. |
 | `genai` | use the **Google Gemini** integration (`ai_sdks.google_genai_plugin`). |
-| `jev` | run a worker whose agents use **`agent.jev_evaluator`**, the builtin AI auto mode evaluator; pulls in [`typesafe-sdk`](https://pypi.org/project/typesafe-sdk/). Worker-side only — the workflow-side factory needs nothing extra. |
+| `jev`, `typesafe` | compatibility aliases; TypeSafe is included in the base install. Register `TypeSafePlugin` before `AgentHarnessPlugin` for provider calls. |
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
@@ -263,6 +262,7 @@ Support is growing across the Python AI SDKs and agent frameworks Temporal integ
 | [Google Gemini](temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
 | [OpenAI Agents SDK](temporal_agent_harness/ai_sdks/openai_agents) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
 | [Pydantic AI](temporal_agent_harness/ai_sdks/pydantic_ai_harness.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
+| [TypeSafe](temporal_agent_harness/ai_sdks/typesafe_harness.py) | ✅ Available now | Included in the base install. Typed decisions and Jev approvals share the canonical `temporalio-typesafe` plugin; register `TypeSafePlugin` before `AgentHarnessPlugin`. [Example](examples/typesafe_hello/README.md). |
 | [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | - |
 | [Strands Agents](https://docs.temporal.io/develop/python/integrations/strands-agents) | 🟡 Planned | - |
 | [LangGraph](https://docs.temporal.io/develop/python/integrations/langgraph) | 🟡 Planned | - |
@@ -396,7 +396,12 @@ assigned, or one assigned to a name nobody registered, is escalated by the harne
 evaluator is invoked and no model call is spent, so an unconfigured auto mode costs nothing.
 That's enforced in the gate rather than left to each evaluator, which is why an evaluator
 receives its governing rules as a required, non-optional field and needs no defensive check of
-its own. Needs the `jev` extra **on the worker only**.
+its own. Register a configured `temporalio.typesafe.TypeSafePlugin` before
+`AgentHarnessPlugin` on the worker, using `AsyncTypeSafeClient(retry=RetryPolicy(max_retries=0))`
+so Temporal owns retries. TypeSafe is included in the base install. New evaluations use
+the canonical provider activity; existing workflow histories retain the legacy approval
+activity through a replay-compatible patch. A missing provider plugin produces an
+actionable evaluation error and leaves the call at the human gate.
 
 Every evaluator — yours or Jev's — is bracketed on the event stream
 (`auto_approval_evaluation_started` → `_ended` / `_superseded` / `_error`), so its verdict,

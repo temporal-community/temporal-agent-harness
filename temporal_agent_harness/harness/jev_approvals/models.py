@@ -1,22 +1,24 @@
-"""The request/answer payloads of the Jev approval activity, and its activity name.
+"""Approval questions, projected answers and provider activity names.
 
-Kept apart from :mod:`.activity` (which reaches for the TypeSafe SDK) so the workflow-side
-approver can build a request, and name the activity it dispatches, without the optional
-``jev`` extra being installed anywhere near the workflow.
+These models remain independent of worker-side provider I/O and credentials.
 
 NB: no ``from __future__ import annotations`` — these models cross Temporal's pydantic
 converter, which builds their ``TypeAdapter`` inside the workflow sandbox, where a
 stringized annotation fails to resolve.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-# The registered Temporal activity name. The workflow-side approver dispatches by NAME (it
-# never imports the activity module, which is worker-side), and ``AgentHarnessPlugin``
-# registers the body under it.
+if TYPE_CHECKING:
+    from temporalio.typesafe.workflow import SystemOneResult
+
+# Retained for histories recorded before the canonical TypeSafe integration.
 JEV_TOOL_APPROVAL_ACTIVITY = "jev_tool_approval"
+
+# The canonical provider activity, also used by the missing-plugin fallback.
+TYPESAFE_SYSTEM_ONE_ACTIVITY = "temporalio.typesafe.system_one"
 
 # The default model. TypeSafe resolves ``jev-latest`` to a concrete release; the answer's
 # ``model`` reports which one actually judged the call, so an audit of an approval decision
@@ -54,8 +56,8 @@ class JevApprovalAnswer(BaseModel):
 
     model: str
     """The model that actually answered (the API's resolved id)."""
-    request_id: str
-    """TypeSafe's id for the call, for correlating with their side."""
+    request_id: str | None = None
+    """TypeSafe's id for the call, when reported by the provider."""
     verdict: str
     """The highest-probability label of the ``verdict`` Choice: approve / deny / escalate."""
     verdict_confidence: float
@@ -66,3 +68,21 @@ class JevApprovalAnswer(BaseModel):
     """Probability that the call's effect could not be undone if it turned out to be wrong."""
     input_tokens: int | None = None
     output_tokens: int | None = None
+
+    @classmethod
+    def from_system_one(cls, result: "SystemOneResult") -> "JevApprovalAnswer":
+        """Project the canonical plugin's native result onto approval fields."""
+        response = result.response
+        verdict = response.choices["verdict"]
+        irreversible = response.nouls["irreversible"]
+        usage = response.usage
+        return cls(
+            model=response.model,
+            request_id=result.request_id,
+            verdict=verdict.choice,
+            verdict_confidence=verdict.confidence,
+            verdict_probabilities=dict(verdict.probabilities),
+            irreversible=irreversible.noul,
+            input_tokens=usage.input_tokens if usage is not None else None,
+            output_tokens=usage.output_tokens if usage is not None else None,
+        )
