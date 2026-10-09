@@ -214,6 +214,13 @@
       .map((message) => message.text)
   );
   const logsByTurn = $derived(groupLogsByTurn(logs));
+  /* Every timed row, shown or not: what a turn's duration and tokens are read from. */
+  const timedLogsByTurn = $derived(
+    Map.groupBy(
+      logs.filter((row) => row.timestamp > 0),
+      (row) => row.turnNumber
+    )
+  );
   const codeModeHosts = $derived(codeModeHostsByRow(logs));
   const resolvedApprovalKeys = $derived(resolvedApprovalIds(runLogs));
   const pendingApprovalRows = $derived(runLogs.filter((row) => isApprovalPending(row)));
@@ -559,7 +566,7 @@
 
   function allLogsForTurn(turnNumber: number | undefined): ReplayLogRow[] {
     if (turnNumber == null) return [];
-    return logs.filter((row) => row.turnNumber === turnNumber && row.timestamp > 0);
+    return timedLogsByTurn.get(turnNumber) ?? [];
   }
 
   function turnActivitySummary(
