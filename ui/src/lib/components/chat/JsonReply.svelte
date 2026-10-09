@@ -64,6 +64,8 @@
   /* Tail the stream while the reader is at its end; once they scroll up to read, arriving
      text and scrub steps leave them where they are. Recomputed on every scroll, not latched. */
   let following = true;
+  /* Whether the stream has scrolled the scroller, so settling has something to undo. */
+  let tailed = false;
 
   const streaming = $derived(json === undefined);
   const body = $derived(streaming ? stripJsonFence(text) : prettyJson(json));
@@ -77,13 +79,20 @@
     streaming ? drawnPart(body, true) : collapsible && !expanded ? headLines(body, COLLAPSED_LINES) : body
   );
   /* The scroller is this component's own element, outside the `{@html}` that is redrawn on
-     every new text, so it keeps its place across deltas and scrub steps. Jumped, never animated. */
+     every new text, so it keeps its place across deltas and scrub steps. Jumped, never animated.
+     A settled reply that never streamed here is left alone: writing scrollTop forces a layout
+     of the whole page, and a long session mounts hundreds of them. */
   $effect(() => {
     const element = scroller;
     if (!element) return;
     shown;
-    if (!streaming) element.scrollTop = 0;
-    else if (following) element.scrollTop = element.scrollHeight;
+    if (streaming) {
+      if (following) element.scrollTop = element.scrollHeight;
+      tailed = true;
+    } else if (tailed) {
+      element.scrollTop = 0;
+      tailed = false;
+    }
   });
 
   function handleScroll(): void {
