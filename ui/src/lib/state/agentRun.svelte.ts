@@ -231,6 +231,7 @@ export class AgentRunController {
   agentInterfaces = $state<Record<string, AgentInterfaceFunction[]>>({});
   failedInterfaceIds = $state<string[]>([]);
   closedWorkflowIds = $state<string[]>([]);
+  #closedIds = $derived(new Set(this.closedWorkflowIds));
   viewIndex = $state(0);
   playing = $state(false);
   /**
@@ -711,7 +712,7 @@ export class AgentRunController {
         closed: true
       };
     }
-    if (this.closedWorkflowIds.includes(workflowId)) return;
+    if (this.#closedIds.has(workflowId)) return;
     this.closedWorkflowIds = [...this.closedWorkflowIds, workflowId];
     if (workflowId === this.session?.workflow_id) {
       this.#stopStream();
@@ -730,7 +731,7 @@ export class AgentRunController {
 
   #isWorkflowClosed(workflowId: string): boolean {
     return (
-      this.closedWorkflowIds.includes(workflowId) ||
+      this.#closedIds.has(workflowId) ||
       this.session?.workflow_id === workflowId && Boolean(this.session.closed) ||
       this.sessions.some((session) => session.workflow_id === workflowId && session.closed)
     );
@@ -756,12 +757,22 @@ export class AgentRunController {
     if (state.closed) this.#markWorkflowClosed(state.workflow_id);
   }
 
+  /* One pass over the list, not #markWorkflowClosed per id: each of those copies the whole
+     list and scans `closedWorkflowIds`, which froze the tab for 88 s at 10,000 sessions. */
   #applySessionExecutionStates(sessions: Session[]): void {
-    for (const session of sessions) {
-      if (session.closed) {
-        this.#markWorkflowClosed(session.workflow_id);
-      }
-    }
+    const closedIds = new Set(sessions.filter((session) => session.closed).map((session) => session.workflow_id));
+    if (closedIds.size === 0) return;
+    this.sessions = this.sessions.map((session) =>
+      closedIds.has(session.workflow_id) && session.execution_status == null
+        ? { ...session, execution_status: "COMPLETED", closed: true }
+        : session
+    );
+    const current = this.session?.workflow_id;
+    const known = this.#closedIds;
+    const fresh = [...closedIds].filter((id) => id !== current && !known.has(id));
+    if (fresh.length > 0) this.closedWorkflowIds = [...this.closedWorkflowIds, ...fresh];
+    for (const id of fresh) this.#stopWorkflowAttach(id);
+    if (current != null && closedIds.has(current)) this.#markWorkflowClosed(current);
   }
 
   async #refreshWorkflowExecutionState(workflowId: string): Promise<void> {

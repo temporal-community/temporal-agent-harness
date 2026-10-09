@@ -187,22 +187,25 @@
   }
 
   function sessionStatusKind(session: Session): StatusKind {
-    if (sessionClosedById(session.workflow_id)) return "closed";
+    if (sessionClosed(session)) return "closed";
     if (session.workflow_id === sessionId) return statusKind;
     return "idle";
   }
 
   function sessionStatusLabel(session: Session): string {
-    if (sessionClosedById(session.workflow_id)) return "Closed";
+    if (sessionClosed(session)) return "Closed";
     if (session.workflow_id === sessionId) return statusLabel;
     return "Open";
   }
 
-  function sessionClosedById(nextSessionId: string): boolean {
+  const closedIds = $derived(new Set(closedWorkflowIds));
+
+  /* Runs per rendered row, so it must not scan the session list. */
+  function sessionClosed(session: Session): boolean {
     return (
-      (nextSessionId === sessionId && closed) ||
-      closedWorkflowIds.includes(nextSessionId) ||
-      Boolean(sessions.find((session) => session.workflow_id === nextSessionId)?.closed)
+      (session.workflow_id === sessionId && closed) ||
+      closedIds.has(session.workflow_id) ||
+      Boolean(session.closed)
     );
   }
 
