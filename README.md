@@ -103,6 +103,7 @@ dependencies = [
     #   jev             Jev-backed auto mode for tool approvals (worker only)
     #   openai-agents   the OpenAI Agents SDK integration
     #   pydantic-ai     the Pydantic AI integration
+    #   typesafe        typed decisions via the canonical temporalio-typesafe plugin
     #   s3              S3-backed offload for large payloads
     #
     # What each one pulls in, and when you actually need it, is in the Extras table below.
