@@ -20,6 +20,9 @@ importers:
       '@tanstack/markdown':
         specifier: 1.0.0
         version: 1.0.0
+      '@tanstack/pacer':
+        specifier: 0.23.1
+        version: 0.23.1
       '@xyflow/svelte':
         specifier: ^1.6.0
         version: 1.6.0(svelte@5.56.3)
@@ -432,6 +435,11 @@ packages:
       vue:
         optional: true
 
+  '@tanstack/devtools-event-client@0.5.0':
+    resolution: {integrity: sha512-H+OH3zC6Vhu/K0NaVfQKknEKawc/+2PT+D3SB3Ox0V8SiMlTo0abbmH2rH0721R2aNYbjdMXA1oENOd8E2UVoA==}
+    engines: {node: '>=18'}
+    hasBin: true
+
   '@tanstack/highlight@1.1.0':
     resolution: {integrity: sha512-mDn/fhny+WgSVHUH0sAcARlSfbXCQJWebu2NRmCOcD+3I4/73m2D9rcMISgIiXJrhl1vyk9hmAJn7sSnWAbfvQ==}
     engines: {node: '>=18'}
@@ -446,6 +454,13 @@ packages:
         optional: true
       react:
         optional: true
+
+  '@tanstack/pacer@0.23.1':
+    resolution: {integrity: sha512-ROZj19aPPGYebeRPhFZNRlqNaR2e4vkcLbgiXfbi5uJu8WiW/etsYmkcAcoSQRGOwGZbbioWRX7xssewDRVRhw==}
+    engines: {node: '>=20'}
+
+  '@tanstack/store@0.11.2':
+    resolution: {integrity: sha512-sJ4mjol8uQsHV0gOJzzjwXfh2Fwm+Sz0+8deqiTm4jGbMdjzNSW+xZCFm0kUa870uhd8yi+DpKnZb5Kc4apa0Q==}
 
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
@@ -1178,9 +1193,18 @@ snapshots:
     optionalDependencies:
       svelte: 5.56.3
 
+  '@tanstack/devtools-event-client@0.5.0': {}
+
   '@tanstack/highlight@1.1.0': {}
 
   '@tanstack/markdown@1.0.0': {}
+
+  '@tanstack/pacer@0.23.1':
+    dependencies:
+      '@tanstack/devtools-event-client': 0.5.0
+      '@tanstack/store': 0.11.2
+
+  '@tanstack/store@0.11.2': {}
 
   '@types/chai@5.2.3':
     dependencies:

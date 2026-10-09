@@ -1,3 +1,4 @@
+import { AsyncThrottler } from "@tanstack/pacer/async-throttler";
 import type {
   AgentInboundMessage,
   AgentInterfaceFunction,
@@ -259,13 +260,23 @@ export class AgentRunController {
   #streamVersion = 0;
   #connectionVersion = 0;
   #sendVersion = 0;
-  #syncingSessions = false;
   /** Single-flight promise for listAgents loads. */
   #agentsLoad: Promise<void> | null = null;
   /** Single-flight promise for listSessions loads. */
   #sessionsLoad: Promise<void> | null = null;
-  /** When the last listSessions finished (ms). */
-  #sessionsLoadedAt = 0;
+  #sessionsLoaded = false;
+  /**
+   * Every load nobody explicitly asked for (picker open, tab refocus) goes through
+   * here, so open/close spam and focus churn cost one listSessions per window.
+   * It wraps the single-flight load rather than replacing it: the throttler only
+   * waits ``wait`` ms for an in-flight call, and a slower list must still not be
+   * requested twice.
+   */
+  #sessionsThrottle = new AsyncThrottler(() => this.#loadSessions(), {
+    wait: 5_000,
+    leading: true,
+    trailing: false
+  });
   #streamAbort: AbortController | null = null;
   /**
    * Wakes the stream's backoff sleep early. Set only while `attach` is sleeping between
@@ -980,7 +991,7 @@ export class AgentRunController {
       const sessions = await this.#api.listSessions();
       this.sessions = sessions;
       this.#applySessionExecutionStates(sessions);
-      this.#sessionsLoadedAt = Date.now();
+      this.#sessionsLoaded = true;
     })().finally(() => {
       this.#sessionsLoad = null;
     });
@@ -1001,22 +1012,15 @@ export class AgentRunController {
     }
   }
 
-  /**
-   * Refresh for the picker without a global connection error. Skips if a fresh
-   * list already landed within ``maxAgeMs`` so open/close spam is cheap.
-   */
-  async ensureSessionsEnriched(maxAgeMs = 5_000): Promise<void> {
-    if (this.refreshingSessions || this.#sessionsLoad) return;
-    if (this.#sessionsLoadedAt > 0 && Date.now() - this.#sessionsLoadedAt < maxAgeMs) {
-      return;
-    }
+  /** Refresh for the picker without a global connection error; throttled. */
+  async ensureSessionsEnriched(): Promise<void> {
     try {
-      await this.#loadSessions();
-      this.sessionsError = null;
+      await this.#sessionsThrottle.maybeExecute();
+      if (this.#sessionsLoaded) this.sessionsError = null;
     } catch (error) {
       // Quiet while an earlier list is still on screen. With none, an empty list would read
       // as "no sessions", so the failure is the thing to show.
-      if (this.#sessionsLoadedAt === 0) {
+      if (!this.#sessionsLoaded) {
         this.sessionsError =
           error instanceof Error ? error.message : "Failed to load sessions.";
       }
@@ -1032,14 +1036,10 @@ export class AgentRunController {
    * or raise the connection banner.
    */
   async syncSessions(): Promise<void> {
-    if (this.refreshingSessions || this.#syncingSessions) return;
-    this.#syncingSessions = true;
     try {
-      await this.#loadSessions();
+      await this.#sessionsThrottle.maybeExecute();
     } catch {
       // The list stays as it was until a later tick answers.
-    } finally {
-      this.#syncingSessions = false;
     }
   }
 
