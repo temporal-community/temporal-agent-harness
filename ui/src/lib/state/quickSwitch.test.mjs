@@ -121,6 +121,21 @@ describe("the highlight and the filter", () => {
     assert.match(options[1], /aria-selected="false"/);
     assert.match(options[2], /aria-selected="false"/);
   });
+
+  it("draws a screenful of a 10,000-session list and tells assistive tech the rest", () => {
+    const sessions = Array.from({ length: 10_000 }, (_, i) => ({
+      workflow_id: `wf-${i}`,
+      created_at: 10_000 - i,
+      agent_workflow_type: "Agent",
+      initial_user_message: `message ${i}`
+    }));
+    const { body } = render(SessionControls, {
+      props: { display: "pane", tab: "sessions", sessions, sessionId: "wf-0" }
+    });
+    const options = [...body.matchAll(/<button[^>]*role="option"[^>]*>/g)].map(([tag]) => tag);
+    assert.ok(options.length > 0 && options.length < 30, `${options.length} options drawn`);
+    assert.match(options[0], /aria-setsize="10000"[^>]*aria-posinset="1"/);
+  });
 });
 
 describe("where focus goes back to", () => {

@@ -1,6 +1,8 @@
 <script lang="ts">
   /** The launcher identifies the current run; the drawer only browses existing sessions. */
   import { Plus, RefreshCw, Search } from "@lucide/svelte";
+  import { createVirtualizer, type VirtualItem } from "@tanstack/svelte-virtual";
+  import { untrack } from "svelte";
   import type { Attachment } from "svelte/attachments";
   import type { AgentDescriptor, JsonRecord, Session } from "$lib/api/types";
   import StartSessionDialog from "$lib/components/chat/StartSessionDialog.svelte";
@@ -10,7 +12,6 @@
     STATUS_TONES,
     type StatusKind
   } from "$lib/components/primitives/StatusChip.svelte";
-  import { scrollFollower } from "$lib/state/followScroll";
   import { handleListKey, keptHighlight } from "$lib/state/quickSwitch";
   import { sessionDay, sessionTitle } from "$lib/state/sessionHistory";
 
@@ -237,13 +238,61 @@
   const filteredIds = $derived(filteredSessionItems.map((session) => session.workflow_id));
   const highlightedId = $derived(keptHighlight(filteredIds, arrowedId));
   let sessionListElement = $state<HTMLElement | null>(null);
-  /* No `onscroll` handed over, on purpose: that is how the follower stands down for a reader
-     who scrolled the playhead away, and here every arrow press is the reader asking to see
-     the row. */
-  const listFollower = scrollFollower(() => sessionListElement);
 
+  /* Only the rows in view are in the DOM: a list of 10,000 took 5 s to open drawn whole.
+     Day headings are rows too, so the list scrolls as one; each option still carries
+     aria-setsize/aria-posinset, so a screen reader hears the full count. */
+  type ListEntry =
+    | { kind: "heading"; key: string; group: string; count: number }
+    | { kind: "session"; key: string; group: string; item: Session; ordinal: number };
+  const entries = $derived.by(() => {
+    const out: ListEntry[] = [];
+    let ordinal = 0;
+    for (const group of sessionGroups) {
+      out.push({ kind: "heading", key: `day:${group.label}`, group: group.label, count: group.sessions.length });
+      for (const item of group.sessions) {
+        out.push({ kind: "session", key: item.workflow_id, group: group.label, item, ordinal: (ordinal += 1) });
+      }
+    }
+    return out;
+  });
+  const entryIndex = $derived(new Map(entries.map((entry, index) => [entry.key, index])));
+  const sessionRows = createVirtualizer<HTMLElement, HTMLElement>({
+    /* Seeded here as well as in the effect below, which SSR never runs. */
+    count: untrack(() => entries.length),
+    getItemKey: (index) => entries[index].key,
+    estimateSize: (index) => (entries[index].kind === "heading" ? 36 : 84),
+    getScrollElement: () => sessionListElement,
+    /* A screenful before the list is measured, so the first paint (and SSR) has rows. */
+    initialRect: { width: 0, height: 800 },
+    overscan: 6
+  });
+  /* Untracked: setOptions publishes the store, which would re-run the effect calling it. */
+  const rows = () => untrack(() => $sessionRows);
+  const measureRow: Attachment<HTMLElement> = (node) => rows().measureElement(node);
+  /* The rows in view, back inside their day's group so it is still announced. */
+  const visibleGroups = $derived.by(() => {
+    const out: { label: string; rows: VirtualItem[] }[] = [];
+    for (const row of $sessionRows.getVirtualItems()) {
+      const label = entries[row.index].group;
+      const last = out.at(-1);
+      if (last?.label === label) last.rows.push(row);
+      else out.push({ label, rows: [row] });
+    }
+    return out;
+  });
+
+  /* Pre, so a shrunk list's count lands before the rows render and index past its end. */
+  $effect.pre(() => {
+    const count = entries.length;
+    sessionListElement;
+    rows().setOptions({ count });
+  });
+
+  /* Every arrow press is the reader asking to see the row, so it always scrolls to it. */
   $effect(() => {
-    if (highlightedId) listFollower.to(sessionOptionId(highlightedId));
+    const index = highlightedId ? entryIndex.get(highlightedId) : undefined;
+    if (index != null) rows().scrollToIndex(index, { align: "auto" });
   });
 
   function sessionOptionId(workflowId: string): string {
@@ -360,16 +409,24 @@
           <p>{sessionItems.length ? "Try another search or agent filter." : "Choose New session in the top bar to begin."}</p>
         </div>
       {/if}
-      {#each sessionGroups as group (group.label)}
+      <div class="session-rows" style:height={`${$sessionRows.getTotalSize()}px`}>
+      {#each visibleGroups as group (group.label)}
         <div class="session-group" role="group" aria-label={group.label}>
-          <div class="group-heading" aria-hidden="true">{group.label} <span>{group.sessions.length}</span></div>
-          {#each group.sessions as item (item.workflow_id)}
+          {#each group.rows as row (row.key)}
+            {@const entry = entries[row.index]}
+            <div class="session-entry" data-index={row.index} style:top={`${row.start}px`} {@attach measureRow}>
+            {#if entry.kind === "heading"}
+              <div class="group-heading" aria-hidden="true">{entry.group} <span>{entry.count}</span></div>
+            {:else}
+            {@const item = entry.item}
             <div class="session-item">
               <button
                 type="button"
                 id={sessionOptionId(item.workflow_id)}
                 class={["session-row", item.workflow_id === sessionId && "active", arrowedId !== null && item.workflow_id === highlightedId && "highlighted"]}
                 role="option"
+                aria-setsize={filteredIds.length}
+                aria-posinset={entry.ordinal}
                 aria-selected={item.workflow_id === highlightedId}
                 aria-current={item.workflow_id === sessionId ? "true" : undefined}
                 onclick={() => void openSession(item.workflow_id)}
@@ -384,9 +441,12 @@
                 </span>
               </button>
             </div>
+            {/if}
+            </div>
           {/each}
         </div>
       {/each}
+      </div>
     </div>
   </section>
 {/if}
@@ -529,9 +589,20 @@
     overflow-y: auto;
   }
 
+  .session-rows {
+    position: relative;
+  }
+
+  /* No box of its own: its rows are placed against .session-rows, and it stays only to
+     name the day to assistive tech. */
   .session-group {
-    display: grid;
-    gap: var(--gap-xs);
+    display: contents;
+  }
+
+  .session-entry {
+    position: absolute;
+    inset-inline: 0;
+    padding-bottom: var(--gap-xs);
   }
 
   .group-heading {

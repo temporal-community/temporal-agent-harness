@@ -7,10 +7,11 @@ import { readdirSync, readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { it } from "vitest";
 
-/* Measured 2026-10-09 with gzip -9: main served 747 KB / 241 KB; with TanStack Markdown, remend
-   and @tanstack/highlight it is 814 KB / 266 KB. The budget is that plus about 4%, too little for
-   a second markdown or highlighting pipeline to slip in. */
-const BUDGET = { bytes: 847_000, gzip: 277_000 };
+/* Measured 2026-10-09 with gzip -9: main served 752 KB / 243 KB; with TanStack Markdown, remend
+   and @tanstack/highlight it is about 25 KB gzip more, and @tanstack/pacer (4.0 KB) plus
+   @tanstack/svelte-virtual (7.5 KB) bring it to 864 KB / 281 KB. The budget is that plus about 4%,
+   too little for a second markdown, highlighting or virtualization library to slip in. */
+const BUDGET = { bytes: 898_000, gzip: 292_000 };
 const assets = new URL("../../temporal_agent_harness/ui/dist/assets/", import.meta.url);
 
 it("keeps the served JavaScript within its size budget", () => {

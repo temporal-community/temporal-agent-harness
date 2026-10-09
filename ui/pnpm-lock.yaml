@@ -23,6 +23,9 @@ importers:
       '@tanstack/pacer':
         specifier: 0.23.1
         version: 0.23.1
+      '@tanstack/svelte-virtual':
+        specifier: 3.13.40
+        version: 3.13.40(svelte@5.56.3)
       '@xyflow/svelte':
         specifier: ^1.6.0
         version: 1.6.0(svelte@5.56.3)
@@ -461,6 +464,14 @@ packages:
 
   '@tanstack/store@0.11.2':
     resolution: {integrity: sha512-sJ4mjol8uQsHV0gOJzzjwXfh2Fwm+Sz0+8deqiTm4jGbMdjzNSW+xZCFm0kUa870uhd8yi+DpKnZb5Kc4apa0Q==}
+
+  '@tanstack/svelte-virtual@3.13.40':
+    resolution: {integrity: sha512-E/U046xeUQGwmCjRCrNpk/6Knb0HR9F3otCQoERt9cDFp3C+4ZBBoQhujXgSYrq2J/6UpeYTBPmJXg4yf4tlKg==}
+    peerDependencies:
+      svelte: ^3.48.0 || ^4.0.0 || ^5.0.0
+
+  '@tanstack/virtual-core@3.18.0':
+    resolution: {integrity: sha512-8frWsyfyBwLGoDQ6wN6Lq3CoT8j4BPJUzE6nH4P9mruLhxPOamk82prC3JxRMLJzYnNa9ISaZ8NtfxEiOGkHEQ==}
 
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
@@ -1205,6 +1216,13 @@ snapshots:
       '@tanstack/store': 0.11.2
 
   '@tanstack/store@0.11.2': {}
+
+  '@tanstack/svelte-virtual@3.13.40(svelte@5.56.3)':
+    dependencies:
+      '@tanstack/virtual-core': 3.18.0
+      svelte: 5.56.3
+
+  '@tanstack/virtual-core@3.18.0': {}
 
   '@types/chai@5.2.3':
     dependencies:
