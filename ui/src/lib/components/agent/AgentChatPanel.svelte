@@ -569,8 +569,8 @@
     const turnRows = allLogsForTurn(turnNumber);
     const rows = turnRows.length > 0 ? turnRows : visibleRows;
     const timestamps = rows.map((row) => row.timestamp).filter((value) => value > 0);
-    const startedAt = Math.min(...timestamps);
-    const endedAt = Math.max(...timestamps);
+    const startedAt = timestamps.reduce((min, value) => Math.min(min, value), Infinity);
+    const endedAt = timestamps.reduce((max, value) => Math.max(max, value), -Infinity);
     const durationMs =
       timestamps.length >= 2 && Number.isFinite(startedAt) && Number.isFinite(endedAt)
         ? Math.max(0, (endedAt - startedAt) * 1000)
