@@ -56,7 +56,7 @@ SAFE BY CONSTRUCTION, in four ways:
 
 1. **Escalating is the default answer**, not approving. Every path that is not a confident
    approve or a confident deny — low confidence, an unrecognized label, an irreversible
-   call, a TypeSafe outage, a worker missing the ``jev`` extra — ends at the human gate.
+   call, a TypeSafe outage, a worker missing ``TypeSafePlugin`` — ends at the human gate.
    The approver never fails open.
 2. **It is only reached when the operator switched auto mode on.** The gate consults it
    only for calls whose live :class:`ToolApprovalPolicy` has ``auto_mode_enabled``; it
@@ -83,9 +83,9 @@ state and questions Jev was asked (criteria included, resolved), its output the 
 and the resulting verdict plus its numbers, the set that governed it, and the criteria
 generation are published as the ``tool_approval_resolved`` reason and details.
 
-This module is WORKFLOW-SAFE. It imports no TypeSafe SDK — it builds plain dicts and
-dispatches the activity by name — so the optional ``jev`` extra is needed only on the
-WORKER that runs :mod:`.activity`.
+This module is WORKFLOW-SAFE. It uses the canonical ``TemporalTypeSafe`` proxy; provider
+I/O and credentials stay in ``TypeSafePlugin`` on the worker. TypeSafe is a required harness
+dependency. A workflow patch retains the legacy activity for pre-migration histories.
 """
 
 from __future__ import annotations
@@ -97,6 +97,9 @@ from typing import Any
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.workflow import ActivityConfig
+
+with workflow.unsafe.imports_passed_through():
+    from temporalio.typesafe.workflow import TemporalTypeSafe
 
 from temporal_agent_harness.harness.agent_protocol import (
     AutoApprovalContext,
@@ -112,6 +115,8 @@ from .models import (
     JevApprovalAnswer,
     JevApprovalRequest,
 )
+
+_TYPESAFE_APPROVAL_PATCH = "jev-approval-typesafe-v1"
 
 # The Choice labels Jev picks between. They are the wire form of ``AutoApprovalVerdict`` and
 # are mapped back onto it by :func:`decide`; an answer outside this set is treated as an
@@ -162,7 +167,8 @@ def jev_evaluator(
             :data:`DEFAULT_ACTIVITY_CONFIG`.
 
     Returns:
-        An async callable of the :data:`AutoModeEvaluator` shape.
+        An async callable of the :data:`AutoModeEvaluator` shape. Register a configured
+        ``TypeSafePlugin`` before ``AgentHarnessPlugin`` on its worker.
     """
     config: ActivityConfig = {**(activity_config or DEFAULT_ACTIVITY_CONFIG)}
 
@@ -181,12 +187,20 @@ def jev_evaluator(
         # the stream: it catches the exception, publishes ``auto_approval_evaluation_error``
         # with the failure, and substitutes an escalate. Catching it here would flatten a
         # failure into a normal verdict and lose that.
-        answer: JevApprovalAnswer = await workflow.execute_activity(
-            JEV_TOOL_APPROVAL_ACTIVITY,
-            request,
-            result_type=JevApprovalAnswer,
-            **config,
-        )
+        if workflow.patched(_TYPESAFE_APPROVAL_PATCH):
+            result = await TemporalTypeSafe(
+                model=request.model,
+                activity_config=config,
+            ).system_one(request.state, request.questions)
+            answer = JevApprovalAnswer.from_system_one(result)
+        else:
+            # Replay the original activity and result type for pre-migration histories.
+            answer = await workflow.execute_activity(
+                JEV_TOOL_APPROVAL_ACTIVITY,
+                request,
+                result_type=JevApprovalAnswer,
+                **config,
+            )
         min_confidence, irreversible_ceiling = ctx.thresholds
         return decide(
             answer,

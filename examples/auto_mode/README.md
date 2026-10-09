@@ -20,6 +20,11 @@ board. This directory adds only the workflow (`workflow.py`, a copy of Monty's
   `approve_when` / `deny_when` / `escalate_when` rules.
 - **The mechanism** — `agent.jev_evaluator()`.
 
+The worker registers `TypeSafePlugin` before `AgentHarnessPlugin`, with SDK retries
+disabled so Temporal owns retries. TypeSafe is included in the base harness install.
+The evaluator uses the canonical provider activity and keeps approval criteria and
+thresholds in the harness. Existing workflow histories retain the legacy activity.
+
 Monty's travel tools are reused **unchanged**. They don't name a criteria set themselves, so
 the rulebook assigns each one by name in `AutoApprovalCriteria.tools`. This is the same
 mechanism that brings tools you didn't write, like an MCP server's, under auto mode. A tool

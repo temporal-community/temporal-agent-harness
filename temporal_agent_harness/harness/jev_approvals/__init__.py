@@ -14,25 +14,16 @@ operator switches on, not a fallback that activates because an evaluator was wir
 verdict comes back ``approve``, ``deny``, or ``escalate``, the last of which leaves the
 call in the human gate exactly where it would have been anyway.
 
-The package splits along the Temporal workflow boundary, so importing it never requires the
-optional ``jev`` extra:
+TypeSafe is included in the base harness install. Register a configured
+``temporalio.typesafe.TypeSafePlugin`` before ``AgentHarnessPlugin`` on the worker,
+using an ``AsyncTypeSafeClient`` with ``RetryPolicy(max_retries=0)``. The canonical
+plugin owns provider execution, response decoding and error translation. This evaluator
+builds the approval questions and applies the operator's thresholds.
 
-  * Workflow-safe (this ``__init__`` and the :mod:`.approver` / :mod:`.models` modules):
-    safe to import anywhere, including inside a workflow. It composes the question as plain
-    dicts and dispatches the model call as an activity BY NAME.
-  * Worker-side (:mod:`.activity`): the one activity that actually talks to TypeSafe.
-    ``AgentHarnessPlugin`` registers it on every worker (a worker can also register
-    ``JEV_APPROVAL_ACTIVITIES`` from that module by hand). Nothing here imports it, so the
-    workflow-safe surface stays free of the SDK. It imports no ``typesafe_sdk`` itself
-    either — it checks that the ``jev`` extra is installed and then delegates — so a worker
-    missing the extra fails one approval check, non-retryably, and the call escalates to a
-    human instead of hanging on Temporal's retryable "activity not registered".
-
-Install the extra on the worker::
-
-    uv add 'temporal-agent-harness[jev]'    # or: pip install 'temporal-agent-harness[jev]'
-
-and give that worker a ``TYPESAFE_API_KEY``.
+A workflow patch retains the original activity and answer type for pre-migration histories.
+``AgentHarnessPlugin`` also registers a missing-provider fallback: without ``TypeSafePlugin``,
+the evaluation fails non-retryably with registration guidance and reaches the human gate.
+Credentials and client configuration stay worker-side.
 """
 
 from .approver import (

@@ -3160,6 +3160,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "temporalio" },
+    { name = "temporalio-typesafe" },
 ]
 
 [package.optional-dependencies]
@@ -3169,9 +3170,6 @@ code-mode = [
 genai = [
     { name = "google-auth" },
     { name = "google-genai" },
-]
-jev = [
-    { name = "typesafe-sdk" },
 ]
 nexus-mcp = [
     { name = "mcp" },
@@ -3189,9 +3187,6 @@ pydantic-ai = [
 ]
 s3 = [
     { name = "temporalio", extra = ["aioboto3"] },
-]
-typesafe = [
-    { name = "temporalio-typesafe" },
 ]
 ui = [
     { name = "fastapi", extra = ["standard"] },
@@ -3216,8 +3211,6 @@ dev = [
     { name = "setuptools" },
     { name = "temporal-nexus-mcp" },
     { name = "temporalio", extra = ["aioboto3", "opentelemetry"] },
-    { name = "temporalio-typesafe" },
-    { name = "typesafe-sdk" },
 ]
 examples = [
     { name = "fastapi", extra = ["standard"] },
@@ -3227,7 +3220,6 @@ examples = [
     { name = "openai-agents" },
     { name = "pydantic-ai-slim", extra = ["temporal"] },
     { name = "pydantic-monty" },
-    { name = "typesafe-sdk" },
 ]
 
 [package.metadata]
@@ -3248,8 +3240,7 @@ requires-dist = [
     { name = "temporalio", extras = ["aioboto3"], marker = "extra == 's3'", specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'nexus-mcp'", specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'openai-agents'", specifier = ">=1.31.0" },
-    { name = "temporalio-typesafe", marker = "extra == 'typesafe'", specifier = ">=0.0.1,<0.1" },
-    { name = "typesafe-sdk", marker = "extra == 'jev'", specifier = ">=0.6.0" },
+    { name = "temporalio-typesafe", specifier = ">=0.0.1,<0.1" },
 ]
 provides-extras = ["genai", "s3", "openai-agents", "pydantic-ai", "ui", "code-mode", "jev", "nexus-mcp", "typesafe"]
 
@@ -3273,8 +3264,6 @@ dev = [
     { name = "temporal-nexus-mcp", editable = "nexus/mcp" },
     { name = "temporalio", extras = ["aioboto3"], specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], specifier = ">=1.31.0" },
-    { name = "temporalio-typesafe", specifier = ">=0.0.1" },
-    { name = "typesafe-sdk", specifier = ">=0.6.0" },
 ]
 examples = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.136.3" },
@@ -3284,7 +3273,6 @@ examples = [
     { name = "openai-agents", specifier = ">=0.22.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
     { name = "pydantic-monty", specifier = "==1.0.0" },
-    { name = "typesafe-sdk", specifier = ">=0.6.0" },
 ]
 
 [[package]]

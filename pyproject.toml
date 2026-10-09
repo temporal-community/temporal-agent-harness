@@ -22,13 +22,13 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
 ]
-# Core runtime deps are deliberately minimal: the harness itself only needs Temporal and
-# pydantic. AI-SDK and external-storage needs are opt-in extras below, so installing the
-# harness doesn't drag in Gemini or boto3.
+# TypeSafe supplies the builtin approval evaluator's durable model calls. Other AI SDKs
+# and external-storage integrations remain opt-in extras below.
 dependencies = [
     "temporalio>=1.31.0",  # provides temporalio.contrib.workflow_streams (experimental)
     "pydantic>=2.0",
     "pyyaml>=6.0",  # reading and writing OKF bundles (code_mode.okf)
+    "temporalio-typesafe>=0.0.1,<0.1",
 ]
 
 [project.urls]
@@ -84,11 +84,8 @@ code-mode = [
     "pydantic-monty==1.0.0",
 ]
 # Jev-backed auto mode for tool approvals: temporal_agent_harness.harness.jev_approvals.
-# Needed on the WORKER only — the workflow-side approver builds plain dicts and dispatches
-# the model call as an activity by name, so an agent using it stays importable without this.
-jev = [
-    "typesafe-sdk>=0.6.0",
-]
+# Compatibility alias: TypeSafe is now included in the base install.
+jev = []
 # Nexus-brokered MCP servers: temporal_agent_harness.ai_sdks.openai_agents.workflow.
 # nexus_brokered_mcp_server. Lets an Agent reach an MCP tool over a Temporal Nexus endpoint,
 # one server per Nexus service, passed directly via Agent(mcp_servers=[...]). Needs the
@@ -107,9 +104,8 @@ nexus-mcp = [
     "mcp>=2.1.1,<3",
     "temporalio[opentelemetry]>=1.31.0",
 ]
-typesafe = [
-    "temporalio-typesafe>=0.0.1,<0.1",
-]
+# Compatibility alias for the original integration install instructions.
+typesafe = []
 
 [dependency-groups]
 # Everything needed to RUN the bundled Monty example from a checkout. Not part of the
@@ -122,7 +118,6 @@ examples = [
     "openai-agents>=0.22.0",  # the OpenAI Agents SDK example (examples/openai_hello, examples/react_agent)
     "pydantic-ai-slim[temporal]>=2.13",  # the Pydantic AI example (examples/pydantic_ai_hello)
     "httpx>=0.27",  # the react_agent example's tools call real weather / geo / IP APIs
-    "typesafe-sdk>=0.6.0",
 ]
 # Test + lint tooling. The full tests/ suite imports both the Gemini SDK (the ai_sdks plugin
 # tests) and pydantic-monty (the monty example tests), which live in the `examples` group —
@@ -150,7 +145,6 @@ dev = [
     # Nexus-brokered MCP server tests. No version marker: temporal-nexus-mcp runs on every
     # Python this project supports, so `uv run pytest` collects the same suite on all of them.
     "temporal-nexus-mcp",
-    "temporalio-typesafe>=0.0.1",
     { include-group = "examples" },
 ]
 

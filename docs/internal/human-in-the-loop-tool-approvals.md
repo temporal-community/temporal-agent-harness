@@ -262,8 +262,10 @@
 > ### `jev_evaluator` — the builtin AI auto mode evaluator
 >
 > `harness/jev_approvals/`, exported as `agent.jev_evaluator(model="jev-latest",
-> extra_state=None, activity_config=None)`. Returns an `AutoModeEvaluator`. Optional
-> `jev` extra (`typesafe-sdk`), **worker-side only**.
+> extra_state=None, activity_config=None)`. Returns an `AutoModeEvaluator`.
+> TypeSafe is a required harness dependency (`temporalio-typesafe`). The `jev` and
+> `typesafe` extras remain empty compatibility aliases. Register a configured
+> `TypeSafePlugin` before `AgentHarnessPlugin`; SDK retries must be disabled.
 >
 > - **It holds no rules and no thresholds.** Those were constructor args (`policy=`,
 >   `min_confidence=`, `escalate_if_irreversible_above=`) and are now the operator's, read off
@@ -298,14 +300,22 @@
 >   path ends at ESCALATE. Its thresholds are now parameters rather than defaults, because
 >   they belong to the criteria set that governed the call — a refund and a lookup do not
 >   share one confidence bar.
-> - **Not reachable by the agent.** Dispatched as a bare `workflow.execute_activity` by name,
+> - **Not reachable by the agent.** Dispatched through the canonical workflow proxy,
 >   never through `run_tool` — so it is not a tool, the model cannot call it or influence what
 >   is asked about its own call, and the gate does not recurse into itself.
-> - **Registered unconditionally by `AgentHarnessPlugin`**, with
->   the extra checked per call: an unregistered activity name is a *retryable* Temporal error,
->   which would hang every gated call mid-approval instead of failing once.
-> - Splits along the workflow boundary: `approver.py`/`models.py` are workflow-safe (plain
->   dicts, dispatch by name); only `activity.py` touches TypeSafe.
+> - **Canonical provider execution.** New evaluations call `TemporalTypeSafe.system_one`,
+>   with the approval evaluator's 30-second attempt timeout and three-attempt retry policy.
+>   The provider plugin owns execution, native response decoding and error translation.
+>   Approval-specific projection preserves optional request IDs and token counts.
+> - **Replay compatibility.** The `jev-approval-typesafe-v1` workflow patch keeps the
+>   original `jev_tool_approval` activity and result type for pre-migration histories.
+>   `AgentHarnessPlugin` continues to register that legacy activity.
+> - **Missing provider plugin.** An unconditional canonical-name fallback is used only when
+>   no provider activity was registered before the harness. It fails non-retryably with
+>   registration guidance, so the runner records an evaluation error and reaches the human.
+> - Splits along the workflow boundary: `approver.py` uses the canonical workflow proxy;
+>   provider credentials and HTTP I/O stay worker-side. Approval events continue to be
+>   emitted by the runner, without adding general model-interaction spans.
 
 ### Implementation notes (deviations from the plan as written)
 

@@ -2,8 +2,9 @@
 
 The provider plugin owns execution, retries and native response decoding. This
 adapter publishes one workflow-side span per call, including all its retries.
-Install ``temporal-agent-harness[typesafe]`` and register ``TypeSafePlugin``
-before ``AgentHarnessPlugin``. Jev tool-approval evaluation is independent.
+TypeSafe is included in the base harness install. Register ``TypeSafePlugin``
+before ``AgentHarnessPlugin``. Jev approvals use the same provider activity, with
+their own approval events and threshold logic.
 """
 
 from __future__ import annotations
@@ -11,16 +12,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-try:
-    from temporalio.typesafe.workflow import TemporalTypeSafe
-    from temporalio.typesafe import SystemOneResult
+from temporalio import workflow
+
+with workflow.unsafe.imports_passed_through():
+    from temporalio.typesafe.workflow import SystemOneResult, TemporalTypeSafe
     from typesafe_sdk import Choice, Noul, Score
-except ModuleNotFoundError as exc:
-    if exc.name not in {"temporalio.typesafe", "typesafe_sdk"}:
-        raise
-    raise ImportError(
-        "TypeSafe support requires pip install 'temporal-agent-harness[typesafe]'"
-    ) from exc
 
 from temporalio.workflow import ActivityConfig
 

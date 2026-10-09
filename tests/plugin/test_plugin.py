@@ -25,9 +25,11 @@ from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.agent_protocol import RUN_SUBAGENT_TURN_ACTIVITY
 from temporal_agent_harness.harness.jev_approvals.activity import (
     JEV_APPROVAL_ACTIVITIES,
+    missing_typesafe_plugin,
 )
 from temporal_agent_harness.harness.jev_approvals.models import (
     JEV_TOOL_APPROVAL_ACTIVITY,
+    TYPESAFE_SYSTEM_ONE_ACTIVITY,
 )
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporal_agent_harness.utils.large_payload import (
@@ -35,13 +37,10 @@ from temporal_agent_harness.utils.large_payload import (
     local_payload_storage,
 )
 
-# Every activity the plugin registers on a worker regardless of configuration — the ones
-# their callers dispatch BY NAME, so an unregistered name would be a retryable Temporal
-# error and a hung turn rather than one actionable failure. Their optional extras are
-# checked per call, inside the activity, never at registration. (Code Mode registers none: its
-# scripts run in the workflow, and only their host calls are activities.)
-_ALWAYS_ON_ACTIVITIES = [*JEV_APPROVAL_ACTIVITIES]
-_ALWAYS_ON_NAMES = {JEV_TOOL_APPROVAL_ACTIVITY}
+# Legacy approvals remain registered for old histories. The canonical-name fallback fails
+# once with configuration guidance when no provider was registered before the harness.
+_ALWAYS_ON_ACTIVITIES = [*JEV_APPROVAL_ACTIVITIES, missing_typesafe_plugin]
+_ALWAYS_ON_NAMES = {JEV_TOOL_APPROVAL_ACTIVITY, TYPESAFE_SYSTEM_ONE_ACTIVITY}
 
 
 @agent.activity_tool_defn(
@@ -182,12 +181,7 @@ def test_tools_rejects_a_non_harness_tool():
 
 
 def test_extra_backed_activities_are_registered_unconditionally():
-    """Registration never branches on an extra — the check lives inside the activity.
-
-    Registering the NAMES is what matters: the Jev auto-approver is dispatched by name, and
-    leaving its name unregistered would make Temporal retry "not registered" forever — a hung
-    turn instead of one actionable failure.
-    """
+    """Compatibility activities and missing-provider guidance are always available."""
     plugin = AgentHarnessPlugin()
     assert set(plugin._worker_activities) == set(_ALWAYS_ON_ACTIVITIES)
     assert _plugin_activity_names(plugin) == _ALWAYS_ON_NAMES
