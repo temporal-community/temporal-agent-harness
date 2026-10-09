@@ -94,6 +94,7 @@
 </script>
 
 <script lang="ts">
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import { ChevronDown, ChevronRight, Cpu, ShieldCheck, Wrench } from "@lucide/svelte";
   import { scrollFollower } from "$lib/state/followScroll";
   import { formatDuration } from "$lib/state/replayLog";
@@ -413,7 +414,7 @@
 
   <div class="turns" bind:this={turnsElement} onscroll={follower.handleScroll}>
     {#if timeline.turns.length === 0}
-      <p class="empty">Step through the stream to chart per-step latency.</p>
+      <EmptyState title="Step through the stream to chart per-step latency." />
     {:else}
       <!-- No shared ruler heads these rows, because each is scaled to its own turn
            and no single ruler would be true of all of them. Nor does a sentence
@@ -963,13 +964,9 @@
     }
   }
 
-  .track-empty,
-  .empty {
+  .track-empty {
     color: var(--text-3);
     font-size: var(--font-sm);
-  }
-
-  .track-empty {
     position: absolute;
     left: 8px;
     top: 6px;
@@ -987,10 +984,6 @@
     color: var(--text-2);
     font-size: var(--font-xs);
     line-height: 1.45;
-  }
-
-  .empty {
-    padding: 20px 2px;
   }
 
   @media (prefers-reduced-motion: reduce) {

@@ -2,6 +2,7 @@
   import FileViewerDialog from "./FileViewerDialog.svelte";
   import MountTrees from "./MountTrees.svelte";
   import OKFGraphDialog from "./OKFGraphDialog.svelte";
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import type { FileChunk, FileViewRequest, OKFGraph, OKFGraphRequest } from "$lib/api/types";
   import type { MountView } from "$lib/state/fileMounts";
   import type { WalkedGraph } from "$lib/state/okfGraph";
@@ -41,22 +42,26 @@
   // Each OKF mount's last walk, so reopening its graph doesn't walk the bundle again unless
   // the mount has changed since.
   let walkedGraphs = $state<Record<string, WalkedGraph>>({});
+
+  const MOUNT_EXAMPLE = `workspace = agent.vfs_mount("/workspace", agent.InMemoryFileSystem, description="...")
+memory = agent.vfs_mount("/memory", LocalDisk, description="...")
+
+mounts=[self.workspace.bind(seed=None), self.memory.bind(LocalDiskConfig(...))]`;
 </script>
 
-<section class="files" aria-label="VFS File Mounts">
+<section class="files" class:empty={mounts.length === 0} aria-label="VFS File Mounts">
   {#if mounts.length === 0}
-    <div class="empty">
-      <p>No agent in this run tracks a filesystem mount.</p>
-      <p class="empty-note">
+    <EmptyState
+      title="No agent in this run tracks a filesystem mount."
+      language="python"
+      code={MOUNT_EXAMPLE}
+    >
+      <p>
         Track a Code Mode mount by declaring it on the agent class, then bind it in
         <code>@agent.init</code>. An in-memory filesystem keeps its files, contents included;
         an activity-backed one keeps an index of its tree:
       </p>
-      <pre data-language="python">workspace = agent.vfs_mount("/workspace", agent.InMemoryFileSystem, description="...")
-memory = agent.vfs_mount("/memory", LocalDisk, description="...")
-
-mounts=[self.workspace.bind(seed=None), self.memory.bind(LocalDiskConfig(...))]</pre>
-    </div>
+    </EmptyState>
   {:else}
     <div class="trees">
       <MountTrees
@@ -101,30 +106,8 @@ mounts=[self.workspace.bind(seed=None), self.memory.bind(LocalDiskConfig(...))]<
     overflow: auto;
   }
 
-  .empty {
-    display: grid;
-    gap: var(--gap-sm);
+  .files.empty {
     padding: var(--gutter-tight);
-    background: var(--surface-2);
-  }
-
-  .empty p {
-    margin: 0;
-  }
-
-  .empty-note {
-    color: var(--text-3);
-    font-size: var(--font-sm);
-  }
-
-  .empty-note code {
-    font-family: var(--font-mono);
-  }
-
-  .empty pre {
-    margin: 0;
-    font-family: var(--font-mono);
-    font-size: var(--font-code);
-    white-space: pre-wrap;
+    overflow: auto;
   }
 </style>
