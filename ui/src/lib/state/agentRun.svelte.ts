@@ -52,7 +52,7 @@ import { displayTextForMessage, renderUserMessage } from "./inboundMessageText";
 import { buildAgentStateDocs } from "./agentState";
 import { buildMountViews, isFileStateDoc } from "./fileMounts";
 import { buildApprovalDecisions } from "./approvalDecisionTree";
-import { buildReplayLog, buildReplayMarkers, rowCovers } from "./replayLog";
+import { buildReplayMarkers, replayLogAt, replayLogBuilder, rowCovers } from "./replayLog";
 import { buildReplayTimeline, type ReplayTimelineEntry } from "./replayTimeline";
 import { buildReplyRuns, replyRunAt } from "./replyRuns";
 import { buildStepBoundaries, buildStepTimeline } from "./stepTimeline";
@@ -440,11 +440,12 @@ export class AgentRunController {
   sessionClosed = $derived(
     this.session != null && this.#isWorkflowClosed(this.session.workflow_id)
   );
-  fullReplayLog = $derived(buildReplayLog(this.replayTimeline, this.agentInterfaces));
+  #foldReplayLog = replayLogBuilder();
+  fullReplayLog = $derived(this.#foldReplayLog(this.replayTimeline, this.agentInterfaces));
   replayLog = $derived(
     this.viewIndex === this.replayTimeline.length
       ? this.fullReplayLog
-      : buildReplayLog(this.visibleReplayTimeline, this.agentInterfaces)
+      : replayLogAt(this.fullReplayLog, this.replayTimeline, this.viewIndex)
   );
   #parentInterface = $derived(
     this.session ? this.agentInterfaces[this.session.workflow_id] : undefined

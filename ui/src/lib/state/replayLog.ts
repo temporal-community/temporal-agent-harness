@@ -11,8 +11,8 @@ import {
 import { formatTokens, summarizeCost, type UsageTotals } from "$lib/cost/pricing";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
 import { handlerReply, outputSchemaTracker } from "$lib/state/handlerReply";
-import { HISTORY_GAP_NOTE, findHistoryGaps } from "$lib/state/historyGap";
-import { buildReplyRuns, type ReplyRun } from "$lib/state/replyRuns";
+import { HISTORY_GAP_NOTE, rootLogOffset } from "$lib/state/historyGap";
+import { replyRunKey } from "$lib/state/replyRuns";
 import { thoughtDeltaText } from "$lib/state/thoughtSummary";
 
 export type ReplayActor =
@@ -674,8 +674,8 @@ function rowFromFrame(
 }
 
 function buildSummary(turnNumber: number, rows: ReplayLogRow[]): TurnLogSummary {
-  const startedAt = Math.min(...rows.map((row) => row.timestamp));
-  const endedAt = Math.max(...rows.map((row) => row.timestamp));
+  const startedAt = rows.reduce((least, row) => Math.min(least, row.timestamp), Infinity);
+  const endedAt = rows.reduce((most, row) => Math.max(most, row.timestamp), -Infinity);
   const toolIds = new Set(rows.map((row) => row.toolId).filter(Boolean));
   const estimatedCostUsd = rows.every((row) => row.estimatedCostUsd !== null)
     ? rows.reduce((sum, row) => sum + (row.estimatedCostUsd ?? 0), 0)
@@ -697,68 +697,157 @@ function buildSummary(turnNumber: number, rows: ReplayLogRow[]): TurnLogSummary 
   };
 }
 
-/** `agentInterfaces` is keyed by workflow ID, so each agent's replies read their own handlers' schemas. */
-export function buildReplayLog(
-  input: Array<AgentSseFrame | ReplayLogFrame>,
-  agentInterfaces: Record<string, AgentInterfaceFunction[]> = {}
-): ReplayLog {
-  const gapPositions = findHistoryGaps(input);
-  const schemaOf = outputSchemaTracker();
-  /* A run of reply chunks draws ONE row, carrying all of their text. A lone chunk
-     is left exactly as it was — it is already one event, and a row that announced
-     itself as a collapsed run of one would only be noise. */
-  const runStarts = new Map<number, ReplyRun>();
-  const withinRun = new Set<number>();
-  for (const run of buildReplyRuns(input)) {
-    if (run.frameCount < 2) continue;
-    runStarts.set(run.startIndex, run);
-    for (let index = run.startIndex + 1; index <= run.endIndex; index += 1) {
-      withinRun.add(index);
-    }
-  }
+type ReplayLogInput = AgentSseFrame | ReplayLogFrame;
+
+const NO_INTERFACES: Record<string, AgentInterfaceFunction[]> = {};
+
+function sameEntry(a: ReplayLogInput, b: ReplayLogInput): boolean {
+  if (a === b) return true;
+  if (!("frame" in a) || !("frame" in b)) return false;
+  return (
+    a.frame === b.frame &&
+    a.workflowId === b.workflowId &&
+    a.role === b.role &&
+    a.label === b.label &&
+    a.parentTurnNumber === b.parentTurnNumber
+  );
+}
+
+function turnGroup(turnNumber: number, rows: ReplayLogRow[]): TurnLogGroup {
+  const summary = buildSummary(turnNumber, rows);
+  return { turnNumber, startedAt: summary.startedAt, rows, summary };
+}
+
+/**
+ * The replay log, folded forward one frame at a time and kept between calls.
+ *
+ * Every commit used to rebuild the whole log, which cost ~30 ms per commit at 10,000
+ * frames. Everything the fold carries only moves forward (the highest root offset
+ * for history gaps, the handler each message opened, the open reply run), so while
+ * the previous input is still a prefix of the new one, only the new frames are
+ * folded in. Anything else (an earlier entry relabelled once its subagent is seen,
+ * new interfaces, a shorter input) starts over. Rows and groups nothing touched
+ * keep their identity.
+ */
+export function replayLogBuilder(): (
+  input: readonly ReplayLogInput[],
+  agentInterfaces?: Record<string, AgentInterfaceFunction[]>
+) => ReplayLog {
+  let seen: readonly ReplayLogInput[] = [];
+  let interfaces: Record<string, AgentInterfaceFunction[]> | null = null;
+  let highestOffset: number | null = null;
+  let schemaOf = outputSchemaTracker();
   /* Carried forward for the same reason the waterfall carries it: `rowFromFrame`
      answers null for an event kind this log does not render, and a seam attached to
      a frame that draws no row would never be seen. A chunk folded into the row above
      is the same case — the seam waits for the next row that can carry it. */
   let pendingGap = false;
-  const rows: ReplayLogRow[] = [];
-  input.forEach((item, index) => {
-    if (gapPositions.has(index)) pendingGap = true;
-    const entry = normalizeReplayLogFrame(item);
-    const scope = entry.workflowId ?? "";
-    const schema = schemaOf(entry.frame, agentInterfaces[scope], scope);
-    if (withinRun.has(index + 1)) return;
-    const row = rowFromFrame(entry, index, schema);
-    if (!row) return;
-    const run = runStarts.get(row.index);
-    if (run) {
-      row.runStartIndex = run.startIndex;
-      row.index = run.endIndex;
-      row.body = run.text;
-    }
-    if (pendingGap) {
-      row.gapBefore = HISTORY_GAP_NOTE;
+  /* A run of reply chunks draws ONE row, carrying all of their text. A lone chunk
+     is left exactly as it was — it is already one event, and a row that announced
+     itself as a collapsed run of one would only be noise. */
+  let open: { key: string; startIndex: number; text: string; row: number; groupRow: number } | null = null;
+  let rows: ReplayLogRow[] = [];
+  let turnRows = new Map<number, ReplayLogRow[]>();
+  let groups = new Map<number, TurnLogGroup>();
+
+  return (input, agentInterfaces = NO_INTERFACES) => {
+    let from = seen.length;
+    let prefix = agentInterfaces === interfaces && input.length >= from;
+    for (let i = 0; prefix && i < from; i += 1) prefix = sameEntry(input[i]!, seen[i]!);
+    if (!prefix) {
+      from = 0;
+      interfaces = agentInterfaces;
+      highestOffset = null;
+      schemaOf = outputSchemaTracker();
       pendingGap = false;
+      open = null;
+      rows = [];
+      turnRows = new Map();
+      groups = new Map();
     }
-    rows.push(row);
-  });
+    const dirty = new Set<number>();
+    for (let index = from; index < input.length; index += 1) {
+      const item = input[index]!;
+      const offset = rootLogOffset(item);
+      if (offset != null) {
+        if (highestOffset != null && offset > highestOffset + 1) pendingGap = true;
+        highestOffset = highestOffset == null ? offset : Math.max(highestOffset, offset);
+      }
+      const entry = normalizeReplayLogFrame(item);
+      const scope = entry.workflowId ?? "";
+      const schema = schemaOf(entry.frame, agentInterfaces[scope], scope);
+      const { frame } = entry;
+      const chunk = frame.event === "reply_delta" && "type" in frame.data ? frame.data.text : null;
+      const key = chunk == null ? null : replyRunKey(entry);
+      if (open && key === open.key) {
+        open.text += chunk;
+        const row = { ...rows[open.row]!, runStartIndex: open.startIndex, index: index + 1, body: open.text };
+        rows[open.row] = row;
+        turnRows.get(row.turnNumber)![open.groupRow] = row;
+        dirty.add(row.turnNumber);
+        continue;
+      }
+      open = null;
+      const row = rowFromFrame(entry, index, schema);
+      if (!row) continue;
+      if (pendingGap) {
+        row.gapBefore = HISTORY_GAP_NOTE;
+        pendingGap = false;
+      }
+      const turn = turnRows.get(row.turnNumber) ?? [];
+      turnRows.set(row.turnNumber, turn);
+      if (key != null) open = { key, startIndex: index + 1, text: chunk!, row: rows.length, groupRow: turn.length };
+      rows.push(row);
+      turn.push(row);
+      dirty.add(row.turnNumber);
+    }
+    seen = input.slice();
+    for (const turnNumber of dirty) {
+      if (turnNumber > 0) groups.set(turnNumber, turnGroup(turnNumber, [...turnRows.get(turnNumber)!]));
+    }
+    return { rows: [...rows], groups: [...groups.values()] };
+  };
+}
 
-  const groupedRows = new Map<number, ReplayLogRow[]>();
-  for (const row of rows) {
-    const current = groupedRows.get(row.turnNumber) ?? [];
-    current.push(row);
-    groupedRows.set(row.turnNumber, current);
+/** `agentInterfaces` is keyed by workflow ID, so each agent's replies read their own handlers' schemas. */
+export function buildReplayLog(
+  input: readonly ReplayLogInput[],
+  agentInterfaces: Record<string, AgentInterfaceFunction[]> = {}
+): ReplayLog {
+  return replayLogBuilder()(input, agentInterfaces);
+}
+
+/**
+ * The log as it stood at a 1-based cursor, cut from the full log rather than rebuilt
+ * from frame one. Rows are in frame order, so the cut is a prefix, plus the reply run
+ * the cursor sits inside shortened to the chunks it has reached. `input` is what the
+ * full log was built from.
+ */
+export function replayLogAt(full: ReplayLog, input: readonly ReplayLogInput[], cursor: number): ReplayLog {
+  let kept = 0;
+  while (kept < full.rows.length && full.rows[kept]!.index <= cursor) kept += 1;
+  const rows = full.rows.slice(0, kept);
+  const cut = full.rows[kept];
+  if (cut?.runStartIndex != null && cut.runStartIndex <= cursor) {
+    let body = "";
+    for (let index = cut.runStartIndex; index <= cursor; index += 1) {
+      const { frame } = normalizeReplayLogFrame(input[index - 1]!);
+      if (frame.event === "reply_delta" && "type" in frame.data) body += frame.data.text;
+    }
+    const { runStartIndex, ...row } = cut;
+    rows.push(cursor === runStartIndex ? { ...row, index: cursor, body } : { ...cut, index: cursor, body });
   }
-
-  const groups = [...groupedRows.entries()]
-    .filter(([turnNumber]) => turnNumber > 0)
-    .map(([turnNumber, rows]) => ({
-      turnNumber,
-      startedAt: Math.min(...rows.map((row) => row.timestamp)),
-      rows,
-      summary: buildSummary(turnNumber, rows)
-    }));
-
+  const shortened = rows.length > kept ? rows[kept]! : null;
+  const groups: TurnLogGroup[] = [];
+  for (const group of full.groups) {
+    const groupRows = group.rows.filter((row) => row.index <= cursor);
+    if (shortened?.turnNumber === group.turnNumber) groupRows.push(shortened);
+    else if (groupRows.length === group.rows.length) {
+      groups.push(group);
+      continue;
+    }
+    if (groupRows.length > 0) groups.push(turnGroup(group.turnNumber, groupRows));
+  }
   return { rows, groups };
 }
 
