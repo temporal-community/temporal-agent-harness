@@ -308,6 +308,7 @@
      whichever of them happens to be first. */
   .minimap-lead {
     min-width: 0;
+    max-width: 100%;
     display: flex;
     align-items: center;
     gap: var(--gap-xs);
@@ -651,7 +652,7 @@
 
   @media (max-width: 760px) {
     .minimap {
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr) auto;
     }
 
     .minimap-mark {

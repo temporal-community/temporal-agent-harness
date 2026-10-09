@@ -85,14 +85,6 @@ export function keptHighlight(visibleIds: readonly string[], highlightedId: stri
 }
 
 /**
- * Choosing a New session row. A no-worker row opens its own hint and starts nothing; any other
- * row clears whichever hint was open and starts a session.
- */
-export function chooseAgentRow(key: string, blocked: boolean): { hint: string | null; start: boolean } {
-  return blocked ? { hint: key, start: false } : { hint: null, start: true };
-}
-
-/**
  * What was focused before the drawer opened, if it is still somewhere focus can go back to.
  * Gone from the page, or inside the drawer that is closing, means the trigger instead.
  */

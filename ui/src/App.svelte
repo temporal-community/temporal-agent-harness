@@ -7,6 +7,7 @@
   import UsageReading from "$lib/components/flow/UsageReading.svelte";
   import StepController from "$lib/components/flow/StepController.svelte";
   import HotkeyHelp from "$lib/components/flow/HotkeyHelp.svelte";
+  import type { JsonRecord } from "$lib/api/types";
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
   import DockedDrawer from "$lib/components/primitives/DockedDrawer.svelte";
   import { restoredDrawerSize } from "$lib/components/primitives/resizeKeys";
@@ -103,7 +104,6 @@
       : "all"
   );
   let hotkeyHelpOpen = $state(false);
-  let sessionManagerTab = $state<"sessions" | "new">("sessions");
   const SESSION_DRAWER_DEFAULT_W = 420;
   const SESSION_DRAWER_MIN_W = 240;
   let sessionManagerHeld = $state(
@@ -567,15 +567,13 @@
     holdSessionManager(!sessionDrawerOpen);
   }
 
-  /* The name chip names the sessions view, so pressing it while that view is
-     already on screen shuts the drawer — the same press-to-close the icon has. */
-  function openSessionManager(tab: "sessions" | "new"): void {
-    if (sessionDrawerOpen && sessionManagerTab === tab) {
-      holdSessionManager(false);
-      return;
+  async function startSession(workflowType: string, data?: JsonRecord): Promise<void> {
+    const previousId = run.runInfo.sessionId;
+    await run.startNewSession(workflowType, data);
+    // The controller reports failures as state. Keep the setup dialog open for retry.
+    if (run.runInfo.sessionId === previousId) {
+      throw new Error(run.connectionError || "Could not start this session. Try again.");
     }
-    sessionManagerTab = tab;
-    holdSessionManager(true);
   }
 
   let windowWidth = $state(window.innerWidth);
@@ -641,13 +639,9 @@
           <PanelLeft size={13} />
         </IconButton>
 
-        <!-- Which session you are in, beside the switch that changes it. The icon
-             opens the drawer on whichever view was last read; this names the session
-             and opens the sessions list. New sessions start from the drawer's tab. -->
+        <!-- History, creation, and the current run have distinct roles in the nav. -->
         <SessionControls
           display="launcher"
-          tab={sessionManagerTab}
-          paneOpen={sessionDrawerOpen}
           sessions={run.sessions}
           agents={run.agents}
           sessionId={run.runInfo.sessionId}
@@ -657,8 +651,11 @@
           closed={run.sessionClosed}
           error={run.connectionError}
           {pendingLabel}
-          onEnsureSessions={() => run.ensureSessionsEnriched()}
-          onTabChange={openSessionManager}
+          onEnsureAgents={() => run.refreshAgents()}
+          onRefreshAgents={() => run.refreshAgents()}
+          refreshingAgents={run.refreshingAgents}
+          agentsError={run.agentsError}
+          onNewSession={startSession}
         />
       {/snippet}
 
@@ -707,7 +704,6 @@
       >
         <SessionControls
           display="pane"
-          tab={sessionManagerTab}
           sessions={run.sessions}
           agents={run.agents}
           sessionId={run.runInfo.sessionId}
@@ -720,15 +716,8 @@
           error={run.connectionError}
           sessionsError={run.sessionsError}
           {pendingLabel}
-          onNewSession={(workflowType, data) => run.startNewSession(workflowType, data)}
           onSelectSession={(sessionId) => run.selectSession(sessionId)}
           onRefreshSessions={() => run.refreshSessions()}
-          onEnsureSessions={() => run.ensureSessionsEnriched()}
-          onEnsureAgents={() => run.ensureAgents()}
-          onRefreshAgents={() => run.refreshAgents()}
-          refreshingAgents={run.refreshingAgents}
-          agentsError={run.agentsError}
-          onTabChange={(tab) => (sessionManagerTab = tab)}
           onClose={() => holdSessionManager(false)}
         />
       </DockedDrawer>
