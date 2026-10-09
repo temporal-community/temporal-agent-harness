@@ -140,17 +140,18 @@ const reattachBackoffMs = [500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000];
  *
  * A rAF rather than a bare timeout, because the point is to let a paint happen:
  * resuming before one has means the work was interleaved without the page ever
- * catching up.
+ * catching up. The timeout still resolves it in a hidden tab, which never
+ * paints and so never runs the rAF.
  */
 function yieldToMain(): Promise<void> {
   return new Promise((resolve) => {
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => resolve());
-      return;
-    }
-    setTimeout(resolve, 0);
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
+    setTimeout(resolve, typeof requestAnimationFrame === "function" ? 100 : 0);
   });
 }
+
+/** How long hydration may hold the main thread before it yields for a paint. */
+const hydrateSliceMs = 8;
 
 /**
  * The identity #ingestFrame dedupes on. A frame arriving twice is normal — a reconnect replays from
@@ -1787,7 +1788,11 @@ export class AgentRunController {
              commits, and chunks can pass far faster than the page can paint. */
           this.#catchUpStartedAt = now();
         }
+        /* Yielding per chunk instead put a frame's wait under every 24 frames:
+           about 14 s for a 20,000-frame cache however fast ingest was. */
+        if (now() - sliceStartedAt < hydrateSliceMs) continue;
         await yieldToMain();
+        sliceStartedAt = now();
       }
     } finally {
       this.#catchingUp = false;
