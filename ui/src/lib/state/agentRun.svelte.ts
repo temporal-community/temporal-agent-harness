@@ -30,7 +30,8 @@ import {
   readOperatorPrefs,
   readStoredActiveSessionId,
   readUrlSessionId,
-  writeCachedFrames,
+  maxCachedFrameChars,
+  writeCachedFrameJson,
   writeOperatorPrefs,
   writeStoredActiveSessionId,
   writeUrlSessionId
@@ -297,6 +298,8 @@ export class AgentRunController {
   #workflowAttachAbort = new Map<string, AbortController>();
   #frameKeys = new Set<string>();
   #frameCacheTimer: number | null = null;
+  /** What the frame cache already holds, so a write only serializes new frames. */
+  #frameCache: { sessionId: string; json: string; count: number; full: boolean } | null = null;
   /** Frames staged but not yet committed. Plain array: writing it must not react. */
   #frameBuffer: AgentSseFrame[] = [];
   #flushQueued = false;
@@ -1772,6 +1775,7 @@ export class AgentRunController {
     this.#catchingUp = true;
     this.#catchUpStartedAt = now();
     try {
+      let sliceStartedAt = now();
       for (let index = 0; index < cachedFrames.length; index += 1) {
         if (this.session?.workflow_id !== sessionId) return;
         this.#ingestFrame(cachedFrames[index], { persist: false });
@@ -1798,8 +1802,28 @@ export class AgentRunController {
     this.#frameCacheTimer = window.setTimeout(() => {
       this.#frameCacheTimer = null;
       if (this.session?.workflow_id !== sessionId) return;
-      writeCachedFrames(sessionId, this.frames);
+      this.#writeFrameCache(sessionId);
     }, 750);
+  }
+
+  #writeFrameCache(sessionId: string): void {
+    if (this.#frameCache?.sessionId !== sessionId) {
+      this.#frameCache = { sessionId, json: "", count: 0, full: false };
+    }
+    const cache = this.#frameCache;
+    if (cache.full || cache.count === this.#frameBuffer.length) return;
+    let { json, count } = cache;
+    for (; count < this.#frameBuffer.length; count += 1) {
+      const next = JSON.stringify(this.#frameBuffer[count]);
+      if (json.length + next.length + 1 > maxCachedFrameChars) {
+        cache.full = true;
+        break;
+      }
+      json = count === 0 ? next : `${json},${next}`;
+    }
+    if (count === cache.count) return;
+    Object.assign(cache, { json, count });
+    writeCachedFrameJson(sessionId, json);
   }
 
   #resetSessionView(): void {
@@ -1808,6 +1832,7 @@ export class AgentRunController {
     this.#awaitingMessages.clear();
     this.#stopWorkflowAttachStreams();
     this.frames = [];
+    this.#frameCache = null;
     this.observedSubagents = [];
     this.#frameKeys = new Set<string>();
     this.#frameBuffer = [];

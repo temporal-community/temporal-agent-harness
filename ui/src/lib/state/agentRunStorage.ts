@@ -101,16 +101,39 @@ export function readCachedFrames(sessionId: string): AgentSseFrame[] {
   }
 }
 
-export function writeCachedFrames(sessionId: string, frames: AgentSseFrame[]): void {
+/**
+ * Most of the frame JSON one session may cache, in UTF-16 units. Browsers give
+ * sessionStorage about 5M of them per origin, shared by every key.
+ */
+export const maxCachedFrameChars = 2_000_000;
+
+/**
+ * Cache a prefix of a session's frames, given as their comma-joined JSON.
+ *
+ * Only ever a prefix: each workflow's stream resumes past the highest offset
+ * already seen, so frames cut off the end are refetched rather than lost. When
+ * the quota still refuses it, other sessions' frames are dropped first.
+ */
+export function writeCachedFrameJson(sessionId: string, framesJson: string): void {
   if (typeof window === "undefined") return;
+  const key = frameCacheStorageKey(sessionId);
+  const value = `{"frames":[${framesJson}],"savedAt":${Date.now()}}`;
   try {
-    window.sessionStorage.setItem(
-      frameCacheStorageKey(sessionId),
-      JSON.stringify({ frames, savedAt: Date.now() })
-    );
+    window.sessionStorage.setItem(key, value);
+    return;
+  } catch {
+    // Quota, most likely; make room below.
+  }
+  try {
+    const store = window.sessionStorage;
+    for (let i = store.length - 1; i >= 0; i -= 1) {
+      const other = store.key(i);
+      if (other?.startsWith(frameCacheStorageKeyPrefix) && other !== key) store.removeItem(other);
+    }
+    window.sessionStorage.setItem(key, value);
   } catch {
     try {
-      window.sessionStorage.removeItem(frameCacheStorageKey(sessionId));
+      window.sessionStorage.removeItem(key);
     } catch {
       // Ignore storage failures.
     }
