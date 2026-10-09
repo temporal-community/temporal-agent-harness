@@ -19,6 +19,7 @@ import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
 import { HttpAgentApi } from "$lib/api/httpClient";
 import { MockAgentApi } from "$lib/api/mockClient";
 import { jsonReplyScenarios } from "$lib/mock/jsonReplyScenarios";
+import { scaleScenarios } from "$lib/mock/scaleScenarios";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
 import { chooseBootSession } from "./bootSession";
@@ -2279,7 +2280,7 @@ export class AgentRunController {
 export function createAgentRunController(): AgentRunController {
   /* Dev-only fixture switch (`?mock=worst`); the branch is dropped from production builds. */
   if (import.meta.env.DEV) {
-    const scenario = jsonReplyScenarios()[new URLSearchParams(window.location.search).get("mock") ?? ""];
+    const scenario = { ...jsonReplyScenarios(), ...scaleScenarios() }[new URLSearchParams(window.location.search).get("mock") ?? ""];
     if (scenario) return new AgentRunController(new MockAgentApi(scenario));
   }
   return new AgentRunController();

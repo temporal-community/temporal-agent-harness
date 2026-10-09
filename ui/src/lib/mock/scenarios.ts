@@ -14,6 +14,8 @@ export interface MockScenario {
   frames: AgentSseFrame[];
   /** What `agent_interface` answers for this scenario's sessions; the mock's default when absent. */
   agentInterface?: AgentInterfaceFunction[];
+  /** How many leading frames replay without the per-frame delay, as a reattach backfill would. */
+  instantFrames?: number;
 }
 
 const startedAt = 1_789_126_400;

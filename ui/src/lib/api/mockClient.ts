@@ -200,10 +200,13 @@ export class MockAgentApi implements AgentApi {
     fromOffset = 0,
     signal?: AbortSignal
   ): AsyncIterable<AgentSseFrame> {
-    for (const item of this.#scenario.frames) {
+    const instant = this.#scenario.instantFrames ?? 0;
+    for (const [index, item] of this.#scenario.frames.entries()) {
       if (signal?.aborted) return;
       if (item.data.resume_offset <= fromOffset) continue;
-      await sleep(40);
+      /* A backfill lands in network-sized chunks, not one macrotask per frame. */
+      if (index >= instant) await sleep(40);
+      else if (index % 100 === 0) await sleep(0);
       if (signal?.aborted) return;
       yield item;
     }
