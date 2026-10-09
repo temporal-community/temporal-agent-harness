@@ -1295,7 +1295,7 @@
             {#if message.data}
               <JsonReply json={message.json} text={message.text} />
             {:else}
-              <MarkdownMessage text={message.text} citations={message.citations} />
+              <MarkdownMessage text={message.text} citations={message.citations} streaming={message.streaming} />
             {/if}
             {#if message.error}
               <p class="reply-error">

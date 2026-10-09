@@ -17,8 +17,10 @@
     "@lucide/svelte": "^1.0.1",
     "@tanstack/charts": "^0.16.0",
     "@tanstack/highlight": "^1.1.0",
+    "@tanstack/markdown": "1.0.0",
     "@xyflow/svelte": "^1.6.0",
     "d3-force": "^3.0.0",
+    "remend": "^1.4.0",
     "svelte": "^5.0.0"
   },
   "devDependencies": {

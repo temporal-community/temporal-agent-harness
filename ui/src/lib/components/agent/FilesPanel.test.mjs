@@ -124,13 +124,10 @@ describe("FilesPanel", () => {
 
   it("keeps a code file in one block, even when it holds a fence", () => {
     const dialog = viewer(html({ selected: { mountKey: "wf-1:skills", path: "memory/run.py" } }));
-    assert.equal(dialog.match(/<pre class="md-code-block"/g)?.length, 1);
-    assert.match(dialog, /data-language="Python"/);
-    // Highlighting wraps operators and numbers in spans; the fence stays inside the one block.
-    assert.match(
-      dialog,
-      /x <span class="md-syntax-operator">=<\/span> <span class="md-syntax-number">1<\/span>\n```\ny /
-    );
+    assert.equal(dialog.match(/<pre class="md-code-block/g)?.length, 1);
+    assert.match(dialog, /class="code-language-tag[^"]*">python</);
+    // Highlighting wraps numbers in spans; the fence stays inside the one block.
+    assert.match(dialog, /x = <span class="md-syntax-number">1<\/span>\n```\ny /);
   });
 
   for (const path of ["memory/evil.md", "memory/evil.py"]) {
