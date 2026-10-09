@@ -1,5 +1,6 @@
 <script lang="ts">
   import Chip from "$lib/components/primitives/Chip.svelte";
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import MetricStrip from "$lib/components/primitives/MetricStrip.svelte";
   import type { Metric } from "$lib/components/primitives/metrics";
   import type { JsonValue } from "$lib/api/types";
@@ -168,19 +169,21 @@
   {/if}
 {/snippet}
 
-<section class="agent-state" aria-label="Agent state">
+<section class="agent-state" class:empty={!current} aria-label="Agent state">
   {#if !current}
     <!-- Not an error and not a loading state: most agents declare none. The line
          that would make this pane say something is short enough to print, so it
          is printed rather than described. -->
-    <div class="empty">
-      <p>No agent in this run has published observable state.</p>
-      <p class="empty-note">
+    <EmptyState
+      title="No agent in this run has published observable state."
+      language="python"
+      code='self._plan = self._runner.state("plan", PlanState())'
+    >
+      <p>
         A workflow author opts in with one call, and the harness streams every change
         to it from then on:
       </p>
-      <pre data-language="python">self._plan = self._runner.state("plan", PlanState())</pre>
-    </div>
+    </EmptyState>
   {:else}
     <div class="state-bar" role="group" aria-label="Registered state">
       {#each states as doc (doc.key)}
@@ -262,6 +265,11 @@
        would swallow the rail's wheel, which is the trap PANE_META's
        viewport/document note is about. */
     overflow: hidden;
+  }
+
+  .agent-state.empty {
+    padding: var(--gutter-tight);
+    overflow: auto;
   }
 
   .state-bar {
@@ -459,45 +467,5 @@
      says the same thing at the size of the thing that changed. */
   .leaf[data-change] {
     background: color-mix(in srgb, var(--mark) 22%, transparent);
-  }
-
-  .empty {
-    display: grid;
-    gap: var(--gutter-tight);
-    align-content: start;
-    padding: var(--gutter);
-    border: 1px solid var(--border);
-    background: var(--surface-2);
-    color: var(--text-2);
-    font-size: var(--font-sm);
-    line-height: 1.5;
-  }
-
-  .empty p {
-    margin: 0;
-  }
-
-  .empty-note {
-    color: var(--text-3);
-  }
-
-  .empty pre {
-    position: relative;
-    margin: 0;
-    /* Room above for the language tag, which app.css draws and every host has to
-       place — the markdown blocks put it in the same corner. */
-    padding: 30px var(--gutter-tight) var(--gutter-tight);
-    border: 1px solid var(--code-block-border);
-    background: var(--code-block-bg);
-    color: var(--code-block-text);
-    font-family: var(--font-mono);
-    font-size: var(--font-code);
-    overflow-x: auto;
-  }
-
-  .empty pre[data-language]::before {
-    position: absolute;
-    top: 7px;
-    right: 8px;
   }
 </style>

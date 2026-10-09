@@ -43,7 +43,9 @@
 
   const chartPoints = $derived(tokenWindow(points));
   const originTimestamp = $derived(
-    chartPoints.length ? Math.min(...chartPoints.map((point) => point.timestamp)) : 0
+    chartPoints.length
+      ? chartPoints.reduce((min, point) => Math.min(min, point.timestamp), Infinity)
+      : 0
   );
   const samples = $derived(
     collapseSameInstant(

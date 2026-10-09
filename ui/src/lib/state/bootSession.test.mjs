@@ -270,4 +270,17 @@ describe("initialize() honours the rule chooseBootSession states", () => {
     );
     assert.equal(created.length, 1, "with nothing openable left, boot must start a fresh session");
   });
+
+  /* Marking closed sessions one at a time copied the whole list per id: 10,000 sessions
+     froze the tab for 88 s. At 20,000 here, quadratic work takes ~2.8 s and linear ~6 ms. */
+  it("marks every closed session of a 20,000-session list in linear time", async () => {
+    /* Reopening a closed stored session skips attach, so the time is the list handling alone. */
+    const sessions = Array.from({ length: 20_000 }, (_, i) => at(`wf-${i}`, done));
+    const started = performance.now();
+    const { controller } = await bootWith(sessions, "wf-0");
+    const elapsed = performance.now() - started;
+    assert.equal(controller.session?.workflow_id, "wf-0", "the stored closed session should reopen");
+    assert.equal(controller.closedWorkflowIds.length, 20_000, "every closed session should be marked closed");
+    assert.ok(elapsed < 1_000, `booting 20,000 sessions took ${Math.round(elapsed)} ms`);
+  });
 });

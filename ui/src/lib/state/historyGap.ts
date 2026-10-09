@@ -85,7 +85,7 @@ type GapInput = AgentSseFrame | { frame: AgentSseFrame };
  * skipping them the way the display projections do would manufacture a gap at
  * every one of them.
  */
-function rootLogOffset(item: GapInput): number | null {
+export function rootLogOffset(item: GapInput): number | null {
   const { data } = "frame" in item ? item.frame : item;
   if (!("type" in data)) return null;
   if (!isRootAgentEvent(data)) return null;

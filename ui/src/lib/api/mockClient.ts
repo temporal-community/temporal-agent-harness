@@ -21,7 +21,7 @@ import type {
   WorkflowId
 } from "./types";
 import type { AgentApi } from "./client";
-import { realisticQaScenario } from "$lib/mock/scenarios";
+import { realisticQaScenario, type MockScenario } from "$lib/mock/scenarios";
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -120,10 +120,16 @@ const montyInterface: AgentInterfaceFunction[] = [
 ];
 
 export class MockAgentApi implements AgentApi {
-  #sessions: Session[] = [...realisticQaScenario.sessions];
+  #scenario: MockScenario;
+  #sessions: Session[];
+
+  constructor(scenario: MockScenario = realisticQaScenario) {
+    this.#scenario = scenario;
+    this.#sessions = [...scenario.sessions];
+  }
 
   async listAgents(): Promise<AgentRegistryResponse> {
-    return { agents: realisticQaScenario.agents };
+    return { agents: this.#scenario.agents };
   }
 
   async listSessions(): Promise<Session[]> {
@@ -157,6 +163,7 @@ export class MockAgentApi implements AgentApi {
   }
 
   async agentInterface(sessionId: WorkflowId): Promise<AgentInterfaceFunction[]> {
+    if (this.#scenario.agentInterface) return this.#scenario.agentInterface;
     return sessionId.toLowerCase().includes("monty") ? montyInterface : qaInterface;
   }
 
@@ -193,10 +200,13 @@ export class MockAgentApi implements AgentApi {
     fromOffset = 0,
     signal?: AbortSignal
   ): AsyncIterable<AgentSseFrame> {
-    for (const item of realisticQaScenario.frames) {
+    const instant = this.#scenario.instantFrames ?? 0;
+    for (const [index, item] of this.#scenario.frames.entries()) {
       if (signal?.aborted) return;
       if (item.data.resume_offset <= fromOffset) continue;
-      await sleep(40);
+      /* A backfill lands in network-sized chunks, not one macrotask per frame. */
+      if (index >= instant) await sleep(40);
+      else if (index % 100 === 0) await sleep(0);
       if (signal?.aborted) return;
       yield item;
     }

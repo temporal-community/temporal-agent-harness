@@ -42,6 +42,7 @@
 </script>
 
 <script lang="ts">
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
   import {
     AlertTriangle,
     Bot,
@@ -302,9 +303,9 @@
 
   <div class="items" bind:this={itemsElement} onscroll={follower.handleScroll}>
     {#if groups.length === 0}
-      <p class="empty">Step through the stream to build the logs.</p>
+      <EmptyState title="Step through the stream to build the logs." />
     {:else if visibleGroups.length === 0}
-      <p class="empty">No events match this filter.</p>
+      <EmptyState title="No events match this filter." />
     {:else}
       <!-- Keyed, because a scrub inserts into the MIDDLE of this list rather than only
            appending to it. Rows arrive in frame order but render grouped by turn, and
@@ -988,10 +989,6 @@
     font-size: var(--font-sm);
     text-decoration: none;
     border-bottom: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
-  }
-
-  .empty {
-    color: var(--text-3);
   }
 
   @media (prefers-reduced-motion: reduce) {

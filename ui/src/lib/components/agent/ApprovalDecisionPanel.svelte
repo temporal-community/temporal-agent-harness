@@ -46,9 +46,10 @@
 </script>
 
 <script lang="ts">
-  import { CheckCircle2, GitBranch, ShieldAlert, XCircle } from "@lucide/svelte";
+  import { CheckCircle2, ShieldAlert, XCircle } from "@lucide/svelte";
   import Chip, { type ChipTone } from "$lib/components/primitives/Chip.svelte";
   import Copyable from "$lib/components/primitives/Copyable.svelte";
+  import EmptyState from "$lib/components/primitives/EmptyState.svelte";
 
   interface Props {
     decisions: ApprovalDecision[];
@@ -97,14 +98,12 @@
   }
 </script>
 
-<section class="approval-decisions" aria-label="Automatic approval decisions">
+<section class="approval-decisions" class:empty={!current} aria-label="Automatic approval decisions">
   {#if !current}
-    <div class="empty">
-      <GitBranch size={22} aria-hidden="true" />
-      {#if ahead > 0}
-        <h3>
-          {ahead} approval {ahead === 1 ? "decision" : "decisions"} ahead of the replay cursor
-        </h3>
+    {#if ahead > 0}
+      <EmptyState
+        title={`${ahead} approval ${ahead === 1 ? "decision" : "decisions"} ahead of the replay cursor`}
+      >
         <p>
           This run has judged {ahead === 1 ? "a gated call" : "gated calls"}, but the cursor
           is parked before {ahead === 1 ? "it" : "them"} — so there is nothing to show
@@ -113,14 +112,15 @@
         <button type="button" class="jump" onclick={onJumpToLive}>
           Jump to latest step
         </button>
-      {:else}
-        <h3>No completed approval decisions</h3>
+      </EmptyState>
+    {:else}
+      <EmptyState title="No completed approval decisions">
         <p>
           Completed <code>auto_approval_evaluation_ended</code> events will appear here as
           the replay cursor reaches them.
         </p>
-      {/if}
-    </div>
+      </EmptyState>
+    {/if}
   {:else}
     <div class="decision-layout">
       <nav class="evaluation-list" aria-label="Completed approval evaluations">
@@ -395,6 +395,10 @@
     padding: var(--gutter);
     background: var(--surface-1);
     overflow: hidden;
+  }
+
+  .approval-decisions.empty {
+    overflow: auto;
   }
 
   .decision-layout {
@@ -835,40 +839,6 @@
     font-family: var(--font-mono);
     font-size: var(--font-2xs);
     line-height: 1.45;
-  }
-
-  .empty {
-    display: grid;
-    align-content: start;
-    justify-items: start;
-    gap: var(--gutter-tight);
-    max-width: 560px;
-    padding: var(--gutter);
-    border: 1px solid var(--border);
-    background: var(--surface-2);
-    color: var(--text-3);
-  }
-
-  .empty :is(h3, p) {
-    margin: 0;
-  }
-
-  .empty h3 {
-    color: var(--text-1);
-    font-size: var(--font-xl);
-  }
-
-  .empty p {
-    color: var(--text-2);
-    font-size: var(--font-sm);
-    line-height: 1.5;
-  }
-
-  .empty code {
-    color: var(--accent-soft);
-    font-family: var(--font-mono);
-    font-size: inherit;
-    overflow-wrap: anywhere;
   }
 
   .jump {

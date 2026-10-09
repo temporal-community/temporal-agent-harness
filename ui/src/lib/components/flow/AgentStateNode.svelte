@@ -56,10 +56,21 @@
     if (tone === "done") return "complete";
     return "idle";
   }
+
+  /** Where the result box scrolls when its text changes; null leaves the reader where they are. */
+  export function resultScrollTop(
+    element: { scrollHeight: number },
+    streaming: boolean,
+    following: boolean
+  ): number | null {
+    if (!streaming) return 0;
+    return following ? element.scrollHeight : null;
+  }
 </script>
 
 <script lang="ts">
   import { Handle, Position } from "@xyflow/svelte";
+  import { drawnPart } from "$lib/components/chat/JsonReply.svelte";
   import StatusChip from "$lib/components/primitives/StatusChip.svelte";
 
   interface Props {
@@ -80,7 +91,9 @@
    * following means tail the live edge, not following means someone scrolled
    * back to read something and must not be dragged off it.
    */
-  let following = $state(true);
+  /* Not reactive: a scroll must never re-run the effect below, or scrolling a finished
+     reply would snap it back to its top. */
+  let following = true;
   /* A fade on the edge that is hiding something, so the region reads as clipped
      rather than as mysteriously ending. Each edge separately: while following,
      the newest text is against the bottom and a fade there would dim the one
@@ -108,17 +121,20 @@
 
   /* Jumped, never animated. This runs once per streamed delta — a smooth scroll
      that is restarted every few milliseconds never arrives, and reads as lag
-     rather than as smoothness. */
+     rather than as smoothness. Only a stream is tailed: a finished reply opens at
+     its top, or a nested payload shows nothing but its closing braces. */
   $effect(() => {
     data.detail;
     const element = resultBody;
     if (!element) return;
-    if (following) element.scrollTop = element.scrollHeight;
+    const top = resultScrollTop(element, streaming, following);
+    if (top !== null) element.scrollTop = top;
     syncEdges(element);
   });
 
   function scriptFromDetail(detail: unknown): string | null {
-    if (typeof detail !== "string") return null;
+    /* The substring test first: a megabyte reply would otherwise be parsed on every scrub step. */
+    if (typeof detail !== "string" || !detail.includes('"script"')) return null;
     try {
       const parsed = JSON.parse(detail);
       if (typeof parsed?.script === "string") return parsed.script;
@@ -221,7 +237,7 @@
           class="result-body"
           bind:this={resultBody}
           onscroll={handleScroll}
-        >{data.detail}</div>
+        >{drawnPart(data.detail ?? "", streaming)}</div>
       {/if}
     </div>
   {/if}

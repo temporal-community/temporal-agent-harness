@@ -1,3 +1,4 @@
+import { AsyncThrottler } from "@tanstack/pacer/async-throttler";
 import type {
   AgentInboundMessage,
   AgentInterfaceFunction,
@@ -17,6 +18,9 @@ import type {
 } from "$lib/api/types";
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
 import { HttpAgentApi } from "$lib/api/httpClient";
+import { MockAgentApi } from "$lib/api/mockClient";
+import { jsonReplyScenarios } from "$lib/mock/jsonReplyScenarios";
+import { scaleScenarios } from "$lib/mock/scaleScenarios";
 import { realisticQaScenario } from "$lib/mock/scenarios";
 import { buildUsageTimeline, summarizeCost } from "$lib/cost/pricing";
 import { chooseBootSession } from "./bootSession";
@@ -26,7 +30,8 @@ import {
   readOperatorPrefs,
   readStoredActiveSessionId,
   readUrlSessionId,
-  writeCachedFrames,
+  maxCachedFrameChars,
+  writeCachedFrameJson,
   writeOperatorPrefs,
   writeStoredActiveSessionId,
   writeUrlSessionId
@@ -49,7 +54,7 @@ import { displayTextForMessage, renderUserMessage } from "./inboundMessageText";
 import { buildAgentStateDocs } from "./agentState";
 import { buildMountViews, isFileStateDoc } from "./fileMounts";
 import { buildApprovalDecisions } from "./approvalDecisionTree";
-import { buildReplayLog, buildReplayMarkers, rowCovers } from "./replayLog";
+import { buildReplayMarkers, replayLogAt, replayLogBuilder, rowCovers } from "./replayLog";
 import { buildReplayTimeline, type ReplayTimelineEntry } from "./replayTimeline";
 import { buildReplyRuns, replyRunAt } from "./replyRuns";
 import { buildStepBoundaries, buildStepTimeline } from "./stepTimeline";
@@ -135,17 +140,18 @@ const reattachBackoffMs = [500, 1_000, 2_000, 4_000, 8_000, 8_000, 8_000];
  *
  * A rAF rather than a bare timeout, because the point is to let a paint happen:
  * resuming before one has means the work was interleaved without the page ever
- * catching up.
+ * catching up. The timeout still resolves it in a hidden tab, which never
+ * paints and so never runs the rAF.
  */
 function yieldToMain(): Promise<void> {
   return new Promise((resolve) => {
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => resolve());
-      return;
-    }
-    setTimeout(resolve, 0);
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => resolve());
+    setTimeout(resolve, typeof requestAnimationFrame === "function" ? 100 : 0);
   });
 }
+
+/** How long hydration may hold the main thread before it yields for a paint. */
+const hydrateSliceMs = 8;
 
 /**
  * The identity #ingestFrame dedupes on. A frame arriving twice is normal — a reconnect replays from
@@ -228,6 +234,7 @@ export class AgentRunController {
   agentInterfaces = $state<Record<string, AgentInterfaceFunction[]>>({});
   failedInterfaceIds = $state<string[]>([]);
   closedWorkflowIds = $state<string[]>([]);
+  #closedIds = $derived(new Set(this.closedWorkflowIds));
   viewIndex = $state(0);
   playing = $state(false);
   /**
@@ -255,13 +262,23 @@ export class AgentRunController {
   #streamVersion = 0;
   #connectionVersion = 0;
   #sendVersion = 0;
-  #syncingSessions = false;
   /** Single-flight promise for listAgents loads. */
   #agentsLoad: Promise<void> | null = null;
   /** Single-flight promise for listSessions loads. */
   #sessionsLoad: Promise<void> | null = null;
-  /** When the last listSessions finished (ms). */
-  #sessionsLoadedAt = 0;
+  #sessionsLoaded = false;
+  /**
+   * Every load nobody explicitly asked for (picker open, tab refocus) goes through
+   * here, so open/close spam and focus churn cost one listSessions per window.
+   * It wraps the single-flight load rather than replacing it: the throttler only
+   * waits ``wait`` ms for an in-flight call, and a slower list must still not be
+   * requested twice.
+   */
+  #sessionsThrottle = new AsyncThrottler(() => this.#loadSessions(), {
+    wait: 5_000,
+    leading: true,
+    trailing: false
+  });
   #streamAbort: AbortController | null = null;
   /**
    * Wakes the stream's backoff sleep early. Set only while `attach` is sleeping between
@@ -282,6 +299,8 @@ export class AgentRunController {
   #workflowAttachAbort = new Map<string, AbortController>();
   #frameKeys = new Set<string>();
   #frameCacheTimer: number | null = null;
+  /** What the frame cache already holds, so a write only serializes new frames. */
+  #frameCache: { sessionId: string; json: string; count: number; full: boolean } | null = null;
   /** Frames staged but not yet committed. Plain array: writing it must not react. */
   #frameBuffer: AgentSseFrame[] = [];
   #flushQueued = false;
@@ -436,13 +455,19 @@ export class AgentRunController {
   sessionClosed = $derived(
     this.session != null && this.#isWorkflowClosed(this.session.workflow_id)
   );
-  fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
+  #foldReplayLog = replayLogBuilder();
+  fullReplayLog = $derived(this.#foldReplayLog(this.replayTimeline, this.agentInterfaces));
   replayLog = $derived(
     this.viewIndex === this.replayTimeline.length
       ? this.fullReplayLog
-      : buildReplayLog(this.visibleReplayTimeline)
+      : replayLogAt(this.fullReplayLog, this.replayTimeline, this.viewIndex)
   );
-  chatTranscript = $derived(buildTranscript(this.#parentFrames(this.replayTimeline)));
+  #parentInterface = $derived(
+    this.session ? this.agentInterfaces[this.session.workflow_id] : undefined
+  );
+  chatTranscript = $derived(
+    buildTranscript(this.#parentFrames(this.replayTimeline), this.#parentInterface)
+  );
   /**
    * What the chat pane is handed: the conversation as of the cursor, plus the
    * whole run for the parts of it that are live state rather than history — a
@@ -455,7 +480,7 @@ export class AgentRunController {
     return {
       items: live
         ? this.chatTranscript
-        : buildTranscript(this.#parentFrames(this.visibleReplayTimeline)),
+        : buildTranscript(this.#parentFrames(this.visibleReplayTimeline), this.#parentInterface),
       logs: this.replayLog.rows,
       liveItems: this.chatTranscript,
       liveLogs: this.fullReplayLog.rows,
@@ -703,7 +728,7 @@ export class AgentRunController {
         closed: true
       };
     }
-    if (this.closedWorkflowIds.includes(workflowId)) return;
+    if (this.#closedIds.has(workflowId)) return;
     this.closedWorkflowIds = [...this.closedWorkflowIds, workflowId];
     if (workflowId === this.session?.workflow_id) {
       this.#stopStream();
@@ -722,7 +747,7 @@ export class AgentRunController {
 
   #isWorkflowClosed(workflowId: string): boolean {
     return (
-      this.closedWorkflowIds.includes(workflowId) ||
+      this.#closedIds.has(workflowId) ||
       this.session?.workflow_id === workflowId && Boolean(this.session.closed) ||
       this.sessions.some((session) => session.workflow_id === workflowId && session.closed)
     );
@@ -748,12 +773,22 @@ export class AgentRunController {
     if (state.closed) this.#markWorkflowClosed(state.workflow_id);
   }
 
+  /* One pass over the list, not #markWorkflowClosed per id: each of those copies the whole
+     list and scans `closedWorkflowIds`, which froze the tab for 88 s at 10,000 sessions. */
   #applySessionExecutionStates(sessions: Session[]): void {
-    for (const session of sessions) {
-      if (session.closed) {
-        this.#markWorkflowClosed(session.workflow_id);
-      }
-    }
+    const closedIds = new Set(sessions.filter((session) => session.closed).map((session) => session.workflow_id));
+    if (closedIds.size === 0) return;
+    this.sessions = this.sessions.map((session) =>
+      closedIds.has(session.workflow_id) && session.execution_status == null
+        ? { ...session, execution_status: "COMPLETED", closed: true }
+        : session
+    );
+    const current = this.session?.workflow_id;
+    const known = this.#closedIds;
+    const fresh = [...closedIds].filter((id) => id !== current && !known.has(id));
+    if (fresh.length > 0) this.closedWorkflowIds = [...this.closedWorkflowIds, ...fresh];
+    for (const id of fresh) this.#stopWorkflowAttach(id);
+    if (current != null && closedIds.has(current)) this.#markWorkflowClosed(current);
   }
 
   async #refreshWorkflowExecutionState(workflowId: string): Promise<void> {
@@ -960,7 +995,7 @@ export class AgentRunController {
       const sessions = await this.#api.listSessions();
       this.sessions = sessions;
       this.#applySessionExecutionStates(sessions);
-      this.#sessionsLoadedAt = Date.now();
+      this.#sessionsLoaded = true;
     })().finally(() => {
       this.#sessionsLoad = null;
     });
@@ -981,22 +1016,15 @@ export class AgentRunController {
     }
   }
 
-  /**
-   * Refresh for the picker without a global connection error. Skips if a fresh
-   * list already landed within ``maxAgeMs`` so open/close spam is cheap.
-   */
-  async ensureSessionsEnriched(maxAgeMs = 5_000): Promise<void> {
-    if (this.refreshingSessions || this.#sessionsLoad) return;
-    if (this.#sessionsLoadedAt > 0 && Date.now() - this.#sessionsLoadedAt < maxAgeMs) {
-      return;
-    }
+  /** Refresh for the picker without a global connection error; throttled. */
+  async ensureSessionsEnriched(): Promise<void> {
     try {
-      await this.#loadSessions();
-      this.sessionsError = null;
+      await this.#sessionsThrottle.maybeExecute();
+      if (this.#sessionsLoaded) this.sessionsError = null;
     } catch (error) {
       // Quiet while an earlier list is still on screen. With none, an empty list would read
       // as "no sessions", so the failure is the thing to show.
-      if (this.#sessionsLoadedAt === 0) {
+      if (!this.#sessionsLoaded) {
         this.sessionsError =
           error instanceof Error ? error.message : "Failed to load sessions.";
       }
@@ -1012,14 +1040,10 @@ export class AgentRunController {
    * or raise the connection banner.
    */
   async syncSessions(): Promise<void> {
-    if (this.refreshingSessions || this.#syncingSessions) return;
-    this.#syncingSessions = true;
     try {
-      await this.#loadSessions();
+      await this.#sessionsThrottle.maybeExecute();
     } catch {
       // The list stays as it was until a later tick answers.
-    } finally {
-      this.#syncingSessions = false;
     }
   }
 
@@ -1752,6 +1776,7 @@ export class AgentRunController {
     this.#catchingUp = true;
     this.#catchUpStartedAt = now();
     try {
+      let sliceStartedAt = now();
       for (let index = 0; index < cachedFrames.length; index += 1) {
         if (this.session?.workflow_id !== sessionId) return;
         this.#ingestFrame(cachedFrames[index], { persist: false });
@@ -1763,7 +1788,11 @@ export class AgentRunController {
              commits, and chunks can pass far faster than the page can paint. */
           this.#catchUpStartedAt = now();
         }
+        /* Yielding per chunk instead put a frame's wait under every 24 frames:
+           about 14 s for a 20,000-frame cache however fast ingest was. */
+        if (now() - sliceStartedAt < hydrateSliceMs) continue;
         await yieldToMain();
+        sliceStartedAt = now();
       }
     } finally {
       this.#catchingUp = false;
@@ -1778,8 +1807,28 @@ export class AgentRunController {
     this.#frameCacheTimer = window.setTimeout(() => {
       this.#frameCacheTimer = null;
       if (this.session?.workflow_id !== sessionId) return;
-      writeCachedFrames(sessionId, this.frames);
+      this.#writeFrameCache(sessionId);
     }, 750);
+  }
+
+  #writeFrameCache(sessionId: string): void {
+    if (this.#frameCache?.sessionId !== sessionId) {
+      this.#frameCache = { sessionId, json: "", count: 0, full: false };
+    }
+    const cache = this.#frameCache;
+    if (cache.full || cache.count === this.#frameBuffer.length) return;
+    let { json, count } = cache;
+    for (; count < this.#frameBuffer.length; count += 1) {
+      const next = JSON.stringify(this.#frameBuffer[count]);
+      if (json.length + next.length + 1 > maxCachedFrameChars) {
+        cache.full = true;
+        break;
+      }
+      json = count === 0 ? next : `${json},${next}`;
+    }
+    if (count === cache.count) return;
+    Object.assign(cache, { json, count });
+    writeCachedFrameJson(sessionId, json);
   }
 
   #resetSessionView(): void {
@@ -1788,6 +1837,7 @@ export class AgentRunController {
     this.#awaitingMessages.clear();
     this.#stopWorkflowAttachStreams();
     this.frames = [];
+    this.#frameCache = null;
     this.observedSubagents = [];
     this.#frameKeys = new Set<string>();
     this.#frameBuffer = [];
@@ -2270,5 +2320,10 @@ export class AgentRunController {
 }
 
 export function createAgentRunController(): AgentRunController {
+  /* Dev-only fixture switch (`?mock=worst`); the branch is dropped from production builds. */
+  if (import.meta.env.DEV) {
+    const scenario = { ...jsonReplyScenarios(), ...scaleScenarios() }[new URLSearchParams(window.location.search).get("mock") ?? ""];
+    if (scenario) return new AgentRunController(new MockAgentApi(scenario));
+  }
   return new AgentRunController();
 }

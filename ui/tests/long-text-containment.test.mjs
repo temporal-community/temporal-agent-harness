@@ -30,6 +30,17 @@ describe("long text stays inside its container", () => {
     assert.match(text, /overflow-wrap: anywhere;/);
   });
 
+  it("never scrolls the chat's message list sideways", () => {
+    /* A 300-char email in a JSON reply scrolls inside its block; what overflowed the list was the
+       invisible tooltip of the copy control at the bubble's corner, which still counts as scroll
+       overflow. Any wide thing painted past a message's edge would do the same. */
+    const list = rule(source("components/agent/AgentChatPanel.svelte"), ".message-list");
+    assert.match(list, /overflow-y: auto;/);
+    assert.match(list, /overflow-x: hidden;/);
+    const code = rule(source("components/chat/JsonReply.svelte"), ".json-code code");
+    assert.match(code, /white-space: pre;/);
+  });
+
   it("pins schema form fields to the form's width", () => {
     const css = source("components/chat/SchemaForm.svelte");
     const field = rule(css, ".field");

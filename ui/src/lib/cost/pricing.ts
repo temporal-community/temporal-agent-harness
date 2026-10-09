@@ -267,6 +267,8 @@ export function unpricedNote(models: string[]): string | null {
   return `No price configured for ${models.join(", ")} — token counts are exact, cost is not estimated.`;
 }
 
+const tokenFormat = new Intl.NumberFormat("en-US");
+
 export function formatTokens(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
+  return tokenFormat.format(value);
 }

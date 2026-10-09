@@ -38,6 +38,13 @@ interface ReplyRunEntry {
   workflowId?: string;
 }
 
+/** Which run a reply chunk continues: two consecutive chunks with the same key are one run. */
+export function replyRunKey(entry: ReplyRunEntry): string {
+  const { frame } = entry;
+  const agentId = "type" in frame.data ? frame.data.agent_id : "";
+  return `${entry.workflowId ?? agentId}:${messageKey(frame)}`;
+}
+
 /**
  * Fold consecutive reply chunks into runs, in order.
  *
@@ -59,7 +66,7 @@ export function buildReplyRuns(
       return;
     }
 
-    const key = `${entry.workflowId ?? frame.data.agent_id}:${messageKey(frame)}`;
+    const key = replyRunKey(entry);
     const index = position + 1;
     const { text, timestamp } = frame.data;
 
