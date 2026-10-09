@@ -147,7 +147,12 @@
       {#if alert}<p class="form-error" role="alert">{alert}</p>{/if}
     </div>
     <footer>
-      <span class="start-summary">{agent ? `Start with ${agent.label || agent.workflow_type}` : "Select an agent to continue"}</span>
+      <div class="start-details" aria-live="polite">
+        <span class="start-summary" title={agent ? `Start with ${agent.label || agent.workflow_type}` : undefined}>{agent ? `Start with ${agent.label || agent.workflow_type}` : "Select an agent to continue"}</span>
+        {#key selectedKey}
+          <p class="start-description">{agent?.description?.trim() || ""}</p>
+        {/key}
+      </div>
       <div class="actions">
         <button type="button" class="secondary" disabled={busy} onclick={close}>Cancel</button>
         {#if form && !form.required}
@@ -243,6 +248,8 @@
 
   .agent-choices {
     display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: 1fr;
     gap: var(--gap-sm);
     margin: 0;
     padding: 0;
@@ -311,12 +318,6 @@
     overflow-wrap: anywhere;
   }
 
-  .agent-choice.selected .agent-description {
-    white-space: normal;
-    overflow-wrap: anywhere;
-    text-overflow: clip;
-  }
-
   .selection-mark {
     display: flex;
     align-items: center;
@@ -379,9 +380,24 @@
     background: var(--surface-2);
   }
 
+  .start-details {
+    display: grid;
+    gap: var(--gap-sm);
+    min-width: 0;
+  }
+
   .start-summary {
     font-size: var(--font-sm);
-    color: var(--text-2);
+    color: var(--text-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .start-description {
+    /* Reserve three lines so choosing another agent does not resize the footer. */
+    block-size: 4.5em;
+    overflow-y: auto;
     overflow-wrap: anywhere;
   }
 
@@ -448,12 +464,20 @@
   }
 
   @media (max-width: 600px) {
+    .agent-choices {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
     header, .setup-body {
       padding: var(--gutter);
     }
 
     footer {
       padding: var(--gutter);
+    }
+
+    .start-description {
+      block-size: 7.5em;
     }
 
     .choice-heading {

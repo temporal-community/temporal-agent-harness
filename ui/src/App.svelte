@@ -11,6 +11,7 @@
   import SessionControls from "$lib/components/chat/SessionControls.svelte";
   import DockedDrawer from "$lib/components/primitives/DockedDrawer.svelte";
   import { restoredDrawerSize } from "$lib/components/primitives/resizeKeys";
+  import Chip from "$lib/components/primitives/Chip.svelte";
   import IconButton from "$lib/components/primitives/IconButton.svelte";
   import { Keyboard, PanelLeft } from "@lucide/svelte";
   import AgentChatPanel from "$lib/components/agent/AgentChatPanel.svelte";
@@ -625,19 +626,22 @@
   <div class="chrome">
     <PaneMinimap {stack} {drawer} describe={describePane}>
       {#snippet lead()}
-        <IconButton
+        <Chip
           class="rail-icon session-drawer-trigger"
-          label={sessionDrawerOpen ? "Close Session Manager" : "Open Session Manager"}
-          tip={sessionDrawerOpen ? "Close Session Manager\nS" : "Open Session Manager\nS"}
-          pressed={sessionDrawerOpen}
+          fill="quiet"
+          active={sessionDrawerOpen}
+          aria-label={sessionDrawerOpen ? "Hide sessions" : "View all sessions"}
+          data-tip={sessionDrawerOpen ? "Hide sessions\nS" : "View all sessions\nS"}
+          aria-pressed={sessionDrawerOpen}
           aria-expanded={sessionDrawerOpen}
           aria-controls="session-manager-drawer"
           data-tip-below
           data-tip-align="start"
           onclick={toggleSessionManager}
         >
-          <PanelLeft size={13} />
-        </IconButton>
+          <PanelLeft size={13} aria-hidden="true" />
+          <span>Sessions</span>
+        </Chip>
 
         <!-- History, creation, and the current run have distinct roles in the nav. -->
         <SessionControls
@@ -1109,6 +1113,12 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+  }
+
+  .chrome :global(.session-drawer-trigger),
+  .chrome :global(.session-new) {
+    flex: none;
+    font-size: var(--font-2xs);
   }
 
   /* A meta-control over the desk, docked beside it rather than participating in
