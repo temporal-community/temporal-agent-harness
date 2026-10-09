@@ -1,6 +1,7 @@
 import {
   SYNTHESIZED,
   type AgentEventType,
+  type AgentInterfaceFunction,
   type AgentSseFrame,
   type FileCitationAnnotation,
   type JsonPatchOp,
@@ -9,6 +10,7 @@ import {
 } from "$lib/api/types";
 import { formatTokens, summarizeCost, type UsageTotals } from "$lib/cost/pricing";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
+import { handlerReply, outputSchemaTracker } from "$lib/state/handlerReply";
 import { HISTORY_GAP_NOTE, findHistoryGaps } from "$lib/state/historyGap";
 import { buildReplyRuns, type ReplyRun } from "$lib/state/replyRuns";
 import { thoughtDeltaText } from "$lib/state/thoughtSummary";
@@ -140,17 +142,6 @@ export interface ReplayLogFrame {
   parentTurnNumber?: number;
 }
 
-function textFromReply(data: { text?: unknown; output?: unknown }): string {
-  if (typeof data.text === "string") return data.text;
-  const output = data.output;
-  if (typeof output === "string") return output;
-  if (typeof output === "object" && output != null) {
-    if ("text" in output && typeof output.text === "string") return output.text;
-    if ("message" in output && typeof output.message === "string") return output.message;
-  }
-  return "";
-}
-
 function citationAnnotations(frame: AgentSseFrame): FileCitationAnnotation[] {
   if (frame.event !== "text_annotation" || !("type" in frame.data)) return [];
   return (frame.data.delta.annotations ?? []).filter(
@@ -198,7 +189,8 @@ function normalizeReplayLogFrame(item: AgentSseFrame | ReplayLogFrame): ReplayLo
 
 function rowFromFrame(
   entry: ReplayLogFrame,
-  frameIndex: number
+  frameIndex: number,
+  outputSchema?: unknown
 ): ReplayLogRow | null {
   const { frame } = entry;
   const ordinal = frameIndex + 1;
@@ -625,7 +617,7 @@ function rowFromFrame(
       actor: "agent",
       tone: "done",
       label: "Handler reply",
-      body: textFromReply(frame.data),
+      body: handlerReply(frame.data, outputSchema).text,
       status: "complete"
     };
   }
@@ -705,8 +697,13 @@ function buildSummary(turnNumber: number, rows: ReplayLogRow[]): TurnLogSummary 
   };
 }
 
-export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): ReplayLog {
+/** `agentInterfaces` is keyed by workflow ID, so each agent's replies read their own handlers' schemas. */
+export function buildReplayLog(
+  input: Array<AgentSseFrame | ReplayLogFrame>,
+  agentInterfaces: Record<string, AgentInterfaceFunction[]> = {}
+): ReplayLog {
   const gapPositions = findHistoryGaps(input);
+  const schemaOf = outputSchemaTracker();
   /* A run of reply chunks draws ONE row, carrying all of their text. A lone chunk
      is left exactly as it was — it is already one event, and a row that announced
      itself as a collapsed run of one would only be noise. */
@@ -727,8 +724,11 @@ export function buildReplayLog(input: Array<AgentSseFrame | ReplayLogFrame>): Re
   const rows: ReplayLogRow[] = [];
   input.forEach((item, index) => {
     if (gapPositions.has(index)) pendingGap = true;
+    const entry = normalizeReplayLogFrame(item);
+    const scope = entry.workflowId ?? "";
+    const schema = schemaOf(entry.frame, agentInterfaces[scope], scope);
     if (withinRun.has(index + 1)) return;
-    const row = rowFromFrame(normalizeReplayLogFrame(item), index);
+    const row = rowFromFrame(entry, index, schema);
     if (!row) return;
     const run = runStarts.get(row.index);
     if (run) {

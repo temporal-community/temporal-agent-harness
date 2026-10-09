@@ -40,6 +40,7 @@
   } from "$lib/state/replayLog";
   import type { TranscriptItem } from "$lib/state/transcript";
   import type { InterfaceStatus } from "$lib/state/agentRun.svelte";
+  import JsonReply from "$lib/components/chat/JsonReply.svelte";
   import MarkdownMessage from "$lib/components/chat/MarkdownMessage.svelte";
   import SchemaForm from "$lib/components/chat/SchemaForm.svelte";
   import CallInput from "./CallInput.svelte";
@@ -133,6 +134,10 @@
     text: string;
     timestamp: number;
     citations: FileCitationAnnotation[];
+    streaming?: boolean;
+    data?: boolean;
+    json?: unknown;
+    error?: string;
   }
 
   interface TurnActivitySummary {
@@ -462,7 +467,11 @@
           turnNumber: item.turnNumber,
           text: item.text,
           timestamp: item.timestamp,
-          citations: item.citations
+          citations: item.citations,
+          streaming: item.streaming,
+          data: item.data,
+          json: item.json,
+          error: item.error
         });
       }
     }
@@ -1274,7 +1283,7 @@
         </div>
       {/if}
 
-      {#each messages as message}
+      {#each messages as message, index (`${message.id}:${index}`)}
         <article class={`message ${message.role}`}>
           {#if message.role === "assistant"}
             <div class="assistant-avatar" aria-hidden="true">
@@ -1282,8 +1291,17 @@
             </div>
           {/if}
 
-          <div class="bubble">
-            <MarkdownMessage text={message.text} citations={message.citations} />
+          <div class="bubble" class:data={message.data}>
+            {#if message.data}
+              <JsonReply json={message.json} text={message.text} />
+            {:else}
+              <MarkdownMessage text={message.text} citations={message.citations} />
+            {/if}
+            {#if message.error}
+              <p class="reply-error">
+                <Copyable value={message.error} label="Copy error"><span>{message.error}</span></Copyable>
+              </p>
+            {/if}
           </div>
         </article>
 
@@ -1773,6 +1791,10 @@
     grid-area: messages;
     min-height: 0;
     overflow-y: auto;
+    /* Never sideways: wide content scrolls inside its own block. Without this, anything
+       painted past a message's edge — even an invisible, absolutely placed tooltip on a
+       control at the bubble's corner — becomes scroll overflow and a pane-wide scrollbar. */
+    overflow-x: hidden;
     overflow-anchor: none;
     display: flex;
     flex-direction: column;
@@ -1878,6 +1900,30 @@
 
   .agent-chat.embedded .message.user .bubble {
     max-width: min(100%, 560px);
+  }
+
+  /* A JSON reply's code block is its frame, so the bubble keeps only its column — the whole
+     pane's, since data reads in columns that prose's measure would only make scroll. */
+  .bubble.data,
+  .agent-chat.embedded .message.assistant .bubble.data {
+    flex: 1 1 0;
+    width: auto;
+    max-width: none;
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+
+  /* The error banner's colors, inside the reply it ended. */
+  .reply-error {
+    margin: 8px 0 0;
+    padding: 8px 10px;
+    overflow-wrap: anywhere;
+    border: 1px solid color-mix(in srgb, var(--error) 35%, var(--border));
+    border-radius: var(--radius-md);
+    color: var(--error);
+    background: color-mix(in srgb, var(--error) 9%, var(--surface-1));
+    font-size: var(--font-md);
   }
 
   .activity-feed {

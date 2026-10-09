@@ -1,4 +1,5 @@
-import type { AgentSseFrame, FileCitationAnnotation } from "$lib/api/types";
+import type { AgentInterfaceFunction, AgentSseFrame, FileCitationAnnotation } from "$lib/api/types";
+import { handlerReply, outputSchemaTracker, streamingIsData } from "$lib/state/handlerReply";
 import { messageKey, renderUserMessage } from "$lib/state/inboundMessageText";
 import { thoughtDeltaText } from "$lib/state/thoughtSummary";
 
@@ -18,6 +19,12 @@ export type TranscriptItem =
       streaming: boolean;
       timestamp: number;
       citations: FileCitationAnnotation[];
+      /** Shown as JSON: the handler is declared as data, or its reply is. */
+      data: boolean;
+      /** The handler's whole output when it is data, once the reply has ended. */
+      json?: unknown;
+      /** The handler failed; whatever it streamed first stays above this. */
+      error?: string;
     }
   | {
       kind: "tool";
@@ -52,17 +59,6 @@ export type TranscriptItem =
       timestamp: number;
     };
 
-function textFromReply(data: { text?: unknown; output?: unknown }): string {
-  if (typeof data.text === "string") return data.text;
-  const output = data.output;
-  if (typeof output === "string") return output;
-  if (typeof output === "object" && output != null) {
-    if ("text" in output && typeof output.text === "string") return output.text;
-    if ("message" in output && typeof output.message === "string") return output.message;
-  }
-  return "";
-}
-
 function citationAnnotations(frame: AgentSseFrame): FileCitationAnnotation[] {
   if (frame.event !== "text_annotation" || !("type" in frame.data)) return [];
   return (frame.data.delta.annotations ?? []).filter(
@@ -74,8 +70,12 @@ function citationAnnotations(frame: AgentSseFrame): FileCitationAnnotation[] {
   );
 }
 
-export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
+export function buildTranscript(
+  frames: AgentSseFrame[],
+  agentInterface?: AgentInterfaceFunction[]
+): TranscriptItem[] {
   const items: TranscriptItem[] = [];
+  const schemaOf = outputSchemaTracker();
   // Keyed by MESSAGE, not by turn. A turn is refcounted, so two `mid_turn: "accept"` handlers
   // can be streaming under one turn_id at once — keying by turn would merge their replies into
   // one bubble and interleave their text.
@@ -87,6 +87,7 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
     if (!("type" in frame.data)) continue;
     const { turn_number, timestamp } = frame.data;
     const key = messageKey(frame);
+    const schema = schemaOf(frame, agentInterface);
 
     if (frame.event === "message_accepted") {
       items.push({
@@ -128,15 +129,28 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
           text: "",
           streaming: true,
           timestamp,
-          citations: []
+          citations: [],
+          data: false
         });
       }
       const item = items[itemIndex];
-      if (item?.kind === "agent") item.text += frame.data.text;
+      if (item?.kind === "agent") {
+        item.text += frame.data.text;
+        item.data = streamingIsData(item.text, schema);
+      }
+    }
+
+    if (frame.event === "message_handler_error") {
+      const item = items[replyIndexByMessage.get(key) ?? -1];
+      if (item?.kind === "agent") {
+        item.streaming = false;
+        item.error = frame.data.message;
+      }
     }
 
     if (frame.event === "message_handler_end") {
-      const text = textFromReply(frame.data);
+      const { text, json } = handlerReply(frame.data, schema);
+      const data = json !== undefined;
       let itemIndex = replyIndexByMessage.get(key);
       if (itemIndex == null) {
         itemIndex = items.length;
@@ -148,7 +162,9 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
           text,
           streaming: false,
           timestamp,
-          citations: citationsByMessage.get(key) ?? []
+          citations: citationsByMessage.get(key) ?? [],
+          data,
+          json
         });
       } else {
         const item = items[itemIndex];
@@ -156,6 +172,8 @@ export function buildTranscript(frames: AgentSseFrame[]): TranscriptItem[] {
           item.text = text || item.text;
           item.streaming = false;
           item.citations = citationsByMessage.get(key) ?? [];
+          item.data = data;
+          item.json = json;
         }
       }
     }

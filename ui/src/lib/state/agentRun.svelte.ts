@@ -436,13 +436,18 @@ export class AgentRunController {
   sessionClosed = $derived(
     this.session != null && this.#isWorkflowClosed(this.session.workflow_id)
   );
-  fullReplayLog = $derived(buildReplayLog(this.replayTimeline));
+  fullReplayLog = $derived(buildReplayLog(this.replayTimeline, this.agentInterfaces));
   replayLog = $derived(
     this.viewIndex === this.replayTimeline.length
       ? this.fullReplayLog
-      : buildReplayLog(this.visibleReplayTimeline)
+      : buildReplayLog(this.visibleReplayTimeline, this.agentInterfaces)
   );
-  chatTranscript = $derived(buildTranscript(this.#parentFrames(this.replayTimeline)));
+  #parentInterface = $derived(
+    this.session ? this.agentInterfaces[this.session.workflow_id] : undefined
+  );
+  chatTranscript = $derived(
+    buildTranscript(this.#parentFrames(this.replayTimeline), this.#parentInterface)
+  );
   /**
    * What the chat pane is handed: the conversation as of the cursor, plus the
    * whole run for the parts of it that are live state rather than history — a
@@ -455,7 +460,7 @@ export class AgentRunController {
     return {
       items: live
         ? this.chatTranscript
-        : buildTranscript(this.#parentFrames(this.visibleReplayTimeline)),
+        : buildTranscript(this.#parentFrames(this.visibleReplayTimeline), this.#parentInterface),
       logs: this.replayLog.rows,
       liveItems: this.chatTranscript,
       liveLogs: this.fullReplayLog.rows,

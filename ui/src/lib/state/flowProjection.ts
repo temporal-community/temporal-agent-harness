@@ -6,6 +6,7 @@ import type {
 } from "$lib/api/types";
 import { formatTokens, summarizeCost, type CostSummary } from "$lib/cost/pricing";
 import { renderUserMessage } from "$lib/state/inboundMessageText";
+import { handlerReply, outputSchemaTracker } from "$lib/state/handlerReply";
 import { UNKNOWN_TOOL_INPUT } from "$lib/state/logValue";
 import { formatDuration } from "$lib/state/replayLog";
 import { NO_THOUGHT_SUMMARY, thoughtDeltaText } from "$lib/state/thoughtSummary";
@@ -772,17 +773,6 @@ function terminalRuntimeSources(
   return segments.at(-1)?.ids ?? [];
 }
 
-function textFromReply(data: { text?: unknown; output?: unknown }): string {
-  if (typeof data.text === "string") return data.text;
-  const output = data.output;
-  if (typeof output === "string") return output;
-  if (typeof output === "object" && output != null) {
-    if ("text" in output && typeof output.text === "string") return output.text;
-    if ("message" in output && typeof output.message === "string") return output.message;
-  }
-  return "";
-}
-
 function textSection(
   label: string,
   text: string | undefined,
@@ -880,6 +870,7 @@ export function buildAgentGraph(
   const showSubagentDispatch = options.showSubagentDispatch ?? true;
   const outputPlacement = options.outputPlacement ?? "external";
   const agentInterface = summarizeAgentInterface(options.agentInterface);
+  const schemaOf = outputSchemaTracker();
   const lingeringTools = options.linger ?? noLingeringTools;
   let activeTurn: number | null = null;
   let status: AgentGraph["status"] = "idle";
@@ -1064,6 +1055,7 @@ export function buildAgentGraph(
   for (const frame of frames) {
     if (!("type" in frame.data)) continue;
     currentFrame = frame;
+    const outputSchema = schemaOf(frame, options.agentInterface);
     if (frame.event === "message_accepted") {
       // The one event carrying what was sent, whatever it did to the turn. Only a QUEUED one
       // shows in the queue depth; an "opened" message is about to be the turn, and a "joined"
@@ -1128,7 +1120,7 @@ export function buildAgentGraph(
     } else if (frame.event === "message_handler_end") {
       markOutput();
       status = "replied";
-      replyText = textFromReply(frame.data) || replyText;
+      replyText = handlerReply(frame.data, outputSchema).text || replyText;
       /* "reply available" was wider than the chip, the same way "awaiting
          approval" was. The noun is carried by the card, which is titled Output. */
       replyState = "available";
