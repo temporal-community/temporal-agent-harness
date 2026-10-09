@@ -35,15 +35,18 @@ import { parse } from "svelte/compiler";
 import { render } from "svelte/server";
 import { beforeAll, describe, it } from "vitest";
 
-import SessionControls from "$lib/components/chat/SessionControls.svelte";
+import StartSessionDialog from "$lib/components/chat/StartSessionDialog.svelte";
 
 import { installBrowserSurface } from "../../../tests/support/controllerHarness.mjs";
 import { AgentRunController } from "./agentRun.svelte.ts";
-import { chooseAgentRow } from "./quickSwitch.ts";
 
 const sessionControlsSource = readFileSync(
   fileURLToPath(new URL("../components/chat/SessionControls.svelte", import.meta.url)),
   "utf8"
+);
+
+const dialogSource = readFileSync(
+  fileURLToPath(new URL("../components/chat/StartSessionDialog.svelte", import.meta.url)), "utf8"
 );
 
 /** Every AST node, once — the same walk TranscriptPanel.test.mjs uses. */
@@ -156,94 +159,33 @@ describe("agent worker readiness", () => {
     assert.match(functionSource(sessionControlsSource, "openNewSessionMenu") ?? "", /\}$/, "through its own closing brace");
   });
 
-  it("refuses a no-worker agent at the press, not only in the markup", () => {
-    /* `aria-disabled` styles a row inert but does not stop it activating — a keyboard
-       Enter still fires onclick — so the refusal has to live in the handler too. */
-    const start = functionSource(sessionControlsSource, "startNewSession") ?? "";
-    assert.match(start, /if \(agentBlocked\(agent\)\) return;/);
-    assert.match(start, /startNewSession\(agent: AgentDescriptor\)/);
-    /* Only no_worker blocks. `unknown` means the server could not ask, and refusing on a
-       failed health check would be a worse lie than the hardcoded "Ready" this replaced. */
-    assert.match(functionSource(sessionControlsSource, "agentBlocked") ?? "", /return agent\.worker\?\.status === "no_worker";/);
+  it("guards form submission against an unavailable worker", () => {
+    assert.match(functionSource(dialogSource, "start") ?? "", /if \(!agent \|\| busy \|\| agentBlocked\(agent\)\) return;/);
+    assert.match(functionSource(dialogSource, "agentBlocked") ?? "", /return agent\.worker\?\.status === "no_worker";/);
   });
 
-  /* The New session rows are two lines each, name and description, with the readiness chip on the
-     right. Where the queue is named: on the chip's tooltip, and in the hint a press opens. */
-  const agentsOnScreen = [
-    { ...agent(noWorker), key: "openai-hello", task_queue: "openai-hello", label: "OpenAI Hello" },
-    { ...agent(ready), key: "monty", label: "Monty" },
-    { ...agent({ ...noWorker, status: "unknown" }), key: "wiki", task_queue: "wiki-queue", label: "Wiki" }
-  ];
-  const { body } = render(SessionControls, {
-    props: { display: "pane", tab: "new", agents: agentsOnScreen, sessionId: "" }
-  });
-  const rows = [...body.matchAll(/<button[^>]*class="agent-row[^"]*"[\s\S]*?<\/button>/g)].map(([row]) => row);
-
-  it("renders no icon and no sentence under the description", () => {
-    assert.equal(rows.length, 3);
-    assert.doesNotMatch(body, /agent-glyph/, "the icon repeated the name's initial and the chip's colour");
-    assert.doesNotMatch(body, />[^<]*No worker polling/, "the queue is named on the chip's tip, not in a line of text");
-    assert.doesNotMatch(body, /agent-note/);
-    for (const row of rows) {
-      assert.equal([...row.matchAll(/<small/g)].length, 1, "every row is the same two lines");
-      assert.doesNotMatch(row, /(?<!aria-)disabled=/, "native `disabled` would swallow the press that opens the hint");
-    }
+  it("allows selecting an unavailable agent to explain how to enable it, but disables Start", () => {
+    const { body } = render(StartSessionDialog, {
+      props: { agents: [agent(noWorker)], onStart() {}, onClose() {} }
+    });
+    assert.match(body, /type="radio"/);
+    assert.match(body, /Start a worker on/);
+    assert.match(body, /monty-dynamic-agent/);
+    assert.match(body, /aria-label="Copy task queue name"/);
+    assert.match(body, /<button[^>]*type="submit"[^>]*disabled/);
   });
 
-  it("names the queue in the chip's tooltip", () => {
-    assert.match(rows[0], /data-tip="No worker polling openai-hello"/);
-    assert.doesNotMatch(rows[1], /data-tip=/, "Ready says everything it needs to");
-    assert.match(rows[2], /data-tip="Could not check for workers on wiki-queue"/);
-    assert.match(rows[0], /<small title="Chats\."[^>]*>Chats\.<\/small>/, "the clipped description is whole on hover");
-  });
-
-  it("a press on a no-worker row opens one hint, with the queue to copy", () => {
-    /* No DOM here, so the choice is driven through the shipped function and the markup is read
-       for the one place the hint renders. */
-    let open = null;
-    const choose = (row) => {
-      const choice = chooseAgentRow(row.key, row.worker.status === "no_worker");
-      open = choice.hint;
-      return choice.start;
-    };
-    assert.equal(choose(agentsOnScreen[0]), false, "a no-worker row starts nothing");
-    assert.equal(open, "openai-hello");
-    assert.equal(choose(agentsOnScreen[2]), true, "unknown still starts: a failed check is not a locked door");
-    assert.equal(open, null, "choosing another row clears the hint");
-
-    assert.match(sessionControlsSource, /onclick=\{\(\) => chooseAgent\(agent\)\}/, "the click goes through it");
-    assert.match(functionSource(sessionControlsSource, "handleAgentListKeydown") ?? "", /chooseAgent\(/, "and so does Enter");
-    const hint = sessionControlsSource.slice(
-      sessionControlsSource.indexOf("{#if hintedAgentKey === agent.key}"),
-      sessionControlsSource.indexOf("{/if}", sessionControlsSource.indexOf("{#if hintedAgentKey === agent.key}"))
-    );
-    assert.match(hint, /Start a worker on/);
-    assert.match(hint, /<Copyable value=\{agent\.task_queue\}/, "the queue name is the thing a terminal needs");
-    assert.match(hint, /to use this agent/);
-    assert.equal([...sessionControlsSource.matchAll(/let hintedAgentKey = \$state<string \| null>/g)].length, 1, "one key, so one hint");
-    assert.equal([...body.matchAll(/aria-live="polite"/g)].length, 3, "an existing live region per row, so the hint is announced");
-    assert.doesNotMatch(body, /class="agent-hint"/, "nothing is open before a press");
-  });
-
-  it("the hint clears when the tab changes or the drawer closes", () => {
-    assert.match(sessionControlsSource, /class="agent-list"[\s\S]*?\{@attach clearHintOnLeave\}/);
-    assert.match(functionSource(sessionControlsSource, "chooseAgent") ?? "", /hintedAgentKey = choice\.hint/);
-    const app = readFileSync(fileURLToPath(new URL("../../App.svelte", import.meta.url)), "utf8");
-    const drawer = app.slice(app.indexOf("{#if sessionManagerHeld}"));
-    assert.ok(
-      drawer.indexOf('display="pane"') < drawer.indexOf("{/if}"),
-      "the manager must unmount with the drawer, which is what drops the hint's state"
-    );
+  it("permits unknown availability and states the uncertainty", () => {
+    const { body } = render(StartSessionDialog, {
+      props: { agents: [agent({ ...noWorker, status: "unknown" })], onStart() {}, onClose() {} }
+    });
+    assert.match(body, /availability could not be checked/);
+    assert.doesNotMatch(body.match(/<button[^>]*type="submit"[^>]*>/)?.[0] ?? "", /disabled/);
   });
 
   it("the refresh control re-checks workers when the agent picker is open", async () => {
-    /* The popover header is shared by both views, so the button belongs to whichever list
-       is on screen. Refreshing sessions while looking at the agent picker was the bug: it
-       spun, and nothing the reader was looking at changed. */
-    const source = sessionControlsSource;
-    assert.match(source, /menuTab === "new" \? onRefreshAgents : onRefreshSessions/);
-    assert.match(source, /menuTab === "new" \? refreshingAgents : refreshingSessions/);
-    assert.match(source, /if \(menuTab === "new"\) await onRefreshAgents\?\.\(\);/);
+    assert.match(dialogSource, /onclick=\{\(\) => void onRefresh\?\.\(\)\}/);
+    assert.doesNotMatch(sessionControlsSource, /menuTab/);
 
     /* Loud, unlike the open: it spins its own control and reports into the popover, because
        a silent no-op would read as "checked, still no worker" — the opposite of the truth. */
@@ -272,13 +214,7 @@ describe("agent worker readiness", () => {
   });
 
   it("states readiness from the worker block rather than hardcoding Ready", () => {
-    assert.doesNotMatch(
-      sessionControlsSource,
-      /<StatusChip\s+label="Ready"/,
-      "the hardcoded Ready chip is the bug this feature removes"
-    );
-    /* no_worker names the queue, because the reader's next move is to start that worker and
-       they need to know which one. */
-    assert.match(functionSource(sessionControlsSource, "agentWorkerTip") ?? "", /`No worker polling \$\{agent\.task_queue\}`/);
+    assert.doesNotMatch(dialogSource, /<StatusChip\s+label="Ready"/);
+    assert.match(dialogSource, /option\.worker\?\.status === "ready"/);
   });
 });

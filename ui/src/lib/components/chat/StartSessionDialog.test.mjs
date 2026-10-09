@@ -27,25 +27,25 @@ const agent = (required) => ({
 });
 
 const html = (props) =>
-  render(StartSessionDialog, { props: { onStart() {}, onClose() {}, ...props } }).body;
+  render(StartSessionDialog, { props: { agents: [], onStart() {}, onClose() {}, ...props } }).body;
 
 describe("StartSessionDialog", () => {
   it("renders the data model's fields for the agent being started", () => {
-    const body = html({ agent: agent(true) });
-    assert.match(body, /Start Tic-Tac-Toe/);
+    const body = html({ agents: [agent(true)] });
+    assert.match(body, /Start with Tic-Tac-Toe/);
     assert.match(body, /MatchSettings/);
     assert.match(body, /Player Name/);
     assert.match(body, /Start session/);
   });
 
   it("offers to start without the data only when it is optional", () => {
-    assert.doesNotMatch(html({ agent: agent(true) }), /Start without/);
-    assert.match(html({ agent: agent(false) }), /Start without/);
+    assert.doesNotMatch(html({ agents: [agent(true)] }), /Start without/);
+    assert.match(html({ agents: [agent(false)] }), /Start without/);
   });
 
-  it("renders no form when no agent is being started", () => {
-    const body = html({ agent: null });
-    assert.match(body, /<dialog/);
-    assert.doesNotMatch(body, /<form/);
+  it("disables starting and explains when the registry is empty", () => {
+    const body = html({ agents: [] });
+    assert.match(body, /No agents are registered yet/);
+    assert.match(body, /<button[^>]*type="submit"[^>]*disabled/);
   });
 });

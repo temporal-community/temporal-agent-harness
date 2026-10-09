@@ -28,7 +28,7 @@ const slice = (text, open, close, label) => {
 
 /* The minimap's lead zone: the app's top-left, and the only place this strip belongs. */
 const lead = slice(app, "{#snippet lead()}", "{/snippet}", "App's minimap lead");
-/* The launcher display, which is the anchor and nothing else. */
+/* The launcher display, which starts sessions and names the current one. */
 const launcher = slice(
   controls,
   '{#if display === "launcher"}',
@@ -71,10 +71,18 @@ describe("the session anchor in the app chrome", () => {
       /aria-label=\{`\$\{agentTitle\} — \$\{statusLabel\}/,
       "a reader who cannot see the pip must still be told the name and the status"
     );
-    assert.doesNotMatch(
+    const identity = slice(controls, '{#snippet identity()}', '{/snippet}', 'read-only session identity');
+    assert.doesNotMatch(identity, /onclick=|aria-expanded=/, "only the drawer switch toggles session history");
+    assert.match(controls, /aria-haspopup="dialog"/, "creation opens its own dialog");
+    assert.match(
       launcher,
-      /session-new/,
-      "the chrome strip must not carry a New chip; new sessions start from the drawer"
+      /class="session-new"[\s\S]*onclick=\{openNewSessionMenu\}[\s\S]*class="session-anchor"/,
+      "New session must precede the current session in the chrome"
+    );
+    assert.doesNotMatch(
+      controls.slice(controls.indexOf('<section class="session-manager"')),
+      /label="New session"/,
+      "the session list panel must not duplicate the New session button"
     );
   });
 
@@ -89,6 +97,7 @@ describe("the session anchor in the app chrome", () => {
       "connecting={run.connecting}",
       "sending={run.sending}",
       "creatingSession={run.creatingSession}",
+      "onEnsureAgents={() => run.refreshAgents()}",
       "closed={run.sessionClosed}",
       "error={run.connectionError}",
       "{pendingLabel}"

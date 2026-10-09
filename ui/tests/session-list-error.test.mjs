@@ -19,7 +19,8 @@ describe("Session Manager list errors", () => {
     assert.doesNotMatch(body, /No matching sessions/);
   });
 
-  it("still says so when nothing matches and nothing failed", () => {
-    assert.match(markup({ sessions: [] }), /No matching sessions/);
+  it("explains how to begin when no sessions exist", () => {
+    assert.match(markup({ sessions: [] }), /No sessions yet/);
+    assert.match(markup({ sessions: [] }), /Choose New session in the top bar/);
   });
 });
