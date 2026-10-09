@@ -243,11 +243,66 @@ a {
   color: inherit;
 }
 
-/* The code-language tag. Four surfaces render code blocks; they all mark the
-   language up as data-language on the pre, so the tag is declared once here and
-   each block only says where to put it. */
+/* Token classes from lib/highlight.ts, one surface's worth of colors for all of them. */
+.md-syntax-comment,
+.md-syntax-meta {
+  color: var(--syntax-comment);
+  font-style: italic;
+}
+
+.md-syntax-string,
+.md-syntax-inserted,
+.md-syntax-link,
+.md-syntax-code-inline {
+  color: var(--syntax-string);
+}
+
+.md-syntax-keyword,
+.md-syntax-tag,
+.md-syntax-heading {
+  color: var(--syntax-keyword);
+  font-weight: 750;
+}
+
+.md-syntax-type,
+.md-syntax-property,
+.md-syntax-selector,
+.md-syntax-attr {
+  color: var(--syntax-type);
+}
+
+.md-syntax-function,
+.md-syntax-command {
+  color: var(--syntax-function);
+}
+
+.md-syntax-number {
+  color: var(--syntax-number);
+}
+
+.md-syntax-literal,
+.md-syntax-variable {
+  color: var(--syntax-literal);
+}
+
+.md-syntax-operator {
+  color: var(--syntax-operator);
+}
+
+.md-syntax-deleted {
+  color: var(--error);
+}
+
+/* The code-language tag. Code blocks mark the language up as data-language on the
+   pre, so the tag is declared once here and each block only says where to put it.
+   `.code-language-tag` is the same tag as an element, for a block whose header is
+   its own rather than the pre's (markdown code blocks, JSON replies). */
 pre[data-language]::before {
   content: attr(data-language);
+}
+
+pre[data-language]::before,
+.code-language-tag {
   padding: 1px 6px;
   border: 1px solid var(--code-label-border);
   background: var(--code-label-bg);

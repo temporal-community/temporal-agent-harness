@@ -240,23 +240,30 @@ export type FileView =
 
 const CODE_LANGUAGES: Record<string, string> = {
   c: "c",
+  cc: "cpp",
   cpp: "cpp",
   cs: "csharp",
   css: "css",
+  diff: "diff",
+  env: "env",
   go: "go",
   h: "c",
+  hpp: "cpp",
+  htm: "html",
   html: "html",
   java: "java",
   js: "javascript",
   json: "json",
   jsx: "javascript",
   mjs: "javascript",
+  patch: "diff",
   py: "python",
   rb: "ruby",
   rs: "rust",
   sh: "shell",
   sql: "sql",
   svelte: "svelte",
+  toml: "toml",
   ts: "typescript",
   tsx: "typescript",
   yaml: "yaml",
@@ -267,6 +274,7 @@ const CODE_LANGUAGES: Record<string, string> = {
 export function fileView(path: string): FileView {
   const ext = path.includes(".") ? path.slice(path.lastIndexOf(".") + 1).toLowerCase() : "";
   if (ext === "md" || ext === "markdown") return { mode: "markdown" };
+  if (/(^|\/)dockerfile$/i.test(path)) return { mode: "code", language: "dockerfile" };
   const language = CODE_LANGUAGES[ext];
   return language ? { mode: "code", language } : { mode: "text" };
 }
