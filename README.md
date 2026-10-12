@@ -35,7 +35,7 @@ of Temporal primitives. Tools as activities or workflow functions, every turn a 
 replayable history. The harness packages those primitives into a toolkit built for first-class
 agent development, so you get the power without hand-rolling the orchestration.
 
-https://github.com/user-attachments/assets/8b283fc2-733e-491b-9e3d-64b59e3503a1
+[Watch the high-level Temporal Agent Harness Explainer](https://github.com/user-attachments/assets/c3bbc3aa-365e-42de-b53c-b4ff0819e11d)
 
 ## Installation
 
