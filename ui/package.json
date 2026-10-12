@@ -17,10 +17,12 @@
     "@lucide/svelte": "^1.0.1",
     "@tanstack/charts": "^0.16.0",
     "@xyflow/svelte": "^1.6.0",
+    "d3-force": "^3.0.0",
     "svelte": "^5.0.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@types/d3-force": "^3.0.10",
     "@types/node": "^22.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "^5.7.0",

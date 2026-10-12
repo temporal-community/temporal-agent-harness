@@ -10,7 +10,8 @@
  *     but only as they are now, never as they were at the cursor.
  *
  * Both carry their mount's path, description and access, so a pane can show every
- * tracked mount without knowing which state belongs to which.
+ * tracked mount without knowing which state belongs to which. An index whose `okf_version`
+ * is set is an OKF bundle: the pane can draw its whole graph, read live from the store.
  */
 import type { FileSource, JsonValue } from "$lib/api/types";
 import type { AgentStateDoc, StateChange } from "./agentState";
@@ -49,6 +50,10 @@ export interface MountView {
   role: "parent" | "subagent";
   /** Where contents can be read now, for an index over an activity-backed mount. */
   source: FileSource | null;
+  /** The OKF version of a mount declared as an OKF bundle; `null` for any other mount. */
+  okfVersion: string | null;
+  /** The tracking state's version: it changes whenever anything about the mount does. */
+  stateVersion: number;
   root: FileNode;
   fileCount: number;
   problem: string | null;
@@ -207,6 +212,8 @@ export function buildMountViews(docs: AgentStateDoc[]): MountView[] {
       label: doc.label,
       role: doc.role,
       source: kind === "index" ? source(value.source) : null,
+      okfVersion: kind === "index" && str(value.okf_version) ? str(value.okf_version) : null,
+      stateVersion: doc.version,
       root,
       fileCount,
       problem: doc.problem

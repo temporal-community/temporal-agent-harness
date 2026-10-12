@@ -21,7 +21,8 @@ service::
 The harness turns each method into an activity named ``vfs.<name>.<method>`` (see
 :attr:`ActivityFileSystem.activities`; ``AgentHarnessPlugin(filesystems=...)`` registers them),
 plus ``vfs.<name>.view``, the read-only chunked read the console's file viewer calls as a
-standalone activity. Every activity builds a fresh instance from the config it is given, so the
+standalone activity, and ``vfs.<name>.okf_graph``, which walks the filesystem as an OKF bundle
+(see :mod:`.okf`). Every activity builds a fresh instance from the config it is given, so the
 config is validated on every call. In the workflow, ``LocalDisk.backend(config)`` is the mount's
 backend: each operation runs the matching activity on the workflow's task queue.
 
@@ -36,7 +37,7 @@ import errno
 import os
 import re
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any, ClassVar, Generic, Literal, TypeVar, get_args, get_origin
 
@@ -45,6 +46,7 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 
+from .okf import OKFGraph, build_okf_graph
 from .vfs import FileSource, FileStat
 
 # Covariant: a filesystem only ever reads its config, so a ``LocalDisk`` is an
@@ -91,6 +93,13 @@ class FsWrite(FsCall):
 
 class FsRename(FsCall):
     target: PurePosixPath
+
+
+class OKFGraphCall(FsCall):
+    """Walk the OKF bundle under ``path`` (``.`` for the whole mount); ``links`` reads whole
+    files to find the links between concepts, where without it only their frontmatter is read."""
+
+    links: bool = True
 
 
 class StatResult(BaseModel):
@@ -301,7 +310,16 @@ def _activities(cls: type[AnyFileSystem]) -> list[Callable[..., Awaitable[object
 
         return await _run(cls, call, page)
 
-    made: list[Callable[..., Awaitable[object]]] = [stat, read, list_, view]
+    @activity.defn(name=activity_name(cls.name, "okf_graph"))
+    async def okf_graph(call: OKFGraphCall) -> OKFGraph:
+        now = datetime.now(timezone.utc)
+        return await _run(
+            cls,
+            call,
+            lambda fs, path: build_okf_graph(fs, prefix=path, links=call.links, now=now),
+        )
+
+    made: list[Callable[..., Awaitable[object]]] = [stat, read, list_, view, okf_graph]
     if not cls.writable:
         return made
 
@@ -369,6 +387,14 @@ class ActivityBackend:
 
     async def list(self, path: PurePosixPath) -> list[str]:
         return await self._call("list", self._at(path), list[str])
+
+    async def okf_graph(self, prefix: PurePosixPath, *, links: bool) -> OKFGraph:
+        """The OKF bundle under ``prefix``, walked in one activity (see :mod:`.okf`)."""
+        return await self._call(
+            "okf_graph",
+            OKFGraphCall(config=self.source.config, path=prefix, links=links),
+            OKFGraph,
+        )
 
 
 class _WritableActivityBackend(ActivityBackend):

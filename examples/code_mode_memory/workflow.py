@@ -1,23 +1,23 @@
-"""A conversational agent with long-term memory kept in a directory on the worker's disk.
+"""A conversational agent with long-term memory kept as an OKF knowledge bundle on disk.
 
-The agent's only tool is a Code Mode tool with no host functions and two mounts:
+The agent's only tool is ``okf_code_mode_tool``: a Code Mode tool with no host functions of its
+own, over two mounts:
 
-- ``/skills``, read-only: an :class:`~temporal_agent_harness.harness.agent.InMemoryFileSystem`
-  seeded by the ``load_skills`` activity, holding the ``memory`` skill. The skill says how
-  memory is laid out and how to recall, save and forget.
-- ``/memory``, writable: :class:`~.local_disk.LocalDisk`, an ``ActivityFileSystem`` whose every
-  operation is an activity on the directory named by the session's init data
-  (``MemoryConfig``), inside this example's ``memories/`` folder.
+- ``/memory``, writable: an OKF bundle (``agent.okf_bundle_vfs_mount``) on
+  :class:`~.local_disk.LocalDisk`, an ``ActivityFileSystem`` whose every operation is an
+  activity on the directory named by the session's init data (``MemoryConfig``), inside this
+  example's ``memories/`` folder. The tool explains OKF to the model and gives its scripts ``okf_concepts``,
+  ``okf_links`` and ``okf_render``.
+- ``/skills``, read-only: :class:`~.local_disk.SkillsDisk`, this example's ``skills/`` folder,
+  holding the ``memory`` skill: what to remember, and how to recall, save, correct and forget.
 
 Memory is not in the workflow: it lives on disk, so it outlasts the session, and every session
-started with the same ``memory_dir`` reads and writes the same memories. The system prompt only
-tells the model when to use the skill; what memory is and how to use it lives in the skill.
+started with the same ``memory_dir`` reads and writes the same bundle. The system prompt tells
+the model when to use the skill, and carries the bundle's ``index.md`` as it was on the
+session's first turn, so the model can see what it remembers without a script to look.
 
-Both mounts are declared on the class with ``agent.vfs_mount``, so the console's files panel
-shows them, and bound in ``@agent.init``, where the session's seed and config are known.
-``/skills`` is a ``FileTree``, so its files, contents included, are agent state. ``/memory`` is a
-``FileIndex``: paths and sizes only, with a file's contents read from disk when someone opens it
-in the panel.
+Both mounts are declared on the class, so the console's files panel shows the paths each session
+touches, and opens them from disk. ``/memory`` also has a graph of the whole bundle.
 """
 
 from __future__ import annotations
@@ -50,9 +50,9 @@ with workflow.unsafe.imports_passed_through():
         ToolApprovalPolicy,
     )
     from temporal_agent_harness.harness.agent_workflow import AgentWorkflowRunner
+    from temporal_agent_harness.harness.code_mode.vfs import VFSMount
 
-    from .activities import load_skills
-    from .local_disk import LocalDisk, LocalDiskConfig
+    from .local_disk import LocalDisk, LocalDiskConfig, SkillsConfig, SkillsDisk
 
 
 TASK_QUEUE = "code-mode-memory"
@@ -68,7 +68,24 @@ Your memory is managed by the `memory` skill at `/skills/memory/SKILL.md`. Use t
 preferences, plans, people or projects, or something they told you before.
 
 Before using memory in a conversation, FIRST run a script that reads \
-`/skills/memory/SKILL.md`, then follow it. Reply in plain prose."""
+`/skills/memory/SKILL.md`, then follow it. Reply in plain prose.
+
+Below is `/memory/index.md` as it was when this session started. Use it to tell what you have \
+saved and which files to read, but read a concept's file before relying on it: the memory may \
+have changed since.
+
+<memory_index>
+{memory_index}
+</memory_index>"""
+
+_INDEX = PurePosixPath("index.md")
+
+
+async def read_memory_index(bundle: VFSMount) -> str:
+    """The bundle's top-level ``index.md``, or a note that there is none yet."""
+    if await bundle.backend.stat(_INDEX) is None:
+        return "(empty: nothing saved yet)"
+    return (await bundle.backend.read(_INDEX)).decode()
 
 
 class MemoryConfig(BaseModel):
@@ -87,11 +104,11 @@ class MemoryConfig(BaseModel):
 class CodeModeMemoryAgentWorkflow:
     skills = agent.vfs_mount(
         "/skills",
-        agent.InMemoryFileSystem,
+        SkillsDisk,
         read_only=True,
         description="Skills, one folder each; start with its SKILL.md.",
     )
-    memory = agent.vfs_mount(
+    memory = agent.okf_bundle_vfs_mount(
         "/memory",
         LocalDisk,
         description=(
@@ -109,22 +126,18 @@ class CodeModeMemoryAgentWorkflow:
             approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
         )
         self._conversation = InteractionConversation()
-        self._code_tool = agent.code_mode_tool(
-            [],
+        self._memory = self.memory.bind(LocalDiskConfig(directory=data.memory_dir))
+        # Read on the first turn, since init can't run activities, then kept for the session
+        # so the system instruction stays the same from turn to turn.
+        self._system_instruction: str | None = None
+        self._code_tool = agent.okf_code_mode_tool(
+            self._memory,
             name="run_code",
-            mounts=[
-                self.skills.bind(seed=self._load_skills),
-                self.memory.bind(LocalDiskConfig(directory=data.memory_dir)),
-            ],
+            mounts=[self.skills.bind(SkillsConfig())],
         )
         self._gemini = google_genai_client(
             activity_config=ActivityConfig(start_to_close_timeout=timedelta(minutes=3)),
             runner=self._runner,
-        )
-
-    async def _load_skills(self) -> dict[str, str]:
-        return await workflow.execute_activity(
-            load_skills, start_to_close_timeout=timedelta(seconds=30)
         )
 
     @agent.accepts(mid_turn=MidTurn.ENQUEUE)
@@ -132,12 +145,16 @@ class CodeModeMemoryAgentWorkflow:
         """Chat with the assistant. Tell it something to remember, or ask about something you
         told it before, in this session or another one sharing its memory."""
         tools = [function_param(self._code_tool)]
+        if self._system_instruction is None:
+            self._system_instruction = SYSTEM_INSTRUCTION.format(
+                memory_index=await read_memory_index(self._memory)
+            )
         self._conversation.add_user_text(message.text)
         while True:
             stream = await self._gemini.interactions.create(
                 model=MODEL,
                 input=self._conversation.steps,
-                system_instruction=SYSTEM_INSTRUCTION,
+                system_instruction=self._system_instruction,
                 tools=tools,
                 stream=True,
             )

@@ -1,7 +1,8 @@
 # ABOUTME: Tests for the console's file view: POST /api/files/view runs a mount's
 # vfs.<name>.view activity as a standalone activity on a real local dev server (the time-skipping
 # test server cannot run standalone activities), pages through the file, and turns failures
-# into HTTP errors the viewer can show.
+# into HTTP errors the viewer can show. POST /api/files/okf-graph runs vfs.<name>.okf_graph the
+# same way.
 #
 # Run with: uv run pytest tests/web/test_file_view.py -v
 
@@ -28,7 +29,11 @@ from temporal_agent_harness.web import file_view
 from temporal_agent_harness.web.app import create_agent_harness_app
 from temporal_agent_harness.web.session_manager import AgentRegistry
 
-FILES = {"notes.md": b"# Notes\n", "big.txt": b"y" * (MAX_VIEW_BYTES + 3)}
+FILES = {
+    "notes.md": b"# Notes\n",
+    "idea.md": b"---\ntype: Idea\ntitle: An idea\n---\nSee [the notes](notes.md).\n",
+    "big.txt": b"y" * (MAX_VIEW_BYTES + 3),
+}
 
 
 class PagesConfig(BaseModel):
@@ -84,13 +89,15 @@ def _body(task_queue: str, path: str, *, offset: int = 0, shelf: str = "main") -
     }
 
 
-async def _post(env: WorkflowEnvironment, body: dict) -> httpx.Response:
+async def _post(
+    env: WorkflowEnvironment, body: dict, route: str = "/api/files/view"
+) -> httpx.Response:
     app = create_agent_harness_app(registry=AgentRegistry(agents=[]))
     app.state.temporal = env.client
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as http:
-        return await http.post("/api/files/view", json=body)
+        return await http.post(route, json=body)
 
 
 async def test_a_file_is_read_by_a_standalone_activity(env, task_queue):
@@ -150,6 +157,40 @@ async def test_a_server_without_standalone_activities_says_so():
     )
     try:
         response = await _post(test_server, _body("any-queue", "notes.md"))
+    finally:
+        await test_server.shutdown()
+    assert (response.status_code, response.json()["error"]) == (501, "file_view_unavailable")
+
+
+# ---------------------------------------------------------------- an OKF bundle's graph
+
+
+async def test_an_okf_graph_is_walked_by_a_standalone_activity(env, task_queue):
+    body = {"source": _body(task_queue, ".")["source"]}
+    response = await _post(env, body, "/api/files/okf-graph")
+    assert response.status_code == 200, response.text
+    graph = response.json()
+    assert [(c["id"], c["type"], c["problem"] is None) for c in graph["concepts"]] == [
+        ("idea", "Idea", True),
+        ("notes", "Unknown", False),
+    ]
+    assert graph["links"] == [{"source": "idea", "target": "notes", "dangling": False}]
+    assert response.headers["cache-control"] == "no-store"
+
+
+async def test_an_okf_graph_failure_comes_back_as_an_http_error(env, task_queue):
+    body = {"source": _body(task_queue, ".", shelf="attic")["source"]}
+    response = await _post(env, body, "/api/files/okf-graph")
+    assert (response.status_code, response.json()["error"]) == (400, "ValueError")
+
+
+async def test_an_okf_graph_needs_standalone_activities():
+    test_server = await WorkflowEnvironment.start_time_skipping(
+        data_converter=pydantic_data_converter
+    )
+    try:
+        body = {"source": _body("any-queue", ".")["source"]}
+        response = await _post(test_server, body, "/api/files/okf-graph")
     finally:
         await test_server.shutdown()
     assert (response.status_code, response.json()["error"]) == (501, "file_view_unavailable")

@@ -10,6 +10,9 @@ import type {
   CreateSessionResponse,
   FileChunk,
   FileViewRequest,
+  OKFConcept,
+  OKFGraph,
+  OKFGraphRequest,
   Session,
   SubmitMessageResponse,
   ToolApprovalRequest,
@@ -235,5 +238,37 @@ export class MockAgentApi implements AgentApi {
     await sleep(120);
     const content = `Contents of ${request.path}, read just now.\n`;
     return { content, encoding: "utf-8", offset: 0, size: content.length, mtime: Date.now() / 1000 };
+  }
+
+  async okfGraph(_request: OKFGraphRequest): Promise<OKFGraph> {
+    await sleep(120);
+    const concept = (id: string, type: string, title: string, extra: Partial<OKFConcept> = {}) => ({
+      id,
+      path: `${id}.md`,
+      type,
+      title,
+      description: "",
+      tags: [],
+      status: "stable",
+      trust_tier: "unverified" as const,
+      stale: false,
+      size: 200,
+      problem: null,
+      ...extra
+    });
+    return {
+      concepts: [
+        concept("people/ana", "Person", "Ana", { description: "The user's sister, in Denver." }),
+        concept("plans/denver-trip", "Plan", "Denver trip", { stale: true }),
+        concept("favorite-coffee", "Preference", "Favorite coffee", { trust_tier: "human-reviewed" })
+      ],
+      links: [
+        { source: "plans/denver-trip", target: "people/ana", dangling: false },
+        { source: "people/ana", target: "favorite-coffee", dangling: false },
+        { source: "plans/denver-trip", target: "plans/flights", dangling: true }
+      ],
+      truncated: false,
+      walked_at: Date.now() / 1000
+    };
   }
 }

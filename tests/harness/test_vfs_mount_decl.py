@@ -136,3 +136,61 @@ def test_a_declaration_is_checked_when_it_is_made():
         agent.vfs_mount("skills", agent.InMemoryFileSystem, description="")
     with pytest.raises(TypeError, match="must be InMemoryFileSystem or an ActivityFileSystem"):
         agent.vfs_mount("/x", object, description="")  # type: ignore[call-overload]
+
+
+# ---------------------------------------------------------------- OKF bundles
+
+
+class OKFAgent:
+    memory = agent.okf_bundle_vfs_mount("/memory", _Store, description="Memory.")
+
+
+def test_an_okf_bundle_mount_records_the_okf_version_from_the_start():
+    assert declared_states(OKFAgent)["memory"].state_type is agent.FileIndex
+    index = OKFAgent().memory.state.current
+    assert (index.mount, index.okf_version) == ("/memory", "0.2")
+    assert Agent().store.state.current.okf_version is None
+
+
+def test_an_okf_bundle_mount_is_marked_in_the_contract():
+    tool = agent.code_mode_tool(
+        [], name="run_code", mounts=[OKFAgent().memory.bind(_Config(store="s"))]
+    )
+    assert "- `/memory` (writable, OKF v0.2 bundle): Memory." in (tool.__doc__ or "")
+
+
+def test_an_okf_bundle_mount_needs_an_activity_filesystem():
+    with pytest.raises(TypeError, match="must be an ActivityFileSystem"):
+        agent.okf_bundle_vfs_mount("/m", agent.InMemoryFileSystem, description="")  # type: ignore[arg-type]
+
+
+def test_okf_code_mode_tool_takes_only_a_bound_okf_bundle():
+    with pytest.raises(TypeError, match="okf_bundle_vfs_mount"):
+        agent.okf_code_mode_tool(Agent().store.bind(_Config(store="s")), name="run_code")
+    with pytest.raises(ValueError, match="'okf_bundle' is reserved"):
+        agent.okf_code_mode_tool(
+            OKFAgent().memory.bind(_Config(store="s")),
+            name="run_code",
+            injections={"okf_bundle": 1},
+        )
+
+
+def test_okf_code_mode_tool_keeps_extra_tools_and_mounts_and_explains_okf():
+    @agent.tool_defn()
+    async def lookup(q: str) -> str:
+        """Look something up."""
+        ...
+
+    instance = Agent()
+    tool = agent.okf_code_mode_tool(
+        OKFAgent().memory.bind(_Config(store="s")),
+        name="run_code",
+        tools=[lookup],
+        mounts=[instance.skills.bind(seed=None)],
+    )
+    doc = tool.__doc__ or ""
+    for name in ("lookup", "okf_concepts", "okf_links", "okf_render"):
+        assert f"async def {name}(" in doc
+    assert "async def okf_concepts(prefix: str = ...)" in doc
+    assert "- `/skills` (read-only)" in doc and "- `/memory` (writable, OKF v0.2 bundle)" in doc
+    assert "Knowledge bundle: `/memory` is an Open Knowledge Format (OKF v0.2) bundle" in doc

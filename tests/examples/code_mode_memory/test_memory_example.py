@@ -1,7 +1,8 @@
 # ABOUTME: Tests for the Code Mode memory example: LocalDisk's activities work on a directory
-# inside memories/ and refuse configs and paths that reach outside it, and, with no model in the
-# loop, two separate sessions given the same memory_dir share their memories through the
-# activity-backed, indexed /memory mount.
+# inside memories/ and refuse configs and paths that reach outside it, SkillsDisk serves the
+# skills folder read-only, and, with no model in the loop, two separate sessions given the same
+# memory_dir share their memories through the /memory OKF bundle, and the agent reads that
+# bundle's index.md for its system instruction.
 #
 # Run with: uv run pytest tests/examples/code_mode_memory -v
 
@@ -20,8 +21,7 @@ from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
 
 from examples.code_mode_memory import local_disk
-from examples.code_mode_memory.activities import load_skills
-from examples.code_mode_memory.local_disk import LocalDisk
+from examples.code_mode_memory.local_disk import LocalDisk, SkillsDisk
 from examples.code_mode_memory.workflow import MemoryConfig
 from temporal_agent_harness.harness.agent_protocol import (
     SEND_AGENT_MESSAGE_UPDATE,
@@ -43,6 +43,7 @@ from temporal_agent_harness.plugin import AgentHarnessPlugin
 from ._memory_e2e_parent import CodeModeMemoryE2EParentWorkflow
 
 DISK = {a.__temporal_activity_definition.name: a for a in LocalDisk.activities}
+SKILLS = {a.__temporal_activity_definition.name: a for a in SkillsDisk.activities}
 
 
 @pytest.fixture
@@ -58,10 +59,17 @@ def memories(tmp_path, monkeypatch):
 # ---------------------------------------------------------------- the activities
 
 
-async def test_load_skills_ships_the_memory_skill():
-    files = await ActivityEnvironment().run(load_skills)
-    assert set(files) == {"memory/SKILL.md", "memory/template.md"}
-    assert files["memory/SKILL.md"].startswith("---\nname: memory\n")
+async def test_skills_disk_serves_the_skills_folder_read_only():
+    env = ActivityEnvironment()
+    assert await env.run(SKILLS["vfs.skills-disk.list"], FsCall(config={}, path=".")) == [
+        "memory"
+    ]
+    page = await env.run(SKILLS["vfs.skills-disk.view"], FsRead(config={}, path="memory/SKILL.md"))
+    assert page.content.startswith("---\nname: memory\n")
+    assert not any(name.endswith((".write", ".delete", ".rename", ".mkdir")) for name in SKILLS)
+    with pytest.raises(ApplicationError) as raised:
+        await env.run(SKILLS["vfs.skills-disk.view"], FsRead(config={}, path="../local_disk.py"))
+    assert raised.value.type == "PermissionError"
 
 
 async def test_local_disk_works_on_a_directory_inside_memories(memories):
@@ -133,21 +141,37 @@ async def test_local_disk_keeps_its_directory(memories):
 
 # What a model following skills/memory/SKILL.md would run to save a memory...
 _SAVE = """
+import asyncio
 from pathlib import Path
-skill = Path('/skills/memory/SKILL.md').read_text()
-index = Path('/memory/MEMORY.md')
-coffee = '# Favorite coffee\\n\\nA flat white with oat milk.\\n'
-Path('/memory/favorite-coffee.md').write_text(coffee)
-before = index.read_text() if index.exists() else '# Memory\\n'
-index.write_text(before + '- [Favorite coffee](favorite-coffee.md) — flat white, oat milk\\n')
-sorted(p.name for p in Path('/memory').iterdir())
+
+async def main():
+    Path('/skills/memory/SKILL.md').read_text()
+    known = await okf_concepts()
+    Path('/memory/favorite-coffee.md').write_text(await okf_render(
+        {'type': 'Preference', 'title': 'Favorite coffee',
+         'description': 'A flat white with oat milk.', 'tags': ['coffee', 'drinks']},
+        'A flat white with oat milk.'))
+    Path('/memory/index.md').write_text(
+        '# Preference\\n\\n* [Favorite coffee](favorite-coffee.md) - A flat white with oat milk.\\n')
+    Path('/memory/log.md').write_text(
+        '# Directory Update Log\\n\\n## 2026-10-06\\n* **Creation**: [Favorite coffee](favorite-coffee.md)\\n')
+    return [len(known), sorted(p.name for p in Path('/memory').iterdir())]
+
+asyncio.run(main())
 """
 
 # ...and to recall it, in another session.
 _RECALL = """
+import asyncio
 from pathlib import Path
-index = Path('/memory/MEMORY.md').read_text()
-[index.splitlines()[-1], Path('/memory/favorite-coffee.md').read_text().splitlines()[2]]
+
+async def main():
+    concepts = await okf_concepts()
+    coffee = [c for c in concepts if 'coffee' in c.get('tags', [])]
+    return [[(c['title'], c['type'], c['description']) for c in coffee],
+            Path(coffee[0]['path']).read_text().splitlines()[-1]]
+
+asyncio.run(main())
 """
 
 
@@ -159,8 +183,7 @@ async def client_and_queue():
         env.client,
         task_queue=task_queue,
         workflows=[CodeModeMemoryE2EParentWorkflow],
-        activities=[load_skills],
-        plugins=[AgentHarnessPlugin(filesystems=[LocalDisk])],
+        plugins=[AgentHarnessPlugin(filesystems=[LocalDisk, SkillsDisk])],
     ):
         try:
             yield env.client, task_queue
@@ -179,10 +202,14 @@ async def _start(client: Client, task_queue: str, memory_dir: str) -> WorkflowHa
 
 async def _send(client: Client, handle: WorkflowHandle[Any, Any], script: str) -> str:
     """Run one script and return its reply."""
+    message = AgentMessage(type="run_code", payload={"script": script})
+    return await _message(client, handle, message)
+
+
+async def _message(client: Client, handle: WorkflowHandle[Any, Any], message: AgentMessage) -> str:
+    """Send one message and return its reply."""
     accepted = await handle.execute_update(
-        SEND_AGENT_MESSAGE_UPDATE,
-        AgentMessage(type="run_code", payload={"script": script}),
-        result_type=AgentMessageReply,
+        SEND_AGENT_MESSAGE_UPDATE, message, result_type=AgentMessageReply
     )
     stream = WorkflowStreamClient.create(client, handle.id)
     async for item in stream.subscribe(
@@ -210,26 +237,29 @@ async def test_a_second_session_recalls_what_the_first_one_saved(client_and_queu
 
     first = await _start(client, task_queue, memory_dir)
     reply = await _send(client, first, _SAVE)
-    assert "result: ['MEMORY.md', 'favorite-coffee.md']" in reply
-    assert (memories / "alice" / "favorite-coffee.md").exists()
+    assert "result: [0, ['favorite-coffee.md', 'index.md', 'log.md']]" in reply, reply
+    saved = (memories / "alice" / "favorite-coffee.md").read_text()
+    assert saved.startswith("---\ntype: Preference\ntitle: Favorite coffee\n")
+    assert "  by: CodeModeMemoryE2EParent\n" in saved
 
     second = await _start(client, task_queue, memory_dir)
     reply = await _send(client, second, _RECALL)
     assert (
-        "result: ['- [Favorite coffee](favorite-coffee.md) — flat white, oat milk', "
+        "result: [[['Favorite coffee', 'Preference', 'A flat white with oat milk.']], "
         "'A flat white with oat milk.']"
-    ) in reply
+    ) in reply, reply
 
     # A session with another memory_dir sees none of it.
     stranger = await _start(client, task_queue, "bob")
-    script = "from pathlib import Path\nPath('/memory/MEMORY.md').exists()"
+    script = "import asyncio\nasync def main():\n    return await okf_concepts()\nasyncio.run(main())"
     reply = await _send(client, stranger, script)
-    assert "result: False" in reply
+    assert "result: []" in reply, reply
 
     # Every file operation was recorded, so the sessions replay without the disk.
-    # The second session's index holds what it saw, and says where to read the files.
+    # The second session's index holds the file it read, and says where to read the files.
     index = await second.query(CodeModeMemoryE2EParentWorkflow.index)
-    assert set(index["entries"]) == {"MEMORY.md", "favorite-coffee.md"}
+    assert set(index["entries"]) == {"favorite-coffee.md"}
+    assert index["okf_version"] == "0.2"
     assert index["source"]["filesystem"] == "local-disk"
     assert index["source"]["task_queue"] == task_queue
 
@@ -237,6 +267,24 @@ async def test_a_second_session_recalls_what_the_first_one_saved(client_and_queu
         path.unlink()
     await _replay(first)
     await _replay(second)
+
+
+async def test_the_system_instruction_index_is_read_from_the_memory(client_and_queue, memories):
+    client, task_queue = client_and_queue
+    read_index = AgentMessage(type="read_index", payload={})
+
+    fresh = await _start(client, task_queue, "alice")
+    assert await _message(client, fresh, read_index) == "(empty: nothing saved yet)"
+
+    await _send(client, fresh, _SAVE)
+    reply = await _message(client, fresh, read_index)
+    assert reply == (
+        "# Preference\n\n* [Favorite coffee](favorite-coffee.md) - A flat white with oat milk.\n"
+    )
+
+    for path in (memories / "alice").iterdir():
+        path.unlink()
+    await _replay(fresh)
 
 
 async def test_a_disk_failure_reaches_the_script_as_the_builtin(client_and_queue, memories):

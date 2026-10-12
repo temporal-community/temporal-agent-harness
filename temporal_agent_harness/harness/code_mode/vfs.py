@@ -112,9 +112,10 @@ class FileIndex(HarnessState):
     only once a script looks at it again.
 
     ``entries`` is keyed by mount-relative path (``"notes/todo.md"``); the mount's root is
-    implicit. ``source`` is recorded with the first operation, so a viewer can fetch a file's
-    contents on demand. Those contents are the file as it is in the store
-    when it is fetched, not as it was at any earlier point in the agent's history: the index
+    implicit. ``okf_version`` is set for a mount declared with ``agent.okf_bundle_vfs_mount``,
+    whose files form an OKF bundle. ``source`` is recorded with the first operation, so a
+    viewer can fetch a file's contents on demand. Those contents are the file as it is in the
+    store when it is fetched, not as it was at any earlier point in the agent's history: the index
     can be replayed to any moment, the store cannot. (A :class:`FileTree` is different: it
     holds an in-memory filesystem's contents, so they replay with it.)"""
 
@@ -122,6 +123,7 @@ class FileIndex(HarnessState):
     mount: str = ""
     description: str = ""
     read_only: bool = False
+    okf_version: str | None = None
     source: IndexSource | None = None
     entries: dict[str, IndexEntry] = {}
 

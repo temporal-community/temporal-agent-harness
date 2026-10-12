@@ -38,6 +38,7 @@ from temporal_agent_harness.harness.code_mode.activity_fs import (
     FsCall,
     FsRead,
     FsWrite,
+    OKFGraphCall,
 )
 from temporal_agent_harness.harness.code_mode.vfs import IndexSource
 from temporal_agent_harness.plugin import AgentHarnessPlugin
@@ -45,6 +46,7 @@ from temporal_agent_harness.plugin import AgentHarnessPlugin
 from _activity_fs_parent import (
     STORES,
     ActivityFsParentWorkflow,
+    OKFParentWorkflow,
     ReadOnlyStoreFileSystem,
     Store,
     StoreAgentData,
@@ -73,6 +75,7 @@ def test_the_activities_are_named_for_the_filesystem():
         "vfs.test-store.delete",
         "vfs.test-store.list",
         "vfs.test-store.mkdir",
+        "vfs.test-store.okf_graph",
         "vfs.test-store.read",
         "vfs.test-store.rename",
         "vfs.test-store.stat",
@@ -81,6 +84,7 @@ def test_the_activities_are_named_for_the_filesystem():
     ]
     assert sorted(_by_name(ReadOnlyStoreFileSystem)) == [
         "vfs.test-store-ro.list",
+        "vfs.test-store-ro.okf_graph",
         "vfs.test-store-ro.read",
         "vfs.test-store-ro.stat",
         "vfs.test-store-ro.view",
@@ -199,6 +203,21 @@ async def test_view_pages_through_a_file(store):
     assert raised.value.type == "IsADirectoryError"
 
 
+async def test_okf_graph_walks_the_filesystem_built_from_the_calls_config(store):
+    STORES[store].files["notes/b.md"] = b"---\ntype: Fact\n---\nSee [a](a.md).\n"
+    STORES[store].files["notes/a.md"] = b"---\ntype: Fact\ntitle: A\n---\n"
+    okf_graph = _by_name(StoreFileSystem)["vfs.test-store.okf_graph"]
+    env = ActivityEnvironment()
+
+    graph = await env.run(okf_graph, OKFGraphCall(config={"store": store}, path="."))
+    assert [(c.id, c.title) for c in graph.concepts] == [("notes/a", "A"), ("notes/b", "b")]
+    assert [(l.source, l.target) for l in graph.links] == [("notes/b", "notes/a")]
+
+    with pytest.raises(ApplicationError) as raised:
+        await env.run(okf_graph, OKFGraphCall(config={"store": "missing"}, path="."))
+    assert raised.value.type == "ValueError"
+
+
 # ---------------------------------------------------------------- an agent mounting one
 
 
@@ -209,7 +228,7 @@ async def client_and_queue():
     async with Worker(
         env.client,
         task_queue=task_queue,
-        workflows=[ActivityFsParentWorkflow],
+        workflows=[ActivityFsParentWorkflow, OKFParentWorkflow],
         plugins=[AgentHarnessPlugin(filesystems=[StoreFileSystem])],
     ):
         try:
@@ -326,6 +345,7 @@ async def test_a_new_session_with_a_declared_mount_publishes_only_its_snapshot(
         "mount": "/store",
         "description": "The test store.",
         "read_only": False,
+        "okf_version": None,
         "source": None,
         "entries": {},
     }
@@ -339,6 +359,59 @@ async def test_a_new_session_with_a_declared_mount_publishes_only_its_snapshot(
     # Where the files can be read arrives with the first file the index records.
     assert {op["path"] for op in patches[0].ops} == {"/source", "/entries/notes"}
     assert all(op["path"] != "/source" for p in patches[1:] for op in p.ops)
+
+
+async def test_an_okf_code_mode_tool_writes_lists_and_links_concepts(client_and_queue, store):
+    client, task_queue = client_and_queue
+    handle = await client.start_workflow(
+        OKFParentWorkflow.run,
+        args=[AgentConfig(), StoreAgentData(store=store)],
+        id=f"OKFParent-{uuid.uuid4()}",
+        task_queue=task_queue,
+    )
+    script = (
+        "import asyncio\n"
+        "from pathlib import Path\n"
+        "async def main():\n"
+        "    Path('/kb/people').mkdir()\n"
+        "    Path('/kb/people/ana.md').write_text(await okf_render(\n"
+        "        {'type': 'Person', 'title': 'Ana', 'description': 'A friend.'},\n"
+        "        'Drinks [coffee](../coffee.md).'))\n"
+        "    Path('/kb/coffee.md').write_text(await okf_render({'type': 'Preference'}, 'Flat white.'))\n"
+        "    Path('/kb/scribble.md').write_text('no frontmatter')\n"
+        "    concepts = await okf_concepts()\n"
+        "    links = await okf_links('coffee')\n"
+        "    return [[(c['path'], c['type'], c.get('problem') is not None) for c in concepts],\n"
+        "            [l['source'] for l in links['cited_by']]]\n"
+        "asyncio.run(main())\n"
+    )
+    reply = await _send(client, handle, script)
+    assert (
+        "result: [[['/kb/coffee.md', 'Preference', False], "
+        "['/kb/notes/a.md', 'Unknown', True], "
+        "['/kb/people/ana.md', 'Person', False], "
+        "['/kb/scribble.md', 'Unknown', True]], ['people/ana']]"
+    ) in reply, reply
+
+    written = STORES[store].files["people/ana.md"].decode()
+    assert written.startswith("---\ntype: Person\ntitle: Ana\n")
+    assert "generated:\n  by: OKFParent\n" in written
+    index = await handle.query(OKFParentWorkflow.index)
+    assert index["okf_version"] == "0.2"
+    assert {"people/ana.md", "coffee.md", "scribble.md"} <= set(index["entries"])
+
+    history = await handle.fetch_history()
+    walks = [
+        e
+        for e in history.events
+        if e.HasField("activity_task_scheduled_event_attributes")
+        and e.activity_task_scheduled_event_attributes.activity_type.name
+        == "vfs.test-store.okf_graph"
+    ]
+    assert len(walks) == 2  # one per okf_concepts / okf_links call, not one per file
+    await Replayer(
+        workflows=[OKFParentWorkflow], data_converter=pydantic_data_converter
+    ).replay_workflow(history)
 
 
 def test_backend_takes_only_its_own_config():

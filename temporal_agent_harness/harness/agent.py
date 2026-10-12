@@ -115,6 +115,8 @@ from temporal_agent_harness.harness.code_mode import (
     VFSMount,
     code_mode_tool,
     code_mode_type_check,
+    okf_bundle_vfs_mount,
+    okf_code_mode_tool,
     vfs_mount,
 )
 from temporal_agent_harness.harness.state.decl import StateDecl, state
@@ -162,6 +164,8 @@ __all__ = [
     "subagent_toolset",
     "teardown",
     "tool_activity",
+    "okf_bundle_vfs_mount",
+    "okf_code_mode_tool",
     "tool_defn",
     "vfs_mount",
 ]

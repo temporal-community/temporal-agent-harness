@@ -11,6 +11,8 @@ import type {
   FileChunk,
   FileViewRequest,
   JsonRecord,
+  OKFGraph,
+  OKFGraphRequest,
   Session
 } from "$lib/api/types";
 import { SYNTHESIZED, isClientSideStreamError } from "$lib/api/types";
@@ -1608,6 +1610,11 @@ export class AgentRunController {
   /** One page of a file in an activity-backed mount, read from its store as it is now. */
   viewFile(request: FileViewRequest): Promise<FileChunk> {
     return this.#api.viewFile(request);
+  }
+
+  /** An OKF bundle mount's whole graph, walked from its store as it is now. */
+  okfGraph(request: OKFGraphRequest): Promise<OKFGraph> {
+    return this.#api.okfGraph(request);
   }
 
   /** Errors surface on the approval's own card, not the connection banner. */

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight, File as FileIcon, Folder } from "@lucide/svelte";
+  import { ChevronDown, ChevronRight, File as FileIcon, Folder, Waypoints } from "@lucide/svelte";
   import Chip from "$lib/components/primitives/Chip.svelte";
   import { formatSize, type FileNode, type MountView } from "$lib/state/fileMounts";
 
@@ -11,9 +11,11 @@
     mounts: MountView[];
     selected: { mountKey: string; path: string } | null;
     onOpen: (mountKey: string, path: string) => void;
+    /** Opens an OKF bundle mount's graph. Without it, no Graph button is shown. */
+    onGraph?: (mountKey: string) => void;
   }
 
-  let { mounts, selected, onOpen }: Props = $props();
+  let { mounts, selected, onOpen, onGraph }: Props = $props();
 
   let collapsed = $state<Set<string>>(new Set());
 
@@ -87,6 +89,17 @@
               "are now"}
         />
         {#if mount.readOnly}<Chip label="read-only" size="xs" fill="quiet" />{/if}
+        {#if mount.okfVersion && onGraph}
+          <button
+            type="button"
+            class="graph-button"
+            title="The whole OKF bundle as a graph, read from its store now"
+            onclick={() => onGraph(mount.key)}
+          >
+            <Waypoints size={12} />
+            Graph
+          </button>
+        {/if}
         {#if mount.role === "subagent"}<span class="kicker owner">{mount.label}</span>{/if}
       </div>
       {#if mount.kind === "index"}
@@ -138,6 +151,21 @@
     font-size: var(--font-sm);
     color: var(--text-1);
     overflow-wrap: anywhere;
+  }
+
+  .graph-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: var(--control-height-xs);
+    padding: 0 8px;
+    border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+    border-radius: var(--radius-chip);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    color: var(--text-1);
+    font-size: var(--font-xs);
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .mount-scope {

@@ -186,6 +186,14 @@ The index also carries a `source`: the filesystem's name, its config and the tas
 
 **The content a viewer gets is the file as it is in the store now**, not as it was at the point in the agent's history being viewed: the index replays, the store does not. A `FileTree` is the opposite: it holds the contents, so they replay with the session.
 
+### 3.8 OKF bundles
+
+`agent.okf_bundle_vfs_mount(...)` declares an `ActivityFileSystem` mount whose files form an
+Open Knowledge Format bundle, and `agent.okf_code_mode_tool(...)` builds a Code Mode tool for it
+with OKF host functions and prompting. Every `ActivityFileSystem` also gets a generated
+`vfs.<name>.okf_graph` activity, which the console uses to draw the bundle. See
+[`okf-bundle-mounts.md`](okf-bundle-mounts.md).
+
 ---
 
 ## 4. Execution

@@ -148,3 +148,31 @@ class ActivityFsParentWorkflow:
     @workflow.query
     def index(self) -> dict[str, JsonValue]:
         return self.files.state.current.model_dump(mode="json")
+
+
+@agent.defn(name="OKFParent")
+class OKFParentWorkflow:
+    knowledge = agent.okf_bundle_vfs_mount("/kb", StoreFileSystem, description="Notes.")
+
+    @agent.init
+    def __init__(self, config: AgentConfig, data: StoreAgentData) -> None:
+        self._runner = AgentWorkflowRunner(
+            config,
+            stream=WorkflowStream(),
+            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+        )
+        self._run_code = agent.okf_code_mode_tool(
+            self.knowledge.bind(StoreConfig(store=data.store)), name="run_code"
+        )
+
+    @agent.accepts
+    async def run_code(self, msg: RunScript) -> TextReply:
+        """Run a Python script in Code Mode over the bundle."""
+        output = await self._runner.run_tool(
+            str(workflow.uuid4()), self._run_code, script=msg.script
+        )
+        return TextReply(text=output)
+
+    @workflow.query
+    def index(self) -> dict[str, JsonValue]:
+        return self.knowledge.state.current.model_dump(mode="json")

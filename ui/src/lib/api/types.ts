@@ -243,6 +243,41 @@ export interface FileChunk {
   mtime: number;
 }
 
+export interface OKFGraphRequest {
+  source: FileSource;
+}
+
+/** One OKF concept, from its frontmatter. `problem` explains missing or broken frontmatter. */
+export interface OKFConcept {
+  id: string;
+  /** Mount-relative path of the concept's file. */
+  path: string;
+  type: string;
+  title: string;
+  description: string;
+  tags: string[];
+  status: string;
+  trust_tier: "unverified" | "machine-confirmed" | "human-reviewed";
+  stale: boolean;
+  size: number;
+  problem: string | null;
+}
+
+export interface OKFLink {
+  source: string;
+  target: string;
+  /** No concept in the bundle has the target id. */
+  dangling: boolean;
+}
+
+/** An OKF bundle's concepts and links, walked from its store right now. */
+export interface OKFGraph {
+  concepts: OKFConcept[];
+  links: OKFLink[];
+  truncated: boolean;
+  walked_at: number;
+}
+
 export interface PendingTurn {
   turn_number: number;
   turn_id: TurnId;

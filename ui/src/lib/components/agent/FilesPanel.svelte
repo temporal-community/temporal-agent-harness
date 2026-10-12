@@ -1,8 +1,10 @@
 <script lang="ts">
   import FileViewerDialog from "./FileViewerDialog.svelte";
   import MountTrees from "./MountTrees.svelte";
-  import type { FileChunk, FileViewRequest } from "$lib/api/types";
+  import OKFGraphDialog from "./OKFGraphDialog.svelte";
+  import type { FileChunk, FileViewRequest, OKFGraph, OKFGraphRequest } from "$lib/api/types";
   import type { MountView } from "$lib/state/fileMounts";
+  import type { WalkedGraph } from "$lib/state/okfGraph";
 
   /**
    * Every Code Mode mount an agent in this run tracks, as a tree as of the cursor. Opening a
@@ -13,12 +15,32 @@
     /** The cursor is at the live edge of the run. */
     live: boolean;
     onViewFile: (request: FileViewRequest) => Promise<FileChunk>;
+    /** Walks an OKF bundle mount for its graph. Without it, OKF mounts offer no graph. */
+    onOkfGraph?: (request: OKFGraphRequest) => Promise<OKFGraph>;
     onJumpToLive?: () => void;
     /** The open file: which mount, and its path in the mount. */
     selected?: { mountKey: string; path: string } | null;
+    /** The mount whose OKF graph is open. */
+    graphMountKey?: string | null;
   }
 
-  let { mounts, live, onViewFile, onJumpToLive, selected = $bindable(null) }: Props = $props();
+  let {
+    mounts,
+    live,
+    onViewFile,
+    onOkfGraph,
+    onJumpToLive,
+    selected = $bindable(null),
+    graphMountKey = $bindable(null)
+  }: Props = $props();
+
+  const graphMount = $derived(
+    graphMountKey ? (mounts.find((m) => m.key === graphMountKey) ?? null) : null
+  );
+
+  // Each OKF mount's last walk, so reopening its graph doesn't walk the bundle again unless
+  // the mount has changed since.
+  let walkedGraphs = $state<Record<string, WalkedGraph>>({});
 </script>
 
 <section class="files" aria-label="VFS File Mounts">
@@ -41,12 +63,28 @@ mounts=[self.workspace.bind(seed=None), self.memory.bind(LocalDiskConfig(...))]<
         {mounts}
         {selected}
         onOpen={(mountKey, path) => (selected = { mountKey, path })}
+        onGraph={onOkfGraph ? (mountKey) => (graphMountKey = mountKey) : undefined}
       />
     </div>
   {/if}
 </section>
 
 <FileViewerDialog {mounts} {live} bind:selected {onViewFile} {onJumpToLive} />
+{#if graphMount && onOkfGraph}
+  {@const key = graphMount.key}
+  {#key key}
+    <OKFGraphDialog
+      mount={graphMount}
+      {live}
+      {onOkfGraph}
+      {onViewFile}
+      {onJumpToLive}
+      cached={walkedGraphs[key] ?? null}
+      onWalked={(walked) => (walkedGraphs = { ...walkedGraphs, [key]: walked })}
+      onClose={() => (graphMountKey = null)}
+    />
+  {/key}
+{/if}
 
 <style>
   .files {

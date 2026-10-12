@@ -231,13 +231,14 @@ def test_keyword_only_params_render_star_separator():
     assert "async def f(a: str, *, b: int) -> str: ..." in src
 
 
-def test_defaults_are_not_emitted():
+def test_defaults_are_marked_but_their_values_are_not_emitted():
     async def f(a: str, b: int = 5) -> str: ...
 
     src = render_type_check_stubs([f]).source
     fn = _func_by_name(src, "f")
-    # No default values in the stub (types only) — the host supplies behavior, not the stub.
-    assert fn.args.defaults == []
+    # The stub says `b` has a default, so a script may leave it out, but not what it is: the
+    # host supplies behavior, not the stub.
+    assert [ast.unparse(d) for d in fn.args.defaults] == ["..."]
 
 
 def test_explicit_any_is_allowed():

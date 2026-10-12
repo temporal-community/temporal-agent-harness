@@ -7,7 +7,7 @@ agent = "examples.code_mode_memory.workflow:CodeModeMemoryAgentWorkflow"
 task_queue = "code-mode-memory"
 label = "Code Mode Memory"
 description = """
-An assistant with long-term memory: its Code Mode scripts read and write a /memory mount
-backed by activities on a directory of the worker's disk, following a memory skill under
-/skills. Start two sessions with the same memory_dir and the second one remembers what
-you told the first."""
+An assistant with long-term memory: its Code Mode scripts keep /memory as an OKF knowledge
+bundle in a directory of the worker's disk, following a memory skill under /skills. Start two
+sessions with the same memory_dir and the second one remembers what you told the first; open
+the Graph in the VFS File Mounts pane to see how the memories link up."""

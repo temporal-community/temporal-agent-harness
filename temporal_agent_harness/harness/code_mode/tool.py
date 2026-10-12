@@ -31,11 +31,12 @@ with workflow.unsafe.imports_passed_through():
 
     from .driver import CodeModeDriver, call_monty, load_stepper
     from .stubs import render_host_interface, render_type_check_stubs, resolve_hints
-    from .vfs import VFSMount, validate_mounts
+    from .vfs import IndexedVFSMount, VFSMount, validate_mounts
 
 # The model-facing contract. ``{sandbox}`` says what the sandbox can reach, ``{interface}`` is the
 # generated host-function signatures (and their descriptions + result TypedDicts) for this tool's
-# specific tool set, and ``{filesystem}`` lists its mounts, if it has any.
+# specific tool set, ``{filesystem}`` lists its mounts, if it has any, and ``{guide}`` is any
+# further explanation a specialized Code Mode tool adds (see :mod:`.okf_tool`).
 _CONTRACT = """\
 Run a Python `script` in a sandbox and return its output. Accomplish tasks by WRITING CODE that \
 calls the host functions listed below — using variables, loops, conditionals, comprehensions and \
@@ -67,7 +68,7 @@ exist.
 Host functions available:
 
 {interface}
-{filesystem}"""
+{filesystem}{guide}"""
 
 _NO_FILESYSTEM = (
     "The sandbox has no filesystem, no network, and no imports except `asyncio` and the host "
@@ -105,6 +106,8 @@ def _render_filesystem(mounts: Sequence[VFSMount]) -> str:
     lines = ["\nFilesystem:\n"]
     for mount in mounts:
         access = "read-only" if mount.read_only else "writable"
+        if isinstance(mount, IndexedVFSMount) and mount.index.current.okf_version:
+            access += f", OKF v{mount.index.current.okf_version} bundle"
         about = f": {mount.description}" if mount.description else ""
         lines.append(f"- `{mount.path}` ({access}){about}")
     return "\n".join(lines) + "\n"
@@ -221,6 +224,29 @@ def code_mode_tool(
         CodeModeStubError: a tool's parameter or result type cannot be rendered into faithful
             type-check stubs (see :mod:`.stubs`).
     """
+    return _code_mode_tool(
+        tools,
+        name=name,
+        inherently_safe=inherently_safe,
+        auto_approval_criteria=auto_approval_criteria,
+        injections=injections,
+        mounts=mounts,
+        guide="",
+    )
+
+
+def _code_mode_tool(
+    tools: Sequence[Callable[..., Awaitable[Any]]],
+    *,
+    name: str,
+    inherently_safe: bool,
+    auto_approval_criteria: str | None,
+    injections: Mapping[str, Any] | None,
+    mounts: Sequence[VFSMount],
+    guide: str,
+) -> Callable[..., Awaitable[str]]:
+    """:func:`code_mode_tool`, with ``guide`` appended to the model-facing contract."""
+    tools = list(tools)
     mount_list = validate_mounts(mounts)
     tools_by_name = _validate_tools(tools, has_mounts=bool(mount_list))
     load_stepper()
@@ -234,6 +260,7 @@ def code_mode_tool(
         sandbox=_WITH_FILESYSTEM if mount_list else _NO_FILESYSTEM,
         interface=host_interface if tools else "(none)",
         filesystem=_render_filesystem(mount_list),
+        guide=guide,
     )
     injection_values = dict(injections or {})
 

@@ -34,8 +34,11 @@ from .mount_decl import (
     InMemoryVFSMountDecl,
     UnboundActivityVFSMount,
     UnboundInMemoryVFSMount,
+    okf_bundle_vfs_mount,
     vfs_mount,
 )
+from .okf import OKFConcept, OKFGraph, OKFLink
+from .okf_tool import OKFLinks, okf_code_mode_tool
 from .stubs import CodeModeStubError
 from .tool import code_mode_tool, code_mode_type_check
 from .vfs import (
@@ -64,10 +67,16 @@ __all__ = [
     "IndexEntry",
     "InMemoryVFSMountDecl",
     "IndexSource",
+    "OKFConcept",
+    "OKFGraph",
+    "OKFLink",
+    "OKFLinks",
     "UnboundActivityVFSMount",
     "UnboundInMemoryVFSMount",
     "VFSMount",
     "code_mode_tool",
     "code_mode_type_check",
+    "okf_bundle_vfs_mount",
+    "okf_code_mode_tool",
     "vfs_mount",
 ]

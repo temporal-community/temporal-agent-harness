@@ -10,6 +10,8 @@ import type {
   CreateSessionResponse,
   FileChunk,
   FileViewRequest,
+  OKFGraph,
+  OKFGraphRequest,
   Session,
   SubmitMessageResponse,
   ToolApprovalRequest,
@@ -42,4 +44,6 @@ export interface AgentApi {
    * NOW: not as it was at any point in the session. Runs outside the agent's workflow.
    */
   viewFile(request: FileViewRequest): Promise<FileChunk>;
+  /** An OKF bundle mount's whole graph, walked from its store as it is now. */
+  okfGraph(request: OKFGraphRequest): Promise<OKFGraph>;
 }

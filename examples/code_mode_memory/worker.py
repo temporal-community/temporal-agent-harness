@@ -29,8 +29,7 @@ from temporalio.worker import Worker
 from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 
-from .activities import load_skills
-from .local_disk import LocalDisk
+from .local_disk import LocalDisk, SkillsDisk
 from .workflow import TASK_QUEUE, CodeModeMemoryAgentWorkflow
 
 
@@ -39,21 +38,20 @@ async def main() -> None:
     if not api_key:
         sys.exit("error: GEMINI_API_KEY env var not set")
 
-    # Harness plugin LAST so the Gemini plugin's payload converter wins. load_skills seeds
-    # /skills; LocalDisk's activities are /memory, so this worker's disk holds the memory.
+    # Harness plugin LAST so the Gemini plugin's payload converter wins. LocalDisk's activities
+    # are /memory, so this worker's disk holds the memory; SkillsDisk's are /skills.
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
         **connect_config,
         plugins=[
             GoogleGenAIPlugin(GeminiClient(api_key=api_key)),
-            AgentHarnessPlugin(filesystems=[LocalDisk]),
+            AgentHarnessPlugin(filesystems=[LocalDisk, SkillsDisk]),
         ],
     )
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
         workflows=[CodeModeMemoryAgentWorkflow],
-        activities=[load_skills],
     )
     print(f"Code Mode memory worker ready: taskQueue={TASK_QUEUE}", flush=True)
     await worker.run()

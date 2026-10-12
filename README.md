@@ -570,10 +570,16 @@ run_code = agent.code_mode_tool(
   [agent state](#build-a-ui-in-react-or-svelte), so they replay with the session. Over an
   `ActivityFileSystem`, its tree is a `FileIndex` state: **only the paths this session's scripts
   have touched** (looked up, listed, read or written), never the whole store, and never
-  contents. A file
-  opens in a large viewer with the trees beside it; for an `ActivityFileSystem` it is read from
-  the store through a standalone activity, without touching the agent's workflow. **That content is the file as it is now, not as it was at that point in
-  the agent's history**: the tree replays, the store does not.
+  contents. A file opens in a large viewer with the trees beside it; for an
+  `ActivityFileSystem` it is read from the store through a standalone activity, without
+  touching the agent's workflow. **That content is the file as it is now, not as it was at that
+  point in the agent's history**: the tree replays, the store does not.
+- **Knowledge bundles.** `agent.okf_bundle_vfs_mount(...)` declares a mount whose files form an
+  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md)
+  (OKF) bundle: markdown files with YAML frontmatter, linked to each other. Pass it to
+  `agent.okf_code_mode_tool(...)` for a Code Mode tool that explains OKF to the model and gives
+  scripts `okf_concepts()`, `okf_links(id)` and `okf_render(frontmatter, body)`. The console
+  draws the whole bundle as a live graph. See [OKF bundles](#okf-bundles) below.
 
 ```python
 run_code = agent.code_mode_tool(
@@ -626,6 +632,41 @@ class Bucket(agent.ActivityFileSystem[BucketConfig], name="bucket"):
 
 Viewing an `ActivityFileSystem` file in the console needs a Temporal server that runs
 standalone activities (the local dev server does; the time-skipping test server does not).
+
+#### OKF bundles
+
+Agent memory, notes or any other knowledge can be kept as an OKF bundle over any
+`ActivityFileSystem`:
+
+```python
+class MyAgent:
+    memory = agent.okf_bundle_vfs_mount("/memory", Bucket, description="Your long-term memory.")
+
+    @agent.init
+    def __init__(self, config: AgentConfig, data: MyData) -> None:
+        ...
+        self._run_code = agent.okf_code_mode_tool(
+            self.memory.bind(BucketConfig(prefix=data.team)),
+            name="run_code",
+            tools=tools,       # optional: code_mode_tool's other arguments all work
+            mounts=[...],
+        )
+```
+
+- **The tool** is `code_mode_tool` with the bundle mounted and an OKF section in its
+  description: concepts, frontmatter fields, `index.md` and `log.md`, and links.
+- **`okf_concepts(prefix="")`** returns every concept's frontmatter in one activity, instead of
+  a file read per concept. **`okf_links(id)`** gives a concept's links and backlinks.
+  **`okf_render(frontmatter, body)`** returns a concept's text with well-formed YAML and records
+  who wrote it (`generated`); scripts write it with `pathlib` like any file.
+- **Nothing is rejected.** A file with missing or broken frontmatter is still listed and drawn,
+  with the problem shown.
+- **The graph:** every `ActivityFileSystem` gets a generated `vfs.<name>.okf_graph` activity.
+  The console's **Graph** button on an OKF mount runs it as a standalone activity and draws the
+  whole bundle as it is now: concepts colored by type, links as edges, stale, deprecated and
+  human-confirmed concepts marked.
+
+The [memory example](examples/code_mode_memory/) keeps a user's memory this way.
 
 A worker that hosts a Code Mode agent needs the `code-mode` extra (which pulls in
 [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in) and

@@ -19,7 +19,8 @@ that cannot be rendered faithfully raises :class:`CodeModeStubError` (naming the
 offending parameter/field) rather than degrading to ``Any``. Result shapes reflect what a script
 actually observes — a tool's return value rendered with ``model_dump(mode="json")`` — so
 ``datetime`` / ``UUID`` / ``Decimal`` / ``bytes`` become ``str``, enums become a ``Literal`` of
-their values, sets/tuples become lists, and a model field with a default becomes
+their values, sets/tuples become lists, pydantic's ``JsonValue`` (arbitrary JSON, which has no
+stub form) becomes ``Any``, and a model field with a default becomes
 ``NotRequired`` (it is optional at the boundary, so a stub calling it required would reject
 calls the tool accepts).
 
@@ -44,7 +45,7 @@ from uuid import UUID
 
 from dataclasses import dataclass, field
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 _NoneType = type(None)
 
@@ -181,7 +182,9 @@ class _StubBuilder:
                     f"requires typed parameters for static validation."
                 )
             rendered = self._render_type(annotation, f"{name}({pname})")
-            rendered_params.append(f"{pname}: {rendered}")
+            # A parameter with a default may be left out, so the stub says it has one.
+            default = "" if param.default is inspect.Parameter.empty else " = ..."
+            rendered_params.append(f"{pname}: {rendered}{default}")
 
         if "return" in hints:
             return_annotation = hints["return"]
@@ -202,6 +205,11 @@ class _StubBuilder:
         return f'{signature}:\n    """\n{indented}\n    """'
 
     def _render_type(self, tp: Any, ctx: str) -> str:
+        # Arbitrary JSON. Its recursive alias has no stub form the checker accepts, so the
+        # script sees `Any`; the value is still validated as JSON when the call is dispatched.
+        if tp is JsonValue:
+            self._uses_any = True
+            return "Any"
         tp = _unwrap_annotated(tp)
 
         if isinstance(tp, str):

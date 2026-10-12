@@ -50,7 +50,13 @@ from temporal_agent_harness.web.agent_starts import (
     resolve_agent_starts,
     validated_start_data,
 )
-from temporal_agent_harness.web.file_view import FileViewError, FileViewRequest, view_file
+from temporal_agent_harness.web.file_view import (
+    FileViewError,
+    FileViewRequest,
+    OKFGraphRequest,
+    okf_graph,
+    view_file,
+)
 from temporal_agent_harness.web.registry import load_agent_registry
 from temporal_agent_harness.web.session_manager import (
     SESSION_MANAGER_ID,
@@ -335,6 +341,15 @@ def create_agent_harness_app(
         chunk = await view_file(app.state.temporal, req)
         return JSONResponse(
             content=chunk.model_dump(mode="json"), headers={"Cache-Control": "no-store"}
+        )
+
+    @app.post("/api/files/okf-graph")
+    async def okf_bundle_graph(req: OKFGraphRequest):
+        """An OKF bundle mount's concepts and the links between them, walked from its store as
+        it is now. Like ``/api/files/view``, nothing about the agent's workflow is touched."""
+        graph = await okf_graph(app.state.temporal, req)
+        return JSONResponse(
+            content=graph.model_dump(mode="json"), headers={"Cache-Control": "no-store"}
         )
 
     @app.post("/api/messages")

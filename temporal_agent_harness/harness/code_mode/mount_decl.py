@@ -37,6 +37,7 @@ with workflow.unsafe.imports_passed_through():
     from temporal_agent_harness.harness.state.decl import StateDecl, state_ref
 
     from .activity_fs import ActivityFileSystem
+    from .okf import OKF_VERSION
     from .vfs import (
         FileIndex,
         FileTree,
@@ -52,6 +53,7 @@ __all__ = [
     "InMemoryVFSMountDecl",
     "UnboundActivityVFSMount",
     "UnboundInMemoryVFSMount",
+    "okf_bundle_vfs_mount",
     "vfs_mount",
 ]
 
@@ -148,12 +150,17 @@ class _VFSMountDecl(StateDecl[S], Generic[S, U]):
         description: str,
         read_only: bool,
         filesystem: type[ActivityFileSystem[Any]] | None = None,
+        okf_version: str | None = None,
     ) -> None:
         check_mount_path(path)
-        super().__init__(
-            state_type,
-            initial=lambda: state_type(mount=path, description=description, read_only=read_only),
-        )
+        header: dict[str, object] = {
+            "mount": path,
+            "description": description,
+            "read_only": read_only,
+        }
+        if okf_version is not None:
+            header["okf_version"] = okf_version
+        super().__init__(state_type, initial=lambda: state_type.model_validate(header))
         self.path = path
         self.description = description
         self.read_only = read_only
@@ -241,20 +248,54 @@ def vfs_mount(
             read_only=read_only,
         )
     if isinstance(backend, type) and issubclass(backend, ActivityFileSystem):
-        if not read_only and not backend.writable:
-            raise TypeError(
-                f"vfs_mount({path!r}): {backend.__name__} is read-only (it implements no "
-                "write methods); declare the mount read_only=True"
-            )
-        return ActivityVFSMountDecl(
-            FileIndex,
-            UnboundActivityVFSMount,
-            path,
-            description=description,
-            read_only=read_only,
-            filesystem=backend,
-        )
+        return _activity_decl("vfs_mount", path, backend, description, read_only, None)
     raise TypeError(
         f"vfs_mount({path!r}): the backend must be InMemoryFileSystem or an "
         f"ActivityFileSystem subclass, got {backend!r}"
+    )
+
+
+def okf_bundle_vfs_mount(
+    path: str,
+    backend: type[ActivityFileSystem[C]],
+    *,
+    description: str,
+    read_only: bool = False,
+) -> ActivityVFSMountDecl[C]:
+    """Declare a Code Mode mount whose files form an OKF bundle (see :mod:`.okf`).
+
+    Like :func:`vfs_mount` over an :class:`ActivityFileSystem`, with the same ``bind``. The
+    mount's ``FileIndex`` records the OKF version, which is how the console knows to offer the
+    bundle's graph. Pass the bound mount to ``okf_code_mode_tool`` to give scripts the OKF host
+    functions and explain the format to the model.
+    """
+    if not (isinstance(backend, type) and issubclass(backend, ActivityFileSystem)):
+        raise TypeError(
+            f"okf_bundle_vfs_mount({path!r}): the backend must be an ActivityFileSystem "
+            f"subclass, got {backend!r}"
+        )
+    return _activity_decl("okf_bundle_vfs_mount", path, backend, description, read_only, OKF_VERSION)
+
+
+def _activity_decl(
+    what: str,
+    path: str,
+    backend: type[ActivityFileSystem[Any]],
+    description: str,
+    read_only: bool,
+    okf_version: str | None,
+) -> ActivityVFSMountDecl[Any]:
+    if not read_only and not backend.writable:
+        raise TypeError(
+            f"{what}({path!r}): {backend.__name__} is read-only (it implements no "
+            "write methods); declare the mount read_only=True"
+        )
+    return ActivityVFSMountDecl(
+        FileIndex,
+        UnboundActivityVFSMount,
+        path,
+        description=description,
+        read_only=read_only,
+        filesystem=backend,
+        okf_version=okf_version,
     )
