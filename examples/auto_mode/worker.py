@@ -19,7 +19,7 @@ Env vars:
     AUTO_MODE_AGENT_TASK_QUEUE   task queue to poll (default: auto-mode-agent)
 
 Both keys are required up front, and that is deliberate even though a missing TypeSafe key
-would not wedge anything: the Jev activity would fail, and every gated call would fall through
+would not wedge anything: the Jev call would fail, and every gated call would fall through
 to the human gate. The agent would run, but auto mode would never approve anything, which
 looks like "auto mode doesn't work" rather than "the key is missing". Failing at startup names
 the actual problem. The Monty example (examples/monty) is the same agent without auto mode,
@@ -40,10 +40,11 @@ import sys
 from google.genai import Client as GeminiClient
 from temporalio.client import Client
 from temporalio.envconfig import ClientConfig
+from temporalio.typesafe import TypeSafePlugin
 from temporalio.worker import Worker
+from typesafe_sdk import AsyncTypeSafeClient, RetryPolicy
 
 from temporal_agent_harness.ai_sdks.google_genai_plugin import GoogleGenAIPlugin
-from temporal_agent_harness.harness.jev_approvals.activity import typesafe_api_key
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 
 from ..monty import activities
@@ -67,38 +68,48 @@ async def main() -> None:
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
     if not gemini_api_key:
         sys.exit("error: GEMINI_API_KEY env var not set")
-    if not typesafe_api_key():
+    typesafe_api_key = os.environ.get("TYPESAFE_API_KEY") or os.environ.get(
+        "TYPESAFE_AI_API_KEY"
+    )
+    if not typesafe_api_key:
         sys.exit(
             "error: TYPESAFE_API_KEY env var not set — auto mode judges gated calls with "
             "Jev. For the same agent without auto mode, run examples/monty instead."
         )
 
-    # Two plugins, harness LAST so the Gemini plugin's payload converter wins:
+    # Three plugins, harness LAST so the Gemini plugin's payload converter wins:
     #   * GoogleGenAIPlugin  — the Gemini interactions activity.
-    #   * AgentHarnessPlugin — the large-payload offload converter, the durable body of
-    #     every travel tool in ALL_TOOLS,
-    #     and the Jev approval activity that `agent.jev_evaluator()` dispatches by name.
+    #   * TypeSafePlugin     — the TypeSafe system_one activity that `jev_evaluator()` calls.
+    #     Temporal owns retries, so the SDK client's own are off.
+    #   * AgentHarnessPlugin — the large-payload offload converter, and the durable body of
+    #     every travel tool in ALL_TOOLS.
     connect_config = ClientConfig.load_client_connect_config()
-    client = await Client.connect(
-        **connect_config,
-        plugins=[
-            GoogleGenAIPlugin(GeminiClient(api_key=gemini_api_key)),
-            AgentHarnessPlugin(tools=activities.ALL_TOOLS),
-        ],
-    )
+    async with AsyncTypeSafeClient(
+        api_key=typesafe_api_key, retry=RetryPolicy(max_retries=0)
+    ) as typesafe:
+        client = await Client.connect(
+            **connect_config,
+            plugins=[
+                GoogleGenAIPlugin(GeminiClient(api_key=gemini_api_key)),
+                TypeSafePlugin(typesafe),
+                AgentHarnessPlugin(tools=activities.ALL_TOOLS),
+            ],
+        )
 
-    # No `activities=` at all: a client plugin is applied to the workers built from that
-    # client, so both plugins register their own activities here.
-    worker = Worker(client, task_queue=task_queue, workflows=[AutoModeTravelAgentWorkflow])
-    print(
-        f"Auto-mode agent worker ready: "
-        f"profile={os.environ.get('TEMPORAL_PROFILE', 'default')!r} "
-        f"address={connect_config.get('target_host')} "
-        f"namespace={connect_config.get('namespace')} "
-        f"taskQueue={task_queue}",
-        flush=True,
-    )
-    await worker.run()
+        # No `activities=` at all: a client plugin is applied to the workers built from that
+        # client, so every plugin registers its own activities here.
+        worker = Worker(
+            client, task_queue=task_queue, workflows=[AutoModeTravelAgentWorkflow]
+        )
+        print(
+            f"Auto-mode agent worker ready: "
+            f"profile={os.environ.get('TEMPORAL_PROFILE', 'default')!r} "
+            f"address={connect_config.get('target_host')} "
+            f"namespace={connect_config.get('namespace')} "
+            f"taskQueue={task_queue}",
+            flush=True,
+        )
+        await worker.run()
 
 
 if __name__ == "__main__":

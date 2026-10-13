@@ -102,10 +102,10 @@ dependencies = [
     #   ui              the browser UI and the `temporal-agent-harness` CLI
     #   code-mode       the sandbox a worker runs Code Mode scripts in
     #   genai           the Google Gemini integration
-    #   jev             Jev-backed auto mode for tool approvals (worker only)
     #   openai-agents   the OpenAI Agents SDK integration
     #   pydantic-ai     the Pydantic AI integration
-    #   typesafe        typed decisions via the canonical temporalio-typesafe plugin
+    #   typesafe        typed decisions and the Jev auto mode evaluator, via the canonical
+    #                   temporalio-typesafe plugin
     #   s3              S3-backed offload for large payloads
     #
     # What each one pulls in, and when you actually need it, is in the Extras table below.
@@ -188,9 +188,9 @@ opt-in:
 | `ui` | want the browser UI and the `temporal-agent-harness` CLI (pulls in `fastapi[standard]`, including Uvicorn). The built Svelte assets are always in the wheel; only the server runtime is gated here, so agent-worker installs stay small. |
 | `code-mode` | run a worker that hosts **Code Mode** agents; pulls in [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in. Importing `agent` needs nothing extra; building a `code_mode_tool` does. |
 | `genai` | use the **Google Gemini** integration (`ai_sdks.google_genai_plugin`). |
-| `jev` | run a worker whose agents use **`agent.jev_evaluator`**, the builtin AI auto mode evaluator; pulls in [`typesafe-sdk`](https://pypi.org/project/typesafe-sdk/). Worker-side only — the workflow-side factory needs nothing extra. |
 | `openai-agents` | use the **OpenAI Agents SDK** integration (`ai_sdks.openai_agents`). |
 | `pydantic-ai` | use the **Pydantic AI** integration (`ai_sdks.pydantic_ai_harness`). |
+| `typesafe` | make typed [TypeSafe](https://docs.typesafe.ai) System One calls (`ai_sdks.typesafe_harness`), or use **`ai_sdks.jev.jev_evaluator`**, the Jev-backed auto mode evaluator; pulls in [`temporalio-typesafe`](https://pypi.org/project/temporalio-typesafe/). Register its `TypeSafePlugin` on the worker, before `AgentHarnessPlugin`. |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 
 Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.6.0'`.
@@ -359,9 +359,10 @@ AgentWorkflowRunner(
         tools={"some_mcp_tool": "read_only"},   # by NAME, so it covers tools you didn't write
         default="read_only",                     # the catch-all
     ),
-    # THE MECHANISM — `agent.jev_evaluator` puts a model in the seat, via one fast typed
-    # judgment from Jev (https://docs.typesafe.ai) rather than a prompt to parse.
-    auto_mode_evaluator=agent.jev_evaluator(),
+    # THE MECHANISM — `jev_evaluator` (from `temporal_agent_harness.ai_sdks.jev`, with the
+    # `typesafe` extra) puts a model in the seat, via one fast typed judgment from Jev
+    # (https://docs.typesafe.ai) rather than a prompt to parse.
+    auto_mode_evaluator=jev_evaluator(),
 )
 ```
 

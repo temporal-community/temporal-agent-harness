@@ -1,5 +1,5 @@
-# ABOUTME: Tests for the builtin Jev-backed auto-approver — the harness primitive that
-# lets a System One model decide approve / deny / escalate for a gated tool call.
+# ABOUTME: Tests for the Jev-backed auto-approver — the evaluator that lets a System One
+# model decide approve / deny / escalate for a gated tool call.
 #
 # Two layers, tested apart because they fail for different reasons:
 #   * the QUESTION (build_request): pure, so the exact state and criteria put to Jev are
@@ -7,31 +7,39 @@
 #   * the COMPOSITION (decide): pure, so every threshold path is asserted exhaustively —
 #     and every one of them that is not a confident verdict lands on ESCALATE, which is
 #     the whole safety argument;
-# plus the worker-side wiring: the activity is registered by the plugin, and a worker
-# missing the optional `jev` extra fails it non-retryably (so the call escalates) rather
-# than leaving the name unregistered (which Temporal retries forever).
-#
-# Nothing here calls TypeSafe. The one place a live model would sit — the activity body —
-# is exercised against a fake client, because what needs testing is the projection of its
+# plus end-to-end runs through the real TypeSafePlugin, with only its HTTP transport faked:
+# what needs testing is the request that leaves the worker and the projection of the
 # answers into JevApprovalAnswer, not the model's judgment.
 #
-# Run with: uv run pytest tests/harness/test_jev_approvals.py -v
+# Run with: uv run pytest tests/ai_sdks/jev/test_jev_evaluator.py -v
 
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
+from typing import Any
 
+import httpx2
 import pytest
-from temporalio import activity
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamClient
-from temporalio.exceptions import ApplicationError
 from temporalio.client import WorkflowUpdateStage
 from temporalio.testing import WorkflowEnvironment
+from temporalio.typesafe import SystemOneResult, TypeSafePlugin
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
+from typesafe_sdk import AsyncTypeSafeClient, Choice, Noul, RetryPolicy, SystemOneResponse
+
+from temporal_agent_harness.ai_sdks.jev import (
+    DEFAULT_JEV_MODEL,
+    JevApprovalAnswer,
+    build_request,
+    decide,
+    jev_evaluator,
+)
 
 from temporal_agent_harness.harness import AgentWorkflowRunner, agent
 from temporal_agent_harness.harness.agent_workflow import Injected
@@ -53,15 +61,6 @@ from temporal_agent_harness.harness.agent_protocol import (
     TextReply,
     AutoApprovalContext,
     ToolApprovalPolicy,
-)
-from temporal_agent_harness.harness.jev_approvals import (
-    DEFAULT_JEV_MODEL,
-    JEV_TOOL_APPROVAL_ACTIVITY,
-    JevApprovalAnswer,
-    JevApprovalRequest,
-    build_request,
-    decide,
-    jev_evaluator,
 )
 
 
@@ -149,7 +148,6 @@ def test_the_request_shows_jev_the_call_and_the_governing_criteria():
     saw when it chose the call), and the exact arguments it would run with."""
     request = build_request(_ctx())
 
-    assert request.model == DEFAULT_JEV_MODEL
     assert request.state["approval_criteria"] == {
         "what_calls_to_this_tool_do": "Permanently destroys the named resource.",
         "deny_when": ["the call deletes anything"],
@@ -202,11 +200,11 @@ def test_the_choice_offers_exactly_the_three_verdicts():
     guaranteed by construction rather than by parsing."""
     request = build_request(_ctx())
     verdict = request.questions["verdict"]
-    assert verdict["type"] == "choice"
-    assert set(verdict["criteria"]) == {"approve", "deny", "escalate"}
+    assert isinstance(verdict, Choice)
+    assert set(verdict.criteria) == {"approve", "deny", "escalate"}
     # Each option says what it is FOR and what it is NOT for, which is what keeps
     # "the criteria are silent" from collapsing into "approve".
-    for option in verdict["criteria"].values():
+    for option in verdict.criteria.values():
         assert set(option) == {"what", "when", "not_for"}
 
 
@@ -216,7 +214,7 @@ def test_irreversibility_is_asked_separately_in_the_same_request():
     to do with it (see decide), the model does not."""
     request = build_request(_ctx())
     assert set(request.questions) == {"verdict", "irreversible"}
-    assert request.questions["irreversible"]["type"] == "noul"
+    assert isinstance(request.questions["irreversible"], Noul)
 
 
 # ---------------------------------------------------------------------------
@@ -386,84 +384,18 @@ def test_an_unrecognized_verdict_escalates():
 
 
 # ---------------------------------------------------------------------------
-# Worker-side wiring
+# Projection — the typed TypeSafe result into the answer decide() reads
 # ---------------------------------------------------------------------------
 
 
-def test_the_plugin_registers_the_approval_activity_unconditionally():
-    """Registered on every worker, extra or not: the workflow dispatches this activity by
-    NAME, and an unregistered name is a RETRYABLE Temporal error, which would hang every
-    gated tool call mid-approval instead of failing it once."""
-    from temporal_agent_harness.plugin import AgentHarnessPlugin
-
-    names = [
-        getattr(a, "__temporal_activity_definition").name
-        for a in AgentHarnessPlugin()._worker_activities
-    ]
-    assert JEV_TOOL_APPROVAL_ACTIVITY in names
-
-
-def test_a_worker_without_the_extra_fails_the_check_non_retryably(monkeypatch):
-    """So the approver turns it into an escalate and a human still resolves the gate."""
-    import builtins
-
-    from temporal_agent_harness.harness.jev_approvals.activity import (
-        JEV_MISSING_EXTRA_ERROR,
-        _require_jev_extra,
+def test_the_typesafe_result_projects_into_the_answer():
+    result = SystemOneResult(
+        response=SystemOneResponse.model_validate_json(
+            json.dumps(_jev_response("deny", 0.91, irreversible=0.77, model="jev-1.0"))
+        ),
+        request_id="req_42",
     )
-
-    real_import = builtins.__import__
-
-    def missing(name, *args, **kwargs):
-        if name == "typesafe_sdk":
-            raise ImportError("no typesafe_sdk")
-        return real_import(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", missing)
-    with pytest.raises(ApplicationError) as excinfo:
-        _require_jev_extra()
-    assert excinfo.value.type == JEV_MISSING_EXTRA_ERROR
-    assert excinfo.value.non_retryable is True
-    assert "temporal-agent-harness[jev]" in str(excinfo.value)
-
-
-async def test_the_activity_projects_typesafe_answers_into_the_typed_result(monkeypatch):
-    """The activity's only real job: ferry the workflow-composed questions and flatten the
-    SDK's answers into the model the workflow reads."""
-    from types import SimpleNamespace
-
-    from temporal_agent_harness.harness.jev_approvals import activity as activity_mod
-
-    seen: dict = {}
-
-    class FakeClient:
-        async def system_one(self, state, questions, model=None):
-            seen.update(state=state, questions=questions, model=model)
-            return SimpleNamespace(
-                model="jev-1.0",
-                request_id="req_42",
-                usage=SimpleNamespace(input_tokens=11, output_tokens=2),
-                choices={
-                    "verdict": SimpleNamespace(
-                        choice="deny",
-                        confidence=0.91,
-                        probabilities={"approve": 0.04, "deny": 0.91, "escalate": 0.05},
-                    )
-                },
-                nouls={"irreversible": SimpleNamespace(noul=0.77)},
-            )
-
-    monkeypatch.setattr(activity_mod, "_require_jev_extra", lambda: None)
-    monkeypatch.setattr(activity_mod, "_typesafe_client", FakeClient)
-
-    request = build_request(_ctx())
-    answer = await activity_mod.jev_tool_approval(request)
-
-    # Asked exactly what the workflow composed — the activity adds no prompt of its own,
-    # which is what makes the activity's INPUT in history the whole audit record.
-    assert seen["state"] == request.state
-    assert seen["questions"] == request.questions
-    assert seen["model"] == DEFAULT_JEV_MODEL
+    answer = JevApprovalAnswer.from_result(result)
 
     assert answer.model == "jev-1.0"
     assert answer.request_id == "req_42"
@@ -480,11 +412,11 @@ async def test_the_activity_projects_typesafe_answers_into_the_typed_result(monk
 # End to end — the approver driving a real gate in a real workflow
 # ---------------------------------------------------------------------------
 #
-# The Jev ACTIVITY is stood in for (a live model in a test would be neither cheap nor
-# deterministic), but everything around it is real: the workflow-side approver, dispatch of
-# the activity BY NAME, the composition, the approval gate, and the published events. What
-# this proves is the wiring that the pure tests above cannot — that a value returned from
-# jev_evaluator() is a working auto_mode_evaluator.
+# TypeSafe's HTTP endpoint is stood in for (a live model in a test would be neither cheap
+# nor deterministic), but everything around it is real: the workflow-side approver, the
+# TypeSafePlugin's system_one activity, the composition, the approval gate, and the
+# published events. What this proves is the wiring that the pure tests above cannot — that
+# a value returned from jev_evaluator() is a working auto_mode_evaluator.
 
 
 @agent.activity_tool_defn(auto_approval_criteria="financial")
@@ -588,52 +520,77 @@ class JevApprovalProbeAgent:
         return TextReply(text=result)
 
 
-def _fake_jev(verdict: str, confidence: float, irreversible: float):
-    """A stand-in Jev activity, registered under the real activity name.
+def _jev_response(
+    verdict: str, confidence: float, *, irreversible: float, model: str = "jev-test"
+) -> dict[str, Any]:
+    return {
+        "model": model,
+        "usage": {"input_tokens": 11, "output_tokens": 2},
+        "answers": {
+            "verdict": {
+                "type": "choice",
+                "choice": verdict,
+                "confidence": confidence,
+                "probabilities": {verdict: confidence},
+            },
+            "irreversible": {"type": "noul", "noul": irreversible},
+        },
+    }
 
-    It also captures the request, so the test can assert the workflow really did compose
-    the full question (policy, tool docstring, arguments, developer context) and hand it
-    over — the activity input is the audit record, and it is only worth anything if it is
-    complete.
+
+Transport = Callable[[httpx2.Request], httpx2.Response]
+
+
+def _fake_jev(
+    verdict: str, confidence: float, irreversible: float
+) -> tuple[Transport, list[dict[str, Any]]]:
+    """A stand-in for TypeSafe's HTTP endpoint, answering every request the same way.
+
+    It also captures each request body, so the test can assert the workflow really did
+    compose the full question (policy, tool docstring, arguments, developer context) and
+    hand it over — that body is exactly what leaves the worker, and the activity input in
+    history is only worth anything as an audit record if it is complete.
     """
-    seen: list[JevApprovalRequest] = []
+    seen: list[dict[str, Any]] = []
 
-    @activity.defn(name=JEV_TOOL_APPROVAL_ACTIVITY)
-    async def fake(request: JevApprovalRequest) -> JevApprovalAnswer:
-        seen.append(request)
-        return JevApprovalAnswer(
-            model="jev-test",
-            request_id="req_e2e",
-            verdict=verdict,
-            verdict_confidence=confidence,
-            verdict_probabilities={verdict: confidence},
-            irreversible=irreversible,
+    def transport(request: httpx2.Request) -> httpx2.Response:
+        seen.append(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            json=_jev_response(verdict, confidence, irreversible=irreversible),
+            headers={"x-request-id": "req_e2e"},
+            request=request,
         )
 
-    return fake, seen
+    return transport, seen
 
 
 @asynccontextmanager
-async def _jev_env(fake_activity):
-    env = await WorkflowEnvironment.start_time_skipping(
-        data_converter=pydantic_data_converter
-    )
-    task_queue = f"jev-approval-test-{uuid.uuid4()}"
-    async with Worker(
-        env.client,
-        task_queue=task_queue,
-        workflows=[JevApprovalProbeAgent],
-        activities=[
-            agent.tool_activity(refund_customer),
-            agent.tool_activity(refund_with_credential),
-            fake_activity,
-        ],
-        workflow_runner=UnsandboxedWorkflowRunner(),
-    ):
-        try:
-            yield env.client, task_queue
-        finally:
-            await env.shutdown()
+async def _jev_env(transport: Transport):
+    async with AsyncTypeSafeClient(
+        api_key="fake",
+        retry=RetryPolicy(max_retries=0),
+        transport=httpx2.MockTransport(transport),
+    ) as typesafe:
+        env = await WorkflowEnvironment.start_time_skipping(
+            data_converter=pydantic_data_converter
+        )
+        task_queue = f"jev-approval-test-{uuid.uuid4()}"
+        async with Worker(
+            env.client,
+            task_queue=task_queue,
+            workflows=[JevApprovalProbeAgent],
+            activities=[
+                agent.tool_activity(refund_customer),
+                agent.tool_activity(refund_with_credential),
+            ],
+            plugins=[TypeSafePlugin(typesafe)],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            try:
+                yield env.client, task_queue
+            finally:
+                await env.shutdown()
 
 
 async def _run_once(
@@ -696,7 +653,8 @@ async def test_end_to_end_approve_dispatches_the_tool_with_no_human():
     # the runner looked that name up in the live criteria, and the rules behind it are what
     # reached the model.
     assert len(seen) == 1
-    state = seen[0].state
+    assert seen[0]["model"] == DEFAULT_JEV_MODEL
+    state = seen[0]["state"]
     assert state["approval_criteria"] == {
         "what_calls_to_this_tool_do": (
             "Moves real money out to a customer. Cannot be taken back."
@@ -733,7 +691,7 @@ async def test_end_to_end_approve_dispatches_the_tool_with_no_human():
         "confidence": 0.95,
         "probabilities": {"approve": 0.95},
         "irreversible": 0.1,
-        "usage": {"input_tokens": None, "output_tokens": None},
+        "usage": {"input_tokens": 11, "output_tokens": 2},
         "thresholds": {"min_confidence": 0.8, "escalate_if_irreversible_above": 0.5},
         # Which rules produced it, and which generation of them. Criteria can be edited
         # mid-session, so a stored verdict that did not name its rulebook could not be
@@ -828,11 +786,13 @@ async def test_end_to_end_a_failing_jev_call_escalates_rather_than_approving():
     closes on ``auto_approval_evaluation_error`` carrying the failure — and the harness
     substitutes an escalate, so a human still resolves the gate."""
 
-    @activity.defn(name=JEV_TOOL_APPROVAL_ACTIVITY)
-    async def broken(request: JevApprovalRequest) -> JevApprovalAnswer:
-        raise ApplicationError("typesafe is down", non_retryable=True)
+    attempts: list[httpx2.Request] = []
 
-    async with _jev_env(broken) as (client, task_queue):
+    def down(request: httpx2.Request) -> httpx2.Response:
+        attempts.append(request)
+        return httpx2.Response(503, json={"message": "typesafe is down"}, request=request)
+
+    async with _jev_env(down) as (client, task_queue):
         handle = await client.start_workflow(
             JevApprovalProbeAgent.run,
             AgentConfig(),
@@ -857,10 +817,9 @@ async def test_end_to_end_a_failing_jev_call_escalates_rather_than_approving():
             ):
                 ev = item.data
                 events.append(ev)
-                if (
-                    ev.event.type == AgentEventType.TOOL_APPROVAL_REQUESTED
-                    and ev.event.tool_id == "r1"
-                ):
+                # Answered only once the evaluation has failed: a human answering while
+                # Jev is still being retried would cancel the evaluation instead.
+                if ev.event.type == AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR:
                     await agent_client.approve_tool("r1", approved=True, reason="ok by me")
                 if ev.event.type == AgentEventType.TURN_END:
                     break
@@ -878,7 +837,10 @@ async def test_end_to_end_a_failing_jev_call_escalates_rather_than_approving():
     failed = _one(events, AgentEventType.AUTO_APPROVAL_EVALUATION_ERROR)
     assert started.evaluation_id == failed.evaluation_id
     assert failed.evaluator == "jev_evaluator"
-    assert "typesafe is down" in failed.message
+    assert "503" in failed.message
+    # Bounded by DEFAULT_ACTIVITY_CONFIG, so an outage reaches a person instead of stalling
+    # the gate behind Temporal's unlimited default retries.
+    assert len(attempts) == 3
     resolved = _one(events, AgentEventType.TOOL_APPROVAL_RESOLVED)
     assert (resolved.approved, resolved.reason) == (True, "ok by me")
     assert _reply(events) == "refunded:20"
@@ -1011,9 +973,9 @@ async def test_an_injected_parameter_never_reaches_the_evaluator():
     "hidden from the model" has to mean hidden from it too, not merely from the one choosing
     the call.
 
-    Asserted against the ACTIVITY'S INPUT rather than against the context object, because the
-    activity input is the payload that actually leaves the worker: whatever is in it is what a
-    third party receives and what lands in workflow history forever. Scanned as serialized
+    Asserted against the HTTP REQUEST BODY rather than against the context object, because
+    that is the payload that actually leaves the worker: whatever is in it is what a third
+    party receives, and it is the activity input that lands in workflow history forever. Scanned as serialized
     JSON so the check cannot be fooled by the secret sitting somewhere unexpected in the state
     (nested under the criteria, the tool description, the operating context) instead of the
     argument it came in as."""
@@ -1027,11 +989,11 @@ async def test_an_injected_parameter_never_reaches_the_evaluator():
     request = seen[0]
 
     # The model-facing argument is there; the injected one is not, by name or by value.
-    assert request.state["call_arguments"] == {"amount": 20}
-    assert "api_token" not in request.state["call_arguments"]
+    assert request["state"]["call_arguments"] == {"amount": 20}
+    assert "api_token" not in request["state"]["call_arguments"]
 
     # Nothing anywhere in the request carries it — state, questions, model id and all.
-    serialized = request.model_dump_json()
+    serialized = json.dumps(request)
     assert INJECTED_SECRET not in serialized
     assert "api_token" not in serialized
 
@@ -1053,8 +1015,8 @@ async def test_an_injected_parameter_never_reaches_the_evaluator_from_an_inline_
         )
 
     assert len(seen) == 1
-    assert seen[0].state["call_arguments"] == {"amount": 20}
-    serialized = seen[0].model_dump_json()
+    assert seen[0]["state"]["call_arguments"] == {"amount": 20}
+    serialized = json.dumps(seen[0])
     assert INJECTED_SECRET not in serialized
     assert "api_token" not in serialized
     assert _reply(events) == "refunded:20"

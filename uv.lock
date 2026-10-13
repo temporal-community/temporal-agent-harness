@@ -3170,9 +3170,6 @@ genai = [
     { name = "google-auth" },
     { name = "google-genai" },
 ]
-jev = [
-    { name = "typesafe-sdk" },
-]
 nexus-mcp = [
     { name = "mcp" },
     { name = "openai-agents" },
@@ -3227,6 +3224,7 @@ examples = [
     { name = "openai-agents" },
     { name = "pydantic-ai-slim", extra = ["temporal"] },
     { name = "pydantic-monty" },
+    { name = "temporalio-typesafe" },
     { name = "typesafe-sdk" },
 ]
 
@@ -3249,9 +3247,8 @@ requires-dist = [
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'nexus-mcp'", specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], marker = "extra == 'openai-agents'", specifier = ">=1.31.0" },
     { name = "temporalio-typesafe", marker = "extra == 'typesafe'", specifier = ">=0.0.1,<0.1" },
-    { name = "typesafe-sdk", marker = "extra == 'jev'", specifier = ">=0.6.0" },
 ]
-provides-extras = ["genai", "s3", "openai-agents", "pydantic-ai", "ui", "code-mode", "jev", "nexus-mcp", "typesafe"]
+provides-extras = ["genai", "s3", "openai-agents", "pydantic-ai", "ui", "code-mode", "nexus-mcp", "typesafe"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3273,7 +3270,7 @@ dev = [
     { name = "temporal-nexus-mcp", editable = "nexus/mcp" },
     { name = "temporalio", extras = ["aioboto3"], specifier = ">=1.31.0" },
     { name = "temporalio", extras = ["opentelemetry"], specifier = ">=1.31.0" },
-    { name = "temporalio-typesafe", specifier = ">=0.0.1" },
+    { name = "temporalio-typesafe", specifier = ">=0.0.1,<0.1" },
     { name = "typesafe-sdk", specifier = ">=0.6.0" },
 ]
 examples = [
@@ -3284,6 +3281,7 @@ examples = [
     { name = "openai-agents", specifier = ">=0.22.0" },
     { name = "pydantic-ai-slim", extras = ["temporal"], specifier = ">=2.13" },
     { name = "pydantic-monty", specifier = "==1.0.0" },
+    { name = "temporalio-typesafe", specifier = ">=0.0.1,<0.1" },
     { name = "typesafe-sdk", specifier = ">=0.6.0" },
 ]
 
