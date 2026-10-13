@@ -73,7 +73,25 @@ def _serve(args: argparse.Namespace) -> None:
     # Imported at call time so `--help` on the other subcommand doesn't pay for FastAPI.
     from temporal_agent_harness.web.serve import run_server
 
-    run_server(*args.registry_paths, host=args.host, port=args.port)
+    paths = list(args.registry_paths)
+    if args.manifest:
+        from temporal_agent_harness.dev.manifest import load_manifest
+
+        paths += [str(p) for p in load_manifest(args.manifest).registry_paths()]
+    if not paths:
+        raise SystemExit("temporal-agent-harness serve: give registry paths or --manifest")
+    run_server(*paths, host=args.host, port=args.port)
+
+
+def _dev(args: argparse.Namespace) -> None:
+    from temporal_agent_harness.dev.runner import run_dev
+
+    run_dev(
+        args.manifest,
+        fresh=args.fresh,
+        watch=not args.no_watch,
+        only=[name for name in (args.only or "").split(",") if name],
+    )
 
 
 def _session_manager(args: argparse.Namespace) -> None:
@@ -141,10 +159,14 @@ def main(argv: list[str] | None = None) -> None:
     )
     serve.add_argument(
         "registry_paths",
-        nargs="+",
+        nargs="*",
         metavar="registry_path",
         help="Path(s) to agents.toml registries. One serves that registry standalone; "
         "several are merged so the UI lists all their agents.",
+    )
+    serve.add_argument(
+        "--manifest", default=None, metavar="PATH",
+        help="Serve the agent registries declared in a harness.toml project manifest.",
     )
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=8000)
@@ -177,6 +199,38 @@ def main(argv: list[str] | None = None) -> None:
         help="Worker identity reported to Temporal. Defaults to the SDK's own identity.",
     )
     session_manager.set_defaults(handler=_session_manager)
+
+    dev = subparsers.add_parser(
+        "dev",
+        help="Run a whole project locally from its harness.toml: Temporal, the session "
+        "manager, the web UI, and every worker.",
+        description="Run a harness project for local development from one command. Starts a "
+        "Temporal dev server (unless one is already reachable; its database is kept under "
+        ".harness/ so sessions survive a restart), the session-manager worker, the web UI and "
+        "API, and every [[workers]] entry whose required environment variables are set. "
+        "Restarts a worker when files under its watch paths change. Ctrl-C stops "
+        "everything it started.",
+    )
+    dev.add_argument(
+        "--manifest",
+        default="harness.toml",
+        metavar="PATH",
+        help="The project manifest (default: %(default)s).",
+    )
+    dev.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Start the local Temporal dev server with an empty database (discards every "
+        "session from earlier runs).",
+    )
+    dev.add_argument(
+        "--only",
+        default=None,
+        metavar="NAMES",
+        help="Start only these workers (comma-separated names).",
+    )
+    dev.add_argument("--no-watch", action="store_true", help="Don't restart on file changes.")
+    dev.set_defaults(handler=_dev)
 
     schema = subparsers.add_parser(
         "schema",

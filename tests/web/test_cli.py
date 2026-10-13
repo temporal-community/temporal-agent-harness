@@ -134,6 +134,22 @@ def test_bare_invocation_lists_both_subcommands(capsys: pytest.CaptureFixture[st
     out = capsys.readouterr().out
     assert "serve" in out
     assert "session-manager" in out
+    assert "dev" in out
+
+
+def test_dev_forwards_manifest_and_reload_options(monkeypatch):
+    captured = {}
+
+    def run_dev(manifest, **kwargs):
+        captured.update(manifest=manifest, **kwargs)
+
+    monkeypatch.setattr("temporal_agent_harness.dev.runner.run_dev", run_dev)
+    main(["dev", "--manifest", "custom.toml", "--fresh", "--no-watch", "--only", "a,b"])
+    assert captured == {
+        "manifest": "custom.toml", "fresh": True, "watch": False, "only": ["a", "b"],
+    }
+    # The runner resolves the connection after loading the project's environment file.
+    assert "TEMPORAL_ADDRESS" not in os.environ
 
 
 def test_unknown_subcommand_names_the_valid_choices(

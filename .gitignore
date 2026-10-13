@@ -20,6 +20,9 @@ htmlcov/
 .env
 .env.local
 
+# Persistent local Temporal database used by `just dev`.
+.harness/
+
 # Private Temporal connection profiles (e.g. Temporal Cloud creds / api_key). The committed
 # temporal.local.toml ships only a local-dev default; put your own profiles in a temporal.toml
 # and point an example's .env.local TEMPORAL_CONFIG_FILE at it.
