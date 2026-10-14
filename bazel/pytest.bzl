@@ -1,6 +1,7 @@
 """harness_pytest_test: this repo's pytest test, the kind Gazelle emits for every test module."""
 
 load("@aspect_rules_py//py:defs.bzl", "py_pytest_test")
+load("//bazel:package_collisions.bzl", "PACKAGE_COLLISIONS")
 
 _PYTEST = Label("@pypi//pytest")
 
@@ -48,6 +49,7 @@ def _harness_pytest_test_impl(name, visibility, srcs, deps, data, env, pytest_ar
         # Names the test's venv `<name>.venv`; rules_py's default `_<name>.venv` breaks the naming
         # rule for targets a symbolic macro declares.
         expose_venv = True,
+        package_collisions = PACKAGE_COLLISIONS,
     )
 
 harness_pytest_test = macro(

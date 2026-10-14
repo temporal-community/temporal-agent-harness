@@ -2,6 +2,7 @@
 
 load("@aspect_rules_py//py:defs.bzl", "py_binary", "py_library")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("//bazel:package_collisions.bzl", "PACKAGE_COLLISIONS")
 
 _MONTY = Label("//bazel:monty")
 
@@ -70,6 +71,7 @@ def _harness_module_binary_impl(name, visibility, srcs, main, module, deps, data
         # Names the binary's venv `<name>.venv`; rules_py's default `_<name>.venv` breaks the
         # naming rule for targets a symbolic macro declares.
         expose_venv = True,
+        package_collisions = PACKAGE_COLLISIONS,
     )
 
 harness_module_binary = macro(

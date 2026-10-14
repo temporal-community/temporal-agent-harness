@@ -3,6 +3,7 @@ load("@aspect_rules_py//py:defs.bzl", "py_venv", "py_venv_link")
 load("@aspect_rules_py//uv:defs.bzl", "gazelle_python_manifest")
 load("@buildifier_prebuilt//:rules.bzl", "buildifier")
 load("@pypi//:defs.bzl", "group_deps")
+load("//bazel:package_collisions.bzl", "PACKAGE_COLLISIONS")
 
 # Python targets are generated: one py_library / test per file, deps from its imports.
 #   bazel run //:gazelle                              # after adding, moving, or re-importing files
@@ -73,6 +74,7 @@ exports_files([
 # pyproject.toml's pytest config puts on sys.path.
 py_venv(
     name = "venv",
+    package_collisions = PACKAGE_COLLISIONS,
     deps = group_deps(),
 )
 
