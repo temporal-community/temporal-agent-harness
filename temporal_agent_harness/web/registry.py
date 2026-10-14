@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import json
 import tomllib
 from collections.abc import Iterable
 from pathlib import Path
 
-from temporal_agent_harness.web.session_manager import AgentDescriptor, AgentRegistry
+from temporal_agent_harness.harness.agent_schema import agent_init_data_schema_from_document
+from temporal_agent_harness.web.session_manager import AgentDescriptor, AgentRegistry, AgentStart
 
 _REQUIRED_FIELDS = ("key", "workflow_type", "task_queue", "label", "description")
 
 
 def load_agent_registry(path: Path | str) -> AgentRegistry:
-    """Parse an agent registry TOML file into an :class:`AgentRegistry`."""
+    """Parse an agent registry TOML file into an :class:`AgentRegistry`.
+
+    An entry's optional ``schema`` is the path, relative to the TOML file, of the agent's schema
+    document (``temporal-agent-harness schema module:Class -o X.schema.json``). Its init data
+    becomes the descriptor's :class:`AgentStart`; the agent's code is never imported.
+    """
 
     registry_path = Path(path)
     with registry_path.open("rb") as file:
@@ -34,6 +41,7 @@ def load_agent_registry(path: Path | str) -> AgentRegistry:
         if entry["key"] in seen_keys:
             raise ValueError(f"Duplicate agent key {entry['key']!r} in {registry_path}.")
         seen_keys.add(entry["key"])
+        schema = entry.get("schema")
         agents.append(
             AgentDescriptor(
                 key=entry["key"],
@@ -41,11 +49,25 @@ def load_agent_registry(path: Path | str) -> AgentRegistry:
                 task_queue=entry["task_queue"],
                 label=entry["label"],
                 description=" ".join(str(entry["description"]).split()),
-                agent=entry.get("agent"),
+                start=(
+                    None
+                    if schema is None
+                    else _agent_start(registry_path.parent / schema, entry["workflow_type"])
+                ),
             )
         )
 
     return AgentRegistry(agents=agents)
+
+
+def _agent_start(schema_path: Path, workflow_type: str) -> AgentStart:
+    document = json.loads(schema_path.read_text())
+    if document.get("agent") != workflow_type:
+        raise ValueError(
+            f"{schema_path} describes the workflow {document.get('agent')!r}, but its registry "
+            f"entry's workflow_type is {workflow_type!r}."
+        )
+    return AgentStart(init_data=agent_init_data_schema_from_document(document))
 
 
 def load_agent_registries(paths: Iterable[Path | str]) -> AgentRegistry:

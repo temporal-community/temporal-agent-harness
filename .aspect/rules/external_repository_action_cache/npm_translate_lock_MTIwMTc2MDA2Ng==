@@ -1,0 +1,7 @@
+# @generated
+# Input hashes for repository rule npm_translate_lock(name = "npm_codegen", pnpm_lock = "@@//packages/codegen:pnpm-lock.yaml").
+# This file should be checked into version control along with the pnpm-lock.yaml file.
+packages/codegen/package-lock.json=590286842
+packages/codegen/package.json=-851111957
+packages/codegen/pnpm-lock.yaml=49735510
+packages/codegen/pnpm-workspace.yaml=1592091721

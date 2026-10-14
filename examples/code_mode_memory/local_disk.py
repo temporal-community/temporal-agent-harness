@@ -25,8 +25,11 @@ from pydantic import BaseModel, Field
 
 from temporal_agent_harness.harness import agent
 
-MEMORIES_DIR = Path(__file__).parent / "memories"
-SKILLS_DIR = Path(__file__).parent / "skills"
+# Beside this file's real location: under Bazel it is a symlink in a runfiles tree, which neither
+# holds the example's folders nor is a place to keep memories.
+_EXAMPLE_DIR = Path(__file__).resolve().parent
+MEMORIES_DIR = _EXAMPLE_DIR / "memories"
+SKILLS_DIR = _EXAMPLE_DIR / "skills"
 
 
 class _Directory:

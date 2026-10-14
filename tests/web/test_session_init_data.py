@@ -1,16 +1,18 @@
 """Starting a session for an agent that takes init data.
 
-A registry entry's ``agent = "module:Class"`` lets the server read what the agent's
-``@agent.init`` takes after its config. ``GET /api/agents`` publishes it (required or optional,
-and the data model's JSON Schema) so a UI can render a form, and ``POST /api/sessions`` checks
-``data`` against it before asking the session manager, which passes it to the agent as its
-second workflow argument.
+A registry entry's start interface (read from the agent's generated schema document, never by
+importing the agent) says what its ``@agent.init`` takes after its config. ``GET /api/agents``
+publishes it (required or optional, and the data model's JSON Schema) so a UI can render a form,
+and ``POST /api/sessions`` refuses data the agent does not take or a missing required one before
+asking the session manager, which passes ``data`` to the agent as its second workflow argument.
+The agent validates the data itself.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -26,8 +28,19 @@ from temporal_agent_harness.harness.agent_protocol import (
     TextReply,
     ToolApprovalPolicy,
 )
-from temporal_agent_harness.web import AgentDescriptor, AgentRegistry, create_agent_harness_app
-from temporal_agent_harness.web.agent_starts import resolve_agent_starts
+from temporal_agent_harness.harness.agent_schema import (
+    agent_init_data_schema,
+    dump_agent_schema,
+    load_agent_class,
+)
+from temporal_agent_harness.web import (
+    AgentDescriptor,
+    AgentRegistry,
+    AgentStart,
+    create_agent_harness_app,
+    load_agent_registry,
+)
+from temporal_agent_harness.web.agent_starts import agent_starts
 from temporal_agent_harness.web.task_queue_status import RegistryWorkers
 from temporal_agent_harness.web.session_manager import (
     CreateSessionRequest,
@@ -58,22 +71,28 @@ class BriefedAgent:
         return TextReply(text=message.text)
 
 
-def _descriptor(key: str, workflow_type: str, agent_path: str | None) -> AgentDescriptor:
+def _descriptor(key: str, workflow_type: str, cls: type | None) -> AgentDescriptor:
     return AgentDescriptor(
         key=key,
         workflow_type=workflow_type,
         task_queue=f"{key}-q",
         label=key,
         description=key,
-        agent=agent_path,
+        start=None if cls is None else AgentStart(init_data=agent_init_data_schema(cls)),
     )
 
 
 REGISTRY = AgentRegistry(
     agents=[
-        _descriptor("briefed", "BriefedAgent", "tests.web.test_session_init_data:BriefedAgent"),
-        _descriptor("tictactoe", "TicTacToeAgent", "examples.tictactoe.workflow:TicTacToeAgentWorkflow"),
-        _descriptor("react", "ReactAgent", "examples.react_agent.workflow:ReactAgentWorkflow"),
+        _descriptor("briefed", "BriefedAgent", BriefedAgent),
+        _descriptor(
+            "tictactoe",
+            "TicTacToeAgent",
+            load_agent_class("examples.tictactoe.workflow:TicTacToeAgentWorkflow"),
+        ),
+        _descriptor(
+            "react", "ReactAgent", load_agent_class("examples.react_agent.workflow:ReactAgentWorkflow")
+        ),
         _descriptor("unnamed", "UnnamedAgent", None),
     ]
 )
@@ -116,7 +135,7 @@ def app_and_manager():
     manager = _FakeManagerHandle()
     app.state.temporal = _FakeTemporalClient()
     app.state.manager_handle = manager
-    app.state.agent_starts = resolve_agent_starts(REGISTRY)
+    app.state.agent_starts = agent_starts(REGISTRY)
     return app, manager
 
 
@@ -155,7 +174,6 @@ def test_valid_data_is_forwarded_to_the_manager(app_and_manager) -> None:
     ("workflow_type", "data", "message"),
     [
         ("BriefedAgent", None, "requires init data (Brief)"),
-        ("BriefedAgent", {"wrong": 1}, "Invalid init data for BriefedAgent"),
         ("ReactAgent", {"topic": "x"}, "takes no init data"),
     ],
 )
@@ -170,6 +188,12 @@ def test_bad_start_data_is_a_422_and_starts_nothing(
     assert manager.requests == []
 
 
+def test_data_the_agent_takes_is_forwarded_for_the_agent_to_validate(app_and_manager) -> None:
+    app, manager = app_and_manager
+    assert _start(app, "BriefedAgent", {"wrong": 1}).status_code == 200
+    assert manager.requests[0].data == {"wrong": 1}
+
+
 def test_optional_data_may_be_omitted(app_and_manager) -> None:
     app, manager = app_and_manager
     assert _start(app, "TicTacToeAgent", send_data=False).status_code == 200
@@ -182,19 +206,34 @@ def test_data_for_an_agent_whose_class_is_unknown_is_passed_through(app_and_mana
     assert manager.requests[0].data == {"anything": True}
 
 
-def test_an_entry_naming_a_class_with_another_workflow_type_is_rejected() -> None:
-    registry = AgentRegistry(
-        agents=[_descriptor("x", "NotTicTacToe", "examples.tictactoe.workflow:TicTacToeAgentWorkflow")]
+def _registry_file(tmp_path: Path, entry: str) -> Path:
+    path = tmp_path / "agents.toml"
+    path.write_text(
+        "[[agents]]\n"
+        'key = "briefed"\n'
+        'workflow_type = "BriefedAgent"\n'
+        'task_queue = "briefed-q"\n'
+        'label = "Briefed"\n'
+        'description = "Takes a brief."\n' + entry
     )
-    with pytest.raises(ValueError, match="is the workflow 'TicTacToeAgent'"):
-        resolve_agent_starts(registry)
+    return path
 
 
-def test_a_class_that_fails_to_import_is_logged_and_left_unknown(caplog) -> None:
-    registry = AgentRegistry(agents=[_descriptor("x", "Missing", "no.such.module:Agent")])
-    with caplog.at_level(logging.WARNING):
-        assert resolve_agent_starts(registry) == {}
-    assert "could not import" in caplog.text
+def test_a_registry_reads_each_agents_start_from_its_schema_file(tmp_path: Path) -> None:
+    (tmp_path / "BriefedAgent.schema.json").write_text(dump_agent_schema(BriefedAgent))
+    registry = load_agent_registry(_registry_file(tmp_path, 'schema = "BriefedAgent.schema.json"\n'))
+    assert registry.agents[0].start == AgentStart(init_data=agent_init_data_schema(BriefedAgent))
+
+
+def test_a_registry_entry_without_a_schema_has_an_unknown_start(tmp_path: Path) -> None:
+    assert load_agent_registry(_registry_file(tmp_path, "")).agents[0].start is None
+
+
+def test_a_schema_for_another_workflow_type_is_rejected(tmp_path: Path) -> None:
+    schema = json.loads(dump_agent_schema(BriefedAgent)) | {"agent": "SomeoneElse"}
+    (tmp_path / "x.schema.json").write_text(json.dumps(schema))
+    with pytest.raises(ValueError, match="describes the workflow 'SomeoneElse'"):
+        load_agent_registry(_registry_file(tmp_path, 'schema = "x.schema.json"\n'))
 
 
 def test_the_manager_passes_data_as_the_second_workflow_argument(monkeypatch) -> None:

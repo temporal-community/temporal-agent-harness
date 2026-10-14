@@ -20,7 +20,8 @@ await session.sendMessage("play", { cell: 5 });
 ```
 
 `src/protocol.ts` is the event stream's wire types, generated from `events.py`:
-`npm run generate:protocol` regenerates it (it needs `packages/codegen` and `uv`).
+`bazel run //packages/client:protocol_update` regenerates it, and `bazel test` fails when it is
+out of date.
 
 ## Development
 

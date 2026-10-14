@@ -1,0 +1,3 @@
+# Read by rules_js (Bazel), which installs this package from pnpm-lock.yaml. npm ignores it.
+# No dependency needs an install script.
+allowBuilds: {}

@@ -1,0 +1,76 @@
+{
+  "agent": "MontyChatSubagentAgent",
+  "source": "examples.monty.conversational_subagent_workflow:MontyChatSubagentWorkflow",
+  "init_data": null,
+  "handlers": {
+    "ask": {
+      "description": "Chat with the travel assistant. Describe the trip you want (flights, hotels,\ndates, traveler name) in plain text; the assistant converses, writes Python scripts,\nand runs them against a simulated travel backend via a script-runner subagent, then\nreplies with the results.",
+      "mid_turn": "enqueue",
+      "input": {
+        "$ref": "#/$defs/TextMessage"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    },
+    "set_model": {
+      "description": "Set the model this session uses for subsequent turns. Takes effect on the next\nmodel call, so a turn already in flight finishes on the model it started with.",
+      "mid_turn": "accept",
+      "input": {
+        "$ref": "#/$defs/SetModel"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {},
+  "$defs": {
+    "SetModel": {
+      "description": "Which model this Monty session should use for subsequent turns.",
+      "properties": {
+        "model": {
+          "enum": [
+            "gemini-3.8-flash",
+            "gemini-3.1-flash-lite"
+          ],
+          "title": "Model",
+          "type": "string"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "SetModel",
+      "type": "object"
+    },
+    "TextMessage": {
+      "description": "Free-form natural-language text from the user (the input to a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextMessage",
+      "type": "object"
+    },
+    "TextReply": {
+      "description": "A free-form natural-language reply (the output of a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextReply",
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,100 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
+load("//bazel:binary.bzl", "harness_module_binary")
+load("//bazel:codegen.bzl", "harness_client_sdk")
+
+py_library(
+    name = "activities",
+    srcs = ["activities.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":models",
+        "//temporal_agent_harness/harness:agent",
+        "@pypi//temporalio",
+        "@pypi//typesafe_sdk",
+    ],
+)
+
+py_library(
+    name = "board",
+    srcs = ["board.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//temporal_agent_harness/harness:agent",
+        "//temporal_agent_harness/harness/state:__init__",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "models",
+    srcs = ["models.py"],
+    visibility = ["//:__subpackages__"],
+    deps = ["@pypi//pydantic"],
+)
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":activities",  # keep
+        ":workflow",
+        "//temporal_agent_harness:plugin",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":activities",  # keep
+        ":board",  # keep
+        ":models",
+        "//temporal_agent_harness/harness:agent",
+        "//temporal_agent_harness/harness:agent_workflow",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_agent(
+    name = "TicTacToeAgent",
+    agent = "examples.tictactoe.workflow:TicTacToeAgentWorkflow",
+    description = """
+Play tic-tac-toe against an agent with NO LLM in the loop. Each of its turns is one
+TypeSafe System One call (jev) answering three typed questions over the board — a Choice
+over the empty cells, a Noul on whether you threaten to win, a Score on the outlook — and
+it acts on the Choice through a workflow tool that mutates the observable board state.
+Send `new_game` to start, then `play` with a cell number 1-9.""",
+    key = "tictactoe",
+    label = "Tic-Tac-Toe (TypeSafe)",
+    task_queue = "tictactoe-agent",
+    visibility = ["//packages/codegen:__pkg__"],
+    deps = [":workflow"],
+)
+
+# agents.toml and TicTacToeAgent.schema.json. `bazel test` fails when either is out of date;
+# `bazel run //examples/tictactoe:agents_update` rewrites them.
+harness_agent_registry(
+    name = "agents",
+    srcs = [
+        "TicTacToeAgent.schema.json",
+        "agents.toml",
+    ],
+    agents = [":TicTacToeAgent"],
+    visibility = [
+        "//packages/codegen:__pkg__",
+        "//tests/harness:__pkg__",
+    ],
+)
+
+# The agent's typed TypeScript client, client_sdk/TicTacToeAgent.ts:
+# `bazel run //examples/tictactoe:client_sdk_update` rewrites it.
+harness_client_sdk(
+    name = "client_sdk",
+    srcs = ["client_sdk/TicTacToeAgent.ts"],
+    agents = [":TicTacToeAgent"],
+)

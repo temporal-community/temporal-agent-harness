@@ -1,0 +1,122 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    visibility = ["//:__subpackages__"],
+)
+
+py_library(
+    name = "_code_mode_e2e_parent",
+    srcs = ["_code_mode_e2e_parent.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//temporal_agent_harness/harness:agent",
+        "//temporal_agent_harness/harness:agent_workflow",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_code_mode_vfs_e2e_parent",
+    srcs = ["_code_mode_vfs_e2e_parent.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_code_mode_e2e_parent",
+        "//temporal_agent_harness/harness:agent",
+        "//temporal_agent_harness/harness:agent_workflow",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_subagent_e2e_parent",
+    srcs = ["_subagent_e2e_parent.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//examples/monty:workflow",
+        "//temporal_agent_harness/harness:agent",
+        "//temporal_agent_harness/harness:agent_workflow",
+        "//temporal_agent_harness/harness:subagent_toolset",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_code_mode_e2e",
+    srcs = ["test_code_mode_e2e.py"],
+    deps = [
+        ":_code_mode_e2e_parent",
+        "//temporal_agent_harness:plugin",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "//tests:conftest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_code_mode_vfs_e2e",
+    srcs = ["test_code_mode_vfs_e2e.py"],
+    deps = [
+        ":_code_mode_e2e_parent",
+        ":_code_mode_vfs_e2e_parent",  # keep
+        "//temporal_agent_harness:plugin",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "//tests:conftest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_observable_trip_board",
+    srcs = ["test_observable_trip_board.py"],
+    deps = [
+        "//examples/monty:activities",
+        "//examples/monty:trip_board",
+        "//examples/monty:workflow",
+        "//temporal_agent_harness:plugin",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "//tests:conftest",
+        "@pypi//jsonpatch",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_subagent_e2e",
+    srcs = ["test_subagent_e2e.py"],
+    deps = [
+        ":_subagent_e2e_parent",
+        "//examples/monty:activities",
+        "//examples/monty:workflow",
+        "//temporal_agent_harness:plugin",
+        "//temporal_agent_harness/harness:agent_client",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "//tests:conftest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_workflow",
+    srcs = ["test_workflow.py"],
+    deps = [
+        "//examples/monty:activities",
+        "//examples/monty:workflow",
+        "//temporal_agent_harness:plugin",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "//tests:conftest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import errno
+import os
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -247,7 +248,8 @@ async def test_a_rename_across_mounts_is_refused():
         "out\n"
     )
     step, _ = await _run(script, mounts)
-    assert step.output == f"[Errno {errno.EXDEV}] Invalid cross-device link: '/b/f'"
+    # The message is the host's strerror: glibc and macOS word EXDEV differently.
+    assert step.output == f"[Errno {errno.EXDEV}] {os.strerror(errno.EXDEV)}: '/b/f'"
 
 
 # ---------------------------------------------------------------- routing

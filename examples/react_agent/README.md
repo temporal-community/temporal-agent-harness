@@ -75,10 +75,10 @@ Ask it a question and it chains tools to find the answer:
 | `human_tools.py` | The `ask_user` human-in-the-loop **callback tool** (`@agent.callback_tool_defn`), plus `HUMAN_TOOLS`. No activity body — fulfilled by a client. |
 | `worker.py` | Worker hosting the workflow. Declares no activities: `AgentHarnessPlugin(tools=...)` registers the four tool bodies (skipping the bodiless `ask_user`) and the OpenAI plugin registers the model activities. Also registers the F1 MCP provider and wires the harness streaming seam. |
 | `client.py` | A terminal client: a session picker that shows which sessions are **waiting on an `ask_user`**, then lets you answer open questions, chat, or create a session — all over HTTP. |
-| `agents.toml` | Registry entry that makes this agent selectable in the shared web UI. |
+| `agents.toml`, `ReactAgent.schema.json` | Registry entry that makes this agent selectable in the shared web UI, and the agent's schema it points at; generated from `BUILD.bazel` (`bazel run :agents_update`). |
 
 The agent is driven by the shared example stack — the packaged `SessionManagerWorkflow` worker plus
-the FastAPI app and web UI (`temporal-agent-harness serve`); registering it in `agents.toml` is all that takes.
+the FastAPI app and web UI (`temporal-agent-harness serve`); registering it (its `harness_agent` in `BUILD.bazel`, which generates `agents.toml`) is all that takes.
 Unlike the simpler examples, it **also ships a terminal `client.py`** — needed to answer `ask_user`,
 since the packaged web UI has no affordance for fulfilling a callback tool.
 

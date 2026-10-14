@@ -1,0 +1,40 @@
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+harness_pytest_test(
+    name = "test_activity_tool_defn",
+    srcs = ["test_activity_tool_defn.py"],
+    deps = [
+        "//temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
+        "//temporal_agent_harness/harness:agent",
+        "//tests:conftest",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_client_errors",
+    srcs = ["test_client_errors.py"],
+    deps = [
+        "//temporal_agent_harness/ai_sdks/google_genai_plugin:_gemini_activity",
+        "//temporal_agent_harness/ai_sdks/google_genai_plugin:_interactions_activity",
+        "//temporal_agent_harness/ai_sdks/google_genai_plugin:_models",
+        "//tests:conftest",
+        "@pypi//google_genai",
+        "@pypi//httpx",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_interactions_conversation",
+    srcs = ["test_interactions_conversation.py"],
+    deps = [
+        "//temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
+        "//temporal_agent_harness/ai_sdks/google_genai_plugin:_temporal_interactions",
+        "//tests:conftest",
+        "@pypi//google_genai",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)

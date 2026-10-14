@@ -1,0 +1,128 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":activity_fs",
+        ":mount_decl",
+        ":okf",
+        ":okf_tool",
+        ":stubs",
+        ":tool",
+        ":vfs",
+    ],
+)
+
+py_library(
+    name = "activity_fs",
+    srcs = ["activity_fs.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":okf",
+        ":vfs",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "driver",
+    srcs = ["driver.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":monty_stepper",
+        ":stubs",
+        ":vfs",
+        "//temporal_agent_harness/harness:agent_workflow",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "monty_stepper",
+    srcs = ["monty_stepper.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":stubs",
+        ":vfs",
+        "@pypi//pydantic_monty_client",
+    ],
+)
+
+py_library(
+    name = "mount_decl",
+    srcs = ["mount_decl.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":activity_fs",
+        ":okf",
+        ":vfs",
+        "//temporal_agent_harness/harness/state:__init__",
+        "//temporal_agent_harness/harness/state:decl",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "okf",
+    srcs = ["okf.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":vfs",
+        "@pypi//pydantic",
+        "@pypi//pyyaml",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "okf_tool",
+    srcs = ["okf_tool.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":activity_fs",
+        ":okf",
+        ":tool",
+        ":vfs",
+        "//temporal_agent_harness/harness:agent_workflow",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "stubs",
+    srcs = ["stubs.py"],
+    visibility = ["//:__subpackages__"],
+    deps = ["@pypi//pydantic"],
+)
+
+py_library(
+    name = "tool",
+    srcs = ["tool.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":driver",
+        ":stubs",
+        ":vfs",
+        "//temporal_agent_harness/harness:agent_workflow",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "vfs",
+    srcs = ["vfs.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//temporal_agent_harness/harness:agent_workflow",
+        "//temporal_agent_harness/harness/state:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)

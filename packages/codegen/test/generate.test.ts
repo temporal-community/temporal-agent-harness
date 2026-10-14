@@ -1,8 +1,8 @@
-// Tests for generateAgentTypes. The golden is generated from the Python side's golden schema
-// (tests/harness/golden/tictactoe.schema.json), so the two goldens pin the whole pipeline from
-// agent class to TypeScript. Regenerate this one after an intended change with:
-//   npm run build && node dist/src/cli.js ../../tests/harness/golden/tictactoe.schema.json \
-//       -o test/golden/TicTacToeAgent.ts
+// Tests for generateAgentTypes. The golden is generated from the tic-tac-toe agent's committed
+// schema (examples/tictactoe/TicTacToeAgent.schema.json, itself checked against the agent), so the
+// two pin the whole pipeline from agent class to TypeScript. Regenerate the golden after an
+// intended change with:
+//   bazel run //packages/codegen:golden_update
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -45,7 +45,7 @@ function doc(overrides: Partial<AgentSchemaDocument> = {}): AgentSchemaDocument 
 }
 
 test("tic-tac-toe matches the golden", async () => {
-  const schema = JSON.parse(read("../../tests/harness/golden/tictactoe.schema.json"));
+  const schema = JSON.parse(read("../../examples/tictactoe/TicTacToeAgent.schema.json"));
   assert.equal(await generateAgentTypes(schema), read("test/golden/TicTacToeAgent.ts"));
 });
 

@@ -1,11 +1,10 @@
 # ABOUTME: Tests for agent_schema(cls) — an agent's handlers and declared state as one JSON
-# Schema document. A golden file pins the tic-tac-toe agent's schema; the rest checks the
+# Schema document. The tic-tac-toe example's committed schema pins its output; the rest checks the
 # validation/serialization split, $defs naming, and that every example agent produces a
 # deterministic schema whose refs all resolve; then the same for protocol_schema().
 #
-# Regenerate the golden after an intended change with:
-#   uv run temporal-agent-harness schema examples.tictactoe.workflow:TicTacToeAgentWorkflow \
-#       -o tests/harness/golden/tictactoe.schema.json
+# After an intended change, rewrite the example's schema (and its agents.toml) with:
+#   bazel run //examples/tictactoe:agents_update
 
 from __future__ import annotations
 
@@ -21,6 +20,7 @@ from temporal_agent_harness.harness.agent_protocol import AgentConfig
 from temporal_agent_harness.harness.agent_protocol.events import AgentEventType
 from temporal_agent_harness.harness.agent_schema import (
     agent_init_data_schema,
+    agent_init_data_schema_from_document,
     agent_schema,
     dump_agent_schema,
     dump_protocol_schema,
@@ -29,7 +29,7 @@ from temporal_agent_harness.harness.agent_schema import (
 )
 from temporal_agent_harness.harness.state import HarnessState
 
-GOLDEN = Path(__file__).parent / "golden" / "tictactoe.schema.json"
+TICTACTOE_SCHEMA = Path(__file__).parents[2] / "examples" / "tictactoe" / "TicTacToeAgent.schema.json"
 
 EXAMPLE_AGENTS = [
     "examples.auto_mode.workflow:AutoModeTravelAgentWorkflow",
@@ -50,8 +50,8 @@ def _tictactoe() -> type:
     return load_agent_class("examples.tictactoe.workflow:TicTacToeAgentWorkflow")
 
 
-def test_tictactoe_matches_the_golden_schema():
-    assert dump_agent_schema(_tictactoe()) == GOLDEN.read_text()
+def test_tictactoe_matches_its_committed_schema():
+    assert dump_agent_schema(_tictactoe()) == TICTACTOE_SCHEMA.read_text()
 
 
 def test_handler_inputs_are_validation_mode_and_outputs_and_states_serialization_mode():
@@ -144,6 +144,39 @@ def test_init_data_schema_is_self_contained_for_a_form():
     assert optional is not None and optional["required"] is False
 
 
+class Leg(BaseModel):
+    city: str
+
+
+class Trip(BaseModel):
+    legs: list[Leg]
+    home: Leg | None = None
+
+
+@agent.defn(name="TripAgent")
+class TripAgent:
+    @agent.init
+    def __init__(self, config: AgentConfig, trip: Trip | None = None) -> None: ...
+
+    @agent.accepts
+    async def echo(self, message: Echo) -> Echo:
+        """Echo the message back."""
+        return message
+
+
+@pytest.mark.parametrize("cls", [BriefedAgent, EchoAgent, TripAgent])
+def test_the_init_data_schema_reads_the_same_from_the_document_as_from_the_class(cls: type):
+    # What a server reads from a generated schema file instead of importing the agent.
+    assert agent_init_data_schema_from_document(agent_schema(cls)) == agent_init_data_schema(cls)
+
+
+def test_the_init_data_schema_from_a_document_keeps_only_the_defs_it_reaches():
+    start = agent_init_data_schema_from_document(agent_schema(TripAgent))
+    assert start is not None and start["required"] is False
+    assert start["schema"]["title"] == "Trip"
+    assert set(start["schema"]["$defs"]) == {"Leg"}
+
+
 def test_a_model_used_both_ways_gets_an_input_and_an_output_definition():
     doc = agent_schema(EchoAgent)
     assert doc["handlers"]["echo"]["input"] == {"$ref": "#/$defs/Echo-Input"}
@@ -229,6 +262,7 @@ def test_every_example_agent_has_a_deterministic_self_contained_schema(
     for ref in _refs(doc):
         assert ref.startswith("#/$defs/")
         assert ref.removeprefix("#/$defs/") in doc["$defs"], ref
+    assert agent_init_data_schema_from_document(doc) == agent_init_data_schema(cls)
 
 
 def test_load_agent_class_explains_a_bad_target():

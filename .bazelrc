@@ -1,0 +1,34 @@
+# Python: 3.13 and the `dev` dependency group (what `uv run pytest` installs) unless asked otherwise.
+# The interpreter is a build setting: opt into another for a whole invocation with
+# --config=py311|py312|py314 (e.g. `bazel test //... --config=py311`). Each version is its own
+# configuration, so CI runs the matrix as one invocation per version.
+# rules_py rewrites rules_python's version flag to match its own inside Python targets; setting
+# both here keeps the rest of the build in that same configuration (see rules_py's
+# docs/interpreter.md).
+common --@aspect_rules_py//py:python_version=3.13
+common --@rules_python//python/config_settings:python_version=3.13
+common --@pypi//dep_group=dev
+
+# A command-line build setting does not change the output directory, so without a suffix every
+# version writes the same bazel-out tree and switching versions rebuilds and reruns everything.
+# 3.13, the default, keeps the unsuffixed tree that plain invocations use.
+common:py311 --@aspect_rules_py//py:python_version=3.11
+common:py311 --@rules_python//python/config_settings:python_version=3.11
+common:py311 --platform_suffix=py311
+common:py312 --@aspect_rules_py//py:python_version=3.12
+common:py312 --@rules_python//python/config_settings:python_version=3.12
+common:py312 --platform_suffix=py312
+common:py313 --@aspect_rules_py//py:python_version=3.13
+common:py313 --@rules_python//python/config_settings:python_version=3.13
+common:py314 --@aspect_rules_py//py:python_version=3.14
+common:py314 --@rules_python//python/config_settings:python_version=3.14
+common:py314 --platform_suffix=py314
+
+# Tests run hermetically: no inherited PATH entries or credentials leak in from the shell.
+common --incompatible_strict_action_env
+test --test_output=errors
+
+# Opt out of aspect's ruleset usage telemetry.
+common --repo_env=DO_NOT_TRACK=1
+
+try-import %workspace%/user.bazelrc

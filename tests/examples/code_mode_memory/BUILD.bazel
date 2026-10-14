@@ -1,0 +1,34 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+py_library(
+    name = "_memory_e2e_parent",
+    srcs = ["_memory_e2e_parent.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//examples/code_mode_memory:local_disk",
+        "//examples/code_mode_memory:workflow",
+        "//temporal_agent_harness/harness:agent",
+        "//temporal_agent_harness/harness:agent_workflow",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_memory_example",
+    srcs = ["test_memory_example.py"],
+    deps = [
+        ":_memory_e2e_parent",
+        "//examples/code_mode_memory:local_disk",
+        "//examples/code_mode_memory:workflow",
+        "//temporal_agent_harness:plugin",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "//temporal_agent_harness/harness/code_mode:activity_fs",
+        "//tests:conftest",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)

@@ -1,0 +1,44 @@
+load("//bazel:dev.bzl", "harness_dev")
+
+# Every example except nexus_hello, which Bazel does not build.
+EXAMPLES = [
+    "agent_dag",
+    "auto_mode",
+    "callback_tools/coding_agent",
+    "callback_tools/wiki_agent",
+    "code_mode_memory",
+    "monty",
+    "openai_hello",
+    "pydantic_ai_hello",
+    "react_agent",
+    "tictactoe",
+]
+
+# `bazel run //examples:<target> -- [example ...]`, every example when none are named (the root
+# justfile's dev, workers, and server recipes). Output lines carry their program's label; Ctrl-C
+# stops them all.
+
+# The session manager, the server over the chosen examples' registries, and their workers.
+harness_dev(
+    name = "dev",
+    cli = "//temporal_agent_harness/web:cli",
+    examples = EXAMPLES,
+    server = True,
+    session_manager = True,
+    workers = True,
+)
+
+# The chosen examples' workers.
+harness_dev(
+    name = "workers",
+    examples = EXAMPLES,
+    workers = True,
+)
+
+# The server over the chosen examples' registries on http://localhost:8000.
+harness_dev(
+    name = "server",
+    cli = "//temporal_agent_harness/web:cli",
+    examples = EXAMPLES,
+    server = True,
+)
