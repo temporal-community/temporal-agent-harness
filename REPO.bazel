@@ -1,3 +1,5 @@
+"""Repository-wide settings: the directories Bazel never looks in."""
+
 ignore_directories([
     # Nexus (Go connectors, nexus/mcp, nexgen) is not built by Bazel.
     "nexus",

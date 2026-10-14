@@ -129,8 +129,9 @@ of truth for Python dependencies. Nexus (`nexus/`, nexgen) is not built by Bazel
 bazel test //...                          # every test on Python 3.13
 bazel test //... --config=py311           # the same on 3.11 (also py312, py314)
 bazel test //tests/state:test_paths --test_filter=escaped  # one module, pytest -k
-bazel run //:gazelle                      # after adding, moving, or changing imports of .py files
-bazel run //:gazelle_python_manifest.update   # after changing uv.lock
+just gazelle                              # after adding, moving, or changing imports of .py files,
+                                          # or changing uv.lock (gazelle_python.yaml, then BUILD files)
+just buildifier                           # format and lint-fix every Bazel file
 bazel run //:venv_link                    # link ./.venv-bazel for an IDE interpreter
 bazel run //examples/monty:worker         # an example's agent worker
 bazel run //examples/tictactoe:agents_update     # rewrite an example's agents.toml and schemas
@@ -142,7 +143,9 @@ bazel run //packages/client:protocol_update        # rewrite packages/client/src
   with `deps` from that file's imports, so `bazel test` reruns only the tests a change can reach.
   Directives live in the root `BUILD.bazel`. Gazelle cannot see a module loaded by name (e.g.
   `load_agent_class("examples.x.workflow:Agent")`) or `from . import x`; those deps are added by
-  hand with `# keep`, which Gazelle preserves.
+  hand with `# keep`, which Gazelle preserves. CI (`bazel-files` in `tests.yml`) fails when
+  `just gazelle` would change anything or buildifier finds a file unformatted or with a lint
+  warning, so run `just gazelle` and `just buildifier` before pushing.
 - **Python** uses [aspect rules_py](https://github.com/aspect-build/rules_py) 2.x: its uv
   extension reads `uv.lock` into the `@pypi` hub (the `dev` dependency group), and it provisions
   the interpreters. The interpreter is a build setting, 3.13 by default; `--config=py3XX` selects

@@ -16,8 +16,10 @@ bazel_dep(name = "rules_python", version = "2.4.1")
 bazel_dep(name = "rules_shell", version = "0.8.0")
 bazel_dep(name = "tar.bzl", version = "0.10.9")
 
-# Gazelle writes the Python BUILD targets (`bazel run //:gazelle`).
+# Gazelle writes the Python BUILD targets (`just gazelle`), and buildifier formats and lints every
+# Starlark file (`just buildifier`).
 bazel_dep(name = "aspect_gazelle_prebuilt", version = "0.0.26", dev_dependency = True)
+bazel_dep(name = "buildifier_prebuilt", version = "10.1.0", dev_dependency = True)
 
 # ---------------------------------------------------------------------------------------------
 # Python interpreters: every version the package claims (requires-python >=3.11, classifiers

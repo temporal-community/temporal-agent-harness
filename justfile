@@ -43,6 +43,20 @@ package: app-build app-check
     rm -rf "{{justfile_directory()}}/dist"
     uv build
 
+# After adding, moving, or changing the imports of a .py file, or changing uv.lock. CI fails while
+# either is out of date.
+#
+# Regenerate the Bazel build: gazelle_python.yaml from uv.lock, then every Python BUILD target.
+gazelle:
+    bazel run //:gazelle_python_manifest.update
+    bazel run //:gazelle
+
+# CI fails on anything this would change, and on lint warnings it cannot fix.
+#
+# Format every Bazel file and apply buildifier's lint fixes.
+buildifier:
+    bazel run //:buildifier
+
 # Minimum `temporal` CLI for the Nexus recipes. Older builds reject the dynamic config
 # keys below, so fail here rather than at the first Nexus call.
 temporal_cli_min := "1.9.1"

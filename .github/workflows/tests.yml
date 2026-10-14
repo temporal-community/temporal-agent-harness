@@ -65,6 +65,35 @@ jobs:
           find ~/.cache/bazel-disk -type f ! -newer "$RUNNER_TEMP/bazel-build-start" -delete
           du -sh ~/.cache/bazel-disk
 
+  bazel-build-files:
+    name: Bazel files are generated and formatted
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: ${{ env.SAVE_CACHE }}
+
+      # MODULE.bazel.lock is left out: Bazel records platform-specific facts in it, so a Linux
+      # run may rewrite a lockfile written on macOS without anything being out of date.
+      - name: BUILD files and gazelle_python.yaml match what `just gazelle` writes
+        run: |
+          bazel run //:gazelle_python_manifest.update
+          bazel run //:gazelle
+          changed="$(git status --porcelain -- . ':!MODULE.bazel.lock')"
+          if [ -n "$changed" ]; then
+            echo "::error::Generated Bazel files are out of date. Run \`just gazelle\` and commit the result."
+            echo "$changed"
+            git diff -- . ':!MODULE.bazel.lock'
+            exit 1
+          fi
+
+      - name: Bazel files are formatted and lint-free (`just buildifier` fixes most)
+        run: bazel run //:buildifier.check
+
   # TEMPORARY: the tests Bazel does not run yet, run under uv instead. Each group below says why.
   # When Bazel runs a group, delete it here; when none are left, delete this job.
   pytest-outside-bazel:
@@ -79,7 +108,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
           cache-suffix: py${{ matrix.python-version }}
