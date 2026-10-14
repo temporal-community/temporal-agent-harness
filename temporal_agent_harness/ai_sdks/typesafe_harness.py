@@ -3,7 +3,8 @@
 The provider plugin owns execution, retries and native response decoding. This
 adapter publishes one workflow-side span per call, including all its retries.
 Install ``temporal-agent-harness[typesafe]`` and register ``TypeSafePlugin``
-before ``AgentHarnessPlugin``. Jev tool-approval evaluation is independent.
+before ``AgentHarnessPlugin``. The Jev tool-approval evaluator in
+:mod:`temporal_agent_harness.ai_sdks.jev` uses the same plugin.
 """
 
 from __future__ import annotations

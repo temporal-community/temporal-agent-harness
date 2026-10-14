@@ -1,10 +1,13 @@
-"""``jev_evaluator`` — the harness's builtin auto mode evaluator, backed by Jev.
+"""``jev_evaluator`` — an auto mode evaluator for tool approvals, backed by Jev.
 
 The MECHANISM half of auto mode. The RULEBOOK is
 :class:`~temporal_agent_harness.harness.agent_protocol.AutoApprovalCriteria`, which reaches
 this evaluator on the context rather than being closed over here — so the operator's rules
 outlive a change of evaluator, and this one holds no configuration of its own beyond which
 model to ask::
+
+    with workflow.unsafe.imports_passed_through():
+        from temporal_agent_harness.ai_sdks.jev import jev_evaluator
 
     self._runner = AgentWorkflowRunner(
         config,
@@ -39,6 +42,10 @@ and each tool names its own default set, which the two above outrank::
     @agent.activity_tool_defn(auto_approval_criteria="financial")
     async def issue_refund(order_id: str, amount_cents: int) -> Receipt: ...
 
+The model call goes through ``temporalio.typesafe``: the worker registers
+``TypeSafePlugin`` (before ``AgentHarnessPlugin``), which owns the TypeSafe client, its
+credentials, and the ``system_one`` activity this evaluator dispatches.
+
 WHY JEV AND NOT A GENERATIVE MODEL: an approval gate is a *classification* with
 consequences, and what it needs back is a decision plus a calibrated number saying how
 sure the model is — not an essay to parse. Jev answers a typed Choice over exactly three
@@ -56,7 +63,7 @@ SAFE BY CONSTRUCTION, in four ways:
 
 1. **Escalating is the default answer**, not approving. Every path that is not a confident
    approve or a confident deny — low confidence, an unrecognized label, an irreversible
-   call, a TypeSafe outage, a worker missing the ``jev`` extra — ends at the human gate.
+   call, a TypeSafe outage, a worker without ``TypeSafePlugin`` — ends at the human gate.
    The approver never fails open.
 2. **It is only reached when the operator switched auto mode on.** The gate consults it
    only for calls whose live :class:`ToolApprovalPolicy` has ``auto_mode_enabled``; it
@@ -78,14 +85,10 @@ property of auto mode, so it must not depend on an evaluator implementation reme
 check. Hence ``ctx.criteria_set`` is non-optional, and an unconfigured auto mode costs zero
 and changes nothing about which calls reach a person.
 
-Every decision is auditable from workflow history alone: the activity's input is the exact
-state and questions Jev was asked (criteria included, resolved), its output the raw answers,
-and the resulting verdict plus its numbers, the set that governed it, and the criteria
-generation are published as the ``tool_approval_resolved`` reason and details.
-
-This module is WORKFLOW-SAFE. It imports no TypeSafe SDK — it builds plain dicts and
-dispatches the activity by name — so the optional ``jev`` extra is needed only on the
-WORKER that runs :mod:`.activity`.
+Every decision is auditable from workflow history alone: the ``system_one`` activity's input
+is the exact state and questions Jev was asked (criteria included, resolved), its output the
+raw answers, and the resulting verdict plus its numbers, the set that governed it, and the
+criteria generation are published as the ``tool_approval_resolved`` reason and details.
 """
 
 from __future__ import annotations
@@ -94,7 +97,17 @@ from collections.abc import Callable, Mapping
 from datetime import timedelta
 from typing import Any
 
-from temporalio import workflow
+try:
+    from temporalio.typesafe.workflow import SystemOneResult, TemporalTypeSafe
+    from typesafe_sdk import Choice, Noul
+except ModuleNotFoundError as exc:
+    if exc.name not in {"temporalio.typesafe", "typesafe_sdk"}:
+        raise
+    raise ImportError(
+        "jev_evaluator requires pip install 'temporal-agent-harness[typesafe]'"
+    ) from exc
+
+from pydantic import BaseModel, Field, JsonValue
 from temporalio.common import RetryPolicy
 from temporalio.workflow import ActivityConfig
 
@@ -106,11 +119,20 @@ from temporal_agent_harness.harness.agent_protocol import (
 )
 from temporal_agent_harness.harness.agent_workflow import AUTO_MODE_EVALUATOR_ATTR
 
-from .models import (
-    DEFAULT_JEV_MODEL,
-    JEV_TOOL_APPROVAL_ACTIVITY,
-    JevApprovalAnswer,
-    JevApprovalRequest,
+# TypeSafe resolves ``jev-latest`` to a concrete release; the answer's ``model`` reports which
+# one actually judged the call, so an audit of an approval decision can name the exact model
+# that made it.
+DEFAULT_JEV_MODEL = "jev-latest"
+
+# One Jev call sits on the critical path of every gated tool call, so the gate is kept
+# short and the retries few: an approval that cannot be reached quickly should become a
+# question for a human, not a turn that stalls behind a retry loop. The bounded attempts
+# also cover a worker without ``TypeSafePlugin``, where Temporal's "activity not registered"
+# error is retryable and would otherwise stall the gate indefinitely.
+DEFAULT_ACTIVITY_CONFIG = ActivityConfig(
+    start_to_close_timeout=timedelta(seconds=30),
+    retry_policy=RetryPolicy(maximum_attempts=3),
+    summary="jev_approval",
 )
 
 # The Choice labels Jev picks between. They are the wire form of ``AutoApprovalVerdict`` and
@@ -122,17 +144,61 @@ _VERDICT_LABELS: dict[str, AutoApprovalVerdict] = {
     "escalate": AutoApprovalVerdict.ESCALATE,
 }
 
-# One Jev call sits on the critical path of every gated tool call, so the gate is kept
-# short and the retries few: an approval that cannot be reached quickly should become a
-# question for a human, not a turn that stalls behind a retry loop.
-DEFAULT_ACTIVITY_CONFIG = ActivityConfig(
-    start_to_close_timeout=timedelta(seconds=30),
-    retry_policy=RetryPolicy(maximum_attempts=3),
-    summary="jev_approval",
+
+class JevApprovalRequest(BaseModel):
+    """One System One call: the state describing a gated tool call, and the questions to
+    ask about it."""
+
+    state: dict[str, JsonValue]
+    """The JSON state Jev judges — the tool, its arguments, and the operator's policy."""
+    questions: dict[str, Choice | Noul]
+    """The typed questions, keyed by the name their answer comes back under."""
+
+
+class JevApprovalAnswer(BaseModel):
+    """Jev's typed answers about one gated tool call.
+
+    Raw judgments only: this carries what the model said, never what the harness decided
+    from it. Composing these numbers into an approve/deny/escalate verdict is code's job
+    (see :func:`decide`), so the thresholds can change — or be audited against a past
+    decision — without re-running inference.
+    """
+
+    model: str
+    """The model that actually answered (the API's resolved id)."""
+    request_id: str | None = None
+    """TypeSafe's id for the call, for correlating with their side, when it reported one."""
+    verdict: str
+    """The highest-probability label of the ``verdict`` Choice: approve / deny / escalate."""
+    verdict_confidence: float
+    """How concentrated the ``verdict`` distribution is (0-1)."""
+    verdict_probabilities: dict[str, float] = Field(default_factory=dict)
+    """The full distribution over the three verdicts, which sums to 1."""
+    irreversible: float
+    """Probability that the call's effect could not be undone if it turned out to be wrong."""
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+    @classmethod
+    def from_result(cls, result: SystemOneResult) -> JevApprovalAnswer:
+        """Project the answers to :func:`build_request`'s questions out of a TypeSafe result."""
+        response = result.response
+        verdict = response.choices["verdict"]
+        return cls(
+            model=response.model,
+            request_id=result.request_id,
+            verdict=verdict.choice,
+            verdict_confidence=verdict.confidence,
+            verdict_probabilities=dict(verdict.probabilities),
+            irreversible=response.nouls["irreversible"].noul,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+        )
+
+
+ExtraState = (
+    Mapping[str, JsonValue] | Callable[[AutoApprovalContext], Mapping[str, JsonValue]]
 )
-
-
-ExtraState = Mapping[str, Any] | Callable[[AutoApprovalContext], Mapping[str, Any]]
 
 
 def jev_evaluator(
@@ -151,20 +217,23 @@ def jev_evaluator(
     to wait.
 
     Args:
-        model: TypeSafe model id; ``None`` takes the client's own default.
+        model: TypeSafe model id; ``None`` takes the worker's TypeSafe client default.
         extra_state: Additional JSON state to show Jev alongside the call, on top of the
             criteria's own serializable ``context``. Either a mapping or a callable taking
             the :class:`AutoApprovalContext`. Use the callable form for facts that must be
             read from LIVE agent state per call — it runs IN-WORKFLOW on every gated call,
             so it must be deterministic and must not do I/O; read from the agent's own
             state, never from the outside world.
-        activity_config: Timeout/retry overrides for the Jev call. Defaults to
+        activity_config: Timeout/retry overrides for the Jev call, merged over
             :data:`DEFAULT_ACTIVITY_CONFIG`.
 
     Returns:
         An async callable of the :data:`AutoModeEvaluator` shape.
     """
-    config: ActivityConfig = {**(activity_config or DEFAULT_ACTIVITY_CONFIG)}
+    typesafe = TemporalTypeSafe(
+        model=model,
+        activity_config={**DEFAULT_ACTIVITY_CONFIG, **(activity_config or {})},
+    )
 
     async def approve(ctx: AutoApprovalContext) -> AutoApprovalDecision:
         # No "are there any rules?" check, deliberately. The harness guarantees there are —
@@ -173,23 +242,16 @@ def jev_evaluator(
         # ``AgentWorkflowRunner._auto_mode_context``). That guarantee is why
         # ``ctx.criteria_set`` is non-optional, and why this function has no way to spend a
         # model call on an empty rulebook.
-        request = build_request(
-            ctx, model=model, extra_state=_resolve_extra_state(extra_state, ctx)
-        )
+        request = build_request(ctx, extra_state=_resolve_extra_state(extra_state, ctx))
         # Deliberately NOT wrapped in try/except. A TypeSafe outage is an evaluation that
         # FAILED, not one that abstained, and the harness already draws that distinction on
         # the stream: it catches the exception, publishes ``auto_approval_evaluation_error``
         # with the failure, and substitutes an escalate. Catching it here would flatten a
         # failure into a normal verdict and lose that.
-        answer: JevApprovalAnswer = await workflow.execute_activity(
-            JEV_TOOL_APPROVAL_ACTIVITY,
-            request,
-            result_type=JevApprovalAnswer,
-            **config,
-        )
+        result = await typesafe.system_one(request.state, request.questions)
         min_confidence, irreversible_ceiling = ctx.thresholds
         return decide(
-            answer,
+            JevApprovalAnswer.from_result(result),
             min_confidence=min_confidence,
             escalate_if_irreversible_above=irreversible_ceiling,
             criteria_set_name=ctx.criteria_set_name,
@@ -205,7 +267,7 @@ def jev_evaluator(
 
 def _resolve_extra_state(
     extra_state: ExtraState | None, ctx: AutoApprovalContext
-) -> Mapping[str, Any] | None:
+) -> Mapping[str, JsonValue] | None:
     if extra_state is None:
         return None
     if callable(extra_state):
@@ -213,7 +275,9 @@ def _resolve_extra_state(
     return extra_state
 
 
-def _rules(criteria_set: AutoApprovalCriteriaSet, ctx: AutoApprovalContext) -> dict[str, Any]:
+def _rules(
+    criteria_set: AutoApprovalCriteriaSet, ctx: AutoApprovalContext
+) -> dict[str, JsonValue]:
     """The operator's rules as JSON, flattened to exactly what the model must weigh.
 
     Empty rule lists are omitted rather than sent as ``[]``: an absent key reads as "the
@@ -221,7 +285,7 @@ def _rules(criteria_set: AutoApprovalCriteriaSet, ctx: AutoApprovalContext) -> d
     toward ``escalate``, whereas an empty list invites a model to read it as "nothing is
     forbidden".
     """
-    out: dict[str, Any] = {}
+    out: dict[str, JsonValue] = {}
     if criteria_set.effect:
         out["what_calls_to_this_tool_do"] = criteria_set.effect
     if criteria_set.approve_when:
@@ -238,8 +302,7 @@ def _rules(criteria_set: AutoApprovalCriteriaSet, ctx: AutoApprovalContext) -> d
 def build_request(
     ctx: AutoApprovalContext,
     *,
-    model: str | None = DEFAULT_JEV_MODEL,
-    extra_state: Mapping[str, Any] | None = None,
+    extra_state: Mapping[str, JsonValue] | None = None,
 ) -> JevApprovalRequest:
     """The exact System One request asked about one gated call.
 
@@ -251,7 +314,7 @@ def build_request(
     same state, so TypeSafe answers them in parallel and the second costs no extra
     round-trip.
     """
-    state: dict[str, Any] = {
+    state: dict[str, JsonValue] = {
         "situation": (
             "An AI agent wants to run a tool. You are the approval gate that decides "
             "whether the call may run unattended, must be refused, or has to be shown to "
@@ -270,11 +333,9 @@ def build_request(
 
     return JevApprovalRequest(
         state=state,
-        model=model,
         questions={
-            "verdict": {
-                "type": "choice",
-                "instructions": {
+            "verdict": Choice(
+                instructions={
                     "question": (
                         "Under the operator's rules in `approval_criteria`, and those "
                         "rules only, what should happen to the call described by `tool` "
@@ -301,7 +362,7 @@ def build_request(
                         "is available and asking costs almost nothing; guessing does not.",
                     ],
                 },
-                "criteria": {
+                criteria={
                     "approve": {
                         "what": "Run the call now, unattended, with no human review.",
                         "when": (
@@ -345,15 +406,14 @@ def build_request(
                         ),
                     },
                 },
-            },
-            "irreversible": {
-                "type": "noul",
-                "instructions": (
+            ),
+            "irreversible": Noul(
+                instructions=(
                     "Independently of whether the call should be allowed: if this call "
                     "runs and turns out to have been a mistake, is its effect one that "
                     "cannot be taken back?"
                 ),
-                "criteria": {
+                criteria={
                     "true": (
                         "Running it causes something that cannot be undone from inside "
                         "this system afterwards — data or a resource destroyed, money "
@@ -364,7 +424,7 @@ def build_request(
                         "back by a later call."
                     ),
                 },
-            },
+            ),
         },
     )
 
@@ -459,7 +519,7 @@ def _details(
     escalate_if_irreversible_above: float | None,
     criteria_set_name: str,
     criteria_version: int,
-) -> dict[str, Any]:
+) -> dict[str, JsonValue]:
     """The reviewable record of one Jev evaluation: what the model said, the numbers
     applied to it, and which rules those came from.
 

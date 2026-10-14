@@ -48,7 +48,7 @@
 # (see the ``tool_approval`` update + ``ToolApprovalRequested``/``ToolApprovalResolved``).
 #
 # AUTO MODE is that policy's fourth layer: with ``auto_mode_enabled`` a gated call is first
-# put to the runner's ``auto_mode_evaluator=`` (``agent.jev_evaluator()`` is the builtin),
+# put to the runner's ``auto_mode_evaluator=`` (``ai_sdks.jev.jev_evaluator()`` is one),
 # which may approve it, deny it, or escalate it to the human gate anyway. OFF by default, so
 # wiring an evaluator alone changes nothing — an operator wanting only their static allow-list
 # plus their own eyes leaves it off. A tool names the criteria set it should be judged against::
@@ -120,7 +120,6 @@ from temporal_agent_harness.harness.code_mode import (
     vfs_mount,
 )
 from temporal_agent_harness.harness.state.decl import StateDecl, state
-from temporal_agent_harness.harness.jev_approvals import jev_evaluator
 from temporal_agent_harness.harness.subagent_toolset import (
     SubagentToolPolicy,
     subagent_toolset,
@@ -156,7 +155,6 @@ __all__ = [
     "VFSMount",
     "defn",
     "init",
-    "jev_evaluator",
     "StateDecl",
     "SubagentToolPolicy",
     "state",

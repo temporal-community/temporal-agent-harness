@@ -62,7 +62,6 @@ from temporalio.converter import DataConverter, DefaultPayloadConverter, Externa
 from temporalio.plugin import SimplePlugin
 from temporalio.worker import WorkerConfig
 
-from temporal_agent_harness.harness.jev_approvals.activity import JEV_APPROVAL_ACTIVITIES
 from temporal_agent_harness.utils.large_payload import DEFAULT_PAYLOAD_STORAGE
 
 if TYPE_CHECKING:
@@ -156,12 +155,6 @@ class AgentHarnessPlugin(SimplePlugin):
       hand-passed ``data_converter=`` both survive.
     * **Subagent activity** — ``run_subagent_turn``, bound to the worker's own ``Client`` so it
       can drive child agents. Every agent built with ``agent.subagent_toolset(...)`` needs it.
-    * **Jev approval activity** — the model call behind
-      :func:`~temporal_agent_harness.harness.jev_approvals.jev_evaluator`, registered
-      unconditionally: the workflow dispatches it by name, so leaving the name unregistered on a worker without the
-      optional ``jev`` extra would make Temporal retry forever and stall every gated tool
-      call mid-approval. The extra is checked per call instead, and a worker without it
-      fails the check once and escalates the call to a human.
     * **Tool activities** — the durable body of each ``@agent.activity_tool_defn`` tool in
       ``tools``.
     * **Filesystem activities** — the ``vfs.<name>.*`` activities of each
@@ -200,7 +193,6 @@ class AgentHarnessPlugin(SimplePlugin):
         self._worker_activities: list[Callable[..., Any]] = [
             *_tool_activities(tools),
             *_filesystem_activities(filesystems),
-            *JEV_APPROVAL_ACTIVITIES,
         ]
 
         def data_converter(converter: DataConverter | None) -> DataConverter:
@@ -250,9 +242,8 @@ def _merge_activities(
 
     Temporal rejects a worker with two activities of the same name, and the harness's
     activities are exactly the ones a worker written before this plugin registered by hand —
-    so a half-migrated worker (or one that passes ``JEV_APPROVAL_ACTIVITIES`` explicitly) keeps
-    working instead of failing at startup. Registration is first-one-wins: an explicitly
-    passed activity is never displaced by the plugin's copy of it.
+    so a half-migrated worker keeps working instead of failing at startup. Registration is
+    first-one-wins: an explicitly passed activity is never displaced by the plugin's copy of it.
     """
     merged = list(existing or [])
     seen = {name for name in (_activity_name(fn) for fn in merged) if name is not None}
