@@ -2,7 +2,7 @@
 
 The same conversational Code Mode agent as ``examples/monty`` — same tools, same trip board —
 but running under ``ToolApprovalPolicy.auto_mode(...)``, so each gated call is first put to
-``agent.jev_evaluator()`` against the rulebook in :data:`_AUTO_APPROVAL_CRITERIA`. Jev may
+``jev_evaluator()`` against the rulebook in :data:`_AUTO_APPROVAL_CRITERIA`. Jev may
 approve it, deny it, or leave it to you; anything it does not approve comes to you exactly as
 it would in the Monty example. Needs a ``GEMINI_API_KEY`` (the conversation) AND a
 ``TYPESAFE_API_KEY`` (the evaluator) — see ``worker.py``.
@@ -51,6 +51,7 @@ with workflow.unsafe.imports_passed_through():
         function_param,
         google_genai_client,
     )
+    from temporal_agent_harness.ai_sdks.jev import jev_evaluator
     from temporal_agent_harness.harness import agent
     from temporal_agent_harness.harness.agent_protocol import (
         AgentConfig,
@@ -206,7 +207,7 @@ class AutoModeTravelAgentWorkflow:
             # human on every gated call by simply not enabling it — and a caller can impose
             # either posture per session via `AgentConfig.approval_policy`.
             auto_approval_criteria_default=_AUTO_APPROVAL_CRITERIA,
-            auto_mode_evaluator=agent.jev_evaluator(),
+            auto_mode_evaluator=jev_evaluator(),
         )
         self._model: str = DEFAULT_MODEL
         # The whole conversation, sent as the input of every model call (see

@@ -47,21 +47,11 @@ describe("workflow ID copy spots", () => {
     { workflow_id: "wf-beta", created_at: 1, label: "b", agent_workflow_type: "Planner" }
   ];
 
-  /* Beside the anchor chip, never inside it: the chip is a button, and a button in a
-     button is invalid markup that browsers pull apart. */
-  it("puts the anchor's copy beside the session chip, not in it", () => {
-    const body = markup({ sessions, sessionId: "wf-alpha" });
-    assert.match(body, /class="copyable[^"]*">\s*<button[^>]*session-anchor[\s\S]*?<\/button>\s*<button[^>]*aria-label="Copy workflow ID"/);
-  });
-
-  it("gives every Session Manager row its own ID and a copy outside the row button", () => {
-    const body = markup({ sessions, sessionId: "wf-alpha", display: "pane" });
-    for (const id of ["wf-alpha", "wf-beta"]) {
-      assert.match(
-        body,
-        new RegExp(`<code class="session-id[^"]*">${id}</code>[\\s\\S]*?</button>\\s*<span class="copyable[^"]*">\\s*<button[^>]*aria-label="Copy workflow ID"`),
-        id
-      );
+  it("keeps session identity and history free of workflow ID copy controls", () => {
+    for (const display of ["launcher", "pane"]) {
+      const body = markup({ sessions, sessionId: "wf-alpha", display });
+      assert.doesNotMatch(body, /aria-label="Copy workflow ID"/);
+      assert.doesNotMatch(body, /class="session-id[\s"]/);
     }
   });
 });

@@ -165,8 +165,8 @@ _INJECTED = _InjectedMarker()
 #      must stop rather than keep burning a model call on a settled question. A synchronous
 #      predicate would run to completion inside one workflow activation with no such seam.
 #
-# See ``temporal_agent_harness.harness.jev_approvals.jev_evaluator`` — the harness's
-# builtin Jev-backed evaluator, which is exactly a value of this type.
+# See ``temporal_agent_harness.ai_sdks.jev.jev_evaluator`` — a Jev-backed evaluator,
+# which is exactly a value of this type.
 AutoModeEvaluator = Callable[
     [AutoApprovalContext], Awaitable[AutoApprovalDecision]
 ]
@@ -273,7 +273,8 @@ def _assert_auto_mode_has_an_evaluator(
         "ToolApprovalPolicy has auto_mode_enabled=True, but this agent has no "
         "auto_mode_evaluator wired, so nothing could ever judge a call while the policy "
         "reported auto mode on. Either pass auto_mode_evaluator= to the AgentWorkflowRunner "
-        "(agent.jev_evaluator() is the builtin), or use a policy with auto mode off.",
+        "(temporal_agent_harness.ai_sdks.jev.jev_evaluator() is one), or use a policy "
+        "with auto mode off.",
         type="AutoModeWithoutEvaluator",
         non_retryable=True,
     )
@@ -520,7 +521,7 @@ async def _apply_approval_policy(
 
     WHY THE EVALUATOR IS CONSULTED *AFTER* REGISTERING+PUBLISHING, not before: an evaluator
     may be slow and may itself be an AI (see
-    :func:`~temporal_agent_harness.harness.jev_approvals.jev_evaluator`, which spends an
+    :func:`~temporal_agent_harness.ai_sdks.jev.jev_evaluator`, which spends an
     activity round-trip asking Jev). Registering first buys three things that matter
     exactly when a model, not a person, is deciding:
 

@@ -106,7 +106,7 @@ describe("the highlight and the filter", () => {
       initial_user_message: `message ${i}`
     }));
     const { body } = render(SessionControls, {
-      props: { display: "pane", tab: "sessions", sessions, sessionId: "wf-mid" }
+      props: { display: "pane", sessions, sessionId: "wf-mid" }
     });
     const input = body.match(/<input[^>]*>/)?.[0] ?? "";
     assert.match(input, /role="combobox"/);

@@ -23,26 +23,11 @@ from temporalio.workflow import ActivityConfig
 
 from temporal_agent_harness.harness import agent
 from temporal_agent_harness.harness.agent_protocol import RUN_SUBAGENT_TURN_ACTIVITY
-from temporal_agent_harness.harness.jev_approvals.activity import (
-    JEV_APPROVAL_ACTIVITIES,
-)
-from temporal_agent_harness.harness.jev_approvals.models import (
-    JEV_TOOL_APPROVAL_ACTIVITY,
-)
 from temporal_agent_harness.plugin import AgentHarnessPlugin
 from temporal_agent_harness.utils.large_payload import (
     DEFAULT_PAYLOAD_STORAGE,
     local_payload_storage,
 )
-
-# Every activity the plugin registers on a worker regardless of configuration — the ones
-# their callers dispatch BY NAME, so an unregistered name would be a retryable Temporal
-# error and a hung turn rather than one actionable failure. Their optional extras are
-# checked per call, inside the activity, never at registration. (Code Mode registers none: its
-# scripts run in the workflow, and only their host calls are activities.)
-_ALWAYS_ON_ACTIVITIES = [*JEV_APPROVAL_ACTIVITIES]
-_ALWAYS_ON_NAMES = {JEV_TOOL_APPROVAL_ACTIVITY}
-
 
 @agent.activity_tool_defn(
     activity_config=ActivityConfig(start_to_close_timeout=timedelta(seconds=5)),
@@ -170,27 +155,12 @@ def test_offload_can_be_turned_off():
 def test_tools_registers_activity_bodies_and_skips_bodiless_tools():
     plugin = AgentHarnessPlugin(tools=[durable_tool, inline_tool, callback_tool])
     names = _plugin_activity_names(plugin)
-    assert names - _ALWAYS_ON_NAMES == {"durable_tool"}
+    assert names == {"durable_tool"}
 
 
 def test_tools_rejects_a_non_harness_tool():
     with pytest.raises(TypeError, match="not a harness tool"):
         AgentHarnessPlugin(tools=[plain_function])
-
-
-# ---------------------------------------------------------------- extra-backed activities
-
-
-def test_extra_backed_activities_are_registered_unconditionally():
-    """Registration never branches on an extra — the check lives inside the activity.
-
-    Registering the NAMES is what matters: the Jev auto-approver is dispatched by name, and
-    leaving its name unregistered would make Temporal retry "not registered" forever — a hung
-    turn instead of one actionable failure.
-    """
-    plugin = AgentHarnessPlugin()
-    assert set(plugin._worker_activities) == set(_ALWAYS_ON_ACTIVITIES)
-    assert _plugin_activity_names(plugin) == _ALWAYS_ON_NAMES
 
 
 # ---------------------------------------------------------------- worker wiring
@@ -209,7 +179,6 @@ async def test_worker_gets_every_harness_activity_from_the_plugin():
         assert _registered_activity_names(worker) == {
             "durable_tool",
             RUN_SUBAGENT_TURN_ACTIVITY,
-            *_ALWAYS_ON_NAMES,
         }
 
 
@@ -225,7 +194,6 @@ async def test_hand_registered_harness_activities_are_not_duplicated():
         data_converter=pydantic_data_converter
     ) as env:
         hand_written = [
-            *_ALWAYS_ON_ACTIVITIES,
             SubagentActivities(env.client).run_subagent_turn,
             agent.tool_activity(durable_tool),
         ]
@@ -241,7 +209,6 @@ async def test_hand_registered_harness_activities_are_not_duplicated():
         assert _registered_activity_names(worker) == {
             "durable_tool",
             RUN_SUBAGENT_TURN_ACTIVITY,
-            *_ALWAYS_ON_NAMES,
         }
 
 
@@ -262,7 +229,6 @@ async def test_unrelated_worker_activities_survive():
         assert _registered_activity_names(worker) == {
             "unrelated",
             RUN_SUBAGENT_TURN_ACTIVITY,
-            *_ALWAYS_ON_NAMES,
         }
 
 
@@ -291,7 +257,6 @@ async def test_client_registered_plugin_reaches_the_worker():
         assert _registered_activity_names(worker) == {
             "durable_tool",
             RUN_SUBAGENT_TURN_ACTIVITY,
-            *_ALWAYS_ON_NAMES,
         }
 
 
