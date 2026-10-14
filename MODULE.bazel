@@ -6,7 +6,7 @@ them directly. Nexus (nexus/, nexgen) is not built by Bazel.
 
 module(name = "temporal_agent_harness")
 
-bazel_dep(name = "aspect_rules_py", version = "2.0.0-alpha.7")
+bazel_dep(name = "aspect_rules_py", version = "2.0.0-alpha.8")
 bazel_dep(name = "aspect_rules_js", version = "3.5.1")
 bazel_dep(name = "bazel_lib", version = "3.7.2")
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
@@ -59,6 +59,14 @@ uv.override_package(
     name = "temporal-nexus-mcp",
     lock = "//:uv.lock",
     target = "//bazel/excluded:temporal_nexus_mcp",
+)
+
+# temporalio ships native code, so rules_py cannot merge temporalio-typesafe's temporalio/typesafe
+# into it and puts that wheel on sys.path instead; extend_path makes temporalio find it there.
+uv.override_package(
+    name = "temporalio",
+    lock = "//:uv.lock",
+    post_install_patches = ["//bazel:temporalio_extend_path.patch"],
 )
 
 # pywin32 (moto -> docker, on Windows only) has no wheel for any other platform. The hub's

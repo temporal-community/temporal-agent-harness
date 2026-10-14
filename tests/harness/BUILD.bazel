@@ -170,24 +170,6 @@ harness_pytest_test(
 )
 
 harness_pytest_test(
-    name = "test_jev_approvals",
-    srcs = ["test_jev_approvals.py"],
-    deps = [
-        "//temporal_agent_harness:plugin",
-        "//temporal_agent_harness/harness:__init__",
-        "//temporal_agent_harness/harness:agent",
-        "//temporal_agent_harness/harness:agent_client",
-        "//temporal_agent_harness/harness:agent_workflow",
-        "//temporal_agent_harness/harness/agent_protocol:__init__",
-        "//temporal_agent_harness/harness/jev_approvals:__init__",
-        "//temporal_agent_harness/harness/jev_approvals:activity",
-        "//tests:conftest",
-        "@pypi//pytest",
-        "@pypi//temporalio",
-    ],
-)
-
-harness_pytest_test(
     name = "test_mcp_tool_governance",
     srcs = ["test_mcp_tool_governance.py"],
     deps = [

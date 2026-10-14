@@ -37,3 +37,16 @@ py_library(
         "@pypi//pydantic_core",
     ],
 )
+
+py_library(
+    name = "typesafe_harness",
+    srcs = ["typesafe_harness.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//temporal_agent_harness/harness:agent_workflow",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//temporalio",
+        "@pypi//temporalio_typesafe",
+        "@pypi//typesafe_sdk",
+    ],
+)

@@ -10,8 +10,6 @@ harness_pytest_test(
         "//temporal_agent_harness/harness:agent",
         "//temporal_agent_harness/harness:subagent_activities",
         "//temporal_agent_harness/harness/agent_protocol:__init__",
-        "//temporal_agent_harness/harness/jev_approvals:activity",
-        "//temporal_agent_harness/harness/jev_approvals:models",
         "//temporal_agent_harness/utils:large_payload",
         "//tests:conftest",
         "@pypi//pytest",

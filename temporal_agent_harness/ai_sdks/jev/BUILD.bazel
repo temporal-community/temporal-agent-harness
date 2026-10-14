@@ -4,38 +4,19 @@ py_library(
     name = "__init__",
     srcs = ["__init__.py"],
     visibility = ["//:__subpackages__"],
-    deps = [
-        ":approver",
-        ":models",
-    ],
+    deps = [":evaluator"],
 )
 
 py_library(
-    name = "activity",
-    srcs = ["activity.py"],
+    name = "evaluator",
+    srcs = ["evaluator.py"],
     visibility = ["//:__subpackages__"],
     deps = [
-        ":models",
-        "@pypi//temporalio",
-        "@pypi//typesafe_sdk",
-    ],
-)
-
-py_library(
-    name = "approver",
-    srcs = ["approver.py"],
-    visibility = ["//:__subpackages__"],
-    deps = [
-        ":models",
         "//temporal_agent_harness/harness:agent_workflow",
         "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
         "@pypi//temporalio",
+        "@pypi//temporalio_typesafe",
+        "@pypi//typesafe_sdk",
     ],
-)
-
-py_library(
-    name = "models",
-    srcs = ["models.py"],
-    visibility = ["//:__subpackages__"],
-    deps = ["@pypi//pydantic"],
 )

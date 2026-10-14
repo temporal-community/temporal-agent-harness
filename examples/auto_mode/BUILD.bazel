@@ -11,9 +11,10 @@ harness_module_binary(
         "//examples/monty:activities",
         "//temporal_agent_harness:plugin",
         "//temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
-        "//temporal_agent_harness/harness/jev_approvals:activity",
         "@pypi//google_genai",
         "@pypi//temporalio",
+        "@pypi//temporalio_typesafe",
+        "@pypi//typesafe_sdk",
     ],
 )
 
@@ -25,6 +26,7 @@ py_library(
         "//examples/monty:activities",
         "//examples/monty:trip_board",
         "//temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
+        "//temporal_agent_harness/ai_sdks/jev:__init__",
         "//temporal_agent_harness/harness:agent",
         "//temporal_agent_harness/harness:agent_workflow",
         "//temporal_agent_harness/harness/agent_protocol:__init__",

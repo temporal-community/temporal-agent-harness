@@ -1,6 +1,9 @@
 load("@aspect_rules_py//py:defs.bzl", "py_binary")
 load(":wheel_script.bzl", "wheel_script")
 
+# Applied to the temporalio wheel (uv.override_package in MODULE.bazel).
+exports_files(["temporalio_extend_path.patch"])
+
 # The binary Code Mode runs scripts in. pydantic-monty finds it through MONTY_BIN.
 wheel_script(
     name = "monty",

@@ -54,6 +54,7 @@ manifest:
     httptools: httptools
     httpx: httpx
     httpx2: httpx2
+    httpx2_jsfetch: httpx2_jsfetch
     hypothesis: hypothesis
     idna: idna
     iniconfig: iniconfig
@@ -80,7 +81,6 @@ manifest:
     mdurl: mdurl
     moto: moto
     mpmath: mpmath
-    msgspec: msgspec
     multidict: multidict
     multipart: python_multipart
     networkx: networkx
@@ -142,7 +142,24 @@ manifest:
     sse_starlette: sse_starlette
     starlette: starlette
     sympy: sympy
-    temporalio: temporalio
+    temporalio.activity: temporalio
+    temporalio.api: temporalio
+    temporalio.bridge: temporalio
+    temporalio.client: temporalio
+    temporalio.common: temporalio
+    temporalio.contrib: temporalio
+    temporalio.converter: temporalio
+    temporalio.envconfig: temporalio
+    temporalio.exceptions: temporalio
+    temporalio.nexus: temporalio
+    temporalio.plugin: temporalio
+    temporalio.runtime: temporalio
+    temporalio.service: temporalio
+    temporalio.testing: temporalio
+    temporalio.types: temporalio
+    temporalio.typesafe: temporalio_typesafe
+    temporalio.worker: temporalio
+    temporalio.workflow: temporalio
     tenacity: tenacity
     truststore: truststore
     typer: typer

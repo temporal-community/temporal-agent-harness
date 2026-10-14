@@ -19,7 +19,6 @@ py_library(
         ":subagent_toolset",
         "//temporal_agent_harness/harness/agent_protocol:__init__",
         "//temporal_agent_harness/harness/code_mode:__init__",
-        "//temporal_agent_harness/harness/jev_approvals:__init__",
         "//temporal_agent_harness/harness/state:decl",
     ],
 )

@@ -14,7 +14,6 @@ py_library(
         "//temporal_agent_harness/harness:subagent_activities",
         "//temporal_agent_harness/harness/code_mode:__init__",
         "//temporal_agent_harness/harness/code_mode:activity_fs",
-        "//temporal_agent_harness/harness/jev_approvals:activity",
         "//temporal_agent_harness/utils:large_payload",
         "@pypi//temporalio",
     ],
