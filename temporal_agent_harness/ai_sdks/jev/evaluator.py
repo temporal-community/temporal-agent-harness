@@ -107,7 +107,7 @@ except ModuleNotFoundError as exc:
         "jev_evaluator requires pip install 'temporal-agent-harness[typesafe]'"
     ) from exc
 
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter
 from temporalio.common import RetryPolicy
 from temporalio.workflow import ActivityConfig
 
@@ -134,6 +134,10 @@ DEFAULT_ACTIVITY_CONFIG = ActivityConfig(
     retry_policy=RetryPolicy(maximum_attempts=3),
     summary="jev_approval",
 )
+
+# A tool's arguments are bound as the Python values the tool receives, which may be pydantic
+# models, dataclasses, or dates; the state Jev judges needs their JSON form.
+_CALL_ARGUMENTS = TypeAdapter(dict[str, Any])
 
 # The Choice labels Jev picks between. They are the wire form of ``AutoApprovalVerdict`` and
 # are mapped back onto it by :func:`decide`; an answer outside this set is treated as an
@@ -326,7 +330,7 @@ def build_request(
             "description": ctx.tool_description,
             "declared_inherently_safe": ctx.inherently_safe,
         },
-        "call_arguments": ctx.tool_input,
+        "call_arguments": _CALL_ARGUMENTS.dump_python(ctx.tool_input, mode="json"),
     }
     if extra_state:
         state["agent_state"] = dict(extra_state)

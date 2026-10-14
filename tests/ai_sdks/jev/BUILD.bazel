@@ -12,6 +12,7 @@ harness_pytest_test(
         "//temporal_agent_harness/harness/agent_protocol:__init__",
         "//tests:conftest",
         "@pypi//httpx2",
+        "@pypi//pydantic",
         "@pypi//pytest",
         "@pypi//temporalio",
         "@pypi//temporalio_typesafe",
