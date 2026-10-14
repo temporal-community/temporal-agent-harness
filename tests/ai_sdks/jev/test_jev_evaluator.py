@@ -20,11 +20,12 @@ import json
 import uuid
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 
 import httpx2
 import pytest
+from pydantic import BaseModel
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.contrib.workflow_streams import WorkflowStream, WorkflowStreamClient
 from temporalio.client import WorkflowUpdateStage
@@ -162,6 +163,31 @@ def test_the_request_shows_jev_the_call_and_the_governing_criteria():
     # No agent state supplied, so the key is absent rather than empty — an empty object
     # would read to the model as "there is state, and it says nothing".
     assert "agent_state" not in request.state
+
+
+class _FlightSearchRequest(BaseModel):
+    origin: str
+    destination: str
+    departure: date
+
+
+def test_model_arguments_reach_jev_as_json():
+    """A tool whose parameter is a pydantic model is bound with the model instance itself,
+    so the arguments are dumped to JSON before they enter the state Jev judges."""
+    request = build_request(
+        _ctx(
+            tool_name="search_flights",
+            tool_input={
+                "request": _FlightSearchRequest(
+                    origin="SFO", destination="JFK", departure=date(2023, 10, 31)
+                )
+            },
+        )
+    )
+
+    assert request.state["call_arguments"] == {
+        "request": {"origin": "SFO", "destination": "JFK", "departure": "2023-10-31"}
+    }
 
 
 def test_a_rule_the_operator_did_not_write_is_absent_not_empty():
