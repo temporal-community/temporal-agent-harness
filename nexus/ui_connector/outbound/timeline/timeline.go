@@ -5,6 +5,7 @@ package timeline
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/markdown"
@@ -41,6 +42,8 @@ type Message struct {
 	Chunks    []protocol.Chunk
 	Text      string // reply text only; citation offsets refer to it
 	Citations []protocol.Citation
+	// Suffix closes formatting. Prefix reopens it in the next message. Text excludes both.
+	Prefix, Suffix string
 }
 
 // Status is the state to show in a status line.
@@ -63,7 +66,9 @@ type Prompt struct {
 type Limits struct {
 	MaxAge   time.Duration
 	MaxChars int // measured by Config.Size
-	MaxCards int // distinct tool and thought cards
+	// MaxOverflow allows a text block to finish after MaxChars.
+	MaxOverflow int
+	MaxCards    int // distinct tool and thought cards
 }
 
 // Config is the platform's choice of behavior.
@@ -74,10 +79,14 @@ type Config struct {
 	// Size measures a chunk for Limits.MaxChars. A card's size replaces the last size
 	// for the same card. Nil counts Markdown characters and adds them up.
 	Size func(protocol.Chunk) int
+	// SplitText chooses message boundaries before pending text is sent.
+	SplitText func(text string, minimum, target, maximum int) markdown.TextBreak
 }
 
 // State is the timeline's state between deliveries. It encodes as JSON.
 type State struct {
+	TextTail   string `json:",omitempty"` // text saved until the next delivery
+	TextOffset int    `json:",omitempty"` // original reply text in closed messages
 	Segment    Segment
 	Thought    *protocol.ThoughtChunk `json:",omitempty"` // open thought block
 	ThoughtSeq int                    `json:",omitempty"`
@@ -92,17 +101,20 @@ type State struct {
 
 // Segment is the current message.
 type Segment struct {
-	Stream    string           `json:",omitempty"`
-	StartedAt time.Time        `json:",omitzero"`
-	Chunks    []protocol.Chunk `json:",omitempty"`
-	Chars     int              `json:",omitempty"` // text, and cards when Config.Size is nil
-	CardChars int              `json:",omitempty"` // sum of CardSizes
-	CardSizes map[string]int   `json:",omitempty"`
-	Cards     int              `json:",omitempty"`
-	CardIDs   map[string]bool  `json:",omitempty"`
-	OpenTools []protocol.Chunk `json:",omitempty"` // latest chunk of each running tool
-	Pending   []protocol.Chunk `json:",omitempty"` // not yet sent
-	Delivered []protocol.Chunk `json:",omitempty"` // content at the last successful send
+	PrefixSent bool             `json:",omitempty"`
+	Prefix     string           `json:",omitempty"`
+	Suffix     string           `json:",omitempty"`
+	Stream     string           `json:",omitempty"`
+	StartedAt  time.Time        `json:",omitzero"`
+	Chunks     []protocol.Chunk `json:",omitempty"`
+	Chars      int              `json:",omitempty"` // text, and cards when Config.Size is nil
+	CardChars  int              `json:",omitempty"` // sum of CardSizes
+	CardSizes  map[string]int   `json:",omitempty"`
+	Cards      int              `json:",omitempty"`
+	CardIDs    map[string]bool  `json:",omitempty"`
+	OpenTools  []protocol.Chunk `json:",omitempty"` // latest chunk of each running tool
+	Pending    []protocol.Chunk `json:",omitempty"` // not yet sent
+	Delivered  []protocol.Chunk `json:",omitempty"` // content at the last successful send
 }
 
 type RunningTool struct {
@@ -124,6 +136,7 @@ func Apply(cfg Config, sink Sink, st *State, events []protocol.Event) {
 // End closes the open message and clears the status.
 func End(cfg Config, sink Sink, st *State) {
 	t := timeline{cfg: cfg, sink: sink, st: st}
+	t.text("", true)
 	t.closeThought()
 	t.finishSegment()
 	t.setStatus(Status{Clear: true})
@@ -136,6 +149,9 @@ type timeline struct {
 }
 
 func (t *timeline) event(ev protocol.Event) {
+	if ev.Chunk == nil || ev.Chunk.Text == "" {
+		t.text("", true)
+	}
 	switch {
 	case ev.TurnStarted:
 		t.st.Active = true
@@ -214,8 +230,74 @@ func (t *timeline) chunk(c protocol.Chunk) {
 	}
 	if c.Text != "" {
 		st.SawText = true
+		t.text(c.Text, false)
+		return
 	}
 	t.emit(c)
+}
+
+// text holds only incomplete block markers. The rest continues streaming until
+// SplitText finds a boundary or reaches the overflow limit.
+func (t *timeline) text(value string, final bool) {
+	value = t.st.TextTail + value
+	t.st.TextTail = ""
+	for value != "" {
+		s := &t.st.Segment
+		l := t.cfg.Limits
+		if t.cfg.SplitText == nil || l.MaxChars <= 0 || len(s.OpenTools) > 0 || t.st.Thought != nil {
+			t.emit(protocol.Chunk{Text: value})
+			return
+		}
+		body := segmentText(s.Chunks)
+		if body == "" && len(s.Chunks) > 0 && s.Chars+s.CardChars >= l.MaxChars {
+			prefix := s.Prefix
+			t.finishSegment()
+			t.st.Segment.Prefix = prefix
+			continue
+		}
+		minimum := len([]rune(s.Prefix)) + len([]rune(body))
+		other := s.Chars - len([]rune(body)) + s.CardChars
+		target := l.MaxChars - other
+		limit := max(target+max(l.MaxOverflow, 0), len([]rune(s.Prefix))+1)
+		if s.Prefix != "" && body == "" && strings.TrimSpace(value) == "" && !strings.HasSuffix(s.Prefix, "\n") {
+			if !final {
+				t.st.TextTail = value
+				return
+			}
+			s.Prefix = ""
+		}
+		plan := t.cfg.SplitText(markdown.PrefixText(body+value, s.Prefix), minimum, target, limit)
+		r := []rune(value)
+		if plan.Index > minimum || plan.Index == minimum && len(s.Chunks) > 0 {
+			take := min(plan.Index-minimum, len(r))
+			if take > 0 {
+				t.emit(protocol.Chunk{Text: string(r[:take])})
+			}
+			t.st.Segment.Suffix = plan.Suffix
+			t.finishSegment()
+			t.st.Segment.Prefix = plan.Prefix
+			value = string(r[take:])
+			continue
+		}
+		if !final && plan.Hold >= minimum && plan.Hold > 0 {
+			take := plan.Hold - minimum
+			if take > 0 {
+				t.emit(protocol.Chunk{Text: string(r[:take])})
+			}
+			t.st.TextTail = string(r[take:])
+			return
+		}
+		t.emit(protocol.Chunk{Text: value})
+		return
+	}
+}
+
+func segmentText(chunks []protocol.Chunk) string {
+	var text strings.Builder
+	for _, c := range chunks {
+		text.WriteString(c.Text)
+	}
+	return text.String()
 }
 
 func (t *timeline) closeThought() {
@@ -279,8 +361,14 @@ func (t *timeline) flush() {
 		}
 		pending := s.Pending
 		s.Pending = nil
+		wire := pending
+		prefixSent := s.PrefixSent
+		if s.Prefix != "" && !prefixSent && segmentText(pending) != "" {
+			wire, _ = markdown.WrapChunks(pending, nil, s.Prefix, "")
+			prefixSent = true
+		}
 		if s.Stream == "" {
-			id, err := t.sink.Open(pending)
+			id, err := t.sink.Open(wire)
 			if err != nil {
 				t.sink.Warn("Open failed, posting instead", err)
 				t.st.NoStream = true
@@ -288,10 +376,12 @@ func (t *timeline) flush() {
 			}
 			s.Stream = id
 			s.StartedAt = t.sink.Now()
+			s.PrefixSent = prefixSent
 			s.Delivered = append([]protocol.Chunk(nil), s.Chunks...)
 			return
 		}
-		if err := t.sink.Append(s.Stream, pending); err == nil {
+		if err := t.sink.Append(s.Stream, wire); err == nil {
+			s.PrefixSent = prefixSent
 			s.Delivered = append([]protocol.Chunk(nil), s.Chunks...)
 			return
 		} else {
@@ -300,7 +390,15 @@ func (t *timeline) flush() {
 
 		resend := t.resendAfterFailure(pending)
 		s.Chunks = s.Delivered
+		var prefix string
+		if t.cfg.SplitText != nil {
+			value := markdown.PrefixText(segmentText(s.Chunks), s.Prefix)
+			n := len([]rune(value))
+			plan := t.cfg.SplitText(value, n, n, n)
+			s.Suffix, prefix = plan.Suffix, plan.Prefix
+		}
 		t.closeSegment()
+		t.st.Segment.Prefix = prefix
 		if attempt == 1 {
 			t.st.NoStream = true
 		}
@@ -338,18 +436,34 @@ func (t *timeline) resendAfterFailure(failed []protocol.Chunk) []protocol.Chunk 
 	return out
 }
 
-// maybeRotate ends the message at a limit, but not while a card is open.
+// maybeRotate applies stream age and card count limits after open cards finish.
+// SplitText chooses where to split text at the size limit.
 func (t *timeline) maybeRotate() {
 	s := &t.st.Segment
 	if s.Stream == "" || len(s.OpenTools) > 0 || t.st.Thought != nil {
 		return
 	}
 	l := t.cfg.Limits
-	if (l.MaxAge > 0 && t.sink.Now().Sub(s.StartedAt) >= l.MaxAge) ||
-		(l.MaxChars > 0 && s.Chars+s.CardChars >= l.MaxChars) ||
-		(l.MaxCards > 0 && s.Cards >= l.MaxCards) {
-		t.finishSegment()
+	forced := (l.MaxAge > 0 && t.sink.Now().Sub(s.StartedAt) >= l.MaxAge) ||
+		(l.MaxCards > 0 && s.Cards >= l.MaxCards)
+	large := l.MaxChars > 0 && s.Chars+s.CardChars+len([]rune(s.Prefix)) >= l.MaxChars
+	if !forced && !large {
+		return
 	}
+	if t.cfg.SplitText == nil {
+		t.finishSegment()
+		return
+	}
+	body := segmentText(s.Chunks)
+	if !forced && body != "" && s.Chars+s.CardChars+len([]rune(s.Prefix)) < l.MaxChars+max(l.MaxOverflow, 0) {
+		return
+	}
+	value := markdown.PrefixText(body, s.Prefix)
+	n := len([]rune(value))
+	plan := t.cfg.SplitText(value, n, n, n)
+	s.Suffix = plan.Suffix
+	t.finishSegment()
+	t.st.Segment.Prefix = plan.Prefix
 }
 
 func (t *timeline) finishSegment() {
@@ -362,11 +476,17 @@ func (t *timeline) closeSegment() {
 	s := t.st.Segment
 	t.st.Segment = Segment{}
 
-	m := Message{Chunks: s.Chunks}
+	m := Message{Chunks: s.Chunks, Prefix: s.Prefix, Suffix: s.Suffix}
 	for _, c := range s.Chunks {
 		m.Text += c.Text
-		m.Citations = append(m.Citations, c.Citations...)
+		for _, citation := range c.Citations {
+			if citation.EndIndex >= 0 {
+				citation.EndIndex = max(0, citation.EndIndex-t.st.TextOffset)
+			}
+			m.Citations = append(m.Citations, citation)
+		}
 	}
+	t.st.TextOffset += len([]rune(m.Text))
 	switch {
 	case s.Stream != "":
 		if err := t.sink.Finish(s.Stream, m); err != nil {

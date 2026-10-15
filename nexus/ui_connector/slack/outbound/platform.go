@@ -25,7 +25,9 @@ var DefaultLimits = timeline.Limits{
 	// Slack ends a stream after about 5 minutes.
 	MaxAge: 4 * time.Minute,
 	// Limit rendered text and card details to reduce msg_too_long errors.
-	MaxChars: 2500,
+	// Finish the current text block within 1,000 extra characters.
+	MaxChars:    2500,
+	MaxOverflow: 1000,
 	// Each card is one task_card block. Slack allows 50 blocks per message.
 	MaxCards: 45,
 }
@@ -64,7 +66,7 @@ func (p *SlackPlatform) Deliver(ctx context.Context, in DeliverInput) (json.RawM
 		}
 	}
 	s := &sink{ctx: ctx, p: p, addr: addr}
-	cfg := timeline.Config{Streaming: true, Limits: p.Limits, Size: chunkSize}
+	cfg := timeline.Config{Streaming: true, Limits: p.Limits, Size: chunkSize, SplitText: markdown.BreakText}
 	if in.End {
 		timeline.End(cfg, s, &st)
 	} else {
@@ -184,12 +186,12 @@ func (s *sink) Append(stream string, chunks []protocol.Chunk) error {
 func (s *sink) Finish(stream string, m timeline.Message) error {
 	withCards := !s.p.cardsUnsupported.Load() && hasCards(m.Chunks)
 	var stopOpts []slackapi.MsgOption
+	ending := m.Suffix
 	if withCards {
-		if footer := markdown.SourcesFooter(m.Citations, markdown.CommonMarkLink); footer != "" {
-			// The stream uses chunks, so the stop must send chunks too. Slack rejects
-			// markdown_text on a chunks stream with streaming_mode_mismatch.
-			stopOpts = append(stopOpts, slackapi.MsgOptionChunks(slackapi.NewMarkdownTextChunk(footer)))
-		}
+		ending += markdown.SourcesFooter(m.Citations, markdown.CommonMarkLink)
+	}
+	if ending != "" {
+		stopOpts = append(stopOpts, slackapi.MsgOptionChunks(slackapi.NewMarkdownTextChunk(ending)))
 	}
 	if _, _, err := s.p.client.StopStreamContext(s.ctx, s.addr.Channel, stream, stopOpts...); err != nil {
 		return fmt.Errorf("chat.stopStream: %w", err)
@@ -197,7 +199,7 @@ func (s *sink) Finish(stream string, m timeline.Message) error {
 	if withCards || len(m.Citations) == 0 {
 		return nil
 	}
-	finalText := markdown.SpliceChunks(m.Chunks, m.Citations, markdown.CommonMarkLink)
+	finalText := renderMessage(m, markdown.CommonMarkLink)
 	if finalText == "" {
 		// chat.update rejects an empty markdown_text.
 		return nil
@@ -212,11 +214,17 @@ func (s *sink) Finish(stream string, m timeline.Message) error {
 
 // Post sends a message with every chunk as text.
 func (s *sink) Post(m timeline.Message) error {
-	text := markdown.SpliceChunks(m.Chunks, m.Citations, mrkdwnLink)
+	text := renderMessage(m, mrkdwnLink)
 	if text == "" {
 		text = m.Text
 	}
 	return s.postText(text)
+}
+
+// renderMessage includes display delimiters without changing source citation offsets.
+func renderMessage(m timeline.Message, link func(string, string) string) string {
+	chunks, citations := markdown.WrapChunks(m.Chunks, m.Citations, m.Prefix, m.Suffix)
+	return markdown.SpliceChunks(chunks, citations, link)
 }
 
 func (s *sink) postText(text string) error {

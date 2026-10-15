@@ -415,3 +415,44 @@ func TestPostPrompt_UnknownType(t *testing.T) {
 	})
 	assert.ErrorContains(t, err, "unknown prompt type")
 }
+
+func TestDeliverSplitsAtTheNextParagraph(t *testing.T) {
+	f := newFakeSlack(t)
+	p := f.platform()
+	p.Limits = timeline.Limits{MaxChars: 40, MaxOverflow: 200}
+	address, err := json.Marshal(addr)
+	require.NoError(t, err)
+	input := DeliverInput{Address: address, Events: []protocol.Event{{Chunk: &protocol.Chunk{Text: "Current public documentation describes **Current and R"}}}}
+	input.State, err = p.Deliver(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/chat.startStream"}, f.paths())
+	input.Events = []protocol.Event{{Chunk: &protocol.Chunk{Text: "amping Versions**, with Pinned Workflows on their assigned version.\n\nNext paragraph."}}}
+	input.State, err = p.Deliver(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/chat.startStream", "/chat.appendStream", "/chat.stopStream", "/chat.startStream"}, f.paths())
+	assert.Equal(t, "Next paragraph.", chunksOf(t, f.requests[3])[0]["text"])
+	input.Events, input.End = nil, true
+	_, err = p.Deliver(context.Background(), input)
+	require.NoError(t, err)
+}
+
+func TestFinishClosesFormattingBeforeSources(t *testing.T) {
+	f := newFakeSlack(t)
+	require.NoError(t, f.sink().Finish(ts, timeline.Message{
+		Chunks:    []protocol.Chunk{toolChunk(protocol.ToolComplete), {Text: "**words"}},
+		Suffix:    "**",
+		Citations: []protocol.Citation{{URL: "https://a", Title: "A", EndIndex: 7}},
+	}))
+	assert.Equal(t, []string{"/chat.stopStream"}, f.paths())
+	assert.Equal(t, "**\n\n*Sources*\n1. [A](https://a)", chunksOf(t, f.requests[0])[0]["text"])
+}
+
+func TestFinishRepairsFormattingInCitationUpdate(t *testing.T) {
+	f := newFakeSlack(t)
+	require.NoError(t, f.sink().Finish(ts, timeline.Message{
+		Chunks: []protocol.Chunk{{Text: " words"}}, Prefix: "**", Suffix: "**",
+		Citations: []protocol.Citation{{URL: "https://a", EndIndex: 6}},
+	}))
+	assert.Equal(t, "**", chunksOf(t, f.requests[0])[0]["text"])
+	assert.Equal(t, " **words [[1]](https://a)**", f.requests[1].form.Get("markdown_text"))
+}

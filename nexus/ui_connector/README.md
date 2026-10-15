@@ -121,7 +121,8 @@ from workflow code and recorded activity results.
 
 - A message opens with its first content, so it is never empty.
 - An approval request ends the message. The prompt is its own message.
-- A message ends at a size or age limit, when no tool or thought card is open.
+- A message ends at its configured limits, when no tool or thought card is open.
+  Drivers can supply `SplitText` to choose text boundaries before sending.
 - If an append fails, the content continues in a new message with the open cards.
 - If a message cannot open, the rest is posted as complete messages.
 - The status updates once per batch.
@@ -176,6 +177,12 @@ Run the HTTP server and a Temporal client in `yourplatform/cmd/webhook/main.go`.
 Use the same task queue as the worker.
 
 ## Platform limits
+
+The Slack connector targets 2,500 characters, including estimated card content.
+It finishes the current paragraph, list item, or code block within 1,000 extra
+characters. Larger blocks split at a line, sentence, or word. The connector closes
+and reopens formatting at these splits. Stream age and card count limits still
+apply.
 
 - Slack form trigger tokens expire about 3 seconds after the click. Buttons that
   carry their fields open the modal at once. The fallback workflow must query the
