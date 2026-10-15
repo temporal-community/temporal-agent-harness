@@ -31,4 +31,15 @@ test --test_output=errors
 # Opt out of aspect's ruleset usage telemetry.
 common --repo_env=DO_NOT_TRACK=1
 
+# CI (--config=ci) starts every run from a fresh output base and a restored disk cache, so nothing
+# it skips is ever needed later:
+#   * --nobuild_runfile_links: builds a runfiles tree only for a test that runs or a tool an action
+#     runs. Every test and binary has one, re-created from scratch each run and never cacheable, so
+#     a run whose tests all hit the cache otherwise spends much of its time creating them.
+#   * --remote_download_minimal: leaves cache hits in the disk cache instead of copying them into
+#     bazel-out; an action that needs one fetches it then. It still refreshes every entry it hits,
+#     so the workflow's prune step keeps them.
+common:ci --nobuild_runfile_links
+common:ci --remote_download_minimal
+
 try-import %workspace%/user.bazelrc
