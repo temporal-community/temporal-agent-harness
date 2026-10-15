@@ -39,6 +39,8 @@ type Sink interface {
 
 // Message is the content of one platform message.
 type Message struct {
+	// Final is true for the last message closed by End.
+	Final     bool
 	Chunks    []protocol.Chunk
 	Text      string // reply text only; citation offsets refer to it
 	Citations []protocol.Citation
@@ -138,14 +140,17 @@ func End(cfg Config, sink Sink, st *State) {
 	t := timeline{cfg: cfg, sink: sink, st: st}
 	t.text("", true)
 	t.closeThought()
-	t.finishSegment()
+	t.flush()
+	t.final = true
+	t.closeSegment()
 	t.setStatus(Status{Clear: true})
 }
 
 type timeline struct {
-	cfg  Config
-	sink Sink
-	st   *State
+	cfg   Config
+	sink  Sink
+	st    *State
+	final bool
 }
 
 func (t *timeline) event(ev protocol.Event) {
@@ -476,7 +481,7 @@ func (t *timeline) closeSegment() {
 	s := t.st.Segment
 	t.st.Segment = Segment{}
 
-	m := Message{Chunks: s.Chunks, Prefix: s.Prefix, Suffix: s.Suffix}
+	m := Message{Final: t.final, Chunks: s.Chunks, Prefix: s.Prefix, Suffix: s.Suffix}
 	for _, c := range s.Chunks {
 		m.Text += c.Text
 		for _, citation := range c.Citations {

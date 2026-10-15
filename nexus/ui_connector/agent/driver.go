@@ -48,6 +48,8 @@ type streamItem struct {
 
 type turnEvent struct {
 	Type       string         `json:"type"`
+	Model      string         `json:"model"`
+	Usage      *modelUsage    `json:"usage"`
 	Text       string         `json:"text"`
 	ToolID     string         `json:"tool_id"`
 	ToolName   string         `json:"tool_name"`
@@ -59,6 +61,12 @@ type turnEvent struct {
 	Approved   bool           `json:"approved"`
 	Remember   bool           `json:"remember"`
 	Reason     string         `json:"reason"`
+}
+
+type modelUsage struct {
+	InputTokens  *int64 `json:"input_tokens"`
+	CachedTokens *int64 `json:"cached_tokens"`
+	OutputTokens *int64 `json:"output_tokens"`
 }
 
 func decodeTurnEvent(item harnessgen.StreamItem) (*streamItem, error) {
@@ -89,6 +97,16 @@ func turnEventToEvent(e turnEvent, messageScoped bool) (ev *protocol.Event, fina
 	case "reply_delta":
 		if e.Text != "" {
 			return chunk(protocol.Chunk{Text: e.Text}), false
+		}
+	case "model_interaction_ended":
+		if e.Usage != nil || e.Model != "" {
+			u := &protocol.ModelUsage{Model: e.Model}
+			if e.Usage != nil {
+				u.InputTokens = e.Usage.InputTokens
+				u.CachedTokens = e.Usage.CachedTokens
+				u.OutputTokens = e.Usage.OutputTokens
+			}
+			return &protocol.Event{Usage: u}, false
 		}
 	case "thought_summary":
 		if text, ok := e.Delta["text"].(string); ok && text != "" {

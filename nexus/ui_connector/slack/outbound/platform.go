@@ -53,13 +53,18 @@ func NewSlackPlatform(client *slackapi.Client, teamID string) *SlackPlatform {
 	return &SlackPlatform{client: client, teamID: teamID, Limits: DefaultLimits}
 }
 
-// Deliver applies one batch of events and returns the updated timeline state.
+type deliveryState struct {
+	timeline.State
+	Usage []protocol.ModelUsage `json:",omitempty"`
+}
+
+// Deliver applies one batch of events and returns the updated state.
 func (p *SlackPlatform) Deliver(ctx context.Context, in DeliverInput) (json.RawMessage, error) {
 	var addr slack.Address
 	if err := json.Unmarshal(in.Address, &addr); err != nil {
 		return nil, fmt.Errorf("decode address: %w", err)
 	}
-	var st timeline.State
+	var st deliveryState
 	if !router.Empty(in.State) {
 		if err := json.Unmarshal(in.State, &st); err != nil {
 			return nil, fmt.Errorf("decode state: %w", err)
@@ -67,10 +72,26 @@ func (p *SlackPlatform) Deliver(ctx context.Context, in DeliverInput) (json.RawM
 	}
 	s := &sink{ctx: ctx, p: p, addr: addr}
 	cfg := timeline.Config{Streaming: true, Limits: p.Limits, Size: chunkSize, SplitText: markdown.BreakText}
+	var events []protocol.Event
+	for _, ev := range in.Events {
+		if ev.Usage != nil {
+			st.Usage = addUsage(st.Usage, *ev.Usage)
+		} else {
+			events = append(events, ev)
+		}
+	}
 	if in.End {
-		timeline.End(cfg, s, &st)
+		s.footer = usageFooter(st.Usage)
+		timeline.End(cfg, s, &st.State)
+		// The final message can already be closed by a size limit or an approval.
+		if s.footer != "" {
+			if err := s.postText(strings.TrimPrefix(s.footer, "\n\n")); err != nil {
+				return nil, err
+			}
+		}
+		st.Usage = nil
 	} else {
-		timeline.Apply(cfg, s, &st, in.Events)
+		timeline.Apply(cfg, s, &st.State, events)
 	}
 	return json.Marshal(st)
 }
@@ -102,6 +123,8 @@ type sink struct {
 	ctx  context.Context
 	p    *SlackPlatform
 	addr slack.Address
+	// footer is added only when the reply ends.
+	footer string
 }
 
 var _ timeline.Sink = (*sink)(nil)
@@ -180,9 +203,9 @@ func (s *sink) Append(stream string, chunks []protocol.Chunk) error {
 	return nil
 }
 
-// Finish closes the stream and adds citations. A message with cards gets a Sources
-// list, because chat.update would replace the cards. A text message gets inline
-// citation markers.
+// Finish closes the stream and adds citations and the final usage footer.
+// A message with cards gets a Sources list, because chat.update would replace
+// the cards. A text message gets inline citation markers.
 func (s *sink) Finish(stream string, m timeline.Message) error {
 	withCards := !s.p.cardsUnsupported.Load() && hasCards(m.Chunks)
 	var stopOpts []slackapi.MsgOption
@@ -190,16 +213,24 @@ func (s *sink) Finish(stream string, m timeline.Message) error {
 	if withCards {
 		ending += markdown.SourcesFooter(m.Citations, markdown.CommonMarkLink)
 	}
+	var footer string
+	if m.Final {
+		footer = s.footer
+	}
+	ending += footer
 	if ending != "" {
 		stopOpts = append(stopOpts, slackapi.MsgOptionChunks(slackapi.NewMarkdownTextChunk(ending)))
 	}
 	if _, _, err := s.p.client.StopStreamContext(s.ctx, s.addr.Channel, stream, stopOpts...); err != nil {
 		return fmt.Errorf("chat.stopStream: %w", err)
 	}
+	if m.Final {
+		s.footer = ""
+	}
 	if withCards || len(m.Citations) == 0 {
 		return nil
 	}
-	finalText := renderMessage(m, markdown.CommonMarkLink)
+	finalText := renderMessage(m, markdown.CommonMarkLink) + footer
 	if finalText == "" {
 		// chat.update rejects an empty markdown_text.
 		return nil
@@ -218,7 +249,17 @@ func (s *sink) Post(m timeline.Message) error {
 	if text == "" {
 		text = m.Text
 	}
-	return s.postText(text)
+	var footer string
+	if m.Final {
+		footer = s.footer
+	}
+	if err := s.postText(text + footer); err != nil {
+		return err
+	}
+	if m.Final {
+		s.footer = ""
+	}
+	return nil
 }
 
 // renderMessage includes display delimiters without changing source citation offsets.

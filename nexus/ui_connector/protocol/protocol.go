@@ -50,6 +50,7 @@ type Event struct {
 	// TurnStarted tells that the agent started work on the request.
 	TurnStarted       bool                `json:",omitempty"`
 	Chunk             *Chunk              `json:",omitempty"`
+	Usage             *ModelUsage         `json:",omitempty"`
 	ApprovalRequested *ApprovalRequest    `json:",omitempty"`
 	ApprovalResolved  *ApprovalResolution `json:",omitempty"`
 	// HandlerOutput is the handler's return value. Show it only if the reply had no text.
@@ -70,6 +71,15 @@ type Chunk struct {
 	Tool      *ToolChunk    `json:",omitempty"`
 	Thought   *ThoughtChunk `json:",omitempty"`
 	Citations []Citation    `json:",omitempty"`
+}
+
+// ModelUsage reports token counts for one model call. Nil counts are unavailable.
+// CachedTokens is part of InputTokens, not an additional token count.
+type ModelUsage struct {
+	Model        string
+	InputTokens  *int64 `json:",omitempty"`
+	CachedTokens *int64 `json:",omitempty"`
+	OutputTokens *int64 `json:",omitempty"`
 }
 
 // ToolPhase is the state of a tool call.

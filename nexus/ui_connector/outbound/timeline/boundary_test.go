@@ -251,3 +251,16 @@ func TestPostingFallbackUsesTheSameBoundaries(t *testing.T) {
 	require.Len(t, sink.posts, 2)
 	assert.Equal(t, input, sink.posts[0].Text+sink.posts[1].Text)
 }
+
+func TestEndMarksOnlyTheLastMessageFinalAfterAppendFailure(t *testing.T) {
+	cfg := boundaryConfig(10, 100)
+	sink, st := &fakeSink{}, State{}
+	Apply(cfg, sink, &st, []protocol.Event{text("- A complete item.\n-")})
+	require.Equal(t, "-", st.TextTail)
+	sink.appendErrs = []error{errors.New("expired")}
+	End(cfg, sink, &st)
+	require.Len(t, sink.finishes, 2)
+	assert.False(t, sink.finishes[0].Final)
+	assert.True(t, sink.finishes[1].Final)
+	assert.Equal(t, "- A complete item.\n-", sink.finishes[0].Text+sink.finishes[1].Text)
+}

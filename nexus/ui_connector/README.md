@@ -45,6 +45,10 @@ continue the session without another mention.
   call's arguments, and its error if it failed. A successful result is not shown.
   A status line shows `Thinking…`, or the tools still running; it updates once per
   poll, after the cards.
+- Each completed reply shows token usage by model when the backend reports it:
+  `gpt-6.1-sol · Input: 2.19M · Cached: 1.99M · Output: 2.56K`.
+  Counts include all model calls for that request. Cached tokens are part of input
+  tokens. A dash means a count is unavailable. Dollar estimates are not included.
 - Approval prompts offer **Approve once**, **Always allow**, and **Deny**.
   Always allow permits future calls to that tool in the session. Backend decision
   events also update prompts when the decision comes from another UI.

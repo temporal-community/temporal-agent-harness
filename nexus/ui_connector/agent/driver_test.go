@@ -385,3 +385,28 @@ func TestStartPreservesLiteralMentions(t *testing.T) {
 	start(t, agentService(sendOp(&got)), message("<@U1> is the on-call engineer"))
 	assert.JSONEq(t, `{"text":"<@U1> is the on-call engineer"}`, got.Payload)
 }
+
+func TestPoll_ModelUsageIsScopedToTheReply(t *testing.T) {
+	var event turnEvent
+	require.NoError(t, json.Unmarshal([]byte(`{"type":"model_interaction_ended","model":"gpt-6.1-sol","usage":{"input_tokens":1000,"cached_tokens":800,"output_tokens":40,"total_tokens":1040}}`), &event))
+	items := []harnessgen.StreamItem{
+		makeTestStreamItem(t, streamItem{TurnNumber: 1, MessageID: "other", Event: event}, 0, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnNumber: 1, MessageID: "mine", Event: event}, 1, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnNumber: 1, MessageID: "mine", Event: turnEvent{Type: "message_handler_end"}}, 2, turnEventsTopic),
+		makeTestStreamItem(t, streamItem{TurnNumber: 1, MessageID: "mine", Event: event}, 3, turnEventsTopic),
+	}
+	result := poll(t, items, false, turnHandle{SessionID: "s", TurnNumber: 1, MessageID: "mine"})
+	require.True(t, result.Done)
+	require.Len(t, result.Events, 2)
+	assert.Equal(t, &protocol.ModelUsage{
+		Model: "gpt-6.1-sol", InputTokens: ptr(int64(1000)), CachedTokens: ptr(int64(800)), OutputTokens: ptr(int64(40)),
+	}, result.Events[0].Usage)
+	require.NotNil(t, result.Events[1].HandlerOutput)
+}
+
+func TestModelUsageCanBeUnavailable(t *testing.T) {
+	ev, final := turnEventToEvent(turnEvent{Type: "model_interaction_ended", Model: "gpt-6.1-sol"}, false)
+	require.NotNil(t, ev)
+	assert.Equal(t, &protocol.ModelUsage{Model: "gpt-6.1-sol"}, ev.Usage)
+	assert.False(t, final)
+}
