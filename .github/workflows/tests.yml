@@ -44,16 +44,26 @@ jobs:
         with:
           bazelisk-cache: true
           repository-cache: true
-          # Each interpreter is its own configuration, so each gets its own action cache.
-          disk-cache: tests-${{ matrix.config }}
           cache-save: ${{ env.SAVE_CACHE }}
+
+      # The disk cache is restored and saved here rather than by setup-bazel, which keys it on the
+      # BUILD and MODULE files: a push to main that changes only sources keeps the same key, and
+      # since a cache key is never overwritten, main's cache would go stale. Keyed by commit
+      # instead, every push to main saves a new one, and a run restores the newest by prefix.
+      # Each interpreter is its own configuration, so each gets its own action cache.
+      - name: Restore the Bazel disk cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-disk-${{ matrix.config }}-${{ github.sha }}
+          restore-keys: bazel-disk-${{ matrix.config }}-
 
       - name: Note when the build starts
         if: env.SAVE_CACHE == 'true'
         run: touch "$RUNNER_TEMP/bazel-build-start"
 
       - name: Run the test suite
-        run: bazel test //... --config=${{ matrix.config }} --config=ci
+        run: bazel test //... --config=${{ matrix.config }} --config=ci --disk_cache="$HOME/.cache/bazel-disk"
 
       # Keep only what this build used, so the saved cache never grows past one build of main.
       # Bazel refreshes a disk cache entry's mtime whenever it reads or writes it; what is left
@@ -64,6 +74,13 @@ jobs:
         run: |
           find ~/.cache/bazel-disk -type f ! -newer "$RUNNER_TEMP/bazel-build-start" -delete
           du -sh ~/.cache/bazel-disk
+
+      - name: Save the Bazel disk cache
+        if: env.SAVE_CACHE == 'true' && !cancelled()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-disk-${{ matrix.config }}-${{ github.sha }}
 
   bazel-build-files:
     name: Bazel files are generated and formatted
