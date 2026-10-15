@@ -55,7 +55,7 @@ worth cloning once to watch the whole stack work.
 Clone at a release tag. No Node/pnpm needed: the browser UI ships prebuilt.
 
 ```bash
-git clone --branch 0.6.0 https://github.com/temporal-community/temporal-agent-harness.git
+git clone --branch 0.7.0 https://github.com/temporal-community/temporal-agent-harness.git
 cd temporal-agent-harness
 cp .env.example .env.local   # then set GEMINI_API_KEY (and/or OPENAI_API_KEY)
 ```
@@ -79,7 +79,7 @@ one UI.
 Git will note that you're in "detached HEAD" — that's expected, it just means you're sitting on
 the tag rather than on a branch. Later, move to a newer release with
 `git fetch --tags && git checkout <version>`, or see what changed between two of them with
-`git diff 0.5.0 0.6.0`.
+`git diff 0.6.0 0.7.0`.
 
 ### Build with it — install from PyPI
 
@@ -88,7 +88,7 @@ The harness is published to
 [`uv`](https://docs.astral.sh/uv/)-managed project:
 
 ```bash
-uv add 'temporal-agent-harness[ui]==0.6.0'
+uv add 'temporal-agent-harness[ui]==0.7.0'
 ```
 
 Or declare it in `pyproject.toml` — an ordinary dependency, no `[tool.uv.sources]` needed:
@@ -109,7 +109,7 @@ dependencies = [
     #   s3              S3-backed offload for large payloads
     #
     # What each one pulls in, and when you actually need it, is in the Extras table below.
-    "temporal-agent-harness[ui]==0.6.0",
+    "temporal-agent-harness[ui]==0.7.0",
 ]
 ```
 
@@ -193,7 +193,7 @@ opt-in:
 | `typesafe` | make typed [TypeSafe](https://docs.typesafe.ai) System One calls (`ai_sdks.typesafe_harness`), or use **`ai_sdks.jev.jev_evaluator`**, the Jev-backed auto mode evaluator; pulls in [`temporalio-typesafe`](https://pypi.org/project/temporalio-typesafe/). Register its `TypeSafePlugin` on the worker, before `AgentHarnessPlugin`. |
 | `s3` | offload large payloads to S3. The default local-filesystem driver needs nothing extra. |
 
-Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.6.0'`.
+Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,genai]==0.7.0'`.
 
 ## Versioning and stability
 
@@ -205,7 +205,7 @@ UI matches the source it was built from.
 
 Two artifacts come out of a release, and they pin differently:
 
-- **The library** — pin an exact version from PyPI (`temporal-agent-harness==0.6.0`).
+- **The library** — pin an exact version from PyPI (`temporal-agent-harness==0.7.0`).
 - **The examples** — check out the matching git tag. They are *not* shipped in the package, so a
   PyPI install gives you the library, the packaged UI, and the CLI, but no `examples/` tree.
 
@@ -400,7 +400,8 @@ assigned, or one assigned to a name nobody registered, is escalated by the harne
 evaluator is invoked and no model call is spent, so an unconfigured auto mode costs nothing.
 That's enforced in the gate rather than left to each evaluator, which is why an evaluator
 receives its governing rules as a required, non-optional field and needs no defensive check of
-its own. Needs the `jev` extra **on the worker only**.
+its own. Needs the `typesafe` extra, with its `TypeSafePlugin` registered on the worker before
+`AgentHarnessPlugin`.
 
 Every evaluator — yours or Jev's — is bracketed on the event stream
 (`auto_approval_evaluation_started` → `_ended` / `_superseded` / `_error`), so its verdict,
