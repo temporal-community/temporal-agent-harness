@@ -52,7 +52,7 @@ NEIGHBORHOODS = {
     "New York": ["Midtown", "SoHo", "Upper East Side", "Chelsea", "Tribeca"],
     "San Francisco": ["Union Square", "Fisherman's Wharf", "SOMA", "Mission", "Nob Hill"],
     "Los Angeles": ["Hollywood", "Santa Monica", "Downtown", "Beverly Hills", "Venice"],
-    "TESTING BAZEL TEST CACHE": ["The Loop", "River North", "Magnificent Mile", "Wicker Park", "Lincoln Park"],
+    "TESTING BAZEL TEST CACHE AGAIN": ["The Loop", "River North", "Magnificent Mile", "Wicker Park", "Lincoln Park"],
     "Miami": ["South Beach", "Brickell", "Wynwood", "Coral Gables", "Coconut Grove"],
 }
 DEFAULT_NEIGHBORHOODS = ["Downtown", "City Center", "Old Town", "Waterfront", "Arts District"]
