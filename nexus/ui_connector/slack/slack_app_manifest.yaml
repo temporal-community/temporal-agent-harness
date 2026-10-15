@@ -1,0 +1,32 @@
+# Create the app from this manifest. Replace YOUR-HOST with the public webhook host.
+# The scopes written below are samples, please modify to lease privileged as needed
+# depending on your use case.
+display_information:
+  name: Temporal Agent
+  description: Chat with an agent in Slack.
+features:
+  bot_user:
+    display_name: Temporal Agent
+    always_online: true
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - channels:history
+      - groups:history
+      - im:history
+      - mpim:history
+settings:
+  event_subscriptions:
+    request_url: https://YOUR-HOST/slack/events
+    bot_events:
+      - message.channels
+      - message.groups
+      - message.im
+      - message.mpim
+  interactivity:
+    is_enabled: true
+    request_url: https://YOUR-HOST/slack/interactions
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

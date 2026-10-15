@@ -1,54 +1,78 @@
-// Package teamsoutbound implements the workflow-side Microsoft Teams outbound driver.
-// The actual Bot Framework I/O runs in the Python Teams activity worker because
-// Microsoft does not provide a Teams SDK for Go.
+// Package teamsoutbound shows agent output in Teams through the Python Teams activity
+// worker.
 package teamsoutbound
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/citations"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/markdown"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/outbound/timeline"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
 	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/teams"
 	"go.temporal.io/sdk/workflow"
 )
 
+// Activity names registered by the Python worker.
 const (
 	beginStreamActivity        = "BeginStream"
 	updateStreamActivity       = "UpdateStream"
 	finishStreamActivity       = "FinishStream"
 	postMessageActivity        = "PostMessage"
 	postApprovalPromptActivity = "PostApprovalPrompt"
-	updateMessageActivity      = "UpdateActivity" // Keep the registered activity name stable for compatibility.
+	updateMessageActivity      = "UpdateActivity"
 )
 
 const pinnedActivityScheduleToStartTimeout = 10 * time.Second
 
-// Driver dispatches durable outbound operations to the Python Teams activity
-// worker, pinning each stream to the worker process that opened it.
+// Driver implements router.Outbound. It runs the timeline in workflow code and calls
+// the Python worker's activities. Each stream is pinned to the worker that opened it.
 type Driver struct {
 	ActivityOptions workflow.ActivityOptions
 }
 
-var _ router.OutboundDriver = (*Driver)(nil)
+var _ router.Outbound = Driver{}
 
 func NewDriver(opts workflow.ActivityOptions) Driver {
 	return Driver{ActivityOptions: opts}
 }
 
-func (d Driver) activityContext(ctx workflow.Context) workflow.Context {
-	return workflow.WithActivityOptions(ctx, d.ActivityOptions)
+func (d Driver) Deliver(ctx workflow.Context, address router.Address, state router.State, events []protocol.Event) (router.State, error) {
+	return d.apply(ctx, address, state, func(cfg timeline.Config, s timeline.Sink, st *timeline.State) {
+		timeline.Apply(cfg, s, st, events)
+	})
 }
 
-// SupportsStreaming reports whether the Teams conversation can receive
-// incremental response updates. Shared conversations require a complete
-// response because Teams does not support native streaming there.
-func (Driver) SupportsStreaming(input router.Input) bool {
-	if input.Message == nil {
-		return true
+func (d Driver) Done(ctx workflow.Context, address router.Address, state router.State) error {
+	if router.Empty(state) {
+		return nil
 	}
+	_, err := d.apply(ctx, address, state, timeline.End)
+	return err
+}
 
-	switch strings.ToLower(strings.TrimSpace(input.Message.ConversationType)) {
+func (d Driver) apply(ctx workflow.Context, address router.Address, state router.State, run func(timeline.Config, timeline.Sink, *timeline.State)) (router.State, error) {
+	var addr teams.Address
+	if err := json.Unmarshal(address, &addr); err != nil {
+		return nil, fmt.Errorf("decode address: %w", err)
+	}
+	var st timeline.State
+	if !router.Empty(state) {
+		if err := json.Unmarshal(state, &st); err != nil {
+			return nil, fmt.Errorf("decode state: %w", err)
+		}
+	}
+	run(timeline.Config{Streaming: SupportsStreaming(addr.ConversationType)}, &sink{ctx: ctx, d: d, addr: addr}, &st)
+	return json.Marshal(st)
+}
+
+// SupportsStreaming reports whether the conversation can show a streamed reply. Teams
+// does not stream in channels and group chats.
+func SupportsStreaming(conversationType string) bool {
+	switch strings.ToLower(strings.TrimSpace(conversationType)) {
 	case "channel", "groupchat":
 		return false
 	default:
@@ -56,140 +80,182 @@ func (Driver) SupportsStreaming(input router.Input) bool {
 	}
 }
 
-// StreamPollInterval implements router.Streamer. Teams doesn't batch updates yet:
-// always forward each delta right away.
-func (Driver) StreamPollInterval(router.Input) time.Duration {
-	return 0
+// Payloads in the Python worker's format (teams_activity_worker/contracts.py).
+
+type textMetadata struct {
+	SenderID   string
+	SessionID  string
+	ThreadID   string
+	Text       string
+	ServiceURL string
+	ChannelID  string
 }
 
-func (d Driver) streamActivityContext(ctx workflow.Context, handle router.StreamHandle) workflow.Context {
-	if handle.TaskQueue == "" {
-		return d.activityContext(ctx)
-	}
-	options := d.ActivityOptions
-	options.TaskQueue = handle.TaskQueue
-	options.ScheduleToStartTimeout = pinnedActivityScheduleToStartTimeout
-	return workflow.WithActivityOptions(ctx, options)
+type streamHandle struct {
+	ID            string
+	SessionID     string
+	TransportMode string
+	TaskQueue     string
 }
 
-func (d Driver) BeginStream(ctx workflow.Context, input router.BeginStreamInput) (router.StreamHandle, error) {
-	var handle router.StreamHandle
-	err := workflow.ExecuteActivity(d.activityContext(ctx), beginStreamActivity, input).Get(ctx, &handle)
-	return handle, err
+type beginStreamPayload struct {
+	textMetadata
+	ConversationType string
 }
 
-// UpdateStream flattens the delta's structured content (Text/ToolStatus/ThoughtSummary)
-// into the plain text string the Python activity worker's contract expects, since Teams
-// has no richer way to show tool status than the same inline markers it always used -
-// see flattenDeltaText.
-func (d Driver) UpdateStream(ctx workflow.Context, input router.UpdateStreamInput) error {
-	input.Delta = flattenDeltaText(router.Delta{
-		Text:           input.Delta,
-		ToolStatus:     input.ToolStatus,
-		ThoughtSummary: input.ThoughtSummary,
-	})
-	return workflow.ExecuteActivity(d.streamActivityContext(ctx, input.Handle), updateStreamActivity, input).Get(ctx, nil)
+type updateStreamPayload struct {
+	textMetadata
+	Handle streamHandle
+	Delta  string
 }
 
-// TODO(long-nt-tran): citations aren't spliced into native-streaming Teams messages -
-// the Python worker's finish_stream just closes the stream, with no way to correct it.
-func (d Driver) FinishStream(ctx workflow.Context, input router.FinishStreamInput) error {
-	return workflow.ExecuteActivity(d.streamActivityContext(ctx, input.Handle), finishStreamActivity, input).Get(ctx, nil)
+type finishStreamPayload struct {
+	textMetadata
+	Handle streamHandle
 }
 
-// PostMessage flattens every delta of the turn (input.Segments) into one plain text
-// string (see flattenSegments), then splices in citation markers. Citations' EndIndex
-// is an offset into the reply text alone, so it's retargeted to flattenSegments' output
-// first - see retargetCitations.
-func (d Driver) PostMessage(ctx workflow.Context, input router.TextMetadata) error {
-	text := flattenSegments(input.Segments)
-	input.Text = citations.Splice(text, retargetCitations(input.Segments, input.Citations), citations.CommonMarkLink)
-	return workflow.ExecuteActivity(d.activityContext(ctx), postMessageActivity, input).Get(ctx, nil)
+type approvalPromptPayload struct {
+	textMetadata
+	ToolID    string
+	ToolName  string
+	ToolInput string
 }
 
-func (d Driver) PostApprovalPrompt(ctx workflow.Context, input router.ApprovalPromptInput) error {
-	return workflow.ExecuteActivity(d.activityContext(ctx), postApprovalPromptActivity, input).Get(ctx, nil)
+type updateMessagePayload struct {
+	textMetadata
+	MessageID string
 }
 
-// flattenDeltaText reproduces the plain-text formatting the connector's agent driver
-// used to bake directly into Delta.Text before ToolStatus/ThoughtSummary became separate
-// structured fields (see agent/driver.go's turnEventToDelta). Teams has no richer way to
-// show tool status than inline text, so its driver rebuilds the exact same markers
-// itself instead of receiving them pre-flattened.
-func flattenDeltaText(d router.Delta) string {
-	switch {
-	case d.ToolStatus != nil:
-		switch d.ToolStatus.Status {
-		case router.ToolStarted:
-			return "\n_" + d.ToolStatus.ToolName + "..._"
-		case router.ToolCompleted:
-			return " ✅\n\n"
-		case router.ToolErrored:
-			return " ❌ Error: " + d.ToolStatus.Message + "\n\n"
-		default:
-			return ""
-		}
-	case d.ThoughtSummary != "":
-		return d.ThoughtSummary
-	default:
-		return d.Text
+// sink calls the Python worker's activities from workflow code.
+type sink struct {
+	ctx  workflow.Context
+	d    Driver
+	addr teams.Address
+}
+
+var _ timeline.Sink = (*sink)(nil)
+
+func (s *sink) meta(text string) textMetadata {
+	return textMetadata{
+		SenderID: s.addr.SenderID, SessionID: s.addr.SessionID, ThreadID: s.addr.ThreadID,
+		Text: text, ServiceURL: s.addr.ServiceURL, ChannelID: s.addr.ChannelID,
 	}
 }
 
-// flattenSegments concatenates every delta's flattened text in order, for the
-// non-streaming PostMessage path where a whole turn arrives as one call.
-func flattenSegments(segments []router.Delta) string {
-	var b strings.Builder
-	for _, d := range segments {
-		b.WriteString(flattenDeltaText(d))
-	}
-	return b.String()
+func (s *sink) exec(name string, input, result any) error {
+	return workflow.ExecuteActivity(workflow.WithActivityOptions(s.ctx, s.d.ActivityOptions), name, input).Get(s.ctx, result)
 }
 
-// retargetCitations rewrites each citation's EndIndex from an offset into the reply
-// text alone to the matching offset in flattenSegments' output, which interleaves tool
-// status/thought summary text between reply chunks.
-func retargetCitations(segments []router.Delta, cs []router.Citation) []router.Citation {
-	if len(cs) == 0 {
-		return cs
+// execPinned runs a stream activity on the worker that holds the stream.
+func (s *sink) execPinned(h streamHandle, name string, input any) error {
+	if h.TaskQueue == "" {
+		return s.exec(name, input, nil)
 	}
-	retargeted := make([]router.Citation, len(cs))
-	for i, c := range cs {
-		c.EndIndex = retargetEndIndex(segments, c.EndIndex)
-		retargeted[i] = c
-	}
-	return retargeted
+	opts := s.d.ActivityOptions
+	opts.TaskQueue = h.TaskQueue
+	opts.ScheduleToStartTimeout = pinnedActivityScheduleToStartTimeout
+	return workflow.ExecuteActivity(workflow.WithActivityOptions(s.ctx, opts), name, input).Get(s.ctx, nil)
 }
 
-func retargetEndIndex(segments []router.Delta, endIndex int) int {
-	if endIndex < 0 {
-		return -1
-	}
-	var replyOffset, flatOffset int
-	for _, seg := range segments {
-		if seg.Text != "" {
-			replyLen := len([]rune(seg.Text))
-			if endIndex <= replyOffset+replyLen {
-				return flatOffset + (endIndex - replyOffset)
-			}
-			replyOffset += replyLen
-		}
-		flatOffset += len([]rune(flattenDeltaText(seg)))
-	}
-	return flatOffset
+func (s *sink) Now() time.Time { return workflow.Now(s.ctx) }
+
+func (s *sink) Warn(msg string, err error) {
+	workflow.GetLogger(s.ctx).Warn("Teams: "+msg, "error", err)
 }
 
-func (d Driver) AcknowledgeApproval(ctx workflow.Context, input router.ApprovalAcknowledgementInput) error {
-	if input.PromptID == "" {
+// Open opens the stream, then appends the first chunks. The Python worker's
+// begin_stream takes no content. The stream ID is the handle as JSON.
+func (s *sink) Open(chunks []protocol.Chunk) (string, error) {
+	var h streamHandle
+	if err := s.exec(beginStreamActivity, beginStreamPayload{textMetadata: s.meta(""), ConversationType: s.addr.ConversationType}, &h); err != nil {
+		return "", err
+	}
+	id, err := json.Marshal(h)
+	if err != nil {
+		return "", err
+	}
+	if err := s.Append(string(id), chunks); err != nil {
+		return "", err
+	}
+	return string(id), nil
+}
+
+func decodeHandle(stream string) (streamHandle, error) {
+	var h streamHandle
+	err := json.Unmarshal([]byte(stream), &h)
+	return h, err
+}
+
+// Append sends the chunks as Markdown. Teams has no cards.
+func (s *sink) Append(stream string, chunks []protocol.Chunk) error {
+	delta := markdown.RenderChunks(chunks)
+	if delta == "" {
+		return nil
+	}
+	h, err := decodeHandle(stream)
+	if err != nil {
+		return err
+	}
+	return s.execPinned(h, updateStreamActivity, updateStreamPayload{textMetadata: s.meta(""), Handle: h, Delta: delta})
+}
+
+// Finish closes the stream. Streamed citations are not shown: the Python worker only
+// closes the stream.
+func (s *sink) Finish(stream string, _ timeline.Message) error {
+	h, err := decodeHandle(stream)
+	if err != nil {
+		return err
+	}
+	return s.execPinned(h, finishStreamActivity, finishStreamPayload{textMetadata: s.meta(""), Handle: h})
+}
+
+// Post renders every chunk as Markdown with citation markers.
+func (s *sink) Post(m timeline.Message) error {
+	return s.postText(markdown.SpliceChunks(m.Chunks, m.Citations, markdown.CommonMarkLink))
+}
+
+func (s *sink) postText(text string) error {
+	if text == "" {
+		return nil
+	}
+	return s.exec(postMessageActivity, s.meta(text), nil)
+}
+
+// Status does nothing: Teams has no status line.
+func (s *sink) Status(timeline.Status) error { return nil }
+
+// Prompt posts the approval card. The Python worker returns no ID; the card is updated
+// from the click (see Settle).
+func (s *sink) Prompt(req protocol.ApprovalRequest) (string, error) {
+	return "", s.exec(postApprovalPromptActivity, approvalPromptPayload{
+		textMetadata: s.meta(""), ToolID: req.ToolID, ToolName: req.ToolName, ToolInput: req.ToolInputJSON,
+	}, nil)
+}
+
+// Settle updates the card that a click came from with the decision.
+func (s *sink) Settle(_ timeline.Prompt, res protocol.ApprovalResolution) error {
+	if s.addr.ActivityID == "" {
 		return nil
 	}
 	decision := "❌ Denied"
-	if input.Approved {
+	if res.Approved {
 		decision = "✅ Approved"
 	}
-	input.Text = fmt.Sprintf("🔐 Tool `%s`: %s", input.ToolName, decision)
-	return workflow.ExecuteActivity(d.activityContext(ctx), updateMessageActivity, router.UpdateMessageInput{
-		TextMetadata: input.TextMetadata,
-		MessageID:    input.PromptID,
-	}).Get(ctx, nil)
+	return s.exec(updateMessageActivity, updateMessagePayload{
+		textMetadata: s.meta(fmt.Sprintf("🔐 Tool `%s`: %s", res.ToolName, decision)),
+		MessageID:    s.addr.ActivityID,
+	}, nil)
+}
+
+func (s *sink) Guide(handlers []protocol.Handler) error {
+	return s.postText(markdown.Guide(handlers))
+}
+
+// Form posts the handler's usage: Teams has no forms here.
+func (s *sink) Form(h protocol.Handler) error {
+	return s.postText(markdown.GuideEntry(h))
+}
+
+func (s *sink) Error(msg string) error {
+	return s.postText("_Something went wrong handling that: " + msg + "_")
 }

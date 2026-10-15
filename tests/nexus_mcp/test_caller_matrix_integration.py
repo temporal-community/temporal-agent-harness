@@ -8,7 +8,6 @@ from typing import Any
 
 import anyio
 import nexusrpc.handler
-import temporalio.nexus
 from mcp import types
 from mcp.client import Client
 from nexus_mcp import NexusTasksClientExtension
@@ -25,7 +24,7 @@ from nexus_mcp.frontends import (
 from nexus_mcp.resolver import NexusToolResolver
 from nexus_mcp.tasks import CreateTaskResult, get_task
 from pydantic import BaseModel
-from temporalio import workflow
+from temporalio import nexus, workflow
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -56,14 +55,15 @@ class _MatrixService(MCPOverNexusServiceHandler):
         return {"message": f"Hello, {name}"}
 
     @nexus_mcp_operation
-    @temporalio.nexus.workflow_run_operation
+    @nexus.temporal_operation
     async def delayed_greet(
         self,
-        ctx: temporalio.nexus.WorkflowRunOperationContext,
+        ctx: nexus.TemporalStartOperationContext,
+        client: nexus.TemporalNexusClient,
         input: _DelayedGreetingInput,
-    ) -> temporalio.nexus.WorkflowHandle[_DelayedGreetingOutput]:
+    ) -> nexus.TemporalOperationResult[_DelayedGreetingOutput]:
         """Greet one person after a durable delay."""
-        return await ctx.start_workflow(
+        return await client.start_workflow(
             _DelayedGreetingWorkflow.run,
             input,
             id=f"matrix-delayed-greeting-{ctx.request_id}",

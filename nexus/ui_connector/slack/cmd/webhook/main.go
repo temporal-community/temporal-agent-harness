@@ -12,15 +12,15 @@ import (
 )
 
 type flags struct {
-	slackBotToken      string
-	slackSigningSecret string
-	temporalAddress    string
-	connectorNamespace string
-	taskQueue          string
-	identity           string
-	webhookPort        string
-	slashCommandPrefix string
-	allowedBotIDs      []string
+	slackBotToken       string
+	slackSigningSecret  string
+	temporalAddress     string
+	connectorNamespace  string
+	taskQueue           string
+	identity            string
+	webhookPort         string
+	allowedBotIDs       []string
+	guideOnFirstContact bool
 }
 
 // splitCommaList splits a comma-separated env var into trimmed, non-empty
@@ -57,31 +57,23 @@ func ensureFlags() *flags {
 	if taskQueue == "" {
 		taskQueue = "nexus-connector-slack"
 	}
-	// Distinguishes this server's router workflows from any other identity
-	// sharing the same connectorNamespace (e.g. running multiple environments
-	// against one Temporal namespace). Empty defers to inbound.NewServer's
-	// own default.
 	identity := os.Getenv("CONNECTOR_IDENTITY")
 	webhookPort := os.Getenv("WEBHOOK_PORT")
 	if webhookPort == "" {
 		webhookPort = "8080"
 	}
-	// Prefix for slash commands. Set this when other bots share the same
-	// Slack workspace. Leave empty if not.
-	slashCommandPrefix := os.Getenv("SLASH_CMD_PREFIX")
-	// Other bot IDs allowed to trigger this server (e.g. a load-test bot),
-	// comma-separated. Leave empty to allow none.
+	guideOnFirstContact := os.Getenv("SLACK_GUIDE_ON_FIRST_CONTACT") != "false"
 	allowedBotIDs := splitCommaList(os.Getenv("ALLOWED_INBOUND_BOT_IDS"))
 	return &flags{
-		slackBotToken:      slackBotToken,
-		slackSigningSecret: slackSigningSecret,
-		temporalAddress:    temporalAddress,
-		connectorNamespace: connectorNamespace,
-		taskQueue:          taskQueue,
-		identity:           identity,
-		webhookPort:        webhookPort,
-		slashCommandPrefix: slashCommandPrefix,
-		allowedBotIDs:      allowedBotIDs,
+		slackBotToken:       slackBotToken,
+		slackSigningSecret:  slackSigningSecret,
+		temporalAddress:     temporalAddress,
+		connectorNamespace:  connectorNamespace,
+		taskQueue:           taskQueue,
+		identity:            identity,
+		webhookPort:         webhookPort,
+		allowedBotIDs:       allowedBotIDs,
+		guideOnFirstContact: guideOnFirstContact,
 	}
 }
 
@@ -105,7 +97,13 @@ func main() {
 		log.Printf("Slack bot user ID: %s (forwarding mentions, plus replies in threads the bot was mentioned in)", bot.UserID)
 	}
 
-	handler := slackinbound.NewServer(tc, flags.taskQueue, flags.identity, flags.slackSigningSecret, bot.UserID, flags.slashCommandPrefix, flags.allowedBotIDs)
+	handler := slackinbound.NewServer(tc, flags.taskQueue, flags.slackSigningSecret, slackinbound.Options{
+		Identity:            flags.identity,
+		BotUserID:           bot.UserID,
+		AllowedBotIDs:       flags.allowedBotIDs,
+		GuideOnFirstContact: flags.guideOnFirstContact,
+		Slack:               bot.Client,
+	})
 	addr := ":" + flags.webhookPort
 	log.Printf("Slack webhook server listening on %s", addr)
 	if err := http.ListenAndServe(addr, handler); err != nil {

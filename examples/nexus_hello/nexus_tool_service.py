@@ -15,7 +15,6 @@ import asyncio
 import random
 
 import nexusrpc.handler
-import temporalio.nexus
 from mcp.types import ToolAnnotations
 from nexus_mcp.authoring import (
     MCPOverNexusServiceHandler,
@@ -23,8 +22,9 @@ from nexus_mcp.authoring import (
     nexus_mcp_tool,
 )
 from pydantic import BaseModel
-from temporalio import workflow
+from temporalio import nexus, workflow
 from temporalio.client import Client
+from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.envconfig import ClientConfig
 from temporalio.worker import Worker
 
@@ -89,14 +89,15 @@ class DemoNexusToolsServiceHandler(MCPOverNexusServiceHandler):
             idempotent_hint=True,
         ),
     )
-    @temporalio.nexus.workflow_run_operation
+    @nexus.temporal_operation
     async def get_delayed_lucky_number(
         self,
-        ctx: temporalio.nexus.WorkflowRunOperationContext,
+        ctx: nexus.TemporalStartOperationContext,
+        client: nexus.TemporalNexusClient,
         input: DelayedLuckyNumberInput,
-    ) -> temporalio.nexus.WorkflowHandle[DelayedLuckyNumberOutput]:
+    ) -> nexus.TemporalOperationResult[DelayedLuckyNumberOutput]:
         """Return a lucky number after a durable delay."""
-        return await ctx.start_workflow(
+        return await client.start_workflow(
             DelayedLuckyNumberWorkflow.run,
             input,
             id=f"delayed-lucky-number-{ctx.request_id}",
@@ -106,7 +107,9 @@ class DemoNexusToolsServiceHandler(MCPOverNexusServiceHandler):
 
 async def main() -> None:
     connect_config = ClientConfig.load_client_connect_config()
-    client = await Client.connect(**connect_config)
+    client = await Client.connect(
+        **connect_config, data_converter=pydantic_data_converter
+    )
 
     worker = Worker(
         client,

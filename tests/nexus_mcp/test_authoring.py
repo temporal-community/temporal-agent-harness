@@ -6,7 +6,6 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import nexusrpc.handler
-import temporalio.nexus
 from mcp.types import ToolAnnotations
 from nexus_mcp.authoring import (
     MCPOverNexusServiceHandler,
@@ -16,8 +15,9 @@ from nexus_mcp.authoring import (
     nexus_mcp_operation,
     nexus_mcp_tool,
 )
-from nexusrpc.handler import OperationTaskCancellation, StartOperationContext
+from nexusrpc.handler import OperationTaskCancellation
 from pydantic import BaseModel
+from temporalio import nexus
 
 
 class _WeatherInput(BaseModel):
@@ -52,33 +52,36 @@ class _WeatherService(MCPOverNexusServiceHandler):
         return {"city": city}
 
     @nexus_mcp_operation(title="Modeled forecast")
-    @nexusrpc.handler.sync_operation(name="modeled-forecast")
+    @nexus.temporal_operation(name="modeled-forecast")
     async def modeled(
         self,
-        ctx: StartOperationContext,
+        ctx: nexus.TemporalStartOperationContext,
+        client: nexus.TemporalNexusClient,
         input: _WeatherInput,
-    ) -> _WeatherOutput:
+    ) -> nexus.TemporalOperationResult[_WeatherOutput]:
         """Use explicit Nexus input and output models."""
-        return _WeatherOutput(summary=input.city)
+        return nexus.TemporalOperationResult.sync(_WeatherOutput(summary=input.city))
 
     @nexus_mcp_operation
-    @temporalio.nexus.workflow_run_operation
+    @nexus.temporal_operation
     async def delayed(
         self,
-        ctx: temporalio.nexus.WorkflowRunOperationContext,
+        ctx: nexus.TemporalStartOperationContext,
+        client: nexus.TemporalNexusClient,
         input: _WeatherInput,
-    ) -> temporalio.nexus.WorkflowHandle[_WeatherOutput]:
+    ) -> nexus.TemporalOperationResult[_WeatherOutput]:
         """Start a workflow-backed tool."""
         raise NotImplementedError
 
-    @nexusrpc.handler.sync_operation
+    @nexus.temporal_operation
     async def internal_operation(
         self,
-        ctx: StartOperationContext,
+        ctx: nexus.TemporalStartOperationContext,
+        client: nexus.TemporalNexusClient,
         input: str,
-    ) -> None:
+    ) -> nexus.TemporalOperationResult[None]:
         """Do not expose this operation as an MCP tool."""
-        return
+        return nexus.TemporalOperationResult.sync(None)
 
 
 def test_build_tool_dicts_exposes_only_decorated_operations() -> None:
@@ -116,16 +119,18 @@ def test_build_tool_dicts_exposes_only_decorated_operations() -> None:
 
 
 async def test_service_list_tools_uses_the_runtime_service_name() -> None:
-    output = await _WeatherService().list_tools(
-        StartOperationContext(
+    result = await _WeatherService().list_tools(
+        nexus.TemporalStartOperationContext(
             service="weather",
             operation="list_tools",
             headers={},
             task_cancellation=MagicMock(spec=OperationTaskCancellation),
             request_id="request-1",
         ),
+        MagicMock(spec=nexus.TemporalNexusClient),
         None,
     )
+    output = result.value
 
     assert sorted(tool["name"] for tool in output.tools) == [
         "weather_conditions",
@@ -141,14 +146,15 @@ async def test_convenience_decorator_accepts_sync_methods() -> None:
     assert operation is not None
 
     output = await cast(Any, _WeatherService().conditions)(
-        StartOperationContext(
+        nexus.TemporalStartOperationContext(
             service="weather",
             operation="conditions",
             headers={},
             task_cancellation=MagicMock(spec=OperationTaskCancellation),
             request_id="request-2",
         ),
+        MagicMock(spec=nexus.TemporalNexusClient),
         cast(Any, operation.input_type)(city="New York"),
     )
 
-    assert output == {"city": "New York"}
+    assert output.value == {"city": "New York"}

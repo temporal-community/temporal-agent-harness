@@ -1,7 +1,7 @@
 """Durable Tool Call Gateway Temporal worker: registers 3rd-party MCP servers and
 proxies their tool calls as standalone activities (Nexus + SAA).
 
-Requires server-side dynamic config: `activity.enableStandalone`,
+Requires server-side dynamic config: `activity.enableStandalone`, `activity.enableCallbacks`,
 `nexusoperation.enableStandalone`. See examples/nexus_hello/justfile's `temporal` recipe.
 
 Usage (from repo root):
@@ -39,13 +39,16 @@ from .registry import (
 )
 from .registry_service_handler import (
     RegistryServiceHandler,
+    list_external_tools,
     mcp_proxy_activity,
 )
 
 logger = logging.getLogger(__name__)
 
 
-async def _seed_external_servers(client: Client, seed: dict[str, str], agent_id: str) -> None:
+async def _seed_external_servers(
+    client: Client, seed: dict[str, str], agent_id: str
+) -> None:
     """Signal each {name: url} pair to ToolRegistryWorkflow.register_external, under
     one agent_id."""
     registry_handle = client.get_workflow_handle(REGISTRY_WORKFLOW_ID)
@@ -53,18 +56,23 @@ async def _seed_external_servers(client: Client, seed: dict[str, str], agent_id:
         await registry_handle.signal(
             ToolRegistryWorkflow.register_external, args=[agent_id, name, url]
         )
-        logger.info("Seeded external server %r -> %s (agent_id=%r)", name, url, agent_id)
+        logger.info(
+            "Seeded external server %r -> %s (agent_id=%r)", name, url, agent_id
+        )
 
 
 async def main(
-    seed_external_servers: dict[str, str] | None = None, seed_agent_id: str | None = None
+    seed_external_servers: dict[str, str] | None = None,
+    seed_agent_id: str | None = None,
 ) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
     if seed_external_servers and not seed_agent_id:
-        raise SystemExit("GATEWAY_SEED_AGENT_ID is required when GATEWAY_SEED_EXTERNAL_SERVERS is set")
+        raise SystemExit(
+            "GATEWAY_SEED_AGENT_ID is required when GATEWAY_SEED_EXTERNAL_SERVERS is set"
+        )
 
     connect_config = ClientConfig.load_client_connect_config()
     client = await Client.connect(
@@ -88,11 +96,13 @@ async def main(
         client,
         task_queue=REGISTRY_TASK_QUEUE,
         workflows=[ToolRegistryWorkflow],
-        activities=[mcp_proxy_activity, fetch_external_tools],
-        nexus_service_handlers=[RegistryServiceHandler(client)],
+        activities=[mcp_proxy_activity, fetch_external_tools, list_external_tools],
+        nexus_service_handlers=[RegistryServiceHandler()],
     )
     async with worker:
-        logger.info("Durable Tool Call Gateway ready — task_queue=%r", REGISTRY_TASK_QUEUE)
+        logger.info(
+            "Durable Tool Call Gateway ready — task_queue=%r", REGISTRY_TASK_QUEUE
+        )
         if seed_external_servers:
             assert seed_agent_id is not None
             await _seed_external_servers(client, seed_external_servers, seed_agent_id)

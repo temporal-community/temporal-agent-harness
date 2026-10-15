@@ -46,7 +46,7 @@ flowchart LR
         subgraph native_service[DemoNexusToolsServiceHandler]
             manifest[list_tools synchronous Nexus operation]
             lucky[get_lucky_number synchronous Nexus operation]
-            delayed_op[get_delayed_lucky_number workflow-run Nexus operation]
+            delayed_op[get_delayed_lucky_number workflow-backed Nexus operation]
         end
         delayed_workflow[DelayedLuckyNumberWorkflow]
     end
@@ -54,7 +54,7 @@ flowchart LR
     subgraph gateway_ns[gateway namespace]
         gateway[RegistryService]
         registry[ToolRegistry workflow]
-        fetch[fetch_external_tools activity]
+        fetch[list_external_tools activity]
         proxy[mcp_proxy_activity]
     end
 
@@ -63,7 +63,7 @@ flowchart LR
     agent -->|Nexus: discover tools| manifest
     agent -->|Nexus: call immediate tool| lucky
     agent -->|Nexus: call durable tool| delayed_op
-    delayed_op -->|start workflow and return handle| delayed_workflow
+    delayed_op -->|start workflow and return operation result| delayed_workflow
 
     agent -->|Nexus: discover tools or call tool| gateway
     gateway -->|query alias URL| registry
@@ -82,13 +82,16 @@ process these calls.
 The service exposes three Nexus operations. The generated `list_tools`
 operation returns the current tool manifest and the exact route for each tool.
 
-`get_lucky_number` is a synchronous Nexus handler operation. The handler
-creates the result and returns it directly. This operation does not start a
-workflow.
+All operations use `@nexus.temporal_operation`, following the
+[Python Nexus feature guide](https://docs.temporal.io/develop/python/nexus/feature-guide).
+The MCP helpers use it for the generated `list_tools` and `get_lucky_number`
+operations, wrapping immediate values in `nexus.TemporalOperationResult.sync(...)`.
 
-`get_delayed_lucky_number` is a workflow-run Nexus operation. Its handler
-starts `DelayedLuckyNumberWorkflow` and returns a workflow handle. The backing
-workflow uses `workflow.sleep()` for its durable timer.
+`get_delayed_lucky_number` is a workflow-backed Nexus operation. Its handler
+uses the supplied `nexus.TemporalNexusClient` to start `DelayedLuckyNumberWorkflow`
+and returns its `nexus.TemporalOperationResult`. The backing workflow uses
+`workflow.sleep()` for its durable timer and delivers its result through the
+Nexus completion callback.
 
 The complete implementation is in
 [`nexus_tool_service.py`](nexus_tool_service.py). This reduced excerpt shows
@@ -102,13 +105,14 @@ class DemoNexusToolsServiceHandler(MCPOverNexusServiceHandler):
         return f"{topic}'s lucky number today is {random.randint(1, 100)}."
 
     @nexus_mcp_operation(title="Get a delayed lucky number")
-    @temporalio.nexus.workflow_run_operation
+    @nexus.temporal_operation
     async def get_delayed_lucky_number(
         self,
-        ctx: temporalio.nexus.WorkflowRunOperationContext,
+        ctx: nexus.TemporalStartOperationContext,
+        client: nexus.TemporalNexusClient,
         input: DelayedLuckyNumberInput,
-    ) -> temporalio.nexus.WorkflowHandle[DelayedLuckyNumberOutput]:
-        return await ctx.start_workflow(
+    ) -> nexus.TemporalOperationResult[DelayedLuckyNumberOutput]:
+        return await client.start_workflow(
             DelayedLuckyNumberWorkflow.run,
             input,
             id=f"delayed-lucky-number-{ctx.request_id}",
@@ -147,8 +151,13 @@ def get_fun_fact(topic: str) -> str:
     return random.choice(facts)
 ```
 
-The gateway uses `fetch_external_tools` for discovery and `mcp_proxy_activity`
-for tool calls. See the
+The gateway also uses `@nexus.temporal_operation`. Registration and deregistration
+return synchronous results. Discovery starts `list_external_tools`, and tool calls
+start `mcp_proxy_activity`, using the supplied Nexus-aware client's `start_activity`.
+Both operations complete through the activity's Nexus callback, so external HTTP
+requests can outlive the handler deadline. Activity IDs derive from the Nexus
+request ID to deduplicate start retries. Tool calls retain a single activity attempt
+because external tools may have side effects. See the
 [gateway architecture](../../nexus/mcp/ARCHITECTURE.md#durable-tools-gateway),
 [`registry.py`](../../nexus/mcp/nexus_mcp/durable_tools_gateway/registry.py)
 and
@@ -159,6 +168,7 @@ The gateway requires these Temporal dynamic configuration values:
 ```text
 nexusoperation.enableStandalone=true
 activity.enableStandalone=true
+activity.enableCallbacks=true
 ```
 
 The `just temporal` recipe sets both values.
@@ -194,7 +204,8 @@ identifiers do not have to match.
   some dynamic configs that are only available on Temporal server versions that 1.9.1+ CLI starts.
 - From the repository root, copy `.env.example` to `.env.local`.
 - Set `OPENAI_API_KEY` in `.env.local`.
-- From the repository root, run `uv sync --extra nexus-mcp`.
+- From the repository root, run `uv sync --extra nexus-mcp` (Temporal Python SDK
+  1.33.0 or later).
 
 The extra installs the local `temporal-nexus-mcp` distribution. Do not run
 `pip install nexus-mcp`. That command installs an unrelated project from PyPI.

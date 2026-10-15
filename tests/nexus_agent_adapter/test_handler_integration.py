@@ -382,6 +382,8 @@ class GatedProbeAgent:
 
 class FullSurfaceOutput(BaseModel):
     handler_names: list[str]
+    handler_mid_turns: list[str | None]
+    message_id: str | None
     pending_tool_id: str
     approve_accepted: bool
     poll_item_count: int
@@ -444,6 +446,8 @@ class FullSurfaceCallerWorkflow:
 
         return FullSurfaceOutput(
             handler_names=sorted(h.name for h in iface.handlers),
+            handler_mid_turns=[h.mid_turn for h in sorted(iface.handlers, key=lambda h: h.name)],
+            message_id=send_out.message_id,
             pending_tool_id=tool_id,
             approve_accepted=approve_out.accepted,
             poll_item_count=len(poll_out.items),
@@ -572,6 +576,8 @@ async def test_full_operation_surface(env: WorkflowEnvironment) -> None:
         result = await handle.result()
 
         assert result.handler_names == ["use_tool"]
+        assert result.handler_mid_turns == ["reject"]
+        assert result.message_id
         assert result.pending_tool_id == "fixed-tool-id"
         assert result.approve_accepted
         assert result.poll_item_count > 0

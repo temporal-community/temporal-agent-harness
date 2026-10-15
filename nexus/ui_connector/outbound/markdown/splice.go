@@ -1,6 +1,6 @@
-// Package citations splices router.Citation markers inline into reply text, shared by
-// the Slack and Teams outbound drivers.
-package citations
+// Package markdown renders protocol chunks as Markdown text, for outbound drivers that
+// show text. It also places citation markers in the text.
+package markdown
 
 import (
 	"fmt"
@@ -9,11 +9,10 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/router"
+	"github.com/temporal-community/temporal-agent-harness/nexus/ui_connector/protocol"
 )
 
-// CommonMarkLink renders a link in standard CommonMark syntax "[title](url)", used by
-// Slack's markdown_text fields and Teams' Bot Framework "markdown" text format.
+// CommonMarkLink renders a link in CommonMark syntax: "[title](url)".
 func CommonMarkLink(url, title string) string {
 	return fmt.Sprintf("[%s](%s)", title, url)
 }
@@ -35,16 +34,23 @@ var markerPattern = regexp.QuoteMeta(string(markerOpen)) + `\d+` + regexp.QuoteM
 // it with a real link built from the citation's URL and Title via link. No dedup:
 // repeated sources get a new number each time. Citations at the same index render
 // adjacent. EndIndex < 0 appends at the very end.
+// Citations inside code move after the code. An unclosed fence moves them before it.
 //
 // Two-phase: place internal sentinel markers, reflow lines (relocateLeadingCitations),
 // then substitute real links last - so line-reflow can match markers by their sentinel
 // regardless of link syntax or citation title/URL content.
-func Splice(text string, cs []router.Citation, link func(url, title string) string) string {
+func Splice(text string, cs []protocol.Citation, link func(url, title string) string) string {
 	if len(cs) == 0 {
 		return text
 	}
 	runes := []rune(text)
+	code := codeRanges(runes)
+	codeStartsAt := make(map[int]bool, len(code))
+	for _, span := range code {
+		codeStartsAt[span.start] = true
+	}
 	markersByIndex := make(map[int][]string, len(cs))
+	paragraphAt := make(map[int]bool)
 	var order []int
 	for i, c := range cs {
 		idx := c.EndIndex
@@ -53,6 +59,20 @@ func Splice(text string, cs []router.Citation, link func(url, title string) stri
 		}
 		idx = citationInsertionIndex(runes, idx)
 		idx = avoidHeadingLine(runes, idx)
+		for _, span := range code {
+			if span.block && idx >= span.start && idx <= span.end {
+				idx = span.end
+				if !span.closed {
+					idx = span.start
+				}
+				paragraphAt[idx] = true
+				break
+			}
+			if !span.block && idx > span.start && idx < span.end {
+				idx = citationInsertionIndex(runes, span.end)
+				break
+			}
+		}
 		if _, ok := markersByIndex[idx]; !ok {
 			order = append(order, idx)
 		}
@@ -64,11 +84,29 @@ func Splice(text string, cs []router.Citation, link func(url, title string) stri
 		left := trimTrailingSpaces(runes[:idx])
 		right := trimLeadingSpaces(runes[idx:])
 		markerText := strings.Join(markersByIndex[idx], " ")
-		if len(left) > 0 {
-			markerText = " " + markerText
-		}
-		if len(right) > 0 && !closesInlineMarkup(right[0]) {
-			markerText += " "
+		if paragraphAt[idx] {
+			// Keep citation links on a separate line from a code fence.
+			left, right = runes[:idx], runes[idx:]
+			if len(left) > 0 {
+				padding := "\n\n"
+				if left[len(left)-1] == '\n' {
+					padding = "\n"
+				}
+				markerText = padding + markerText
+			}
+			if len(right) > 0 {
+				markerText += "\n"
+				if right[0] != '\n' {
+					markerText += "\n"
+				}
+			}
+		} else {
+			if len(left) > 0 {
+				markerText = " " + markerText
+			}
+			if len(right) > 0 && (!closesInlineMarkup(right[0]) || codeStartsAt[idx]) {
+				markerText += " "
+			}
 		}
 		m := []rune(markerText)
 		merged := make([]rune, 0, len(left)+len(m)+len(right))
@@ -135,7 +173,7 @@ func citationInsertionIndex(runes []rune, idx int) int {
 	return idx
 }
 
-// avoidHeadingLine: Slack and Teams don't render links inside ATX headings ("#"-"######").
+// avoidHeadingLine: chat platforms often do not render links inside ATX headings.
 // If idx lands on a heading line, moves to the start of the next non-heading line
 // (skips blank lines too). Loops for consecutive headings.
 func avoidHeadingLine(runes []rune, idx int) int {
@@ -177,14 +215,18 @@ var (
 	leadingCitationRun = regexp.MustCompile(`^(\s*)((?:` + markerPattern + `\s*)+)(.+)$`)
 	// A run of markers right after a heading prefix, e.g. "### <markers> Step 1".
 	headingCitationRun = regexp.MustCompile(`^(#{1,4}\s+)((?:` + markerPattern + `\s*)+)(.+)$`)
+	onlyCitations      = regexp.MustCompile(`^\s*(?:` + markerPattern + `\s*)+$`)
 )
 
 // relocateLeadingCitations: a marker glued to the front of a line (before a list item's
-// number, a heading's text, etc.) breaks Slack/Teams' block parsing for that line. Per
+// number, a heading's text, etc.) can break block parsing for that line. Per
 // line, moves any such leading run to the end of the line instead.
 func relocateLeadingCitations(text string) string {
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
+		if onlyCitations.MatchString(line) {
+			continue
+		}
 		line = moveMatchedCitationsToEnd(leadingCitationRun, line)
 		line = moveMatchedCitationsToEnd(headingCitationRun, line)
 		lines[i] = line

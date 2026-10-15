@@ -193,19 +193,24 @@ It does not process calls to native Nexus tool services.
 
 The registry stores an MCP server URL under an agent ID and alias. It does not
 store tool definitions. During discovery, `RegistryService` reads the selected
-URLs and starts one `fetch_external_tools` activity for each server. Each
-activity sends `tools/list` to the external server.
+URLs and starts a `list_external_tools` activity. The activity fetches each
+server's `tools/list` concurrently and groups the results by alias.
 
 During a tool call, `RegistryService` reads the URL and starts
 `mcp_proxy_activity`. The activity sends `tools/call` to the external server.
 The activity does not retry because the tool might not be idempotent.
+
+Every handler uses `@nexus.temporal_operation`. Registration and deregistration
+return synchronous results. Discovery and tool calls return activity-backed
+operation results; the activities deliver completion through Nexus callbacks.
+Their IDs derive from the Nexus request ID to deduplicate start retries.
 
 ```mermaid
 flowchart LR
     caller[Agent workflow]
     gateway[RegistryService]
     registry[ToolRegistry workflow]
-    fetch[fetch_external_tools activity]
+    fetch[list_external_tools activity]
     proxy[mcp_proxy_activity]
     server[External HTTP MCP server]
 
@@ -222,6 +227,7 @@ The gateway requires these Temporal dynamic configuration values:
 ```text
 nexusoperation.enableStandalone=true
 activity.enableStandalone=true
+activity.enableCallbacks=true
 ```
 
 See the [Nexus hello example](../../examples/nexus_hello/README.md) for a

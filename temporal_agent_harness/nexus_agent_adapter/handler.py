@@ -166,11 +166,8 @@ class AgentServiceHandler:
             turn_number=reply.turn_number,
             turn_id=reply.turn_id,
             stream_head_offset=reply.accepted_offset,
-            # The IDL still models acceptance as a bool; the harness now reports the
-            # richer MessageDisposition (opened / joined / queued), of which "queued" is
-            # exactly what this field meant. The contract regeneration that removes the
-            # operator operations is where this becomes the disposition itself.
             pending=reply.disposition is MessageDisposition.QUEUED,
+            message_id=reply.message_id,
         )
 
     # -----------------------------------------------------------------------
@@ -251,6 +248,7 @@ class AgentServiceHandler:
                     description=fn.description,
                     parameters=json.dumps(fn.parameters),
                     output=json.dumps(fn.output),
+                    mid_turn=fn.mid_turn.value,
                 )
                 for fn in functions
             ]
