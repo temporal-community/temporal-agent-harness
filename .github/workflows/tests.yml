@@ -53,7 +53,7 @@ jobs:
         run: touch "$RUNNER_TEMP/bazel-build-start"
 
       - name: Run the test suite
-        run: bazel test //... --config=${{ matrix.config }}
+        run: bazel test //... --config=${{ matrix.config }} --config=ci
 
       # Keep only what this build used, so the saved cache never grows past one build of main.
       # Bazel refreshes a disk cache entry's mtime whenever it reads or writes it; what is left
