@@ -96,6 +96,7 @@ temporal: _require-temporal-cli
         --dynamic-config-value 'callback.allowedAddresses=[{"Pattern":"*","AllowInsecure":true}]' \
         --dynamic-config-value 'history.enableUpdateCallbacks=true' \
         --dynamic-config-value 'nexusoperation.enableStandalone=true' \
+        --dynamic-config-value 'activity.enableCallbacks=true' \
         --dynamic-config-value 'activity.enableStandalone=true'
 
 # ONE-SHOT: create the "gateway" and "nexus-mcp-server" namespaces (the agent's own "default"

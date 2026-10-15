@@ -60,7 +60,7 @@ class NexusHelloAgentWorkflow:
             config,
             stream=WorkflowStream(),
             # Hello-world default: skip approvals.
-            approval_policy_default=ToolApprovalPolicy.dangerously_skip_all(),
+            approval_policy_default=ToolApprovalPolicy.always_require_human_approval(),
         )
         self._conversation: list[TResponseInputItem] = []
 

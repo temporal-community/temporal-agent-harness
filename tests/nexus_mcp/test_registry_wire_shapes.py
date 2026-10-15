@@ -5,19 +5,13 @@
 # validate at construction, so passing a plain dict (the old pydantic-era shape) builds
 # fine and only crashes once the real Nexus wire serializes it:
 #   AttributeError: 'dict' object has no attribute 'additional_properties'
-# These call the real handler methods and round-trip their return values through the
-# real payload converter -- the exact step that raised -- to catch that failure mode.
-#
-# temporalio.nexus.info() only works inside a real dispatched Nexus operation; it's
-# patched here (a public SDK entry point, not an internal) rather than standing up a
-# live worker + real MCP server, which this environment's asyncio/Temporal interaction
-# made too flaky to rely on.
+# Exercise the handlers and their backing activities, then round-trip the activity
+# results through the real payload converter to catch that failure mode.
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import temporalio.nexus
 from mcp.types import CallToolResult, TextContent
 from nexus_mcp.durable_tools_gateway.generated import (
     CallToolInput,
@@ -29,18 +23,16 @@ from nexus_mcp.durable_tools_gateway.generated import (
 from nexus_mcp.durable_tools_gateway.registry import (
     AgentEntries,
     ToolRegistryWorkflow,
-    fetch_external_tools,
 )
 from nexus_mcp.durable_tools_gateway.registry_service_handler import (
     RegistryServiceHandler,
+    list_external_tools,
     mcp_proxy_activity,
 )
+from temporalio import nexus
 from temporalio.converter import DataConverter
 
 _payload_converter = DataConverter.default.payload_converter
-_FAKE_NEXUS_INFO = temporalio.nexus.Info(
-    endpoint="test-endpoint", namespace="test-namespace", task_queue="test-task-queue"
-)
 
 
 def _round_trip(value: object, type_hint: type) -> object:
@@ -49,9 +41,11 @@ def _round_trip(value: object, type_hint: type) -> object:
     return decoded
 
 
-def _mock_client(*, remote_servers=None, fetched_tools=None, find_url=None, call_result=None):
+def _mock_client(
+    *, remote_servers=None, fetched_tools=None, find_url=None, call_result=None
+):
     """A fake temporalio.client.Client just capable enough for RegistryServiceHandler."""
-    client = MagicMock()
+    client = MagicMock(spec=nexus.TemporalNexusClient)
     handle = MagicMock()
 
     async def query(method, *args, **kwargs):
@@ -62,44 +56,60 @@ def _mock_client(*, remote_servers=None, fetched_tools=None, find_url=None, call
         raise AssertionError(f"unexpected query: {method}")
 
     handle.query = AsyncMock(side_effect=query)
-    client.get_workflow_handle.return_value = handle
+    client.client.get_workflow_handle.return_value = handle
 
-    async def execute_activity(activity, *args, **kwargs):
-        if activity is fetch_external_tools:
-            return fetched_tools or []
-        if activity is mcp_proxy_activity:
-            return call_result
-        raise AssertionError(f"unexpected activity: {activity}")
+    async def start_activity(activity_fn, input, **kwargs):
+        if activity_fn is list_external_tools:
+            with patch(
+                "nexus_mcp.durable_tools_gateway.registry_service_handler.fetch_external_tools",
+                AsyncMock(return_value=fetched_tools or []),
+            ):
+                result = await activity_fn(input)
+        elif activity_fn is mcp_proxy_activity:
+            mcp_client = MagicMock()
+            mcp_client.__aenter__ = AsyncMock(return_value=mcp_client)
+            mcp_client.__aexit__ = AsyncMock()
+            mcp_client.call_tool = AsyncMock(return_value=call_result)
+            with patch(
+                "nexus_mcp.durable_tools_gateway.registry_service_handler.MCPClient",
+                return_value=mcp_client,
+            ):
+                result = await activity_fn(input)
+        else:
+            raise AssertionError(f"unexpected activity: {activity_fn}")
+        return nexus.TemporalOperationResult.sync(result)
 
-    client.execute_activity = AsyncMock(side_effect=execute_activity)
+    client.start_activity = AsyncMock(side_effect=start_activity)
     return client
 
 
-@patch("temporalio.nexus.info", return_value=_FAKE_NEXUS_INFO)
-async def test_list_agent_entries_output_serializes_over_the_wire(_mock_info: MagicMock) -> None:
+async def test_list_agent_entries_output_serializes_over_the_wire() -> None:
     client = _mock_client(
         remote_servers={"weather": "http://fake"},
         fetched_tools=[{"name": "weather_get_forecast", "description": "fake"}],
     )
-    handler = RegistryServiceHandler(client)
+    handler = RegistryServiceHandler()
 
     output = await handler.list_agent_entries(
-        MagicMock(), ListAgentEntriesInput(agent_id="agent-1")
+        MagicMock(request_id="list-1"),
+        client,
+        ListAgentEntriesInput(agent_id="agent-1"),
     )
 
-    decoded = _round_trip(output, ListAgentEntriesOutput)
+    assert client.start_activity.await_args.kwargs["id"] == "mcp-list-tools-list-1"
+    decoded = _round_trip(output.value, ListAgentEntriesOutput)
     tools = decoded.remote_tools.additional_properties["weather"]
     assert tools[0].additional_properties["name"] == "weather_get_forecast"
 
 
-@patch("temporalio.nexus.info", return_value=_FAKE_NEXUS_INFO)
-async def test_call_tool_forwards_arguments_and_serializes_result(_mock_info: MagicMock) -> None:
+async def test_call_tool_forwards_arguments_and_serializes_result() -> None:
     fake_result = CallToolResult(content=[TextContent(type="text", text="42")])
     client = _mock_client(find_url="http://fake", call_result=fake_result)
-    handler = RegistryServiceHandler(client)
+    handler = RegistryServiceHandler()
 
     output = await handler.call_tool(
-        MagicMock(),
+        MagicMock(request_id="call-1"),
+        client,
         CallToolInput(
             agent_id="agent-1",
             alias="weather",
@@ -110,9 +120,11 @@ async def test_call_tool_forwards_arguments_and_serializes_result(_mock_info: Ma
 
     # Proves the wrapper got unwrapped before reaching the (mocked) activity, not just
     # that construction didn't crash.
-    activity_input = client.execute_activity.await_args.args[1]
+    activity_input = client.start_activity.await_args.args[1]
     assert activity_input.arguments == {"city": "NYC"}
+    assert client.start_activity.await_args.kwargs["id"] == "mcp-proxy-call-1"
+    assert client.start_activity.await_args.kwargs["retry_policy"].maximum_attempts == 1
 
-    decoded = _round_trip(output, CallToolOutput)
+    decoded = _round_trip(output.value, CallToolOutput)
     assert decoded.result.additional_properties["content"][0]["text"] == "42"
     assert decoded.result.additional_properties["isError"] is False

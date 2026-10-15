@@ -3307,7 +3307,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-ai-slim", marker = "extra == 'integrations'", specifier = ">=2.13" },
     { name = "pydantic-ai-slim", marker = "extra == 'pydantic-ai'", specifier = ">=2.13" },
-    { name = "temporalio", specifier = ">=1.15.0" },
+    { name = "temporalio", specifier = ">=1.33.0" },
 ]
 provides-extras = ["openai-agents", "pydantic-ai", "integrations"]
 
