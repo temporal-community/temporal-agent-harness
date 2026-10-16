@@ -1,7 +1,7 @@
 // The design doc's goal, as a component `tsc` type-checks against the example's generated client
 // types. It is never rendered; it is here to be compiled.
 
-import type { TicTacToeAgent } from "../../../examples/tictactoe/client_sdk/TicTacToeAgent";
+import type { TicTacToeAgent } from "../../../python/examples/tictactoe/client_sdk/TicTacToeAgent";
 import { useAgentSession } from "../src/index.js";
 
 export function TicTacToeBoard({ sessionId }: { sessionId: string }) {
