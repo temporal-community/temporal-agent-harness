@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -70,7 +71,12 @@ func (p *SlackPlatform) Deliver(ctx context.Context, in DeliverInput) (json.RawM
 			return nil, fmt.Errorf("decode state: %w", err)
 		}
 	}
-	s := &sink{ctx: ctx, p: p, addr: addr}
+	s := &sink{ctx: ctx, p: p, addr: addr, toolInputsSent: make(map[string]bool)}
+	for _, c := range st.Segment.Delivered {
+		if c.Tool != nil && prettyJSON(c.Tool.Input) != "" {
+			s.toolInputsSent[c.Tool.ID] = true
+		}
+	}
 	cfg := timeline.Config{Streaming: true, Limits: p.Limits, Size: chunkSize, SplitText: markdown.BreakText}
 	var events []protocol.Event
 	for _, ev := range in.Events {
@@ -125,6 +131,8 @@ type sink struct {
 	addr slack.Address
 	// footer is added only when the reply ends.
 	footer string
+	// Slack appends details, so tool arguments are sent only once per stream.
+	toolInputsSent map[string]bool
 }
 
 var _ timeline.Sink = (*sink)(nil)
@@ -164,9 +172,10 @@ func (s *sink) Open(chunks []protocol.Chunk) (string, error) {
 	}
 
 	cards := !s.p.cardsUnsupported.Load()
-	ts, err := start(streamChunks(chunks, cards))
+	sent := make(map[string]bool)
+	ts, err := start(streamChunks(chunks, cards, sent))
 	if err != nil && cards && hasCards(chunks) {
-		if textTS, retryErr := start(streamChunks(chunks, false)); retryErr == nil {
+		if textTS, retryErr := start(streamChunks(chunks, false, nil)); retryErr == nil {
 			s.p.cardsUnsupported.Store(true)
 			ts, err = textTS, nil
 		}
@@ -174,6 +183,7 @@ func (s *sink) Open(chunks []protocol.Chunk) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("chat.startStream: %w", err)
 	}
+	s.toolInputsSent = sent
 	return ts, nil
 }
 
@@ -181,18 +191,21 @@ func (s *sink) Open(chunks []protocol.Chunk) (string, error) {
 // card fails and the same content succeeds as text, later calls use text.
 func (s *sink) Append(stream string, chunks []protocol.Chunk) error {
 	cards := !s.p.cardsUnsupported.Load()
-	content := streamChunks(chunks, cards)
+	sent := make(map[string]bool)
+	maps.Copy(sent, s.toolInputsSent)
+	content := streamChunks(chunks, cards, sent)
 	if len(content) == 0 {
 		return nil
 	}
 	_, _, err := s.p.client.AppendStreamContext(s.ctx, s.addr.Channel, stream, slackapi.MsgOptionChunks(content...))
 	if err == nil {
+		s.toolInputsSent = sent
 		return nil
 	}
 	if !cards || !hasCards(chunks) {
 		return fmt.Errorf("chat.appendStream: %w", err)
 	}
-	text := streamChunks(chunks, false)
+	text := streamChunks(chunks, false, nil)
 	if len(text) == 0 {
 		return nil
 	}
@@ -384,7 +397,8 @@ func hasCards(chunks []protocol.Chunk) bool {
 }
 
 // streamChunks converts content to Slack chunks and merges adjacent text.
-func streamChunks(chunks []protocol.Chunk, cards bool) []slackapi.StreamChunk {
+// sent tracks tool arguments included in this stream, including earlier chunks in this batch.
+func streamChunks(chunks []protocol.Chunk, cards bool, sent map[string]bool) []slackapi.StreamChunk {
 	var out []slackapi.StreamChunk
 	var text strings.Builder
 	flushText := func() {
@@ -395,6 +409,13 @@ func streamChunks(chunks []protocol.Chunk, cards bool) []slackapi.StreamChunk {
 	}
 	for _, c := range chunks {
 		if card, ok := taskCard(c); ok && cards {
+			if c.Tool != nil && card.Details != "" {
+				if sent[card.ID] {
+					card.Details = ""
+				} else {
+					sent[card.ID] = true
+				}
+			}
 			flushText()
 			out = append(out, card)
 			continue

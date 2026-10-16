@@ -98,7 +98,7 @@ func TestStreamChunks_CardsAndText(t *testing.T) {
 		{Text: "c"},
 	}
 
-	withCards := streamChunks(chunks, true)
+	withCards := streamChunks(chunks, true, make(map[string]bool))
 	require.Len(t, withCards, 4)
 	assert.Equal(t, slackapi.NewMarkdownTextChunk("ab"), withCards[0])
 	tool := withCards[1].(slackapi.TaskUpdateChunk)
@@ -109,7 +109,7 @@ func TestStreamChunks_CardsAndText(t *testing.T) {
 	assert.Equal(t, "Thinking", thought.Title)
 	assert.Equal(t, slackapi.NewMarkdownTextChunk("c"), withCards[3])
 
-	textOnly := streamChunks(chunks, false)
+	textOnly := streamChunks(chunks, false, nil)
 	require.Len(t, textOnly, 1)
 	assert.Equal(t, slackapi.NewMarkdownTextChunk("ab\n_🔧 search…_\n\n> 💭 hmc"), textOnly[0])
 }
@@ -178,6 +178,39 @@ func TestSink_StreamLifecycle(t *testing.T) {
 	assert.Equal(t, "task_update", first[0]["type"])
 	assert.Equal(t, map[string]any{"type": "markdown_text", "text": "hi"}, first[1])
 	assert.Empty(t, f.requests[2].form.Get("markdown_text"), "no citations: nothing to add")
+}
+
+func TestSink_ToolArgumentsAreTrackedPerTaskAndStream(t *testing.T) {
+	f := newFakeSlack(t)
+	s := f.sink()
+	first := toolChunk(protocol.ToolRunning)
+	second := toolChunk(protocol.ToolRunning)
+	second.Tool.ID = "t2"
+	stream, err := s.Open([]protocol.Chunk{first, second})
+	require.NoError(t, err)
+	for _, card := range chunksOf(t, f.requests[0]) {
+		assert.Equal(t, "{\n  \"q\": \"x\"\n}", card["details"])
+	}
+	require.NoError(t, s.Append(stream, []protocol.Chunk{toolChunk(protocol.ToolComplete)}))
+	assert.Empty(t, chunksOf(t, f.requests[1])[0]["details"])
+
+	// A new stream needs the arguments even when its first card is already complete.
+	_, err = s.Open([]protocol.Chunk{toolChunk(protocol.ToolComplete)})
+	require.NoError(t, err)
+	assert.Equal(t, "{\n  \"q\": \"x\"\n}", chunksOf(t, f.requests[2])[0]["details"])
+}
+
+func TestSink_FailedAppendDoesNotConsumeToolArguments(t *testing.T) {
+	f := newFakeSlack(t)
+	s := f.sink()
+	stream, err := s.Open([]protocol.Chunk{{Text: "Looking up docs."}})
+	require.NoError(t, err)
+	f.fail["/chat.appendStream"] = "message_not_in_streaming_state"
+	require.Error(t, s.Append(stream, []protocol.Chunk{toolChunk(protocol.ToolRunning)}))
+	delete(f.fail, "/chat.appendStream")
+	require.NoError(t, s.Append(stream, []protocol.Chunk{toolChunk(protocol.ToolComplete)}))
+	last := f.requests[len(f.requests)-1]
+	assert.Equal(t, "{\n  \"q\": \"x\"\n}", chunksOf(t, last)[0]["details"])
 }
 
 func TestSink_CardsFallBackToText(t *testing.T) {
@@ -377,6 +410,53 @@ func TestDeliverActivity(t *testing.T) {
 	_, err = env.ExecuteActivity(p.Deliver, DeliverInput{Address: address, State: state, End: true})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"/chat.startStream", "/assistant.threads.setStatus", "/chat.stopStream", "/assistant.threads.setStatus"}, f.paths())
+}
+
+func TestDeliverToolArgumentsAppearOnce(t *testing.T) {
+	for _, phase := range []protocol.ToolPhase{protocol.ToolComplete, protocol.ToolErrored} {
+		for _, batched := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/batched=%t", phase, batched), func(t *testing.T) {
+				f := newFakeSlack(t)
+				p := f.platform()
+				address, err := json.Marshal(addr)
+				require.NoError(t, err)
+				start := toolChunk(protocol.ToolRunning)
+				end := toolChunk(phase)
+				end.Tool.Input = "" // The timeline restores the input from tool_start.
+				in := DeliverInput{Address: address, Events: []protocol.Event{{Chunk: &start}}}
+				if batched {
+					in.Events = append(in.Events, protocol.Event{Chunk: &end})
+				}
+				in.State, err = p.Deliver(context.Background(), in)
+				require.NoError(t, err)
+				if !batched {
+					in.Events = []protocol.Event{{Chunk: &end}}
+					_, err = p.Deliver(context.Background(), in)
+					require.NoError(t, err)
+				}
+
+				var details string
+				var last map[string]any
+				for _, req := range f.requests {
+					if req.path != "/chat.startStream" && req.path != "/chat.appendStream" {
+						continue
+					}
+					for _, card := range chunksOf(t, req) {
+						if value, ok := card["details"].(string); ok {
+							details += value
+						}
+						last = card
+					}
+				}
+				assert.Equal(t, "{\n  \"q\": \"x\"\n}", details)
+				want, _ := taskCard(end)
+				assert.Equal(t, string(want.Status), last["status"])
+				if phase == protocol.ToolErrored {
+					assert.Equal(t, "boom", last["output"])
+				}
+			})
+		}
+	}
 }
 
 func TestGuideBlocks(t *testing.T) {
