@@ -31,6 +31,12 @@ test --test_output=errors
 # Opt out of aspect's ruleset usage telemetry.
 common --repo_env=DO_NOT_TRACK=1
 
+# Every checkout and worktree on a machine shares one action cache, so a new worktree reuses
+# results instead of rebuilding. CI passes its own --disk_cache, which overrides this; opt out in
+# user.bazelrc with `common --disk_cache=`.
+common --disk_cache=~/.cache/bazel-disk
+common --experimental_disk_cache_gc_max_size=20G
+
 # CI (--config=ci) starts every run from a fresh output base and a restored disk cache, so nothing
 # it skips is ever needed later:
 #   * --nobuild_runfile_links: builds a runfiles tree only for a test that runs or a tool an action
