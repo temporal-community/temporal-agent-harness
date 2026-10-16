@@ -2,12 +2,9 @@ name: Client SDK codegen
 
 # packages/codegen turns `temporal-agent-harness schema` documents into TypeScript types.
 # packages/client commits its output for the event protocol as src/protocol.ts, and examples
-# that ship typed clients commit their agent's output (e.g. examples/tictactoe/client_sdk/). Nothing else
-# notices when a Python model changes and the committed types don't, so these jobs
-# regenerate them and fail on any difference.
-#
-# Every example whose justfile defines a `codegen-client-sdk` recipe is checked, so a new
-# example opts in by adding the recipe.
+# that ship typed clients commit their agent's output (e.g. examples/tictactoe/client_sdk/). Bazel
+# generates every one of them, and the `bazel test` jobs in tests.yml fail when a committed copy
+# differs (each file's `*_up_to_date_test`). These jobs test the npm packages themselves.
 
 on:
   pull_request:
@@ -49,40 +46,20 @@ jobs:
       - run: npm test
 
   client:
-    name: packages/client tests and protocol types
+    name: packages/client tests
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: packages/client
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: |
-            packages/client/package-lock.json
-            packages/codegen/package-lock.json
+          cache-dependency-path: packages/client/package-lock.json
       - run: npm ci
-      - run: npm ci
-        working-directory: packages/codegen
       - run: npm test
-
-      - name: Regenerate the protocol types
-        run: npm run generate:protocol
-
-      - name: Verify the committed protocol types are current
-        run: |
-          set -euo pipefail
-          if ! git diff --exit-code -- src/protocol.ts; then
-            echo "::error::packages/client/src/protocol.ts is out of date with events.py."
-            echo "Regenerate it from packages/client and commit the result:"
-            echo "    npm run generate:protocol"
-            exit 1
-          fi
 
   svelte:
     name: packages/svelte tests
@@ -141,45 +118,3 @@ jobs:
         run: npm test
       - working-directory: packages/react
         run: npm run build
-
-  committed-types:
-    name: Committed client types match the agents
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: packages/codegen/package-lock.json
-      - uses: extractions/setup-just@v2
-
-      - name: Regenerate every example's client types
-        run: |
-          set -euo pipefail
-          for justfile in examples/*/justfile; do
-            if grep -q '^codegen-client-sdk:' "$justfile"; then
-              echo "::group::$justfile"
-              just --justfile "$justfile" codegen-client-sdk
-              echo "::endgroup::"
-            fi
-          done
-
-      - name: Verify the committed types are current
-        run: |
-          set -euo pipefail
-          changes="$(git status --porcelain -- examples)"
-          if [ -n "$changes" ]; then
-            echo "::error::Generated client types are out of date with the agents they describe."
-            echo
-            echo "Regenerate them from the example's directory and commit the result:"
-            echo "    just codegen-client-sdk"
-            echo
-            echo "$changes"
-            git diff -- examples
-            exit 1
-          fi
-          echo "Committed client types match the agents."

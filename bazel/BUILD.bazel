@@ -1,0 +1,27 @@
+load("@aspect_rules_py//py:defs.bzl", "py_binary")
+load(":wheel_script.bzl", "wheel_script")
+
+# Applied to the temporalio wheel (uv.override_package in MODULE.bazel).
+exports_files(["temporalio_extend_path.patch"])
+
+# The binary Code Mode runs scripts in. pydantic-monty finds it through MONTY_BIN.
+wheel_script(
+    name = "monty",
+    visibility = ["//visibility:public"],
+    whl = "@pypi//pydantic_monty_runtime:whl",
+)
+
+# Runs harness_dev targets' programs (bazel/dev.bzl).
+py_binary(
+    name = "dev_runner",
+    srcs = ["dev_runner.py"],
+    main = "dev_runner.py",
+    visibility = ["//visibility:public"],
+)
+
+# Writes harness_agent_registry targets' agents.toml (bazel/agents.bzl).
+py_binary(
+    name = "agents_toml",
+    srcs = ["agents_toml.py"],
+    main = "agents_toml.py",
+)

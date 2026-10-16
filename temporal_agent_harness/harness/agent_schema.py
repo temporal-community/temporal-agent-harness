@@ -12,6 +12,7 @@ import importlib
 import json
 import os
 import sys
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, TypeAdapter
@@ -142,6 +143,41 @@ def agent_init_data_schema(cls: type) -> dict[str, Any] | None:
         "required": init_data.required,
         "schema": init_data.model.model_json_schema(mode="validation"),
     }
+
+
+def agent_init_data_schema_from_document(document: Mapping[str, Any]) -> dict[str, Any] | None:
+    """:func:`agent_init_data_schema`, read from a document :func:`agent_schema` wrote instead of
+    from the class: the init data's ``$ref`` is inlined, with the ``$defs`` it reaches."""
+    init_data = document.get("init_data")
+    if init_data is None:
+        return None
+    defs: Mapping[str, Any] = document.get("$defs", {})
+
+    def ref_name(node: Mapping[str, Any]) -> str | None:
+        ref = node.get("$ref")
+        return ref.removeprefix("#/$defs/") if isinstance(ref, str) else None
+
+    def reached(node: Any, into: dict[str, Any]) -> None:
+        if isinstance(node, Mapping):
+            name = ref_name(node)
+            if name is not None and name not in into:
+                into[name] = defs[name]
+                reached(defs[name], into)
+            for value in node.values():
+                reached(value, into)
+        elif isinstance(node, list):
+            for value in node:
+                reached(value, into)
+
+    data: Mapping[str, Any] = init_data["data"]
+    root_name = ref_name(data)
+    schema = dict(defs[root_name]) if root_name is not None else dict(data)
+    nested: dict[str, Any] = {}
+    reached(schema, nested)
+    nested.pop(root_name, None)
+    if nested:
+        schema["$defs"] = dict(sorted(nested.items()))
+    return {"required": init_data["required"], "schema": schema}
 
 
 def protocol_schema() -> dict[str, Any]:

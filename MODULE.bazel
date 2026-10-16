@@ -1,0 +1,160 @@
+"""Bazel build for temporal-agent-harness.
+
+pyproject.toml and uv.lock stay the source of truth for Python dependencies; the uv hub below reads
+them directly. Nexus (nexus/, nexgen) is not built by Bazel.
+"""
+
+module(name = "temporal_agent_harness")
+
+bazel_dep(name = "aspect_rules_py", version = "2.0.0-alpha.8")
+bazel_dep(name = "aspect_rules_js", version = "3.5.1")
+bazel_dep(name = "bazel_lib", version = "3.7.2")
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_nodejs", version = "6.7.6")
+bazel_dep(name = "rules_python", version = "2.4.1")
+bazel_dep(name = "rules_shell", version = "0.8.0")
+bazel_dep(name = "tar.bzl", version = "0.10.9")
+
+# Gazelle writes the Python BUILD targets (`just gazelle`), and buildifier formats and lints every
+# Starlark file (`just buildifier`).
+bazel_dep(name = "aspect_gazelle_prebuilt", version = "0.0.26", dev_dependency = True)
+bazel_dep(name = "buildifier_prebuilt", version = "10.1.0", dev_dependency = True)
+
+# ---------------------------------------------------------------------------------------------
+# Python interpreters: every version the package claims (requires-python >=3.11, classifiers
+# 3.11-3.14). 3.13 is the default; .bazelrc's --config=py3XX or a target's python_version
+# attribute selects another.
+# ---------------------------------------------------------------------------------------------
+interpreters = use_extension("@aspect_rules_py//py:extensions.bzl", "python_interpreters")
+interpreters.configure(releases = ["20260924"])
+interpreters.toolchain(python_version = "3.11")
+interpreters.toolchain(python_version = "3.12")
+interpreters.toolchain(python_version = "3.13")
+interpreters.toolchain(python_version = "3.14")
+use_repo(interpreters, "python_interpreters")
+
+register_toolchains("@python_interpreters//:all")
+
+# ---------------------------------------------------------------------------------------------
+# PyPI dependencies, read from uv.lock. Each [dependency-groups] entry in pyproject.toml becomes a
+# dependency group of the @pypi hub; .bazelrc selects `dev`, the group `uv run pytest` installs.
+# ---------------------------------------------------------------------------------------------
+uv_bin = use_extension("@aspect_rules_py//uv:extensions.bzl", "uv_bin")
+uv_bin.toolchain()
+use_repo(uv_bin, "uv")
+
+register_toolchains("@uv//:all")
+
+uv = use_extension("@aspect_rules_py//uv:extensions.bzl", "uv")
+uv.declare_hub(hub_name = "pypi")
+uv.project(
+    hub_name = "pypi",
+    lock = "//:uv.lock",
+    pyproject = "//:pyproject.toml",
+)
+
+# temporal-nexus-mcp is an editable path dependency on nexus/mcp, which Bazel does not build.
+uv.override_package(
+    name = "temporal-nexus-mcp",
+    lock = "//:uv.lock",
+    target = "//bazel/excluded:temporal_nexus_mcp",
+)
+
+# temporalio ships native code, so rules_py cannot merge temporalio-typesafe's temporalio/typesafe
+# into it and puts that wheel on sys.path instead; extend_path makes temporalio find it there.
+uv.override_package(
+    name = "temporalio",
+    lock = "//:uv.lock",
+    post_install_patches = ["//bazel:temporalio_extend_path.patch"],
+)
+
+# pywin32 (moto -> docker, on Windows only) has no wheel for any other platform. The hub's
+# gazelle_index_whls lists every locked wheel regardless of its environment markers, so the
+# Gazelle manifest cannot build while it is installable; this build does not target Windows.
+uv.override_package(
+    name = "pywin32",
+    lock = "//:uv.lock",
+    target = "//bazel/excluded:pywin32",
+)
+use_repo(uv, "pypi")
+
+# ---------------------------------------------------------------------------------------------
+# Node, for packages/codegen (the TypeScript generator behind the committed client types).
+# rules_js reads pnpm-lock.yaml, which it keeps in step with packages/codegen/package-lock.json.
+# ---------------------------------------------------------------------------------------------
+node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
+node.toolchain(node_version = "22.20.0")
+
+npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
+npm.npm_translate_lock(
+    name = "npm_codegen",
+    data = [
+        "//packages/codegen:package.json",
+        "//packages/codegen:pnpm-workspace.yaml",
+    ],
+    npm_package_lock = "//packages/codegen:package-lock.json",
+    pnpm_lock = "//packages/codegen:pnpm-lock.yaml",
+    # Re-derive pnpm-lock.yaml (`pnpm import`) whenever package-lock.json changes; the state is
+    # recorded under .aspect/rules/external_repository_action_cache.
+    update_pnpm_lock = True,
+)
+use_repo(npm, "npm_codegen")
+
+# ---------------------------------------------------------------------------------------------
+# Temporal servers for tests, pinned so tests never download them at runtime:
+#   * the `temporal` CLI dev server, behind WorkflowEnvironment.start_local
+#   * the Java time-skipping test server, behind WorkflowEnvironment.start_time_skipping
+# //bazel/temporal picks the archive for the host platform.
+# ---------------------------------------------------------------------------------------------
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+TEMPORAL_CLI_VERSION = "1.9.1"
+
+TEMPORAL_CLI_SHA256 = {
+    "darwin_amd64": "48cdd6c84c56e27ae8e4d9a47052b89289a9c552dee029b49dd312c6fb72873f",
+    "darwin_arm64": "41e0425378fcb4fb5766340b97435e20fe47bbff2d7bf644ec2d51f7662b7c56",
+    "linux_amd64": "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5",
+    "linux_arm64": "6c57c352d52fc3df34412376fd9ba6f74b7e3ace8e426e6cba8600156d36a145",
+}
+
+[
+    http_archive(
+        name = "temporal_cli_" + platform,
+        build_file_content = 'exports_files(["temporal"])',
+        sha256 = sha256,
+        url = "https://github.com/temporalio/cli/releases/download/v{v}/temporal_cli_{v}_{p}.tar.gz".format(
+            p = platform,
+            v = TEMPORAL_CLI_VERSION,
+        ),
+    )
+    for platform, sha256 in TEMPORAL_CLI_SHA256.items()
+]
+
+TEMPORAL_TEST_SERVER_VERSION = "1.40.0"
+
+TEMPORAL_TEST_SERVER_SHA256 = {
+    "linux_amd64": "524465a96274831e004326f6e2f2a5f3ef9aaed72c2069cf16c1d64b8b1ec3ca",
+    "linux_arm64": "1d712f6f1de8a97454185d335752d0f9ea8267797c340b55569312251f6670e9",
+    "macOS_amd64": "bd48704369f9a0aa36f48bc904adb405fcbc6c651cddee965235cd8a23d2803a",
+    "macOS_arm64": "483d6b6d75979b78efa6a93ee159e8eb3232e919fe7d3576fce6e90a167804ec",
+}
+
+[
+    http_archive(
+        name = "temporal_test_server_" + platform.lower(),
+        build_file_content = 'exports_files(["temporal-test-server"])',
+        # The release archive ships the binary without its execute bit.
+        patch_cmds = ["chmod +x temporal-test-server"],
+        sha256 = sha256,
+        strip_prefix = "temporal-test-server_{v}_{p}".format(
+            p = platform,
+            v = TEMPORAL_TEST_SERVER_VERSION,
+        ),
+        url = "https://github.com/temporalio/sdk-java/releases/download/v{v}/temporal-test-server_{v}_{p}.tar.gz".format(
+            p = platform,
+            v = TEMPORAL_TEST_SERVER_VERSION,
+        ),
+    )
+    for platform, sha256 in TEMPORAL_TEST_SERVER_SHA256.items()
+]

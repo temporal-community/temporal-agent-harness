@@ -35,3 +35,8 @@ pyrightconfig.json
 
 # Local LLM configs
 .claude/
+
+# Bazel
+/bazel-*
+user.bazelrc
+.venv-bazel

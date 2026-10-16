@@ -6,6 +6,9 @@
 #     them), plus the clients for the human-in-the-loop / callback agents.
 # The aggregate recipes read the shared repo-root .env.local (creds: OPENAI_API_KEY, GEMINI_API_KEY,
 # F1_MCP_SERVER_HOME, ...). Prerequisites + run order: see the "Run everything" section in README.md.
+# The run recipes build and run with Bazel (`bazel`, via bazelisk). `server`, `workers`, and `dev`
+# take example names to run a subset (`just dev monty wiki_agent`). `uv run --group examples ...`
+# from the repo root runs the same modules.
 # Build/package + Nexus/Slack/Teams connector recipes follow the run recipes.
 
 # Shows a notice when running from an untagged commit (silent on a release archive).
@@ -39,6 +42,20 @@ package: app-build app-check
     uv run pytest
     rm -rf "{{justfile_directory()}}/dist"
     uv build
+
+# After adding, moving, or changing the imports of a .py file, or changing uv.lock. CI fails while
+# either is out of date.
+#
+# Regenerate the Bazel build: gazelle_python.yaml from uv.lock, then every Python BUILD target.
+gazelle:
+    bazel run //:gazelle_python_manifest.update
+    bazel run //:gazelle
+
+# CI fails on anything this would change, and on lint warnings it cannot fix.
+#
+# Format every Bazel file and apply buildifier's lint fixes.
+buildifier:
+    bazel run //:buildifier
 
 # Minimum `temporal` CLI for the Nexus recipes. Older builds reject the dynamic config
 # keys below, so fail here rather than at the first Nexus call.
@@ -168,36 +185,18 @@ temporal:
     temporal server start-dev
 
 # Run the packaged, agent-agnostic session-manager worker (hosts only SessionManagerWorkflow).
-session-manager:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd "{{justfile_directory()}}"
-    set -a; [ -f .env.local ] && . ./.env.local; set +a
-    uv run --group examples temporal-agent-harness session-manager
+session-manager: (_run "//temporal_agent_harness/web:cli" "session-manager")
 
 # Serves the COMMITTED UI build in temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
 # a downloaded release archive runs as-is. If you changed anything under ui/, rebuild it first
 # with `just app-build`, or use `just dev-server` (build + serve). An agent only runs if its
 # worker is up — see the worker recipes below.
 #
-# Serve EVERY example's agents.toml merged on http://localhost:8000, so the UI lists all agents.
-server:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd "{{justfile_directory()}}"
-    set -a; [ -f .env.local ] && . ./.env.local; set +a
-    uv run --group examples temporal-agent-harness serve \
-        examples/openai_hello/agents.toml \
-        examples/pydantic_ai_hello/agents.toml \
-        examples/react_agent/agents.toml \
-        examples/monty/agents.toml \
-        examples/tictactoe/agents.toml \
-        examples/auto_mode/agents.toml \
-        examples/callback_tools/wiki_agent/agents.toml \
-        examples/callback_tools/coding_agent/agents.toml \
-        examples/agent_dag/agents.toml \
-        examples/code_mode_memory/agents.toml \
-        --host 0.0.0.0 --port 8000
+# Names are example directories (`monty`, `wiki_agent`); none means every example, e.g.
+# `just server monty tictactoe`.
+#
+# Serve the named examples' agents.toml registries merged on http://localhost:8000.
+server *EXAMPLES: (_run "//examples:server" EXAMPLES)
 
 # Rebuild the Svelte UI, then serve — the contributor loop after editing ui/ (needs pnpm).
 dev-server: app-build server
@@ -237,44 +236,41 @@ worker-agent-dag:
 worker-code-mode-memory:
     cd "{{justfile_directory()}}/examples/code_mode_memory" && just worker
 
-# Co-launch all ten agent workers in one terminal (Ctrl-C stops them all; logs interleave).
-# Requires every agent's prerequisites at once (both API keys, the F1 MCP server, etc.).
-workers:
+# Names as for `server`, e.g. `just workers monty wiki_agent`. Each output line carries its
+# worker's name; Ctrl-C stops them all. Each needs its agent's prerequisites (API keys, the F1 MCP
+# server, ...).
+#
+# Co-launch the named examples' agent workers in one terminal.
+workers *EXAMPLES: (_run "//examples:workers" EXAMPLES)
+
+# Against a running Temporal (`just temporal`): the session manager, `server` over the named
+# examples' registries, and their workers. Names as for `server`, e.g. `just dev monty`. Each
+# output line carries its program's name; Ctrl-C stops them all.
+#
+# Run the local stack for the named examples in one terminal.
+dev *EXAMPLES: (_run "//examples:dev" EXAMPLES)
+
+# `bazel run <target> -- <args>` with the repo-root .env.local loaded.
+_run target *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Stop every worker on Ctrl-C / TERM. Trap the signals explicitly so cleanup runs regardless of
-    # what the shell is blocked on; clear the traps first so `kill 0` (SIGTERM to the whole process
-    # group, incl. this shell) runs once. (Ctrl-C also reaches the workers directly via the
-    # foreground process group; this makes the intent explicit and cleans up any straggler.)
-    trap 'trap - INT TERM EXIT; kill 0' INT TERM EXIT
-    just worker-openai-hello &
-    just worker-pydantic &
-    just worker-react &
-    just worker-monty &
-    just worker-tictactoe &
-    just worker-auto-mode &
-    just worker-wiki &
-    just worker-coding &
-    just worker-agent-dag &
-    just worker-code-mode-memory &
-    wait
+    cd "{{justfile_directory()}}"
+    set -a; [ -f .env.local ] && . ./.env.local; set +a
+    bazel run {{target}} -- {{ARGS}}
 
 # --- Clients / external processes for the human-in-the-loop & callback agents ---
 # ReAct client: answers the `ask_user` callback (plain chat also works in the web UI).
 react-client *ARGS:
     cd "{{justfile_directory()}}/examples/react_agent" && just client {{ARGS}}
 
-# Wiki client: REQUIRED — fulfills the wiki callback tools against a local dir (default ./wiki).
+# Wiki client: REQUIRED — fulfills the wiki callback tools against a local dir (default: wiki/ in
+# the example's directory).
 wiki-client *ARGS:
     cd "{{justfile_directory()}}/examples/callback_tools/wiki_agent" && just client {{ARGS}}
 
 # Coding shim: REQUIRED — the OpenCode shim that fulfills the coding callback tools (attach the
 # OpenCode TUI to it). Pass a working dir, e.g. `just coding-shim ~/some/project`.
-coding-shim *ARGS:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd "{{justfile_directory()}}"
-    uv run --group examples python -m examples.callback_tools.coding_agent.opencode_shim {{ARGS}}
+coding-shim *ARGS: (_run "//examples/callback_tools/coding_agent/opencode_shim:opencode_shim_bin" ARGS)
 
 # Terminate the session-manager workflow so the next `server` start re-seeds it with the current
 # (merged) registry. Needed when switching which agents are served without a fresh Temporal.

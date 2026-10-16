@@ -34,7 +34,7 @@ type, which defaults to the agent's workflow type name.
 
 With `--protocol`, it reads `temporal-agent-harness schema --protocol` instead and writes the
 event stream's types. The client package (`packages/client`) commits that output as its
-`src/protocol.ts`; `npm run generate:protocol` there regenerates it.
+`src/protocol.ts`; `bazel run //packages/client:protocol_update` regenerates it.
 
 ## Development
 
@@ -43,6 +43,6 @@ npm ci
 npm test    # compiles src/ and test/ (including compile-time type checks), then runs node --test
 ```
 
-`test/golden/TicTacToeAgent.ts` is generated from the Python side's golden schema,
-`tests/harness/golden/tictactoe.schema.json`; the comment at the top of
-`test/generate.test.ts` has the command to regenerate it.
+`test/golden/TicTacToeAgent.ts` is generated from the tic-tac-toe example's committed schema,
+`examples/tictactoe/TicTacToeAgent.schema.json`; `bazel run //packages/codegen:golden_update`
+regenerates it.

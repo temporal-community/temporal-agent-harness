@@ -1,0 +1,16 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+# Packages uv.lock records that Bazel deliberately does not install (uv.override_package in
+# MODULE.bazel). Each resolves to nothing, so importing it fails.
+
+# The editable temporal-nexus-mcp dependency (nexus/mcp): Nexus is not built by Bazel.
+py_library(
+    name = "temporal_nexus_mcp",
+    visibility = ["//visibility:public"],
+)
+
+# Windows-only, and ships no wheel for any other platform.
+py_library(
+    name = "pywin32",
+    visibility = ["//visibility:public"],
+)

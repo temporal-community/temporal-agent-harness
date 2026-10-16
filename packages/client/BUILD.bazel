@@ -1,0 +1,19 @@
+load("//bazel:agents.bzl", "harness_schema")
+load("//bazel:codegen.bzl", "harness_types")
+
+harness_schema(
+    name = "protocol_schema",
+    args = [
+        "schema",
+        "--protocol",
+    ],
+)
+
+# The event protocol's types, src/protocol.ts, generated from the Python events:
+# `bazel run //packages/client:protocol_update` rewrites it.
+harness_types(
+    name = "protocol",
+    src = "src/protocol.ts",
+    codegen_args = ["--protocol"],
+    schema = ":protocol_schema",
+)

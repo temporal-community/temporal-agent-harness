@@ -44,7 +44,7 @@ phase isn't throttled by approving one thing at a time.
 | `tools.py` | The six callback tools — declarations only (`...` bodies); the shim supplies the impl. |
 | `workflow.py` | `CodingAgent`: a Gemini tool-calling loop that converses and calls the tools. |
 | `worker.py` | Hosts `CodingAgent` (no tool activities — callback tools are inline). |
-| `agents.toml` | This example's registry (just the `CodingAgent`). |
+| `agents.toml`, `CodingAgent.schema.json` | This example's registry (just the `CodingAgent`) and the agent's schema it points at; generated from `BUILD.bazel` (`bazel run :agents_update`). |
 | `opencode_shim/` | The OpenCode-protocol server. `harness_backend.py` fronts the workflow; `local_tools.py` executes the callback tools on your disk; `backend.py` defines the `AgentBackend` protocol + the `AgentTurn` seam. |
 | `justfile` | Recipes for the local stack. |
 

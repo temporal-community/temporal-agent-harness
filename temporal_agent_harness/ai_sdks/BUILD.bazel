@@ -1,0 +1,52 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    visibility = ["//:__subpackages__"],
+)
+
+py_library(
+    name = "openai_agents_harness",
+    srcs = ["openai_agents_harness.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//temporal_agent_harness/ai_sdks/integration_helpers:__init__",
+        "//temporal_agent_harness/harness:agent_workflow",
+        "//temporal_agent_harness/harness:stream_context",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//mcp",
+        "@pypi//mcp_types",
+        "@pypi//openai",
+        "@pypi//openai_agents",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "pydantic_ai_harness",
+    srcs = ["pydantic_ai_harness.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//temporal_agent_harness/harness:agent_workflow",
+        "//temporal_agent_harness/harness:stream_context",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//pydantic_ai_slim",
+        "@pypi//pydantic_core",
+    ],
+)
+
+py_library(
+    name = "typesafe_harness",
+    srcs = ["typesafe_harness.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//temporal_agent_harness/harness:agent_workflow",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//temporalio",
+        "@pypi//temporalio_typesafe",
+        "@pypi//typesafe_sdk",
+    ],
+)

@@ -71,8 +71,9 @@ just server            # 3. browser UI + JSON API on :8000
 just worker            # 4. this example's agent worker
 ```
 
-Open <http://localhost:8000> and start a session. There's no install step — `uv` fetches
-dependencies on demand. Every example follows the same four recipes; see
+Open <http://localhost:8000> and start a session. There's no install step — the recipes build with
+Bazel, which fetches dependencies on first run (or skip Bazel and
+[run the same modules with uv](#without-bazel)). Every example follows the same four recipes; see
 [Run the examples](#run-the-examples) for the rest of them, including running all ten behind
 one UI.
 
@@ -148,19 +149,27 @@ That registry is what lists the launchable agents:
 [[agents]]
 key = "my-agent"
 workflow_type = "MyAgent"
-agent = "my_app.workflow:MyAgentWorkflow"   # optional; see below
 task_queue = "my-agent-task-queue"
 label = "My Agent"
 description = "A short description shown in the UI."
+schema = "MyAgent.schema.json"   # optional; see below
 ```
 
-`agent` names the agent's class, which the server imports at startup to learn what the agent takes
-to start. If its `@agent.init` takes a `data` model after its config, required (`data: MyData`) or
-optional (`data: MyData | None = None`), `GET /api/agents` publishes it and the console asks for it
-in a form before starting a session. `POST /api/sessions` checks the `data` it is sent against the
-model and answers `422` if it does not fit. Without `agent`, the agent is started with no data, and
-any `data` a caller sends goes through unchecked for the agent itself to validate. A class that
-fails to import is logged, and treated the same way.
+`schema` is the agent's schema document, relative to the registry, which the
+`schema` subcommand writes from its class:
+
+```bash
+uv run temporal-agent-harness schema my_app.workflow:MyAgentWorkflow -o MyAgent.schema.json
+```
+
+The server reads what the agent takes to start from it and never imports the agent's code. If its
+`@agent.init` takes a `data` model after its config, required (`data: MyData`) or optional
+(`data: MyData | None = None`), `GET /api/agents` publishes it and the console asks for it in a
+form before starting a session. `POST /api/sessions` answers `422` when `data` is missing for an
+agent that requires it or sent to one that takes none; the agent validates the data itself. Without
+`schema`, any `data` a caller sends goes through for the agent to validate. Regenerate the schema
+when the agent's init data changes. (This repo's examples have Bazel generate each `agents.toml`
+and its schemas; see `bazel/agents.bzl`.)
 
 Both subcommands resolve their Temporal connection through temporalio's standard client config,
 so they land on the same namespace. With nothing configured they use `localhost:7233` — the
@@ -886,8 +895,8 @@ class TicTacToeAgentWorkflow:
 **2. Generate the types.** `temporal-agent-harness schema` prints an agent's handlers, state,
 and init data as JSON Schema, and [`harness-codegen`](packages/codegen) turns that into
 TypeScript. The generator runs from a checkout of this repo: build it once with
-`npm ci && npm run build` in `packages/codegen`, then from the repo root (the same steps as the
-`codegen-client-sdk` recipe in [`examples/tictactoe/justfile`](examples/tictactoe/justfile)):
+`npm ci && npm run build` in `packages/codegen`, then from the repo root (this repo's examples run
+the same pipeline through Bazel, e.g. `bazel run //examples/tictactoe:client_sdk_update`):
 
 ```bash
 uv run temporal-agent-harness schema examples.tictactoe.workflow:TicTacToeAgentWorkflow \
@@ -972,6 +981,9 @@ To build with the harness:
 To run the bundled examples from a checkout, additionally:
 
 - [just](https://just.systems/) for the example recipes
+- [Bazelisk](https://github.com/bazelbuild/bazelisk), installed as `bazel` (e.g.
+  `brew install bazelisk`), which the recipes build and run with. Optional — the examples also
+  [run with uv alone](#without-bazel).
 - The [`temporal` CLI](https://docs.temporal.io/cli), which `just temporal` starts a local dev
   server with. The Nexus example (`examples/nexus_hello`) needs **1.9.1 or later** — older
   builds reject the Nexus dynamic config its `just temporal` recipe sets. Its recipes check the
@@ -1026,6 +1038,16 @@ just server            # serves the MERGED registry (all agents) on http://local
 just workers           # co-launch all ten agent workers (Ctrl-C stops them; or run `just worker-<name>` each)
 ```
 
+Or, against a running Temporal, `just dev` starts the session manager, the server, and all ten
+workers in one terminal: one build, then all in parallel, each output line labelled with the
+program it came from; Ctrl-C stops them all.
+
+`server`, `workers`, and `dev` also take example names (the directory under `examples/`, e.g.
+`monty` or `wiki_agent`) to run only those: `just dev monty wiki_agent` serves just their agents and
+starts just their workers, and `just workers tictactoe` adds one more worker beside a running
+stack. From an example's own directory, `just dev` does the same for that example. Switching the
+set of agents you serve is a registry change, so `just reset-manager` first (see the gotcha below).
+
 Then create a session for any agent in the UI. A few need extra setup or a client:
 
 | Agent | Needs |
@@ -1035,7 +1057,7 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 | Travel agent (Jev Auto mode) | `GEMINI_API_KEY` **and** `TYPESAFE_API_KEY`; Monty with [auto mode](#auto-mode--letting-code-or-a-model-decide) judging its gated calls ([readme](examples/auto_mode/README.md)); chat directly in the UI |
 | Tic-Tac-Toe (TypeSafe) | `TYPESAFE_API_KEY`; no LLM — every move is a [TypeSafe](https://docs.typesafe.ai) System One judgment ([readme](examples/tictactoe/README.md)); send `new_game` then `play` in the UI |
 | ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
-| Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client --wiki-dir ./wiki`** — required, or its tool calls hang |
+| Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client`** (wiki in `examples/callback_tools/wiki_agent/wiki`; `--wiki-dir` moves it) — required, or its tool calls hang |
 | Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
 | Code Mode Memory | `GEMINI_API_KEY`; long-term memory on the worker's disk, shared by sessions given the same `memory_dir` ([readme](examples/code_mode_memory/README.md)); chat directly in the UI |
 | Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](examples/agent_dag/README.md)); best in its own UI, **`just studio`** from `examples/agent_dag` |
@@ -1046,6 +1068,20 @@ between a single-example server and the all-agents server (or change the set), r
 `just reset-manager` before the next `just server`, or start a fresh Temporal dev server. Also: an
 agent whose worker isn't running will accept a created session but never progress (it parks) — start
 its worker.
+
+### Without Bazel
+
+The recipes are thin wrappers: each runs a module that uv can run directly from the project root,
+with the `examples` dependency group. Load `.env.local` first (`set -a; . ./.env.local; set +a`),
+then, for example:
+
+```bash
+uv run --group examples temporal-agent-harness session-manager
+uv run --group examples temporal-agent-harness serve examples/monty/agents.toml --port 8000
+uv run --group examples python -m examples.monty.worker
+```
+
+The generated TypeScript the example UIs use is committed, so nothing needs regenerating to run.
 
 ## Self-hosting the web app
 

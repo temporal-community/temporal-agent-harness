@@ -47,7 +47,7 @@ from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.utils.large_payload import DEFAULT_PAYLOAD_STORAGE
 from temporal_agent_harness.web.agent_starts import (
     InvalidStartData,
-    resolve_agent_starts,
+    agent_starts,
     validated_start_data,
 )
 from temporal_agent_harness.web.file_view import (
@@ -167,7 +167,7 @@ def create_agent_harness_app(
         resolved_registry = _resolve_registry(registry, registry_path)
         # Read from this process's own registry rather than the manager's copy, so a change to
         # an agent's init data shows up on restart without resetting the manager.
-        app.state.agent_starts = resolve_agent_starts(resolved_registry)
+        app.state.agent_starts = agent_starts(resolved_registry)
 
         app.state.manager_handle = await _ensure_session_manager_workflow(
             app.state.temporal,
@@ -226,9 +226,9 @@ def create_agent_harness_app(
                 {
                     **asdict(agent),
                     # {"required": bool, "schema": {...}}, or null when the agent takes no
-                    # init data (or its registry entry does not name its class).
+                    # init data (or its registry entry has no schema).
                     "init_data": (
-                        starts[agent.workflow_type].init_data_schema
+                        starts[agent.workflow_type].init_data
                         if agent.workflow_type in starts
                         else None
                     ),
@@ -413,10 +413,10 @@ def create_agent_harness_app(
 
     @app.exception_handler(InvalidStartData)
     async def invalid_start_data_handler(request, exc):
-        # 422: the start was not attempted. ``errors`` are pydantic's, for a form to place.
+        # 422: the start was not attempted.
         return JSONResponse(
             status_code=422,
-            content={"error": "invalid_init_data", "message": str(exc), "errors": exc.errors},
+            content={"error": "invalid_init_data", "message": str(exc)},
         )
 
     @app.exception_handler(MidTurnRejectedError)
@@ -695,10 +695,12 @@ def _mount_static_ui(
     if not static_path.exists():
         raise ValueError(f"Static UI directory does not exist: {static_path}")
 
+    # follow_symlink: a dist installed as symlinks (e.g. Bazel runfiles) resolves outside its
+    # directory, which StaticFiles otherwise answers with 404.
     assets_path = static_path / "assets"
     if assets_path.is_dir():
-        app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
-    app.mount("/static", StaticFiles(directory=static_path), name="static")
+        app.mount("/assets", StaticFiles(directory=assets_path, follow_symlink=True), name="assets")
+    app.mount("/static", StaticFiles(directory=static_path, follow_symlink=True), name="static")
 
     @app.get("/")
     async def index():

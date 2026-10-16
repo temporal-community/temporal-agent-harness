@@ -21,6 +21,15 @@ SESSION_MANAGER_TASK_QUEUE = "session-manager"
 
 
 @dataclass
+class AgentStart:
+    """What an agent takes to start, after its config: its ``@agent.init`` init data."""
+
+    # {"required": bool, "schema": {...}}: the init data's JSON Schema, self-contained for a form
+    # (agent_init_data_schema). ``None`` when the agent takes no init data.
+    init_data: dict[str, Any] | None = None
+
+
+@dataclass
 class AgentDescriptor:
     """One launchable agent in the web session registry."""
 
@@ -29,9 +38,9 @@ class AgentDescriptor:
     task_queue: str
     label: str
     description: str
-    # Where the agent's class is defined ("module.path:ClassName"), so the web server can read
-    # its start interface. ``None`` when the registry does not say.
-    agent: str | None = None
+    # The agent's start interface, read from its generated schema document (the registry's
+    # ``schema``). ``None`` when the registry does not say; the agent still validates its start.
+    start: AgentStart | None = None
 
 
 @dataclass

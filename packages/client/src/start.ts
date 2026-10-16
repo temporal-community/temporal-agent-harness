@@ -55,7 +55,8 @@ type StartArgs<A extends AgentSchema> = A["initData"] extends { required: true }
   : [options?: StartSessionOptions<A>];
 
 /** Start a session for `agent`, sending the init data its `@agent.init` takes. The server
- *  rejects data that does not fit with an `HttpError` (status 422, code `invalid_init_data`). */
+ *  rejects missing required data, or data for an agent that takes none, with an `HttpError`
+ *  (status 422, code `invalid_init_data`); the agent validates the data itself. */
 export async function startSession<A extends AgentSchema = UntypedAgent>(
   starter: SessionStarter,
   agent: AgentDefinition<A>,

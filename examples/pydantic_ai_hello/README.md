@@ -40,11 +40,11 @@ harness needs. The harness only supplies a thin glue module.
 |---|---|
 | `workflow.py` | `PydanticAIHelloAgent` — the harness agent; one `ask` handler, one `get_weather` tool, driven by `TemporalAgent.run` + the harness event-stream handler. |
 | `worker.py` | Worker hosting the workflow; `PydanticAIPlugin` + `AgentHarnessPlugin` on the client, `AgentPlugin(agent)` on the worker. |
-| `agents.toml` | Registry entry that makes this agent selectable in the shared web UI. |
+| `agents.toml`, `PydanticAIHelloAgent.schema.json` | Registry entry that makes this agent selectable in the shared web UI, and the agent's schema it points at; generated from `BUILD.bazel` (`bazel run :agents_update`). |
 
 There is **no per-example client**: like the other examples, this agent is driven by the shared
 example stack — the packaged `SessionManagerWorkflow` worker plus the FastAPI app and web UI
-(`temporal-agent-harness serve`). Registering the agent in `agents.toml` is all it takes to make it driveable.
+(`temporal-agent-harness serve`). Registering the agent (its `harness_agent` in `BUILD.bazel`, which generates `agents.toml`) is all it takes to make it driveable.
 
 ## Run it
 

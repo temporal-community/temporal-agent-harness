@@ -1,7 +1,8 @@
 # Tic-Tac-Toe board
 
 A Svelte page for the tic-tac-toe agent, written against `@temporalio/agent-harness-svelte` and the
-agent's generated types (`../client_sdk/TicTacToeAgent.ts`, from `just codegen-client-sdk`). Run
+agent's generated types (`../client_sdk/TicTacToeAgent.ts`, from
+`bazel run //examples/tictactoe:client_sdk_update`). Run
 it with `just play` from `examples/tictactoe`, then open http://127.0.0.1:5173/.
 
 The whole page is `App.svelte`, and its whole integration is the top of that file:

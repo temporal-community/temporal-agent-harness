@@ -1,0 +1,16 @@
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+harness_pytest_test(
+    name = "test_pydantic_stream_observer",
+    srcs = ["test_pydantic_stream_observer.py"],
+    deps = [
+        "//temporal_agent_harness/ai_sdks:pydantic_ai_harness",
+        "//temporal_agent_harness/harness:agent",
+        "//temporal_agent_harness/harness:agent_workflow",
+        "//temporal_agent_harness/harness:stream_context",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "//tests:conftest",
+        "@pypi//pydantic_ai_slim",
+        "@pypi//pytest",
+    ],
+)

@@ -1,0 +1,58 @@
+# Pinned Temporal servers for tests (versions and checksums in MODULE.bazel), resolved for the
+# platform the test runs on.
+
+config_setting(
+    name = "darwin_amd64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "darwin_arm64",
+    constraint_values = [
+        "@platforms//os:macos",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+config_setting(
+    name = "linux_amd64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)
+
+config_setting(
+    name = "linux_arm64",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
+)
+
+# The `temporal` CLI; WorkflowEnvironment.start_local runs its dev server.
+alias(
+    name = "cli",
+    actual = select({
+        ":darwin_amd64": "@temporal_cli_darwin_amd64//:temporal",
+        ":darwin_arm64": "@temporal_cli_darwin_arm64//:temporal",
+        ":linux_amd64": "@temporal_cli_linux_amd64//:temporal",
+        ":linux_arm64": "@temporal_cli_linux_arm64//:temporal",
+    }),
+    visibility = ["//visibility:public"],
+)
+
+# The Java time-skipping test server behind WorkflowEnvironment.start_time_skipping.
+alias(
+    name = "test_server",
+    actual = select({
+        ":darwin_amd64": "@temporal_test_server_macos_amd64//:temporal-test-server",
+        ":darwin_arm64": "@temporal_test_server_macos_arm64//:temporal-test-server",
+        ":linux_amd64": "@temporal_test_server_linux_amd64//:temporal-test-server",
+        ":linux_arm64": "@temporal_test_server_linux_arm64//:temporal-test-server",
+    }),
+    visibility = ["//visibility:public"],
+)

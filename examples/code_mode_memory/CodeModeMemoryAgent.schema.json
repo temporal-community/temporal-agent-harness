@@ -1,0 +1,229 @@
+{
+  "agent": "CodeModeMemoryAgent",
+  "source": "examples.code_mode_memory.workflow:CodeModeMemoryAgentWorkflow",
+  "init_data": {
+    "data": {
+      "$ref": "#/$defs/MemoryConfig"
+    },
+    "required": true
+  },
+  "handlers": {
+    "ask": {
+      "description": "Chat with the assistant. Tell it something to remember, or ask about something you\ntold it before, in this session or another one sharing its memory.",
+      "mid_turn": "enqueue",
+      "input": {
+        "$ref": "#/$defs/TextMessage"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {
+    "skills": {
+      "$ref": "#/$defs/FileIndex"
+    },
+    "memory": {
+      "$ref": "#/$defs/FileIndex"
+    }
+  },
+  "$defs": {
+    "FileIndex": {
+      "additionalProperties": false,
+      "description": "The paths of a mount that this session has touched, as agent state: never the whole\nstore, and never file contents.\n\nAn ``agent.vfs_mount(...)`` over an ``ActivityFileSystem`` declares one. It starts with the\nmount's details and no entries, then records every path the session's scripts look up,\nlist, read or change, with its metadata, publishing each change as a state patch. A file\nno script has looked at is not in it, and a file another process changes appears changed\nonly once a script looks at it again.\n\n``entries`` is keyed by mount-relative path (``\"notes/todo.md\"``); the mount's root is\nimplicit. ``okf_version`` is set for a mount declared with ``agent.okf_bundle_vfs_mount``,\nwhose files form an OKF bundle. ``source`` is recorded with the first operation, so a\nviewer can fetch a file's contents on demand. Those contents are the file as it is in the\nstore when it is fetched, not as it was at any earlier point in the agent's history: the index\ncan be replayed to any moment, the store cannot. (A :class:`FileTree` is different: it\nholds an in-memory filesystem's contents, so they replay with it.)",
+      "properties": {
+        "kind": {
+          "const": "file_index",
+          "default": "file_index",
+          "title": "Kind",
+          "type": "string"
+        },
+        "mount": {
+          "default": "",
+          "title": "Mount",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "read_only": {
+          "default": false,
+          "title": "Read Only",
+          "type": "boolean"
+        },
+        "okf_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Okf Version"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IndexSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "entries": {
+          "additionalProperties": {
+            "$ref": "#/$defs/IndexEntry"
+          },
+          "default": {},
+          "title": "Entries",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "mount",
+        "description",
+        "read_only",
+        "okf_version",
+        "source",
+        "entries"
+      ],
+      "title": "FileIndex",
+      "type": "object"
+    },
+    "IndexEntry": {
+      "additionalProperties": false,
+      "description": "What a session has seen of one path in a mount. ``is_dir`` is ``None`` for a name seen\nonly in a directory listing; ``size`` and ``mtime`` are ``None`` until a stat or read says.\n``writes`` counts the session's writes to the file, so every write changes the entry.",
+      "properties": {
+        "is_dir": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Is Dir"
+        },
+        "size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size"
+        },
+        "mtime": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mtime"
+        },
+        "writes": {
+          "default": 0,
+          "title": "Writes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "is_dir",
+        "size",
+        "mtime",
+        "writes"
+      ],
+      "title": "IndexEntry",
+      "type": "object"
+    },
+    "IndexSource": {
+      "additionalProperties": false,
+      "description": "Where a mount's files can be read outside the workflow: the\n:class:`~.activity_fs.ActivityFileSystem` named ``filesystem``, built from ``config``,\nwhose ``vfs.<filesystem>.view`` activity runs on ``task_queue``.",
+      "properties": {
+        "filesystem": {
+          "title": "Filesystem",
+          "type": "string"
+        },
+        "config": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Config",
+          "type": "object"
+        },
+        "task_queue": {
+          "title": "Task Queue",
+          "type": "string"
+        }
+      },
+      "required": [
+        "filesystem",
+        "config",
+        "task_queue"
+      ],
+      "title": "IndexSource",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "MemoryConfig": {
+      "description": "Where this session's memory lives.",
+      "properties": {
+        "memory_dir": {
+          "description": "Directory holding this session's memory, relative to the example's memories/ folder (e.g. 'alice'), created if missing. Sessions given the same directory share their memories.",
+          "format": "path",
+          "title": "Memory Dir",
+          "type": "string"
+        }
+      },
+      "required": [
+        "memory_dir"
+      ],
+      "title": "MemoryConfig",
+      "type": "object"
+    },
+    "TextMessage": {
+      "description": "Free-form natural-language text from the user (the input to a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextMessage",
+      "type": "object"
+    },
+    "TextReply": {
+      "description": "A free-form natural-language reply (the output of a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextReply",
+      "type": "object"
+    }
+  }
+}

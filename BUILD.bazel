@@ -1,0 +1,116 @@
+load("@aspect_gazelle_prebuilt//:def.bzl", "aspect_gazelle")
+load("@aspect_rules_py//py:defs.bzl", "py_venv", "py_venv_link")
+load("@aspect_rules_py//uv:defs.bzl", "gazelle_python_manifest")
+load("@buildifier_prebuilt//:rules.bzl", "buildifier")
+load("@pypi//:defs.bzl", "group_deps")
+load("//bazel:package_collisions.bzl", "PACKAGE_COLLISIONS")
+
+# Python targets are generated: one py_library / test per file, deps from its imports.
+#   bazel run //:gazelle                              # after adding, moving, or re-importing files
+#   bazel run //:gazelle_python_manifest.update       # after changing uv.lock
+#
+# gazelle:python_generation_mode file
+# gazelle:python_experimental_allow_relative_imports true
+# gazelle:python_test_file_pattern test_*.py
+# gazelle:python_label_convention $distribution_name$
+# gazelle:python_label_normalization snake_case
+# rules_py has no pyi_deps; type-checking-only imports stay out of the runtime graph.
+# gazelle:python_generate_pyi_deps false
+# gazelle:map_kind py_library py_library @aspect_rules_py//py:defs.bzl
+# gazelle:map_kind py_binary harness_module_binary //bazel:binary.bzl
+# gazelle:map_kind py_test harness_pytest_test //bazel:pytest.bzl
+#
+# Nexus is not built by Bazel.
+# gazelle:exclude nexus
+# gazelle:exclude examples/nexus_hello
+# gazelle:exclude temporal_agent_harness/nexus_agent_adapter
+# gazelle:exclude tests/nexus_agent_adapter
+# gazelle:exclude tests/nexus_mcp
+# gazelle:exclude tests/ai_sdks/openai_agents/test_nexus_mcp.py
+# gazelle:resolve py nexus_mcp //bazel/excluded:temporal_nexus_mcp
+#
+# The coding agent's OpenCode shim converts tokonomics and exxec models when those are installed;
+# neither is in uv.lock.
+# gazelle:python_ignore_dependencies tokonomics.model_discovery.model_info,exxec
+#
+# The vendored OpenAI Agents plugin traces through openinference when it is installed; it is not
+# in uv.lock.
+# gazelle:python_ignore_dependencies openinference.instrumentation.openai_agents,openinference.instrumentation.openai_agents._processor
+#
+# Tests import helper modules beside them by bare name (pytest puts a test's directory on sys.path).
+# gazelle:python_resolve_sibling_imports true
+#
+# Not Python sources of the build (bazel/ holds hand-written build tooling).
+# gazelle:exclude bazel
+# gazelle:exclude .claude
+# gazelle:exclude **/node_modules
+# gazelle:exclude **/.venv
+# gazelle:exclude build
+# gazelle:exclude dist
+# gazelle:exclude ui
+# gazelle:exclude packages
+# gazelle:exclude third-party-platforms
+# gazelle:exclude scripts
+# gazelle:exclude docs
+aspect_gazelle(
+    name = "gazelle",
+    languages = ["python"],
+)
+
+# Maps import names to @pypi labels for Gazelle (gazelle_python.yaml).
+gazelle_python_manifest(
+    name = "gazelle_python_manifest",
+    hub = "pypi",
+    venvs = ["dev"],
+)
+
+exports_files([
+    "pyproject.toml",
+    "uv.lock",
+])
+
+# A virtualenv for IDEs and shells: the interpreter plus every package in the `dev` dependency
+# group, like uv's .venv. First-party code stays in the source tree, which IDEs index and
+# pyproject.toml's pytest config puts on sys.path.
+py_venv(
+    name = "venv",
+    package_collisions = PACKAGE_COLLISIONS,
+    deps = group_deps(),
+)
+
+#   bazel run //:venv_link                    # links ./.venv-bazel (Python 3.13)
+#   bazel run //:venv_link --config=py311     # the same on another interpreter
+# then point the IDE's interpreter at the venv path it prints. The link sits beside uv's .venv
+# rather than replacing it.
+py_venv_link(
+    name = "venv_link",
+    link_name = ".venv-bazel",
+    venv = ":venv",
+)
+
+# buildifier over every Starlark file Bazel reads (not nexus/, which Bazel does not build, nor other
+# worktrees or installed packages).
+BUILDIFIER_EXCLUDES = [
+    "./.git/*",
+    "./.claude/*",
+    "./nexus/*",
+    "./build/*",
+    "./.venv*",
+    "*/node_modules/*",
+]
+
+# `just buildifier`: formats them and applies buildifier's lint fixes.
+buildifier(
+    name = "buildifier",
+    exclude_patterns = BUILDIFIER_EXCLUDES,
+    lint_mode = "fix",
+    mode = "fix",
+)
+
+# CI: fails when a file is not formatted or has a lint warning.
+buildifier(
+    name = "buildifier.check",
+    exclude_patterns = BUILDIFIER_EXCLUDES,
+    lint_mode = "warn",
+    mode = "check",
+)

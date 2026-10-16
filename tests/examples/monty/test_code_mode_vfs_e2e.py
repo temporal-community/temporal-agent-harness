@@ -87,6 +87,16 @@ def _tool_names(events: list[AgentEvent]) -> list[str]:
     return [e.event.tool_name for e in events if e.event.type == AgentEventType.TOOL_START]
 
 
+async def _scheduled_activities(handle: WorkflowHandle[Any, Any]) -> list[str]:
+    """The activity types the workflow scheduled, in the order it scheduled them."""
+    history = await handle.fetch_history()
+    return [
+        e.activity_task_scheduled_event_attributes.activity_type.name
+        for e in history.events
+        if e.HasField("activity_task_scheduled_event_attributes")
+    ]
+
+
 async def _replay(handle: WorkflowHandle[Any, Any]) -> None:
     history = await handle.fetch_history()
     await Replayer(
@@ -226,10 +236,11 @@ async def test_a_host_call_made_before_a_file_operation_still_resolves(client_an
         "    return [report.split(': ')[1].strip(), total['total']]\n"
         "asyncio.run(main())\n"
     )
-    reply, events = await _send(client, handle, script)
+    reply, _ = await _send(client, handle, script)
     assert "result: ['42', 2]" in reply, reply
-    names = _tool_names(events)
-    # The add call was handed over when the script stopped at its first file operation, so it
-    # started before the remote read did.
-    assert names.index("add") < names.index("fs_read")
+    # The add call was handed over when the script stopped at its first file operation, so its
+    # activity was scheduled before the remote read's. (Its tool_start comes from inside the
+    # activity, so the event stream only says which activity reported first.)
+    scheduled = await _scheduled_activities(handle)
+    assert scheduled.index("add") < scheduled.index("remote_read"), scheduled
     await _replay(handle)

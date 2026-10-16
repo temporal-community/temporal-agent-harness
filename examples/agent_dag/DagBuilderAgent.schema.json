@@ -1,0 +1,72 @@
+{
+  "agent": "DagBuilderAgent",
+  "source": "examples.agent_dag.workflow:DagBuilderAgentWorkflow",
+  "init_data": null,
+  "handlers": {
+    "execute": {
+      "description": "Run a flow script. Each `run_agent` call starts a step agent as a subagent; the reply is\nwhat the script printed and returned.",
+      "mid_turn": "enqueue",
+      "input": {
+        "$ref": "#/$defs/RunFlow"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    },
+    "generate": {
+      "description": "Describe the flow you want, or a change to the current one. The agent writes it into\nyour editor, one edit at a time.",
+      "mid_turn": "enqueue",
+      "input": {
+        "$ref": "#/$defs/TextMessage"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {},
+  "$defs": {
+    "RunFlow": {
+      "description": "A flow script to run: Python that calls `run_agent` to start step agents, in sequence\nor in parallel, and returns what the last of them produced.",
+      "properties": {
+        "script": {
+          "title": "Script",
+          "type": "string"
+        }
+      },
+      "required": [
+        "script"
+      ],
+      "title": "RunFlow",
+      "type": "object"
+    },
+    "TextMessage": {
+      "description": "Free-form natural-language text from the user (the input to a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextMessage",
+      "type": "object"
+    },
+    "TextReply": {
+      "description": "A free-form natural-language reply (the output of a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextReply",
+      "type": "object"
+    }
+  }
+}

@@ -31,12 +31,12 @@ streaming activity, to the live turn stream the web UI consumes.
 |---|---|
 | `workflow.py` | `OpenAIHelloAgent` — the harness agent; one `ask` handler, one `get_weather` tool, driven by `Runner.run_streamed`. |
 | `worker.py` | Worker hosting the workflow; wires the OpenAI plugin for the harness streaming seam, plus `AgentHarnessPlugin` for the harness's own converter and activities. |
-| `agents.toml` | Registry entry that makes this agent selectable in the shared web UI. |
+| `agents.toml`, `OpenAIHelloAgent.schema.json` | Registry entry that makes this agent selectable in the shared web UI, and the agent's schema it points at; generated from `BUILD.bazel` (`bazel run :agents_update`). |
 
 There is **no per-example client**: like the Monty example, this agent is driven by the shared
 example stack — the packaged `SessionManagerWorkflow` worker plus the FastAPI app and web UI
 (`temporal-agent-harness serve`), which send messages and stream turns through the harness's built-in
-`AgentClient`. Registering the agent in `agents.toml` is all it takes to make it driveable.
+`AgentClient`. Registering the agent (its `harness_agent` in `BUILD.bazel`, which generates `agents.toml`) is all it takes to make it driveable.
 
 ## Run it
 

@@ -11,9 +11,11 @@
 # Paris?"). The reply streams token by token and the get_weather tool call shows up live.
 # `just server` builds the Svelte UI first (needs `pnpm`); `just ui-dev` runs it on Vite instead.
 #
-# uv installs the project's `examples` dependency group (incl. the OpenAI Agents SDK) on demand,
-# so there's no separate install step. First-time setup: `cp .env.example .env.local` from the
-# repo root and fill it in (Temporal connection + OPENAI_API_KEY). See README.md.
+# The recipes build and run each program with Bazel (install bazelisk as `bazel`), which fetches the
+# project's `examples` dependencies on first use. Without Bazel, run the same module with uv from
+# the repo root, e.g. `uv run --group examples python -m examples.openai_hello.worker`. First-time
+# setup: `cp .env.example .env.local` from the repo root and fill it in (Temporal connection +
+# OPENAI_API_KEY). See README.md.
 
 # Shows a notice when running from an untagged commit (silent on a release archive).
 import '../../scripts/untagged-notice.just'
@@ -40,14 +42,14 @@ temporal:
 
 # Run the packaged session-manager worker (`temporal-agent-harness session-manager`).
 session-manager:
-    cd "{{root}}" && uv run --group examples temporal-agent-harness session-manager
+    bazel run //temporal_agent_harness/web:cli -- session-manager
 
 # Serves the COMMITTED UI build in temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
 # a downloaded release archive runs as-is. Rebuild with `just app-build` if you changed ui/.
 #
 # Serve the packaged FastAPI API + UI on http://localhost:8000, pointed at this example's registry.
 server:
-    cd "{{root}}" && uv run --group examples temporal-agent-harness serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
+    bazel run //temporal_agent_harness/web:cli -- serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
 
 # Build the shared Svelte UI into temporal_agent_harness/ui/dist for the server to serve.
 # Runs FROM the ui dir (not `pnpm --dir`) so corepack reads ui/package.json's pinned pnpm
@@ -65,4 +67,11 @@ ui-dev:
 
 # Run the OpenAIHelloAgent worker.
 worker:
-    cd "{{root}}" && uv run --group examples python -m examples.openai_hello.worker
+    bazel run //examples/openai_hello:worker
+
+# The session manager, `server`, and `worker` in one terminal, against a running Temporal (`just
+# temporal`). Ctrl-C stops them all.
+#
+# Run this example's local stack.
+dev:
+    just --justfile "{{root}}/justfile" dev openai_hello

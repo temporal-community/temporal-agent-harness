@@ -1,0 +1,22 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [":evaluator"],
+)
+
+py_library(
+    name = "evaluator",
+    srcs = ["evaluator.py"],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//temporal_agent_harness/harness:agent_workflow",
+        "//temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+        "@pypi//temporalio_typesafe",
+        "@pypi//typesafe_sdk",
+    ],
+)

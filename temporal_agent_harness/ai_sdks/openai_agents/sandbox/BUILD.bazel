@@ -1,0 +1,18 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "sandbox",
+    srcs = [
+        "__init__.py",
+        "_sandbox_client_provider.py",
+        "_temporal_activity_models.py",
+        "_temporal_sandbox_client.py",
+        "_temporal_sandbox_session.py",
+    ],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "@pypi//openai_agents",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)

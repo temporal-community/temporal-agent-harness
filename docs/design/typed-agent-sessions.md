@@ -237,12 +237,12 @@ docstrings become Markdown, and `Echo-Input` becomes `EchoInput`, rejecting two 
 generate one. `Literal` aliases are inlined by pydantic, so a field reads `"X" | "O"` rather than
 `Mark`.
 
-**Where generated files live, and what keeps them current.** Each example that ships a typed client
-owns a `codegen-client-sdk` recipe in its own justfile and commits the output
-(`examples/tictactoe/client_sdk/TicTacToeAgent.ts`); there is no top-level codegen recipe. The
-protocol types are committed as `packages/client/src/protocol.ts` (`npm run generate:protocol`
-there). The `client-sdk` CI workflow regenerates both — for every example whose justfile defines
-the recipe — and fails on any difference.
+**Where generated files live, and what keeps them current.** Bazel generates every one of them
+and the repo commits the output, so the examples run with uv alone. Each example that ships a
+typed client declares a `harness_client_sdk` for its agents in its own
+`BUILD.bazel` (`examples/tictactoe/client_sdk/TicTacToeAgent.ts`); the protocol types are
+committed as `packages/client/src/protocol.ts` (`//packages/client:protocol_update`). `bazel test`
+fails on any difference between a committed file and what its agent generates.
 
 ### Starting a session
 
@@ -252,9 +252,10 @@ session. `Agent` is the generated definition value, so `A` comes from it: for
 `initData: { data: D; required: true }` the options, and `data` in them, are required; for
 `required: false` they are optional; for `initData: null` a `data` is a type error.
 `HttpTransport` implements `SessionStarter` (and `listSessions()`), so a UI starts, lists and
-follows sessions through one object. The server checks `data` against the agent's model when its
-registry entry names the class (`agent = "module:Class"`), rejecting a bad start with `422`
-`invalid_init_data`, which arrives as an `HttpError` with that `code`.
+follows sessions through one object. When its registry entry has the agent's schema document
+(`schema = "X.schema.json"`), the server rejects a start that omits required `data` or sends
+`data` to an agent that takes none with `422` `invalid_init_data`, which arrives as an `HttpError`
+with that `code`; the agent validates the data itself.
 
 The console does not use the generated types — it hosts many agents — but reads the same start
 interface off `GET /api/agents` (`init_data: { required, schema }`) and renders the model's

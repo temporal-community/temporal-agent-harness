@@ -1,0 +1,48 @@
+{
+  "agent": "WikiAgent",
+  "source": "examples.callback_tools.wiki_agent.workflow:WikiAgentWorkflow",
+  "init_data": null,
+  "handlers": {
+    "ask": {
+      "description": "Chat with the wiki keeper. Tell it something to remember, ask what you've noted, or ask\nit to reorganize; it reads and edits your local Markdown wiki through callback tools and\nreplies with what it did.",
+      "mid_turn": "reject",
+      "input": {
+        "$ref": "#/$defs/TextMessage"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {},
+  "$defs": {
+    "TextMessage": {
+      "description": "Free-form natural-language text from the user (the input to a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextMessage",
+      "type": "object"
+    },
+    "TextReply": {
+      "description": "A free-form natural-language reply (the output of a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextReply",
+      "type": "object"
+    }
+  }
+}
