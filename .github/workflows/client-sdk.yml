@@ -2,7 +2,7 @@ name: Client SDK codegen
 
 # packages/codegen turns `temporal-agent-harness schema` documents into TypeScript types.
 # packages/client commits its output for the event protocol as src/protocol.ts, and examples
-# that ship typed clients commit their agent's output (e.g. examples/tictactoe/client_sdk/). Bazel
+# that ship typed clients commit their agent's output (e.g. python/examples/tictactoe/client_sdk/). Bazel
 # generates every one of them, and the `bazel test` jobs in tests.yml fail when a committed copy
 # differs (each file's `*_up_to_date_test`). These jobs test the npm packages themselves.
 
@@ -88,10 +88,10 @@ jobs:
       # The tic-tac-toe board and the agent DAG studio are written against the binding and their
       # example's committed generated types, so they are type-checked with them (neither has a
       # build of its own).
-      - working-directory: examples/tictactoe/ui
-        run: ../../../packages/svelte/node_modules/.bin/svelte-check --tsconfig ./tsconfig.json
-      - working-directory: examples/agent_dag/ui
-        run: ../../../packages/svelte/node_modules/.bin/svelte-check --tsconfig ./tsconfig.json
+      - working-directory: python/examples/tictactoe/ui
+        run: ../../../../packages/svelte/node_modules/.bin/svelte-check --tsconfig ./tsconfig.json
+      - working-directory: python/examples/agent_dag/ui
+        run: ../../../../packages/svelte/node_modules/.bin/svelte-check --tsconfig ./tsconfig.json
 
   react:
     name: packages/react tests

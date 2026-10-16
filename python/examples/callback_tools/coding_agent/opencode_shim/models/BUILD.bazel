@@ -1,0 +1,221 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent",
+        ":app",
+        ":base",
+        ":common",
+        ":config",
+        ":diagnostics",
+        ":events",
+        ":file",
+        ":inputs",
+        ":mcp",
+        ":message",
+        ":parts",
+        ":provider",
+        ":pty",
+        ":question",
+        ":session",
+    ],
+)
+
+py_library(
+    name = "agent",
+    srcs = ["agent.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":base",
+        ":common",
+        "@pypi//annotated_types",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "app",
+    srcs = ["app.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [":base"],
+)
+
+py_library(
+    name = "base",
+    srcs = ["base.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = ["@pypi//pydantic"],
+)
+
+py_library(
+    name = "common",
+    srcs = ["common.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":base",
+        "//python/examples/callback_tools/coding_agent/opencode_shim:_time",
+        "@pypi//pydantic",
+        "@pypi//pydantic_ai_slim",
+    ],
+)
+
+py_library(
+    name = "config",
+    srcs = ["config.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":base",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "diagnostics",
+    srcs = ["diagnostics.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = ["@pypi//pydantic"],
+)
+
+py_library(
+    name = "events",
+    srcs = ["events.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":app",
+        ":base",
+        ":common",
+        ":message",
+        ":parts",
+        ":pty",
+        ":question",
+        ":session",
+        "//python/examples/callback_tools/coding_agent/opencode_shim:_time",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "file",
+    srcs = ["file.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":base",
+        ":common",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "inputs",
+    srcs = ["inputs.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":base",
+        ":common",
+        ":parts",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "mcp",
+    srcs = ["mcp.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":base",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "message",
+    srcs = ["message.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":base",
+        ":common",
+        ":inputs",
+        ":parts",
+        "//python/examples/callback_tools/coding_agent/opencode_shim:_identifiers",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "parts",
+    srcs = ["parts.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":base",
+        ":common",
+        "//python/examples/callback_tools/coding_agent/opencode_shim:_time",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "provider",
+    srcs = ["provider.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":base",
+        ":common",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "pty",
+    srcs = ["pty.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [":base"],
+)
+
+py_library(
+    name = "question",
+    srcs = ["question.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":base",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "session",
+    srcs = ["session.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":base",
+        ":common",
+        "@pypi//pydantic",
+    ],
+)
+
+py_library(
+    name = "tool_metadata",
+    srcs = ["tool_metadata.py"],
+    imports = ["../../../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [":common"],
+)

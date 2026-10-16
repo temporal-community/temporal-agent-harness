@@ -11,27 +11,29 @@ _TEMPORAL_CLI = Label("//bazel/temporal:cli")
 _TEMPORAL_TEST_SERVER = Label("//bazel/temporal:test_server")
 _MONTY = Label("//bazel:monty")
 
-def _harness_pytest_test_impl(name, visibility, srcs, deps, data, env, pytest_args, size, timeout, tags, flaky):
+def _harness_pytest_test_impl(name, visibility, srcs, deps, imports, data, env, pytest_args, size, timeout, tags, flaky):
     py_pytest_test(
         name = name,
         visibility = visibility,
         srcs = srcs,
+        imports = imports,
         deps = deps + [d for d in [_PYTEST] + _PYTEST_PLUGINS if d not in deps],
-        # The repo's pytest settings (asyncio_mode, pythonpath, ...) apply as under `uv run pytest`.
-        # Passed at run time, so every test shares rules_py's prebuilt pytest entry point.
+        # python/pyproject.toml's pytest settings (asyncio_mode, pythonpath, ...) apply as under
+        # `uv run pytest` there. Passed at run time, so every test shares rules_py's prebuilt pytest
+        # entry point.
         # consider_namespace_packages: a test's package __init__.py files belong to other Bazel
         # packages and are not in its runfiles, so pytest names modules from the import path
-        # (tests.state.test_decl) and package-relative imports resolve.
+        # (tests.state.test_decl), the names the tests import each other by.
         args = [
             "-c",
-            "pyproject.toml",
+            "python/pyproject.toml",
             "--rootdir",
-            ".",
+            "python",
             "-o",
             "consider_namespace_packages=true",
         ] + pytest_args,
         data = data + [
-            Label("//:pyproject.toml"),
+            Label("//python:pyproject.toml"),
             _TEMPORAL_CLI,
             _TEMPORAL_TEST_SERVER,
             _MONTY,
@@ -62,6 +64,7 @@ harness_pytest_test = macro(
     attrs = {
         "srcs": attr.label_list(mandatory = True, allow_files = [".py"], configurable = False, doc = "The test modules pytest collects."),
         "deps": attr.label_list(configurable = False, doc = "Libraries the modules import; @pypi//pytest is added."),
+        "imports": attr.string_list(configurable = False, doc = "Import roots, relative to this package (Gazelle sets the python_root)."),
         "data": attr.label_list(allow_files = True, configurable = False, doc = "Files the tests read at runtime."),
         "env": attr.string_dict(configurable = False, doc = "Extra environment variables."),
         "pytest_args": attr.string_list(configurable = False, doc = "Extra pytest arguments, e.g. --deselect=<node id>."),

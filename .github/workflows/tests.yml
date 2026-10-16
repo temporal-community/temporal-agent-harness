@@ -35,7 +35,7 @@ jobs:
       # needing a second run to answer.
       fail-fast: false
       matrix:
-        # .bazelrc's --config=py3XX; keep in lockstep with the pyproject.toml classifiers.
+        # .bazelrc's --config=py3XX; keep in lockstep with the python/pyproject.toml classifiers.
         config: [py311, py312, py313, py314]
     steps:
       - uses: actions/checkout@v4
@@ -98,7 +98,7 @@ jobs:
       # run may rewrite a lockfile written on macOS without anything being out of date.
       - name: BUILD files and gazelle_python.yaml match what `just gazelle` writes
         run: |
-          bazel run //:gazelle_python_manifest.update
+          bazel run //python:gazelle_python_manifest.update
           bazel run //:gazelle
           changed="$(git status --porcelain -- . ':!MODULE.bazel.lock')"
           if [ -n "$changed" ]; then
@@ -132,6 +132,7 @@ jobs:
           save-cache: ${{ env.SAVE_CACHE }}
 
       - name: Run the tests Bazel does not run
+        working-directory: python
         run: |
           tests=(
             # Nexus (nexus/, the temporal-nexus-mcp package) is not built by Bazel.

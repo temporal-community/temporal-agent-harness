@@ -5,8 +5,8 @@ program. A program that exits on its own is reported; the others keep running.
 
     dev_runner <instructions.json> [example ...]
 
-An example is named by its directory under examples/ (`callback_tools/wiki_agent`) or that path's
-last segment (`wiki_agent`); naming none runs every example.
+An example is named by its directory under the examples package (`callback_tools/wiki_agent`) or that
+path's last segment (`wiki_agent`); naming none runs every example.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def _launches(instructions: dict[str, object], names: list[str]) -> list[Launch]
     examples = instructions["examples"]
     assert isinstance(examples, list)
     chosen = _choose([str(e) for e in examples], names)
-    registries = [f"examples/{example}/agents.toml" for example in chosen]
+    registries = [f"{example}/agents.toml" for example in chosen]
 
     launches: list[Launch] = []
     cli_blob = instructions.get("cli")

@@ -1,5 +1,5 @@
 # Project-level recipes. Two ways to run the examples:
-#   * ONE example standalone — from its own dir: `cd examples/<x> && just server|worker|client`.
+#   * ONE example standalone — from its own dir: `cd python/examples/<x> && just server|worker|client`.
 #     Each example owns its justfile and is unchanged by the aggregate recipes here.
 #   * ALL examples behind one UI — the aggregate recipes below: `server` merges every example's
 #     agents.toml so the UI lists all agents; run each agent worker (or `just workers` to co-launch
@@ -7,15 +7,16 @@
 # The aggregate recipes read the shared repo-root .env.local (creds: OPENAI_API_KEY, GEMINI_API_KEY,
 # F1_MCP_SERVER_HOME, ...). Prerequisites + run order: see the "Run everything" section in README.md.
 # The run recipes build and run with Bazel (`bazel`, via bazelisk). `server`, `workers`, and `dev`
-# take example names to run a subset (`just dev monty wiki_agent`). `uv run --group examples ...`
-# from the repo root runs the same modules.
+# take example names to run a subset (`just dev monty wiki_agent`). `uv run --project python --group
+# examples ...` from the repo root runs the same modules (README.md, "Without Bazel").
 # Build/package + Nexus/Slack/Teams connector recipes follow the run recipes.
 
 # Shows a notice when running from an untagged commit (silent on a release archive).
 import 'scripts/untagged-notice.just'
 
 ui := justfile_directory() / "ui"
-monty := justfile_directory() / "examples" / "monty"
+python := justfile_directory() / "python"
+monty := python / "examples" / "monty"
 nexus_dir := justfile_directory() / "nexus"
 
 # List available recipes.
@@ -30,25 +31,25 @@ app-install:
 app-check:
     pnpm --dir "{{ui}}" run check
 
-# Build the Svelte UI into temporal_agent_harness/ui/dist.
+# Build the Svelte UI into python/temporal_agent_harness/ui/dist.
 app-build:
     pnpm --dir "{{ui}}" run build
 
-# Build, test, and create the wheel/sdist in dist/.
+# Build, test, and create the wheel/sdist in python/dist/.
 # Clears dist/ first: `uv build` only ADDS to it, so artifacts from a previously released
 # version linger there indefinitely. That matters at publish time — `uv publish` uploads
 # dist/* by default, so a stale wheel would be pushed to PyPI alongside the current one.
 package: app-build app-check
-    uv run pytest
-    rm -rf "{{justfile_directory()}}/dist"
-    uv build
+    cd "{{python}}" && uv run pytest
+    rm -rf "{{python}}/dist"
+    cd "{{python}}" && uv build
 
 # After adding, moving, or changing the imports of a .py file, or changing uv.lock. CI fails while
 # either is out of date.
 #
 # Regenerate the Bazel build: gazelle_python.yaml from uv.lock, then every Python BUILD target.
 gazelle:
-    bazel run //:gazelle_python_manifest.update
+    bazel run //python:gazelle_python_manifest.update
     bazel run //:gazelle
 
 # CI fails on anything this would change, and on lint warnings it cannot fix.
@@ -185,9 +186,9 @@ temporal:
     temporal server start-dev
 
 # Run the packaged, agent-agnostic session-manager worker (hosts only SessionManagerWorkflow).
-session-manager: (_run "//temporal_agent_harness/web:cli" "session-manager")
+session-manager: (_run "//python/temporal_agent_harness/web:cli" "session-manager")
 
-# Serves the COMMITTED UI build in temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
+# Serves the COMMITTED UI build in python/temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
 # a downloaded release archive runs as-is. If you changed anything under ui/, rebuild it first
 # with `just app-build`, or use `just dev-server` (build + serve). An agent only runs if its
 # worker is up — see the worker recipes below.
@@ -196,7 +197,7 @@ session-manager: (_run "//temporal_agent_harness/web:cli" "session-manager")
 # `just server monty tictactoe`.
 #
 # Serve the named examples' agents.toml registries merged on http://localhost:8000.
-server *EXAMPLES: (_run "//examples:server" EXAMPLES)
+server *EXAMPLES: (_run "//python/examples:server" EXAMPLES)
 
 # Rebuild the Svelte UI, then serve — the contributor loop after editing ui/ (needs pnpm).
 dev-server: app-build server
@@ -207,48 +208,48 @@ ui-dev:
 
 # --- Per-example agent workers (each loads .env.local via its own justfile) ---
 worker-openai-hello:
-    cd "{{justfile_directory()}}/examples/openai_hello" && just worker
+    cd "{{python}}/examples/openai_hello" && just worker
 
 worker-pydantic:
-    cd "{{justfile_directory()}}/examples/pydantic_ai_hello" && just worker
+    cd "{{python}}/examples/pydantic_ai_hello" && just worker
 
 worker-react:
-    cd "{{justfile_directory()}}/examples/react_agent" && just worker
+    cd "{{python}}/examples/react_agent" && just worker
 
 worker-monty:
     cd "{{monty}}" && just worker
 
 worker-tictactoe:
-    cd "{{justfile_directory()}}/examples/tictactoe" && just worker
+    cd "{{python}}/examples/tictactoe" && just worker
 
 worker-auto-mode:
-    cd "{{justfile_directory()}}/examples/auto_mode" && just worker
+    cd "{{python}}/examples/auto_mode" && just worker
 
 worker-wiki:
-    cd "{{justfile_directory()}}/examples/callback_tools/wiki_agent" && just worker
+    cd "{{python}}/examples/callback_tools/wiki_agent" && just worker
 
 worker-coding:
-    cd "{{justfile_directory()}}/examples/callback_tools/coding_agent" && just worker
+    cd "{{python}}/examples/callback_tools/coding_agent" && just worker
 
 worker-agent-dag:
-    cd "{{justfile_directory()}}/examples/agent_dag" && just worker
+    cd "{{python}}/examples/agent_dag" && just worker
 
 worker-code-mode-memory:
-    cd "{{justfile_directory()}}/examples/code_mode_memory" && just worker
+    cd "{{python}}/examples/code_mode_memory" && just worker
 
 # Names as for `server`, e.g. `just workers monty wiki_agent`. Each output line carries its
 # worker's name; Ctrl-C stops them all. Each needs its agent's prerequisites (API keys, the F1 MCP
 # server, ...).
 #
 # Co-launch the named examples' agent workers in one terminal.
-workers *EXAMPLES: (_run "//examples:workers" EXAMPLES)
+workers *EXAMPLES: (_run "//python/examples:workers" EXAMPLES)
 
 # Against a running Temporal (`just temporal`): the session manager, `server` over the named
 # examples' registries, and their workers. Names as for `server`, e.g. `just dev monty`. Each
 # output line carries its program's name; Ctrl-C stops them all.
 #
 # Run the local stack for the named examples in one terminal.
-dev *EXAMPLES: (_run "//examples:dev" EXAMPLES)
+dev *EXAMPLES: (_run "//python/examples:dev" EXAMPLES)
 
 # `bazel run <target> -- <args>` with the repo-root .env.local loaded.
 _run target *ARGS:
@@ -261,16 +262,16 @@ _run target *ARGS:
 # --- Clients / external processes for the human-in-the-loop & callback agents ---
 # ReAct client: answers the `ask_user` callback (plain chat also works in the web UI).
 react-client *ARGS:
-    cd "{{justfile_directory()}}/examples/react_agent" && just client {{ARGS}}
+    cd "{{python}}/examples/react_agent" && just client {{ARGS}}
 
 # Wiki client: REQUIRED — fulfills the wiki callback tools against a local dir (default: wiki/ in
 # the example's directory).
 wiki-client *ARGS:
-    cd "{{justfile_directory()}}/examples/callback_tools/wiki_agent" && just client {{ARGS}}
+    cd "{{python}}/examples/callback_tools/wiki_agent" && just client {{ARGS}}
 
 # Coding shim: REQUIRED — the OpenCode shim that fulfills the coding callback tools (attach the
 # OpenCode TUI to it). Pass a working dir, e.g. `just coding-shim ~/some/project`.
-coding-shim *ARGS: (_run "//examples/callback_tools/coding_agent/opencode_shim:opencode_shim_bin" ARGS)
+coding-shim *ARGS: (_run "//python/examples/callback_tools/coding_agent/opencode_shim:opencode_shim_bin" ARGS)
 
 # Terminate the session-manager workflow so the next `server` start re-seeds it with the current
 # (merged) registry. Needed when switching which agents are served without a fresh Temporal.
@@ -280,7 +281,7 @@ reset-manager:
 # Run the standalone Nexus worker exposing AgentService. AGENT_WORKFLOW_NAME is required —
 # see worker.py for the rest of the env vars.
 nexus-agent-worker:
-    uv run python -m temporal_agent_harness.nexus_agent_adapter.worker
+    cd "{{python}}" && uv run python -m temporal_agent_harness.nexus_agent_adapter.worker
 
 # Installs the newest nex-gen release into ~/.local/bin. Tracks latest, not a pinned
 # version, while nex-gen is under active development.
@@ -305,8 +306,8 @@ install-nexgen:
 
 # Gets the contract from remote and regenerates the Python AgentService bindings.
 nexus-agent-generate: install-nexgen
-    "$HOME/.local/bin/nexgen" python temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml \
-        --output temporal_agent_harness/nexus_agent_adapter/generated
+    "$HOME/.local/bin/nexgen" python python/temporal_agent_harness/nexus_agent_adapter/agent.nexusrpc.yaml \
+        --output python/temporal_agent_harness/nexus_agent_adapter/generated
 
 # Gets the contract from local and regenerates the Durable Tools Gateway's Python bindings.
 generate-registry-contract: install-nexgen

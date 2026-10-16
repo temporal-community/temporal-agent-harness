@@ -1,0 +1,39 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:binary.bzl", "harness_module_binary")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+)
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":workflow",
+        "//python/temporal_agent_harness:plugin",
+        "@pypi//temporalio",
+        "@pypi//temporalio_typesafe",
+        "@pypi//typesafe_sdk",
+    ],
+)
+
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/ai_sdks:typesafe_harness",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+        "@pypi//typesafe_sdk",
+    ],
+)

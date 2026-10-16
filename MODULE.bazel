@@ -1,7 +1,7 @@
 """Bazel build for temporal-agent-harness.
 
-pyproject.toml and uv.lock stay the source of truth for Python dependencies; the uv hub below reads
-them directly. Nexus (nexus/, nexgen) is not built by Bazel.
+python/pyproject.toml and python/uv.lock stay the source of truth for Python dependencies; the uv hub
+below reads them directly. Nexus (nexus/, nexgen) is not built by Bazel.
 """
 
 module(name = "temporal_agent_harness")
@@ -50,14 +50,14 @@ uv = use_extension("@aspect_rules_py//uv:extensions.bzl", "uv")
 uv.declare_hub(hub_name = "pypi")
 uv.project(
     hub_name = "pypi",
-    lock = "//:uv.lock",
-    pyproject = "//:pyproject.toml",
+    lock = "//python:uv.lock",
+    pyproject = "//python:pyproject.toml",
 )
 
 # temporal-nexus-mcp is an editable path dependency on nexus/mcp, which Bazel does not build.
 uv.override_package(
     name = "temporal-nexus-mcp",
-    lock = "//:uv.lock",
+    lock = "//python:uv.lock",
     target = "//bazel/excluded:temporal_nexus_mcp",
 )
 
@@ -65,7 +65,7 @@ uv.override_package(
 # into it and puts that wheel on sys.path instead; extend_path makes temporalio find it there.
 uv.override_package(
     name = "temporalio",
-    lock = "//:uv.lock",
+    lock = "//python:uv.lock",
     post_install_patches = ["//bazel:temporalio_extend_path.patch"],
 )
 
@@ -74,7 +74,7 @@ uv.override_package(
 # Gazelle manifest cannot build while it is installable; this build does not target Windows.
 uv.override_package(
     name = "pywin32",
-    lock = "//:uv.lock",
+    lock = "//python:uv.lock",
     target = "//bazel/excluded:pywin32",
 )
 use_repo(uv, "pypi")

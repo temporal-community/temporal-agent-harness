@@ -1,0 +1,119 @@
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+harness_pytest_test(
+    name = "test_caller_chosen_session_id",
+    srcs = ["test_caller_chosen_session_id.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/web:__init__",
+        "//python/temporal_agent_harness/web:session_manager",
+        "//python/tests:conftest",
+        "@pypi//fastapi",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+# Loads the tic-tac-toe example by module path (the `# keep` deps).
+harness_pytest_test(
+    name = "test_cli",
+    srcs = ["test_cli.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/examples/tictactoe:board",  # keep
+        "//python/examples/tictactoe:workflow",  # keep
+        "//python/temporal_agent_harness/harness:agent_schema",
+        "//python/temporal_agent_harness/web:cli",
+        "//python/temporal_agent_harness/web:client",
+        "//python/temporal_agent_harness/web:session_manager",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_file_view",
+    srcs = ["test_file_view.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/code_mode:activity_fs",
+        "//python/temporal_agent_harness/web:app",
+        "//python/temporal_agent_harness/web:file_view",
+        "//python/temporal_agent_harness/web:session_manager",
+        "//python/tests:conftest",
+        "@pypi//httpx",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+# The deselected tests build the wheel and sdist with setuptools inside the source tree, which
+# the sandbox mounts read-only. They come back once the distributions are Bazel targets.
+# CI runs them outside Bazel for now (the pytest-outside-bazel job in .github/workflows/tests.yml);
+# drop them there when they come back here.
+harness_pytest_test(
+    name = "test_packaged_ui",
+    srcs = ["test_packaged_ui.py"],
+    data = ["//python/examples/monty:agents_files"],
+    imports = ["../.."],
+    pytest_args = [
+        "--deselect=tests/web/test_packaged_ui.py::test_built_distributions_exclude_the_nexus_source_tree",
+        "--deselect=tests/web/test_packaged_ui.py::test_built_distributions_expose_ui_server_console_script",
+        "--deselect=tests/web/test_packaged_ui.py::test_built_distributions_include_packaged_ui_assets",
+        "--deselect=tests/web/test_packaged_ui.py::test_extracted_wheel_can_resolve_packaged_ui_dist",
+    ],
+    deps = [
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/ui:__init__",
+        "//python/temporal_agent_harness/web:__init__",
+        "//python/temporal_agent_harness/web:app",
+        "//python/temporal_agent_harness/web:serve",
+        "//python/tests:conftest",
+        "@pypi//fastapi",
+        "@pypi//pytest",
+        "@pypi//setuptools",
+        "@pypi//temporalio",
+    ],
+)
+
+# Loads example agents by module path (the `# keep` deps).
+harness_pytest_test(
+    name = "test_session_init_data",
+    srcs = ["test_session_init_data.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/examples/react_agent:workflow",  # keep
+        "//python/examples/tictactoe:workflow",  # keep
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_schema",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/web:__init__",
+        "//python/temporal_agent_harness/web:agent_starts",
+        "//python/temporal_agent_harness/web:session_manager",
+        "//python/temporal_agent_harness/web:task_queue_status",
+        "//python/tests:conftest",
+        "@pypi//fastapi",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_task_queue_status",
+    srcs = ["test_task_queue_status.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/web:__init__",
+        "//python/temporal_agent_harness/web:task_queue_status",
+        "//python/tests:conftest",
+        "@pypi//fastapi",
+        "@pypi//protobuf",
+        "@pypi//temporalio",
+    ],
+)

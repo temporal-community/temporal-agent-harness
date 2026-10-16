@@ -1,0 +1,106 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent",
+        ":agent_workflow",
+    ],
+)
+
+py_library(
+    name = "agent",
+    srcs = ["agent.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent_workflow",
+        ":subagent_toolset",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/code_mode:__init__",
+        "//python/temporal_agent_harness/harness/state:decl",
+    ],
+)
+
+py_library(
+    name = "agent_client",
+    srcs = ["agent_client.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/stream_merge:__init__",
+        "//python/temporal_agent_harness/harness/stream_merge:cursor",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "agent_schema",
+    srcs = ["agent_schema.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:events",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "@pypi//pydantic",
+        "@pypi//pydantic_core",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "agent_workflow",
+    srcs = ["agent_workflow.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":stream_context",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/temporal_agent_harness/harness/state:decl",
+        "//python/temporal_agent_harness/harness/state:events",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "stream_context",
+    srcs = ["stream_context.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = ["@pypi//pydantic"],
+)
+
+py_library(
+    name = "subagent_activities",
+    srcs = ["subagent_activities.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent_client",
+        ":agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "subagent_toolset",
+    srcs = ["subagent_toolset.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)

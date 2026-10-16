@@ -1,0 +1,192 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+py_library(
+    name = "bench_state",
+    srcs = ["bench_state.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":models",
+        ":support",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "@pypi//pytest",
+    ],
+)
+
+py_library(
+    name = "models",
+    srcs = ["models.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = ["//python/temporal_agent_harness/harness/state:__init__"],
+)
+
+py_library(
+    name = "replay",
+    srcs = ["replay.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "@pypi//jsonpatch",
+    ],
+)
+
+py_library(
+    name = "support",
+    srcs = ["support.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/temporal_agent_harness/harness/state:events",
+    ],
+)
+
+py_library(
+    name = "conftest",
+    testonly = True,
+    srcs = ["conftest.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = ["@pypi//hypothesis"],
+)
+
+harness_pytest_test(
+    name = "test_decl",
+    srcs = ["test_decl.py"],
+    imports = ["../.."],
+    deps = [
+        ":conftest",
+        ":models",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_frozen",
+    srcs = ["test_frozen.py"],
+    imports = ["../.."],
+    deps = [
+        ":conftest",
+        ":models",
+        ":support",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/temporal_agent_harness/harness/state:containers",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_json_value",
+    srcs = ["test_json_value.py"],
+    imports = ["../.."],
+    deps = [
+        ":conftest",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/temporal_agent_harness/harness/state:errors",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_lifecycle",
+    srcs = ["test_lifecycle.py"],
+    imports = ["../.."],
+    deps = [
+        ":conftest",
+        ":models",
+        ":replay",
+        ":support",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/temporal_agent_harness/harness/state:drafts",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_paths",
+    srcs = ["test_paths.py"],
+    imports = ["../.."],
+    deps = [
+        ":conftest",
+        ":replay",
+        ":support",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/temporal_agent_harness/harness/state:base",
+        "//python/temporal_agent_harness/harness/state:containers",
+        "//python/temporal_agent_harness/harness/state:errors",
+        "//python/temporal_agent_harness/harness/state:session",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+    ],
+)
+
+# Runs `python -c` from the source tree, which imports temporal_agent_harness.harness through
+# its package __init__ (the `# keep` dep).
+harness_pytest_test(
+    name = "test_property",
+    srcs = ["test_property.py"],
+    imports = ["../.."],
+    deps = [
+        ":conftest",
+        ":models",
+        ":replay",
+        ":support",
+        "//python/temporal_agent_harness/harness:__init__",  # keep
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/tests:conftest",
+        "@pypi//hypothesis",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_roundtrip",
+    srcs = ["test_roundtrip.py"],
+    imports = ["../.."],
+    deps = [
+        ":conftest",
+        ":models",
+        "//python/temporal_agent_harness/harness/state:containers",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_schema",
+    srcs = ["test_schema.py"],
+    imports = ["../.."],
+    deps = [
+        ":conftest",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//typing_extensions",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_sharing",
+    srcs = ["test_sharing.py"],
+    imports = ["../.."],
+    deps = [
+        ":conftest",
+        ":models",
+        ":support",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/tests:conftest",
+    ],
+)

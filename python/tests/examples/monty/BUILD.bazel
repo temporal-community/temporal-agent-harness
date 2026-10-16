@@ -1,0 +1,131 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+)
+
+py_library(
+    name = "_code_mode_e2e_parent",
+    srcs = ["_code_mode_e2e_parent.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_code_mode_vfs_e2e_parent",
+    srcs = ["_code_mode_vfs_e2e_parent.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":_code_mode_e2e_parent",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "_subagent_e2e_parent",
+    srcs = ["_subagent_e2e_parent.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/examples/monty:workflow",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness:subagent_toolset",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_code_mode_e2e",
+    srcs = ["test_code_mode_e2e.py"],
+    imports = ["../../.."],
+    deps = [
+        ":_code_mode_e2e_parent",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_code_mode_vfs_e2e",
+    srcs = ["test_code_mode_vfs_e2e.py"],
+    imports = ["../../.."],
+    deps = [
+        ":_code_mode_e2e_parent",
+        ":_code_mode_vfs_e2e_parent",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_observable_trip_board",
+    srcs = ["test_observable_trip_board.py"],
+    imports = ["../../.."],
+    deps = [
+        "//python/examples/monty:activities",
+        "//python/examples/monty:trip_board",
+        "//python/examples/monty:workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//jsonpatch",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_subagent_e2e",
+    srcs = ["test_subagent_e2e.py"],
+    imports = ["../../.."],
+    deps = [
+        ":_subagent_e2e_parent",
+        "//python/examples/monty:activities",
+        "//python/examples/monty:workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_workflow",
+    srcs = ["test_workflow.py"],
+    imports = ["../../.."],
+    deps = [
+        "//python/examples/monty:activities",
+        "//python/examples/monty:workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)

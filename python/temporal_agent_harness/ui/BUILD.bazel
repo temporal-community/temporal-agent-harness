@@ -1,0 +1,10 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+# The packaged browser UI (pyproject.toml package-data).
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    data = glob(["dist/**"]),
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+)

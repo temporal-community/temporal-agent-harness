@@ -12,14 +12,18 @@ def _program(target):
         "path": target[DefaultInfo].files_to_run.executable.short_path,
     }
 
+def _example_dir(ctx, example):
+    return "%s/%s" % (ctx.label.package, example)
+
 def _harness_dev_rule_impl(ctx):
     instructions = ctx.actions.declare_file(ctx.label.name + ".json")
     ctx.actions.write(instructions, json.encode_indent({
         "cli": _program(ctx.attr.cli) if ctx.attr.cli else None,
-        "examples": ctx.attr.examples,
+        # Each example as its directory from the workspace root, where `bazel run` runs the CLI.
+        "examples": [_example_dir(ctx, example) for example in ctx.attr.examples],
         "server": ctx.attr.server,
         "session_manager": ctx.attr.session_manager,
-        "workers": {example: _program(worker) for worker, example in ctx.attr.workers.items()},
+        "workers": {_example_dir(ctx, example): _program(worker) for worker, example in ctx.attr.workers.items()},
     }))
 
     runner = ctx.attr._runner
@@ -70,13 +74,13 @@ def _harness_dev_impl(name, visibility, examples, cli, session_manager, server, 
         examples = examples,
         server = server,
         session_manager = session_manager,
-        workers = {"//examples/%s:worker" % example: example for example in examples} if workers else {},
+        workers = {"//%s/%s:worker" % (native.package_name(), example): example for example in examples} if workers else {},
     )
 
 harness_dev = macro(
     doc = """Runs examples' programs together: `bazel run <name> -- [example ...]`.
 
-    For each example named at run time (its directory under examples/, or that path's last
+    For each example named at run time (its directory under this package, or that path's last
     segment; none means all of `examples`), runs its `:worker` when `workers` is set, plus `cli`'s
     session manager and `cli serve` over the chosen examples' agents.toml registries when
     `session_manager` and `server` are set. Every output line carries its program's label, and
@@ -84,7 +88,7 @@ harness_dev = macro(
     """,
     implementation = _harness_dev_impl,
     attrs = {
-        "examples": attr.string_list(mandatory = True, configurable = False, doc = "Directories under examples/ that can be run."),
+        "examples": attr.string_list(mandatory = True, configurable = False, doc = "Directories under this package that can be run."),
         "cli": attr.label(configurable = False, doc = "The temporal-agent-harness CLI, able to import every example's agents."),
         "session_manager": attr.bool(configurable = False, doc = "Run `cli session-manager`."),
         "server": attr.bool(configurable = False, doc = "Run `cli serve` over the chosen examples' registries on :8000."),

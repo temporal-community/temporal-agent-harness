@@ -1,0 +1,44 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":gates",
+        ":merge",
+    ],
+)
+
+py_library(
+    name = "cursor",
+    srcs = ["cursor.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "gates",
+    srcs = ["gates.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = ["//python/temporal_agent_harness/harness/agent_protocol:__init__"],
+)
+
+py_library(
+    name = "merge",
+    srcs = ["merge.py"],
+    imports = ["../../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        ":cursor",
+        ":gates",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//temporalio",
+    ],
+)

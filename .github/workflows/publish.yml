@@ -6,7 +6,7 @@ name: Publish to PyPI
 # https://pypi.org/manage/project/temporal-agent-harness/settings/publishing/ exactly.
 #
 # No Node toolchain here on purpose: the browser UI is committed prebuilt to
-# temporal_agent_harness/ui/dist, and the "UI dist" workflow already fails on main if that build
+# python/temporal_agent_harness/ui/dist, and the "UI dist" workflow already fails on main if that build
 # has drifted from ui/. So the commit a release is cut from is verified before we get here, and
 # `uv build` alone produces a complete wheel.
 
@@ -36,6 +36,9 @@ jobs:
       # Pin the interpreter rather than taking the runner's default, so what a release builds
       # and tests is reproducible: 3.13 is what the project develops against.
       UV_PYTHON: "3.13"
+    defaults:
+      run:
+        working-directory: python
     permissions:
       contents: read
       # Mints the short-lived OIDC token PyPI exchanges for an upload token. Without this the
@@ -53,7 +56,7 @@ jobs:
       - name: Build the wheel and sdist
         run: uv build
 
-      # The version lives in pyproject.toml and is bumped by hand, so a tag and a version CAN
+      # The version lives in python/pyproject.toml and is bumped by hand, so a tag and a version CAN
       # disagree. Catch that here rather than discovering that 0.4.0 shipped 0.3.0's code.
       - name: Check the built version matches the release tag
         if: github.event_name == 'release'
@@ -72,3 +75,5 @@ jobs:
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist/

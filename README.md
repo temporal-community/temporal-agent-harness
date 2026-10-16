@@ -60,11 +60,11 @@ cd temporal-agent-harness
 cp .env.example .env.local   # then set GEMINI_API_KEY (and/or OPENAI_API_KEY)
 ```
 
-Then run [`examples/monty`](examples/monty) — a conversational Code Mode travel agent — with one
+Then run [`python/examples/monty`](python/examples/monty) — a conversational Code Mode travel agent — with one
 recipe per terminal:
 
 ```bash
-cd examples/monty
+cd python/examples/monty
 just temporal          # 1. local Temporal dev server (needs the `temporal` CLI)
 just session-manager   # 2. worker hosting the packaged SessionManagerWorkflow
 just server            # 3. browser UI + JSON API on :8000
@@ -272,9 +272,9 @@ Support is growing across the Python AI SDKs and agent frameworks Temporal integ
 
 | AI SDK | Status | Notes |
 | --- | --- | --- |
-| [Google Gemini](temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
-| [OpenAI Agents SDK](temporal_agent_harness/ai_sdks/openai_agents) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
-| [Pydantic AI](temporal_agent_harness/ai_sdks/pydantic_ai_harness.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
+| [Google Gemini](python/temporal_agent_harness/ai_sdks/google_genai_plugin) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
+| [OpenAI Agents SDK](python/temporal_agent_harness/ai_sdks/openai_agents) | ✅ Available now | Ships in this repo and is **experimental** - [Python SDK](https://github.com/temporalio/sdk-python) has a fully-supported non-harness integration. |
+| [Pydantic AI](python/temporal_agent_harness/ai_sdks/pydantic_ai_harness.py) | ✅ Available now | Directly uses Pydantic's Temporal plugin |
 | [Google ADK](https://adk.dev/integrations/temporal/) | 🟡 Planned | - |
 | [Strands Agents](https://docs.temporal.io/develop/python/integrations/strands-agents) | 🟡 Planned | - |
 | [LangGraph](https://docs.temporal.io/develop/python/integrations/langgraph) | 🟡 Planned | - |
@@ -297,7 +297,7 @@ supplies the single generic implementation. Because it's dispatched like any oth
 tool inherits the *same* approval policy, `tool_start`/`tool_end` events, and durable pause/resume:
 the workflow simply waits (seconds or days) until a result arrives, and that result is validated
 against the tool's declared output type before the turn continues. See
-[`examples/callback_tools/wiki_agent`](examples/callback_tools/wiki_agent) — a cloud-shaped agent
+[`python/examples/callback_tools/wiki_agent`](python/examples/callback_tools/wiki_agent) — a cloud-shaped agent
 that organizes a Markdown wiki on *your* local disk through a thin terminal client.
 
 ### 🧩 Agents that are more than chatbots
@@ -418,7 +418,7 @@ reasoning and latency stay auditable even when it *escalates* and resolves nothi
 answers first **cancels** it, and the console gives the evaluation its own card and its own share
 of the approval wait.
 
-[`examples/auto_mode`](examples/auto_mode) runs all of this end to end: the Monty travel agent,
+[`python/examples/auto_mode`](python/examples/auto_mode) runs all of this end to end: the Monty travel agent,
 with lookups auto-approved and bookings still coming to you.
 
 ## A taste
@@ -680,7 +680,7 @@ class MyAgent:
   whole bundle as it is now: concepts colored by type, links as edges, stale, deprecated and
   human-confirmed concepts marked.
 
-The [memory example](examples/code_mode_memory/) keeps a user's memory this way.
+The [memory example](python/examples/code_mode_memory/) keeps a user's memory this way.
 
 A worker that hosts a Code Mode agent needs the `code-mode` extra (which pulls in
 [`pydantic-monty`](https://pypi.org/project/pydantic-monty/), the sandbox the scripts run in) and
@@ -694,9 +694,9 @@ client = await Client.connect(..., plugins=[AgentHarnessPlugin(tools=my_tools)])
 worker = Worker(client, task_queue=..., workflows=[MyAgent])
 ```
 
-See [`examples/monty`](examples/monty) for three agents all built on Code Mode: a no-model script
+See [`python/examples/monty`](python/examples/monty) for three agents all built on Code Mode: a no-model script
 runner, a conversational agent that writes its own scripts, and a subagent-driven variant.
-[`examples/code_mode_memory`](examples/code_mode_memory) shows a Code Mode tool working on a
+[`python/examples/code_mode_memory`](python/examples/code_mode_memory) shows a Code Mode tool working on a
 virtual filesystem: skills seeded into memory, and long-term memory on disk that sessions share.
 
 ## Accepted Messages
@@ -896,10 +896,11 @@ class TicTacToeAgentWorkflow:
 and init data as JSON Schema, and [`harness-codegen`](packages/codegen) turns that into
 TypeScript. The generator runs from a checkout of this repo: build it once with
 `npm ci && npm run build` in `packages/codegen`, then from the repo root (this repo's examples run
-the same pipeline through Bazel, e.g. `bazel run //examples/tictactoe:client_sdk_update`):
+the same pipeline through Bazel, e.g. `bazel run //python/examples/tictactoe:client_sdk_update`):
 
 ```bash
-uv run temporal-agent-harness schema examples.tictactoe.workflow:TicTacToeAgentWorkflow \
+PYTHONPATH=python uv run --project python temporal-agent-harness schema \
+  examples.tictactoe.workflow:TicTacToeAgentWorkflow \
   | node packages/codegen/dist/src/cli.js - -o client_sdk/TicTacToeAgent.ts
 ```
 
@@ -966,8 +967,8 @@ full example.
 - **Typed starts.** `startSession(transport, TicTacToeAgent, { data })` creates a session, with
   `data` required, optional, or refused to match the agent's init data.
 
-[`examples/tictactoe/ui`](examples/tictactoe/ui) is a complete board in one Svelte component, and
-[`examples/agent_dag/ui`](examples/agent_dag/ui) is a larger studio. The design and its reasoning
+[`python/examples/tictactoe/ui`](python/examples/tictactoe/ui) is a complete board in one Svelte component, and
+[`python/examples/agent_dag/ui`](python/examples/agent_dag/ui) is a larger studio. The design and its reasoning
 are in [`docs/design/typed-agent-sessions.md`](docs/design/typed-agent-sessions.md).
 
 ## Requirements
@@ -990,7 +991,7 @@ To run the bundled examples from a checkout, additionally:
   version and fail with a message. The other examples work with any recent release.
 
 [pnpm](https://pnpm.io/) is **not** required to run anything: the browser UI ships prebuilt in
-`temporal_agent_harness/ui/dist`, both in release archives and in the repo. You only need it to
+`python/temporal_agent_harness/ui/dist`, both in release archives and in the repo. You only need it to
 *change* the UI — see [UI development](docs/internal/development.md#ui-development).
 
 ## Run the examples
@@ -1010,11 +1011,11 @@ The default committed `temporal.local.toml` profile points at a local Temporal d
 
 ### One example, standalone
 
-Each example runs on its own from its directory — [`examples/monty`](examples/monty) (a
+Each example runs on its own from its directory — [`python/examples/monty`](python/examples/monty) (a
 conversational Code Mode travel agent + a subagent variant) is the best starting point:
 
 ```bash
-cd examples/monty
+cd python/examples/monty
 just temporal          # local Temporal dev server; skip if you bring your own
 just session-manager   # worker hosting the packaged SessionManagerWorkflow
 just server            # serves the Svelte UI + /api on :8000 (this example's agents only)
@@ -1023,7 +1024,7 @@ just worker            # this example's agent worker
 
 Open <http://localhost:8000> and pick an agent. Every example follows the same recipe set
 (`temporal` / `session-manager` / `server` / `worker`, plus `client` where noted). `just server`
-serves the prebuilt UI from `temporal_agent_harness/ui/dist`, so it needs no Node/pnpm. If you're
+serves the prebuilt UI from `python/temporal_agent_harness/ui/dist`, so it needs no Node/pnpm. If you're
 changing the UI, use `just dev-server` (rebuild + serve) instead.
 
 ### All examples behind one UI
@@ -1042,7 +1043,7 @@ Or, against a running Temporal, `just dev` starts the session manager, the serve
 workers in one terminal: one build, then all in parallel, each output line labelled with the
 program it came from; Ctrl-C stops them all.
 
-`server`, `workers`, and `dev` also take example names (the directory under `examples/`, e.g.
+`server`, `workers`, and `dev` also take example names (the directory under `python/examples/`, e.g.
 `monty` or `wiki_agent`) to run only those: `just dev monty wiki_agent` serves just their agents and
 starts just their workers, and `just workers tictactoe` adds one more worker beside a running
 stack. From an example's own directory, `just dev` does the same for that example. Switching the
@@ -1054,13 +1055,13 @@ Then create a session for any agent in the UI. A few need extra setup or a clien
 |---|---|
 | OpenAI Hello · Pydantic AI Hello | `OPENAI_API_KEY`; chat directly in the UI |
 | Monty (both) | `GEMINI_API_KEY`; chat directly in the UI |
-| Travel agent (Jev Auto mode) | `GEMINI_API_KEY` **and** `TYPESAFE_API_KEY`; Monty with [auto mode](#auto-mode--letting-code-or-a-model-decide) judging its gated calls ([readme](examples/auto_mode/README.md)); chat directly in the UI |
-| Tic-Tac-Toe (TypeSafe) | `TYPESAFE_API_KEY`; no LLM — every move is a [TypeSafe](https://docs.typesafe.ai) System One judgment ([readme](examples/tictactoe/README.md)); send `new_game` then `play` in the UI |
-| ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
-| Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client`** (wiki in `examples/callback_tools/wiki_agent/wiki`; `--wiki-dir` moves it) — required, or its tool calls hang |
+| Travel agent (Jev Auto mode) | `GEMINI_API_KEY` **and** `TYPESAFE_API_KEY`; Monty with [auto mode](#auto-mode--letting-code-or-a-model-decide) judging its gated calls ([readme](python/examples/auto_mode/README.md)); chat directly in the UI |
+| Tic-Tac-Toe (TypeSafe) | `TYPESAFE_API_KEY`; no LLM — every move is a [TypeSafe](https://docs.typesafe.ai) System One judgment ([readme](python/examples/tictactoe/README.md)); send `new_game` then `play` in the UI |
+| ReAct Agent | `OPENAI_API_KEY`; the **F1 MCP server** at `F1_MCP_SERVER_HOME` ([setup](python/examples/react_agent/README.md#the-f1-mcp-server)); `just react-client` to answer its `ask_user` (chat alone works in the UI) |
+| Wiki (callback) | `GEMINI_API_KEY`; **`just wiki-client`** (wiki in `python/examples/callback_tools/wiki_agent/wiki`; `--wiki-dir` moves it) — required, or its tool calls hang |
 | Coding (callback) | `GEMINI_API_KEY`; **`just coding-shim <dir>`** + the OpenCode TUI — required |
-| Code Mode Memory | `GEMINI_API_KEY`; long-term memory on the worker's disk, shared by sessions given the same `memory_dir` ([readme](examples/code_mode_memory/README.md)); chat directly in the UI |
-| Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](examples/agent_dag/README.md)); best in its own UI, **`just studio`** from `examples/agent_dag` |
+| Code Mode Memory | `GEMINI_API_KEY`; long-term memory on the worker's disk, shared by sessions given the same `memory_dir` ([readme](python/examples/code_mode_memory/README.md)); chat directly in the UI |
+| Agent DAG Studio | `OPENAI_API_KEY`; an agent writes a Python flow of agents that Code Mode runs as subagents ([readme](python/examples/agent_dag/README.md)); best in its own UI, **`just studio`** from `examples/agent_dag` |
 
 **Gotcha — the session manager caches its registry.** The server seeds the `session-manager`
 workflow with the registry on first start and reuses the existing one after that. So when you switch
@@ -1071,15 +1072,18 @@ its worker.
 
 ### Without Bazel
 
-The recipes are thin wrappers: each runs a module that uv can run directly from the project root,
-with the `examples` dependency group. Load `.env.local` first (`set -a; . ./.env.local; set +a`),
-then, for example:
+The recipes are thin wrappers: each runs a module that uv can run directly from the repo root,
+pointed at the Python project in `python/` and with the `examples` dependency group. Load
+`.env.local` first (`set -a; . ./.env.local; set +a`), then, for example:
 
 ```bash
-uv run --group examples temporal-agent-harness session-manager
-uv run --group examples temporal-agent-harness serve examples/monty/agents.toml --port 8000
-uv run --group examples python -m examples.monty.worker
+uv run --project python --group examples temporal-agent-harness session-manager
+uv run --project python --group examples temporal-agent-harness serve python/examples/monty/agents.toml --port 8000
+PYTHONPATH=python uv run --project python --group examples python -m examples.monty.worker
 ```
+
+Running from the repo root keeps `.env.local`'s relative `TEMPORAL_CONFIG_FILE` resolving, and
+`PYTHONPATH=python` makes the examples importable as `examples.*`.
 
 The generated TypeScript the example UIs use is committed, so nothing needs regenerating to run.
 

@@ -10,9 +10,9 @@ wheels/
 htmlcov/
 
 # Packaged browser UI assets. Root-level dist/ and ui/dist/ stay ignored.
-!temporal_agent_harness/ui/
-!temporal_agent_harness/ui/dist/
-!temporal_agent_harness/ui/dist/**
+!python/temporal_agent_harness/ui/
+!python/temporal_agent_harness/ui/dist/
+!python/temporal_agent_harness/ui/dist/**
 
 # Virtual environments
 .venv

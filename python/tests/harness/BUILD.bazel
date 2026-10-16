@@ -1,0 +1,308 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+py_library(
+    name = "_activity_fs_parent",
+    srcs = ["_activity_fs_parent.py"],
+    imports = ["../.."],
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+# Imports _activity_fs_parent by bare name, so its directory goes on sys.path as under
+# `uv run pytest`.
+harness_pytest_test(
+    name = "test_activity_filesystem",
+    srcs = ["test_activity_filesystem.py"],
+    imports = ["../.."],
+    pytest_args = [
+        "-o",
+        "pythonpath='. tests/harness'",  # one token: Bazel shell-splits args
+    ],
+    deps = [
+        ":_activity_fs_parent",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/code_mode:activity_fs",
+        "//python/temporal_agent_harness/harness/code_mode:vfs",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+# Loads every example agent by module path (the `# keep` deps), except the Nexus one, which
+# Bazel does not build; CI runs that case outside Bazel (the pytest-outside-bazel job in
+# .github/workflows/tests.yml).
+harness_pytest_test(
+    name = "test_agent_schema",
+    srcs = ["test_agent_schema.py"],
+    data = ["//python/examples/tictactoe:agents_files"],
+    imports = ["../.."],
+    pytest_args = ["--deselect=tests/harness/test_agent_schema.py::test_every_example_agent_has_a_deterministic_self_contained_schema[examples.nexus_hello.workflow:NexusHelloAgentWorkflow]"],
+    deps = [
+        "//python/examples/auto_mode:workflow",  # keep
+        "//python/examples/callback_tools/coding_agent:workflow",  # keep
+        "//python/examples/callback_tools/wiki_agent:workflow",  # keep
+        "//python/examples/monty:conversational_subagent_workflow",  # keep
+        "//python/examples/monty:conversational_workflow",  # keep
+        "//python/examples/monty:workflow",  # keep
+        "//python/examples/openai_hello:workflow",  # keep
+        "//python/examples/pydantic_ai_hello:workflow",  # keep
+        "//python/examples/react_agent:workflow",  # keep
+        "//python/examples/tictactoe:workflow",  # keep
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_schema",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/agent_protocol:events",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_agent_tool",
+    srcs = ["test_agent_tool.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_agent_workflow_runner",
+    srcs = ["test_agent_workflow_runner.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness:stream_context",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_callback_tools",
+    srcs = ["test_callback_tools.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_code_mode",
+    srcs = ["test_code_mode.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/code_mode:monty_stepper",
+        "//python/temporal_agent_harness/harness/code_mode:stubs",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pydantic_monty_client",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_code_mode_stubs",
+    srcs = ["test_code_mode_stubs.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/code_mode:monty_stepper",
+        "//python/temporal_agent_harness/harness/code_mode:stubs",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_code_mode_vfs",
+    srcs = ["test_code_mode_vfs.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/code_mode:monty_stepper",
+        "//python/temporal_agent_harness/harness/code_mode:vfs",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_event_discriminator_serialization",
+    srcs = ["test_event_discriminator_serialization.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/ai_sdks/openai_agents",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/agent_protocol:events",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_mcp_tool_governance",
+    srcs = ["test_mcp_tool_governance.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//mcp",
+        "@pypi//mcp_types",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_observable_state",
+    srcs = ["test_observable_state.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/temporal_agent_harness/harness/state:drafts",
+        "//python/tests:conftest",
+        "@pypi//jsonpatch",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_okf",
+    srcs = ["test_okf.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness/code_mode:okf",
+        "//python/temporal_agent_harness/harness/code_mode:vfs",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+        "@pypi//pyyaml",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_stream_merge",
+    srcs = ["test_stream_merge.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/temporal_agent_harness/harness/stream_merge:__init__",
+        "//python/temporal_agent_harness/harness/stream_merge:cursor",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_subagent_init_data",
+    srcs = ["test_subagent_init_data.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_subagents",
+    srcs = ["test_subagents.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness:stream_context",
+        "//python/temporal_agent_harness/harness:subagent_activities",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_tool_approvals",
+    srcs = ["test_tool_approvals.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_client",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//pytest",
+        "@pypi//pytest_asyncio",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_vfs_mount_decl",
+    srcs = ["test_vfs_mount_decl.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness/code_mode:vfs",
+        "//python/temporal_agent_harness/harness/state:__init__",
+        "//python/tests:conftest",
+        "@pypi//pydantic",
+        "@pypi//pytest",
+    ],
+)

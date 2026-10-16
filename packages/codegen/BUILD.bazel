@@ -56,7 +56,7 @@ js_test(
         "package.json",
         ":dist",
         ":node_modules",
-        "//examples/tictactoe:agents_files",
+        "//python/examples/tictactoe:agents_files",
     ] + glob(["test/golden/**"]),
     entry_point = ":test_entry_point",
 )
@@ -66,5 +66,5 @@ js_test(
 harness_types(
     name = "golden",
     src = "test/golden/TicTacToeAgent.ts",
-    schema = "//examples/tictactoe:TicTacToeAgent",
+    schema = "//python/examples/tictactoe:TicTacToeAgent",
 )

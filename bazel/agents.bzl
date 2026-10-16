@@ -20,7 +20,7 @@ AgentInfo = provider(
     },
 )
 
-_CLI_LIB = Label("//temporal_agent_harness/web:cli_lib")
+_CLI_LIB = Label("//python/temporal_agent_harness/web:cli_lib")
 _CLI_MODULE = "temporal_agent_harness.web.cli"
 
 def _write_schema(ctx, tool, args, env = {}):
@@ -46,7 +46,7 @@ harness_schema = rule(
     attrs = {
         "args": attr.string_list(mandatory = True, doc = 'The CLI\'s arguments, e.g. ["schema", "--protocol"].'),
         "tool": attr.label(
-            default = "//temporal_agent_harness/web:cli",
+            default = "//python/temporal_agent_harness/web:cli",
             executable = True,
             cfg = "exec",
             doc = "The temporal-agent-harness CLI.",

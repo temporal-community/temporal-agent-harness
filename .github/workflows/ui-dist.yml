@@ -1,6 +1,6 @@
 name: UI dist
 
-# The browser UI is committed prebuilt to temporal_agent_harness/ui/dist so that a downloaded
+# The browser UI is committed prebuilt to python/temporal_agent_harness/ui/dist so that a downloaded
 # release archive runs with no Node toolchain at all (see the Installation section of README.md).
 # That makes the committed build load-bearing: if it drifts from ui/, a release ships a stale UI
 # and nothing catches it — the server happily serves whatever is in dist/, and the tests only
@@ -49,7 +49,7 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: ui
 
-      # vite.config.ts writes to ../temporal_agent_harness/ui/dist with emptyOutDir, so this
+      # vite.config.ts writes to ../python/temporal_agent_harness/ui/dist with emptyOutDir, so this
       # overwrites the committed build in place. The git check below is what compares them.
       # Asset filenames are content-hashed, so a source change shows up as new untracked files
       # plus deletions of the old ones rather than as modified content.
@@ -60,9 +60,9 @@ jobs:
       - name: Verify the committed build is current
         run: |
           set -euo pipefail
-          changes="$(git status --porcelain -- temporal_agent_harness/ui/dist)"
+          changes="$(git status --porcelain -- python/temporal_agent_harness/ui/dist)"
           if [ -n "$changes" ]; then
-            echo "::error::temporal_agent_harness/ui/dist is out of date with the source in ui/."
+            echo "::error::python/temporal_agent_harness/ui/dist is out of date with the source in ui/."
             echo
             echo "Rebuild it and commit the result:"
             echo "    just app-build        # or: pnpm --dir ui run build"

@@ -1,7 +1,7 @@
 <!-- The design doc's goal, as a component svelte-check type-checks against the example's
      generated client types. It is never rendered; it is here to be compiled. -->
 <script lang="ts">
-  import type { TicTacToeAgent } from "../../../examples/tictactoe/client_sdk/TicTacToeAgent";
+  import type { TicTacToeAgent } from "../../../python/examples/tictactoe/client_sdk/TicTacToeAgent";
   import { AgentSession } from "../src/lib/index.js";
 
   let { sessionId }: { sessionId: string } = $props();

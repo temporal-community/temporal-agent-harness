@@ -15,7 +15,7 @@ Useful commands from the repo root or the Monty example:
 ```bash
 just app-install   # one-time install, or after package changes
 just app-check     # svelte-check + local Svelte 5 syntax guard
-just app-build     # writes temporal_agent_harness/ui/dist for packaging
+just app-build     # writes python/temporal_agent_harness/ui/dist for packaging
 just ui-dev        # Vite dev server; proxies /api to localhost:8000
 ```
 

@@ -1,0 +1,19 @@
+load("//bazel:pytest.bzl", "harness_pytest_test")
+
+harness_pytest_test(
+    name = "test_typesafe_harness",
+    srcs = ["test_typesafe_harness.py"],
+    imports = ["../../.."],
+    deps = [
+        "//python/examples/typesafe_hello:workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks:typesafe_harness",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "//python/tests:conftest",
+        "@pypi//httpx2",
+        "@pypi//pytest",
+        "@pypi//temporalio",
+        "@pypi//temporalio_typesafe",
+        "@pypi//typesafe_sdk",
+    ],
+)

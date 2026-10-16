@@ -1,7 +1,7 @@
 # @temporal-agent-harness/codegen
 
 Generates TypeScript types for one harness agent from the JSON Schema document the Python
-package prints for it:
+package prints for it (from `python/`):
 
 ```sh
 uv run temporal-agent-harness schema examples.tictactoe.workflow:TicTacToeAgentWorkflow \
@@ -44,5 +44,5 @@ npm test    # compiles src/ and test/ (including compile-time type checks), then
 ```
 
 `test/golden/TicTacToeAgent.ts` is generated from the tic-tac-toe example's committed schema,
-`examples/tictactoe/TicTacToeAgent.schema.json`; `bazel run //packages/codegen:golden_update`
+`python/examples/tictactoe/TicTacToeAgent.schema.json`; `bazel run //packages/codegen:golden_update`
 regenerates it.

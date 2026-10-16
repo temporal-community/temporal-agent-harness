@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [svelte()],
   base: "./",
   build: {
-    outDir: "../temporal_agent_harness/ui/dist",
+    outDir: "../python/temporal_agent_harness/ui/dist",
     emptyOutDir: true
   },
   resolve: {

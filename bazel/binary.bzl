@@ -6,13 +6,26 @@ load("//bazel:package_collisions.bzl", "PACKAGE_COLLISIONS")
 
 _MONTY = Label("//bazel:monty")
 
-def _module_name(src):
+def _import_root(package, imports):
+    """The directory module names start from: `package` joined with its import root, if any."""
+    parts = package.split("/") if package else []
+    for part in (imports[0].split("/") if imports else []):
+        if part == "..":
+            parts = parts[:-1]
+        elif part not in ("", "."):
+            parts.append(part)
+    return "/".join(parts)
+
+def _module_name(src, imports):
     path = src.package + "/" + src.name.removesuffix(".py")
+    root = _import_root(src.package, imports)
+    if root:
+        path = path.removeprefix(root + "/")
 
     # `python -m pkg` runs pkg/__main__.py.
     return path.removesuffix("/__main__").replace("/", ".")
 
-def _harness_module_binary_impl(name, visibility, srcs, main, module, deps, data, env, args):
+def _harness_module_binary_impl(name, visibility, srcs, main, module, deps, imports, data, env, args):
     if module and (srcs or main):
         fail("harness_module_binary: give either `module` (run a module from deps) or `srcs`, not both")
     if not module:
@@ -26,18 +39,19 @@ def _harness_module_binary_impl(name, visibility, srcs, main, module, deps, data
             main = programs[0]
         elif main not in srcs:
             fail("harness_module_binary: main %s is not one of srcs %s" % (main, srcs))
-        module = _module_name(main)
+        module = _module_name(main, imports)
 
         # The program's code, for other binaries to depend on (e.g. a schema tool built on the CLI).
         py_library(
             name = name + "_lib",
             srcs = srcs,
+            imports = imports,
             visibility = visibility,
             deps = deps,
         )
         deps = [":" + name + "_lib"]
 
-    # `python -m <module>`, so the program's package-relative imports resolve. Written into the
+    # `python -m <module>`, so the program runs as its module, in its package. Written into the
     # entry point rather than passed as an argument, so the binary also works as an action tool.
     write_file(
         name = name + "_main",
@@ -87,6 +101,7 @@ harness_module_binary = macro(
         "main": attr.label(allow_single_file = [".py"], configurable = False, doc = "The module to run among srcs; required when srcs holds more than one besides __init__.py."),
         "module": attr.string(configurable = False, doc = "Instead of srcs: a module, provided by deps, to run."),
         "deps": attr.label_list(configurable = False, doc = "Libraries the program imports."),
+        "imports": attr.string_list(configurable = False, doc = "Import roots, relative to this package (Gazelle sets the python_root); module names start there."),
         "data": attr.label_list(allow_files = True, configurable = False, doc = "Files the program reads at runtime."),
         "env": attr.string_dict(configurable = False, doc = "Extra environment variables."),
         "args": attr.string_list(configurable = False, doc = "Arguments to the program."),
