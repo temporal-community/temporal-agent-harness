@@ -20,7 +20,11 @@ python/               # the Python SDK as a uv project (pyproject.toml, uv.lock)
 │       └── wiki_agent/ # a wiki-organizing agent on callback tools, with a thin terminal client
 └── tests/            # mirrors the package layout
 
-ui/                   # shared Svelte frontend for the Monty example
+typescript/           # one pnpm workspace (pnpm-workspace.yaml, one pnpm-lock.yaml)
+├── packages/         # client, react, svelte (published to npm), codegen
+└── apps/
+    ├── ui/           # the console: the Svelte frontend the Python package serves
+    └── chat-server/  # Chat SDK front end for Slack/Discord
 ```
 
 ## Root Justfile
@@ -32,7 +36,7 @@ Build and package recipes run directly from the root:
 
 ```bash
 just app-install   # install Svelte dependencies
-just app-build     # build ui/ into python/temporal_agent_harness/ui/dist
+just app-build     # build typescript/apps/ui/ into python/temporal_agent_harness/ui/dist
 just app-check     # Svelte checks
 just package       # UI build + UI checks + pytest + uv build
 ```
@@ -43,15 +47,15 @@ Local stack recipes delegate into `python/examples/monty`:
 just temporal          # local Temporal dev server
 just session-manager   # packaged session-manager worker
 just server            # serves the COMMITTED UI build + FastAPI API on http://localhost:8000
-just dev-server        # rebuild the UI first, then serve (use after editing ui/)
+just dev-server        # rebuild the UI first, then serve (use after editing typescript/apps/ui/)
 just monty-worker      # Monty agent worker
 just ui-dev            # Vite hot reload on http://127.0.0.1:5173
 ```
 
 `just server` deliberately does **not** rebuild the UI: it serves the committed
 `python/temporal_agent_harness/ui/dist`, so a downloaded release archive runs with no Node/pnpm
-installed. That makes the committed build load-bearing — after changing anything under `ui/`,
-run `just app-build` (or `just dev-server`) and commit the result.
+installed. So after changing anything under `typescript/apps/ui/`, run `just app-build` (or
+`just dev-server`) and commit the result; otherwise a release ships the stale build.
 
 All example recipes read one shared env file, `.env.local` at the repo root: the root
 justfile loads it directly, and `python/examples/*/justfile` read the same root file (via
@@ -59,15 +63,22 @@ justfile loads it directly, and `python/examples/*/justfile` read the same root 
 
 ## UI Development
 
-The source Svelte app lives in [`ui/`](../../ui). The package ships the compiled
+The source Svelte app lives in [`typescript/apps/ui/`](../../typescript/apps/ui), a package of
+the pnpm workspace in `typescript/`. The package ships the compiled
 output in [`python/temporal_agent_harness/ui/dist`](../../python/temporal_agent_harness/ui/dist), so
 any UI change needs a rebuild before packaging or before `just server` serves it:
 
 ```bash
-just app-install   # one-time install of Svelte dependencies
-just app-build     # build ui/ into python/temporal_agent_harness/ui/dist
+just app-install   # install the typescript/ workspace (the other recipes run it first)
+just app-build     # build typescript/apps/ui/ into python/temporal_agent_harness/ui/dist
 just app-check     # svelte-check + local Svelte 5 syntax guard
 ```
+
+Every pnpm command in the justfiles runs through Bazel: `bazel run //typescript:pnpm -- --dir
+<package> <args>` is the pnpm that `typescript/package.json`'s `packageManager` pins, on Bazel's
+Node, and the scripts it runs get that Node too. Nothing JavaScript needs installing on the
+machine. Running `pnpm` yourself in `typescript/` works as well with pnpm 12; an older pnpm may
+fail to switch itself to the pinned version, so use the Bazel target there.
 
 For hot reload, keep the FastAPI API server running on port 8000 and start Vite
 in another terminal:
@@ -88,7 +99,7 @@ from `/` or under a path prefix as long as the UI and API are mounted together.
 Use the package recipe from the repo root:
 
 ```bash
-just app-install   # one-time setup if ui/node_modules is absent
+just app-install   # one-time setup if typescript/node_modules is absent
 just package
 ```
 
@@ -135,7 +146,7 @@ bazel run //python:venv_link             # link .venv-bazel here for an IDE inte
 bazel run //python/examples/monty:worker  # an example's agent worker
 bazel run //python/examples/tictactoe:agents_update     # rewrite an example's agents.toml and schemas
 bazel run //python/examples/tictactoe:client_sdk_update   # rewrite a committed client SDK
-bazel run //packages/client:protocol_update        # rewrite packages/client/src/protocol.ts
+bazel run //typescript/packages/client:protocol_update  # rewrite its src/protocol.ts
 ```
 
 - **Targets are generated.** Gazelle writes one `py_library` (or test, or binary) per `.py` file,
@@ -181,13 +192,16 @@ bazel run //packages/client:protocol_update        # rewrite packages/client/src
   (`bazel run :agents_update`) and checked by `bazel test`, so `serve` reads every agent's start
   interface from them without importing agent code, under Bazel or uv alike. `nexus_hello`,
   which Bazel does not build, keeps a hand-written registry and schema.
-- **Generated TypeScript** (`python/examples/*/client_sdk/`, `packages/client/src/protocol.ts`) is
-  built from those schema documents (`harness_schema` for the protocol's) by the `harness_types`
-  rule (`bazel/codegen.bzl`) through `packages/codegen` (rules_js). An example declares its clients
-  with `harness_client_sdk`.
+- **Generated TypeScript** (`python/examples/*/client_sdk/`,
+  `typescript/packages/client/src/protocol.ts`) is built from those schema documents
+  (`harness_schema` for the protocol's) by the `harness_types` rule (`bazel/codegen.bzl`) through
+  `typescript/packages/codegen` (rules_js). An example declares its clients with
+  `harness_client_sdk`.
 - **Committed generated files** all go through `committed_files` (`bazel/committed_files.bzl`),
   which `harness_agent_registry` and `harness_client_sdk` use too: `bazel run :<name>_update`
   writes them, and `<name>_<file>_up_to_date_test` fails while one differs from what Bazel
   generates.
-  `packages/codegen/pnpm-lock.yaml` is derived from its `package-lock.json` by rules_js
-  (`pnpm import`) whenever the latter changes.
+  rules_js reads the workspace's `typescript/pnpm-lock.yaml`, and reruns `pnpm install
+  --lockfile-only` when a workspace `package.json` changes. Each one must be listed in
+  `npm_translate_lock`'s `data` in `MODULE.bazel`;
+  `//typescript:npm_translate_lock_data_matches_workspace_test` fails while one is missing.

@@ -1,0 +1,2 @@
+# A Bazel package so npm_translate_lock (MODULE.bazel) can read this package.json; nothing here
+# builds under Bazel yet.

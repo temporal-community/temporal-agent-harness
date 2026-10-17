@@ -330,8 +330,9 @@ def test_a_dict_key_named_dash_emits_an_ordinary_replace():
     RFC 6901 gives ``-`` its "one past the last array element" meaning ONLY when the value
     it indexes is an array; against an object it is an ordinary member name, and there is
     no escape for it (only ``~`` and ``/`` have one). The harness gets this right — the op
-    below is exactly what it should emit, and `ui/src/lib/state/jsonPatch.ts` replays it
-    correctly because it checks `Array.isArray(parent)` before treating ``-`` specially.
+    below is exactly what it should emit, and the console's
+    `typescript/apps/ui/src/lib/state/jsonPatch.ts` replays it correctly because it checks
+    `Array.isArray(parent)` before treating ``-`` specially.
 
     What cannot replay it is our test ORACLE: jsonpatch 1.33's ``ReplaceOperation.apply``
     raises on a final ``-`` token before checking whether the parent is a sequence (its own

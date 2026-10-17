@@ -14,7 +14,11 @@
 # Shows a notice when running from an untagged commit (silent on a release archive).
 import 'scripts/untagged-notice.just'
 
-ui := justfile_directory() / "ui"
+typescript := justfile_directory() / "typescript"
+ui := typescript / "apps" / "ui"
+# pnpm as Bazel pins it, on Bazel's Node (//typescript:pnpm): no recipe needs Node or pnpm on
+# the machine.
+pnpm := "bazel run --noshow_progress --ui_event_filters=-info --show_result=0 //typescript:pnpm --"
 python := justfile_directory() / "python"
 monty := python / "examples" / "monty"
 nexus_dir := justfile_directory() / "nexus"
@@ -23,17 +27,17 @@ nexus_dir := justfile_directory() / "nexus"
 default:
     @just --list
 
-# Install the Svelte UI dependencies.
+# Install the JavaScript workspace (typescript/), which includes the Svelte UI.
 app-install:
-    pnpm --dir "{{ui}}" install
+    {{pnpm}} --dir "{{typescript}}" install --frozen-lockfile
 
 # Type-check the Svelte UI and run its test suite.
-app-check:
-    pnpm --dir "{{ui}}" run check
+app-check: app-install
+    {{pnpm}} --dir "{{ui}}" run check
 
 # Build the Svelte UI into python/temporal_agent_harness/ui/dist.
-app-build:
-    pnpm --dir "{{ui}}" run build
+app-build: app-install
+    {{pnpm}} --dir "{{ui}}" run build
 
 # Build, test, and create the wheel/sdist in python/dist/.
 # Clears dist/ first: `uv build` only ADDS to it, so artifacts from a previously released
@@ -189,9 +193,9 @@ temporal:
 session-manager: (_run "//python/temporal_agent_harness/web:cli" "session-manager")
 
 # Serves the COMMITTED UI build in python/temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
-# a downloaded release archive runs as-is. If you changed anything under ui/, rebuild it first
-# with `just app-build`, or use `just dev-server` (build + serve). An agent only runs if its
-# worker is up — see the worker recipes below.
+# a downloaded release archive runs as-is. If you changed anything under typescript/apps/ui/,
+# rebuild it first with `just app-build`, or use `just dev-server` (build + serve). An agent only
+# runs if its worker is up — see the worker recipes below.
 #
 # Names are example directories (`monty`, `wiki_agent`); none means every example, e.g.
 # `just server monty tictactoe`.
@@ -199,12 +203,12 @@ session-manager: (_run "//python/temporal_agent_harness/web:cli" "session-manage
 # Serve the named examples' agents.toml registries merged on http://localhost:8000.
 server *EXAMPLES: (_run "//python/examples:server" EXAMPLES)
 
-# Rebuild the Svelte UI, then serve — the contributor loop after editing ui/ (needs pnpm).
+# Rebuild the Svelte UI, then serve — the contributor loop after editing typescript/apps/ui/.
 dev-server: app-build server
 
 # Run the Svelte Vite dev server with /api proxied to the server on :8000.
-ui-dev:
-    pnpm --dir "{{ui}}" run dev
+ui-dev: app-install
+    {{pnpm}} --dir "{{ui}}" run dev
 
 # --- Per-example agent workers (each loads .env.local via its own justfile) ---
 worker-openai-hello:

@@ -32,17 +32,17 @@
   "devDependencies": {
     "@sveltejs/package": "^2.5.8",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
-    "@types/node": "^22.20.4",
-    "happy-dom": "^20.14.5",
+    "@types/node": "catalog:",
+    "happy-dom": "catalog:",
     "svelte": "^5.57.1",
     "svelte-check": "^4.7.6",
     "typescript": "^6.0.3",
     "vite": "^8.3.0",
-    "vitest": "^5.0.1"
+    "vitest": "catalog:"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/temporal-community/temporal-agent-harness.git",
-    "directory": "packages/svelte"
+    "directory": "typescript/packages/svelte"
   }
 }

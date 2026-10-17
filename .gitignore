@@ -9,7 +9,7 @@ wheels/
 .coverage
 htmlcov/
 
-# Packaged browser UI assets. Root-level dist/ and ui/dist/ stay ignored.
+# Packaged browser UI assets. Every other dist/ stays ignored.
 !python/temporal_agent_harness/ui/
 !python/temporal_agent_harness/ui/dist/
 !python/temporal_agent_harness/ui/dist/**
@@ -26,6 +26,7 @@ htmlcov/
 temporal.toml
 
 # Node-generated files
+node_modules/
 .pnpm-store/
 
 # Local configs for IDEs

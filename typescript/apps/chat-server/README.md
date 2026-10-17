@@ -4,7 +4,8 @@ An **optional** front end that puts your harness agents on Slack or Discord.
 
 Nothing about the harness depends on this directory. The Python web app is the primary
 surface; it runs, builds and packages without ever entering here, and this process is one you
-start only when you want a chat platform in the loop. It needs Node — no Python, no pnpm.
+start only when you want a chat platform in the loop. It needs only Bazel (bazelisk), which
+brings the pinned Node and pnpm — no Python.
 
 ```
 Slack ───socket mode──┐
@@ -169,7 +170,7 @@ to your server.
 # Step 3 — configure and run
 
 ```bash
-cd third-party-platforms/chat-server
+cd typescript/apps/chat-server
 cp .env.example .env.local
 ```
 
@@ -460,13 +461,14 @@ store.
 |---|---|
 | `just run` | start the server (installs deps on first use) |
 | `just check` | type-check and run the tests — needs no credentials |
-| `just install` | install Node dependencies |
+| `just install` | install Node dependencies (through Bazel's pnpm) |
 
 Without `just`:
 
 ```bash
-npm install && npm test
-BOT_AGENT_ROUTES=monty-chat DISCORD_BOT_TOKEN=... npm run dev
+bazel run //typescript:pnpm -- --dir "$PWD" install
+bazel run //typescript:pnpm -- --dir "$PWD" test
+BOT_AGENT_ROUTES=monty-chat DISCORD_BOT_TOKEN=... bazel run //typescript:pnpm -- --dir "$PWD" run dev
 ```
 
 # Known gaps

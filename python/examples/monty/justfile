@@ -22,7 +22,10 @@ set dotenv-path := "../../../.env.local"
 set dotenv-load := true
 
 root := justfile_directory() / ".." / ".." / ".."
-ui := root / "ui"
+ui := root / "typescript" / "apps" / "ui"
+# pnpm as Bazel pins it, on Bazel's Node (//typescript:pnpm): no recipe needs Node or pnpm on
+# the machine.
+pnpm := "bazel run --noshow_progress --ui_event_filters=-info --show_result=0 //typescript:pnpm --"
 
 # List available recipes (bare `just`).
 default:
@@ -50,15 +53,15 @@ server:
 
 # Install the shared Svelte UI dependencies.
 app-install:
-    pnpm --dir "{{ui}}" install
+    {{pnpm}} --dir "{{ui}}" install --frozen-lockfile
 
 # Type-check the shared Svelte UI and run its test suite.
-app-check:
-    pnpm --dir "{{ui}}" run check
+app-check: app-install
+    {{pnpm}} --dir "{{ui}}" run check
 
 # Build the shared Svelte UI into temporal_agent_harness/ui/dist for packaging/server use.
-app-build:
-    pnpm --dir "{{ui}}" run build
+app-build: app-install
+    {{pnpm}} --dir "{{ui}}" run build
 
 # Build, test, and create the wheel/sdist in dist/.
 package: app-build app-check
@@ -66,8 +69,8 @@ package: app-build app-check
     cd "{{root}}" && uv build
 
 # Run the shared Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
-ui-dev:
-    pnpm --dir "{{ui}}" run dev
+ui-dev: app-install
+    {{pnpm}} --dir "{{ui}}" run dev
 
 # Run the Monty example agent worker (MontyDynamicAgent + the two conversational agents).
 worker:

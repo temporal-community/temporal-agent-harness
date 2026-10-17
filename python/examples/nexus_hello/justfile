@@ -40,7 +40,10 @@ set dotenv-path := "../../../.env.local"
 set dotenv-load := true
 
 root := justfile_directory() / ".." / ".." / ".."
-ui := root / "ui"
+ui := root / "typescript" / "apps" / "ui"
+# pnpm as Bazel pins it, on Bazel's Node (//typescript:pnpm): no recipe needs Node or pnpm on
+# the machine.
+pnpm := "bazel run --noshow_progress --ui_event_filters=-info --show_result=0 //typescript:pnpm --"
 
 # TEMPORAL_CONFIG_FILE=temporal.local.toml (from the repo-root .env.local) is a path resolved
 # relative to the repo root — but `just` recipes run from the justfile's own directory
@@ -163,16 +166,16 @@ server:
     cd "{{root}}" && PYTHONPATH=python uv run --project python --group examples temporal-agent-harness serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
 
 # Build the shared Svelte UI into temporal_agent_harness/ui/dist for the server to serve.
-app-build:
-    cd "{{ui}}" && pnpm run build
+app-build: app-install
+    {{pnpm}} --dir "{{ui}}" run build
 
 # Install the shared Svelte UI dependencies (run once if the build complains about missing modules).
 app-install:
-    cd "{{ui}}" && pnpm install
+    {{pnpm}} --dir "{{ui}}" install --frozen-lockfile
 
 # Run the shared Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
-ui-dev:
-    cd "{{ui}}" && pnpm run dev
+ui-dev: app-install
+    {{pnpm}} --dir "{{ui}}" run dev
 
 # Run the NexusHelloAgent worker, on the "default" namespace.
 worker:

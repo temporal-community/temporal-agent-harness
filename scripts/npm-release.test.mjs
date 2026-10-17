@@ -17,13 +17,10 @@ const event = () => ({ action: 'closed', pull_request: {
 function fixture(fn, version = '0.1.1') {
   const original = process.cwd();
   const root = mkdtempSync(join(tmpdir(), 'npm-release-test-'));
-  mkdirSync(join(root, 'packages/react'), { recursive: true });
-  writeFileSync(join(root, 'packages/react/package.json'), JSON.stringify({
+  mkdirSync(join(root, 'typescript/packages/react'), { recursive: true });
+  writeFileSync(join(root, 'typescript/packages/react/package.json'), JSON.stringify({
     name: '@temporalio/agent-harness-react', version,
     dependencies: { '@temporalio/agent-harness-client': '^0.1.0' },
-  }));
-  writeFileSync(join(root, 'packages/react/package-lock.json'), JSON.stringify({
-    version, packages: { '': { version } },
   }));
   process.chdir(root);
   try { fn(root); } finally { process.chdir(original); rmSync(root, { recursive: true }); }
@@ -127,15 +124,15 @@ test('does not create a tag when GitHub ref lookup fails', () => fixture(() => {
   assert.equal(calls.length, 2);
 }));
 
-test('prepares version and lockfile using npm and retains the existing dependency by default', () => fixture((root) => {
+test('prepares the version using npm and retains the existing dependency by default', () => fixture((root) => {
   const env = { RELEASE_PACKAGE: 'react', RELEASE_BUMP: 'patch', GITHUB_REF: 'refs/heads/main',
     GITHUB_REPOSITORY: repository, GITHUB_OUTPUT: join(root, 'outputs'), RUNNER_TEMP: root };
   const calls = [];
   prepare(env, (command, args, options) => {
     calls.push([command, ...args]);
     if (command === 'gh') return '[]';
-    // Exercise npm's actual version and lockfile update, without network access.
-    assert.equal(options.cwd, 'packages/react');
+    // Exercise npm's actual version update, without network access.
+    assert.equal(options.cwd, 'typescript/packages/react');
     assert.deepEqual(args, ['version', 'patch', '--no-git-tag-version', '--ignore-scripts']);
     return execFileSync(command, args, { ...options, encoding: 'utf8' });
   });
@@ -149,7 +146,7 @@ test('rejects an existing open release PR without changing versions', () => fixt
     GITHUB_REF: 'refs/heads/main', GITHUB_REPOSITORY: repository }, () =>
     JSON.stringify([{ headRefName: 'release/npm-react-v0.1.1', url: 'https://example.test/pr' }])),
   /already exists/);
-  assert.equal(JSON.parse(readFileSync('packages/react/package.json')).version, '0.1.0');
+  assert.equal(JSON.parse(readFileSync('typescript/packages/react/package.json')).version, '0.1.0');
 }, '0.1.0'));
 
 test('unavailable client version fails before dependency or version updates', () => fixture(() => {
@@ -173,16 +170,17 @@ test('checks client availability and updates the dependency before bumping a bin
     calls.push([command, ...args]);
     if (command === 'gh') return '[]';
     if (args[0] === 'view') return '"0.2.0"';
-    if (args[0] === 'install') {
-      assert.deepEqual(args, ['install', '@temporalio/agent-harness-client@^0.2.0',
-        '--package-lock-only', '--ignore-scripts']);
-      const manifest = JSON.parse(readFileSync('packages/react/package.json'));
+    if (command === 'pnpm') {
+      assert.equal(options.cwd, 'typescript/packages/react');
+      assert.deepEqual(args, ['add', '@temporalio/agent-harness-client@^0.2.0',
+        '--lockfile-only', '--ignore-scripts']);
+      const manifest = JSON.parse(readFileSync('typescript/packages/react/package.json'));
       manifest.dependencies['@temporalio/agent-harness-client'] = '^0.2.0';
-      writeFileSync('packages/react/package.json', JSON.stringify(manifest));
+      writeFileSync('typescript/packages/react/package.json', JSON.stringify(manifest));
       return '';
     }
     return execFileSync(command, args, { ...options, encoding: 'utf8' });
   });
-  assert.deepEqual(calls.map((call) => call[1]), ['pr', 'view', 'install', 'version']);
+  assert.deepEqual(calls.map((call) => call[1]), ['pr', 'view', 'add', 'version']);
   assert.match(readFileSync(join(root, 'npm-release-body.md'), 'utf8'), /\^0.2.0/);
 }, '0.1.0'));

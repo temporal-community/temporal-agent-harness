@@ -19,5 +19,6 @@ ignore_directories([
     "dist",
     "python/build",
     "python/dist",
-    "packages/*/dist",
+    "typescript/packages/*/dist",
+    "typescript/apps/*/dist",
 ])

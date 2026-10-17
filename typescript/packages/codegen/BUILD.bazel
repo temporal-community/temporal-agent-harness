@@ -1,7 +1,7 @@
 load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_test")
 load("@bazel_lib//lib:directory_path.bzl", "directory_path")
-load("@npm_codegen//:defs.bzl", "npm_link_all_packages")
-load("@npm_codegen//packages/codegen:typescript/package_json.bzl", typescript_bin = "bin")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//typescript/packages/codegen:typescript/package_json.bzl", typescript_bin = "bin")
 load("//bazel:codegen.bzl", "harness_types")
 
 npm_link_all_packages(name = "node_modules")
@@ -62,7 +62,8 @@ js_test(
 )
 
 # The generator's golden, test/golden/TicTacToeAgent.ts: the tic-tac-toe agent's types, which the
-# tests compare and type-check. `bazel run //packages/codegen:golden_update` rewrites it.
+# tests compare and type-check. `bazel run //typescript/packages/codegen:golden_update` rewrites
+# it.
 harness_types(
     name = "golden",
     src = "test/golden/TicTacToeAgent.ts",

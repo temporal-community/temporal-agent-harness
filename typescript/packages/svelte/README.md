@@ -31,13 +31,16 @@ harness agent session.
 
 ## Development
 
-This package depends on the published `@temporalio/agent-harness-client` package from npm.
-Run these commands from `packages/svelte`:
+This package depends on the published `@temporalio/agent-harness-client` package from npm. It
+is part of the pnpm workspace in `typescript/`; run these commands from
+`typescript/packages/svelte`:
 
 ```sh
-npm ci
-npm run check && npm test && npm run build
+pnpm install
+pnpm run check && pnpm test && pnpm run build
 ```
 
-Changes in `packages/client` are not picked up automatically. To use a new client release,
-update this package's dependency and lockfile with `npm install @temporalio/agent-harness-client@<version>`.
+Changes in `typescript/packages/client` are not picked up automatically (see
+[Testing local changes](../README.md#testing-local-changes-without-publishing) to try them). To
+use a new client release, update this package's dependency and the workspace lockfile with
+`pnpm add @temporalio/agent-harness-client@^<version>`.

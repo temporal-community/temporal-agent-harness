@@ -827,9 +827,9 @@ const agent = new AgentSession<TicTacToeAgent>({ get sessionId() { return id; } 
 
 | Package | What it is |
 | --- | --- |
-| [`@temporalio/agent-harness-react`](packages/react) | `useAgentSession`, a hook for React 18.2+ |
-| [`@temporalio/agent-harness-svelte`](packages/svelte) | `AgentSession`, a reactive class for Svelte 5 |
-| [`@temporalio/agent-harness-client`](packages/client) | the framework-free core both bindings share; re-exported by each |
+| [`@temporalio/agent-harness-react`](typescript/packages/react) | `useAgentSession`, a hook for React 18.2+ |
+| [`@temporalio/agent-harness-svelte`](typescript/packages/svelte) | `AgentSession`, a reactive class for Svelte 5 |
+| [`@temporalio/agent-harness-client`](typescript/packages/client) | the framework-free core both bindings share; re-exported by each |
 
 **1. Declare state on the agent.** `agent.state(...)` makes a model observable: every
 committed `mutate()` block is published on the event stream as JSON Patch ops. A tool reaches
@@ -893,15 +893,15 @@ class TicTacToeAgentWorkflow:
 ```
 
 **2. Generate the types.** `temporal-agent-harness schema` prints an agent's handlers, state,
-and init data as JSON Schema, and [`harness-codegen`](packages/codegen) turns that into
-TypeScript. The generator runs from a checkout of this repo: build it once with
-`npm ci && npm run build` in `packages/codegen`, then from the repo root (this repo's examples run
-the same pipeline through Bazel, e.g. `bazel run //python/examples/tictactoe:client_sdk_update`):
+and init data as JSON Schema, and [`harness-codegen`](typescript/packages/codegen) turns that
+into TypeScript. The generator runs from a checkout of this repo, built and run by Bazel (this
+repo's examples run the same pipeline, e.g.
+`bazel run //python/examples/tictactoe:client_sdk_update`). From the repo root:
 
 ```bash
 PYTHONPATH=python uv run --project python temporal-agent-harness schema \
   examples.tictactoe.workflow:TicTacToeAgentWorkflow \
-  | node packages/codegen/dist/src/cli.js - -o client_sdk/TicTacToeAgent.ts
+  | bazel run //typescript/packages/codegen:cli -- - -o "$PWD/client_sdk/TicTacToeAgent.ts"
 ```
 
 Commit the output and regenerate it in CI. Renaming a field on `Board` without regenerating then
@@ -990,9 +990,10 @@ To run the bundled examples from a checkout, additionally:
   builds reject the Nexus dynamic config its `just temporal` recipe sets. Its recipes check the
   version and fail with a message. The other examples work with any recent release.
 
-[pnpm](https://pnpm.io/) is **not** required to run anything: the browser UI ships prebuilt in
-`python/temporal_agent_harness/ui/dist`, both in release archives and in the repo. You only need it to
-*change* the UI — see [UI development](docs/internal/development.md#ui-development).
+Node and [pnpm](https://pnpm.io/) are **not** required for anything: the browser UI ships prebuilt in
+`python/temporal_agent_harness/ui/dist`, both in release archives and in the repo, and the recipes
+that build or change it run the Node and pnpm Bazel pins — see
+[UI development](docs/internal/development.md#ui-development).
 
 ## Run the examples
 

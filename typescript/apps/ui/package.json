@@ -3,7 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@10.9.0",
   "author": "Alex Tideman",
   "scripts": {
     "dev": "vite --host 127.0.0.1",

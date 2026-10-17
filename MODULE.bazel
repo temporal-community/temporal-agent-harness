@@ -80,26 +80,39 @@ uv.override_package(
 use_repo(uv, "pypi")
 
 # ---------------------------------------------------------------------------------------------
-# Node, for packages/codegen (the TypeScript generator behind the committed client types).
-# rules_js reads pnpm-lock.yaml, which it keeps in step with packages/codegen/package-lock.json.
+# Node, for the pnpm workspace under typescript/ (today Bazel builds only packages/codegen, the
+# TypeScript generator behind the committed client types). rules_js reads the workspace's one
+# pnpm-lock.yaml.
 # ---------------------------------------------------------------------------------------------
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
 node.toolchain(node_version = "22.20.0")
 
+# The pnpm that updates the lockfile below: the one typescript/package.json's packageManager pins.
+pnpm = use_extension("@aspect_rules_js//npm:extensions.bzl", "pnpm")
+pnpm.pnpm(pnpm_version_from = "//typescript:package.json")
+use_repo(pnpm, "pnpm")
+
 npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
 npm.npm_translate_lock(
-    name = "npm_codegen",
+    name = "npm",
+    # Every workspace package's package.json: a change to one re-runs `pnpm install
+    # --lockfile-only`. //typescript:npm_translate_lock_data_matches_workspace_test fails while
+    # one is missing.
     data = [
-        "//packages/codegen:package.json",
-        "//packages/codegen:pnpm-workspace.yaml",
+        "//typescript:package.json",
+        "//typescript:pnpm-workspace.yaml",
+        "//typescript/apps/chat-server:package.json",
+        "//typescript/apps/ui:package.json",
+        "//typescript/packages/client:package.json",
+        "//typescript/packages/codegen:package.json",
+        "//typescript/packages/react:package.json",
+        "//typescript/packages/svelte:package.json",
     ],
-    npm_package_lock = "//packages/codegen:package-lock.json",
-    pnpm_lock = "//packages/codegen:pnpm-lock.yaml",
-    # Re-derive pnpm-lock.yaml (`pnpm import`) whenever package-lock.json changes; the state is
-    # recorded under .aspect/rules/external_repository_action_cache.
+    pnpm_lock = "//typescript:pnpm-lock.yaml",
+    # The update state is recorded under .aspect/rules/external_repository_action_cache.
     update_pnpm_lock = True,
 )
-use_repo(npm, "npm_codegen")
+use_repo(npm, "npm")
 
 # ---------------------------------------------------------------------------------------------
 # Temporal servers for tests, pinned so tests never download them at runtime:

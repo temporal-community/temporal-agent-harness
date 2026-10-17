@@ -7,8 +7,8 @@ name: Publish to PyPI
 #
 # No Node toolchain here on purpose: the browser UI is committed prebuilt to
 # python/temporal_agent_harness/ui/dist, and the "UI dist" workflow already fails on main if that build
-# has drifted from ui/. So the commit a release is cut from is verified before we get here, and
-# `uv build` alone produces a complete wheel.
+# has drifted from typescript/apps/ui/. So the commit a release is cut from is verified before we
+# get here, and `uv build` alone produces a complete wheel.
 
 on:
   # The normal path: cut a GitHub release for the tag, and it publishes.

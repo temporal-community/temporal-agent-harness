@@ -20,12 +20,12 @@ await session.sendMessage("play", { cell: 5 });
 ```
 
 `src/protocol.ts` is the event stream's wire types, generated from `events.py`:
-`bazel run //packages/client:protocol_update` regenerates it, and `bazel test` fails when it is
-out of date.
+`bazel run //typescript/packages/client:protocol_update` regenerates it, and `bazel test` fails
+when it is out of date.
 
 ## Development
 
 ```sh
-npm ci
-npm test    # compiles src/ and test/ (including compile-time type checks), then runs node --test
+pnpm install
+pnpm test   # compiles src/ and test/ (including compile-time type checks), then runs node --test
 ```

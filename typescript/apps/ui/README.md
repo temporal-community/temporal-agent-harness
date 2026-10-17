@@ -19,7 +19,8 @@ just app-build     # writes python/temporal_agent_harness/ui/dist for packaging
 just ui-dev        # Vite dev server; proxies /api to localhost:8000
 ```
 
-The same commands can be run from the repo root with `pnpm --dir ui ...`.
+They run `bazel run //typescript:pnpm -- --dir typescript/apps/ui ...`: the pnpm and Node Bazel
+pins, so nothing needs installing.
 
 Local testing:
 

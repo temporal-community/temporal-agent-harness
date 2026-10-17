@@ -1,10 +1,11 @@
 name: Client SDK codegen
 
-# packages/codegen turns `temporal-agent-harness schema` documents into TypeScript types.
-# packages/client commits its output for the event protocol as src/protocol.ts, and examples
-# that ship typed clients commit their agent's output (e.g. python/examples/tictactoe/client_sdk/). Bazel
-# generates every one of them, and the `bazel test` jobs in tests.yml fail when a committed copy
-# differs (each file's `*_up_to_date_test`). These jobs test the npm packages themselves.
+# typescript/packages/codegen turns `temporal-agent-harness schema` documents into TypeScript
+# types. typescript/packages/client commits its output for the event protocol as src/protocol.ts,
+# and examples that ship typed clients commit their agent's output (e.g.
+# python/examples/tictactoe/client_sdk/). Bazel generates every one of them, and the `bazel test`
+# jobs in tests.yml fail when a committed copy differs (each file's `*_up_to_date_test`). These
+# jobs test the npm packages themselves, from the pnpm workspace in typescript/.
 
 on:
   pull_request:
@@ -29,92 +30,39 @@ jobs:
           node-version: 22
       - run: node --test scripts/npm-release.test.mjs
 
-  codegen:
-    name: packages/codegen tests
+  packages:
+    name: typescript/packages/${{ matrix.package }} tests
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [codegen, client, svelte, react]
     defaults:
       run:
-        working-directory: packages/codegen
+        working-directory: typescript/packages/${{ matrix.package }}
     steps:
       - uses: actions/checkout@v4
+      # Before setup-node: `cache: pnpm` needs the pnpm binary. With no `version` input,
+      # action-setup reads typescript/package.json's packageManager.
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: typescript/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: packages/codegen/package-lock.json
-      - run: npm ci
-      - run: npm test
-
-  client:
-    name: packages/client tests
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/client
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: packages/client/package-lock.json
-      - run: npm ci
-      - run: npm test
-
-  svelte:
-    name: packages/svelte tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            packages/client/package-lock.json
-            packages/svelte/package-lock.json
-      # The binding links ../client, which it resolves through that package's build.
-      - name: Build packages/client
-        working-directory: packages/client
-        run: npm ci && npm run build
-      - working-directory: packages/svelte
-        run: npm ci
-      - working-directory: packages/svelte
-        run: npm run check
-      - working-directory: packages/svelte
-        run: npm test
-      - working-directory: packages/svelte
-        run: npm run build
-      # The tic-tac-toe board and the agent DAG studio are written against the binding and their
-      # example's committed generated types, so they are type-checked with them (neither has a
-      # build of its own).
-      - working-directory: python/examples/tictactoe/ui
-        run: ../../../../packages/svelte/node_modules/.bin/svelte-check --tsconfig ./tsconfig.json
-      - working-directory: python/examples/agent_dag/ui
-        run: ../../../../packages/svelte/node_modules/.bin/svelte-check --tsconfig ./tsconfig.json
-
-  react:
-    name: packages/react tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: |
-            packages/client/package-lock.json
-            packages/react/package-lock.json
-      # The binding links ../client, which it resolves through that package's build.
-      - name: Build packages/client
-        working-directory: packages/client
-        run: npm ci && npm run build
-      - working-directory: packages/react
-        run: npm ci
-      # Also type-checks test/TicTacToeBoard.tsx against the example's committed generated types.
-      - working-directory: packages/react
-        run: npm run check
-      - working-directory: packages/react
-        run: npm test
-      - working-directory: packages/react
-        run: npm run build
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run --if-present check
+      - run: pnpm test
+      - if: matrix.package != 'codegen'
+        run: pnpm run build
+      # The tic-tac-toe board and the agent DAG studio are written against the Svelte binding and
+      # their example's committed generated types, so they are type-checked with them (neither has
+      # a build of its own).
+      - if: matrix.package == 'svelte'
+        working-directory: python/examples/tictactoe/ui
+        run: ../../../../typescript/packages/svelte/node_modules/.bin/svelte-check --tsconfig ./tsconfig.json
+      - if: matrix.package == 'svelte'
+        working-directory: python/examples/agent_dag/ui
+        run: ../../../../typescript/packages/svelte/node_modules/.bin/svelte-check --tsconfig ./tsconfig.json

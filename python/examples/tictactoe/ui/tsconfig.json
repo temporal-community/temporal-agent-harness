@@ -1,6 +1,7 @@
 {
   // For type-checking App.svelte against the generated client types. The page itself is never
-  // built; `svelte`, the binding and the client resolve through packages/svelte's install.
+  // built; `svelte`, the binding and the client resolve through typescript/packages/svelte's
+  // install.
   "compilerOptions": {
     "target": "ES2023",
     "module": "ESNext",
@@ -13,9 +14,9 @@
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": [],
     "paths": {
-      "svelte": ["../../../packages/svelte/node_modules/svelte"],
-      "svelte/*": ["../../../packages/svelte/node_modules/svelte/*"],
-      "@temporalio/agent-harness-svelte": ["../../../../packages/svelte/src/lib/index.ts"]
+      "svelte": ["../../../../typescript/packages/svelte/node_modules/svelte"],
+      "svelte/*": ["../../../../typescript/packages/svelte/node_modules/svelte/*"],
+      "@temporalio/agent-harness-svelte": ["../../../../typescript/packages/svelte/src/lib/index.ts"]
     }
   },
   "include": ["App.svelte"]

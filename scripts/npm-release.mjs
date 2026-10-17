@@ -22,14 +22,12 @@ export function releaseDetails(branch) {
   const match = /^release\/npm-(client|react|svelte)-v(.+)$/.exec(branch);
   assert(match && stableVersion.test(match[2]), 'Invalid npm release branch');
   const [, pkg, version] = match;
-  return { pkg, version, tag: `npm-${pkg}-v${version}`, directory: `packages/${pkg}` };
+  return { pkg, version, tag: `npm-${pkg}-v${version}`, directory: `typescript/packages/${pkg}` };
 }
 
-export function validateRelease(manifest, lock, pkg, version) {
+export function validateRelease(manifest, pkg, version) {
   assert.equal(manifest.name, `@temporalio/agent-harness-${pkg}`);
   assert.equal(manifest.version, version, 'Release branch must match package version');
-  assert.equal(lock.version, version, 'Update the lockfile version');
-  assert.equal(lock.packages[''].version, version, 'Update the lockfile root version');
 }
 
 export function prepare(env = process.env, run = execute) {
@@ -38,7 +36,7 @@ export function prepare(env = process.env, run = execute) {
   const clientVersion = (env.CLIENT_VERSION ?? '').trim();
   validateInputs(pkg, bump, clientVersion);
   assert.equal(env.GITHUB_REF, 'refs/heads/main', 'Run this workflow from main');
-  const directory = `packages/${pkg}`;
+  const directory = `typescript/packages/${pkg}`;
   const manifest = readJson(`${directory}/package.json`);
   assert.equal(manifest.name, `@temporalio/agent-harness-${pkg}`);
   assert(stableVersion.test(manifest.version), 'Current version must be stable');
@@ -49,19 +47,19 @@ export function prepare(env = process.env, run = execute) {
   assert(!existing, `An open ${pkg} release PR already exists: ${existing?.url}`);
 
   if (clientVersion) {
-    // Resolve the requested version before changing either manifest or lockfile.
+    // Resolve the requested version before changing the manifest or the workspace lockfile.
     const available = JSON.parse(run('npm', ['view',
       `@temporalio/agent-harness-client@${clientVersion}`, 'version', '--json',
       '--registry=https://registry.npmjs.org/', '--prefer-online']));
     assert.equal(available, clientVersion, 'Client version is not available on npm yet');
-    run('npm', ['install', `@temporalio/agent-harness-client@^${clientVersion}`,
-      '--package-lock-only', '--ignore-scripts'], { cwd: directory });
+    run('pnpm', ['add', `@temporalio/agent-harness-client@^${clientVersion}`,
+      '--lockfile-only', '--ignore-scripts'], { cwd: directory });
   }
   run('npm', ['version', bump, '--no-git-tag-version', '--ignore-scripts'], { cwd: directory });
   const updated = readJson(`${directory}/package.json`);
   const version = updated.version;
   const tag = `npm-${pkg}-v${version}`;
-  validateRelease(updated, readJson(`${directory}/package-lock.json`), pkg, version);
+  validateRelease(updated, pkg, version);
   appendFileSync(env.GITHUB_OUTPUT,
     `directory=${directory}\nbranch=release/${tag}\ntag=${tag}\n`);
   const dependency = updated.dependencies?.['@temporalio/agent-harness-client'];
@@ -77,7 +75,7 @@ export function prepare(env = process.env, run = execute) {
     'which tests and builds that commit again before publishing with OIDC.',
     'Closing without merging does not publish anything.',
     '',
-    `See [the release guide](https://github.com/${env.GITHUB_REPOSITORY}/blob/main/packages/README.md) for setup and retries.`,
+    `See [the release guide](https://github.com/${env.GITHUB_REPOSITORY}/blob/main/typescript/packages/README.md) for setup and retries.`,
     '',
   ].join('\n'));
 }
@@ -112,8 +110,7 @@ export function finish(event, repository, run = execute) {
   assert(/^[a-f0-9]{40}$/.test(pr.merge_commit_sha), 'Invalid merge commit');
   assert.equal(run('git', ['rev-parse', 'HEAD']), pr.merge_commit_sha,
     'Checkout must point to the merged release commit');
-  validateRelease(readJson(`${directory}/package.json`),
-    readJson(`${directory}/package-lock.json`), pkg, version);
+  validateRelease(readJson(`${directory}/package.json`), pkg, version);
 
   // Read matching refs so an absent tag is distinct from authentication/network errors.
   const refs = JSON.parse(run('gh', ['api',

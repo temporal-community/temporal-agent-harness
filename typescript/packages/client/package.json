@@ -23,12 +23,12 @@
     "test": "tsc -p tsconfig.json && node --test dist/test/*.test.js"
   },
   "devDependencies": {
-    "@types/node": "^22.20.4",
-    "typescript": "^7.0.2"
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/temporal-community/temporal-agent-harness.git",
-    "directory": "packages/client"
+    "directory": "typescript/packages/client"
   }
 }

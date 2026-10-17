@@ -9,7 +9,7 @@
 #
 # Then open http://localhost:8000, pick "OpenAI Hello", and chat (e.g. "What's the weather in
 # Paris?"). The reply streams token by token and the get_weather tool call shows up live.
-# `just server` builds the Svelte UI first (needs `pnpm`); `just ui-dev` runs it on Vite instead.
+# `just server` builds the Svelte UI first; `just ui-dev` runs it on Vite instead.
 #
 # The recipes build and run each program with Bazel (install bazelisk as `bazel`), which fetches the
 # project's `examples` dependencies on first use. Without Bazel, run the same module with uv from
@@ -25,7 +25,10 @@ set dotenv-path := "../../../.env.local"
 set dotenv-load := true
 
 root := justfile_directory() / ".." / ".." / ".."
-ui := root / "ui"
+ui := root / "typescript" / "apps" / "ui"
+# pnpm as Bazel pins it, on Bazel's Node (//typescript:pnpm): no recipe needs Node or pnpm on
+# the machine.
+pnpm := "bazel run --noshow_progress --ui_event_filters=-info --show_result=0 //typescript:pnpm --"
 
 # List available recipes (bare `just`).
 default:
@@ -52,18 +55,16 @@ server:
     bazel run //python/temporal_agent_harness/web:cli -- serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
 
 # Build the shared Svelte UI into temporal_agent_harness/ui/dist for the server to serve.
-# Runs FROM the ui dir (not `pnpm --dir`) so corepack reads ui/package.json's pinned pnpm
-# version instead of the repo root's (which has none) — avoids a corepack version mismatch.
-app-build:
-    cd "{{ui}}" && pnpm run build
+app-build: app-install
+    {{pnpm}} --dir "{{ui}}" run build
 
 # Install the shared Svelte UI dependencies (run once if the build complains about missing modules).
 app-install:
-    cd "{{ui}}" && pnpm install
+    {{pnpm}} --dir "{{ui}}" install --frozen-lockfile
 
 # Run the shared Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
-ui-dev:
-    cd "{{ui}}" && pnpm run dev
+ui-dev: app-install
+    {{pnpm}} --dir "{{ui}}" run dev
 
 # Run the OpenAIHelloAgent worker.
 worker:

@@ -21,7 +21,10 @@ set dotenv-path := "../../../.env.local"
 set dotenv-load := true
 
 root := justfile_directory() / ".." / ".." / ".."
-ui := root / "ui"
+ui := root / "typescript" / "apps" / "ui"
+# pnpm as Bazel pins it, on Bazel's Node (//typescript:pnpm): no recipe needs Node or pnpm on
+# the machine.
+pnpm := "bazel run --noshow_progress --ui_event_filters=-info --show_result=0 //typescript:pnpm --"
 
 # List available recipes (bare `just`).
 default:
@@ -47,7 +50,8 @@ server:
 
 # Run the Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
 ui-dev:
-    pnpm --dir "{{ui}}" run dev
+    {{pnpm}} --dir "{{ui}}" install --frozen-lockfile
+    {{pnpm}} --dir "{{ui}}" run dev
 
 # Run the auto-mode agent worker (needs GEMINI_API_KEY and TYPESAFE_API_KEY).
 worker:

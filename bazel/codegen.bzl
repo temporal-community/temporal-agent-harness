@@ -1,7 +1,7 @@
 """TypeScript types generated from `temporal-agent-harness schema` documents, kept in the source tree.
 
-harness_types commits one file (e.g. packages/client's event protocol); harness_client_sdk commits
-a typed client for each of a package's agents.
+harness_types commits one file (e.g. typescript/packages/client's event protocol);
+harness_client_sdk commits a typed client for each of a package's agents.
 """
 
 load("//bazel:committed_files.bzl", "committed_files")
@@ -27,7 +27,7 @@ _types_rule = rule(
         "codegen_args": attr.string_list(),
         "schema": attr.label(allow_single_file = [".json"], mandatory = True),
         "_codegen": attr.label(
-            default = "//packages/codegen:cli",
+            default = "//typescript/packages/codegen:cli",
             executable = True,
             cfg = "exec",
         ),
@@ -49,7 +49,8 @@ def _harness_types_impl(name, visibility, src, schema, codegen_args):
     )
 
 harness_types = macro(
-    doc = """TypeScript types (packages/codegen) for a schema document, committed as `src`.
+    doc = """TypeScript types (typescript/packages/codegen) for a schema document, committed as
+    `src`.
 
     `bazel run :<name>_update` writes `src`; `<name>_<file>_up_to_date_test` fails while it is out
     of date. `:<name>_ts` is the generated file.
@@ -81,7 +82,7 @@ def _harness_client_sdk_impl(name, visibility, agents, srcs):
 
 harness_client_sdk = macro(
     doc = """Typed TypeScript clients for `agents` (harness_agent targets), committed as
-    `<name>/<Agent>.ts` (packages/codegen's output for each agent's schema).
+    `<name>/<Agent>.ts` (typescript/packages/codegen's output for each agent's schema).
 
     `bazel run :<name>_update` writes them; `<name>_<Agent>_ts_up_to_date_test` fails while one is
     out of date. `:<name>_<Agent>_ts` is an agent's generated types.

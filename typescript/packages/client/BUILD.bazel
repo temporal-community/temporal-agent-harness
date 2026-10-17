@@ -10,7 +10,7 @@ harness_schema(
 )
 
 # The event protocol's types, src/protocol.ts, generated from the Python events:
-# `bazel run //packages/client:protocol_update` rewrites it.
+# `bazel run //typescript/packages/client:protocol_update` rewrites it.
 harness_types(
     name = "protocol",
     src = "src/protocol.ts",

@@ -22,7 +22,10 @@ set dotenv-path := "../../../.env.local"
 set dotenv-load := true
 
 root := justfile_directory() / ".." / ".." / ".."
-ui := root / "ui"
+ui := root / "typescript" / "apps" / "ui"
+# pnpm as Bazel pins it, on Bazel's Node (//typescript:pnpm): no recipe needs Node or pnpm on
+# the machine.
+pnpm := "bazel run --noshow_progress --ui_event_filters=-info --show_result=0 //typescript:pnpm --"
 
 # List available recipes (bare `just`).
 default:
@@ -48,24 +51,26 @@ server:
 
 # Run the Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
 ui-dev:
-    pnpm --dir "{{ui}}" run dev
+    {{pnpm}} --dir "{{ui}}" install --frozen-lockfile
+    {{pnpm}} --dir "{{ui}}" run dev
 
 # Serve the Svelte board (ui/) on http://127.0.0.1:5173. The page has no build step (the browser
-# compiles App.svelte); Node only builds the harness packages it imports.
+# compiles App.svelte); pnpm, through Bazel, only builds the harness packages it imports.
 # Needs `just server` + `just worker` running for it to talk to.
 # TODO: once @temporal-agent-harness/{client,svelte} are published to npm, drop the build and the
 # links below and point ui/index.html's import map at a CDN instead.
 play:
-    @cd "{{root}}/packages/client" && npm ci --prefer-offline --no-audit --no-fund --silent && npm run --silent build
-    @cd "{{root}}/packages/svelte" && npm ci --prefer-offline --no-audit --no-fund --silent && npm run --silent build >/dev/null
-    @ln -sfn "{{root}}/packages/client/dist" ui/harness-client
-    @ln -sfn "{{root}}/packages/svelte/dist" ui/harness-svelte
+    @{{pnpm}} --dir "{{root}}/typescript" install --frozen-lockfile --prefer-offline --silent
+    @{{pnpm}} --dir "{{root}}/typescript/packages/client" run --silent build
+    @{{pnpm}} --dir "{{root}}/typescript/packages/svelte" run --silent build >/dev/null
+    @ln -sfn "{{root}}/typescript/packages/client/dist" ui/harness-client
+    @ln -sfn "{{root}}/typescript/packages/svelte/dist" ui/harness-svelte
     @cd ui && python3 -u -m http.server 5173 --bind 127.0.0.1 2>/dev/null
 
 # Type-check ui/App.svelte against the generated client types (after `just play` has installed
-# packages/svelte).
+# the typescript/ workspace).
 check-ui:
-    cd "{{justfile_directory()}}/ui" && "{{root}}/packages/svelte/node_modules/.bin/svelte-check" --tsconfig ./tsconfig.json
+    {{pnpm}} --dir "{{root}}/typescript/packages/svelte" exec svelte-check --workspace "{{justfile_directory()}}/ui" --tsconfig "{{justfile_directory()}}/ui/tsconfig.json"
 
 # Run the tic-tac-toe agent worker.
 worker:

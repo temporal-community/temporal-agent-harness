@@ -1,9 +1,9 @@
 # Publishing the JavaScript packages
 
 The client, React binding, and Svelte binding release independently through
-[Prepare npm release](../.github/workflows/prepare-npm-release.yml). Run the action,
+[Prepare npm release](../../.github/workflows/prepare-npm-release.yml). Run the action,
 open a PR from its prepared branch, and merge it to publish using npm trusted publishing.
-[Publish to npm](../.github/workflows/publish-npm.yml) performs the actual build and publication.
+[Publish to npm](../../.github/workflows/publish-npm.yml) performs the actual build and publication.
 
 | Package | Tag format |
 | --- | --- |
@@ -13,48 +13,46 @@ open a PR from its prepared branch, and merge it to publish using npm trusted pu
 
 ## Testing local changes without publishing
 
-Run these commands from the repository root to build the shared client and link it
-into both bindings:
+The packages are one pnpm workspace in `typescript/`, with one lockfile. The bindings
+depend on the **published** client (`^0.1.0`), so by default they build and test
+against the registry release, as their users do. Run these commands from `typescript/`. They
+need pnpm 12 (the version `package.json` pins); without it, run each `pnpm <args>` as
+`bazel run //typescript:pnpm -- --dir "$PWD" <args>`, which brings that pnpm and its Node:
 
 ```sh
-(cd packages/client && npm install && npm run build)
-(cd packages/react && npm install --no-save --package-lock=false ../client)
-(cd packages/svelte && npm install --no-save --package-lock=false ../client)
+pnpm install
+(cd packages/react && pnpm run check && pnpm test && pnpm run build)
+(cd packages/svelte && pnpm run check && pnpm test && pnpm run build)
 ```
 
-The bindings' `.npmrc` files set `install-links=false`, so the local client is linked
-instead of copied. The `--no-save --package-lock=false` flags keep the bindings'
-published dependency declarations and lockfiles unchanged.
-
-Check, test, and build the bindings against the local client:
+To try the bindings against the client in the working tree, point them at the
+workspace package and build it:
 
 ```sh
-(cd packages/react && npm run check && npm test && npm run build)
-(cd packages/svelte && npm run check && npm test && npm run build)
+pnpm --filter @temporalio/agent-harness-react --filter @temporalio/agent-harness-svelte \
+  add '@temporalio/agent-harness-client@workspace:^'
+(cd packages/client && pnpm run build)
 ```
 
-After editing the shared client, rebuild it so the bindings see the changes:
+The bindings then resolve the client through `packages/client/dist`, so rebuild the
+client after editing it. This changes both bindings' `package.json` and
+`pnpm-lock.yaml`; **Publish to npm** refuses a `workspace:` dependency, so restore
+them before committing:
 
 ```sh
-(cd packages/client && npm run build)
-```
-
-To restore the published dependencies from the lockfiles:
-
-```sh
-(cd packages/react && npm ci)
-(cd packages/svelte && npm ci)
+git checkout -- pnpm-lock.yaml packages/react/package.json packages/svelte/package.json
+pnpm install
 ```
 
 ### Testing in a separate application
 
 After building the local client and bindings, create tarballs containing the files
-that would be published:
+that would be published. From `typescript/`:
 
 ```sh
-(cd packages/client && npm pack)
-(cd packages/react && npm pack)
-(cd packages/svelte && npm pack)
+(cd packages/client && pnpm pack)
+(cd packages/react && pnpm pack)
+(cd packages/svelte && pnpm pack)
 ```
 
 Each command prints the generated `.tgz` filename in that package's directory. In
@@ -63,11 +61,11 @@ using their absolute paths. For example:
 
 ```sh
 npm install --no-save --package-lock=false \
-  /path/to/temporal-agent-harness/packages/client/temporalio-agent-harness-client-0.1.0.tgz \
-  /path/to/temporal-agent-harness/packages/react/temporalio-agent-harness-react-0.1.0.tgz
+  /path/to/temporal-agent-harness/typescript/packages/client/temporalio-agent-harness-client-0.1.0.tgz \
+  /path/to/temporal-agent-harness/typescript/packages/react/temporalio-agent-harness-react-0.1.0.tgz
 ```
 
-Use the filenames produced by `npm pack`, and substitute the Svelte tarball for a
+Use the filenames produced by `pnpm pack`, and substitute the Svelte tarball for a
 Svelte app. The local client's version must satisfy the binding's declared dependency
 range so npm uses it for the binding. Tarballs are snapshots: rebuild, repack, and
 reinstall after further edits. Run `npm ci` in the test app to restore its locked
@@ -98,8 +96,9 @@ All fields must match exactly. No `NPM_TOKEN` secret is needed. See the
 2. Choose `client`, `react`, or `svelte`, then `patch`, `minor`, or `major`.
 3. For a binding, optionally enter an already published client version such as `0.1.1`.
    Leave it blank to keep the current dependency. The workflow records it as `^0.1.1`.
-4. Run the workflow. It updates the package manifest and lockfile, checks, tests, and
-   builds the package, then pushes a release branch.
+4. Run the workflow. It updates the package manifest (and, for a new client dependency,
+   `typescript/pnpm-lock.yaml`), checks, tests, and builds the package, then pushes a
+   release branch.
 5. In the run summary, click **Create the release pull request**. The link prefills
    the branch, title, and description. Click **Create pull request** on GitHub.
 6. Review the version and dependency changes, wait for the required CI checks, and merge.
@@ -120,7 +119,7 @@ or npm secret is needed. Existing npm trusted publisher settings remain
 The preparation workflow must be run from `main`; other refs are skipped. Release PRs
 use branches named `release/npm-<package>-v<version>`. Keep these names unchanged.
 Tagging only happens for release branches in this repository merged into `main`,
-with the package and lockfile versions matching the release branch. The PR author
+with the package version matching the release branch. The PR author
 can be a maintainer. The workflow does not create GitHub Releases or trigger PyPI publishing.
 
 GitHub does not trigger push workflows for tags created with `GITHUB_TOKEN`, so the
@@ -133,8 +132,8 @@ Start from an up-to-date `main` with passing CI. For example, to release the nex
 client patch, run from the repository root:
 
 ```sh
-(cd packages/client && npm version patch --no-git-tag-version)
-git add packages/client/package.json packages/client/package-lock.json
+(cd typescript/packages/client && npm version patch --no-git-tag-version)
+git add typescript/packages/client/package.json
 git commit -m "Release client 0.1.1"
 ```
 
@@ -148,14 +147,15 @@ git push origin npm-client-v0.1.1
 ```
 
 Use `react` or `svelte` in the directory and tag for a binding release. The workflow
-requires the tag version to match both the package manifest and lockfile. It supports
-stable versions only and publishes to npm's `latest` tag.
+requires the tag version to match the package manifest. It supports stable versions
+only and publishes to npm's `latest` tag.
 
 If a binding needs a new client version, publish the client first and wait until
 `npm view @temporalio/agent-harness-client@<version> version` succeeds. Then update
-the binding with `npm install '@temporalio/agent-harness-client@^<version>'`, commit
-its manifest and lockfile, and release the binding. Local `file:` dependencies
-cannot be published by this workflow.
+the binding with `pnpm add '@temporalio/agent-harness-client@^<version>'` in its
+directory, commit its manifest and `typescript/pnpm-lock.yaml`, and release the binding.
+Local `file:`, `link:`, and `workspace:` dependencies cannot be published by this
+workflow.
 
 Monitor the **Publish to npm** run in GitHub Actions. For a failed run before publication,
 rerun it, or use `gh workflow run publish-npm.yml --ref npm-client-v0.1.1` after the

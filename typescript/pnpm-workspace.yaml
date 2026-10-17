@@ -1,0 +1,20 @@
+# Every package here shares one pnpm-lock.yaml, which Bazel (rules_js) reads too. A new package
+# must also be added to npm_translate_lock's `data` in MODULE.bazel;
+# //typescript:npm_translate_lock_data_matches_workspace_test fails until it is.
+packages:
+  - packages/*
+  - apps/*
+
+# Versions shared by several packages. A package on another major (the console's TypeScript 5, the
+# Svelte binding's TypeScript 6) keeps its own specifier. `pnpm pack` writes the versions into a
+# published package.json.
+catalog:
+  "@types/node": ^22.20.4
+  happy-dom: ^20.14.5
+  typescript: ^7.0.2
+  vitest: ^5.0.1
+
+# No dependency needs an install script. esbuild's only checks its platform binary, which it
+# also gets as an optional dependency.
+allowBuilds:
+  esbuild: false

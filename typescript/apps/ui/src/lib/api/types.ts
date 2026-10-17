@@ -1,4 +1,4 @@
-import type * as Protocol from "../../../../packages/client/src/protocol";
+import type * as Protocol from "../../../../../packages/client/src/protocol";
 
 export type UnixEpochSeconds = number;
 export type ResumeOffset = number;
@@ -344,7 +344,7 @@ export interface FastApiValidationErrorResponse {
 //
 // Every payload is the generated protocol type for its `type`, flattened together with the
 // envelope fields `web/app.py` adds to it. A field added to an event in `events.py` reaches
-// these types by regenerating `packages/client/src/protocol.ts`. The only hand-written
+// these types by regenerating `typescript/packages/client/src/protocol.ts`. The only hand-written
 // parts are what the wire leaves open: the envelope fields below, the few payload fields
 // narrowed in `Narrowed`, and `stream_error`, which no agent publishes.
 
