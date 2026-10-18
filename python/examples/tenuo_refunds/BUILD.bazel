@@ -1,0 +1,105 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:agents.bzl", "harness_agent", "harness_agent_registry")
+load("//bazel:binary.bzl", "harness_module_binary")
+
+harness_module_binary(
+    name = "issue_warrant",
+    srcs = ["issue_warrant.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":keys",
+        ":tools",
+        "@pypi//tenuo",
+    ],
+)
+
+py_library(
+    name = "keys",
+    srcs = ["keys.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["@pypi//tenuo"],
+)
+
+py_library(
+    name = "tools",
+    srcs = ["tools.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = ["//python/temporal_agent_harness/harness:agent"],
+)
+
+harness_module_binary(
+    name = "start_session",
+    srcs = ["start_session.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":issue_warrant",
+        ":keys",
+        ":tools",
+    ],
+)
+
+harness_module_binary(
+    name = "worker",
+    srcs = ["worker.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":keys",
+        ":tools",
+        ":workflow",
+        "//python/temporal_agent_harness:plugin",
+        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
+        "//python/temporal_agent_harness/ai_sdks/openai_agents",
+        "//python/temporal_agent_harness/ai_sdks/tenuo:__init__",
+        "@pypi//temporalio",
+    ],
+)
+
+py_library(
+    name = "workflow",
+    srcs = ["workflow.py"],
+    imports = ["../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":issue_warrant",
+        ":keys",
+        ":tools",
+        "//python/temporal_agent_harness/ai_sdks:openai_agents_harness",
+        "//python/temporal_agent_harness/ai_sdks/tenuo:__init__",
+        "//python/temporal_agent_harness/harness:agent",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//openai_agents",
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+    ],
+)
+
+harness_agent(
+    name = "TenuoRefundsAgent",
+    agent = "examples.tenuo_refunds.workflow:TenuoRefundsAgentWorkflow",
+    description = """
+A refund support agent whose tool calls are checked against a Tenuo warrant for one order.
+Start a session with `just session A-1001` (or `just demo`), then ask for refunds: up to $50
+runs on its own, more waits for the support lead's signed approval (asked in the worker's
+output), and anything on another order is denied.""",
+    key = "tenuo-refunds",
+    label = "Tenuo Refunds",
+    task_queue = "tenuo-refunds",
+    deps = [":workflow"],
+)
+
+# agents.toml and its agents' schema documents. `bazel test` fails when one is out of date;
+# `bazel run //python/examples/tenuo_refunds:agents_update` rewrites them.
+harness_agent_registry(
+    name = "agents",
+    srcs = [
+        "TenuoRefundsAgent.schema.json",
+        "agents.toml",
+    ],
+    agents = [":TenuoRefundsAgent"],
+)

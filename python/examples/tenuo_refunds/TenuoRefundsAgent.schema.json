@@ -1,0 +1,68 @@
+{
+  "agent": "TenuoRefundsAgent",
+  "source": "examples.tenuo_refunds.workflow:TenuoRefundsAgentWorkflow",
+  "init_data": {
+    "data": {
+      "$ref": "#/$defs/RefundTask"
+    },
+    "required": true
+  },
+  "handlers": {
+    "ask": {
+      "description": "Ask for a refund, e.g. \"Please refund $30 on order A-1001, the desk arrived\nscratched\".",
+      "mid_turn": "reject",
+      "input": {
+        "$ref": "#/$defs/TextMessage"
+      },
+      "output": {
+        "$ref": "#/$defs/TextReply"
+      }
+    }
+  },
+  "states": {},
+  "$defs": {
+    "RefundTask": {
+      "description": "What the session is for: one customer's refund request, and the warrant scoped to it.",
+      "properties": {
+        "warrant": {
+          "description": "The Tenuo warrant for this refund request, in base64. It names the order the agent may act on and how much it may refund. `just session A-1001` issues one and starts the session with it.",
+          "title": "Warrant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "warrant"
+      ],
+      "title": "RefundTask",
+      "type": "object"
+    },
+    "TextMessage": {
+      "description": "Free-form natural-language text from the user (the input to a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextMessage",
+      "type": "object"
+    },
+    "TextReply": {
+      "description": "A free-form natural-language reply (the output of a plain chat handler).",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "TextReply",
+      "type": "object"
+    }
+  }
+}

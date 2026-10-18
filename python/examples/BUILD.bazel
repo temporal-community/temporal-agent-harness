@@ -11,6 +11,7 @@ EXAMPLES = [
     "openai_hello",
     "pydantic_ai_hello",
     "react_agent",
+    "tenuo_refunds",
     "tictactoe",
 ]
 

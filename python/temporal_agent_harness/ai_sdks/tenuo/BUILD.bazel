@@ -1,0 +1,39 @@
+load("@aspect_rules_py//py:defs.bzl", "py_library")
+
+py_library(
+    name = "__init__",
+    srcs = ["__init__.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":approvals",
+        ":evaluator",
+    ],
+)
+
+py_library(
+    name = "approvals",
+    srcs = ["approvals.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        "@pypi//pydantic",
+        "@pypi//temporalio",
+        "@pypi//tenuo",
+    ],
+)
+
+py_library(
+    name = "evaluator",
+    srcs = ["evaluator.py"],
+    imports = ["../../.."],
+    visibility = ["//python:__subpackages__"],
+    deps = [
+        ":approvals",
+        "//python/temporal_agent_harness/harness:agent_workflow",
+        "//python/temporal_agent_harness/harness/agent_protocol:__init__",
+        "@pypi//pydantic_core",
+        "@pypi//temporalio",
+        "@pypi//tenuo",
+    ],
+)
