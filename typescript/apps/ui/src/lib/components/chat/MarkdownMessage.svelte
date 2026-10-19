@@ -22,6 +22,14 @@
     value: string;
   }
 
+  interface ListItemMatch {
+    indent: number;
+    contentIndent: number;
+    ordered: boolean;
+    start: number;
+    text: string;
+  }
+
   let { text, citations = [], language = null }: Props = $props();
 
   const rendered = $derived(
@@ -892,24 +900,65 @@
     return output;
   }
 
+  function listItemMatch(line: string): ListItemMatch | null {
+    // Accept empty contents while streaming, and use the same match for dispatch and consumption.
+    const match = line.match(/^([ \t]*)(\d+[.)]|[-*])([ \t]+)(.*)$/);
+    if (!match) return null;
+    return {
+      indent: match[1].length,
+      contentIndent: match[1].length + match[2].length + match[3].length,
+      ordered: /^\d/.test(match[2]),
+      start: Number.parseInt(match[2], 10),
+      text: match[4]
+    };
+  }
+
   function renderList(
     lines: string[],
     links: CitationLink[],
-    ordered: boolean
+    first: ListItemMatch,
+    depth: number
   ): { html: string; nextIndex: number } {
     const items: string[] = [];
-    const pattern = ordered ? /^\s*\d+[.)]\s+(.+)$/ : /^\s*[-*]\s+(.+)$/;
     let index = 0;
 
     while (index < lines.length) {
-      const match = lines[index]?.match(pattern);
-      if (!match?.[1]) break;
-      items.push(`<li>${renderInline(moveLeadingCitationsToEnd(match[1]), links)}</li>`);
+      const match = listItemMatch(lines[index] ?? "");
+      if (!match || match.indent !== first.indent || match.ordered !== first.ordered) break;
+      const itemLines = [moveLeadingCitationsToEnd(match.text)];
       index += 1;
+
+      while (index < lines.length) {
+        const line = lines[index] ?? "";
+        if (!line.trim()) {
+          let next = index + 1;
+          while (next < lines.length && !lines[next]?.trim()) next += 1;
+          const nextLine = lines[next] ?? "";
+          const sibling = listItemMatch(nextLine);
+          if (sibling?.indent === first.indent && sibling.ordered === first.ordered) {
+            index = next;
+            break;
+          }
+          if (next >= lines.length || (nextLine.match(/^[ \t]*/)?.[0].length ?? 0) < match.contentIndent) break;
+          itemLines.push("");
+          index = next;
+          continue;
+        }
+
+        // De-indent the item's body before parsing blocks, keeping sublists and continuation
+        // paragraphs inside this <li> instead of ending the list and restarting its numbering.
+        if ((line.match(/^[ \t]*/)?.[0].length ?? 0) < match.contentIndent) break;
+        itemLines.push(line.slice(match.contentIndent));
+        index += 1;
+      }
+
+      const body = renderBlocks(itemLines, links, depth + 1).replace(/^<p>(.*?)<\/p>/s, "$1");
+      items.push(`<li>${body}</li>`);
     }
 
-    const tag = ordered ? "ol" : "ul";
-    return { html: `<${tag}>${items.join("")}</${tag}>`, nextIndex: index };
+    const tag = first.ordered ? "ol" : "ul";
+    const start = first.ordered && first.start !== 1 ? ` start="${first.start}"` : "";
+    return { html: `<${tag}${start}>${items.join("")}</${tag}>`, nextIndex: index };
   }
 
   /* GFM: `\|` is a pipe inside a cell, not a column break. */
@@ -997,6 +1046,12 @@
     const lines = textWithCitations
       .split("\n")
       .map((line) => moveHeadingCitationsToEnd(moveLeadingCitationsToEnd(line)));
+    return renderBlocks(lines, links);
+  }
+
+  function renderBlocks(lines: string[], links: CitationLink[], depth = 0): string {
+    // Keep excessive nesting visible as text rather than overflowing the renderer's stack.
+    if (depth >= 64) return `<p>${renderInline(lines.join(" "), links)}</p>`;
     const blocks: string[] = [];
     let index = 0;
 
@@ -1037,15 +1092,9 @@
         continue;
       }
 
-      if (/^\s*[-*]\s+/.test(line)) {
-        const list = renderList(lines.slice(index), links, false);
-        blocks.push(list.html);
-        index += list.nextIndex;
-        continue;
-      }
-
-      if (/^\s*\d+[.)]\s+/.test(line)) {
-        const list = renderList(lines.slice(index), links, true);
+      const listItem = listItemMatch(line);
+      if (listItem) {
+        const list = renderList(lines.slice(index), links, listItem, depth);
         blocks.push(list.html);
         index += list.nextIndex;
         continue;
@@ -1064,7 +1113,7 @@
           quoteLines.push((lines[index] ?? "").replace(/^>\s?/, ""));
           index += 1;
         }
-        blocks.push(`<blockquote>${renderMarkdown(quoteLines.join("\n"), [])}</blockquote>`);
+        blocks.push(`<blockquote>${renderBlocks(quoteLines, links, depth + 1)}</blockquote>`);
         continue;
       }
 
@@ -1081,8 +1130,7 @@
         lines[index]?.trim() &&
         !/^\s*```/.test(lines[index] ?? "") &&
         !/^(#{1,4})\s+/.test(lines[index] ?? "") &&
-        !/^\s*[-*]\s+/.test(lines[index] ?? "") &&
-        !/^\s*\d+[.)]\s+/.test(lines[index] ?? "") &&
+        !listItemMatch(lines[index] ?? "") &&
         !isTableStart(lines, index) &&
         !/^>\s?/.test(lines[index] ?? "") &&
         !/^---+$/.test((lines[index] ?? "").trim())
