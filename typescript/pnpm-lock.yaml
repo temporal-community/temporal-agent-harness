@@ -188,7 +188,7 @@ importers:
         version: 4.41.0
       '@chat-adapter/slack':
         specifier: 4.41.0
-        version: 4.41.0
+        version: 4.41.0(debug@4.4.3)
       chat:
         specifier: 4.41.0
         version: 4.41.0
@@ -206,8 +206,8 @@ importers:
         specifier: ^22
         version: 22.20.4
       typescript:
-        specifier: ^5.6
-        version: 5.9.3
+        specifier: 'catalog:'
+        version: 7.0.2
 
   apps/ui:
     dependencies:
@@ -238,7 +238,7 @@ importers:
         version: 22.19.21
       svelte-check:
         specifier: ^4.0.0
-        version: 4.6.0(picomatch@4.0.4)(svelte@5.56.3)(typescript@5.9.3)
+        version: 4.6.0(picomatch@4.0.7)(svelte@5.56.3)(typescript@5.9.3)
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
@@ -312,8 +312,8 @@ importers:
         version: 0.1.0
     devDependencies:
       '@sveltejs/package':
-        specifier: ^2.5.8
-        version: 2.5.8(svelte@5.57.1)(typescript@6.0.3)
+        specifier: ^3.0.1
+        version: 3.0.1(svelte@5.57.1)(typescript@6.0.3)
       '@sveltejs/vite-plugin-svelte':
         specifier: ^7.3.0
         version: 7.3.0(svelte@5.57.1)(vite@8.3.0(@types/node@22.20.4))
@@ -871,12 +871,16 @@ packages:
     resolution: {integrity: sha512-VT3qmUb8pRV2QrZjd8iAmtg8lf4W0TIjZbvXtz5MKei/q96teWZgGJyyidJzOjzZzvdq616eSRVeMYIQChUTAQ==}
     engines: {node: '>= 18.0.0'}
 
-  '@sveltejs/package@2.5.8':
-    resolution: {integrity: sha512-zeBbsXYvHiBu56v4gJaGQoEHzg96w0E1j3dOMX8vo56s6vI5eQ57ZEZhudjwjnegnVitRRu5MrmhO0eNvaonIw==}
-    engines: {node: ^16.14 || >=18}
+  '@sveltejs/package@3.0.1':
+    resolution: {integrity: sha512-QblEaqd2r685OZWVO4I0DLAKUOozIp7YxvahxPYntv+4zzMQbisX2vubBEg2d8riF+bPF13AqTzMFlhyuSlaRQ==}
+    engines: {node: '>=22'}
     hasBin: true
     peerDependencies:
       svelte: ^3.44.0 || ^4.0.0 || ^5.0.0-next.1
+      typescript: ^6.0.0
+    peerDependenciesMeta:
+      typescript:
+        optional: true
 
   '@sveltejs/vite-plugin-svelte-inspector@4.0.1':
     resolution: {integrity: sha512-J/Nmb2Q2y7mck2hyCX4ckVHcR5tu2J+MtBEQqpDrrgELZ2uvraQcK/ioCV61AqkdXFgriksOKIceDcQmqnGhVw==}
@@ -2046,11 +2050,6 @@ packages:
   scule@1.3.0:
     resolution: {integrity: sha512-6FtHJEvt+pVMIB9IBY+IcCJ6Z5f1iQnytgyfKMhDKgmzYG+TeH/wx1y3l27rshSbLiSanrR9ffZDrEsmjlQF2g==}
 
-  semver@7.8.5:
-    resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
-    engines: {node: '>=10'}
-    hasBin: true
-
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
 
@@ -2403,11 +2402,11 @@ snapshots:
       - workflow
       - zod
 
-  '@chat-adapter/slack@4.41.0':
+  '@chat-adapter/slack@4.41.0(debug@4.4.3)':
     dependencies:
       '@chat-adapter/shared': 4.41.0
-      '@slack/socket-mode': 2.0.7
-      '@slack/web-api': 7.19.0
+      '@slack/socket-mode': 2.0.7(debug@4.4.3)
+      '@slack/web-api': 7.19.0(debug@4.4.3)
       chat: 4.41.0
     transitivePeerDependencies:
       - ai
@@ -2709,10 +2708,10 @@ snapshots:
     dependencies:
       '@types/node': 22.20.4
 
-  '@slack/socket-mode@2.0.7':
+  '@slack/socket-mode@2.0.7(debug@4.4.3)':
     dependencies:
       '@slack/logger': 4.0.1
-      '@slack/web-api': 7.19.0
+      '@slack/web-api': 7.19.0(debug@4.4.3)
       '@types/node': 22.20.4
       '@types/ws': 8.18.1
       eventemitter3: 5.0.4
@@ -2725,13 +2724,13 @@ snapshots:
 
   '@slack/types@2.22.0': {}
 
-  '@slack/web-api@7.19.0':
+  '@slack/web-api@7.19.0(debug@4.4.3)':
     dependencies:
       '@slack/logger': 4.0.1
       '@slack/types': 2.22.0
       '@types/node': 22.20.4
       '@types/retry': 0.12.0
-      axios: 1.20.0
+      axios: 1.20.0(debug@4.4.3)
       eventemitter3: 5.0.4
       form-data: 4.0.6
       is-electron: 2.2.2
@@ -2759,16 +2758,14 @@ snapshots:
 
   '@sveltejs/load-config@0.2.3': {}
 
-  '@sveltejs/package@2.5.8(svelte@5.57.1)(typescript@6.0.3)':
+  '@sveltejs/package@3.0.1(svelte@5.57.1)(typescript@6.0.3)':
     dependencies:
+      '@sveltejs/load-config': 0.2.3
       chokidar: 5.0.0
-      kleur: 4.1.5
-      sade: 1.8.1
-      semver: 7.8.5
       svelte: 5.57.1
       svelte2tsx: 0.7.61(svelte@5.57.1)(typescript@6.0.3)
-    transitivePeerDependencies:
-      - typescript
+    optionalDependencies:
+      typescript: 6.0.3
 
   '@sveltejs/vite-plugin-svelte-inspector@4.0.1(@sveltejs/vite-plugin-svelte@5.1.1(svelte@5.56.3)(vite@6.4.3(@types/node@22.19.21)(lightningcss@1.33.0)))(svelte@5.56.3)(vite@6.4.3(@types/node@22.19.21)(lightningcss@1.33.0))':
     dependencies:
@@ -3080,9 +3077,9 @@ snapshots:
 
   asynckit@0.4.0: {}
 
-  axios@1.20.0:
+  axios@1.20.0(debug@4.4.3):
     dependencies:
-      follow-redirects: 1.16.0
+      follow-redirects: 1.16.0(debug@4.4.3)
       form-data: 4.0.6
       https-proxy-agent: 5.0.1
       proxy-from-env: 2.1.0
@@ -3391,7 +3388,9 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.7
 
-  follow-redirects@1.16.0: {}
+  follow-redirects@1.16.0(debug@4.4.3):
+    optionalDependencies:
+      debug: 4.4.3
 
   form-data@4.0.6:
     dependencies:
@@ -4036,8 +4035,6 @@ snapshots:
 
   scule@1.3.0: {}
 
-  semver@7.8.5: {}
-
   siginfo@2.0.0: {}
 
   source-map-js@1.2.1: {}
@@ -4046,12 +4043,12 @@ snapshots:
 
   std-env@4.2.0: {}
 
-  svelte-check@4.6.0(picomatch@4.0.4)(svelte@5.56.3)(typescript@5.9.3):
+  svelte-check@4.6.0(picomatch@4.0.7)(svelte@5.56.3)(typescript@5.9.3):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       '@sveltejs/load-config': 0.1.1
       chokidar: 4.0.3
-      fdir: 6.5.0(picomatch@4.0.4)
+      fdir: 6.5.0(picomatch@4.0.7)
       picocolors: 1.1.1
       sade: 1.8.1
       svelte: 5.56.3

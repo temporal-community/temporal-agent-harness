@@ -30,7 +30,7 @@
     "@temporalio/agent-harness-client": "^0.1.0"
   },
   "devDependencies": {
-    "@sveltejs/package": "^2.5.8",
+    "@sveltejs/package": "^3.0.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@types/node": "catalog:",
     "happy-dom": "catalog:",

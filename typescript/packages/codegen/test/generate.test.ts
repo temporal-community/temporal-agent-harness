@@ -2,10 +2,10 @@
 // schema (python/examples/tictactoe/TicTacToeAgent.schema.json, itself checked against the agent),
 // so the two pin the whole pipeline from agent class to TypeScript. Regenerate the golden after an
 // intended change with:
-//   bazel run //typescript/packages/codegen:golden_update
+//   bazel run //typescript/packages/codegen/test/golden:golden_update
 
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
@@ -14,8 +14,14 @@ import {
   type AgentSchemaDocument
 } from "../src/generate.ts";
 
-// Compiled to dist/test/, so the package root is two levels up.
-const packageRoot = new URL("../../", import.meta.url);
+// The nearest directory with a package.json: compiled to dist/test/ by `pnpm test`, and beside the
+// source by Bazel.
+let packageRoot = new URL("./", import.meta.url);
+while (!existsSync(new URL("package.json", packageRoot))) {
+  const parent = new URL("../", packageRoot);
+  if (parent.href === packageRoot.href) throw new Error(`no package.json above ${import.meta.url}`);
+  packageRoot = parent;
+}
 const read = (path: string, base: URL = packageRoot) => readFileSync(new URL(path, base), "utf8");
 
 function doc(overrides: Partial<AgentSchemaDocument> = {}): AgentSchemaDocument {

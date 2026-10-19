@@ -28,6 +28,9 @@ common:py314 --platform_suffix=py314
 common --incompatible_strict_action_env
 test --test_output=errors
 
+# ts_project emits JavaScript with tsc itself, so Bazel builds the same files `tsc -p` does.
+common --@aspect_rules_ts//ts:default_to_tsc_transpiler
+
 # Opt out of aspect's ruleset usage telemetry.
 common --repo_env=DO_NOT_TRACK=1
 

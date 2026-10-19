@@ -27,7 +27,7 @@ _types_rule = rule(
         "codegen_args": attr.string_list(),
         "schema": attr.label(allow_single_file = [".json"], mandatory = True),
         "_codegen": attr.label(
-            default = "//typescript/packages/codegen:cli",
+            default = "//typescript/packages/codegen/src:harness-codegen",
             executable = True,
             cfg = "exec",
         ),

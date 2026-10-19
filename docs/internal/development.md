@@ -146,7 +146,7 @@ bazel run //python:venv_link             # link .venv-bazel here for an IDE inte
 bazel run //python/examples/monty:worker  # an example's agent worker
 bazel run //python/examples/tictactoe:agents_update     # rewrite an example's agents.toml and schemas
 bazel run //python/examples/tictactoe:client_sdk_update   # rewrite a committed client SDK
-bazel run //typescript/packages/client:protocol_update  # rewrite its src/protocol.ts
+bazel run //typescript/packages/client/src:protocol_codegen_update  # rewrite its src/protocol.ts
 ```
 
 - **Targets are generated.** Gazelle writes one `py_library` (or test, or binary) per `.py` file,

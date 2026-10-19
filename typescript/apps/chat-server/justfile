@@ -30,8 +30,8 @@ install:
     {{pnpm}} --dir "{{justfile_directory()}}" install --frozen-lockfile
 
 # Type-check and run the test suite.
-check: _deps
-    {{pnpm}} --dir "{{justfile_directory()}}" test
+check:
+    bazel test //typescript/apps/chat-server/...
 
 # Discord runs over the Gateway (an outbound WebSocket), so it needs no public URL — set
 # DISCORD_GATEWAY=0 to use the webhook route instead. Slack always needs a public URL.

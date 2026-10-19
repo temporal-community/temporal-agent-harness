@@ -1,0 +1,34 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+ts_project(
+    name = "generate.test",
+    testonly = True,
+    srcs = ["generate.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/codegen:tsconfig",
+    deps = ["//typescript/packages/codegen/src:generate"],
+)
+
+# Compile-time checks on the golden's types.
+ts_project(
+    name = "golden.types",
+    testonly = True,
+    srcs = ["golden.types.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/codegen:tsconfig",
+    deps = ["//typescript/packages/codegen/test/golden:TicTacToeAgent"],
+)
+
+# The generator against its golden, from the tic-tac-toe agent's committed schema. It reads both
+# from the package root, the directory with package.json.
+js_test(
+    name = "generate_test",
+    data = [
+        ":generate.test",
+        "//python/examples/tictactoe:agents_files",
+        "//typescript/packages/codegen:package_json",
+        "//typescript/packages/codegen/test/golden:golden_files",
+    ],
+    entry_point = "generate.test.js",
+)

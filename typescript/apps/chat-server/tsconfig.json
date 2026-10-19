@@ -8,18 +8,20 @@
     "skipLibCheck": true,
     "lib": ["ES2022", "DOM"],
     "types": ["node"],
+    // Declarations let the tests compile as their own Bazel project, against the sources' types.
+    "declaration": true,
 
     // Cards and modals are authored as JSX against Chat SDK's own runtime (`chat/jsx-runtime`).
     "jsx": "react-jsx",
     "jsxImportSource": "chat",
 
     // Source imports carry `.ts` extensions and are rewritten to `.js` on emit, so the same
-    // files typecheck in place and run from `dist/` under plain Node ESM. This Node build has
-    // no TypeScript stripping, so tests compile first rather than running from source.
+    // files typecheck in place and run as compiled JavaScript under plain Node ESM. No outDir:
+    // Bazel emits beside the sources, so a test package finds the sources' declarations; the
+    // package scripts pass `--outDir dist`. This Node build has no TypeScript stripping, so
+    // tests compile first rather than running from source.
     "allowImportingTsExtensions": true,
-    "rewriteRelativeImportExtensions": true,
-    "outDir": "dist",
-    "rootDir": "."
+    "rewriteRelativeImportExtensions": true
   },
   "include": ["src", "test"]
 }

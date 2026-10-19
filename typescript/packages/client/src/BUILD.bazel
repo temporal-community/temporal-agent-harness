@@ -1,0 +1,167 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("//bazel:agents.bzl", "harness_schema")
+load("//bazel:codegen.bzl", "harness_types")
+
+# One target per file, depending on the files it imports, so a change reruns only the tests that
+# reach it.
+ts_project(
+    name = "frames",
+    srcs = ["frames.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [":protocol"],
+)
+
+ts_project(
+    name = "index",
+    srcs = ["index.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":frames",
+        ":jsonPatch",
+        ":messages",
+        ":plainState",
+        ":projection",
+        ":protocol",
+        ":schema",
+        ":session",
+        ":start",
+        ":transport",
+        ":views",
+    ],
+)
+
+ts_project(
+    name = "jsonPatch",
+    srcs = ["jsonPatch.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [":frames"],
+)
+
+ts_project(
+    name = "messages",
+    srcs = ["messages.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":frames",
+        ":schema",
+    ],
+)
+
+ts_project(
+    name = "plainState",
+    srcs = ["plainState.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":frames",
+        ":messages",
+        ":schema",
+        ":session",
+        ":views",
+    ],
+)
+
+ts_project(
+    name = "projection",
+    srcs = ["projection.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":frames",
+        ":jsonPatch",
+        ":messages",
+    ],
+)
+
+ts_project(
+    name = "protocol",
+    srcs = ["protocol.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+)
+
+ts_project(
+    name = "schema",
+    srcs = ["schema.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+)
+
+ts_project(
+    name = "session",
+    srcs = ["session.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":frames",
+        ":messages",
+        ":projection",
+        ":schema",
+        ":transport",
+        ":views",
+    ],
+)
+
+ts_project(
+    name = "start",
+    srcs = ["start.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [":schema"],
+)
+
+ts_project(
+    name = "transport",
+    srcs = ["transport.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":frames",
+        ":start",
+    ],
+)
+
+ts_project(
+    name = "views",
+    srcs = ["views.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":messages",
+        ":projection",
+        ":schema",
+    ],
+)
+
+harness_schema(
+    name = "protocol_schema",
+    args = [
+        "schema",
+        "--protocol",
+    ],
+)
+
+# The event protocol's types, protocol.ts, generated from the Python events:
+# `bazel run //typescript/packages/client/src:protocol_codegen_update` rewrites it.
+harness_types(
+    name = "protocol_codegen",
+    src = "protocol.ts",
+    codegen_args = ["--protocol"],
+    schema = ":protocol_schema",
+)

@@ -1,19 +1,23 @@
-load("//bazel:agents.bzl", "harness_schema")
-load("//bazel:codegen.bzl", "harness_types")
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config")
+load("@npm//:defs.bzl", "npm_link_all_packages")
 
-harness_schema(
-    name = "protocol_schema",
-    args = [
-        "schema",
-        "--protocol",
-    ],
+npm_link_all_packages(name = "node_modules")
+
+# package.json's "type": "module" makes tsc emit ES modules (module: NodeNext) and Node load them.
+js_library(
+    name = "package_json",
+    srcs = ["package.json"],
+    visibility = ["//typescript/packages/client:__subpackages__"],
 )
 
-# The event protocol's types, src/protocol.ts, generated from the Python events:
-# `bazel run //typescript/packages/client:protocol_update` rewrites it.
-harness_types(
-    name = "protocol",
-    src = "src/protocol.ts",
-    codegen_args = ["--protocol"],
-    schema = ":protocol_schema",
+# Every ts_project in src/ and test/ compiles with this tsconfig, each rooted at its own directory.
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    visibility = ["//typescript/packages/client:__subpackages__"],
+    deps = [
+        ":node_modules/@types/node",
+        ":package_json",
+    ],
 )

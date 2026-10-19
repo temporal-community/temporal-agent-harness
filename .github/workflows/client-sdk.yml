@@ -4,8 +4,10 @@ name: Client SDK codegen
 # types. typescript/packages/client commits its output for the event protocol as src/protocol.ts,
 # and examples that ship typed clients commit their agent's output (e.g.
 # python/examples/tictactoe/client_sdk/). Bazel generates every one of them, and the `bazel test`
-# jobs in tests.yml fail when a committed copy differs (each file's `*_up_to_date_test`). These
-# jobs test the npm packages themselves, from the pnpm workspace in typescript/.
+# jobs in tests.yml fail when a committed copy differs (each file's `*_up_to_date_test`). Those
+# jobs also run the codegen and client packages' tests and the npm release automation's; the jobs
+# here test the React and Svelte bindings, which do not build under Bazel yet, from the pnpm
+# workspace in typescript/.
 
 on:
   pull_request:
@@ -20,23 +22,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  release-automation:
-    name: npm release automation tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: node --test scripts/npm-release.test.mjs
-
   packages:
     name: typescript/packages/${{ matrix.package }} tests
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        package: [codegen, client, svelte, react]
+        package: [svelte, react]
     defaults:
       run:
         working-directory: typescript/packages/${{ matrix.package }}
@@ -55,8 +47,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run --if-present check
       - run: pnpm test
-      - if: matrix.package != 'codegen'
-        run: pnpm run build
+      - run: pnpm run build
       # The tic-tac-toe board and the agent DAG studio are written against the Svelte binding and
       # their example's committed generated types, so they are type-checked with them (neither has
       # a build of its own).

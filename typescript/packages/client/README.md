@@ -20,10 +20,16 @@ await session.sendMessage("play", { cell: 5 });
 ```
 
 `src/protocol.ts` is the event stream's wire types, generated from `events.py`:
-`bazel run //typescript/packages/client:protocol_update` regenerates it, and `bazel test` fails
+`bazel run //typescript/packages/client/src:protocol_codegen_update` regenerates it, and `bazel test` fails
 when it is out of date.
 
 ## Development
+
+```sh
+bazel test //typescript/packages/client/...   # one target per test file, e.g. //typescript/packages/client/test:session_test
+```
+
+Without Bazel, from this directory:
 
 ```sh
 pnpm install

@@ -1,0 +1,98 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# One target per file, depending on the files it imports, so a change reruns only the tests that
+# reach it.
+ts_project(
+    name = "activity",
+    srcs = ["activity.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    visibility = ["//typescript/apps/chat-server:__subpackages__"],
+    deps = ["//typescript/apps/chat-server:node_modules/chat"],
+)
+
+ts_project(
+    name = "app",
+    srcs = ["app.tsx"],
+    declaration = True,
+    preserve_jsx = False,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    visibility = ["//typescript/apps/chat-server:__subpackages__"],
+    deps = [
+        ":activity",
+        ":command",
+        ":harness",
+        ":routing",
+        ":schema-to-modal",
+        ":state",
+        ":text-form",
+        "//typescript/apps/chat-server:node_modules/chat",
+    ],
+)
+
+ts_project(
+    name = "command",
+    srcs = ["command.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    visibility = ["//typescript/apps/chat-server:__subpackages__"],
+)
+
+ts_project(
+    name = "harness",
+    srcs = ["harness.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    visibility = ["//typescript/apps/chat-server:__subpackages__"],
+)
+
+ts_project(
+    name = "routing",
+    srcs = ["routing.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    visibility = ["//typescript/apps/chat-server:__subpackages__"],
+)
+
+ts_project(
+    name = "schema-to-modal",
+    srcs = ["schema-to-modal.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    visibility = ["//typescript/apps/chat-server:__subpackages__"],
+    deps = ["//typescript/apps/chat-server:node_modules/chat"],
+)
+
+ts_project(
+    name = "server",
+    srcs = ["server.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    visibility = ["//typescript/apps/chat-server:__subpackages__"],
+    deps = [
+        ":app",
+        ":harness",
+        ":routing",
+        "//typescript/apps/chat-server:node_modules/@chat-adapter/discord",
+        "//typescript/apps/chat-server:node_modules/@chat-adapter/slack",
+        "//typescript/apps/chat-server:node_modules/chat",
+    ],
+)
+
+ts_project(
+    name = "state",
+    srcs = ["state.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    visibility = ["//typescript/apps/chat-server:__subpackages__"],
+    deps = ["//typescript/apps/chat-server:node_modules/chat"],
+)
+
+ts_project(
+    name = "text-form",
+    srcs = ["text-form.ts"],
+    declaration = True,
+    tsconfig = "//typescript/apps/chat-server:tsconfig",
+    visibility = ["//typescript/apps/chat-server:__subpackages__"],
+    deps = [":schema-to-modal"],
+)

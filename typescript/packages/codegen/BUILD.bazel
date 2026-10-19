@@ -1,71 +1,23 @@
-load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_test")
-load("@bazel_lib//lib:directory_path.bzl", "directory_path")
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config")
 load("@npm//:defs.bzl", "npm_link_all_packages")
-load("@npm//typescript/packages/codegen:typescript/package_json.bzl", typescript_bin = "bin")
-load("//bazel:codegen.bzl", "harness_types")
 
 npm_link_all_packages(name = "node_modules")
 
-# `npm run build`: tsc emits src/ and test/ into dist/.
-typescript_bin.tsc(
-    name = "dist",
-    srcs = glob([
-        "src/**/*.ts",
-        "test/**",
-    ]) + [
-        "package.json",
-        "tsconfig.json",
-        ":node_modules",
+# package.json's "type": "module" makes tsc emit ES modules (module: NodeNext) and Node load them.
+js_library(
+    name = "package_json",
+    srcs = ["package.json"],
+    visibility = ["//typescript/packages/codegen:__subpackages__"],
+)
+
+# Every ts_project in src/ and test/ compiles with this tsconfig, each rooted at its own directory.
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    visibility = ["//typescript/packages/codegen:__subpackages__"],
+    deps = [
+        ":node_modules/@types/node",
+        ":package_json",
     ],
-    args = [
-        "-p",
-        "tsconfig.json",
-    ],
-    chdir = package_name(),
-    out_dirs = ["dist"],
-)
-
-directory_path(
-    name = "cli_entry_point",
-    directory = ":dist",
-    path = "src/cli.js",
-)
-
-# harness-codegen: reads a `temporal-agent-harness schema` document and prints TypeScript types.
-js_binary(
-    name = "cli",
-    data = [
-        "package.json",
-        ":dist",
-        ":node_modules",
-    ],
-    entry_point = ":cli_entry_point",
-    visibility = ["//visibility:public"],
-)
-
-directory_path(
-    name = "test_entry_point",
-    directory = ":dist",
-    path = "test/generate.test.js",
-)
-
-# `npm test`: the generator against its golden, from the tic-tac-toe agent's committed schema.
-js_test(
-    name = "test",
-    data = [
-        "package.json",
-        ":dist",
-        ":node_modules",
-        "//python/examples/tictactoe:agents_files",
-    ] + glob(["test/golden/**"]),
-    entry_point = ":test_entry_point",
-)
-
-# The generator's golden, test/golden/TicTacToeAgent.ts: the tic-tac-toe agent's types, which the
-# tests compare and type-check. `bazel run //typescript/packages/codegen:golden_update` rewrites
-# it.
-harness_types(
-    name = "golden",
-    src = "test/golden/TicTacToeAgent.ts",
-    schema = "//python/examples/tictactoe:TicTacToeAgent",
 )

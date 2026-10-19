@@ -77,7 +77,7 @@ Send `new_game` to start, then `play` with a cell number 1-9.""",
     key = "tictactoe",
     label = "Tic-Tac-Toe (TypeSafe)",
     task_queue = "tictactoe-agent",
-    visibility = ["//typescript/packages/codegen:__pkg__"],
+    visibility = ["//typescript/packages/codegen/test/golden:__pkg__"],
     deps = [":workflow"],
 )
 
@@ -92,7 +92,7 @@ harness_agent_registry(
     agents = [":TicTacToeAgent"],
     visibility = [
         "//python/tests/harness:__pkg__",
-        "//typescript/packages/codegen:__pkg__",
+        "//typescript/packages/codegen/test:__pkg__",
     ],
 )
 

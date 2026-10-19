@@ -901,7 +901,7 @@ repo's examples run the same pipeline, e.g.
 ```bash
 PYTHONPATH=python uv run --project python temporal-agent-harness schema \
   examples.tictactoe.workflow:TicTacToeAgentWorkflow \
-  | bazel run //typescript/packages/codegen:cli -- - -o "$PWD/client_sdk/TicTacToeAgent.ts"
+  | bazel run //typescript/packages/codegen/src:harness-codegen -- - -o "$PWD/client_sdk/TicTacToeAgent.ts"
 ```
 
 Commit the output and regenerate it in CI. Renaming a field on `Board` without regenerating then

@@ -8,6 +8,7 @@ module(name = "temporal_agent_harness")
 
 bazel_dep(name = "aspect_rules_py", version = "2.0.0-alpha.8")
 bazel_dep(name = "aspect_rules_js", version = "3.5.1")
+bazel_dep(name = "aspect_rules_ts", version = "3.10.1")
 bazel_dep(name = "bazel_lib", version = "3.7.2")
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
 bazel_dep(name = "platforms", version = "1.1.0")
@@ -80,9 +81,8 @@ uv.override_package(
 use_repo(uv, "pypi")
 
 # ---------------------------------------------------------------------------------------------
-# Node, for the pnpm workspace under typescript/ (today Bazel builds only packages/codegen, the
-# TypeScript generator behind the committed client types). rules_js reads the workspace's one
-# pnpm-lock.yaml.
+# Node, for the pnpm workspace under typescript/. rules_js reads the workspace's one
+# pnpm-lock.yaml; rules_ts compiles its TypeScript packages.
 # ---------------------------------------------------------------------------------------------
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
 node.toolchain(node_version = "22.20.0")
@@ -113,6 +113,12 @@ npm.npm_translate_lock(
     update_pnpm_lock = True,
 )
 use_repo(npm, "npm")
+
+# The compiler ts_project runs: the TypeScript the workspace catalog resolves to in pnpm-lock.yaml.
+# rules_ts cannot read a `catalog:` specifier, so a TypeScript upgrade bumps both.
+typescript = use_extension("@aspect_rules_ts//ts:extensions.bzl", "typescript")
+typescript.deps(version = "7.0.2")
+use_repo(typescript, "npm_typescript")
 
 # ---------------------------------------------------------------------------------------------
 # Temporal servers for tests, pinned so tests never download them at runtime:

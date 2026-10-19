@@ -1,2 +1,23 @@
-# A Bazel package so npm_translate_lock (MODULE.bazel) can read this package.json; nothing here
-# builds under Bazel yet.
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+
+npm_link_all_packages(name = "node_modules")
+
+# package.json's "type": "module" makes Node load tsc's output as ES modules.
+js_library(
+    name = "package_json",
+    srcs = ["package.json"],
+    visibility = ["//typescript/apps/chat-server:__subpackages__"],
+)
+
+# Every ts_project in src/ and test/ compiles with this tsconfig, each rooted at its own directory.
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    visibility = ["//typescript/apps/chat-server:__subpackages__"],
+    deps = [
+        ":node_modules/@types/node",
+        ":package_json",
+    ],
+)

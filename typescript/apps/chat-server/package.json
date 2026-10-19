@@ -5,10 +5,10 @@
   "type": "module",
   "description": "Chat SDK front end for temporal-agent-harness. Runs alongside the Python web app; needed only to reach agents from Slack/Discord/etc.",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json --outDir dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json && node --test dist/test/*.test.js",
-    "dev": "tsc -p tsconfig.json && node dist/src/server.js"
+    "test": "tsc -p tsconfig.json --outDir dist && node --test dist/test/*.test.js",
+    "dev": "tsc -p tsconfig.json --outDir dist && node dist/src/server.js"
   },
   "dependencies": {
     "@chat-adapter/discord": "^4.41.0",
@@ -20,6 +20,6 @@
   },
   "devDependencies": {
     "@types/node": "^22",
-    "typescript": "^5.6"
+    "typescript": "catalog:"
   }
 }

@@ -1,0 +1,140 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+
+# One target per test file (and per compile-time type check, *.types.ts), depending on the files it
+# imports.
+ts_project(
+    name = "jsonPatch.test",
+    testonly = True,
+    srcs = ["jsonPatch.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        "//typescript/packages/client/src:frames",
+        "//typescript/packages/client/src:jsonPatch",
+    ],
+)
+
+ts_project(
+    name = "projection.test",
+    testonly = True,
+    srcs = ["projection.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        ":support",
+        "//typescript/packages/client/src:messages",
+        "//typescript/packages/client/src:projection",
+    ],
+)
+
+ts_project(
+    name = "protocol.types",
+    testonly = True,
+    srcs = ["protocol.types.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = ["//typescript/packages/client/src:protocol"],
+)
+
+ts_project(
+    name = "session.test",
+    testonly = True,
+    srcs = ["session.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        ":support",
+        "//typescript/packages/client/src:plainState",
+        "//typescript/packages/client/src:schema",
+        "//typescript/packages/client/src:session",
+    ],
+)
+
+ts_project(
+    name = "start.test",
+    testonly = True,
+    srcs = ["start.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        "//typescript/packages/client/src:start",
+        "//typescript/packages/client/src:transport",
+    ],
+)
+
+ts_project(
+    name = "start.types",
+    testonly = True,
+    srcs = ["start.types.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = ["//typescript/packages/client/src:start"],
+)
+
+ts_project(
+    name = "support",
+    testonly = True,
+    srcs = ["support.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        "//typescript/packages/client/src:frames",
+        "//typescript/packages/client/src:transport",
+    ],
+)
+
+ts_project(
+    name = "transport.test",
+    testonly = True,
+    srcs = ["transport.test.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        "//typescript/packages/client/src:frames",
+        "//typescript/packages/client/src:transport",
+    ],
+)
+
+ts_project(
+    name = "typed.types",
+    testonly = True,
+    srcs = ["typed.types.ts"],
+    declaration = True,
+    tsconfig = "//typescript/packages/client:tsconfig",
+    deps = [
+        "//typescript/packages/client/src:messages",
+        "//typescript/packages/client/src:plainState",
+        "//typescript/packages/client/src:session",
+    ],
+)
+
+js_test(
+    name = "jsonPatch_test",
+    data = [":jsonPatch.test"],
+    entry_point = "jsonPatch.test.js",
+)
+
+js_test(
+    name = "projection_test",
+    data = [":projection.test"],
+    entry_point = "projection.test.js",
+)
+
+js_test(
+    name = "session_test",
+    data = [":session.test"],
+    entry_point = "session.test.js",
+)
+
+js_test(
+    name = "start_test",
+    data = [":start.test"],
+    entry_point = "start.test.js",
+)
+
+js_test(
+    name = "transport_test",
+    data = [":transport.test"],
+    entry_point = "transport.test.js",
+)

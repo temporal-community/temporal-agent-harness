@@ -241,8 +241,9 @@ generate one. `Literal` aliases are inlined by pydantic, so a field reads `"X" |
 and the repo commits the output, so the examples run with uv alone. Each example that ships a
 typed client declares a `harness_client_sdk` for its agents in its own
 `BUILD.bazel` (`examples/tictactoe/client_sdk/TicTacToeAgent.ts`); the protocol types are
-committed as `packages/client/src/protocol.ts` (`//packages/client:protocol_update`). `bazel test`
-fails on any difference between a committed file and what its agent generates.
+committed as `packages/client/src/protocol.ts`
+(`//typescript/packages/client/src:protocol_codegen_update`). `bazel test` fails on any difference
+between a committed file and what its agent generates.
 
 ### Starting a session
 

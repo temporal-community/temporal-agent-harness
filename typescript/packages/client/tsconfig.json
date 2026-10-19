@@ -11,11 +11,11 @@
     "declaration": true,
 
     // Source imports carry `.ts` extensions and are rewritten to `.js` on emit, so the same
-    // files typecheck in place and run from `dist/` under plain Node ESM.
+    // files typecheck in place and run as compiled JavaScript under plain Node ESM. No outDir:
+    // Bazel emits beside the sources, so a test package finds the sources' declarations; the
+    // package scripts pass `--outDir dist`.
     "allowImportingTsExtensions": true,
-    "rewriteRelativeImportExtensions": true,
-    "outDir": "dist",
-    "rootDir": "."
+    "rewriteRelativeImportExtensions": true
   },
   "include": ["src", "test"]
 }

@@ -8,9 +8,9 @@
     "harness-codegen": "dist/src/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json --outDir dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsc -p tsconfig.json && node --test dist/test/*.test.js"
+    "test": "tsc -p tsconfig.json --outDir dist && node --test dist/test/*.test.js"
   },
   "dependencies": {
     "json-schema-to-typescript": "^16.0.0"

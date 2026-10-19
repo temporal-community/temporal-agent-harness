@@ -1,0 +1,10 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+
+# The npm release automation (prepare-/finish-/publish-npm.yml) against mocked GitHub calls. It runs
+# the pinned Node's own npm for `npm version`.
+js_test(
+    name = "npm-release_test",
+    data = ["npm-release.mjs"],
+    entry_point = "npm-release.test.mjs",
+    include_npm = True,
+)
