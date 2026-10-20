@@ -892,19 +892,24 @@
     return output;
   }
 
+  function listItemMatch(line: string, ordered: boolean): RegExpMatchArray | null {
+    // An empty item is a valid streaming prefix. The dispatcher and consumer must agree on
+    // it, otherwise renderList can return zero consumed lines and the block loop never advances.
+    return line.match(ordered ? /^\s*\d+[.)]\s+(.*)$/ : /^\s*[-*]\s+(.*)$/);
+  }
+
   function renderList(
     lines: string[],
     links: CitationLink[],
     ordered: boolean
   ): { html: string; nextIndex: number } {
     const items: string[] = [];
-    const pattern = ordered ? /^\s*\d+[.)]\s+(.+)$/ : /^\s*[-*]\s+(.+)$/;
     let index = 0;
 
     while (index < lines.length) {
-      const match = lines[index]?.match(pattern);
-      if (!match?.[1]) break;
-      items.push(`<li>${renderInline(moveLeadingCitationsToEnd(match[1]), links)}</li>`);
+      const match = listItemMatch(lines[index] ?? "", ordered);
+      if (!match) break;
+      items.push(`<li>${renderInline(moveLeadingCitationsToEnd(match[1] ?? ""), links)}</li>`);
       index += 1;
     }
 
@@ -1037,14 +1042,14 @@
         continue;
       }
 
-      if (/^\s*[-*]\s+/.test(line)) {
+      if (listItemMatch(line, false)) {
         const list = renderList(lines.slice(index), links, false);
         blocks.push(list.html);
         index += list.nextIndex;
         continue;
       }
 
-      if (/^\s*\d+[.)]\s+/.test(line)) {
+      if (listItemMatch(line, true)) {
         const list = renderList(lines.slice(index), links, true);
         blocks.push(list.html);
         index += list.nextIndex;
@@ -1081,8 +1086,8 @@
         lines[index]?.trim() &&
         !/^\s*```/.test(lines[index] ?? "") &&
         !/^(#{1,4})\s+/.test(lines[index] ?? "") &&
-        !/^\s*[-*]\s+/.test(lines[index] ?? "") &&
-        !/^\s*\d+[.)]\s+/.test(lines[index] ?? "") &&
+        !listItemMatch(lines[index] ?? "", false) &&
+        !listItemMatch(lines[index] ?? "", true) &&
         !isTableStart(lines, index) &&
         !/^>\s?/.test(lines[index] ?? "") &&
         !/^---+$/.test((lines[index] ?? "").trim())
