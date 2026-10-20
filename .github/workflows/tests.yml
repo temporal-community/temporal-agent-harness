@@ -1,8 +1,11 @@
 name: Tests
 
-# Runs the suite on every pull request and every push to main, once per Python version the package
-# claims: `requires-python` is ">=3.11" and the classifiers list 3.11 through 3.14, so a suite that
-# only ran on one interpreter would not be testing what the package claims to support.
+# Runs the suite on every pull request and every push to main. Python's tests (//python/...) run
+# once per Python version the package claims: `requires-python` is ">=3.11" and the classifiers
+# list 3.11 through 3.14, so a suite that only ran on one interpreter would not be testing what the
+# package claims to support. Everything else runs once, on the default interpreter: the Python
+# version cannot change a TypeScript test, but it is a build setting, so every version would
+# rebuild and rerun them all.
 #
 # Caches are saved only by pushes to main and restored by every run, pull requests included: code
 # nobody has reviewed never writes a cache, a pull request still starts from main's latest build,
@@ -27,7 +30,7 @@ env:
 
 jobs:
   bazel:
-    name: bazel test (${{ matrix.config }})
+    name: bazel test (${{ matrix.name }})
     runs-on: ubuntu-latest
     strategy:
       # WHICH interpreters fail is the entire signal a matrix exists to give. Cancelling py313
@@ -35,8 +38,15 @@ jobs:
       # needing a second run to answer.
       fail-fast: false
       matrix:
-        # .bazelrc's --config=py3XX; keep in lockstep with the python/pyproject.toml classifiers.
-        config: [py311, py312, py313, py314]
+        # `config` is .bazelrc's --config=py3XX; keep the Python entries in lockstep with the
+        # python/pyproject.toml classifiers. Together the entries' `targets` cover //...: the last
+        # entry is everything outside python/, so a test anywhere else still runs.
+        include:
+          - { name: "python, py311", config: py311, cache: python-py311, targets: "//python/..." }
+          - { name: "python, py312", config: py312, cache: python-py312, targets: "//python/..." }
+          - { name: "python, py313", config: py313, cache: python-py313, targets: "//python/..." }
+          - { name: "python, py314", config: py314, cache: python-py314, targets: "//python/..." }
+          - { name: "everything else", config: py313, cache: other, targets: "//... -//python/..." }
     steps:
       - uses: actions/checkout@v4
 
@@ -50,20 +60,21 @@ jobs:
       # BUILD and MODULE files: a push to main that changes only sources keeps the same key, and
       # since a cache key is never overwritten, main's cache would go stale. Keyed by commit
       # instead, every push to main saves a new one, and a run restores the newest by prefix.
-      # Each interpreter is its own configuration, so each gets its own action cache.
+      # Each entry builds its own targets in its own configuration, so each gets its own cache.
       - name: Restore the Bazel disk cache
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/bazel-disk
-          key: bazel-disk-${{ matrix.config }}-${{ github.sha }}
-          restore-keys: bazel-disk-${{ matrix.config }}-
+          key: bazel-disk-${{ matrix.cache }}-${{ github.sha }}
+          restore-keys: bazel-disk-${{ matrix.cache }}-
 
       - name: Note when the build starts
         if: env.SAVE_CACHE == 'true'
         run: touch "$RUNNER_TEMP/bazel-build-start"
 
-      - name: Run the test suite
-        run: bazel test //... --config=${{ matrix.config }} --config=ci --disk_cache="$HOME/.cache/bazel-disk"
+      # `--` so the `-//python/...` exclusion is read as a target pattern, not a flag.
+      - name: Run the tests
+        run: bazel test --config=${{ matrix.config }} --config=ci --disk_cache="$HOME/.cache/bazel-disk" -- ${{ matrix.targets }}
 
       # Keep only what this build used, so the saved cache never grows past one build of main.
       # Bazel refreshes a disk cache entry's mtime whenever it reads or writes it; what is left
@@ -80,7 +91,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.cache/bazel-disk
-          key: bazel-disk-${{ matrix.config }}-${{ github.sha }}
+          key: bazel-disk-${{ matrix.cache }}-${{ github.sha }}
 
   bazel-build-files:
     name: Bazel files are generated and formatted

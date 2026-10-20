@@ -65,13 +65,13 @@ jobs:
           repository-cache: true
           cache-save: false
 
-      # main's newest disk cache (tests.yml), for the default interpreter configuration.
+      # main's newest disk cache for everything outside python/ (tests.yml).
       - name: Restore the Bazel disk cache
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/bazel-disk
-          key: bazel-disk-py313-${{ github.sha }}
-          restore-keys: bazel-disk-py313-
+          key: bazel-disk-other-${{ github.sha }}
+          restore-keys: bazel-disk-other-
 
       # The package's tests, including the check of its tarball against package.json
       # (bazel/npm_package.bzl), then that same tarball, :pkg_tgz, written out: --config=ci leaves
