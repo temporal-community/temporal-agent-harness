@@ -210,8 +210,8 @@ Combine them in one spec, e.g. `uv add 'temporal-agent-harness[ui,code-mode,gena
 **Pin to a release.** Every release is listed on the
 [releases page](https://github.com/temporal-community/temporal-agent-harness/releases) and
 published to [PyPI](https://pypi.org/project/temporal-agent-harness/). A release tag marks a
-commit that is known-good at the moment it was cut: the tests passed, and the prebuilt browser
-UI matches the source it was built from.
+commit that is known-good at the moment it was cut: the tests passed, and the published wheel and
+sdist were built from that commit, browser UI included.
 
 Two artifacts come out of a release, and they pin differently:
 
@@ -1025,8 +1025,8 @@ just worker            # this example's agent worker
 
 Open <http://localhost:8000> and pick an agent. Every example follows the same recipe set
 (`temporal` / `session-manager` / `server` / `worker`, plus `client` where noted). `just server`
-serves the prebuilt UI from `python/temporal_agent_harness/ui/dist`, so it needs no Node/pnpm. If you're
-changing the UI, use `just dev-server` (rebuild + serve) instead.
+builds the UI from `typescript/apps/ui/` with the Node and pnpm Bazel pins, so a change there
+shows up on the next `just server`.
 
 ### All examples behind one UI
 

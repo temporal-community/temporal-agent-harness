@@ -42,9 +42,6 @@ temporal:
 session-manager:
     bazel run //python/temporal_agent_harness/web:cli -- session-manager
 
-# Serves the COMMITTED UI build in temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
-# a downloaded release archive runs as-is. Rebuild with `just app-build` if you changed ui/.
-#
 # Serve the Svelte UI + FastAPI API on http://localhost:8000, pointed at this example's registry.
 server:
     bazel run //python/temporal_agent_harness/web:cli -- serve "{{justfile_directory()}}/agents.toml" --host 0.0.0.0 --port 8000
@@ -56,15 +53,6 @@ app-install:
 # Type-check the shared Svelte UI and run its test suite.
 app-check:
     bazel test //typescript/apps/ui/...
-
-# Build the shared Svelte UI with Bazel into temporal_agent_harness/ui/dist for packaging/server use.
-app-build:
-    bazel run //python/temporal_agent_harness/ui:dist_update
-
-# Build, test, and create the wheel/sdist in dist/.
-package: app-build app-check
-    cd "{{root}}" && uv run pytest
-    cd "{{root}}" && uv build
 
 # Run the shared Svelte UI on Vite for hot reloading. /api is proxied to the FastAPI server on :8000.
 ui-dev: app-install

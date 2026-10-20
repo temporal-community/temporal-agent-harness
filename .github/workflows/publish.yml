@@ -5,10 +5,8 @@ name: Publish to PyPI
 # THIS environment, so the three must match the publisher configured at
 # https://pypi.org/manage/project/temporal-agent-harness/settings/publishing/ exactly.
 #
-# No Node toolchain here on purpose: the browser UI is committed prebuilt to
-# python/temporal_agent_harness/ui/dist, and the "UI dist" workflow already fails on main if that build
-# has drifted from typescript/apps/ui/. So the commit a release is cut from is verified before we
-# get here, and `uv build` alone produces a complete wheel.
+# Bazel builds both archives (//python:dists), with the browser UI built from typescript/apps/ui/
+# in the same invocation, and the tests that gate the upload check those same files.
 
 on:
   # The normal path: cut a GitHub release for the tag, and it publishes.
@@ -32,13 +30,6 @@ jobs:
     # Must match the environment name given to PyPI's trusted publisher. Also the place to add
     # required reviewers if you want a human gate on every upload.
     environment: pypi
-    env:
-      # Pin the interpreter rather than taking the runner's default, so what a release builds
-      # and tests is reproducible: 3.13 is what the project develops against.
-      UV_PYTHON: "3.13"
-    defaults:
-      run:
-        working-directory: python
     permissions:
       contents: read
       # Mints the short-lived OIDC token PyPI exchanges for an upload token. Without this the
@@ -47,14 +38,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: false
 
-      # A release is irreversible and a version can never be reused, so gate on the suite.
-      - name: Run the test suite
-        run: uv run pytest -q
+      # main's newest disk cache for python/ on Python 3.13, the default interpreter (tests.yml).
+      - name: Restore the Bazel disk cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-disk-py313-${{ github.sha }}
+          restore-keys: bazel-disk-py313-
 
-      - name: Build the wheel and sdist
-        run: uv build
+      # A release is irreversible and a version can never be reused, so gate on the suite, which
+      # includes the checks of the archives themselves (tests/test_packaged_distributions.py).
+      # Then write those archives out: --config=ci leaves cached outputs in the cache unless asked
+      # for them.
+      - name: Test and build the wheel and sdist
+        run: |
+          flags=(--config=ci --disk_cache="$HOME/.cache/bazel-disk")
+          bazel test //python/... "${flags[@]}"
+          bazel build //python:dists "${flags[@]}" --remote_download_toplevel
+          dists="$(bazel info execution_root "${flags[@]}")/$(bazel cquery //python:dists "${flags[@]}" --output=files)"
+          # A directory of its own, not a copy of Bazel's read-only one: the publish step writes
+          # attestations beside the archives.
+          mkdir python/dist
+          cp "$dists"/* python/dist/
+          ls -l python/dist
 
       # The version lives in python/pyproject.toml and is bumped by hand, so a tag and a version CAN
       # disagree. Catch that here rather than discovering that 0.4.0 shipped 0.3.0's code.
@@ -62,16 +74,13 @@ jobs:
         if: github.event_name == 'release'
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
-          version="$(python -c '
-          import tomllib, pathlib
-          print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])
-          ')"
-          echo "tag=${tag} pyproject version=${version}"
-          if [ "${tag#v}" != "${version}" ]; then
-            echo "::error::Release tag ${tag} does not match pyproject version ${version}."
-            exit 1
-          fi
+          version="${GITHUB_REF_NAME#v}"
+          for dist in "temporal_agent_harness-${version}-py3-none-any.whl" "temporal_agent_harness-${version}.tar.gz"; do
+            if [ ! -f "python/dist/${dist}" ]; then
+              echo "::error::Release tag ${GITHUB_REF_NAME} has no ${dist}; python/dist holds: $(ls python/dist)"
+              exit 1
+            fi
+          done
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1

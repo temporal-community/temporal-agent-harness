@@ -34,18 +34,12 @@ app-install:
 app-check:
     bazel test //typescript/apps/ui/...
 
-# Build the Svelte UI with Bazel into python/temporal_agent_harness/ui/dist.
-app-build:
-    bazel run //python/temporal_agent_harness/ui:dist_update
-
-# Build, test, and create the wheel/sdist in python/dist/.
-# Clears dist/ first: `uv build` only ADDS to it, so artifacts from a previously released
-# version linger there indefinitely. That matters at publish time — `uv publish` uploads
-# dist/* by default, so a stale wheel would be pushed to PyPI alongside the current one.
-package: app-build app-check
-    cd "{{python}}" && uv run pytest
-    rm -rf "{{python}}/dist"
-    cd "{{python}}" && uv build
+# Releases publish from CI (.github/workflows/publish.yml), which runs the same targets.
+#
+# Test the Python package and the console, then build the wheel and sdist (//python:dists).
+package:
+    bazel test //python/... //typescript/apps/ui/...
+    bazel build //python:dists
 
 # After adding, moving, or changing the imports of a .py file, or changing uv.lock. CI fails while
 # either is out of date.
@@ -191,19 +185,14 @@ temporal:
 # Run the packaged, agent-agnostic session-manager worker (hosts only SessionManagerWorkflow).
 session-manager: (_run "//python/temporal_agent_harness/web:cli" "session-manager")
 
-# Serves the COMMITTED UI build in python/temporal_agent_harness/ui/dist, so this needs no Node/pnpm —
-# a downloaded release archive runs as-is. If you changed anything under typescript/apps/ui/,
-# rebuild it first with `just app-build`, or use `just dev-server` (build + serve). An agent only
-# runs if its worker is up — see the worker recipes below.
+# Serves the console as Bazel builds it from typescript/apps/ui/, so a change there shows up on the
+# next run. An agent only runs if its worker is up — see the worker recipes below.
 #
 # Names are example directories (`monty`, `wiki_agent`); none means every example, e.g.
 # `just server monty tictactoe`.
 #
 # Serve the named examples' agents.toml registries merged on http://localhost:8000.
 server *EXAMPLES: (_run "//python/examples:server" EXAMPLES)
-
-# Rebuild the Svelte UI, then serve — the contributor loop after editing typescript/apps/ui/.
-dev-server: app-build server
 
 # Run the Svelte Vite dev server with /api proxied to the server on :8000.
 ui-dev: app-install

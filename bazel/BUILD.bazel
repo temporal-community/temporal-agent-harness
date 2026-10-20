@@ -41,6 +41,14 @@ py_binary(
     visibility = ["//visibility:public"],
 )
 
+# Builds python_dists targets' wheel and sdist (bazel/python_dists.bzl).
+py_binary(
+    name = "python_dists",
+    srcs = ["python_dists.py"],
+    main = "python_dists.py",
+    deps = ["@pypi//setuptools"],
+)
+
 # Writes harness_agent_registry targets' agents.toml (bazel/agents.bzl).
 py_binary(
     name = "agents_toml",

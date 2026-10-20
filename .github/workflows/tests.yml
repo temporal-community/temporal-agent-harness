@@ -127,6 +127,11 @@ jobs:
       - name: Every TypeScript test file has a Bazel test target
         run: scripts/check-ts-test-targets.sh
 
+      # The wheel ships what //python/temporal_agent_harness reaches; its entry points are listed
+      # by hand.
+      - name: Every library in the Python package ships in the wheel and sdist
+        run: scripts/check-python-package-entry-points.sh
+
   # TEMPORARY: the tests Bazel does not run yet, run under uv instead. Each group below says why.
   # When Bazel runs a group, delete it here; when none are left, delete this job.
   pytest-outside-bazel:
@@ -158,13 +163,5 @@ jobs:
             "tests/ai_sdks/openai_agents/test_harness_mcp_server.py::test_every_nexus_mcp_server_factory_returns_a_governed_server"
             "tests/ai_sdks/openai_agents/test_harness_mcp_server.py::test_every_nexus_factory_passes_runner_and_inherently_safe"
             "tests/harness/test_agent_schema.py::test_every_example_agent_has_a_deterministic_self_contained_schema[examples.nexus_hello.workflow:NexusHelloAgentWorkflow]"
-
-            # Deselected in tests/web/BUILD.bazel: they build the wheel and sdist in the source
-            # tree, which Bazel's sandbox mounts read-only. Back under Bazel once the
-            # distributions are Bazel targets.
-            "tests/web/test_packaged_ui.py::test_built_distributions_exclude_the_nexus_source_tree"
-            "tests/web/test_packaged_ui.py::test_built_distributions_expose_ui_server_console_script"
-            "tests/web/test_packaged_ui.py::test_built_distributions_include_packaged_ui_assets"
-            "tests/web/test_packaged_ui.py::test_extracted_wheel_can_resolve_packaged_ui_dist"
           )
           uv run pytest -q "${tests[@]}"

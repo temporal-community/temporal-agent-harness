@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-import os
 import re
-import subprocess
-import sys
-import tarfile
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,7 +39,6 @@ from temporal_agent_harness.web.app import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-WHEEL_UI_PREFIX = "temporal_agent_harness/ui/dist/"
 
 
 def test_packaged_ui_dist_contains_relative_vite_entrypoints() -> None:
@@ -425,151 +419,6 @@ async def test_session_manager_startup_handles_concurrent_start_race() -> None:
     assert len(temporal.start_calls) == 1
 
 
-@pytest.fixture(scope="module")
-def built_distributions(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
-    import setuptools.build_meta as build_meta
-
-    dist_root = tmp_path_factory.mktemp("dists")
-    wheel_dir = dist_root / "wheel"
-    sdist_dir = dist_root / "sdist"
-    wheel_dir.mkdir()
-    sdist_dir.mkdir()
-
-    previous_cwd = Path.cwd()
-    os.chdir(ROOT)
-    try:
-        wheel_name = build_meta.build_wheel(str(wheel_dir))
-        sdist_name = build_meta.build_sdist(str(sdist_dir))
-    finally:
-        os.chdir(previous_cwd)
-
-    return wheel_dir / wheel_name, sdist_dir / sdist_name
-
-
-def test_built_distributions_include_packaged_ui_assets(
-    built_distributions: tuple[Path, Path],
-) -> None:
-    wheel_path, sdist_path = built_distributions
-
-    with zipfile.ZipFile(wheel_path) as wheel:
-        names = set(wheel.namelist())
-        _assert_ui_assets_present(names)
-        assert "temporal_agent_harness/web/session_manager_worker.py" in names
-
-        # The dist-info directory name embeds the package version, so match it rather than
-        # hardcoding it — cutting a release shouldn't require editing this test.
-        (metadata_name,) = [
-            name
-            for name in names
-            if re.fullmatch(r"temporal_agent_harness-[^/]+\.dist-info/METADATA", name)
-        ]
-        metadata = wheel.read(metadata_name).decode()
-        assert "Provides-Extra: ui" in metadata
-        assert 'Requires-Dist: fastapi[standard]>=0.136.3; extra == "ui"' in metadata
-
-        html = wheel.read(f"{WHEEL_UI_PREFIX}index.html").decode()
-        for asset_path in _relative_asset_paths(html):
-            assert f"{WHEEL_UI_PREFIX}{asset_path}" in names
-
-    with tarfile.open(sdist_path) as sdist:
-        names = set(sdist.getnames())
-        assert any(name.endswith("/temporal_agent_harness/web/session_manager_worker.py") for name in names)
-        assert any(name.endswith("/temporal_agent_harness/ui/dist/index.html") for name in names)
-        assert any(name.endswith("/temporal_agent_harness/ui/dist/temporal-logo.svg") for name in names)
-        assert any(
-            name.endswith(".js") and "/temporal_agent_harness/ui/dist/assets/" in name
-            for name in names
-        )
-        assert any(
-            name.endswith(".css") and "/temporal_agent_harness/ui/dist/assets/" in name
-            for name in names
-        )
-
-
-def test_built_distributions_expose_ui_server_console_script(
-    built_distributions: tuple[Path, Path],
-) -> None:
-    """The prebuilt UI must be runnable straight from an install, not just from a checkout."""
-    wheel_path, _ = built_distributions
-
-    with zipfile.ZipFile(wheel_path) as wheel:
-        names = set(wheel.namelist())
-        # The CLI is parsing only; the work it dispatches to must ship alongside it.
-        for module in (
-            "temporal_agent_harness/web/cli.py",
-            "temporal_agent_harness/web/serve.py",
-            "temporal_agent_harness/web/client.py",
-            "temporal_agent_harness/web/session_manager_worker.py",
-        ):
-            assert module in names
-
-        (entry_points_name,) = [
-            name
-            for name in names
-            if re.fullmatch(r"temporal_agent_harness-[^/]+\.dist-info/entry_points.txt", name)
-        ]
-        entry_points = wheel.read(entry_points_name).decode()
-
-    assert "[console_scripts]" in entry_points
-    assert "temporal-agent-harness = temporal_agent_harness.web.cli:main" in entry_points
-
-
-def test_built_distributions_exclude_the_nexus_source_tree(
-    built_distributions: tuple[Path, Path],
-) -> None:
-    """Nothing under the repo's top-level ``nexus/`` directory may ship in the package.
-
-    ``nexus/`` holds the separate Go/Nexus projects (``nexus/mcp`` is wired in only as a
-    workspace-local editable source for the ``nexus-mcp`` extra), so neither distribution should
-    carry any of it. In-package modules whose *names* contain "nexus" — e.g.
-    ``temporal_agent_harness/nexus_agent_adapter/`` — are part of the harness and do ship.
-    """
-    wheel_path, sdist_path = built_distributions
-
-    with zipfile.ZipFile(wheel_path) as wheel:
-        wheel_names = set(wheel.namelist())
-    with tarfile.open(sdist_path) as sdist:
-        # sdist members are prefixed with "<name>-<version>/"; strip it before checking.
-        sdist_names = {name.split("/", 1)[-1] for name in sdist.getnames()}
-
-    for names in (wheel_names, sdist_names):
-        assert not [name for name in names if name.startswith("nexus/")]
-
-
-def test_extracted_wheel_can_resolve_packaged_ui_dist(
-    built_distributions: tuple[Path, Path],
-    tmp_path: Path,
-) -> None:
-    wheel_path, _ = built_distributions
-    extracted = tmp_path / "wheel"
-    extracted.mkdir()
-
-    with zipfile.ZipFile(wheel_path) as wheel:
-        wheel.extractall(extracted)
-
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(extracted)
-    script = """
-from temporal_agent_harness.ui import packaged_ui_dist
-
-dist = packaged_ui_dist()
-assert dist is not None
-assert (dist / "index.html").is_file()
-assert (dist / "temporal-logo.svg").is_file()
-print(dist)
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=tmp_path,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
 def _relative_asset_paths(index_html: str) -> set[str]:
     return set(re.findall(r'(?:src|href)="\./([^"]+)"', index_html))
 
@@ -651,16 +500,3 @@ async def _history_event_for_agent_message(message: AgentMessage) -> HistoryEven
         await pydantic_data_converter.encode([message])
     )
     return event
-
-
-def _assert_ui_assets_present(names: set[str]) -> None:
-    assert f"{WHEEL_UI_PREFIX}index.html" in names
-    assert f"{WHEEL_UI_PREFIX}temporal-logo.svg" in names
-    assert any(
-        name.startswith(f"{WHEEL_UI_PREFIX}assets/") and name.endswith(".js")
-        for name in names
-    )
-    assert any(
-        name.startswith(f"{WHEEL_UI_PREFIX}assets/") and name.endswith(".css")
-        for name in names
-    )

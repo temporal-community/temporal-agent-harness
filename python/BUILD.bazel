@@ -2,6 +2,7 @@ load("@aspect_rules_py//py:defs.bzl", "py_venv", "py_venv_link")
 load("@aspect_rules_py//uv:defs.bzl", "gazelle_python_manifest")
 load("@pypi//:defs.bzl", "group_deps")
 load("//bazel:package_collisions.bzl", "PACKAGE_COLLISIONS")
+load("//bazel:python_dists.bzl", "python_dists")
 
 # Python targets are generated: one py_library / test per file, deps from its imports.
 #   bazel run //:gazelle                                    # after adding, moving, or re-importing files
@@ -53,6 +54,20 @@ exports_files([
     "pyproject.toml",
     "uv.lock",
 ])
+
+# The wheel and sdist PyPI publishes (.github/workflows/publish.yml), with the console's build at
+# temporal_agent_harness/ui/dist.
+python_dists(
+    name = "dists",
+    srcs = [
+        "pyproject.toml",
+        "//:LICENSE",
+        "//:README.md",
+    ],
+    package = "temporal_agent_harness",
+    visibility = ["//python/tests:__pkg__"],
+    deps = ["//python/temporal_agent_harness"],
+)
 
 # A virtualenv for IDEs and shells: the interpreter plus every package in the `dev` dependency
 # group, like uv's .venv. First-party code stays in the source tree, which IDEs index and

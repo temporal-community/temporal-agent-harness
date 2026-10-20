@@ -20,3 +20,27 @@ py_library(
         "@pypi//temporalio",
     ],
 )
+
+# The published package: its entry points, the modules nothing else in the package imports.
+# Everything they reach under temporal_agent_harness/, with the console their data brings, is what
+# the wheel and sdist ship (//python:dists). scripts/check-python-package-entry-points.sh fails
+# while a library in the package is outside this target's dependencies.
+py_library(
+    name = "temporal_agent_harness",  # keep
+    visibility = [
+        "//python:__pkg__",
+        "//python/tests:__pkg__",
+    ],
+    deps = [
+        ":__init__",
+        "//python/temporal_agent_harness/ai_sdks:__init__",
+        "//python/temporal_agent_harness/ai_sdks:pydantic_ai_harness",
+        "//python/temporal_agent_harness/ai_sdks:typesafe_harness",
+        "//python/temporal_agent_harness/ai_sdks/google_genai_plugin:__init__",
+        "//python/temporal_agent_harness/ai_sdks/jev:__init__",
+        "//python/temporal_agent_harness/ai_sdks/openai_agents",
+        "//python/temporal_agent_harness/harness:__init__",
+        "//python/temporal_agent_harness/utils:__init__",
+        "//python/temporal_agent_harness/web:cli_lib",
+    ],
+)

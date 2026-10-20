@@ -5,10 +5,9 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [svelte()],
   base: "./",
-  // python/temporal_agent_harness/ui/dist commits Bazel's build of this
-  // (//typescript/apps/ui:dist); `bazel run //python/temporal_agent_harness/ui:dist_update`
-  // rewrites it. A build outside Bazel names dependencies' scoped CSS classes from pnpm's
-  // node_modules layout, so it stays here.
+  // The Python package ships Bazel's build of this (//typescript/apps/ui:dist). A build outside
+  // Bazel names dependencies' scoped CSS classes from pnpm's node_modules layout, so it stays
+  // here.
   build: {
     outDir: "dist",
     emptyOutDir: true

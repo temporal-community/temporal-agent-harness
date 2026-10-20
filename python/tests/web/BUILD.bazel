@@ -51,21 +51,11 @@ harness_pytest_test(
     ],
 )
 
-# The deselected tests build the wheel and sdist with setuptools inside the source tree, which
-# the sandbox mounts read-only. They come back once the distributions are Bazel targets.
-# CI runs them outside Bazel for now (the pytest-outside-bazel job in .github/workflows/tests.yml);
-# drop them there when they come back here.
 harness_pytest_test(
     name = "test_packaged_ui",
     srcs = ["test_packaged_ui.py"],
     data = ["//python/examples/monty:agents_files"],
     imports = ["../.."],
-    pytest_args = [
-        "--deselect=tests/web/test_packaged_ui.py::test_built_distributions_exclude_the_nexus_source_tree",
-        "--deselect=tests/web/test_packaged_ui.py::test_built_distributions_expose_ui_server_console_script",
-        "--deselect=tests/web/test_packaged_ui.py::test_built_distributions_include_packaged_ui_assets",
-        "--deselect=tests/web/test_packaged_ui.py::test_extracted_wheel_can_resolve_packaged_ui_dist",
-    ],
     deps = [
         "//python/temporal_agent_harness/harness/agent_protocol:__init__",
         "//python/temporal_agent_harness/ui:__init__",
@@ -75,7 +65,6 @@ harness_pytest_test(
         "//python/tests:conftest",
         "@pypi//fastapi",
         "@pypi//pytest",
-        "@pypi//setuptools",
         "@pypi//temporalio",
     ],
 )
@@ -115,5 +104,16 @@ harness_pytest_test(
         "@pypi//fastapi",
         "@pypi//protobuf",
         "@pypi//temporalio",
+    ],
+)
+
+harness_pytest_test(
+    name = "test_serve",
+    srcs = ["test_serve.py"],
+    imports = ["../.."],
+    deps = [
+        "//python/temporal_agent_harness/web:serve",
+        "//python/tests:conftest",
+        "@pypi//pytest",
     ],
 )

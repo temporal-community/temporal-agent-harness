@@ -14,16 +14,15 @@ Useful commands from the repo root or the Monty example:
 
 ```bash
 just app-check     # svelte-check and the tests, under Bazel
-just app-build     # Bazel's build, written to python/temporal_agent_harness/ui/dist for packaging
 just app-install   # installs the workspace for ui-dev
 just ui-dev        # Vite dev server; proxies /api to localhost:8000
 ```
 
-`app-check` and `app-build` run Bazel targets (`//typescript/apps/ui/...`,
-`//python/temporal_agent_harness/ui:dist_update`). `app-install` and `ui-dev` run
+`app-check` runs `//typescript/apps/ui/...`. The production build is `//typescript/apps/ui:dist`,
+which `just server` serves and the Python wheel ships. `app-install` and `ui-dev` run
 `bazel run //typescript:pnpm -- --dir typescript/apps/ui ...`: the pnpm and Node Bazel pins, so
-nothing needs installing. A `pnpm run build` outside Bazel writes `typescript/apps/ui/dist`, not
-the committed copy.
+nothing needs installing. A `pnpm run build` outside Bazel writes `typescript/apps/ui/dist`,
+which nothing else reads.
 
 Local testing:
 

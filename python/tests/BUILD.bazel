@@ -1,4 +1,5 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("//bazel:pytest.bzl", "harness_pytest_test")
 
 py_library(
     name = "__init__",
@@ -14,4 +15,18 @@ py_library(
     imports = [".."],
     visibility = ["//:__subpackages__"],
     deps = ["@pypi//temporalio"],
+)
+
+harness_pytest_test(
+    name = "test_packaged_distributions",
+    srcs = ["test_packaged_distributions.py"],
+    data = ["//python:dists"],
+    env = {"PYTHON_DISTS": "$(rootpath //python:dists)"},
+    imports = [".."],
+    deps = [
+        # The package's third-party dependencies, for importing the extracted wheel.
+        "//python/temporal_agent_harness",  # keep
+        ":conftest",
+        "@pypi//pytest",
+    ],
 )

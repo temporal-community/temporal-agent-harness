@@ -35,10 +35,9 @@ The repo root has a `justfile` for the common development workflow. Run
 Build and package recipes run directly from the root:
 
 ```bash
-just app-install   # install Svelte dependencies
-just app-build     # build typescript/apps/ui/ into python/temporal_agent_harness/ui/dist
+just app-install   # install the typescript/ workspace, for `ui-dev`
 just app-check     # Svelte checks
-just package       # UI build + UI checks + pytest + uv build
+just package       # Python and UI tests, then the wheel and sdist (//python:dists)
 ```
 
 Local stack recipes delegate into `python/examples/monty`:
@@ -46,17 +45,14 @@ Local stack recipes delegate into `python/examples/monty`:
 ```bash
 just temporal          # local Temporal dev server
 just session-manager   # packaged session-manager worker
-just server            # serves the COMMITTED UI build + FastAPI API on http://localhost:8000
-just dev-server        # rebuild the UI first, then serve (use after editing typescript/apps/ui/)
+just server            # the UI + FastAPI API on http://localhost:8000
 just monty-worker      # Monty agent worker
 just ui-dev            # Vite hot reload on http://127.0.0.1:5173
 ```
 
-`just server` deliberately does **not** rebuild the UI: it serves the committed
-`python/temporal_agent_harness/ui/dist`, so a downloaded release archive runs with no Node/pnpm
-installed. So after changing anything under `typescript/apps/ui/`, run `just app-build` (or
-`just dev-server`) and commit the result; `bazel test //...` fails while the committed copy
-differs from Bazel's build (`//python/temporal_agent_harness/ui:dist_up_to_date_test`).
+`just server` serves the UI as Bazel builds it from `typescript/apps/ui/`
+(`//python/temporal_agent_harness/ui:dist`), so a change there shows up on the next run. No
+build of the UI is committed.
 
 All example recipes read one shared env file, `.env.local` at the repo root: the root
 justfile loads it directly, and `python/examples/*/justfile` read the same root file (via
@@ -65,13 +61,12 @@ justfile loads it directly, and `python/examples/*/justfile` read the same root 
 ## UI Development
 
 The source Svelte app lives in [`typescript/apps/ui/`](../../typescript/apps/ui), a package of
-the pnpm workspace in `typescript/`. The package ships the compiled
-output in [`python/temporal_agent_harness/ui/dist`](../../python/temporal_agent_harness/ui/dist), so
-any UI change needs a rebuild before packaging or before `just server` serves it:
+the pnpm workspace in `typescript/`. Bazel builds it (`//typescript/apps/ui:dist`) into the
+Python package's `temporal_agent_harness/ui/dist`, which `just server` serves and the wheel and
+sdist ship:
 
 ```bash
-just app-install   # install the typescript/ workspace (the other recipes run it first)
-just app-build     # build typescript/apps/ui/ into python/temporal_agent_harness/ui/dist
+just app-install   # install the typescript/ workspace, for `ui-dev`
 just app-check     # svelte-check + local Svelte 5 syntax guard
 ```
 
@@ -97,18 +92,13 @@ from `/` or under a path prefix as long as the UI and API are mounted together.
 
 ## Build And Package
 
-Use the package recipe from the repo root:
+Bazel builds the wheel and sdist PyPI publishes as `//python:dists`, a directory holding both
+(`bazel/python_dists.bzl`). It runs setuptools' build backend on a staged copy of the project, so
+`python/pyproject.toml` decides what ships and with what metadata, as it would for `uv build`;
+the UI comes from Bazel's build of `typescript/apps/ui/`. From the repo root:
 
 ```bash
-just app-install   # one-time setup if typescript/node_modules is absent
-just package
-```
-
-The resulting artifacts are written to `python/dist/`:
-
-```text
-python/dist/temporal_agent_harness-0.3.0.tar.gz
-python/dist/temporal_agent_harness-0.3.0-py3-none-any.whl
+just package       # bazel test //python/... //typescript/apps/ui/..., then bazel build //python:dists
 ```
 
 The wheel and sdist include:
@@ -118,16 +108,15 @@ The wheel and sdist include:
 - `temporal_agent_harness.ui/dist` with the built Svelte UI assets
 - the `ui` extra, which pulls in `fastapi[standard]`
 
-Before publishing or handing off artifacts, run:
-
-```bash
-just package
-```
-
-`just package` runs the Svelte production build, Svelte checks, the local
-Svelte 5 syntax guard, the Python test suite, and `uv build`. The primary
-recipe lives in the repo-root `justfile`; the same recipe is also available
-from `python/examples/monty/justfile` for convenience.
+`//python/tests:test_packaged_distributions` checks those archives, and
+[Publish to PyPI](../../.github/workflows/publish.yml) uploads them after `bazel test //python/...`.
+What ships is what `//python/temporal_agent_harness` reaches under
+`python/temporal_agent_harness/`: its deps are the package's entry points (the modules nothing
+else in the package imports), and their sources and data (the UI) make up the archives. A new
+entry point, such as an SDK integration nothing imports, must be added to those deps;
+`scripts/check-python-package-entry-points.sh` fails in CI until it is. Modules Bazel does not
+build, like `nexus_agent_adapter/`, are not published. A package installed from a git checkout
+(`pip install git+https://...`) has no UI, and `serve` says so.
 
 ## Bazel
 

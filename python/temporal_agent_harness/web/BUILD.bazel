@@ -103,6 +103,7 @@ py_library(
         ":__init__",
         ":client",
         ":registry",
+        "//python/temporal_agent_harness/ui:__init__",
         "@pypi//fastapi",
         "@pypi//uvicorn",
     ],

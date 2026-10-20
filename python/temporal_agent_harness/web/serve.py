@@ -12,9 +12,11 @@ The ``serve`` subcommand of the ``temporal-agent-harness`` console script is thi
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from temporal_agent_harness.ui import packaged_ui_dist
 from temporal_agent_harness.web.client import verify_temporal_reachable
 from temporal_agent_harness.web.registry import load_agent_registries
 
@@ -56,6 +58,17 @@ def run_server(
         ) from exc
 
     app = create_app(*registry_paths)
+
+    # The console ships in the published wheel and in Bazel's build, not in the source tree, so
+    # an install from a git checkout has none. Serve the API anyway (pages like the examples' talk
+    # to it), but say why there is no console.
+    if packaged_ui_dist() is None:
+        print(
+            "No browser console in this install (temporal_agent_harness/ui/dist), so this server "
+            "answers the API only. Install temporal-agent-harness from PyPI, which ships it, or "
+            "from a checkout run `bazel run //python/temporal_agent_harness/web:cli -- serve ...`.",
+            file=sys.stderr,
+        )
 
     # Pre-flight the Temporal connection. The app connects inside its ASGI lifespan, where a
     # failure surfaces as a starlette traceback plus "Application startup failed" — and only

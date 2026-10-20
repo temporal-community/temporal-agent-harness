@@ -28,8 +28,9 @@ js_library(
     ],
 )
 
-# The console's production build, which python/temporal_agent_harness/ui/dist commits: the page,
-# what its entry module imports, and public/, which vite copies as it is.
+# The console's production build, which the Python package serves and ships
+# (//python/temporal_agent_harness/ui:dist): the page, what its entry module imports, and public/,
+# which vite copies as it is.
 vite_bin.vite(
     name = "dist",
     srcs = [
