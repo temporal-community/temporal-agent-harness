@@ -42,10 +42,10 @@ jobs:
         # python/pyproject.toml classifiers. Together the entries' `targets` cover //...: the last
         # entry is everything outside python/, so a test anywhere else still runs.
         include:
-          - { name: "python, py311", config: py311, cache: python-py311, targets: "//python/..." }
-          - { name: "python, py312", config: py312, cache: python-py312, targets: "//python/..." }
-          - { name: "python, py313", config: py313, cache: python-py313, targets: "//python/..." }
-          - { name: "python, py314", config: py314, cache: python-py314, targets: "//python/..." }
+          - { name: "python, py311", config: py311, cache: py311, targets: "//python/..." }
+          - { name: "python, py312", config: py312, cache: py312, targets: "//python/..." }
+          - { name: "python, py313", config: py313, cache: py313, targets: "//python/..." }
+          - { name: "python, py314", config: py314, cache: py314, targets: "//python/..." }
           - { name: "everything else", config: py313, cache: other, targets: "//... -//python/..." }
     steps:
       - uses: actions/checkout@v4
