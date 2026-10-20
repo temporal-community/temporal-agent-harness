@@ -13,35 +13,20 @@ open a PR from its prepared branch, and merge it to publish using npm trusted pu
 
 ## Testing local changes without publishing
 
-The packages are one pnpm workspace in `typescript/`, with one lockfile. The bindings
-depend on the **published** client (`^0.1.0`), so by default they build and test
-against the registry release, as their users do. Run these commands from `typescript/`. They
-need pnpm 12 (the version `package.json` pins); without it, run each `pnpm <args>` as
-`bazel run //typescript:pnpm -- --dir "$PWD" <args>`, which brings that pnpm and its Node:
+The packages are one pnpm workspace in `typescript/`, with one lockfile. The bindings'
+`^0.1.0` client dependency links the client in the working tree (`linkWorkspacePackages`), so
+they build and test against it in the same commit; the published range stays `^0.1.0`.
+`bazel test //typescript/...` builds the client first. Outside Bazel, build it before the
+bindings, which resolve it through `packages/client/dist`, and again after editing it. Run these
+commands from `typescript/`. They need pnpm 12 (the version `package.json` pins); without it,
+run each `pnpm <args>` as `bazel run //typescript:pnpm -- --dir "$PWD" <args>`, which brings
+that pnpm and its Node:
 
 ```sh
 pnpm install
+(cd packages/client && pnpm run build)
 (cd packages/react && pnpm run check && pnpm test && pnpm run build)
 (cd packages/svelte && pnpm run check && pnpm test && pnpm run build)
-```
-
-To try the bindings against the client in the working tree, point them at the
-workspace package and build it:
-
-```sh
-pnpm --filter @temporalio/agent-harness-react --filter @temporalio/agent-harness-svelte \
-  add '@temporalio/agent-harness-client@workspace:^'
-(cd packages/client && pnpm run build)
-```
-
-The bindings then resolve the client through `packages/client/dist`, so rebuild the
-client after editing it. This changes both bindings' `package.json` and
-`pnpm-lock.yaml`; **Publish to npm** refuses a `workspace:` dependency, so restore
-them before committing:
-
-```sh
-git checkout -- pnpm-lock.yaml packages/react/package.json packages/svelte/package.json
-pnpm install
 ```
 
 ### Testing in a separate application

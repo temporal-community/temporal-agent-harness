@@ -13,6 +13,19 @@ js_library(
     visibility = ["//visibility:public"],
 )
 
+# Serve and check static_page targets (bazel/static_page.bzl).
+js_library(
+    name = "static_page_server",
+    srcs = ["static_page_server.mjs"],
+    visibility = ["//visibility:public"],
+)
+
+js_library(
+    name = "static_page_imports_test",
+    srcs = ["static_page_imports_test.mjs"],
+    visibility = ["//visibility:public"],
+)
+
 # The binary Code Mode runs scripts in. pydantic-monty finds it through MONTY_BIN.
 wheel_script(
     name = "monty",

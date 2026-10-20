@@ -52,7 +52,9 @@ worth cloning once to watch the whole stack work.
 
 ### Try it — run the example agents
 
-Clone at a release tag. No Node/pnpm needed: the browser UI ships prebuilt.
+Clone at a release tag. You need [just](https://just.systems/),
+[Bazelisk](https://github.com/bazelbuild/bazelisk) installed as `bazel`, and the
+[`temporal` CLI](https://docs.temporal.io/cli) (see [Requirements](#requirements)).
 
 ```bash
 git clone --branch 0.7.0 https://github.com/temporal-community/temporal-agent-harness.git
@@ -72,8 +74,7 @@ just worker            # 4. this example's agent worker
 ```
 
 Open <http://localhost:8000> and start a session. There's no install step — the recipes build with
-Bazel, which fetches dependencies on first run (or skip Bazel and
-[run the same modules with uv](#without-bazel)). Every example follows the same four recipes; see
+Bazel, which fetches dependencies on first run. Every example follows the same four recipes; see
 [Run the examples](#run-the-examples) for the rest of them, including running all ten behind
 one UI.
 
@@ -983,16 +984,15 @@ To run the bundled examples from a checkout, additionally:
 
 - [just](https://just.systems/) for the example recipes
 - [Bazelisk](https://github.com/bazelbuild/bazelisk), installed as `bazel` (e.g.
-  `brew install bazelisk`), which the recipes build and run with. Optional — the examples also
-  [run with uv alone](#without-bazel).
+  `brew install bazelisk`), which the recipes build and run with. It fetches the pinned Bazel,
+  which brings its own Python, Node and pnpm.
 - The [`temporal` CLI](https://docs.temporal.io/cli), which `just temporal` starts a local dev
   server with. The Nexus example (`examples/nexus_hello`) needs **1.9.1 or later** — older
   builds reject the Nexus dynamic config its `just temporal` recipe sets. Its recipes check the
   version and fail with a message. The other examples work with any recent release.
 
-Node and [pnpm](https://pnpm.io/) are **not** required for anything: the browser UI ships prebuilt in
-`python/temporal_agent_harness/ui/dist`, both in release archives and in the repo, and the recipes
-that build or change it run the Node and pnpm Bazel pins — see
+Node and [pnpm](https://pnpm.io/) are **not** required: the recipes that build or change the browser
+UIs run the Node and pnpm Bazel pins — see
 [UI development](docs/internal/development.md#ui-development).
 
 ## Run the examples
@@ -1070,23 +1070,6 @@ between a single-example server and the all-agents server (or change the set), r
 `just reset-manager` before the next `just server`, or start a fresh Temporal dev server. Also: an
 agent whose worker isn't running will accept a created session but never progress (it parks) — start
 its worker.
-
-### Without Bazel
-
-The recipes are thin wrappers: each runs a module that uv can run directly from the repo root,
-pointed at the Python project in `python/` and with the `examples` dependency group. Load
-`.env.local` first (`set -a; . ./.env.local; set +a`), then, for example:
-
-```bash
-uv run --project python --group examples temporal-agent-harness session-manager
-uv run --project python --group examples temporal-agent-harness serve python/examples/monty/agents.toml --port 8000
-PYTHONPATH=python uv run --project python --group examples python -m examples.monty.worker
-```
-
-Running from the repo root keeps `.env.local`'s relative `TEMPORAL_CONFIG_FILE` resolving, and
-`PYTHONPATH=python` makes the examples importable as `examples.*`.
-
-The generated TypeScript the example UIs use is committed, so nothing needs regenerating to run.
 
 ## Self-hosting the web app
 

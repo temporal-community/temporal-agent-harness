@@ -9,9 +9,7 @@
 #   just client            # 5. the thin terminal client that fulfills the callback tools
 #
 # The recipes build and run each program with Bazel (install bazelisk as `bazel`), which fetches the
-# project's `examples` dependencies on first use. Without Bazel, run the same module with uv from
-# the repo root, e.g. `PYTHONPATH=python uv run --project python --group examples python -m
-# examples.callback_tools.wiki_agent.worker`.
+# project's `examples` dependencies on first use.
 #
 # First-time setup: create the shared repo-root .env.local (`cp .env.example .env.local` from the
 # repo root) and set GEMINI_API_KEY. See README.md.

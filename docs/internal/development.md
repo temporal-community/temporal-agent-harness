@@ -182,9 +182,7 @@ bazel run //typescript/packages/client/src:protocol_codegen_update  # rewrite it
   `bazel/dev_runner.py` starts them with the environment `bazel run` would give each, prefixes
   every output line with the program's name, and forwards Ctrl-C to all of them. The root
   `server`, `workers`, and `dev` recipes run these targets. Bazel holds its lock only while
-  building, so separate `bazel run`s can also run side by side. The
-  examples also run with uv alone (README, "Without Bazel"), since every generated file they read
-  is committed.
+  building, so separate `bazel run`s can also run side by side.
 - **Agent registries are generated.** Each example declares its agents with `harness_agent`
   (`bazel/agents.bzl`): the class and the fields of its `agents.toml` entry. `harness_agent`
   writes the agent's schema document with the CLI (`schema module:Class`), and

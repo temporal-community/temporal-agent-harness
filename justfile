@@ -7,8 +7,7 @@
 # The aggregate recipes read the shared repo-root .env.local (creds: OPENAI_API_KEY, GEMINI_API_KEY,
 # F1_MCP_SERVER_HOME, ...). Prerequisites + run order: see the "Run everything" section in README.md.
 # The run recipes build and run with Bazel (`bazel`, via bazelisk). `server`, `workers`, and `dev`
-# take example names to run a subset (`just dev monty wiki_agent`). `uv run --project python --group
-# examples ...` from the repo root runs the same modules (README.md, "Without Bazel").
+# take example names to run a subset (`just dev monty wiki_agent`).
 # Build/package + Nexus/Slack/Teams connector recipes follow the run recipes.
 
 # Shows a notice when running from an untagged commit (silent on a release archive).

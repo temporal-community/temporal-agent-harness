@@ -12,10 +12,8 @@
 # `just server` builds the Svelte UI first; `just ui-dev` runs it on Vite instead.
 #
 # The recipes build and run each program with Bazel (install bazelisk as `bazel`), which fetches the
-# project's `examples` dependencies on first use. Without Bazel, run the same module with uv from
-# the repo root, e.g. `PYTHONPATH=python uv run --project python --group examples python -m
-# examples.pydantic_ai_hello.worker`. First-time setup: `cp .env.example .env.local` from the repo
-# root and fill it in (Temporal connection + OPENAI_API_KEY). See README.md.
+# project's `examples` dependencies on first use. First-time setup: `cp .env.example .env.local`
+# from the repo root and fill it in (Temporal connection + OPENAI_API_KEY). See README.md.
 
 # Shows a notice when running from an untagged commit (silent on a release archive).
 import '../../../scripts/untagged-notice.just'

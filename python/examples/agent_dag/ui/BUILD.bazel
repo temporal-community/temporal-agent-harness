@@ -1,8 +1,29 @@
 load("@npm//typescript/packages/svelte:svelte-check/package_json.bzl", svelte_check_bin = "bin")
+load("//bazel:static_page.bzl", "static_page")
+
+# The studio, served with the client and the Svelte binding: `bazel run :studio` (`just studio`).
+# Nothing builds the page itself; the browser compiles each .svelte file (svelte-sw.js).
+static_page(
+    name = "studio",
+    srcs = [
+        "App.svelte",
+        "ChatPanel.svelte",
+        "CodeEditor.svelte",
+        "RunPanel.svelte",
+        "Sidebar.svelte",
+        "Studio.svelte",
+        "index.html",
+        "style.css",
+        "svelte-sw.js",
+    ],
+    packages = {
+        "//typescript/packages/client:pkg": "harness-client",
+        "//typescript/packages/svelte:pkg": "harness-svelte",
+    },
+)
 
 # Type-checks the studio's components against the Svelte binding's sources and the agents'
-# generated clients (tsconfig.json's `paths` point into typescript/packages/svelte). Nothing builds
-# them: `just studio` serves ui/ as-is, and the browser compiles each .svelte file (svelte-sw.js).
+# generated clients (tsconfig.json's `paths` point into typescript/packages/svelte).
 svelte_check_bin.svelte_check_test(
     name = "svelte_check_test",
     args = [
@@ -10,7 +31,13 @@ svelte_check_bin.svelte_check_test(
         "./tsconfig.json",
     ],
     chdir = package_name(),
-    data = glob(["*.svelte"]) + [
+    data = [
+        "App.svelte",
+        "ChatPanel.svelte",
+        "CodeEditor.svelte",
+        "RunPanel.svelte",
+        "Sidebar.svelte",
+        "Studio.svelte",
         "tsconfig.json",
         "//python/examples/agent_dag:client_sdk_types",
         "//typescript/packages/svelte:node_modules/svelte",

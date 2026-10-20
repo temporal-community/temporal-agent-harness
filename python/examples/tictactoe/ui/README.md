@@ -34,11 +34,12 @@ The whole page is `App.svelte`, and its whole integration is the top of that fil
 ## No build step
 
 `index.html` maps `svelte` to esm.sh and the harness packages to `harness-client/` and
-`harness-svelte/`, which `just play` links to those packages' builds in this repo, and
-`svelte-sw.js`, a service worker, compiles `App.svelte` (and the binding's `.svelte.js` rune
-modules) as the browser fetches them. Svelte 5 strips the component's TypeScript itself, so the
-generated types cost nothing at runtime. Node is needed only to build the two harness packages,
-which `just play` does.
+`harness-svelte/`, and `svelte-sw.js`, a service worker, compiles `App.svelte` (and the binding's
+`.svelte.js` rune modules) as the browser fetches them. Svelte 5 strips the component's TypeScript
+itself, so the generated types cost nothing at runtime. `just play` (`bazel run :play`) serves this
+directory with the two harness packages beside it, as Bazel builds them for npm; nothing is
+built or linked here. `:play_imports_resolve_test` fails if anything the page imports is missing
+from what it serves, or if the import map does not cover a package it imports.
 
 The types still count: `just check-ui` (and CI) type-check `App.svelte` against the generated
 `TicTacToeAgent`, so a Python model change that breaks the page fails there.

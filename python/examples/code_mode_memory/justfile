@@ -7,9 +7,7 @@
 #   just worker            # 4. this example's agent worker
 #
 # The recipes build and run each program with Bazel (install bazelisk as `bazel`), which fetches the
-# project's `examples` dependencies on first use. Without Bazel, run the same module with uv from
-# the repo root, e.g. `PYTHONPATH=python uv run --project python --group examples python -m
-# examples.code_mode_memory.worker`.
+# project's `examples` dependencies on first use.
 #
 # First-time setup: `cp .env.example .env.local` at the repo root and fill it in (Temporal
 # connection + GEMINI_API_KEY).
