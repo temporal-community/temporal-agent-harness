@@ -21,13 +21,15 @@ function walk(dir, prefix = "") {
 
 const files = new Set(walk(directory));
 const read = (path) => readFileSync(join(directory, path), "utf8");
-const scripts = (html, attributes) =>
-  [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)]
-    .filter(([, attrs]) => attributes.test(attrs))
+/** The bodies of the <script> elements in html, only those of the given `type` if one is given.
+ * HTML ignores case in tag and attribute names and allows anything before an end tag's `>`. */
+const scripts = (html, type) =>
+  [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi)]
+    .filter(([, attrs]) => !type || new RegExp(`\\btype\\s*=\\s*["']?${type}["'\\s]`, "i").test(`${attrs} `))
     .map(([, , body]) => body);
 
 const html = read("index.html");
-const importMaps = scripts(html, /type="importmap"/);
+const importMaps = scripts(html, "importmap");
 assert.equal(importMaps.length, 1, "index.html needs exactly one import map");
 const { imports } = JSON.parse(importMaps[0]);
 
@@ -63,10 +65,10 @@ function specifiers(source) {
 /** Each module in the page and its source: index.html's inline module scripts, every .js file and
  * every .svelte component's scripts. */
 function modules() {
-  const found = scripts(html, /type="module"/).map((source) => ["index.html", source]);
+  const found = scripts(html, "module").map((source) => ["index.html", source]);
   for (const path of files) {
     if (path.endsWith(".js")) found.push([path, read(path)]);
-    else if (path.endsWith(".svelte")) found.push(...scripts(read(path), /.*/).map((source) => [path, source]));
+    else if (path.endsWith(".svelte")) found.push(...scripts(read(path)).map((source) => [path, source]));
   }
   return found;
 }
