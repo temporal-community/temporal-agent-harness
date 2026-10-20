@@ -817,7 +817,8 @@ describe("which keys are allowed to move the playhead at all", () => {
       recursive: true,
       withFileTypes: true
     })) {
-      if (!file.isFile() || !/\.(svelte|ts)$/.test(file.name)) continue;
+      // Not isFile(): under Bazel each source is a symlink.
+      if (file.isDirectory() || !/\.(svelte|ts)$/.test(file.name)) continue;
       const path = `${file.parentPath}/${file.name}`;
       const source = await readFile(path, "utf8");
       if (!/\.(scrollIntoView|scrollTo|scrollBy)\(/.test(source)) continue;

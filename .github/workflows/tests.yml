@@ -111,6 +111,11 @@ jobs:
       - name: Bazel files are formatted and lint-free (`just buildifier` fixes most)
         run: bazel run //:buildifier.check
 
+      # The TypeScript BUILD files are written by hand, so nothing else notices a test file
+      # without a target.
+      - name: Every TypeScript test file has a Bazel test target
+        run: scripts/check-ts-test-targets.sh
+
   # TEMPORARY: the tests Bazel does not run yet, run under uv instead. Each group below says why.
   # When Bazel runs a group, delete it here; when none are left, delete this job.
   pytest-outside-bazel:

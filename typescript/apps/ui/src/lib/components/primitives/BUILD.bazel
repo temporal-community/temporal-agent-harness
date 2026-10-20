@@ -1,0 +1,122 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
+
+# One target per file, depending on the files it imports.
+js_library(
+    name = "AgentGlyph",
+    srcs = ["AgentGlyph.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui:node_modules/@lucide/svelte"],
+)
+
+js_library(
+    name = "Badge",
+    srcs = ["Badge.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":Chip"],
+)
+
+js_library(
+    name = "Chip",
+    srcs = ["Chip.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "Copyable",
+    srcs = ["Copyable.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":IconButton",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+    ],
+)
+
+js_library(
+    name = "DockedDrawer",
+    srcs = ["DockedDrawer.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":resizeKeys"],
+)
+
+js_library(
+    name = "IconButton",
+    srcs = ["IconButton.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "MetricStrip",
+    srcs = ["MetricStrip.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "StatusChip",
+    srcs = ["StatusChip.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":Chip",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+    ],
+)
+
+js_library(
+    name = "metrics",
+    srcs = ["metrics.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "resizeKeys",
+    srcs = ["resizeKeys.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "tipFocus",
+    srcs = ["tipFocus.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "Copyable_test",
+    src = "Copyable.test.mjs",
+    deps = [
+        ":Copyable",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "primitiveProps_test",
+    src = "primitiveProps.test.mjs",
+    deps = [
+        ":Chip",
+        ":IconButton",
+        "//typescript/apps/ui:node_modules/svelte",
+    ],
+)
+
+vitest_test(
+    name = "resizeKeys_test",
+    src = "resizeKeys.test.mjs",
+    deps = [
+        ":DockedDrawer",
+        ":resizeKeys",
+        "//typescript/apps/ui:node_modules/svelte",
+    ],
+)
+
+vitest_test(
+    name = "tipFocus_test",
+    src = "tipFocus.test.mjs",
+    deps = [
+        ":tipFocus",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src:main",
+    ],
+)

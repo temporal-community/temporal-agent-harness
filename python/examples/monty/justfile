@@ -56,12 +56,12 @@ app-install:
     {{pnpm}} --dir "{{ui}}" install --frozen-lockfile
 
 # Type-check the shared Svelte UI and run its test suite.
-app-check: app-install
-    {{pnpm}} --dir "{{ui}}" run check
+app-check:
+    bazel test //typescript/apps/ui/...
 
-# Build the shared Svelte UI into temporal_agent_harness/ui/dist for packaging/server use.
-app-build: app-install
-    {{pnpm}} --dir "{{ui}}" run build
+# Build the shared Svelte UI with Bazel into temporal_agent_harness/ui/dist for packaging/server use.
+app-build:
+    bazel run //python/temporal_agent_harness/ui:dist_update
 
 # Build, test, and create the wheel/sdist in dist/.
 package: app-build app-check

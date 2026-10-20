@@ -1,11 +1,13 @@
 """vitest_test: one vitest test file, run from its workspace package's root like `pnpm test`."""
 
+load("@npm//typescript/apps/ui:vitest/package_json.bzl", console_vitest = "bin")
 load("@npm//typescript/packages/react:vitest/package_json.bzl", react_vitest = "bin")
 load("@npm//typescript/packages/svelte:vitest/package_json.bzl", svelte_vitest = "bin")
 
 # Each workspace package's own vitest (rules_js generates a bin per package that depends on it).
 # A package's tests run with its vitest, its config and its dependencies' versions.
 _VITEST = {
+    "typescript/apps/ui": console_vitest,
     "typescript/packages/react": react_vitest,
     "typescript/packages/svelte": svelte_vitest,
 }

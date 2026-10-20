@@ -55,7 +55,8 @@ just ui-dev            # Vite hot reload on http://127.0.0.1:5173
 `just server` deliberately does **not** rebuild the UI: it serves the committed
 `python/temporal_agent_harness/ui/dist`, so a downloaded release archive runs with no Node/pnpm
 installed. So after changing anything under `typescript/apps/ui/`, run `just app-build` (or
-`just dev-server`) and commit the result; otherwise a release ships the stale build.
+`just dev-server`) and commit the result; `bazel test //...` fails while the committed copy
+differs from Bazel's build (`//python/temporal_agent_harness/ui:dist_up_to_date_test`).
 
 All example recipes read one shared env file, `.env.local` at the repo root: the root
 justfile loads it directly, and `python/examples/*/justfile` read the same root file (via

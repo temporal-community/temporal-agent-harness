@@ -1,0 +1,608 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
+
+# One target per file, depending on the files it imports.
+js_library(
+    name = "agentIdentity",
+    srcs = ["agentIdentity.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "agentRun.svelte",
+    srcs = ["agentRun.svelte.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":agentRunStorage",
+        ":agentState",
+        ":approvalDecisionTree",
+        ":bootSession",
+        ":fileMounts",
+        ":flowProjection",
+        ":hydration",
+        ":inboundMessageText",
+        ":initData",
+        ":replayLog",
+        ":replayTimeline",
+        ":replyRuns",
+        ":stepTimeline",
+        ":transcript",
+        "//typescript/apps/ui/src/lib/api:httpClient",
+        "//typescript/apps/ui/src/lib/api:types",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+    ],
+)
+
+js_library(
+    name = "agentRunStorage",
+    srcs = ["agentRunStorage.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "agentState",
+    srcs = ["agentState.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":jsonPatch"],
+)
+
+js_library(
+    name = "approvalDecisionTree",
+    srcs = ["approvalDecisionTree.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "bootSession",
+    srcs = ["bootSession.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "codeModeNesting",
+    srcs = ["codeModeNesting.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "dismissable.svelte",
+    srcs = ["dismissable.svelte.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "eventVelocity",
+    srcs = ["eventVelocity.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "favicon",
+    srcs = ["favicon.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "fileMounts",
+    srcs = ["fileMounts.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":jsonPatch"],
+)
+
+js_library(
+    name = "flowProjection",
+    srcs = ["flowProjection.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":inboundMessageText",
+        ":logValue",
+        ":replayLog",
+        ":thoughtSummary",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+    ],
+)
+
+js_library(
+    name = "followScroll",
+    srcs = ["followScroll.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "historyGap",
+    srcs = ["historyGap.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":agentIdentity",
+        "//typescript/apps/ui/src/lib/api:types",
+    ],
+)
+
+js_library(
+    name = "hydration",
+    srcs = ["hydration.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "inboundMessageText",
+    srcs = ["inboundMessageText.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "initData",
+    srcs = ["initData.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui/src/lib/components/chat:schemaForm"],
+)
+
+js_library(
+    name = "jsonPatch",
+    srcs = ["jsonPatch.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "logValue",
+    srcs = ["logValue.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "nodeTween",
+    srcs = ["nodeTween.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "okfGraph",
+    srcs = ["okfGraph.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "paneStack.svelte",
+    srcs = ["paneStack.svelte.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":agentRunStorage",
+        "//typescript/apps/ui/src/lib/panes:paneDrop",
+        "//typescript/apps/ui/src/lib/panes:registry",
+    ],
+)
+
+js_library(
+    name = "pendingRequests",
+    srcs = ["pendingRequests.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "quickSwitch",
+    srcs = ["quickSwitch.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "replayHotkeys",
+    srcs = ["replayHotkeys.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "replayLog",
+    srcs = ["replayLog.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":historyGap",
+        ":inboundMessageText",
+        ":replyRuns",
+        ":thoughtSummary",
+        "//typescript/apps/ui/src/lib/api:types",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+    ],
+)
+
+js_library(
+    name = "replayTimeline",
+    srcs = ["replayTimeline.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":agentIdentity"],
+)
+
+js_library(
+    name = "replyRuns",
+    srcs = ["replyRuns.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":inboundMessageText"],
+)
+
+js_library(
+    name = "scrubLane",
+    srcs = ["scrubLane.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "sessionHistory",
+    srcs = ["sessionHistory.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "stepTimeline",
+    srcs = ["stepTimeline.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":historyGap",
+        ":inboundMessageText",
+    ],
+)
+
+js_library(
+    name = "thoughtSummary",
+    srcs = ["thoughtSummary.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "timeTicks",
+    srcs = ["timeTicks.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "transcript",
+    srcs = ["transcript.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":inboundMessageText",
+        ":thoughtSummary",
+    ],
+)
+
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "agentState_test",
+    src = "agentState.test.mjs",
+    deps = [
+        ":agentState",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+    ],
+)
+
+vitest_test(
+    name = "agentWorkerReadiness_test",
+    src = "agentWorkerReadiness.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/components/chat:StartSessionDialog",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "approvalDecisionTree_test",
+    src = "approvalDecisionTree.test.mjs",
+    deps = [":approvalDecisionTree"],
+)
+
+vitest_test(
+    name = "approvalEvaluation_test",
+    src = "approvalEvaluation.test.mjs",
+    deps = [":stepTimeline"],
+)
+
+vitest_test(
+    name = "approvalEvaluationNode_test",
+    src = "approvalEvaluationNode.test.mjs",
+    deps = [":flowProjection"],
+)
+
+vitest_test(
+    name = "approvalRouting_test",
+    src = "approvalRouting.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "bootSession_test",
+    src = "bootSession.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":agentRunStorage",
+        ":bootSession",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "caughtUpAttach_test",
+    src = "caughtUpAttach.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":hydration",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "codeModeNesting_test",
+    src = "codeModeNesting.test.mjs",
+    deps = [":codeModeNesting"],
+)
+
+vitest_test(
+    name = "dismissable_test",
+    src = "dismissable.test.mjs",
+    deps = [":dismissable.svelte"],
+)
+
+vitest_test(
+    name = "eventVelocity_test",
+    src = "eventVelocity.test.mjs",
+    deps = [":eventVelocity"],
+)
+
+vitest_test(
+    name = "favicon_test",
+    src = "favicon.test.mjs",
+    deps = [
+        ":favicon",
+        "//typescript/apps/ui:index_html",
+        "//typescript/apps/ui/public:favicon",
+        "//typescript/apps/ui/public:temporal-logo",
+    ],
+)
+
+vitest_test(
+    name = "fileMounts_test",
+    src = "fileMounts.test.mjs",
+    deps = [":fileMounts"],
+)
+
+vitest_test(
+    name = "focusFold_test",
+    src = "focusFold.test.mjs",
+    deps = [
+        ":flowProjection",
+        ":thoughtSummary",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
+    ],
+)
+
+vitest_test(
+    name = "followScroll_test",
+    src = "followScroll.test.mjs",
+    deps = [
+        ":followScroll",
+        "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/components/flow:LatencyWaterfall",
+        "//typescript/apps/ui/src/lib/panes:PaneRail",
+    ],
+)
+
+vitest_test(
+    name = "formatTimestamp_test",
+    src = "formatTimestamp.test.mjs",
+    deps = [":replayLog"],
+)
+
+vitest_test(
+    name = "frameArrival_test",
+    src = "frameArrival.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":hydration",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "frameKey_test",
+    src = "frameKey.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        "//typescript/apps/ui/src/lib/api:types",
+    ],
+)
+
+vitest_test(
+    name = "historyGap_test",
+    src = "historyGap.test.mjs",
+    deps = [
+        ":historyGap",
+        ":replayLog",
+        ":stepTimeline",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+    ],
+)
+
+vitest_test(
+    name = "hydration_test",
+    src = "hydration.test.mjs",
+    deps = [":hydration"],
+)
+
+vitest_test(
+    name = "inboundMessageText_test",
+    src = "inboundMessageText.test.mjs",
+    deps = [
+        ":flowProjection",
+        ":inboundMessageText",
+        ":replayLog",
+        ":stepTimeline",
+        ":transcript",
+    ],
+)
+
+vitest_test(
+    name = "initData_test",
+    src = "initData.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":initData",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "jsonPatch_test",
+    src = "jsonPatch.test.mjs",
+    deps = [":jsonPatch"],
+)
+
+vitest_test(
+    name = "logValue_test",
+    src = "logValue.test.mjs",
+    deps = [
+        ":flowProjection",
+        ":logValue",
+        ":replayLog",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
+    ],
+)
+
+vitest_test(
+    name = "nodeTween_test",
+    src = "nodeTween.test.mjs",
+    deps = [":nodeTween"],
+)
+
+vitest_test(
+    name = "okfGraph_test",
+    src = "okfGraph.test.mjs",
+    deps = [":okfGraph"],
+)
+
+vitest_test(
+    name = "paneStack_test",
+    src = "paneStack.test.mjs",
+    deps = [":paneStack.svelte"],
+)
+
+vitest_test(
+    name = "pendingRequests_test",
+    src = "pendingRequests.test.mjs",
+    deps = [":pendingRequests"],
+)
+
+vitest_test(
+    name = "quickSwitch_test",
+    src = "quickSwitch.test.mjs",
+    deps = [
+        ":quickSwitch",
+        ":replayHotkeys",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+    ],
+)
+
+vitest_test(
+    name = "replayHotkeys_test",
+    src = "replayHotkeys.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":replayHotkeys",
+        "//typescript/apps/ui:sources",
+        "//typescript/apps/ui/src/lib/components/flow:StepController",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "replayMarkers_test",
+    src = "replayMarkers.test.mjs",
+    deps = [":replayLog"],
+)
+
+vitest_test(
+    name = "replayTimeline_test",
+    src = "replayTimeline.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":replayTimeline",
+        ":transcript",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+    ],
+)
+
+vitest_test(
+    name = "replyRunStepping_test",
+    src = "replyRunStepping.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        ":replayLog",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "replyRuns_test",
+    src = "replyRuns.test.mjs",
+    deps = [":replyRuns"],
+)
+
+vitest_test(
+    name = "runtimeWrap_test",
+    src = "runtimeWrap.test.mjs",
+    deps = [":flowProjection"],
+)
+
+vitest_test(
+    name = "sessionHistory_test",
+    src = "sessionHistory.test.mjs",
+    deps = [":sessionHistory"],
+)
+
+vitest_test(
+    name = "statusNote_test",
+    src = "statusNote.test.mjs",
+    deps = [
+        ":replayLog",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+    ],
+)
+
+vitest_test(
+    name = "thoughtSummary_test",
+    src = "thoughtSummary.test.mjs",
+    deps = [
+        ":flowProjection",
+        ":replayLog",
+        ":thoughtSummary",
+        ":transcript",
+    ],
+)
+
+vitest_test(
+    name = "timeTicks_test",
+    src = "timeTicks.test.mjs",
+    deps = [":timeTicks"],
+)
+
+vitest_test(
+    name = "turnNavigation_test",
+    src = "turnNavigation.test.mjs",
+    deps = [
+        ":agentRun.svelte",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)

@@ -27,17 +27,17 @@ nexus_dir := justfile_directory() / "nexus"
 default:
     @just --list
 
-# Install the JavaScript workspace (typescript/), which includes the Svelte UI.
+# Install the JavaScript workspace (typescript/), which includes the Svelte UI, for `ui-dev`.
 app-install:
     {{pnpm}} --dir "{{typescript}}" install --frozen-lockfile
 
 # Type-check the Svelte UI and run its test suite.
-app-check: app-install
-    {{pnpm}} --dir "{{ui}}" run check
+app-check:
+    bazel test //typescript/apps/ui/...
 
-# Build the Svelte UI into python/temporal_agent_harness/ui/dist.
-app-build: app-install
-    {{pnpm}} --dir "{{ui}}" run build
+# Build the Svelte UI with Bazel into python/temporal_agent_harness/ui/dist.
+app-build:
+    bazel run //python/temporal_agent_harness/ui:dist_update
 
 # Build, test, and create the wheel/sdist in python/dist/.
 # Clears dist/ first: `uv build` only ADDS to it, so artifacts from a previously released

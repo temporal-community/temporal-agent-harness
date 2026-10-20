@@ -13,14 +13,17 @@ Files:
 Useful commands from the repo root or the Monty example:
 
 ```bash
-just app-install   # one-time install, or after package changes
-just app-check     # svelte-check + local Svelte 5 syntax guard
-just app-build     # writes python/temporal_agent_harness/ui/dist for packaging
+just app-check     # svelte-check and the tests, under Bazel
+just app-build     # Bazel's build, written to python/temporal_agent_harness/ui/dist for packaging
+just app-install   # installs the workspace for ui-dev
 just ui-dev        # Vite dev server; proxies /api to localhost:8000
 ```
 
-They run `bazel run //typescript:pnpm -- --dir typescript/apps/ui ...`: the pnpm and Node Bazel
-pins, so nothing needs installing.
+`app-check` and `app-build` run Bazel targets (`//typescript/apps/ui/...`,
+`//python/temporal_agent_harness/ui:dist_update`). `app-install` and `ui-dev` run
+`bazel run //typescript:pnpm -- --dir typescript/apps/ui ...`: the pnpm and Node Bazel pins, so
+nothing needs installing. A `pnpm run build` outside Bazel writes `typescript/apps/ui/dist`, not
+the committed copy.
 
 Local testing:
 

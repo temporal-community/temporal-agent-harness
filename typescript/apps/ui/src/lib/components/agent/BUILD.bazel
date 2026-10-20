@@ -1,0 +1,253 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
+
+# One target per file, depending on the files it imports.
+js_library(
+    name = "AgentChatPanel",
+    srcs = ["AgentChatPanel.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":CallInput",
+        ":PendingCallbackCard",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/api:httpClient",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
+        "//typescript/apps/ui/src/lib/components/chat:schemaForm",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/state:codeModeNesting",
+        "//typescript/apps/ui/src/lib/state:logValue",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:thoughtSummary",
+    ],
+)
+
+js_library(
+    name = "AgentStatePanel",
+    srcs = ["AgentStatePanel.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
+        "//typescript/apps/ui/src/lib/state:followScroll",
+        "//typescript/apps/ui/src/lib/state:jsonPatch",
+    ],
+)
+
+js_library(
+    name = "ApprovalDecisionPanel",
+    srcs = ["ApprovalDecisionPanel.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+    ],
+)
+
+js_library(
+    name = "CallInput",
+    srcs = ["CallInput.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui/src/lib/state:logValue"],
+)
+
+js_library(
+    name = "FileViewerDialog",
+    srcs = ["FileViewerDialog.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":MountTrees",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/state:fileMounts",
+    ],
+)
+
+js_library(
+    name = "FilesPanel",
+    srcs = ["FilesPanel.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":FileViewerDialog",
+        ":MountTrees",
+        ":OKFGraphDialog",
+    ],
+)
+
+js_library(
+    name = "MountTrees",
+    srcs = ["MountTrees.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/state:fileMounts",
+    ],
+)
+
+js_library(
+    name = "OKFGraphDialog",
+    srcs = ["OKFGraphDialog.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":OKFGraphView",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/state:fileMounts",
+        "//typescript/apps/ui/src/lib/state:okfGraph",
+    ],
+)
+
+js_library(
+    name = "OKFGraphView",
+    srcs = ["OKFGraphView.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/d3-force",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:okfGraph",
+    ],
+)
+
+js_library(
+    name = "PendingCallbackCard",
+    srcs = ["PendingCallbackCard.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":CallInput",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/api:httpClient",
+        "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
+        "//typescript/apps/ui/src/lib/components/chat:schemaForm",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+    ],
+)
+
+js_library(
+    name = "TranscriptPanel",
+    srcs = ["TranscriptPanel.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Badge",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/state:followScroll",
+        "//typescript/apps/ui/src/lib/state:logValue",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+    ],
+)
+
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "AgentChatPanel_test",
+    src = "AgentChatPanel.test.mjs",
+    deps = [
+        ":AgentChatPanel",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:logValue",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "AgentStatePanel_test",
+    src = "AgentStatePanel.test.mjs",
+    deps = [
+        ":AgentStatePanel",
+        "//typescript/apps/ui:node_modules/svelte",
+    ],
+)
+
+vitest_test(
+    name = "ApprovalDecisionPanel_test",
+    src = "ApprovalDecisionPanel.test.mjs",
+    deps = [
+        ":ApprovalDecisionPanel",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "FilesPanel_test",
+    src = "FilesPanel.test.mjs",
+    deps = [
+        ":FilesPanel",
+        ":OKFGraphDialog",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:fileMounts",
+    ],
+)
+
+vitest_test(
+    name = "TranscriptPanel_test",
+    src = "TranscriptPanel.test.mjs",
+    deps = [
+        ":TranscriptPanel",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+    ],
+)
+
+vitest_test(
+    name = "chatCursor_test",
+    src = "chatCursor.test.mjs",
+    deps = [
+        ":AgentChatPanel",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+        "//typescript/apps/ui/src/lib/state:agentRun.svelte",
+        "//typescript/apps/ui/src/lib/state:codeModeNesting",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:thoughtSummary",
+        "//typescript/apps/ui/tests/support:controllerHarness",
+    ],
+)
+
+vitest_test(
+    name = "chatLayout_test",
+    src = "chatLayout.test.mjs",
+    deps = [
+        ":AgentChatPanel",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+    ],
+)
+
+vitest_test(
+    name = "pendingCallback_test",
+    src = "pendingCallback.test.mjs",
+    deps = [
+        ":AgentChatPanel",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/chat:schemaForm",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+    ],
+)
+
+vitest_test(
+    name = "rowIdentifiers_test",
+    src = "rowIdentifiers.test.mjs",
+    deps = [
+        ":TranscriptPanel",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+    ],
+)

@@ -1,5 +1,5 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
-import { fileURLToPath, URL } from "node:url";
+import { resolve } from "node:path";
 import { defineConfig } from "vitest/config";
 
 /* Separate from vite.config.ts rather than a `test` block inside it, because
@@ -11,7 +11,8 @@ export default defineConfig({
   plugins: [svelte()],
   resolve: {
     alias: {
-      $lib: fileURLToPath(new URL("./src/lib", import.meta.url))
+      // From the working directory, as in vite.config.ts and for the same reason.
+      $lib: resolve("src/lib")
     }
   },
   test: {

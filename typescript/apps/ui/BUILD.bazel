@@ -1,2 +1,178 @@
-# A Bazel package so npm_translate_lock (MODULE.bazel) can read this package.json; nothing here
-# builds under Bazel yet.
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//typescript/apps/ui:svelte-check/package_json.bzl", svelte_check_bin = "bin")
+load("@npm//typescript/apps/ui:vite/package_json.bzl", vite_bin = "bin")
+
+npm_link_all_packages(name = "node_modules")
+
+# The page, which a test also reads.
+js_library(
+    name = "index_html",
+    srcs = ["index.html"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+# What vite, vitest and svelte-check read from the package root.
+js_library(
+    name = "config",
+    srcs = [
+        "package.json",
+        "svelte.config.js",
+        "tsconfig.json",
+        "vite.config.ts",
+    ],
+    deps = [
+        ":node_modules/@sveltejs/vite-plugin-svelte",
+        ":node_modules/svelte",
+        ":node_modules/vite",
+    ],
+)
+
+# The console's production build, which python/temporal_agent_harness/ui/dist commits: the page,
+# what its entry module imports, and public/, which vite copies as it is.
+vite_bin.vite(
+    name = "dist",
+    srcs = [
+        ":config",
+        ":index_html",
+        "//typescript/apps/ui/public:favicon",
+        "//typescript/apps/ui/public:temporal-logo",
+        "//typescript/apps/ui/src:main",
+    ],
+    args = ["build"],
+    chdir = package_name(),
+    out_dirs = ["dist"],
+    visibility = ["//python/temporal_agent_harness/ui:__pkg__"],
+)
+
+# What vitest reads from the package root. vitest_test (bazel/vitest.bzl) adds it to every test,
+# which takes visibility from //bazel.
+js_library(
+    name = "vitest_config",
+    srcs = ["vitest.config.ts"],
+    visibility = ["//bazel:__pkg__"],
+    deps = [
+        ":config",
+        ":node_modules/vitest",
+    ],
+)
+
+# Every source file of the console, for what reads them all: svelte-check, and the tests that
+# scan directories of sources rather than import them.
+js_library(
+    name = "sources",
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui/public:favicon",
+        "//typescript/apps/ui/public:temporal-logo",
+        "//typescript/apps/ui/src:App",
+        "//typescript/apps/ui/src:app",
+        "//typescript/apps/ui/src:main",
+        "//typescript/apps/ui/src:vite-env.d",
+        "//typescript/apps/ui/src/lib/api:client",
+        "//typescript/apps/ui/src/lib/api:httpClient",
+        "//typescript/apps/ui/src/lib/api:index",
+        "//typescript/apps/ui/src/lib/api:mockClient",
+        "//typescript/apps/ui/src/lib/api:types",
+        "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
+        "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
+        "//typescript/apps/ui/src/lib/components/agent:ApprovalDecisionPanel",
+        "//typescript/apps/ui/src/lib/components/agent:CallInput",
+        "//typescript/apps/ui/src/lib/components/agent:FileViewerDialog",
+        "//typescript/apps/ui/src/lib/components/agent:FilesPanel",
+        "//typescript/apps/ui/src/lib/components/agent:MountTrees",
+        "//typescript/apps/ui/src/lib/components/agent:OKFGraphDialog",
+        "//typescript/apps/ui/src/lib/components/agent:OKFGraphView",
+        "//typescript/apps/ui/src/lib/components/agent:PendingCallbackCard",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/components/chat:MarkdownMessage",
+        "//typescript/apps/ui/src/lib/components/chat:SchemaForm",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/components/chat:StartSessionDialog",
+        "//typescript/apps/ui/src/lib/components/chat:schemaForm",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateNode",
+        "//typescript/apps/ui/src/lib/components/flow:AgentWorkflowNode",
+        "//typescript/apps/ui/src/lib/components/flow:AutoFitView",
+        "//typescript/apps/ui/src/lib/components/flow:HotkeyHelp",
+        "//typescript/apps/ui/src/lib/components/flow:LatencyWaterfall",
+        "//typescript/apps/ui/src/lib/components/flow:ModelBreakdown",
+        "//typescript/apps/ui/src/lib/components/flow:StepController",
+        "//typescript/apps/ui/src/lib/components/flow:UsageLineChart",
+        "//typescript/apps/ui/src/lib/components/flow:UsageReading",
+        "//typescript/apps/ui/src/lib/components/primitives:AgentGlyph",
+        "//typescript/apps/ui/src/lib/components/primitives:Badge",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:DockedDrawer",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/components/primitives:MetricStrip",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/components/primitives:metrics",
+        "//typescript/apps/ui/src/lib/components/primitives:resizeKeys",
+        "//typescript/apps/ui/src/lib/components/primitives:tipFocus",
+        "//typescript/apps/ui/src/lib/cost:pricing",
+        "//typescript/apps/ui/src/lib/mock:scenarios",
+        "//typescript/apps/ui/src/lib/panes:PaneLinkNotice",
+        "//typescript/apps/ui/src/lib/panes:PaneMinimap",
+        "//typescript/apps/ui/src/lib/panes:PaneRail",
+        "//typescript/apps/ui/src/lib/panes:PaneShell",
+        "//typescript/apps/ui/src/lib/panes:launcher",
+        "//typescript/apps/ui/src/lib/panes:paneDrop",
+        "//typescript/apps/ui/src/lib/panes:registry",
+        "//typescript/apps/ui/src/lib/state:agentIdentity",
+        "//typescript/apps/ui/src/lib/state:agentRun.svelte",
+        "//typescript/apps/ui/src/lib/state:agentRunStorage",
+        "//typescript/apps/ui/src/lib/state:agentState",
+        "//typescript/apps/ui/src/lib/state:approvalDecisionTree",
+        "//typescript/apps/ui/src/lib/state:bootSession",
+        "//typescript/apps/ui/src/lib/state:codeModeNesting",
+        "//typescript/apps/ui/src/lib/state:dismissable.svelte",
+        "//typescript/apps/ui/src/lib/state:eventVelocity",
+        "//typescript/apps/ui/src/lib/state:favicon",
+        "//typescript/apps/ui/src/lib/state:fileMounts",
+        "//typescript/apps/ui/src/lib/state:flowProjection",
+        "//typescript/apps/ui/src/lib/state:followScroll",
+        "//typescript/apps/ui/src/lib/state:historyGap",
+        "//typescript/apps/ui/src/lib/state:hydration",
+        "//typescript/apps/ui/src/lib/state:inboundMessageText",
+        "//typescript/apps/ui/src/lib/state:initData",
+        "//typescript/apps/ui/src/lib/state:jsonPatch",
+        "//typescript/apps/ui/src/lib/state:logValue",
+        "//typescript/apps/ui/src/lib/state:nodeTween",
+        "//typescript/apps/ui/src/lib/state:okfGraph",
+        "//typescript/apps/ui/src/lib/state:paneStack.svelte",
+        "//typescript/apps/ui/src/lib/state:pendingRequests",
+        "//typescript/apps/ui/src/lib/state:quickSwitch",
+        "//typescript/apps/ui/src/lib/state:replayHotkeys",
+        "//typescript/apps/ui/src/lib/state:replayLog",
+        "//typescript/apps/ui/src/lib/state:replayTimeline",
+        "//typescript/apps/ui/src/lib/state:replyRuns",
+        "//typescript/apps/ui/src/lib/state:scrubLane",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
+        "//typescript/apps/ui/src/lib/state:stepTimeline",
+        "//typescript/apps/ui/src/lib/state:thoughtSummary",
+        "//typescript/apps/ui/src/lib/state:timeTicks",
+        "//typescript/apps/ui/src/lib/state:transcript",
+    ],
+)
+
+# The whole tsconfig project type-checked together, as the `check` script's svelte-check does.
+svelte_check_bin.svelte_check_test(
+    name = "svelte_check_test",
+    args = [
+        "--tsconfig",
+        "./tsconfig.json",
+    ],
+    chdir = package_name(),
+    data = [
+        ":config",
+        ":node_modules",
+        ":sources",
+        # The event protocol's types, which src/lib/api/types.ts imports by path (type-only, so
+        # no source target depends on it).
+        "//typescript/packages/client/src:protocol",
+    ],
+    # Its declarations, which a test's runfiles leave out by default.
+    include_types = True,
+)

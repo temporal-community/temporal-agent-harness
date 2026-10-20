@@ -1,0 +1,82 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
+
+# One target per file, depending on the files it imports.
+js_library(
+    name = "MarkdownMessage",
+    srcs = ["MarkdownMessage.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "SchemaForm",
+    srcs = ["SchemaForm.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":schemaForm"],
+)
+
+js_library(
+    name = "SessionControls",
+    srcs = ["SessionControls.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":StartSessionDialog",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/state:followScroll",
+        "//typescript/apps/ui/src/lib/state:quickSwitch",
+        "//typescript/apps/ui/src/lib/state:sessionHistory",
+    ],
+)
+
+js_library(
+    name = "StartSessionDialog",
+    srcs = ["StartSessionDialog.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":SchemaForm",
+        ":schemaForm",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Copyable",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/components/primitives:StatusChip",
+        "//typescript/apps/ui/src/lib/state:initData",
+    ],
+)
+
+js_library(
+    name = "schemaForm",
+    srcs = ["schemaForm.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "MarkdownMessage_test",
+    src = "MarkdownMessage.test.mjs",
+    deps = [
+        ":MarkdownMessage",
+        "//typescript/apps/ui:node_modules/svelte",
+    ],
+)
+
+vitest_test(
+    name = "StartSessionDialog_test",
+    src = "StartSessionDialog.test.mjs",
+    deps = [
+        ":StartSessionDialog",
+        "//typescript/apps/ui:node_modules/svelte",
+    ],
+)
+
+vitest_test(
+    name = "schemaForm_test",
+    src = "schemaForm.test.mjs",
+    deps = [
+        ":SchemaForm",
+        ":schemaForm",
+        "//typescript/apps/ui:node_modules/svelte",
+    ],
+)

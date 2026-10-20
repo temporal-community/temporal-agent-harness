@@ -1,0 +1,47 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
+
+# One target per file, depending on the files it imports.
+js_library(
+    name = "client",
+    srcs = ["client.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "httpClient",
+    srcs = ["httpClient.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "index",
+    srcs = ["index.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":client",
+        ":httpClient",
+        ":mockClient",
+        ":types",
+    ],
+)
+
+js_library(
+    name = "mockClient",
+    srcs = ["mockClient.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui/src/lib/mock:scenarios"],
+)
+
+js_library(
+    name = "types",
+    srcs = ["types.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "httpClient_test",
+    src = "httpClient.test.mjs",
+    deps = [":httpClient"],
+)

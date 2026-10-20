@@ -1,0 +1,61 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+
+# One target per file, depending on the files it imports.
+js_library(
+    name = "App",
+    srcs = ["App.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/agent:AgentChatPanel",
+        "//typescript/apps/ui/src/lib/components/agent:AgentStatePanel",
+        "//typescript/apps/ui/src/lib/components/agent:ApprovalDecisionPanel",
+        "//typescript/apps/ui/src/lib/components/agent:FilesPanel",
+        "//typescript/apps/ui/src/lib/components/agent:TranscriptPanel",
+        "//typescript/apps/ui/src/lib/components/chat:SessionControls",
+        "//typescript/apps/ui/src/lib/components/flow:AgentStateFlow",
+        "//typescript/apps/ui/src/lib/components/flow:HotkeyHelp",
+        "//typescript/apps/ui/src/lib/components/flow:LatencyWaterfall",
+        "//typescript/apps/ui/src/lib/components/flow:StepController",
+        "//typescript/apps/ui/src/lib/components/flow:UsageReading",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/components/primitives:DockedDrawer",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/components/primitives:resizeKeys",
+        "//typescript/apps/ui/src/lib/panes:PaneLinkNotice",
+        "//typescript/apps/ui/src/lib/panes:PaneMinimap",
+        "//typescript/apps/ui/src/lib/panes:PaneRail",
+        "//typescript/apps/ui/src/lib/panes:registry",
+        "//typescript/apps/ui/src/lib/state:agentRun.svelte",
+        "//typescript/apps/ui/src/lib/state:agentRunStorage",
+        "//typescript/apps/ui/src/lib/state:favicon",
+        "//typescript/apps/ui/src/lib/state:paneStack.svelte",
+        "//typescript/apps/ui/src/lib/state:pendingRequests",
+        "//typescript/apps/ui/src/lib/state:quickSwitch",
+        "//typescript/apps/ui/src/lib/state:replayHotkeys",
+    ],
+)
+
+js_library(
+    name = "app",
+    srcs = ["app.css"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "main",
+    srcs = ["main.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":App",
+        ":app",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:tipFocus",
+    ],
+)
+
+js_library(
+    name = "vite-env.d",
+    srcs = ["vite-env.d.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)

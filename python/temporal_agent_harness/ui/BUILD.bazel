@@ -1,4 +1,6 @@
 load("@aspect_rules_py//py:defs.bzl", "py_library")
+load("@bazel_lib//lib:diff_test.bzl", "diff_test")
+load("@bazel_lib//lib:write_source_files.bzl", "write_source_file")
 
 # The packaged browser UI (pyproject.toml package-data).
 py_library(
@@ -7,4 +9,20 @@ py_library(
     data = glob(["dist/**"]),
     imports = ["../.."],
     visibility = ["//:__subpackages__"],
+)
+
+# dist/ is //typescript/apps/ui:dist, committed so that `uv build` packages it:
+# `bazel run :dist_update` rewrites it, and dist_up_to_date_test fails while it differs.
+write_source_file(
+    name = "dist_update",
+    diff_test = False,
+    in_file = "//typescript/apps/ui:dist",
+    out_file = "dist",
+)
+
+diff_test(
+    name = "dist_up_to_date_test",
+    failure_message = "python/temporal_agent_harness/ui/dist is out of date. To update it, run:\n\n    bazel run //python/temporal_agent_harness/ui:dist_update\n",
+    file1 = "//typescript/apps/ui:dist",
+    file2 = "dist",
 )

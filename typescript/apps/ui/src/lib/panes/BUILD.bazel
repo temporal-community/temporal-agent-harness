@@ -1,0 +1,91 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("//bazel:vitest.bzl", "vitest_test")
+
+# One target per file, depending on the files it imports.
+js_library(
+    name = "PaneLinkNotice",
+    srcs = ["PaneLinkNotice.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = ["//typescript/apps/ui/src/lib/components/primitives:Chip"],
+)
+
+js_library(
+    name = "PaneMinimap",
+    srcs = ["PaneMinimap.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":launcher",
+        ":registry",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:IconButton",
+        "//typescript/apps/ui/src/lib/state:dismissable.svelte",
+        "//typescript/apps/ui/src/lib/state:paneStack.svelte",
+    ],
+)
+
+js_library(
+    name = "PaneRail",
+    srcs = ["PaneRail.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":PaneShell",
+        ":paneDrop",
+        ":registry",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:Chip",
+        "//typescript/apps/ui/src/lib/state:followScroll",
+        "//typescript/apps/ui/src/lib/state:paneStack.svelte",
+    ],
+)
+
+js_library(
+    name = "PaneShell",
+    srcs = ["PaneShell.svelte"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [
+        ":registry",
+        "//typescript/apps/ui:node_modules/@lucide/svelte",
+        "//typescript/apps/ui/src/lib/components/primitives:resizeKeys",
+    ],
+)
+
+js_library(
+    name = "launcher",
+    srcs = ["launcher.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+    deps = [":registry"],
+)
+
+js_library(
+    name = "paneDrop",
+    srcs = ["paneDrop.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+js_library(
+    name = "registry",
+    srcs = ["registry.ts"],
+    visibility = ["//typescript/apps/ui:__subpackages__"],
+)
+
+# One target per test file, depending on what it imports and the files it reads by path.
+vitest_test(
+    name = "foldedSpine_test",
+    src = "foldedSpine.test.mjs",
+    deps = [
+        ":PaneRail",
+        "//typescript/apps/ui:node_modules/svelte",
+        "//typescript/apps/ui/src/lib/state:paneStack.svelte",
+    ],
+)
+
+vitest_test(
+    name = "launcher_test",
+    src = "launcher.test.mjs",
+    deps = [
+        ":PaneMinimap",
+        ":launcher",
+        "//typescript/apps/ui/src/lib/state:dismissable.svelte",
+        "//typescript/apps/ui/src/lib/state:paneStack.svelte",
+    ],
+)
