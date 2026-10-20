@@ -114,8 +114,8 @@ npm.npm_translate_lock(
 )
 use_repo(npm, "npm")
 
-# The compiler ts_project runs: the TypeScript the workspace catalog resolves to in pnpm-lock.yaml.
-# rules_ts cannot read a `catalog:` specifier, so a TypeScript upgrade bumps both.
+# The compiler ts_project runs: the TypeScript 7 the packages' package.json files resolve to in
+# pnpm-lock.yaml. rules_ts does not read it from the lockfile, so a TypeScript upgrade bumps both.
 typescript = use_extension("@aspect_rules_ts//ts:extensions.bzl", "typescript")
 typescript.deps(version = "7.0.2")
 use_repo(typescript, "npm_typescript")

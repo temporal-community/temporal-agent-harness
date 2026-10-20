@@ -23,8 +23,8 @@
     "test": "tsc -p tsconfig.json --outDir dist && node --test dist/test/*.test.js"
   },
   "devDependencies": {
-    "@types/node": "catalog:",
-    "typescript": "catalog:"
+    "@types/node": "^22.20.4",
+    "typescript": "^7.0.2"
   },
   "repository": {
     "type": "git",

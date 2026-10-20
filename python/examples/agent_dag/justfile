@@ -66,11 +66,9 @@ studio:
     @echo "Agent DAG Studio: http://127.0.0.1:5173"
     @cd ui && python3 -u -m http.server 5173 --bind 127.0.0.1 2>/dev/null
 
-# Needs the typescript/ workspace installed, which `just studio` does.
-#
 # Type-check the studio against the generated client types.
 check-ui:
-    {{pnpm}} --dir "{{root}}/typescript/packages/svelte" exec svelte-check --workspace "{{justfile_directory()}}/ui" --tsconfig "{{justfile_directory()}}/ui/tsconfig.json"
+    bazel test //python/examples/agent_dag/ui:svelte_check_test
 
 # The session manager, `server`, and `worker` in one terminal, against a running Temporal (`just
 # temporal`). Ctrl-C stops them all.

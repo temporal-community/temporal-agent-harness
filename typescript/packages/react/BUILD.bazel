@@ -1,2 +1,51 @@
-# A Bazel package so npm_translate_lock (MODULE.bazel) can read this package.json; nothing here
-# builds under Bazel yet.
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_config")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("//bazel:npm_package.bzl", "published_npm_package")
+
+npm_link_all_packages(name = "node_modules")
+
+js_library(
+    name = "package_json",
+    srcs = ["package.json"],
+    visibility = ["//typescript/packages/react:__subpackages__"],
+)
+
+# What vitest reads from the package root. vitest_test (bazel/vitest.bzl) adds it to every test,
+# which takes visibility from //bazel. tsconfig.json's `jsx` tells vite's esbuild transform to use
+# the automatic JSX runtime.
+js_library(
+    name = "vitest_config",
+    srcs = ["vitest.config.ts"],
+    data = [":tsconfig"],
+    visibility = ["//bazel:__pkg__"],
+    deps = [
+        ":node_modules/happy-dom",
+        ":node_modules/vitest",
+        ":package_json",
+    ],
+)
+
+# Every ts_project in src/ and test/ compiles with this tsconfig, each rooted at its own directory.
+ts_config(
+    name = "tsconfig",
+    src = "tsconfig.json",
+    visibility = ["//typescript/packages/react:__subpackages__"],
+    deps = [
+        ":node_modules/@types/node",
+        ":package_json",
+    ],
+)
+
+# The package as npm publishes it; `pkg.tgz` (`:pkg_tgz`) is the tarball. Bazel emits src/ beside
+# the sources, and the published package keeps tsconfig.build.json's dist/ layout.
+published_npm_package(
+    name = "pkg",
+    srcs = [
+        "LICENSE",
+        "README.md",
+        "package.json",
+        "//typescript/packages/react/src:index",
+    ],
+    replace_prefixes = {"src/": "dist/"},
+)

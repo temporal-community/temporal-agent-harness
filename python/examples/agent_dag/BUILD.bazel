@@ -132,4 +132,8 @@ harness_client_sdk(
         ":DagBuilderAgent",
         ":DagStepAgent",
     ],
+    visibility = [
+        "//typescript:__subpackages__",
+        ":__subpackages__",
+    ],
 )

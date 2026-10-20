@@ -1,8 +1,17 @@
+load("@aspect_rules_js//js:defs.bzl", "js_library")
 load("@aspect_rules_py//py:defs.bzl", "py_binary")
 load(":wheel_script.bzl", "wheel_script")
 
 # Applied to the temporalio wheel (uv.override_package in MODULE.bazel).
 exports_files(["temporalio_extend_path.patch"])
+
+# Checks published_npm_package targets' tarballs (bazel/npm_package.bzl). A js_library, so the
+# tests in other packages find it in the output tree.
+js_library(
+    name = "npm_tarball_test",
+    srcs = ["npm_tarball_test.mjs"],
+    visibility = ["//visibility:public"],
+)
 
 # The binary Code Mode runs scripts in. pydantic-monty finds it through MONTY_BIN.
 wheel_script(

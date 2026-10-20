@@ -1,0 +1,49 @@
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("//bazel:vitest.bzl", "vitest_test")
+
+# One target per file, depending on the files it imports: tsc type-checks each, and vitest runs
+# each test file from its source.
+ts_project(
+    name = "session.test",
+    testonly = True,
+    srcs = ["session.test.tsx"],
+    declaration = True,
+    tsconfig = "//typescript/packages/react:tsconfig",
+    deps = [
+        "//typescript/packages/react:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/react:node_modules/@testing-library/react",
+        "//typescript/packages/react:node_modules/@types/react",
+        "//typescript/packages/react:node_modules/@types/react-dom",
+        "//typescript/packages/react:node_modules/react",
+        "//typescript/packages/react:node_modules/react-dom",
+        "//typescript/packages/react:node_modules/vitest",
+        "//typescript/packages/react/src:index",
+    ],
+)
+
+vitest_test(
+    name = "session_test",
+    src = "session.test.tsx",
+    deps = [
+        "//typescript/packages/react:node_modules/@temporalio/agent-harness-client",
+        "//typescript/packages/react:node_modules/@testing-library/react",
+        "//typescript/packages/react:node_modules/react",
+        "//typescript/packages/react:node_modules/react-dom",
+        "//typescript/packages/react/src:index",
+    ],
+)
+
+# The tic-tac-toe example's typed client used through useAgentSession: compiled, never run.
+ts_project(
+    name = "TicTacToeBoard",
+    testonly = True,
+    srcs = ["TicTacToeBoard.tsx"],
+    declaration = True,
+    tsconfig = "//typescript/packages/react:tsconfig",
+    deps = [
+        "//python/examples/tictactoe:client_sdk_types",
+        "//typescript/packages/react:node_modules/@types/react",
+        "//typescript/packages/react:node_modules/react",
+        "//typescript/packages/react/src:index",
+    ],
+)

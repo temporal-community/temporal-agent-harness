@@ -1,0 +1,21 @@
+load("@npm//typescript/packages/svelte:svelte-check/package_json.bzl", svelte_check_bin = "bin")
+
+# Type-checks the studio's components against the Svelte binding's sources and the agents'
+# generated clients (tsconfig.json's `paths` point into typescript/packages/svelte). Nothing builds
+# them: `just studio` serves ui/ as-is, and the browser compiles each .svelte file (svelte-sw.js).
+svelte_check_bin.svelte_check_test(
+    name = "svelte_check_test",
+    args = [
+        "--tsconfig",
+        "./tsconfig.json",
+    ],
+    chdir = package_name(),
+    data = glob(["*.svelte"]) + [
+        "tsconfig.json",
+        "//python/examples/agent_dag:client_sdk_types",
+        "//typescript/packages/svelte:node_modules/svelte",
+        "//typescript/packages/svelte/src/lib:index",
+    ],
+    # The clients' declarations, which a test's runfiles leave out by default.
+    include_transitive_types = True,
+)

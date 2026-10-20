@@ -26,12 +26,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The packages are one pnpm workspace; action-setup reads typescript/package.json's
-      # packageManager.
-      - uses: pnpm/action-setup@v6
-        with:
-          package_json_file: typescript/package.json
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -56,7 +50,7 @@ jobs:
           assert.equal(manifest.repository.url,
             `git+https://github.com/${process.env.GITHUB_REPOSITORY}.git`);
           for (const value of Object.values(manifest.dependencies ?? {})) {
-            assert(!/^(file:|link:|workspace:|catalog:)/.test(value), 'Publish registry dependencies only');
+            assert(!/^(file:|link:|workspace:)/.test(value), 'Publish registry dependencies only');
           }
           appendFileSync(process.env.GITHUB_OUTPUT, `directory=${directory}\n`);
           JS
@@ -65,25 +59,32 @@ jobs:
       - name: Install npm with trusted publishing support
         run: npm install --global npm@11
 
-      - name: Install dependencies
-        working-directory: typescript
-        run: pnpm install --frozen-lockfile
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: false
 
-      - name: Check, test, and build
-        working-directory: ${{ steps.package.outputs.directory }}
-        run: |
-          pnpm run --if-present check
-          pnpm test
-          pnpm run build
+      # main's newest disk cache (tests.yml), for the default interpreter configuration.
+      - name: Restore the Bazel disk cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-disk-py313-${{ github.sha }}
+          restore-keys: bazel-disk-py313-
 
-      # pnpm pack writes the catalog's versions into the packed package.json (its devDependencies
-      # say `catalog:` in the source tree); npm publishes that tarball.
-      - name: Pack and inspect package contents
+      # The package's tests, including the check of its tarball against package.json
+      # (bazel/npm_package.bzl), then that same tarball, :pkg_tgz, written out: --config=ci leaves
+      # cached outputs in the cache unless asked for them.
+      - name: Test and build the package
         id: pack
-        working-directory: ${{ steps.package.outputs.directory }}
+        env:
+          PACKAGE_DIRECTORY: ${{ steps.package.outputs.directory }}
         run: |
-          tarball="$(pnpm pack --json --pack-destination "$RUNNER_TEMP" | node -e \
-            'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).filename)')"
+          flags=(--config=ci --disk_cache="$HOME/.cache/bazel-disk")
+          bazel test "//$PACKAGE_DIRECTORY/..." "${flags[@]}"
+          bazel build "//$PACKAGE_DIRECTORY:pkg_tgz" "${flags[@]}" --remote_download_toplevel
+          tarball="$(bazel info execution_root "${flags[@]}")/$(bazel cquery "//$PACKAGE_DIRECTORY:pkg_tgz" "${flags[@]}" --output=files)"
           tar -tvzf "$tarball"
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
 

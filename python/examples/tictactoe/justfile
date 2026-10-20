@@ -67,10 +67,9 @@ play:
     @ln -sfn "{{root}}/typescript/packages/svelte/dist" ui/harness-svelte
     @cd ui && python3 -u -m http.server 5173 --bind 127.0.0.1 2>/dev/null
 
-# Type-check ui/App.svelte against the generated client types (after `just play` has installed
-# the typescript/ workspace).
+# Type-check ui/App.svelte against the generated client types.
 check-ui:
-    {{pnpm}} --dir "{{root}}/typescript/packages/svelte" exec svelte-check --workspace "{{justfile_directory()}}/ui" --tsconfig "{{justfile_directory()}}/ui/tsconfig.json"
+    bazel test //python/examples/tictactoe/ui:svelte_check_test
 
 # Run the tic-tac-toe agent worker.
 worker:

@@ -17,7 +17,6 @@ exports_files([
     "package.json",
     "pnpm-workspace.yaml",
 ])
-
 js_test(
     name = "npm_translate_lock_data_matches_workspace_test",
     data = [

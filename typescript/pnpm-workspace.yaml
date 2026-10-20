@@ -5,14 +5,11 @@ packages:
   - packages/*
   - apps/*
 
-# Versions shared by several packages. A package on another major (the console's TypeScript 5, the
-# Svelte binding's TypeScript 6) keeps its own specifier. `pnpm pack` writes the versions into a
-# published package.json.
-catalog:
-  "@types/node": ^22.20.4
-  happy-dom: ^20.14.5
-  typescript: ^7.0.2
-  vitest: ^5.0.1
+# A dependency on a workspace package's version (the bindings' `^0.1.0` client) links the working
+# tree's copy, and Bazel links that package's `:pkg` (bazel/npm_package.bzl), so the bindings
+# build and test against the client in the same commit. The published package.json keeps the
+# version range.
+linkWorkspacePackages: true
 
 # No dependency needs an install script. esbuild's only checks its platform binary, which it
 # also gets as an optional dependency.

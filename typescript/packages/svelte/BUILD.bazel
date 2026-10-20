@@ -1,2 +1,80 @@
-# A Bazel package so npm_translate_lock (MODULE.bazel) can read this package.json; nothing here
-# builds under Bazel yet.
+load("@aspect_rules_js//js:defs.bzl", "js_library")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//typescript/packages/svelte:@sveltejs/package/package_json.bzl", svelte_package_bin = "bin")
+load("@npm//typescript/packages/svelte:svelte-check/package_json.bzl", svelte_check_bin = "bin")
+load("//bazel:npm_package.bzl", "published_npm_package")
+
+npm_link_all_packages(name = "node_modules")
+
+# What svelte-package, svelte-check and vitest read from the package root.
+js_library(
+    name = "config",
+    srcs = [
+        "package.json",
+        "svelte.config.js",
+        "tsconfig.json",
+    ],
+    visibility = ["//typescript/packages/svelte:__subpackages__"],
+)
+
+# What vitest reads from the package root. vitest_test (bazel/vitest.bzl) adds it to every test,
+# which takes visibility from //bazel.
+js_library(
+    name = "vitest_config",
+    srcs = ["vitest.config.ts"],
+    visibility = ["//bazel:__pkg__"],
+    deps = [
+        ":config",
+        ":node_modules/@sveltejs/vite-plugin-svelte",
+        ":node_modules/happy-dom",
+        ":node_modules/vitest",
+    ],
+)
+
+# dist/: src/lib compiled for publishing, with declarations (svelte-package, on this package's
+# TypeScript 6).
+svelte_package_bin.svelte_package(
+    name = "dist",
+    srcs = [
+        ":config",
+        ":node_modules/@types/node",
+        ":node_modules/svelte",
+        ":node_modules/typescript",
+        "//typescript/packages/svelte/src/lib:index",
+    ],
+    chdir = package_name(),
+    out_dirs = ["dist"],
+)
+
+# The package as npm publishes it; `pkg.tgz` (`:pkg_tgz`) is the tarball.
+published_npm_package(
+    name = "pkg",
+    srcs = [
+        "LICENSE",
+        "README.md",
+        "package.json",
+        ":dist",
+    ],
+)
+
+# The sources and tests type-checked together, as `pnpm run check` does.
+svelte_check_bin.svelte_check_test(
+    name = "svelte_check_test",
+    args = [
+        "--tsconfig",
+        "./tsconfig.json",
+    ],
+    chdir = package_name(),
+    data = [
+        ":config",
+        ":node_modules/@types/node",
+        ":node_modules/svelte",
+        ":node_modules/typescript",
+        ":node_modules/vitest",
+        "//typescript/packages/svelte/src/lib:index",
+        "//typescript/packages/svelte/test:sources",
+    ],
+    # The tic-tac-toe client's declarations (a dep of test:sources), which a test's runfiles leave
+    # out by default.
+    include_transitive_types = True,
+)

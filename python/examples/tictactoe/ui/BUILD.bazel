@@ -1,0 +1,22 @@
+load("@npm//typescript/packages/svelte:svelte-check/package_json.bzl", svelte_check_bin = "bin")
+
+# Type-checks the board, App.svelte, against the Svelte binding's sources and the agent's generated
+# client (tsconfig.json's `paths` point into typescript/packages/svelte). Nothing builds it:
+# `just play` serves ui/ as-is, and the browser compiles each .svelte file (svelte-sw.js).
+svelte_check_bin.svelte_check_test(
+    name = "svelte_check_test",
+    args = [
+        "--tsconfig",
+        "./tsconfig.json",
+    ],
+    chdir = package_name(),
+    data = [
+        "App.svelte",
+        "tsconfig.json",
+        "//python/examples/tictactoe:client_sdk_types",
+        "//typescript/packages/svelte:node_modules/svelte",
+        "//typescript/packages/svelte/src/lib:index",
+    ],
+    # The client's declarations, which a test's runfiles leave out by default.
+    include_transitive_types = True,
+)

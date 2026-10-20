@@ -39,7 +39,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: main
-      # The packages are one pnpm workspace; action-setup reads typescript/package.json's
+      # scripts/npm-release.mjs bumps the version with npm and moves a binding's client range with
+      # pnpm (`pnpm add --lockfile-only`); action-setup reads typescript/package.json's
       # packageManager.
       - uses: pnpm/action-setup@v6
         with:
@@ -57,16 +58,25 @@ jobs:
           CLIENT_VERSION: ${{ inputs.client_version }}
         run: node scripts/npm-release.mjs prepare
 
-      - name: Install the workspace from the updated lockfile
-        working-directory: typescript
-        run: pnpm install --frozen-lockfile
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          cache-save: false
 
-      - name: Check, test, and build the proposed release
-        working-directory: ${{ steps.release.outputs.directory }}
-        run: |
-          pnpm run --if-present check
-          pnpm test
-          pnpm run build
+      # main's newest disk cache (tests.yml), for the default interpreter configuration.
+      - name: Restore the Bazel disk cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/bazel-disk
+          key: bazel-disk-py313-${{ github.sha }}
+          restore-keys: bazel-disk-py313-
+
+      # Builds the tarball publish-npm.yml will publish and runs the package's tests, including the
+      # check of the tarball against package.json. The version bump changes package.json, so Bazel
+      # also rewrites rules_js's record of it in .aspect/, which the release commit includes.
+      - name: Test the proposed release
+        run: bazel test "//${{ steps.release.outputs.directory }}/..." --config=ci --disk_cache="$HOME/.cache/bazel-disk"
 
       - name: Push release branch and show PR creation link
         env:
@@ -77,7 +87,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git switch -c "$RELEASE_BRANCH"
-          git add "$PACKAGE_DIRECTORY/package.json" typescript/pnpm-lock.yaml
+          git add "$PACKAGE_DIRECTORY/package.json" typescript/pnpm-lock.yaml .aspect/rules/external_repository_action_cache
           git commit -m "Release $RELEASE_TAG"
           git push origin "$RELEASE_BRANCH"
           node scripts/npm-release.mjs summary

@@ -4,6 +4,8 @@ harness_types commits one file (e.g. typescript/packages/client's event protocol
 harness_client_sdk commits a typed client for each of a package's agents.
 """
 
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("//bazel:committed_files.bzl", "committed_files")
 
 def _types_rule_impl(ctx):
@@ -80,12 +82,44 @@ def _harness_client_sdk_impl(name, visibility, agents, srcs):
         generated = generated,
     )
 
+    # Their declarations, for ts_project and svelte-check targets that type-check code written
+    # against the clients. tsc finds a project's files through its tsconfig, so the tsconfig is
+    # written into this package (ts_project's own `tsconfig = {...}` would name its target against
+    # a symbolic macro's naming rules). The clients import nothing, so it resolves no modules.
+    files = [src.name for src in srcs]
+    write_file(
+        name = name + "_tsconfig",
+        out = name + ".tsconfig.json",
+        content = [json.encode_indent({
+            "compilerOptions": {
+                "declaration": True,
+                "emitDeclarationOnly": True,
+                "module": "ESNext",
+                "moduleResolution": "Bundler",
+                "strict": True,
+                "target": "ES2022",
+                "types": [],
+            },
+            "files": files,
+        })],
+    )
+    ts_project(
+        name = name + "_types",
+        visibility = visibility,
+        # ts_project names its outputs after its srcs, so it takes them as file names.
+        srcs = files,
+        declaration = True,
+        emit_declaration_only = True,
+        tsconfig = ":%s_tsconfig" % name,
+    )
+
 harness_client_sdk = macro(
     doc = """Typed TypeScript clients for `agents` (harness_agent targets), committed as
     `<name>/<Agent>.ts` (typescript/packages/codegen's output for each agent's schema).
 
     `bazel run :<name>_update` writes them; `<name>_<Agent>_ts_up_to_date_test` fails while one is
-    out of date. `:<name>_<Agent>_ts` is an agent's generated types.
+    out of date. `:<name>_<Agent>_ts` is an agent's generated types, and `:<name>_types` the
+    committed clients' declarations.
     """,
     implementation = _harness_client_sdk_impl,
     attrs = {
